@@ -107,7 +107,12 @@ class TransportCommandHandlerMixin:
             )
             return CommandResult(str(lane_id))
         if isinstance(command, UpdateLogisticsLane):
-            sim.logistics.update_lane(EntityId(command.lane_id), command.requested_capacity_t_per_day, command.priority)
+            sim.logistics.update_lane(
+                EntityId(command.lane_id),
+                command.requested_capacity_t_per_day,
+                command.priority,
+                None if command.path_policy is None else PathPolicy(command.path_policy),
+            )
             return CommandResult()
         if isinstance(command, PauseLogisticsLane):
             sim.logistics.pause_lane(EntityId(command.lane_id)); return CommandResult()

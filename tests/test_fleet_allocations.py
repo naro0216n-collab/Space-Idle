@@ -176,6 +176,31 @@ def test_fleet_reservation_queries_return_read_only_snapshots_in_stable_order():
         snapshots[0].units = 2
 
 
+def test_fleet_query_exposes_generic_other_reservations_without_hiding_commitments():
+    app = build_game_application()
+    sim = app._simulation
+    lg = sim.logistics
+    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
+    lg.fleet_pool(vehicle_id, ids.LEO).total_units = 2
+    lg.reserve_fleet_units(
+        EntityId("reservation.other"),
+        EntityId("special.owner"),
+        FleetReservationKind.OTHER,
+        vehicle_id,
+        ids.LEO,
+        1,
+    )
+
+    row = next(
+        item for item in app.query(GetFleet()).pools
+        if item.vehicle_definition_id == str(vehicle_id)
+        and item.location_id == str(ids.LEO)
+    )
+    assert row.total_units == 2
+    assert row.free_units == 1
+    assert row.other_reserved_units == 1
+
+
 def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():
     sim = _fleet_sim(3)
     lg = sim.logistics
@@ -205,6 +230,51 @@ def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():
     assert snapshot.required_units == 3
     assert snapshot.unfilled_units == 2
     assert "fleet_unfilled:2" in snapshot.blockers
+
+
+def test_capacity_mode_rejects_target_in_a_direction_without_nominal_service():
+    sim = build_base_simulation()
+    lg = sim.logistics
+    before_counter = lg._transport_allocation_counter
+    before_allocations = dict(lg.transport_allocations)
+
+    with pytest.raises(ValueError, match="reverse capacity target"):
+        lg.create_transport_allocation(
+            ids.REUSABLE_LAUNCH_VEHICLE,
+            ids.EARTH,
+            ids.LEO,
+            control_mode=TransportControlMode.CAPACITY,
+            target_units=None,
+            target_capacity=DirectionalCapacity(1.0, 1.0),
+            day=sim.day,
+        )
+
+    assert lg.transport_allocations == before_allocations
+    assert lg._transport_allocation_counter == before_counter
+
+
+def test_capacity_mode_update_rolls_back_an_unsupported_directional_target():
+    sim = build_base_simulation()
+    lg = sim.logistics
+    allocation_id = lg.create_transport_allocation(
+        ids.REUSABLE_LAUNCH_VEHICLE,
+        ids.EARTH,
+        ids.LEO,
+        control_mode=TransportControlMode.CAPACITY,
+        target_units=None,
+        target_capacity=DirectionalCapacity(1.0, 0.0),
+        day=sim.day,
+    )
+    before = replace(lg.transport_allocations[allocation_id])
+
+    with pytest.raises(ValueError, match="reverse capacity target"):
+        lg.update_transport_allocation(
+            allocation_id,
+            target_capacity=DirectionalCapacity(1.0, 1.0),
+            day=sim.day,
+        )
+
+    assert lg.transport_allocations[allocation_id] == before
 
 
 def test_capacity_mode_uses_nominal_not_available_capacity_for_required_units():

@@ -102,6 +102,7 @@ class UpdateLogisticsLane:
     lane_id: str
     requested_capacity_t_per_day: float
     priority: int
+    path_policy: PathPolicyLiteral | None = None
 
 
 @dataclass(frozen=True)

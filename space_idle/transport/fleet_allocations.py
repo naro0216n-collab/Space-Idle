@@ -717,11 +717,11 @@ class FleetAllocationMixin:
         ratios: list[float] = []
         if target.forward_t_per_day > 1e-12:
             if nominal_per_unit.forward_t_per_day <= 1e-12:
-                return 0
+                raise ValueError("forward capacity target requires a cargo-capable forward service")
             ratios.append(target.forward_t_per_day / nominal_per_unit.forward_t_per_day)
         if target.reverse_t_per_day > 1e-12:
             if nominal_per_unit.reverse_t_per_day <= 1e-12:
-                return 0
+                raise ValueError("reverse capacity target requires a cargo-capable reverse service")
             ratios.append(target.reverse_t_per_day / nominal_per_unit.reverse_t_per_day)
         return 0 if not ratios else int(math.ceil(max(ratios) - 1e-12))
 
@@ -771,10 +771,19 @@ class FleetAllocationMixin:
             0,
         )
         self.transport_allocations[allocation_id] = allocation
-        # Reject structurally invalid explicit paths immediately, while allowing
-        # allocations whose capacity is temporarily unavailable.
-        self.derive_transport_service_plan(allocation_id, day)
-        self.reconcile_fleet_allocations(day)
+        try:
+            # Reject structurally invalid explicit paths immediately, while allowing
+            # allocations whose capacity is temporarily unavailable. CAPACITY targets
+            # must also refer only to directions this service can carry cargo.
+            plan = self.derive_transport_service_plan(allocation_id, day)
+            if control_mode is TransportControlMode.CAPACITY:
+                assert target_capacity is not None
+                self._units_for_capacity(target_capacity, plan.nominal_per_unit)
+            self.reconcile_fleet_allocations(day)
+        except Exception:
+            self.transport_allocations.pop(allocation_id, None)
+            self._transport_allocation_counter -= 1
+            raise
         return allocation_id
 
     def update_transport_allocation(
@@ -811,11 +820,15 @@ class FleetAllocationMixin:
             )
         self.transport_allocations[allocation_id] = updated
         try:
-            self.derive_transport_service_plan(allocation_id, day)
+            plan = self.derive_transport_service_plan(allocation_id, day)
+            if updated.control_mode is TransportControlMode.CAPACITY:
+                assert updated.target_capacity is not None
+                self._units_for_capacity(updated.target_capacity, plan.nominal_per_unit)
+            self.reconcile_fleet_allocations(day)
         except Exception:
             self.transport_allocations[allocation_id] = current
+            self.reconcile_fleet_allocations(day)
             raise
-        self.reconcile_fleet_allocations(day)
 
     def change_transport_allocation_mode(
         self,

@@ -185,14 +185,15 @@ def test_lane_capacity_and_priority_can_be_updated_without_replacing_lane():
     app.execute(PauseLogisticsLane(lane_id))
 
     before = next(row for row in app.query(GetLogisticsLanes()).items if row.id == lane_id)
-    app.execute(UpdateLogisticsLane(lane_id, 3.5, priority=80))
+    app.execute(UpdateLogisticsLane(lane_id, 3.5, priority=80, path_policy="lowest_propellant"))
     after = next(row for row in app.query(GetLogisticsLanes()).items if row.id == lane_id)
 
     assert after.id == before.id
     assert after.source_id == before.source_id
     assert after.destination_id == before.destination_id
     assert after.path == before.path
-    assert after.path_policy == before.path_policy
+    assert before.path_policy == "fastest"
+    assert after.path_policy == "lowest_propellant"
     assert after.paused is True
     assert after.requested_capacity_t_per_day == 3.5
     assert after.priority == 80
