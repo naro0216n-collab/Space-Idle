@@ -311,6 +311,87 @@ def test_gateway_begin_starts_at_connector_budget_and_defers_failed_parts_to_sha
     )
 
 
+def test_gateway_refine_splits_largest_pending_part_without_connector_result(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
+    content = "\n".join(hashlib.sha256(str(i).encode()).hexdigest() for i in range(400)) + "\n"
+    (repo / "payload.txt").write_text(content, encoding="utf-8")
+    commit_all(repo, "bridge refinement")
+    plan = gateway_begin(repo, base_commit)
+    assert len(plan["connector_actions"]) == 1
+    original_packet = json.loads(
+        Path(plan["connector_actions"][0]["packet"]).read_text(encoding="utf-8")
+    )
+    original_content = original_packet["action_args"]["content"]
+
+    refined = json.loads(run_request(repo, "gateway-refine"))
+    assert refined["entrypoint"] == "gateway-refine"
+    assert refined["phase"] == "upload-payload-parts"
+    assert refined["refined_pending_parts"] == 1
+    assert refined["request_action_generated"] is False
+    assert refined["remote_mutation_performed"] is False
+    assert len(refined["connector_actions"]) == 2
+
+    child_packets = [
+        json.loads(Path(action["packet"]).read_text(encoding="utf-8"))
+        for action in refined["connector_actions"]
+    ]
+    child_contents = [packet["action_args"]["content"] for packet in child_packets]
+    assert "".join(child_contents) == original_content
+    module = load_module()
+    assert [packet["expected_blob_git_oid"] for packet in child_packets] == [
+        module._git_object_oid(repo, "blob", part.encode("utf-8")) for part in child_contents
+    ]
+    assert not (
+        repo / ".git" / "space-idle-publish-active" / "connector" / "submit-request.json"
+    ).exists()
+
+
+def test_gateway_refine_preserves_confirmed_parts_and_only_refines_pending_part(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("adaptive refine\n" * 80, encoding="utf-8")
+    commit_all(repo, "adaptive refine")
+    gateway_begin(repo, base_commit)
+    first = json.loads(
+        run_request(repo, "gateway-submit", "--uploaded-blob-sha", "0" * 40)
+    )
+    assert len(first["connector_actions"]) == 2
+    first_child = json.loads(
+        Path(first["connector_actions"][0]["packet"]).read_text(encoding="utf-8")
+    )
+    second_child = json.loads(
+        Path(first["connector_actions"][1]["packet"]).read_text(encoding="utf-8")
+    )
+    second = json.loads(
+        run_request(
+            repo,
+            "gateway-submit",
+            "--uploaded-blob-sha",
+            first_child["expected_blob_git_oid"],
+            "--uploaded-blob-sha",
+            "1" * 40,
+        )
+    )
+    assert second["verified_upload_parts"] == 1
+    session_path = repo / ".git" / "space-idle-publish-active" / "session.json"
+    before = json.loads(session_path.read_text(encoding="utf-8"))
+    confirmed = [part for part in before["payload_parts"] if part["confirmed_sha"] is not None]
+    assert len(confirmed) == 1
+    confirmed_packet = confirmed[0]["packet"]
+    confirmed_sha = confirmed[0]["confirmed_sha"]
+
+    refined = json.loads(run_request(repo, "gateway-refine"))
+    assert refined["verified_upload_parts"] == 1
+    after = json.loads(session_path.read_text(encoding="utf-8"))
+    confirmed_after = [part for part in after["payload_parts"] if part["confirmed_sha"] is not None]
+    assert [(part["packet"], part["confirmed_sha"]) for part in confirmed_after] == [
+        (confirmed_packet, confirmed_sha)
+    ]
+    assert all(
+        action["packet"] != confirmed_packet for action in refined["connector_actions"]
+    )
+    assert second_child["expected_blob_git_oid"] != confirmed_sha
+
+
 def test_gateway_submit_resplits_only_mismatched_payload_part(tmp_path: Path) -> None:
     repo, base_commit, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("adaptive split\n" * 40, encoding="utf-8")
@@ -466,6 +547,7 @@ def test_standard_cli_has_one_gateway_entry_and_no_low_level_connector_knobs() -
         stdout=subprocess.PIPE,
     ).stdout
     assert "gateway-begin" in top_help
+    assert "gateway-refine" in top_help
     assert "gateway-submit" in top_help
     assert "gateway-record" in top_help
     assert "gateway-complete" in top_help

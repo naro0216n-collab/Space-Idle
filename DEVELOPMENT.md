@@ -83,7 +83,7 @@ Connector経路の正常入口は `gateway-begin` に一本化する。`prepare`
 1. ローカル変更を責務としてまとまったcommitにする。publish対象は明示したcommitted `target-ref` のtreeであり、その後にworking treeへ別の未commit作業があっても対象へ混入させない。
 2. publish直前に対象branch HEADを一度だけ取得する。これはChatGPT側が正常系で取得する唯一のpublish整合性入力である。
 3. 取得したHEADとpublish対象commitを `gateway-begin` へ渡す。`develop`では取得HEADが記録済みpublish基点と一致することをhelperが検証する。隔離検証用`temp`では取得した`temp` HEADそのものをそのsessionのbaseとし、developのpublish stateとは独立に扱う。その上でhelperは決定論的publish commit、Git bundle、v5 request、payload SHA-256、Connector packet、active sessionを一括生成する。GitHub repository、固定 `publish` branch、Connector call容量、manifest/packet出力先はhelper所有であり、publishごとに指定しない。
-4. `gateway-begin` はConnector本来のcall容量を上限として、payloadを最小数の `GitHub.create_blob` actionへ分ける。ChatGPT側bridgeの経験的な固定上限は設けない。helperが出力する`connector_namespace` / `connector_function`を実行入口とし、別のConnector write actionへ読み替えない。action名・part境界・初回分割数は判断対象ではない。
+4. `gateway-begin` はConnector本来のcall容量を上限として、payloadを最小数の `GitHub.create_blob` actionへ分ける。ChatGPT側bridgeの経験的な固定上限は設けない。helperが出力する`connector_namespace` / `connector_function`を実行入口とし、別のConnector write actionへ読み替えない。action名・part境界・初回分割数は判断対象ではない。現在のhelper packet自体をexecution bridgeが忠実に引き渡せない場合は、欠損した内容を送信したり固定サイズを推測したりせず、remote write前に`gateway-refine`を実行する。helperが最大の未確認partを一段だけ二分して新packetを生成し、part選択・境界はhelper所有のままとする。
 5. 各 `GitHub.create_blob` が返したSHAを、helperが事前計算したGit blob OIDと照合する。全文再取得・全文比較は正常系で行わない。`gateway-submit --uploaded-blob-sha ...` へ現在のupload action順で返却SHAを渡し、一致したpartは確定する。不一致partがあればhelperはそのpartだけを二分し、新しい `create_blob` actionを返す。成功済みpartは再送しない。この照合・再分割を必要なpartだけ反復するため、より小さい固定上限を事前推測したりChatGPTがBase64境界を作り直したりしない。全partのOIDが一致した場合に限って小さい最終 `GitHub.create_file` request actionを生成する。
 6. `gateway-submit` が生成した最終actionをそのまま実行する。長いBase64 payloadを `create_file` 引数へ直接転記する正常経路は持たない。
 7. Gatewayはpayload、Git object、bundle、publish commit、parent/base、target tree、対象branch HEADを検証し、すべて一致した場合だけexact commitを対象branchへnon-force publishする。成功時はreceiptを記録しFast CIを起動する。
@@ -102,6 +102,12 @@ python scripts/publish_request.py gateway-begin \
 ```
 
 `gateway-begin` は常に `phase: upload-payload-parts` を返す。現在表示されているupload actionを実行し、その返却SHAをaction順で次へ渡す。
+
+helper packetそのものを現在のexecution bridgeが忠実に転送できない場合は、送信前に次を実行する。これはGitHubへ何も書き込まず、最大の未確認partをhelper内部で一段だけ二分する。必要なら繰り返すが、固定のbridge上限を設けるためには使わない。
+
+```bash
+python scripts/publish_request.py gateway-refine
+```
 
 ```bash
 python scripts/publish_request.py gateway-submit --uploaded-blob-sha <sha> [--uploaded-blob-sha <sha> ...]

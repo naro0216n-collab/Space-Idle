@@ -870,7 +870,7 @@ def cmd_gateway_begin(args: argparse.Namespace) -> int:
         raise PublishStateError(
             "an active Gateway publish session already exists: "
             f"request_id={active['request_id']} phase={active['phase']}; "
-            "continue it through gateway-submit/gateway-complete or inspect it with gateway-status"
+            "continue it through gateway-refine/gateway-submit/gateway-complete or inspect it with gateway-status"
         )
     if active_dir.exists():
         shutil.rmtree(active_dir)
@@ -968,6 +968,11 @@ def cmd_gateway_begin(args: argparse.Namespace) -> int:
                 "connector_actions": connector_actions,
                 "connector_action_selection_is_not_a_decision": True,
                 "execute_packet_action_exactly": True,
+                "bridge_refinement_command": "python scripts/publish_request.py gateway-refine",
+                "bridge_refinement_condition": (
+                    "use only when the current helper packet cannot be faithfully forwarded "
+                    "before any Connector write"
+                ),
                 "next_helper_command": next_helper_command,
                 "remote_receipt_path": plan["remote_receipt_path"],
                 "after_gateway_success": (
@@ -983,7 +988,7 @@ def cmd_gateway_begin(args: argparse.Namespace) -> int:
     return 0
 
 
-def _split_failed_payload_part(
+def _split_payload_part(
     repo: Path,
     *,
     github_repository: str,
@@ -997,8 +1002,7 @@ def _split_failed_payload_part(
     content = args_data.get("content") if isinstance(args_data, dict) else None
     if not isinstance(content, str) or len(content) <= 1:
         raise PublishStateError(
-            "payload upload SHA mismatch persisted at the minimum splittable size; "
-            "stop and inspect the Connector transport"
+            "payload part cannot be split further; stop and inspect the Connector transport"
         )
     midpoint = len(content) // 2
     children: list[dict[str, object]] = []
@@ -1020,6 +1024,99 @@ def _split_failed_payload_part(
             }
         )
     return children, next_packet_index
+
+
+def cmd_gateway_refine(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    session = _read_active_session(repo)
+    if session["strategy"] not in {
+        "verified-blobs-then-request-file",
+        "parallel-blobs-then-request-file",
+    }:
+        raise PublishStateError("gateway-refine requires a blob-upload Gateway session")
+    if session["phase"] != "upload-payload-parts":
+        raise PublishStateError(
+            "gateway-refine is only valid before the final request action is generated"
+        )
+
+    payload_parts = session.get("payload_parts")
+    if not isinstance(payload_parts, list) or not payload_parts:
+        raise PublishStateError("active Gateway session is missing ordered payload parts")
+    pending_parts = [
+        part
+        for part in payload_parts
+        if isinstance(part, dict) and part.get("confirmed_sha") is None
+    ]
+    if not pending_parts:
+        raise PublishStateError("no unconfirmed payload part remains to refine")
+
+    # Keep bridge-capability handling deterministic. The operator neither chooses
+    # a boundary nor supplies a size threshold: refine only the largest pending
+    # helper-owned part, preserving every already-confirmed part unchanged.
+    selected = max(
+        pending_parts,
+        key=lambda part: (int(part.get("chars", 0)), str(part.get("packet", ""))),
+    )
+    connector_dir = Path(str(session["connector_dir"]))
+    next_packet_index = int(session.get("next_packet_index", len(payload_parts)))
+    children, next_packet_index = _split_payload_part(
+        repo,
+        github_repository=GITHUB_REPOSITORY,
+        part=selected,
+        next_packet_index=next_packet_index,
+        connector_dir=connector_dir,
+    )
+
+    rebuilt: list[dict[str, object]] = []
+    selected_packet = str(selected["packet"])
+    for part in payload_parts:
+        if not isinstance(part, dict):
+            raise PublishStateError("invalid ordered payload part in active Gateway session")
+        if str(part.get("packet")) == selected_packet:
+            rebuilt.extend(children)
+        else:
+            rebuilt.append(part)
+    pending_paths = [
+        str(part["packet"])
+        for part in rebuilt
+        if part.get("confirmed_sha") is None
+    ]
+    session["payload_parts"] = rebuilt
+    session["upload_packets"] = pending_paths
+    session["next_packet_index"] = next_packet_index
+    _write_active_session(repo, session)
+    print(
+        json.dumps(
+            {
+                "entrypoint": "gateway-refine",
+                "request_id": session["request_id"],
+                "phase": "upload-payload-parts",
+                "refined_pending_parts": 1,
+                "verified_upload_parts": sum(
+                    1 for part in rebuilt if part.get("confirmed_sha") is not None
+                ),
+                "connector_actions": [
+                    _packet_action_summary(path) for path in pending_paths
+                ],
+                "connector_action_selection_is_not_a_decision": True,
+                "execute_packet_action_exactly": True,
+                "request_action_generated": False,
+                "remote_mutation_performed": False,
+                "note": (
+                    "Use this only when the execution bridge cannot faithfully forward the current "
+                    "helper packet. The helper chooses the part and split boundary; no fixed bridge "
+                    "size or intentionally corrupted upload is required."
+                ),
+                "next_helper_command": (
+                    "execute the emitted GitHub.create_blob actions exactly, then run "
+                    "gateway-submit with their returned blob SHAs"
+                ),
+                "verified": True,
+            },
+            indent=2,
+        )
+    )
+    return 0
 
 
 def cmd_gateway_submit(args: argparse.Namespace) -> int:
@@ -1065,7 +1162,7 @@ def cmd_gateway_submit(args: argparse.Namespace) -> int:
             part["confirmed_sha"] = actual_oid
             continue
         mismatches += 1
-        children, next_packet_index = _split_failed_payload_part(
+        children, next_packet_index = _split_payload_part(
             repo,
             github_repository=GITHUB_REPOSITORY,
             part=part,
@@ -1667,7 +1764,8 @@ def build_parser() -> argparse.ArgumentParser:
     gateway_submit = sub.add_parser(
         "gateway-submit",
         help=(
-            "verify the blob SHAs returned by Connector uploads, then emit the final small request action"
+            "verify Connector-returned blob SHAs; re-split only mismatched payload parts, "
+            "and emit the final small request action only after every part is confirmed"
         ),
     )
     gateway_submit.add_argument(
@@ -1677,6 +1775,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="blob SHA returned by each helper-specified GitHub.create_blob action; repeat once per upload",
     )
     gateway_submit.set_defaults(func=cmd_gateway_submit)
+
+    gateway_refine = sub.add_parser(
+        "gateway-refine",
+        help=(
+            "split the largest unconfirmed upload part when the execution bridge cannot faithfully "
+            "forward the current helper packet; performs no Connector write"
+        ),
+    )
+    gateway_refine.set_defaults(func=cmd_gateway_refine)
 
     gateway_complete = sub.add_parser(
         "gateway-complete",
