@@ -20,6 +20,10 @@ GitHub の `main` をユーザー承認済みの正準ブランチ、`develop` �
 - `.source-commit`: artifact対象commit
 - `.source-tree`: 対象commitのtree
 - `.source-branch`: 対象branch
+- `.source-publish-commit`: artifact生成時点の `publish` HEAD
+- `.source-publish-tree`: その `publish` HEADのtree
+
+`repository.bundle` は対象 `develop` refに加えて `refs/space-idle/publish-base` を含み、通常publishのtransport treeを追加GitHub readなしでローカル再構築できるようにする。
 
 復元例:
 
@@ -80,79 +84,54 @@ GitHub反映の入口は差分種別で決める。
 
 ### Normal develop publish
 
-通常publishは次の順序で実行する。
+通常publishは次の一本道で実行する。
 
 1. 変更を責務としてまとまったlocal commitにする。
-2. `prepare`を実行して、現在の `HEAD` をpublish対象として固定する。
-3. remote `develop` HEADを1回、transport基点となる remote `publish` HEAD/treeを1回取得し、`connector-plan` に渡す。
-4. helperが生成したtree headerとtree element filesから1つの `GitHub.create_tree` actionを構成して実行する。長いpayloadはhandoff上複数の `content` elementへ分けるが、Connector call全体が144 KiB以内なら送信は1回である。
-5. 返却tree SHAを `connector-tree` に渡す。hard ceiling上1回に収まらない場合だけhelperが次の `create_tree` packetを生成し、収まる場合は直ちにcommit packetを生成する。複数tree callになってもbranchはまだ更新しない。
-6. 最終tree後に生成されたcommit packetを実行し、返却commit SHAを `connector-commit` に渡す。helperが生成したpayload verification packetを1回だけ実行し、返されたgeneration directoryの全payload fileについてfilename、blob SHA、sizeを `connector-verify` に渡す。
-7. payload metadataが正準値と一致するとhelperがnon-force ref packetを生成する。これを1回だけ実行し、この1回の `publish` branch更新でpayload part、index、request triggerを同時に可視化してGatewayを起動する。
-8. Gateway成功後、requestに対応するreceiptを取得して `record` に渡す。
-9. Fast CIは結果が次の判断に必要になった時点で確認する。
+2. `prepare`で現在の `HEAD` をpublish対象として固定する。
+3. GitHubのheads一覧を1回取得し、`develop` HEADと`publish` HEADを同じ観測から `connector-plan` へ渡す。`publish` treeはsource-snapshotに保持した正準baseを使うため再取得しない。
+4. helperが生成した `GitHub.create_tree` packetを実行し、返却tree SHAを `connector-tree` に渡す。helperはローカルで事前計算した期待tree SHAと直ちに照合する。
+5. 期待SHAと一致したtreeだけを `GitHub.create_commit` へ進め、返却commit SHAを `connector-commit` に渡す。
+6. helperが生成したnon-force `GitHub.update_ref` packetを1回実行して固定 `publish` branchを進める。これがGatewayを起動する唯一のbranch更新である。
+7. 当該transport commitのPublish Gateway runが `completed / success` になったことを1回のrun観測で確認し、そのrun ID・conclusion・transport commitを `record` へ渡す。
+8. Fast CIは結果が次の判断に必要になった時点で確認する。
 
 ```bash
 python scripts/publish_request.py prepare
-```
-
-remote `develop` HEADとremote `publish` HEAD/treeをそれぞれ1回取得した後、その観測値を渡す。
-
-```bash
 python scripts/publish_request.py connector-plan \
   --target-remote-head <current-develop-head> \
-  --publish-remote-head <current-publish-head> \
-  --publish-remote-tree <current-publish-tree>
-```
-
-`connector-plan` が生成したtree headerとtree element filesを、順序を変えず1つの `GitHub.create_tree` callへ組み立てる。個々の `content` elementはlocal handoff用に小さく保つが、Connector call全体が144 KiB以内なら分割送信しない。tree生成に成功したら返却tree SHAを渡す。
-
-```bash
+  --publish-remote-head <current-publish-head>
 python scripts/publish_request.py connector-tree \
   --tree-sha <create-tree-result-sha>
-```
-
-helperが次のtree packetを返した場合だけ同じ操作を繰り返す。commit packetを返したらそれを実行し、返却commit SHAを渡す。
-
-```bash
 python scripts/publish_request.py connector-commit \
   --commit-sha <create-commit-result-sha>
-```
-
-helperが生成した `GitHub.fetch` verification packetを1回実行する。返却されたgeneration directoryの全fileを、本文ではなくname、blob SHA、sizeだけ次の形で渡す。
-
-```bash
-python scripts/publish_request.py connector-verify \
-  --remote-part 0000.b64=<blob-sha>:<size> \
-  --remote-part 0001.b64=<blob-sha>:<size>
-```
-
-全partが一致すればref packetが生成されるので `GitHub.update_ref` で実行する。`force` は常にfalseであり、partごとのbranch更新や `create_file` は通常publish経路に置かない。
-
-Gateway成功後、receiptを取得して記録する。
-
-```bash
+# generated GitHub.update_ref packetを実行
 python scripts/publish_request.py record \
-  --receipt /tmp/publish-receipt.json
+  --gateway-transport-commit <publish-transport-commit> \
+  --gateway-run-id <publish-gateway-run-id> \
+  --gateway-conclusion success
 ```
+
+transportは `.publish/transport/<target>/0000.b64` から始まる固定slotを使用する。独立したrequest trigger、generation index、receipt fileは作らない。bundleが144 KiB hard ceiling内に収まる通常ケースではpayload partも `create_tree` も1つである。hard ceilingを超える場合だけhelperがpayloadを最大効率で分割し、必要最少数の連続 `create_tree` callへpackingする。固定6 KiB等の恒常的chunk sizeは使用しない。
+
+各 `create_tree` の期待root tree SHAは、source-snapshotに含めた `publish` base treeと正準payloadからローカルGitで事前計算する。返却SHAが一致しない限りcommitもref updateも生成しないため、正常系にverification GETは存在しない。初回移行時に旧 `.publish` transport artifactが残っている場合も、固定slot以外の旧artifactを同じunreferenced tree組立の中で削除し、部分的なremote状態を作らない。
+
+Gatewayはtransport commitをcheckoutした後、そのworking treeにある固定slotだけを読む。GitHub Contents / Blob APIでpayloadを再取得せず、連番partを連結してbundleを検証し、bundleからpublish commit、base、target treeを導出する。checkout済み `origin/<target>` がbundle parentと一致することをローカル確認した後、exact publish commitをnon-force pushする。成功したpush後の `ls-remote` /再fetch、receipt書込み、Fast CI pending status書込みは行わない。Fast CIの明示dispatchは `GITHUB_TOKEN` pushから別workflowが自動起動しないため維持する。
 
 #### Transaction continuation and cancellation
 
-active transactionが存在する場合は、そのtransactionの現在段階から続行する。新しいpublishを開始する判断はhelperに任せ、作業者は既存transactionの生成済みpacketを実行する。prepared targetを公開する前にそのcheckpoint自体を取り消す必要が生じた場合は、remote `develop` HEADと `publish` treeを一度観測し、両方がtransaction開始時から内容上不変である場合だけ `cancel` で閉じる。transaction directoryを手動削除しない。
+active transactionが存在する場合は、そのstageから続行する。prepared targetを `publish` refへ出す前に取り消す場合だけ、heads一覧を1回観測し、`develop` と `publish` の両HEADがtransaction開始時から不変であることをhelperへ渡して `cancel` する。transaction directoryを手動削除しない。
 
 ```bash
 python scripts/publish_request.py cancel \
   --target-remote-head <current-develop-head> \
-  --publish-remote-tree <current-publish-tree>
+  --publish-remote-head <current-publish-head>
 ```
 
 #### Pre-ref transport retry
 
-payload verificationが不一致の場合は、現在のactive transaction内で同一request・同一generation・同一publish対象・同一transport基点を維持し、元の正準payloadから直ちにtransportを再試行する。`publish` refは検証成功まで進めない。
+`create_tree`返却SHAが期待SHAと不一致なら、`publish` refを動かさず同じactive transaction内でそのtree転送を即再試行する。初回を含む最大3 attemptとし、最初の再送は同じtransfer layout、最後の再送だけinline payload単位を縮小してbase treeからplanを再構築する。retryを使い切ってもref packetは生成しない。
 
-初回送信を含め最大3 attemptとする。1回目の再送は通常と同じhandoff粒度で行い、2回目の再送だけpart数上限を守りながらhandoff element粒度を縮小する。3 attemptすべて不一致ならref packetを生成せず停止し、必要な場合だけ後述の Publish recovery へ進む。
-
-ref update結果が不明確だった、Gatewayがpayload検証で停止した、またはpre-ref transport retryを使い切った後に上位復旧が必要な場合だけ、後述の Publish recovery に進む。
+ref更新後の一時的なGateway障害ではtransportを別generationとして書き直さず、同じtransport commitのworkflow rerunを用いる。target移動やcontrol不一致など意味のあるGateway failureはtransport再送で隠さず、原因を解消してから次のpublish判断を行う。
 
 ### Workflow maintenance procedure
 
@@ -186,56 +165,40 @@ python scripts/workflow_maintenance.py verify-remote \
 
 ### Publish control maintenance procedure
 
-Publish Gateway の control plane (`.github/workflows/publish-gateway.yml` と Gateway validator scripts) は `scripts/publish_control_maintenance.py` で固定 `publish` branchへ反映する。通常のgame/source publishや `develop` workflow maintenanceとは混在させない。
+Publish Gateway control plane (`.github/workflows/publish-gateway.yml` とvalidator) は `scripts/publish_control_maintenance.py` で固定 `publish` branchへ反映する。通常game/source publishとは混在させない。
 
 1. control plane変更をcommitし、clean worktreeで `prepare` する。
-2. remote `publish` HEADとtreeを1回取得し、`connector-plan` に渡す。
-3. helperが生成したblob packetの `action_args` をコピペで `GitHub.create_blob` へ渡す。返却blob SHAは本文を確認せず `connector-tree` へ渡し、helperが正準blob OIDとの一致を機械判定する。
-4. helperが生成したtree、commit、non-force ref update packetを順に実行する。
-5. 更新後の `publish` HEADとtreeを1回取得し、`verify-remote` に渡してtransactionを閉じる。`develop` は変更されないためsource-snapshot再構築は不要。
+2. remote `publish` HEADを1回観測して `connector-plan` へ渡す。base treeはsource-snapshot由来のlocal publish stateを使うため再取得しない。
+3. helper生成の `create_blob` packetを実行し、返却blob SHAを `connector-tree` へ渡す。helperが各正準Git blob OIDを照合する。
+4. `create_tree`返却SHAをhelperの期待tree SHAと照合してから `create_commit`、non-force `update_ref` の順に実行する。commit objectの再fetchは行わない。
+5. `update_ref` 成功後は同じcommit SHAを `record-update --result success` へ渡す。追加のremote HEAD/tree再取得は行わず、helperがnormal publish stateの `publish` baseを更新する。
 
 ```bash
 python scripts/publish_control_maintenance.py prepare
 python scripts/publish_control_maintenance.py connector-plan \
-  --target-remote-head <current-publish-head> \
-  --target-remote-tree <current-publish-tree>
+  --target-remote-head <current-publish-head>
 python scripts/publish_control_maintenance.py connector-tree \
   --blob '<control-path>=<create-blob-result-sha>' \
   --blob '<control-path>=<create-blob-result-sha>'
 python scripts/publish_control_maintenance.py connector-commit \
   --tree-sha <create-tree-result-sha>
 python scripts/publish_control_maintenance.py connector-update \
+  --commit-sha <create-commit-result-sha>
+# generated GitHub.update_ref packetを実行
+python scripts/publish_control_maintenance.py record-update \
   --commit-sha <create-commit-result-sha> \
-  --commit-tree-sha <fetched-commit-tree-sha> \
-  --commit-parent-sha <fetched-commit-parent-sha>
-python scripts/publish_control_maintenance.py verify-remote \
-  --remote-head <publish-head-after-update> \
-  --remote-tree <publish-tree-after-update>
+  --result success
 ```
 
-control planeの実装は独立した小さなtracked fileへ分け、巨大なworkflow本文をConnector callへ再構成しない。blob本文の成立判定はGit blob OIDで行い、tree/commit/refはhelperが生成するGit data packetだけを使用する。
+control blob本文は小さな独立tracked fileとして維持し、返却OID/期待tree SHAで成立判定する。旧validator componentを撤去する変更は同じcontrol treeで削除し、新旧control経路を併存させない。
 
 ### Publish recovery
 
-通常publishでpre-ref transport retryを使い切った、ref update結果が不明確、またはGatewayのpayload検証で停止した場合も、active transactionを正本として復旧する。通常のpayload handoff mismatchはこの段階へ進めず、commit作成後の1回のmetadata verificationで検出して同一generation内ですぐ再送する。payload本文の取得や目視比較は行わない。
+pre-refの本文転記破損は `create_tree` の期待SHA不一致としてその場で処理するため、上位recoveryへ持ち込まない。ref更新後にGateway runが一時的理由で失敗した場合は、同じtransport commitのGitHub Actions rerunを使用する。別のrequest/generationを書き足して復旧しない。
 
-repair開始時だけremote `publish` HEAD/treeを1回取得し、その観測値を渡す。
+Gatewayがtarget branch移動、trusted workflow不一致、bundle不整合等の意味のある条件で停止した場合は、active transactionと該当runを証拠として原因を調査する。remote target状態やpublish対象そのものが変わった場合はtransport recoveryではなく、新しいsource stateから次のpublishを判断する。
 
-```bash
-python scripts/publish_request.py connector-repair \
-  --publish-remote-head <current-publish-head> \
-  --publish-remote-tree <current-publish-tree>
-```
-
-helperは観測された `publish` 基点が、直前世代をまだbranchへ反映していない基点、または直前世代を原子的に反映したcommit/treeのいずれかであることを機械検証する。Gatewayが既にreceiptを記録した後の別commit等であればrepairせず停止する。
-
-次世代も144 KiB hard ceilingをConnector call全体へ適用する。会話表示やlocal packet読出しで本文を複数sliceに分ける必要がある場合、helperはそれらを同一 `GitHub.create_tree` call内の複数 `content` elementとして扱う。call全体がhard ceiling以内なら送信は1回であり、handoff field数をtool call数へ伝播させない。hard ceilingを超える場合だけ、helperがtree elementsを必要最少数の連続 `create_tree` callへpackingする。blob返却SHAの中継や本文SHAの手動確認は行わない。
-
-その後は通常系と同じく、tree packet → `connector-tree` → 必要なら次tree packet → commit packet → `connector-commit` → 1回のpayload metadata verification → `connector-verify` → non-force ref packetの順で実行する。`publish` branch更新は世代ごとに1回だけであり、handoff fieldやtree batchをbranchへ個別公開しない。各generationでもpre-ref transport mismatchは同一generation内の最大3 attemptで処理し、ref更新後にGateway検証で停止した場合だけ次の `connector-repair` で次世代へ進む。request ID、base、target tree、publish commitはactive transactionのものを維持する。
-
-remote `develop` HEAD、publish parent、target treeなどpublish対象そのものの整合性が崩れている場合はtransport recoveryではない。transactionを進めず、remote同期または実装状態の問題として調査する。
-
-Workflow maintenanceで問題が発生した場合も、各helper stageが生成したpacketと検証結果を正本として同じ原則で処理する。
+Workflow maintenanceで問題が発生した場合も、helper stageが生成したpacketと検証結果を正本として処理する。
 
 ## CI
 

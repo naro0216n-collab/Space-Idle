@@ -4,13 +4,11 @@ on:
   push:
     branches: [publish]
     paths:
-      - '.publish/requests/*.json'
-      - '.publish/retries/*/*.json'
+      - '.publish/transport/**'
 
 permissions:
   contents: write
   actions: write
-  statuses: write
 
 concurrency:
   group: publish-gateway
@@ -25,24 +23,35 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve request file
+      - name: Resolve fixed transport slot
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t requests < <(
-            git diff-tree --no-commit-id --name-only --diff-filter=A -r "${GITHUB_SHA}" -- \
-              .publish/requests .publish/retries \
-              | grep -E '^(\.publish/requests/[0-9a-f]{32}\.json|\.publish/retries/[0-9a-f]{32}/g[0-9]{4}\.json)$' || true
-          )
-          if [ "${#requests[@]}" -ne 1 ]; then
-            echo "Expected exactly one newly added publish request or retry envelope, found ${#requests[@]}" >&2
+          mapfile -t changed < <(git diff-tree --no-commit-id --name-status --no-renames -r "${GITHUB_SHA}")
+          branches=()
+          for entry in "${changed[@]}"; do
+            status="${entry%%$'\t'*}"
+            path="${entry#*$'\t'}"
+            if [[ "${status}" =~ ^[AM]$ && "${path}" =~ ^\.publish/transport/(develop|temp)/[0-9]{4}\.b64$ ]]; then
+              branch="${BASH_REMATCH[1]}"
+              if [[ ! " ${branches[*]} " =~ " ${branch} " ]]; then
+                branches+=("${branch}")
+              fi
+            elif [[ "${status}" == D && "${path}" == .publish/* ]]; then
+              :
+            else
+              echo "Invalid publish transport change: ${status} ${path}" >&2
+              exit 1
+            fi
+          done
+          if [ "${#branches[@]}" -ne 1 ]; then
+            echo "Expected exactly one active transport target, found ${#branches[@]}" >&2
             exit 1
           fi
-          echo "REQUEST_FILE=${requests[0]}" >> "$GITHUB_ENV"
+          echo "TARGET_BRANCH=${branches[0]}" >> "$GITHUB_ENV"
+          echo "TRANSPORT_DIR=.publish/transport/${branches[0]}" >> "$GITHUB_ENV"
 
-      - name: Parse and verify request payload
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Validate local transport and bundle
         shell: bash
         run: |
           set -euo pipefail
@@ -52,100 +61,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          current="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
-          if [ "${current}" != "${BASE_SHA}" ]; then
-            echo "Target moved: expected ${BASE_SHA}, found ${current}" >&2
-            exit 1
-          fi
-
-          git fetch --quiet --no-tags origin "${BASE_SHA}"
-          git bundle verify "${BUNDLE_FILE}"
-          incoming_ref="refs/space-idle/incoming/${REQUEST_ID}"
-          trap 'git update-ref -d "${incoming_ref}" >/dev/null 2>&1 || true' EXIT
-          git fetch --quiet "${BUNDLE_FILE}" "refs/space-idle/publish-request:${incoming_ref}"
-          fetched="$(git rev-parse "${incoming_ref}")"
-          if [ "${fetched}" != "${PUBLISH_COMMIT}" ]; then
-            echo "Bundle commit mismatch: expected ${PUBLISH_COMMIT}, got ${fetched}" >&2
-            exit 1
-          fi
-          actual_parent="$(git rev-parse "${PUBLISH_COMMIT}^")"
-          if [ "${actual_parent}" != "${BASE_SHA}" ]; then
-            echo "Publish parent mismatch: expected ${BASE_SHA}, got ${actual_parent}" >&2
-            exit 1
-          fi
-          actual_tree="$(git rev-parse "${PUBLISH_COMMIT}^{tree}")"
-          if [ "${actual_tree}" != "${TARGET_TREE}" ]; then
-            echo "Target tree mismatch: expected ${TARGET_TREE}, got ${actual_tree}" >&2
-            exit 1
-          fi
-
           python scripts/publish_gateway_validate.py --verify-trusted-workflow
-
           git push origin "${PUBLISH_COMMIT}:refs/heads/${TARGET_BRANCH}"
-          remote_after="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
-          if [ "${remote_after}" != "${PUBLISH_COMMIT}" ]; then
-            echo "Remote ref verification failed: expected ${PUBLISH_COMMIT}, found ${remote_after}" >&2
-            exit 1
-          fi
-          git fetch --quiet --no-tags origin "refs/heads/${TARGET_BRANCH}"
-          remote_tree="$(git rev-parse 'FETCH_HEAD^{tree}')"
-          if [ "${remote_tree}" != "${TARGET_TREE}" ]; then
-            echo "Remote tree verification failed: expected ${TARGET_TREE}, found ${remote_tree}" >&2
-            exit 1
-          fi
-
-          echo "PUBLISHED_SHA=${PUBLISH_COMMIT}" >> "$GITHUB_ENV"
-          echo "PUBLISHED_TREE=${remote_tree}" >> "$GITHUB_ENV"
-
-      - name: Record verified publish receipt
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          receipt_path="${RUNNER_TEMP}/publish-receipt.json"
-          commit_object_b64="$(git cat-file commit "${PUBLISHED_SHA}" | base64 -w0)"
-          export PUBLISHED_COMMIT_OBJECT_B64="${commit_object_b64}"
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          receipt = {
-              'version': 3,
-              'request_id': os.environ['REQUEST_ID'],
-              'request_version': 7,
-              'target_branch': os.environ['TARGET_BRANCH'],
-              'base_commit': os.environ['BASE_SHA'],
-              'target_tree': os.environ['TARGET_TREE'],
-              'published_commit': os.environ['PUBLISHED_SHA'],
-              'published_tree': os.environ['PUBLISHED_TREE'],
-              'published_commit_object_b64': os.environ['PUBLISHED_COMMIT_OBJECT_B64'],
-          }
-          Path(os.environ['RUNNER_TEMP'], 'publish-receipt.json').write_text(
-              json.dumps(receipt, indent=2, sort_keys=True) + '\n',
-              encoding='utf-8',
-          )
-          PY
-          receipt_b64="$(base64 -w0 "${receipt_path}")"
-          gh api \
-            --method PUT \
-            "repos/${GITHUB_REPOSITORY}/contents/.publish/receipts/${REQUEST_ID}.json" \
-            -f message="Record publish receipt ${REQUEST_ID}" \
-            -f content="${receipt_b64}" \
-            -f branch=publish >/dev/null
-
-      - name: Mark Fast CI pending
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          gh api \
-            --method POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${PUBLISHED_SHA}" \
-            -f state=pending \
-            -f context='Fast CI' \
-            -f description='Fast CI queued'
 
       - name: Dispatch Fast CI for published branch
         env:

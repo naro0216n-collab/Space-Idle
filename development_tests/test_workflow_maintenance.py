@@ -56,7 +56,11 @@ def init_repo(tmp_path: Path) -> tuple[Path, str, str]:
     (source_snapshot / ".source-commit").write_text(base + "\n", encoding="utf-8")
     (source_snapshot / ".source-tree").write_text(tree + "\n", encoding="utf-8")
     (source_snapshot / ".source-branch").write_text("develop\n", encoding="utf-8")
-    git(repo, "bundle", "create", str(source_snapshot / "repository.bundle"), "refs/heads/develop")
+    git(repo, "update-ref", "refs/space-idle/publish-base", base)
+    (source_snapshot / ".source-publish-commit").write_text(base + "\n", encoding="utf-8")
+    (source_snapshot / ".source-publish-tree").write_text(tree + "\n", encoding="utf-8")
+    git(repo, "bundle", "create", str(source_snapshot / "repository.bundle"),
+        "refs/heads/develop", "refs/space-idle/publish-base")
     git(repo, "remote", "add", "origin", str((source_snapshot / "repository.bundle").resolve()))
     run(PUBLISH, repo, "init")
     return repo, base, tree
@@ -174,7 +178,12 @@ def test_workflow_maintenance_stages_exact_git_data_and_requires_rehydration(tmp
     (refreshed_snapshot / ".source-commit").write_text(created_commit + "\n", encoding="utf-8")
     (refreshed_snapshot / ".source-tree").write_text(target_tree + "\n", encoding="utf-8")
     (refreshed_snapshot / ".source-branch").write_text("develop\n", encoding="utf-8")
-    git(repo, "bundle", "create", str(refreshed_snapshot / "repository.bundle"), "refs/heads/develop")
+    publish_base = git(repo, "rev-parse", "refs/space-idle/publish-base")
+    publish_tree = git(repo, "rev-parse", f"{publish_base}^{{tree}}")
+    (refreshed_snapshot / ".source-publish-commit").write_text(publish_base + "\n", encoding="utf-8")
+    (refreshed_snapshot / ".source-publish-tree").write_text(publish_tree + "\n", encoding="utf-8")
+    git(repo, "bundle", "create", str(refreshed_snapshot / "repository.bundle"),
+        "refs/heads/develop", "refs/space-idle/publish-base")
     git(repo, "remote", "set-url", "origin", str((refreshed_snapshot / "repository.bundle").resolve()))
     run(PUBLISH, repo, "init")
     marker = repo / ".git" / "space-idle-workflow-maintenance-rehydrate-required"
