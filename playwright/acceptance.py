@@ -164,6 +164,20 @@ def run() -> dict[str, object]:
     _fixture_facility, fixture_recipe = upgrade_fixture
     fixture_sim.technology.completed.update(fixture_recipe.prerequisite_technologies)
 
+    # Keep the browser smoke focused on the player-facing site-selection and
+    # Founding command path rather than encoding Survey balance timing. Survey
+    # start/progression has its own domain/integration coverage, and the browser
+    # still exercises a real orbital Survey on another lunar cell below.
+    founding_fixture_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    founding_survey_target = next(
+        target
+        for (cell_id, _resource_id), target in fixture_sim.survey.targets.items()
+        if cell_id == founding_fixture_cell
+    )
+    fixture_sim.survey.knowledge_progress[(
+        founding_survey_target.cell_id, founding_survey_target.resource_id
+    )] = founding_survey_target.thresholds[1]
+
     server = create_server(
         runtime,
         ApiServerConfig(host="127.0.0.1", port=0),
@@ -411,6 +425,30 @@ def run() -> dict[str, object]:
             _assert(survey_lifecycle.get_attribute('data-survey-action') == 'pause' and survey_lifecycle.is_enabled(), "active survey lifecycle control must transition to pause")
             _assert(page.locator('#inspectorContent [data-set-survey-weight]').is_enabled(), "active survey must expose allocation command")
             _assert(float(page.locator('#surveyWeightInput').input_value()) == 0.5, "survey start allocation must round-trip through the UI")
+
+            # A surveyed Cell must become a player-selectable founding site; the
+            # UI must use the Application-projected option rather than inventing
+            # a fixed pre-existing lunar Location.
+            page.locator('[data-tab="surface"]').click()
+            founding_cell = page.locator(f'.surface-cell-button[data-id="{founding_fixture_cell}"]')
+            founding_cell.wait_for(timeout=10000)
+            founding_cell.click()
+            founding_button = page.locator(
+                f'#inspectorContent [data-surface-found][data-staging-node-id="{ids.LUNAR_ORBIT}"]'
+                f'[data-package-id="{ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE}"]'
+                f'[data-vehicle-id="{ids.REUSABLE_SURFACE_CARGO_LANDER}"]'
+            )
+            _assert(founding_button.count() == 1, "surveyed lunar cell must expose the canonical Founding option")
+            _assert(founding_button.is_enabled(), "surveyed lunar cell must allow player-selected Founding when planning requirements are met")
+            founding_card = founding_button.locator('xpath=ancestor::*[contains(@class,"surface-action-card")][1]')
+            _assert("Staging必要Resource" in founding_card.inner_text(), "Founding decision surface must expose staging resources before commitment")
+            _assert("推進剤" in founding_card.inner_text(), "Founding decision surface must include deployment propellant before commitment")
+            founding_card.locator('[data-new-location-name]').fill("Browser Lunar Outpost")
+            founding_button.click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            _assert("案件進行中" in page.locator('#inspectorContent').inner_text(), "Founding command must round-trip to an active project on the selected cell")
+            _assert(founding_button.count() == 1, "Founding control must remain in the same place after project start")
+            _assert(not founding_button.is_enabled(), "active Founding must keep the same action visible but unavailable")
             page.locator('[data-tab="overview"]').click()
 
             page.locator('[data-time-speed="4"]').click()

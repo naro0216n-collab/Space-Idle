@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -19,6 +19,7 @@ from space_idle import (
 )
 from space_idle.content import base_ids as ids
 from space_idle.persistence import SAVE_SCHEMA_VERSION, capture_state, load_game, save_game
+from space_idle.simulation import OfflineProgressPolicy
 from space_idle.founding import FoundingResourceRequirement
 from space_idle.shared import DefinitionId, SpatialNodeId
 from space_idle.transport.surface_routes import DERIVED_SURFACE_ORBIT_ROUTE_PREFIX
@@ -393,18 +394,28 @@ def test_active_founding_save_load_preserves_identity_and_future_transition(tmp_
     project = next(p for p in sim.founding.projects.values() if str(p.id) == project_id)
     generated = project.new_location_id
 
+    saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     path = tmp_path / "founding.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    save_game(app, path, saved_at=saved_at)
     loaded, _ = load_game(path, build_game_application)
     loaded_project = loaded._simulation.founding.projects[project.id]
     assert loaded_project.new_location_id == generated
     assert capture_state(loaded._simulation) == capture_state(sim)
 
-    app.execute(AdvanceTime(8))
-    loaded.execute(AdvanceTime(8))
+    elapsed_days = 8
+    policy = OfflineProgressPolicy(real_seconds_per_game_day=60.0)
+    offline_loaded, offline = load_game(
+        path,
+        build_game_application,
+        now=saved_at + timedelta(seconds=policy.real_seconds_per_game_day * elapsed_days),
+        offline_policy=policy,
+    )
+    app.execute(AdvanceTime(elapsed_days))
+    assert offline is not None
+    assert offline.advanced_days == elapsed_days
     assert generated in app._simulation.graph.locations
-    assert generated in loaded._simulation.graph.locations
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
+    assert generated in offline_loaded._simulation.graph.locations
+    assert capture_state(offline_loaded._simulation) == capture_state(app._simulation)
 
 
 def test_deploying_founding_save_load_completes_exactly_once(tmp_path):
