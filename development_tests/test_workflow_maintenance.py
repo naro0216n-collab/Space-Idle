@@ -151,7 +151,10 @@ def test_workflow_maintenance_stages_exact_git_data_and_requires_rehydration(tmp
 
     created_commit = git(repo, "rev-parse", "HEAD")
     update_meta = json.loads(run(
-        MAINTENANCE, repo, "connector-update", "--commit-sha", created_commit
+        MAINTENANCE, repo, "connector-update",
+        "--commit-sha", created_commit,
+        "--commit-tree-sha", target_tree,
+        "--commit-parent-sha", base,
     ).stdout)
     update_packet = json.loads(Path(update_meta["update_packet"]).read_text(encoding="utf-8"))
     assert update_packet["action"] == "GitHub.update_ref"
@@ -202,6 +205,28 @@ def test_workflow_stage_machine_rejects_skips_replanning_and_wrong_sha(tmp_path:
     wrong_tree = run(MAINTENANCE, repo, "connector-commit", "--tree-sha", "3" * 40, check=False)
     assert wrong_tree.returncode != 0
     assert "does not match expected target tree" in wrong_tree.stderr
+
+    target_tree = git(repo, "rev-parse", "HEAD^{tree}")
+    run(MAINTENANCE, repo, "connector-commit", "--tree-sha", target_tree)
+    created_commit = git(repo, "rev-parse", "HEAD")
+    wrong_commit_tree = run(
+        MAINTENANCE, repo, "connector-update",
+        "--commit-sha", created_commit,
+        "--commit-tree-sha", "4" * 40,
+        "--commit-parent-sha", base,
+        check=False,
+    )
+    assert wrong_commit_tree.returncode != 0
+    assert "does not match expected target tree" in wrong_commit_tree.stderr
+    wrong_commit_parent = run(
+        MAINTENANCE, repo, "connector-update",
+        "--commit-sha", created_commit,
+        "--commit-tree-sha", target_tree,
+        "--commit-parent-sha", "5" * 40,
+        check=False,
+    )
+    assert wrong_commit_parent.returncode != 0
+    assert "does not match recorded develop base" in wrong_commit_parent.stderr
 
 
 def test_workflow_plan_refuses_moved_develop_before_any_packets(tmp_path: Path) -> None:

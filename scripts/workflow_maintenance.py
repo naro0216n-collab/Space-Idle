@@ -434,6 +434,16 @@ def cmd_connector_update(args: argparse.Namespace) -> int:
             f"connector-update requires stage commit-packet-ready, found {state['stage']}"
         )
     _require_hex_sha(args.commit_sha, name="created workflow commit SHA")
+    _require_hex_sha(args.commit_tree_sha, name="created workflow commit tree SHA")
+    _require_hex_sha(args.commit_parent_sha, name="created workflow commit parent SHA")
+    if args.commit_tree_sha != state["target_tree"]:
+        raise WorkflowMaintenanceError(
+            f"created workflow commit tree {args.commit_tree_sha} does not match expected target tree {state['target_tree']}"
+        )
+    if args.commit_parent_sha != state["base_commit"]:
+        raise WorkflowMaintenanceError(
+            f"created workflow commit parent {args.commit_parent_sha} does not match recorded develop base {state['base_commit']}"
+        )
     packet = {
         "action": "GitHub.update_ref",
         "action_args": {
@@ -447,6 +457,8 @@ def cmd_connector_update(args: argparse.Namespace) -> int:
     _write_json(packet_path, packet)
     state["stage"] = "update-packet-ready"
     state["published_commit_candidate"] = args.commit_sha
+    state["verified_commit_tree"] = args.commit_tree_sha
+    state["verified_commit_parent"] = args.commit_parent_sha
     state["update_packet"] = str(packet_path)
     _write_connector_state(plan_dir, state)
     summary = _write_summary(
@@ -538,6 +550,8 @@ def build_parser() -> argparse.ArgumentParser:
         "connector-update", help="after commit creation, generate the non-force develop ref update packet"
     )
     connector_update.add_argument("--commit-sha", required=True)
+    connector_update.add_argument("--commit-tree-sha", required=True)
+    connector_update.add_argument("--commit-parent-sha", required=True)
     connector_update.set_defaults(func=cmd_connector_update)
 
     verify_remote = sub.add_parser(

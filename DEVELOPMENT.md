@@ -158,11 +158,13 @@ python scripts/workflow_maintenance.py connector-commit \
   --tree-sha <create-tree-result-sha>
 ```
 
-commit packetはrecorded `develop` HEADを唯一のparent、検証済みtarget treeをtreeとして `GitHub.create_commit` を実行する。commit作成後、その返却SHAからnon-force ref update packetを生成する。
+commit packetはrecorded `develop` HEADを唯一のparent、検証済みtarget treeをtreeとして `GitHub.create_commit` を実行する。commit作成後はそのcommitを一度読み取り、treeとparentがrecorded target tree / develop baseに一致することを確認してからnon-force ref update packetを生成する。
 
 ```bash
 python scripts/workflow_maintenance.py connector-update \
-  --commit-sha <create-commit-result-sha>
+  --commit-sha <create-commit-result-sha> \
+  --commit-tree-sha <fetched-commit-tree-sha> \
+  --commit-parent-sha <fetched-commit-parent-sha>
 ```
 
 `advance-workflow-ref.json` の `GitHub.update_ref(force=false)` 実行後、`develop` を一度取得してremote HEAD/treeを検証する。
