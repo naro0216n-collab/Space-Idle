@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 from .application_commands import (
-    AcceptContract, AdvanceTime, ApplicationError, CancelBuild, ChangeTransportAllocationMode,
+    AcceptContract, AdvanceTime, ApplicationError, CancelBuild, CancelFounding, ChangeTransportAllocationMode,
     CreateLogisticsLane, CreateTransportAllocation, DeclineContract, DeleteLogisticsLane,
     DeleteTransportAllocation, FundResearchPrototype, GetBottlenecks,
     GetBuildOptions, GetCatalog, GetCargoFlows, GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport,
     GetLocation, GetLogistics, GetLogisticsLanes, GetLogisticsSummary, GetProjects,
     GetResearch, GetRoutes, GetScientificExplorations, GetSurveys, GetTransportAllocations,
-    GetTransportAllocationOptions, GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseLogisticsLane,
+    GetTransportAllocationOptions, GetWorld, GetSurfaceMap, PauseBuild, PauseFounding, PauseFacility, PauseLogisticsLane,
     PauseResearch, PauseScientificExploration, PauseSurvey, PauseTransportAllocation,
     PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, FoundLocation, DevelopSurfaceCell, ProduceVehicle, RelocateFleet,
-    ResumeBuild, ResumeFacility, ResumeLogisticsLane, ResumeResearch,
+    ResumeBuild, ResumeFounding, ResumeFacility, ResumeLogisticsLane, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
     ResumeVehicleProduction, SetConstructionWeight, SetFacilityProcess, SetMaintenancePriority,
-    SetPowerPriority, SetProjectImportSource, SetProjectPriority, SetProjectSourcingPolicy,
+    SetPowerPriority, SetFoundingPriority, SetProjectImportSource, SetProjectPriority, SetProjectSourcingPolicy,
     SetResearchDemonstrationSite, SetResearchPrototypeSite, SetSurveyAllocation,
     SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration,
     StartSurvey, UnassignExplorationFleet, UpdateLogisticsLane,

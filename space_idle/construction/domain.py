@@ -4,11 +4,10 @@ from typing import Any
 
 from ..domain import DomainExtension, StateCodec
 from ..validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
-from ..shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
+from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .models import (
     ConstructionProject,
     FacilityUpgradeTarget,
-    LocationFoundingTarget,
     NewFacilityTarget,
     ProjectResourceState,
     ProjectStatus,
@@ -21,15 +20,6 @@ def _capture_target(target) -> dict[str, Any]:
         return {"kind": "new_facility", "facility_def_id": str(target.facility_def_id)}
     if isinstance(target, FacilityUpgradeTarget):
         return {"kind": "facility_upgrade", "facility_id": str(target.facility_id), "target_level": target.target_level}
-    if isinstance(target, LocationFoundingTarget):
-        return {
-            "kind": "location_founding",
-            "recipe_id": str(target.recipe_id),
-            "new_location_id": str(target.new_location_id),
-            "display_name": target.display_name,
-            "body_id": str(target.body_id),
-            "core_cell_id": str(target.core_cell_id),
-        }
     return {"kind": "surface_cell_development", "recipe_id": str(target.recipe_id), "cell_id": str(target.cell_id)}
 
 
@@ -39,14 +29,6 @@ def _restore_target(data: dict[str, Any]):
         return NewFacilityTarget(DefinitionId(data["facility_def_id"]))
     if kind == "facility_upgrade":
         return FacilityUpgradeTarget(EntityId(data["facility_id"]), int(data["target_level"]))
-    if kind == "location_founding":
-        return LocationFoundingTarget(
-            DefinitionId(data["recipe_id"]),
-            SpatialNodeId(data["new_location_id"]),
-            str(data["display_name"]),
-            CelestialBodyId(data["body_id"]),
-            SurfaceCellId(data["core_cell_id"]),
-        )
     if kind == "surface_cell_development":
         return SurfaceCellDevelopmentTarget(DefinitionId(data["recipe_id"]), SurfaceCellId(data["cell_id"]))
     raise ValueError(f"unknown construction target kind: {kind}")
@@ -164,8 +146,6 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
                 sim.projects.surface_knowledge_level_provider is not None,
                 f"spatial development survey requirement has no knowledge provider: {recipe_id}",
             )
-    if sim.projects.location_founding_recipe_id is not None:
-        _require(sim.projects.location_founding_recipe_id in sim.projects.spatial_recipes, "unknown location founding recipe")
     if sim.projects.surface_cell_development_recipe_id is not None:
         _require(sim.projects.surface_cell_development_recipe_id in sim.projects.spatial_recipes, "unknown surface cell development recipe")
     _require(set(sim.projects.sourcing_wait_days) == {"import_now", "mixed", "local_priority"}, "invalid sourcing policy configuration")
@@ -182,7 +162,6 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 def validate_runtime(sim: Any) -> None:
     active_upgrade_targets: set[EntityId] = set()
     active_spatial_cells: set[SurfaceCellId] = set()
-    active_new_location_ids: set[SpatialNodeId] = set()
     for project_id, project in sim.projects.projects.items():
         _require(sim.graph.has_operational_node(project.location_id), f"project references unknown host location: {project_id}")
         if project.import_source_id is not None:
@@ -207,23 +186,6 @@ def validate_runtime(sim: Any) -> None:
                 _require(facility.level == target.target_level - 1, f"active upgrade target level mismatch: {project_id}")
             if project.status is ProjectStatus.COMPLETE:
                 _require(facility.level == target.target_level, f"completed upgrade did not apply target level: {project_id}")
-        elif isinstance(target, LocationFoundingTarget):
-            _require(project.site_cell_id is None, f"location founding duplicates target cell: {project_id}")
-            _require(target.recipe_id in sim.projects.spatial_recipes, f"founding project references unknown recipe: {project_id}")
-            recipe = sim.projects.spatial_recipes[target.recipe_id]
-            _require(target.core_cell_id in sim.graph.surface_cells, f"founding project references unknown cell: {project_id}")
-            _require(sim.graph.surface_cells[target.core_cell_id].body_id == target.body_id, f"founding project body mismatch: {project_id}")
-            _require(sim.graph.operational_node(project.location_id).body_id == target.body_id, f"founding construction host body mismatch: {project_id}")
-            if project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
-                _require(target.core_cell_id not in active_spatial_cells, f"duplicate active spatial target cell: {target.core_cell_id}")
-                _require(target.new_location_id not in active_new_location_ids, f"duplicate active new location id: {target.new_location_id}")
-                active_spatial_cells.add(target.core_cell_id)
-                active_new_location_ids.add(target.new_location_id)
-                _require(target.new_location_id not in sim.graph.locations and target.new_location_id not in sim.graph.nodes, f"active founding target already exists: {project_id}")
-            if project.status is ProjectStatus.COMPLETE:
-                _require(target.new_location_id in sim.graph.locations, f"completed founding project did not create location: {project_id}")
-                location = sim.graph.locations[target.new_location_id]
-                _require(location.body_id == target.body_id and location.core_cell_id == target.core_cell_id, f"completed founding location mismatch: {project_id}")
         else:
             _require(project.site_cell_id is None, f"surface development duplicates target cell: {project_id}")
             _require(target.recipe_id in sim.projects.spatial_recipes, f"development project references unknown recipe: {project_id}")

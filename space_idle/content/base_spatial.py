@@ -181,30 +181,6 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
     graph.add_location(
         LocationState(ids.EARTH, "地球産業拠点", ids.EARTH_BODY, ids.EARTH_CELL_INDUSTRIAL)
     )
-    graph.add_location(
-        LocationState(
-            ids.SOUTH_POLAR_RIDGE,
-            "月南極高地縁辺拠点",
-            ids.MOON,
-            ids.MOON_CELL_SOUTH_POLAR_RIDGE,
-        )
-    )
-    graph.add_location(
-        LocationState(
-            ids.POLAR_COLD_TRAP,
-            "月極域永久影クレーター拠点",
-            ids.MOON,
-            ids.MOON_CELL_POLAR_COLD_TRAP,
-        )
-    )
-    graph.add_location(
-        LocationState(
-            ids.NEARSIDE_MARE,
-            "月表側海地域拠点",
-            ids.MOON,
-            ids.MOON_CELL_NEARSIDE_MARE,
-        )
-    )
 
     facets = StaticFacetStore()
 

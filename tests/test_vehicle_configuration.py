@@ -112,7 +112,7 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
 
 
 def test_operation_asset_disposition_prevents_route_continuation_after_recovery():
-    from space_idle.content.base_game import EARTH, SOUTH_POLAR_RIDGE
+    from space_idle.content import base_ids as ids
     from space_idle.logistics import (
         LandingCapability,
         OperationAssetDisposition,
@@ -120,11 +120,31 @@ def test_operation_asset_disposition_prevents_route_continuation_after_recovery(
         SpaceflightCapability,
         TransportPerformanceProfile,
     )
-    from space_idle.shared import RouteId
+    from space_idle.shared import RouteId, SpatialNodeId
+    from space_idle.transport import (
+        RouteDef,
+        RouteEndpoint,
+        TransportOperationKind,
+        TransportOperationRequirement,
+    )
 
     app = build_game_application()
     sim = app._simulation
-    route = sim.logistics.routes[RouteId("base.route.earth_ridge_direct")]
+    destination = SpatialNodeId("test.location.asset_disposition_surface")
+    sim.graph.found_location(
+        destination, "Disposition Target", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS
+    )
+    route = RouteDef(
+        RouteId("test.route.asset_disposition"),
+        RouteEndpoint(ids.EARTH, access_cell_id=ids.EARTH_CELL_INDUSTRIAL),
+        RouteEndpoint(destination, access_cell_id=ids.MOON_CELL_FARSIDE_HIGHLANDS),
+        10,
+        (
+            TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 10.0),
+            TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 5.0),
+            TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),
+        ),
+    )
     profile = TransportPerformanceProfile(
         dry_mass_t=10.0,
         payload_t=1.0,
@@ -137,9 +157,8 @@ def test_operation_asset_disposition_prevents_route_continuation_after_recovery(
 
     failures = sim.logistics.performance_route_failures(route, profile, sim.day)
 
-    assert EARTH == route.origin_id and SOUTH_POLAR_RIDGE == route.destination_id
+    assert route.origin_id == ids.EARTH and route.destination_id == destination
     assert "operation:powered_ascent:asset_returns_before_route_complete" in failures
-
 
 def test_transport_endurance_is_profile_level_and_validated():
     app = build_game_application()

@@ -25,13 +25,33 @@ class PlanFacilityUpgrade:
 
 @dataclass(frozen=True)
 class FoundLocation:
-    provider_location_id: str
-    display_name: str
-    body_id: str
+    package_id: str
+    staging_location_id: str
     core_cell_id: str
+    display_name: str
+    vehicle_definition_id: str
     priority: int = 50
-    sourcing_policy: SourcingPolicyValue = "mixed"
-    import_source_id: str | None = None
+
+
+@dataclass(frozen=True)
+class CancelFounding:
+    project_id: str
+
+
+@dataclass(frozen=True)
+class PauseFounding:
+    project_id: str
+
+
+@dataclass(frozen=True)
+class ResumeFounding:
+    project_id: str
+
+
+@dataclass(frozen=True)
+class SetFoundingPriority:
+    project_id: str
+    priority: int
 
 
 @dataclass(frozen=True)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..power import PowerSnapshot
 from ..shared import SpatialNodeId
 from .models import (
-    ConstructionProject, FacilityUpgradeTarget, LocationFoundingTarget, NewFacilityTarget,
+    ConstructionProject, FacilityUpgradeTarget, NewFacilityTarget,
     ProjectStatus, SurfaceCellDevelopmentTarget,
 )
 
@@ -28,10 +28,6 @@ class ConstructionExecutionMixin:
                 invested_resources=invested,
             )
             project.completed_facility_id = target.facility_id
-        elif isinstance(target, LocationFoundingTarget):
-            self.facilities.environment.graph.found_location(
-                target.new_location_id, target.display_name, target.body_id, target.core_cell_id
-            )
         else:
             self.facilities.environment.graph.develop_surface_cell(
                 project.location_id, target.cell_id
@@ -46,13 +42,6 @@ class ConstructionExecutionMixin:
                 facility is not None
                 and facility.location_id == project.location_id
                 and facility.level == target.target_level - 1
-            )
-        if isinstance(target, LocationFoundingTarget):
-            graph = self.facilities.environment.graph
-            return (
-                target.new_location_id not in graph.locations
-                and target.new_location_id not in graph.nodes
-                and not graph.location_foundation_failures(target.body_id, target.core_cell_id)
             )
         if isinstance(target, SurfaceCellDevelopmentTarget):
             return not self.facilities.environment.graph.surface_cell_development_failures(

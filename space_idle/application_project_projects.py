@@ -9,7 +9,7 @@ from .application_views import (
     ProjectRow,
 )
 from .construction.models import (
-    FacilityUpgradeTarget, LocationFoundingTarget, NewFacilityTarget,
+    FacilityUpgradeTarget, NewFacilityTarget,
     ProjectStatus, SurfaceCellDevelopmentTarget,
 )
 from .facilities import FacilityPlacementScope
@@ -139,12 +139,6 @@ class ProjectProjectorMixin:
                 target_level = target.target_level
                 definition = sim.facilities.definitions[facility_definition_id]
                 display_name = definition.display_name
-            elif isinstance(target, LocationFoundingTarget):
-                target_kind = "location_founding"
-                target_cell_id = str(target.core_cell_id)
-                target_body_id = str(target.body_id)
-                target_location_id = str(target.new_location_id)
-                display_name = target.display_name
             else:
                 target_kind = "surface_cell_development"
                 target_cell_id = str(target.cell_id)
@@ -175,6 +169,36 @@ class ProjectProjectorMixin:
                 target_cell_id, target_body_id, target_location_id,
                 construction_fulfillment, limiting_factors,
             ))
+        if sim.founding is not None:
+            for project in sorted(sim.founding.projects.values(), key=lambda row: str(row.id)):
+                if location_id is not None and project.staging_location_id != location_id:
+                    continue
+                package = sim.founding.definitions[project.package_id]
+                blockers = sim.founding.blockers(project.id, day=sim.day)
+                resources = []
+                for resource_id, required_t in sim.founding.resource_requirements(project.id):
+                    reserved_t = sim.founding.reserved_resource_t(project.id, resource_id)
+                    shortage_t = max(0.0, required_t - reserved_t) if not project.inputs_consumed else 0.0
+                    resources.append(ProjectResourceRow(
+                        str(resource_id), required_t, reserved_t,
+                        required_t if project.inputs_consumed else 0.0,
+                        shortage_t, None,
+                        None if project.inputs_consumed else f"demand.location_founding:{project.id}:{resource_id}",
+                    ))
+                target_cell = sim.graph.surface_cells[project.target_cell_id]
+                settings_editable = project.status.value == "preparing"
+                rows.append(ProjectRow(
+                    str(project.id), "location_founding_deployment", str(project.staging_location_id),
+                    None, None, None, project.display_name, project.status, project.paused,
+                    project.priority, "lane_managed", None, settings_editable, False, (), (),
+                    project.progress_days, float(package.transit_days), 0.0, project.inputs_consumed,
+                    None, tuple(resources), blockers, None, str(project.target_cell_id),
+                    str(target_cell.body_id), str(project.new_location_id), 1.0,
+                    tuple(dict.fromkeys(code for code, _detail in blockers)),
+                    str(project.package_id), str(project.vehicle_definition_id),
+                    project.preparation_done, package.preparation_work,
+                    project.progress_days, float(package.transit_days),
+                ))
         return tuple(rows)
 
     def _build_options_view(self, location_id: SpatialNodeId) -> BuildOptionsView:

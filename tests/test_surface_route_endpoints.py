@@ -18,6 +18,23 @@ from space_idle.logistics import (
 from space_idle.shared import DefinitionId, RouteId, SpatialNodeId
 from space_idle.transport.surface_routes import derived_surface_access_route_id
 
+TEST_RIDGE = SpatialNodeId("test.location.lunar_ridge")
+TEST_COLD_TRAP = SpatialNodeId("test.location.lunar_cold_trap")
+TEST_NEARSIDE = SpatialNodeId("test.location.lunar_nearside")
+
+
+def _build_surface_app():
+    app = build_game_application()
+    sim = app._simulation
+    for location_id, name, cell_id in (
+        (TEST_RIDGE, "Test Ridge", ids.MOON_CELL_SOUTH_POLAR_RIDGE),
+        (TEST_COLD_TRAP, "Test Cold Trap", ids.MOON_CELL_POLAR_COLD_TRAP),
+        (TEST_NEARSIDE, "Test Nearside", ids.MOON_CELL_NEARSIDE_MARE),
+    ):
+        sim.graph.found_location(location_id, name, ids.MOON, cell_id)
+    sim.logistics.synchronize_surface_access_routes()
+    return app
+
 
 def _surface_route(route_id: str, origin, origin_cell, destination, destination_cell) -> RouteDef:
     return RouteDef(
@@ -50,25 +67,25 @@ def _surface_vehicle(vehicle_id: str, *, speed_km_per_day: float, max_distance_k
 
 
 def test_surface_route_geometry_uses_access_cells_not_location_core_cells():
-    app = build_game_application()
+    app = _build_surface_app()
     sim = app._simulation
 
     # Expand the south-polar Location toward the equator without changing its core cell.
-    sim.graph.develop_surface_cell(ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
-    sim.graph.develop_surface_cell(ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
+    sim.graph.develop_surface_cell(TEST_RIDGE, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
+    sim.graph.develop_surface_cell(TEST_RIDGE, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
 
     core_route = _surface_route(
         "test.route.core",
-        ids.SOUTH_POLAR_RIDGE,
+        TEST_RIDGE,
         ids.MOON_CELL_SOUTH_POLAR_RIDGE,
-        ids.NEARSIDE_MARE,
+        TEST_NEARSIDE,
         ids.MOON_CELL_NEARSIDE_MARE,
     )
     access_route = _surface_route(
         "test.route.access",
-        ids.SOUTH_POLAR_RIDGE,
+        TEST_RIDGE,
         ids.MOON_CELL_EQUATORIAL_HIGHLANDS,
-        ids.NEARSIDE_MARE,
+        TEST_NEARSIDE,
         ids.MOON_CELL_NEARSIDE_MARE,
     )
     sim.logistics.routes[core_route.id] = core_route
@@ -83,25 +100,25 @@ def test_surface_route_geometry_uses_access_cells_not_location_core_cells():
     assert core_geometry.distance_km is not None
     assert access_geometry.distance_km < core_geometry.distance_km
     assert access_geometry.origin.surface_cell_id == ids.MOON_CELL_EQUATORIAL_HIGHLANDS
-    assert access_geometry.origin.location_id == ids.SOUTH_POLAR_RIDGE
+    assert access_geometry.origin.location_id == TEST_RIDGE
 
 
 def test_surface_transport_latency_and_service_plan_derive_from_endpoint_distance_and_vehicle_speed():
-    app = build_game_application()
+    app = _build_surface_app()
     sim = app._simulation
     vehicle = _surface_vehicle("test.vehicle.surface", speed_km_per_day=25.0)
     forward = _surface_route(
         "test.route.ridge_cold_trap",
-        ids.SOUTH_POLAR_RIDGE,
+        TEST_RIDGE,
         ids.MOON_CELL_SOUTH_POLAR_RIDGE,
-        ids.POLAR_COLD_TRAP,
+        TEST_COLD_TRAP,
         ids.MOON_CELL_POLAR_COLD_TRAP,
     )
     reverse = _surface_route(
         "test.route.cold_trap_ridge",
-        ids.POLAR_COLD_TRAP,
+        TEST_COLD_TRAP,
         ids.MOON_CELL_POLAR_COLD_TRAP,
-        ids.SOUTH_POLAR_RIDGE,
+        TEST_RIDGE,
         ids.MOON_CELL_SOUTH_POLAR_RIDGE,
     )
     sim.logistics.vehicle_defs[vehicle.id] = vehicle
@@ -116,8 +133,8 @@ def test_surface_transport_latency_and_service_plan_derive_from_endpoint_distanc
 
     plan = sim.logistics.transport_service_plan_for(
         vehicle.id,
-        ids.SOUTH_POLAR_RIDGE,
-        ids.POLAR_COLD_TRAP,
+        TEST_RIDGE,
+        TEST_COLD_TRAP,
         path=(forward.id,),
     )
     assert plan.feasible
@@ -129,9 +146,9 @@ def test_surface_transport_latency_and_service_plan_derive_from_endpoint_distanc
 
 
 def test_derived_surface_route_tracks_closest_access_cells_without_changing_route_identity():
-    app = build_game_application()
+    app = _build_surface_app()
     sim = app._simulation
-    route_id = derived_surface_access_route_id(ids.SOUTH_POLAR_RIDGE, ids.NEARSIDE_MARE)
+    route_id = derived_surface_access_route_id(TEST_RIDGE, TEST_NEARSIDE)
 
     sim.logistics.synchronize_surface_access_routes()
     before_count = len(sim.logistics.routes)
@@ -139,8 +156,8 @@ def test_derived_surface_route_tracks_closest_access_cells_without_changing_rout
     assert before.origin.surface_cell_id == ids.MOON_CELL_SOUTH_POLAR_RIDGE
     assert before.distance_km is not None
 
-    sim.graph.develop_surface_cell(ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
-    sim.graph.develop_surface_cell(ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
+    sim.graph.develop_surface_cell(TEST_RIDGE, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
+    sim.graph.develop_surface_cell(TEST_RIDGE, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
     sim.logistics.synchronize_surface_access_routes()
 
     after = sim.logistics.route_geometry(route_id)
@@ -151,16 +168,16 @@ def test_derived_surface_route_tracks_closest_access_cells_without_changing_rout
     assert after.distance_km < before.distance_km
 
     plan = sim.logistics.transport_service_plan_for(
-        ids.SURFACE_CARGO_HAULER, ids.SOUTH_POLAR_RIDGE, ids.NEARSIDE_MARE
+        ids.SURFACE_CARGO_HAULER, TEST_RIDGE, TEST_NEARSIDE
     )
     assert plan.forward_path == (route_id,)
     assert plan.reverse_path == (
-        derived_surface_access_route_id(ids.NEARSIDE_MARE, ids.SOUTH_POLAR_RIDGE),
+        derived_surface_access_route_id(TEST_NEARSIDE, TEST_RIDGE),
     )
 
 
 def test_player_founded_surface_location_receives_location_to_location_routes_without_cell_nodes():
-    app = build_game_application()
+    app = _build_surface_app()
     sim = app._simulation
     new_location_id = SpatialNodeId("player.location.farside")
     node_count_before = len(sim.graph.operational_node_ids())
@@ -174,11 +191,11 @@ def test_player_founded_surface_location_receives_location_to_location_routes_wi
     )
     sim.logistics.synchronize_surface_access_routes()
 
-    route_id = derived_surface_access_route_id(new_location_id, ids.NEARSIDE_MARE)
+    route_id = derived_surface_access_route_id(new_location_id, TEST_NEARSIDE)
     route = sim.logistics.routes[route_id]
     geometry = sim.logistics.route_geometry(route_id)
     assert route.origin_id == new_location_id
-    assert route.destination_id == ids.NEARSIDE_MARE
+    assert route.destination_id == TEST_NEARSIDE
     assert geometry.origin.surface_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
     assert geometry.destination.surface_cell_id == ids.MOON_CELL_NEARSIDE_MARE
     assert geometry.same_body_surface
@@ -188,7 +205,7 @@ def test_player_founded_surface_location_receives_location_to_location_routes_wi
     rows = app.query(
         GetRoutes(
             origin_id=str(new_location_id),
-            destination_id=str(ids.NEARSIDE_MARE),
+            destination_id=str(TEST_NEARSIDE),
             include_modes=True,
         )
     ).items
@@ -202,23 +219,23 @@ def test_player_founded_surface_location_receives_location_to_location_routes_wi
 
 
 def test_surface_interface_route_endpoint_resolves_facility_site_cell_and_application_projection():
-    app = build_game_application()
+    app = _build_surface_app()
     sim = app._simulation
 
     origin_interface = sim.facilities.install(
         ids.ROBOTIC_GEOLOGY_STATION,
-        ids.SOUTH_POLAR_RIDGE,
+        TEST_RIDGE,
         site_cell_id=ids.MOON_CELL_SOUTH_POLAR_RIDGE,
     )
     destination_interface = sim.facilities.install(
         ids.ROBOTIC_GEOLOGY_STATION,
-        ids.NEARSIDE_MARE,
+        TEST_NEARSIDE,
         site_cell_id=ids.MOON_CELL_NEARSIDE_MARE,
     )
     route = RouteDef(
         RouteId("test.route.surface_interfaces"),
-        RouteEndpoint(ids.SOUTH_POLAR_RIDGE, surface_interface_id=origin_interface),
-        RouteEndpoint(ids.NEARSIDE_MARE, surface_interface_id=destination_interface),
+        RouteEndpoint(TEST_RIDGE, surface_interface_id=origin_interface),
+        RouteEndpoint(TEST_NEARSIDE, surface_interface_id=destination_interface),
         transit_days=99,
         operations=(TransportOperationRequirement(TransportOperationKind.SURFACE_TRANSPORT),),
         display_name="Surface interface route",
@@ -260,13 +277,13 @@ def test_surface_interface_route_endpoint_resolves_facility_site_cell_and_applic
     assert "origin:interface:maintenance:facility unavailable" in blocked.blockers
 
 def test_external_surface_service_latency_uses_endpoint_geometry():
-    app = build_game_application()
+    app = _build_surface_app()
     sim = app._simulation
     route = _surface_route(
         "test.route.external_surface",
-        ids.SOUTH_POLAR_RIDGE,
+        TEST_RIDGE,
         ids.MOON_CELL_SOUTH_POLAR_RIDGE,
-        ids.POLAR_COLD_TRAP,
+        TEST_COLD_TRAP,
         ids.MOON_CELL_POLAR_COLD_TRAP,
     )
     service_id = DefinitionId("test.service.surface")
@@ -295,13 +312,13 @@ def test_external_surface_service_latency_uses_endpoint_geometry():
     assert mode.forward_latency_days != route.transit_days
 
 def test_surface_transport_distance_limit_is_a_physical_route_blocker():
-    app = build_game_application()
+    app = _build_surface_app()
     sim = app._simulation
     route = _surface_route(
         "test.route.surface_limit",
-        ids.SOUTH_POLAR_RIDGE,
+        TEST_RIDGE,
         ids.MOON_CELL_SOUTH_POLAR_RIDGE,
-        ids.NEARSIDE_MARE,
+        TEST_NEARSIDE,
         ids.MOON_CELL_NEARSIDE_MARE,
     )
     sim.logistics.routes[route.id] = route
@@ -320,21 +337,21 @@ def test_surface_transport_distance_limit_is_a_physical_route_blocker():
 
 
 def test_route_query_exposes_resolved_physical_endpoints_and_surface_distance():
-    app = build_game_application()
+    app = _build_surface_app()
     sim = app._simulation
     route = _surface_route(
         "test.route.query_geometry",
-        ids.SOUTH_POLAR_RIDGE,
+        TEST_RIDGE,
         ids.MOON_CELL_SOUTH_POLAR_RIDGE,
-        ids.POLAR_COLD_TRAP,
+        TEST_COLD_TRAP,
         ids.MOON_CELL_POLAR_COLD_TRAP,
     )
     sim.logistics.routes[route.id] = route
 
     row = app.query(GetRoutes(route_id=str(route.id), include_modes=False)).items[0]
 
-    assert row.origin_id == str(ids.SOUTH_POLAR_RIDGE)
-    assert row.destination_id == str(ids.POLAR_COLD_TRAP)
+    assert row.origin_id == str(TEST_RIDGE)
+    assert row.destination_id == str(TEST_COLD_TRAP)
     assert row.origin_endpoint.surface_cell_id == str(ids.MOON_CELL_SOUTH_POLAR_RIDGE)
     assert row.destination_endpoint.surface_cell_id == str(ids.MOON_CELL_POLAR_COLD_TRAP)
     assert row.same_body_surface
@@ -344,7 +361,7 @@ def test_route_query_exposes_resolved_physical_endpoints_and_surface_distance():
 def test_derived_surface_route_is_rebuilt_after_save_load_for_persisted_allocation(tmp_path):
     from space_idle.persistence import load_game, save_game
 
-    app = build_game_application()
+    app = _build_surface_app()
     sim = app._simulation
     new_location_id = SpatialNodeId("player.location.persisted_surface_route")
     sim.graph.found_location(
@@ -354,10 +371,10 @@ def test_derived_surface_route_is_rebuilt_after_save_load_for_persisted_allocati
         ids.MOON_CELL_FARSIDE_HIGHLANDS,
     )
     sim.logistics.synchronize_surface_access_routes()
-    route_id = derived_surface_access_route_id(ids.SOUTH_POLAR_RIDGE, new_location_id)
+    route_id = derived_surface_access_route_id(TEST_RIDGE, new_location_id)
     allocation_id = sim.logistics.create_transport_allocation(
         ids.SURFACE_CARGO_HAULER,
-        ids.SOUTH_POLAR_RIDGE,
+        TEST_RIDGE,
         new_location_id,
         target_units=1,
         path=(route_id,),
@@ -374,6 +391,6 @@ def test_derived_surface_route_is_rebuilt_after_save_load_for_persisted_allocati
     allocation = loaded_sim.logistics.transport_allocations[allocation_id]
     assert allocation.path == (route_id,)
     geometry = loaded_sim.logistics.route_geometry(route_id)
-    assert geometry.origin.location_id == ids.SOUTH_POLAR_RIDGE
+    assert geometry.origin.location_id == TEST_RIDGE
     assert geometry.destination.location_id == new_location_id
     assert geometry.same_body_surface

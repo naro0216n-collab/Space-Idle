@@ -17,10 +17,6 @@ def configure_initial_inventory(inventory) -> None:
     for node in (ids.LEO, ids.LUNAR_ORBIT):
         inventory.add_capacity(node, "general_cargo", 1000.0)
         inventory.add_capacity(node, "cryogenic", 120.0)
-    for node in (ids.SOUTH_POLAR_RIDGE, ids.POLAR_COLD_TRAP, ids.NEARSIDE_MARE):
-        inventory.add_capacity(node, "general_cargo", 40.0)
-        inventory.add_capacity(node, "bulk", 30.0)
-
     # Initial imported industrial stock supports the opening research/logistics
     # investments but is deliberately finite. Sustained midgame expansion must
     # transition toward production, extraction, and logistics rather than draw

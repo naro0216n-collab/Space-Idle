@@ -284,9 +284,8 @@ def test_resource_demand_reservations_are_derived_and_rebuilt_after_load(tmp_pat
 def test_save_load_preserves_active_cell_resource_survey_future_behavior(tmp_path):
     app = build_game_application()
     sim = app._simulation
-    sim.facilities.install(ids.ROBOTIC_SURVEY_PACKAGE, ids.SOUTH_POLAR_RIDGE)
     key = (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.WATER)
-    app.execute(StartSurvey(str(ids.SOUTH_POLAR_RIDGE), str(key[0]), str(key[1]), allocation_weight=1.0))
+    app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(key[0]), str(key[1]), allocation_weight=1.0))
 
     path = tmp_path / "active-surface-survey.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))

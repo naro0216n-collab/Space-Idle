@@ -4,6 +4,7 @@ from .domain_extensions import BASE_DOMAIN_EXTENSIONS
 from ..contracts import ContractService
 from ..facilities import FacilityBook
 from ..industry import IndustryService
+from ..founding import LocationFoundingService
 from ..inventory import InventoryBook
 from ..logistics import LogisticsService
 from ..maintenance import FacilityMaintenanceService
@@ -30,6 +31,7 @@ from ..content.base_construction import (
 from ..content.base_contracts import build_contract_templates
 from ..content.base_facilities import build_facility_definitions, initial_facility_placements, initial_facility_investments
 from ..content.base_industry import build_process_specs
+from ..content.base_founding import build_founding_packages
 from ..content.base_initial_state import configure_initial_inventory
 from ..content.base_power import build_power_specs
 from ..content.base_progression import (
@@ -46,6 +48,7 @@ from ..content.base_transport import (
     build_external_transport_services,
     build_route_definitions,
     build_vehicle_definitions,
+    build_surface_access_route_rules,
     initial_vehicle_deployments,
 )
 
@@ -74,6 +77,7 @@ def build_base_simulation() -> Simulation:
 
     logistics = LogisticsService(
         build_route_definitions(), inventory, account, facilities, power,
+        surface_access_route_rules=build_surface_access_route_rules(),
         technology_state=technology,
     )
     logistics.external_services.update(build_external_transport_services())
@@ -104,6 +108,8 @@ def build_base_simulation() -> Simulation:
     for cell_id, resource_id in initial_known_surface_resource_knowledge():
         survey.initialize_known(cell_id, resource_id)
 
+    storage = StorageService(build_storage_provider_specs(), inventory, facilities)
+
     projects = ProjectService(
         recipes=build_construction_recipes(),
         upgrade_recipes=build_facility_upgrade_recipes(),
@@ -117,11 +123,11 @@ def build_base_simulation() -> Simulation:
         technology_state=technology,
         construction_resource_providers=build_construction_resource_providers(),
         spatial_recipes=build_spatial_development_recipes(),
-        location_founding_recipe_id=ids.LOCATION_FOUNDATION_PROJECT,
         surface_cell_development_recipe_id=ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
     )
-
-    storage = StorageService(build_storage_provider_specs(), inventory, facilities)
+    founding = LocationFoundingService(
+        build_founding_packages(), graph, facilities, inventory, storage, logistics, survey
+    )
     maintenance = FacilityMaintenanceService(facilities, inventory)
 
     research = ResearchService(
@@ -140,7 +146,8 @@ def build_base_simulation() -> Simulation:
 
     sim = Simulation(
         0, account, graph, environment, inventory, facilities, power, storage,
-        industry, logistics, projects, technology, contracts, research, survey, extraction,
+        industry, logistics, projects, technology, founding=founding,
+        contracts=contracts, research=research, survey=survey, extraction=extraction,
         scientific_exploration=scientific_exploration, maintenance=maintenance,
         surface_infrastructure=surface_infrastructure,
     )

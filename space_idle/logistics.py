@@ -40,6 +40,7 @@ from .transport.models import (
     RouteEndpoint,
     SpaceflightCapability,
     SurfaceTransportCapability,
+    SurfaceAccessRouteRule,
     TransportAllocation,
     TransportCapacitySnapshot,
     TransportControlMode,
@@ -73,6 +74,7 @@ class LogisticsService(
     vehicle_defs: dict[DefinitionId, VehicleDef] = field(default_factory=dict)
     external_services: dict[DefinitionId, ExternalTransportServiceDef] = field(default_factory=dict)
     operation_registry: OperationEvaluatorRegistry = field(default_factory=build_default_operation_registry)
+    surface_access_route_rules: tuple[SurfaceAccessRouteRule, ...] = ()
     surface_access_factor_provider: Callable[[SpatialNodeId, SurfaceCellId, int], float] | None = None
     fleet_pools: dict[tuple[DefinitionId, SpatialNodeId], FleetPool] = field(default_factory=dict)
     fleet_reservations: dict[EntityId, FleetReservation] = field(default_factory=dict)
@@ -102,6 +104,7 @@ __all__ = [
     "FleetRelease", "FleetReservation", "FleetReservationKind", "FleetReservationSnapshot", "LandingCapability",
     "LaneRuntimeMetrics", "LogisticsLane", "LogisticsLaneSnapshot", "LogisticsService",
     "OperationAssetDisposition", "OperationSupportLocation", "OperationSupportRequirement",
+    "SurfaceAccessRouteRule",
     "ResourceSupportRequirement",
     "PathPolicy", "PoweredAscentCapability", "RouteDef", "RouteEndpoint", "SpaceflightCapability", "SurfaceTransportCapability",
     "TransportAllocation", "TransportCapacitySnapshot", "TransportControlMode",

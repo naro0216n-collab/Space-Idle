@@ -117,33 +117,35 @@ class SurfaceProjectorMixin:
                     for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id))
                     if sim.facilities.definitions[recipe.facility_def_id].placement_scope is FacilityPlacementScope.SURFACE_CELL
                 )
-            foundation_recipe = (
-                None if sim.projects.location_founding_recipe_id is None
-                else sim.projects.spatial_recipes.get(sim.projects.location_founding_recipe_id)
-            )
             foundation_options = ()
-            if foundation_recipe is not None:
+            if sim.founding is not None and owner is None:
                 foundation_rows = []
-                for provider_id in sorted(sim.graph.operational_node_ids(), key=str):
-                    provider = sim.graph.operational_node(provider_id)
-                    if provider.body_id != body_id:
-                        continue
-                    provider_power = sim.power.snapshot(provider_id, sim.facilities, sim.day)
-                    failures = sim.projects.location_founding_failures(
-                        provider_id, body_id, cell.id, sim.day, provider_power
-                    )
-                    foundation_rows.append(SurfaceCellFoundationOption(
-                        str(provider_id),
-                        foundation_recipe.construction_work,
-                        tuple((str(req.resource_id), req.amount_t) for req in foundation_recipe.resources),
-                        tuple(sorted(
-                            str(technology) for technology in foundation_recipe.prerequisite_technologies - sim.projects.unlocked_technologies
-                        )),
-                        tuple((failure.code, failure.detail) for failure in failures),
-                        None if active_spatial_project is None else str(active_spatial_project.id),
-                        tuple(sim.projects.sourcing_policy_options()),
-                        tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(provider_id)),
-                    ))
+                active_founding = sim.founding.active_project_for_cell(cell.id)
+                for package in sorted(sim.founding.definitions.values(), key=lambda row: str(row.id)):
+                    for staging_id in sorted(sim.graph.operational_node_ids(), key=str):
+                        staging = sim.graph.operational_node(staging_id)
+                        for vehicle_id, failures in sim.founding.compatible_vehicle_options(
+                            package.id, staging_id, cell.id, day=sim.day
+                        ):
+                            vehicle = sim.logistics.vehicle_defs[vehicle_id]
+                            foundation_rows.append(SurfaceCellFoundationOption(
+                                str(package.id),
+                                package.display_name,
+                                str(staging_id),
+                                staging.display_name,
+                                str(vehicle_id),
+                                vehicle.display_name,
+                                package.transit_days,
+                                package.payload_t,
+                                tuple(
+                                    (str(resource_id), amount_t)
+                                    for resource_id, amount_t in sim.founding.deployment_resource_requirements(
+                                        package.id, vehicle_id
+                                    )
+                                ),
+                                tuple(failures),
+                                None if active_founding is None else str(active_founding.id),
+                            ))
                 foundation_options = tuple(foundation_rows)
 
             rows.append(

@@ -16,6 +16,7 @@ from space_idle.content import base_ids as ids
 from space_idle.content.base_facilities import build_facility_definitions
 from space_idle.facilities import FacilityBook, FacilityPlacementScope
 from space_idle.persistence import capture_state, load_game, save_game
+from space_idle.shared import SpatialNodeId
 from space_idle.validation import validate_runtime_state
 
 
@@ -74,27 +75,31 @@ def test_surface_cell_facility_requires_a_developed_cell_owned_by_location():
 
 def test_surface_cell_facility_uses_site_environment_while_remaining_location_owned():
     base = build_game_application()._simulation
-    base.graph.develop_surface_cell(ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
+    location_id = SpatialNodeId("test.location.surface_environment")
+    base.graph.found_location(
+        location_id, "Surface Environment Test", ids.MOON, ids.MOON_CELL_SOUTH_POLAR_RIDGE
+    )
+    base.graph.develop_surface_cell(location_id, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
     definitions = build_facility_definitions()
 
     ridge = FacilityBook(definitions, base.facilities.environment)
     ridge_id = ridge.install(
         ids.ROBOTIC_GEOLOGY_STATION,
-        ids.SOUTH_POLAR_RIDGE,
+        location_id,
         site_cell_id=ids.MOON_CELL_SOUTH_POLAR_RIDGE,
     )
     plain = FacilityBook(definitions, base.facilities.environment)
     plain_id = plain.install(
         ids.ROBOTIC_GEOLOGY_STATION,
-        ids.SOUTH_POLAR_RIDGE,
+        location_id,
         site_cell_id=ids.MOON_CELL_SOUTH_POLAR_PLAIN,
     )
 
-    ridge_power = base.power.snapshot(ids.SOUTH_POLAR_RIDGE, ridge, base.day)
-    plain_power = base.power.snapshot(ids.SOUTH_POLAR_RIDGE, plain, base.day)
+    ridge_power = base.power.snapshot(location_id, ridge, base.day)
+    plain_power = base.power.snapshot(location_id, plain, base.day)
 
-    assert ridge.facilities[ridge_id].location_id == ids.SOUTH_POLAR_RIDGE
-    assert plain.facilities[plain_id].location_id == ids.SOUTH_POLAR_RIDGE
+    assert ridge.facilities[ridge_id].location_id == location_id
+    assert plain.facilities[plain_id].location_id == location_id
     assert ridge_power.generation_mw > plain_power.generation_mw
 
 

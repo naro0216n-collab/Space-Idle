@@ -76,8 +76,9 @@ def test_base_surface_map_exposes_affiliation_without_creating_cell_inventory_no
     view = app.query(GetSurfaceMap(str(ids.MOON)))
 
     assert len(view.cells) == 6
-    assert len(view.locations) == 3
-    assert any(not cell.developed for cell in view.cells)
+    assert view.locations == ()
+    assert all(not cell.developed for cell in view.cells)
+    assert all(cell.location_id is None for cell in view.cells)
     assert all(cell.environment for cell in view.cells)
     assert all(cell.display_name for cell in view.cells)
     assert {cell.display_name for cell in view.cells} >= {"南極高地縁辺", "極域永久影クレーター", "表側海地域"}

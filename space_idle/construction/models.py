@@ -106,28 +106,13 @@ class FacilityUpgradeTarget:
 
 
 @dataclass(frozen=True)
-class LocationFoundingTarget:
-    recipe_id: DefinitionId
-    new_location_id: SpatialNodeId
-    display_name: str
-    body_id: CelestialBodyId
-    core_cell_id: SurfaceCellId
-
-    def __post_init__(self) -> None:
-        if not str(self.new_location_id):
-            raise ValueError("new location id must not be empty")
-        if not self.display_name:
-            raise ValueError("new location display name must not be empty")
-
-
-@dataclass(frozen=True)
 class SurfaceCellDevelopmentTarget:
     recipe_id: DefinitionId
     cell_id: SurfaceCellId
 
 
 ConstructionTarget: TypeAlias = (
-    NewFacilityTarget | FacilityUpgradeTarget | LocationFoundingTarget | SurfaceCellDevelopmentTarget
+    NewFacilityTarget | FacilityUpgradeTarget | SurfaceCellDevelopmentTarget
 )
 
 
@@ -158,8 +143,7 @@ class ConstructionProject:
     id: ProjectId
     target: ConstructionTarget
     # Existing operational Location/Node that owns procurement and supplies
-    # construction flow. For surface-cell development this is the Location being
-    # expanded; for founding it is the explicit staging/provider Location.
+    # construction flow. Surface-cell development uses the Location being expanded.
     location_id: SpatialNodeId
     priority: int
     sourcing_policy: SourcingPolicy

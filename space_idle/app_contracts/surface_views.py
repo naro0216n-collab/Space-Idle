@@ -33,14 +33,17 @@ class SurfaceFacilityPlacementOption:
 
 @dataclass(frozen=True)
 class SurfaceCellFoundationOption:
-    provider_location_id: str
-    construction_required: float
+    package_id: str
+    package_name: str
+    staging_location_id: str
+    staging_location_name: str
+    vehicle_definition_id: str
+    vehicle_name: str
+    deployment_days: int
+    payload_t: float
     resources: tuple[tuple[str, float], ...]
-    missing_technologies: tuple[str, ...]
     blockers: tuple[tuple[str, str], ...]
     active_project_id: str | None = None
-    sourcing_policy_options: tuple[str, ...] = ()
-    import_source_options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

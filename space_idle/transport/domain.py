@@ -224,6 +224,7 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
         for row in production_data.get("projects", [])
     }
     lg.reconcile_fleet_allocations(sim.day)
+    lg.synchronize_surface_access_routes()
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:
     result: set[DefinitionId] = set()
@@ -330,6 +331,22 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     sim.logistics.synchronize_surface_access_routes()
     nodes = ctx.nodes
     known_capabilities = ctx.known_capabilities
+    seen_surface_rule_ids: set[DefinitionId] = set()
+    for rule in sim.logistics.surface_access_route_rules:
+        _require(rule.id not in seen_surface_rule_ids, f"duplicate surface access route rule: {rule.id}")
+        seen_surface_rule_ids.add(rule.id)
+        _require(rule.node_id in sim.graph.nodes, f"surface access rule references non-static node: {rule.id}/{rule.node_id}")
+        if rule.node_id in sim.graph.nodes:
+            _require(sim.graph.nodes[rule.node_id].body_id == rule.body_id, f"surface access rule body mismatch: {rule.id}")
+        _require(rule.body_id in sim.graph.bodies, f"surface access rule references unknown body: {rule.id}/{rule.body_id}")
+        _require(rule.transit_days > 0, f"surface access rule has non-positive transit: {rule.id}")
+        for operation in rule.descent_operations + rule.ascent_operations:
+            _require(
+                sim.logistics.operation_registry.supports(operation.operation_type),
+                f"surface access rule references unregistered operation: {rule.id}/{operation.operation_type}",
+            )
+        _validate_site_requirements(rule.node_requirements, known_capabilities, f"surface_access_rule:{rule.id}:node")
+        _validate_site_requirements(rule.surface_requirements, known_capabilities, f"surface_access_rule:{rule.id}:surface")
     for route_id, route in sim.logistics.routes.items():
         _require(route_id == route.id, f"route definition key mismatch: {route_id}")
         _require(route.origin_id in nodes and route.destination_id in nodes, f"route references unknown location: {route_id}")

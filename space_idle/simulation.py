@@ -7,6 +7,7 @@ from .contracts import ContractService
 from .domain import DomainExtension
 from .facilities import FacilityBook
 from .industry import IndustryService
+from .founding import LocationFoundingService
 from .inventory import InventoryBook
 from .logistics import LogisticsService
 from .maintenance import FacilityMaintenanceService
@@ -66,6 +67,7 @@ class Simulation:
     logistics: LogisticsService
     projects: ProjectService
     technology: TechnologyState
+    founding: LocationFoundingService | None = None
     contracts: ContractService | None = None
     research: ResearchService | None = None
     survey: SurveyService | None = None
@@ -82,6 +84,11 @@ class Simulation:
         locations.update(project.location_id for project in self.projects.projects.values())
         if self.survey is not None:
             locations.update(campaign.provider_location_id for campaign in self.survey.campaigns.values())
+        if self.founding is not None:
+            locations.update(
+                project.staging_location_id
+                for project in self.founding.projects.values()
+            )
         locations.update(
             project.location_id
             for project in self.logistics.vehicle_production_projects.values()
@@ -114,6 +121,8 @@ class Simulation:
             for loc in sorted(locations, key=str)
         }
         demands: list[ResourceDemand] = list(self.projects.resource_demands(self.day))
+        if self.founding is not None:
+            demands.extend(self.founding.resource_demands(self.day))
         for location_id in sorted(locations, key=str):
             power = powers.get(location_id)
             if power is None:
@@ -257,6 +266,8 @@ class Simulation:
                 self.survey.advance_day(power_before, self.day)
             if self.maintenance is not None:
                 self.maintenance.advance_day(self.day)
+            if self.founding is not None:
+                self.founding.advance_day(self.day)
 
             self.projects.advance_procurement(self.day)
 

@@ -7,7 +7,7 @@ from space_idle.api import GameRuntime
 from space_idle.content import base_ids as ids
 from space_idle.research import ResearchPhase
 from space_idle.resource_demand import ResourceDemand
-from space_idle.shared import EntityId, RouteId
+from space_idle.shared import EntityId, RouteId, SpatialNodeId
 from space_idle.simulation import OfflineProgressPolicy
 
 
@@ -74,11 +74,22 @@ def test_research_definitions_have_granular_engineering_outcomes():
     })
 
 
-def test_direct_earth_to_south_pole_cargo_actually_dispatches_and_arrives():
+def test_runtime_lunar_surface_route_cargo_actually_dispatches_and_arrives():
     app = build_game_application()
     sim = app._simulation
-    route_id = RouteId("base.route.earth_ridge_direct")
-    demand_id = EntityId("test.demand.direct_lunar")
+    destination_id = SpatialNodeId("test.location.dynamic_lunar_cargo")
+    sim.graph.found_location(
+        destination_id, "Dynamic Lunar Cargo Site", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS
+    )
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, destination_id)
+    sim.facilities.install(ids.CARGO_WAREHOUSE, destination_id)
+    sim.logistics.synchronize_surface_access_routes()
+
+    route_id = next(
+        route_id for route_id, route in sim.logistics.routes.items()
+        if route.origin_id == ids.LUNAR_ORBIT and route.destination_id == destination_id
+    )
     route = app.query(GetRoutes(route_id=str(route_id), include_modes=True)).items[0]
     external_mode = next(
         mode for mode in route.modes
@@ -86,15 +97,14 @@ def test_direct_earth_to_south_pole_cargo_actually_dispatches_and_arrives():
     )
     amount_t = external_mode.nominal_capacity.forward_t_per_day / 2.0
     assert amount_t > 0
-    destination_before = sim.inventory.amount(
-        ids.SOUTH_POLAR_RIDGE, ids.STRUCTURAL_COMPONENTS
-    )
-    if sim.inventory.available(ids.EARTH, ids.STRUCTURAL_COMPONENTS) < amount_t:
-        sim.inventory.add(ids.EARTH, ids.STRUCTURAL_COMPONENTS, amount_t)
+    demand_id = EntityId("test.demand.dynamic_lunar")
+    destination_before = sim.inventory.amount(destination_id, ids.STRUCTURAL_COMPONENTS)
+    if sim.inventory.available(ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS) < amount_t:
+        sim.inventory.add(ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS, amount_t)
 
     lane_id = sim.logistics.create_lane(
-        ids.EARTH,
-        ids.SOUTH_POLAR_RIDGE,
+        ids.LUNAR_ORBIT,
+        destination_id,
         requested_capacity_t_per_day=1.0,
         priority=50,
         path=(route_id,),
@@ -103,11 +113,11 @@ def test_direct_earth_to_south_pole_cargo_actually_dispatches_and_arrives():
         demand_id,
         "test",
         EntityId("test.owner"),
-        ids.SOUTH_POLAR_RIDGE,
+        destination_id,
         ids.STRUCTURAL_COMPONENTS,
         amount_t,
         priority=50,
-        source_id=ids.EARTH,
+        source_id=ids.LUNAR_ORBIT,
         local_claim_t=0.0,
     )
 
@@ -118,12 +128,11 @@ def test_direct_earth_to_south_pole_cargo_actually_dispatches_and_arrives():
     assert flows[0].demand_id == demand_id
     assert flows[0].amount_t == pytest.approx(amount_t)
 
-    sim.advance_days(20)
+    sim.advance_days(10)
     assert not sim.logistics.cargo_flows
-    assert sim.inventory.amount(
-        ids.SOUTH_POLAR_RIDGE, ids.STRUCTURAL_COMPONENTS
-    ) == pytest.approx(destination_before + amount_t)
-
+    assert sim.inventory.amount(destination_id, ids.STRUCTURAL_COMPONENTS) == pytest.approx(
+        destination_before + amount_t
+    )
 
 def test_runtime_snapshot_reads_all_projections_at_one_clock_sync(tmp_path):
     now = [0.0]

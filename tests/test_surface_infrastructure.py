@@ -6,6 +6,7 @@ import json
 from space_idle import AdvanceTime, DevelopSurfaceCell, GetLocation, GetProjects, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
+from space_idle.shared import SpatialNodeId
 from space_idle.surface_infrastructure import SURFACE_DISTRIBUTION_CAPABILITY
 
 
@@ -202,10 +203,17 @@ def test_surface_gateway_handling_capability_uses_location_surface_infrastructur
 
 def test_remote_surface_route_available_capacity_uses_location_surface_infrastructure():
     sim = build_game_application()._simulation
+    origin = SpatialNodeId("test.location.lunar_ridge")
+    destination = SpatialNodeId("test.location.lunar_nearside")
+    sim.graph.found_location(origin, "Ridge", ids.MOON, ids.MOON_CELL_SOUTH_POLAR_RIDGE)
+    sim.graph.found_location(destination, "Nearside", ids.MOON, ids.MOON_CELL_NEARSIDE_MARE)
+    sim.logistics.synchronize_surface_access_routes()
+    sim.logistics.add_fleet_units(ids.SURFACE_CARGO_HAULER, 1, origin, day=sim.day)
+
     allocation_id = sim.logistics.create_transport_allocation(
         ids.SURFACE_CARGO_HAULER,
-        ids.SOUTH_POLAR_RIDGE,
-        ids.NEARSIDE_MARE,
+        origin,
+        destination,
         target_units=1,
         day=sim.day,
     )
@@ -215,12 +223,8 @@ def test_remote_surface_route_available_capacity_uses_location_surface_infrastru
         initial.nominal.forward_t_per_day
     )
 
-    sim.graph.develop_surface_cell(
-        ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_SOUTH_POLAR_PLAIN
-    )
-    sim.graph.develop_surface_cell(
-        ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_EQUATORIAL_HIGHLANDS
-    )
+    sim.graph.develop_surface_cell(origin, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
+    sim.graph.develop_surface_cell(origin, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
     sim.logistics.synchronize_surface_access_routes()
     constrained = sim.logistics.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert constrained.nominal.forward_t_per_day > 0.0
@@ -230,8 +234,8 @@ def test_remote_surface_route_available_capacity_uses_location_surface_infrastru
         for factor in constrained.limiting_factors
     )
 
-    sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, ids.SOUTH_POLAR_RIDGE)
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.SOUTH_POLAR_RIDGE)
+    sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, origin)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, origin)
     supplied = sim.logistics.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert 0.0 < supplied.available.forward_t_per_day < supplied.nominal.forward_t_per_day
     assert any(

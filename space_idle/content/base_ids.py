@@ -25,12 +25,9 @@ PROPELLANT = DefinitionId("base.resource.chemical_propellant")
 EARTH_BODY = CelestialBodyId("base.body.earth")
 MOON = CelestialBodyId("base.body.moon")
 
-# Player-operated/pre-existing economic Locations. These IDs continue to own
-# Inventory/Facility/Fleet state, but are no longer static surface geography.
+# Player-operated/pre-existing economic Locations.  The standard scenario has
+# no lunar surface Location before the player completes a Founding Deployment.
 EARTH = SpatialNodeId("base.location.earth_industrial")
-SOUTH_POLAR_RIDGE = SpatialNodeId("base.location.lunar_south_polar_ridge")
-POLAR_COLD_TRAP = SpatialNodeId("base.location.lunar_polar_cold_trap")
-NEARSIDE_MARE = SpatialNodeId("base.location.lunar_nearside_mare")
 
 # Non-surface spatial nodes.
 LEO = SpatialNodeId("base.node.low_earth_orbit")
@@ -49,8 +46,8 @@ MOON_CELL_NEARSIDE_MARE = SurfaceCellId("base.cell.moon.nearside_mare")
 MOON_CELL_EQUATORIAL_HIGHLANDS = SurfaceCellId("base.cell.moon.equatorial_highlands")
 MOON_CELL_FARSIDE_HIGHLANDS = SurfaceCellId("base.cell.moon.farside_highlands")
 
-# Construction project recipe IDs for geographic investment.
-LOCATION_FOUNDATION_PROJECT = DefinitionId("base.construction.location_foundation")
+# Geographic development and Founding Package IDs.
+LUNAR_ROBOTIC_FOUNDING_PACKAGE = DefinitionId("base.founding.robotic_lunar_outpost")
 SURFACE_CELL_DEVELOPMENT_PROJECT = DefinitionId("base.construction.surface_cell_development")
 
 # ---------------------------------------------------------------------------
@@ -136,6 +133,7 @@ SURFACE_CARGO_HAULER = DefinitionId("base.vehicle.surface_cargo_hauler")
 
 EARTH_LEO_LAUNCH_SERVICE = DefinitionId("base.transport_service.commercial_earth_launch")
 LEO_LUNAR_SERVICE = DefinitionId("base.transport_service.commercial_orbital_transfer")
+LUNAR_ORBIT_SURFACE_ACCESS_RULE = DefinitionId("base.route_rule.lunar_orbit_surface_access")
 LUNAR_LANDING_SERVICE = DefinitionId("base.transport_service.commercial_vacuum_lander")
 DIRECT_LUNAR_SERVICE = DefinitionId("base.transport_service.commercial_earth_lunar_direct")
 

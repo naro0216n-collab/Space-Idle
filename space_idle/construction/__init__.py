@@ -10,7 +10,6 @@ from .models import (
     ConstructionProject,
     NewFacilityTarget,
     FacilityUpgradeTarget,
-    LocationFoundingTarget,
     SurfaceCellDevelopmentTarget,
     ProjectBlocker,
 )
@@ -27,7 +26,6 @@ __all__ = [
     "ConstructionProject",
     "NewFacilityTarget",
     "FacilityUpgradeTarget",
-    "LocationFoundingTarget",
     "SurfaceCellDevelopmentTarget",
     "ProjectBlocker",
 ]

@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError, replace
 from space_idle import GetFleet, build_game_application
 from space_idle.composition.base_simulation import build_base_simulation
 from space_idle.content import base_ids as ids
-from space_idle.shared import EntityId, RouteId
+from space_idle.shared import EntityId, RouteId, SpatialNodeId
 from space_idle.site import CapabilityRequirement, SiteRequirements
 from space_idle.transport.models import (
     DirectionalCapacity,
@@ -133,7 +133,7 @@ def test_fleet_free_read_does_not_materialize_an_empty_pool():
     lg = sim.logistics
     before = dict(lg.fleet_pools)
 
-    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.SOUTH_POLAR_RIDGE) == 0
+    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT) == 0
     assert lg.fleet_pools == before
 
 
@@ -143,7 +143,7 @@ def test_fleet_snapshot_read_does_not_materialize_an_empty_pool():
     before = dict(lg.fleet_pools)
 
     snapshot = lg.fleet_pool_snapshot(
-        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.SOUTH_POLAR_RIDGE
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
     )
     assert snapshot.total_units == 0
     assert snapshot.free_units == 0
@@ -521,17 +521,23 @@ def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
             ),
         ),
     )
+    destination_id = SpatialNodeId("test.location.multileg_surface")
+    sim.graph.found_location(
+        destination_id, "Multileg Surface", ids.MOON, ids.MOON_CELL_SOUTH_POLAR_RIDGE
+    )
+    lg.synchronize_surface_access_routes()
+    landing_route_id = next(
+        route.id for route in lg.routes.values()
+        if route.origin_id == ids.LUNAR_ORBIT and route.destination_id == destination_id
+    )
     lg.fleet_pool(vehicle_id, ids.LEO).total_units = 1
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     allocation_id = lg.create_transport_allocation(
         vehicle_id,
         ids.LEO,
-        ids.SOUTH_POLAR_RIDGE,
+        destination_id,
         target_units=1,
-        path=(
-            RouteId("base.route.leo_lunar_orbit"),
-            RouteId("base.route.lunar_orbit_ridge"),
-        ),
+        path=(RouteId("base.route.leo_lunar_orbit"), landing_route_id),
         day=sim.day,
     )
     snapshot = lg.transport_capacity_snapshot(allocation_id, day=sim.day)
@@ -580,8 +586,8 @@ def test_same_priority_allocation_result_does_not_depend_on_registration_order()
             for allocation in lg.transport_allocations.values()
         }
 
-    first = active_by_destination((ids.LUNAR_ORBIT, ids.SOUTH_POLAR_RIDGE))
-    second = active_by_destination((ids.SOUTH_POLAR_RIDGE, ids.LUNAR_ORBIT))
+    first = active_by_destination((ids.LUNAR_ORBIT, ids.EARTH))
+    second = active_by_destination((ids.EARTH, ids.LUNAR_ORBIT))
     assert first == second
 
 

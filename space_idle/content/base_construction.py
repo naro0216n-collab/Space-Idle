@@ -192,18 +192,6 @@ def build_spatial_development_recipes() -> dict:
     ))
     recipes = (
         SpatialDevelopmentRecipe(
-            ids.LOCATION_FOUNDATION_PROJECT,
-            "Surface Location Founding",
-            (
-                BuildResourceRequirement(ids.STRUCTURAL_COMPONENTS, 18.0),
-                BuildResourceRequirement(ids.MACHINERY, 12.0),
-                BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 8.0),
-            ),
-            120.0,
-            surface_site,
-            minimum_survey_knowledge_level=1,
-        ),
-        SpatialDevelopmentRecipe(
             ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
             "Surface Territory Development",
             (

@@ -7,7 +7,6 @@ from .models import (
     ConstructionProject,
     FacilityUpgradeRecipe,
     FacilityUpgradeTarget,
-    LocationFoundingTarget,
     NewFacilityTarget,
     ProjectRecipe,
     ProjectStatus,
@@ -88,8 +87,6 @@ class ConstructionRulesMixin:
 
     def _spatial_target_cell(self, project: ConstructionProject) -> SurfaceCellId | None:
         target = project.target
-        if isinstance(target, LocationFoundingTarget):
-            return target.core_cell_id
         if isinstance(target, SurfaceCellDevelopmentTarget):
             return target.cell_id
         return None
@@ -124,27 +121,6 @@ class ConstructionRulesMixin:
                 ))
         return tuple(failures)
 
-    def location_founding_failures(
-        self, provider_location_id: SpatialNodeId, body_id, cell_id: SurfaceCellId,
-        day: int = 0, power: PowerSnapshot | None = None,
-    ) -> tuple[SiteRequirementFailure, ...]:
-        recipe_id = self.location_founding_recipe_id
-        if recipe_id is None or recipe_id not in self.spatial_recipes:
-            return (SiteRequirementFailure("construction_recipe", "location founding recipe is not configured"),)
-        graph = self.facilities.environment.graph
-        failures = [SiteRequirementFailure(code, detail) for code, detail in graph.location_foundation_failures(body_id, cell_id)]
-        if not graph.has_operational_node(provider_location_id):
-            failures.append(SiteRequirementFailure("construction_host", str(provider_location_id)))
-            return tuple(failures)
-        host_body = graph.operational_node(provider_location_id).body_id
-        if host_body != body_id:
-            failures.append(SiteRequirementFailure("construction_host_body", f"host={host_body}, target={body_id}"))
-        active = self.active_spatial_project_for_cell(cell_id)
-        if active is not None:
-            failures.append(SiteRequirementFailure("active_spatial_project", str(active.id)))
-        failures.extend(self._spatial_recipe_site_failures(recipe_id, provider_location_id, cell_id, day, power))
-        return tuple(dict.fromkeys(failures))
-
     def surface_cell_development_failures(
         self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
         day: int = 0, power: PowerSnapshot | None = None,
@@ -168,33 +144,20 @@ class ConstructionRulesMixin:
         power: PowerSnapshot | None = None,
     ) -> tuple[SiteRequirementFailure, ...]:
         target = project.target
-        if not isinstance(target, (LocationFoundingTarget, SurfaceCellDevelopmentTarget)):
-            raise TypeError("project is not a spatial development project")
+        if not isinstance(target, SurfaceCellDevelopmentTarget):
+            raise TypeError("project is not a surface development project")
         graph = self.facilities.environment.graph
-        failures: list[SiteRequirementFailure] = []
-        if isinstance(target, LocationFoundingTarget):
-            host_body = graph.operational_node(project.location_id).body_id
-            if host_body != target.body_id:
-                failures.append(SiteRequirementFailure(
-                    "construction_host_body",
-                    f"host={host_body}, target={target.body_id}",
-                ))
-            failures.extend(
-                SiteRequirementFailure(code, detail)
-                for code, detail in graph.location_foundation_failures(target.body_id, target.core_cell_id)
+        failures = [
+            SiteRequirementFailure(code, detail)
+            for code, detail in graph.surface_cell_development_failures(
+                project.location_id, target.cell_id
             )
-            if target.new_location_id in graph.locations or target.new_location_id in graph.nodes:
-                failures.append(SiteRequirementFailure("location_id_in_use", str(target.new_location_id)))
-            environment_context = target.core_cell_id
-        else:
-            failures.extend(
-                SiteRequirementFailure(code, detail)
-                for code, detail in graph.surface_cell_development_failures(project.location_id, target.cell_id)
-            )
-            environment_context = target.cell_id
-        snapshot = power if power is not None else self.power.snapshot(project.location_id, self.facilities, day)
+        ]
+        snapshot = power if power is not None else self.power.snapshot(
+            project.location_id, self.facilities, day
+        )
         failures.extend(self._spatial_recipe_site_failures(
-            target.recipe_id, project.location_id, environment_context, day, snapshot
+            target.recipe_id, project.location_id, target.cell_id, day, snapshot
         ))
         return tuple(dict.fromkeys(failures))
 

@@ -48,8 +48,12 @@ def _raw_request(port: int, path: str):
 def test_found_location_command_keeps_internal_location_identity_out_of_public_contract():
     schema = next(row for row in command_schema() if row["type"] == "FoundLocation")
     parameter_names = {row["name"] for row in schema["parameters"]}
+    assert parameter_names == {
+        "package_id", "staging_location_id", "core_cell_id",
+        "display_name", "vehicle_definition_id", "priority",
+    }
     assert "new_location_id" not in parameter_names
-    with pytest.raises(ApiPayloadError, match="unknown command fields: new_location_id"):
+    with pytest.raises(ApiPayloadError, match="unknown command fields: body_id, new_location_id, provider_location_id"):
         decode_command({
             "type": "FoundLocation",
             "payload": {
