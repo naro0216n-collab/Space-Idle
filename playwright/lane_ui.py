@@ -101,7 +101,7 @@ def run() -> None:
 
             assert page.locator("#laneTable").is_visible()
             lane_headers = page.locator("#laneTable th").all_inner_texts()
-            for required in ("要求容量", "優先度", "実効容量", "本日使用", "待ち需要", "状態"):
+            for required in ("要求容量", "優先度", "実効容量", "使用", "待ち需要", "状態"):
                 assert required in lane_headers, f"lane decision surface lacks {required}"
             demand_headers = page.locator("#demandTable th").all_inner_texts()
             for required in ("発生元", "資源", "要求", "輸送系内", "未充足"):
