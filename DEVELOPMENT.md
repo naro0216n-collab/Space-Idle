@@ -76,6 +76,12 @@ Publish Gateway、publish helper、CI/E2E harnessなど開発環境そのもの�
 
 ## Publish procedure
 
+GitHub反映の入口は差分種別で一意に決める。作業者がtransport都合で選択しない。
+
+- `.github/workflows/**` を含まない通常変更: `scripts/publish_request.py` だけを使用する。
+- `.github/workflows/**` だけのworkflow変更: `scripts/workflow_maintenance.py` だけを使用する。
+- workflowとそれ以外が混在するcommit: 反映しない。通常変更を先に独立checkpointとしてpublishし、その後workflow-only commitを作る。
+
 通常の実装はローカルGitで完結させ、GitHubへの転送だけを固定 `publish` branch上のPublish Gatewayへ委ねる。`publish` はゲーム開発branchではなく、Connector制約下でnative `git push`を代替するtransport control planeである。`temp` は通常publishの中継には使わず、ユーザー指定時またはGateway / workflow自体の隔離検証時だけ使用する。
 
 通常publishは次の順序に固定する。
@@ -146,6 +152,66 @@ python scripts/publish_request.py record \
 ```
 
 標準Connector経路はGit bundle request v6だけを扱う。旧patch transport、段階的旧helper、manual record fallback、任意call-budget調整は維持しない。
+
+
+### Workflow maintenance procedure
+
+workflow更新は通常Publish Gatewayへ流さない。`scripts/workflow_maintenance.py` は `.github/workflows/**` だけが変更されたcommitted targetを受け付け、他パスが一件でも含まれれば開始前に拒否する。対象branchは `develop` に固定し、`main` や通常source publishへ兼用しない。
+
+入口は次の1つだけとする。
+
+```bash
+python scripts/workflow_maintenance.py prepare \
+  --target-ref HEAD \
+  --output /tmp/space-idle-workflow-maintenance.json
+```
+
+`prepare` 後に `develop` HEADを一度だけ取得し、記録済みbaseと一致する場合だけConnector stageへ進む。
+
+```bash
+python scripts/workflow_maintenance.py connector-plan \
+  --manifest /tmp/space-idle-workflow-maintenance.json \
+  --github-repository naro0216n-collab/Space-Idle \
+  --target-remote-head <current-develop-head>
+```
+
+`connector-plan` は変更後workflow fileの `GitHub.create_blob` packetだけを生成する。call budgetは通常publishと同じ固定96 KiB profileであり、CLIから変更しない。1 workflow fileのblob action自体がprofile上限を超える場合は自動細分化せず停止する。workflow fileは1 Git blobであるため、分割transportへ読み替えない。
+
+全blob upload後にtree packetを生成する。削除workflowはtarget tree entryを `sha: null` として扱い、追加・変更workflowはlocal target commitの事前計算blob OIDを参照する。Connector返却blob SHAを後続入力へ採用しない。
+
+```bash
+python scripts/workflow_maintenance.py connector-tree \
+  --plan-dir /tmp/space-idle-workflow-maintenance.json.connector
+```
+
+`GitHub.create_tree` 成功後、その返却tree SHAがlocal target treeと一致した場合だけcommit packetを生成する。
+
+```bash
+python scripts/workflow_maintenance.py connector-commit \
+  --plan-dir /tmp/space-idle-workflow-maintenance.json.connector \
+  --tree-sha <create-tree-result-sha>
+```
+
+commit packetはrecorded `develop` HEADを唯一のparent、検証済みtarget treeをtreeとして `GitHub.create_commit` を実行する。commit作成後、その返却SHAからnon-force ref update packetを生成する。
+
+```bash
+python scripts/workflow_maintenance.py connector-update \
+  --plan-dir /tmp/space-idle-workflow-maintenance.json.connector \
+  --commit-sha <create-commit-result-sha>
+```
+
+`advance-workflow-ref.json` の `GitHub.update_ref(force=false)` 実行後、`develop` を一度取得してremote HEAD/treeを検証する。
+
+```bash
+python scripts/workflow_maintenance.py verify-remote \
+  --plan-dir /tmp/space-idle-workflow-maintenance.json.connector \
+  --remote-head <develop-head-after-update> \
+  --remote-tree <develop-tree-after-update>
+```
+
+workflow maintenanceは通常publish stateへ動的に生成されたGitHub commit objectを擬似記録しない。`verify-remote` 成功時に旧ローカルrepoへrehydration-required markerを記録し、`publish_request.py` は以後の通常操作を拒否する。maintenance後は更新後 `develop` のFast CIが生成した `source-snapshot` からrepoを復元し、`publish_request.py init` を実行してから通常開発へ戻る。これによりworkflow maintenanceのcommit SHAを手作業で通常publish stateへ中継しない。
+
+`temp` はworkflow経路そのものの隔離検証に使用できるが、標準workflow maintenanceの中継・promotion元にはしない。`temp` で得たcommitを `develop` 入力へ再利用せず、`develop` 更新は常にlocal committed targetから独立して作成する。
 
 ### Publish failure handling
 

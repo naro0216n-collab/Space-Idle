@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 
 STATE_NAME = "space-idle-publish-state.json"
+WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
 REQUEST_VERSION = 6
 RECEIPT_VERSION = 3
 CONNECTOR_CALL_BUDGET_BYTES = 96 * 1024
@@ -62,6 +63,11 @@ def _state_path(repo: Path) -> Path:
 
 
 def _read_state(repo: Path) -> dict[str, str]:
+    marker = _git_dir(repo) / WORKFLOW_REHYDRATE_MARKER_NAME
+    if marker.exists():
+        raise PublishStateError(
+            "workflow maintenance updated develop; restore the latest source-snapshot and run init before normal publish"
+        )
     path = _state_path(repo)
     if not path.exists():
         raise PublishStateError(
@@ -568,6 +574,9 @@ def cmd_init(args: argparse.Namespace) -> int:
             f"artifact/local tree mismatch: local={local_tree} remote={args.remote_tree}"
         )
     _write_state(repo, args.remote_commit, args.remote_tree, local_commit)
+    marker = _git_dir(repo) / WORKFLOW_REHYDRATE_MARKER_NAME
+    if marker.exists():
+        marker.unlink()
     print(json.dumps({"remote_commit": args.remote_commit, "remote_tree": args.remote_tree, "local_head": local_commit}, indent=2))
     return 0
 
@@ -640,7 +649,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     if workflow_paths:
         raise PublishStateError(
             "standard Publish Gateway cannot publish .github/workflows changes; "
-            "use the separately authorized workflow-maintenance path: "
+            "use `python scripts/workflow_maintenance.py prepare` for a workflow-only commit: "
             + ", ".join(workflow_paths)
         )
     message_text = args.message if args.message is not None else _default_message(repo, state, args.target_ref)
