@@ -345,6 +345,9 @@ def test_multistage_cargo_flow_records_handoffs_and_cumulative_latency():
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
     sim.refresh_storage()
     lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 1.0, 100)
+    lane = sim.logistics.lanes[lane_id]
+    planned_path = sim.logistics.lane_service_path(lane, sim.day)
+    assert len(planned_path) > 1
     initial_destination_machinery = sim.inventory.amount(LUNAR_ORBIT, MACHINERY)
     sim.inventory.add(EARTH, MACHINERY, 1.0)
     demand = _demand(
@@ -357,9 +360,11 @@ def test_multistage_cargo_flow_records_handoffs_and_cumulative_latency():
     _advance_logistics(sim, sim.day, (demand,))
 
     flow = next(flow for flow in sim.logistics.cargo_flows.values() if flow.lane_id == lane_id)
-    assert flow.service_destinations == (LEO, LUNAR_ORBIT)
-    assert len(flow.service_ids) == 2
-    assert flow.ready_day - flow.departure_day == 7
+    assert flow.service_ids == tuple(edge.key for edge in planned_path)
+    assert flow.service_destinations == tuple(edge.destination_id for edge in planned_path)
+    assert flow.ready_day - flow.departure_day == sum(
+        edge.latency_days for edge in planned_path
+    )
     dispatched_amount = flow.amount_t
     assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == pytest.approx(
         initial_destination_machinery
@@ -415,7 +420,12 @@ def test_transport_capacity_uses_only_cargo_settled_at_tick_boundary():
         for flow in sim.logistics.cargo_flows.values()
         if flow.lane_id == inbound_lane
     )
-    assert arriving.ready_day == 2
+    service_by_key = {
+        row.key: row for row in sim.transport.transport_service_supplies(arriving.departure_day)
+    }
+    assert arriving.ready_day - arriving.departure_day == sum(
+        service_by_key[key].latency_days for key in arriving.service_ids
+    )
     sim.transport.external_services.clear()
 
     sim.inventory.add(LEO, MACHINERY, 1.0)

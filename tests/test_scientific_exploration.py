@@ -39,6 +39,15 @@ def _fleet_row(app, definition_id, location_id):
     )
 
 
+def _advance_until_complete(app, exploration_id, *, max_days: int = 200) -> int:
+    state = app._simulation.scientific_exploration.campaigns[exploration_id]
+    for elapsed in range(max_days + 1):
+        if state.phase.value == "complete":
+            return elapsed
+        app.execute(AdvanceTime(1))
+    raise AssertionError(f"scientific exploration did not complete within {max_days} days: {exploration_id}")
+
+
 def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performance():
     app = build_game_application()
     sim = app._simulation
@@ -173,7 +182,6 @@ def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future
         str(ids.CISLUNAR_SCIENCE_EXPLORATION),
         str(ids.REUSABLE_ORBITAL_CARGO_TUG),
     ))
-    app.execute(AdvanceTime(2))
 
     path = tmp_path / "scientific-exploration.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -181,8 +189,9 @@ def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
     assert _fleet_row(loaded, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == _row(loaded).required_units
 
-    app.execute(AdvanceTime(6))
-    loaded.execute(AdvanceTime(6))
+    remaining_days = _advance_until_complete(app, ids.CISLUNAR_SCIENCE_EXPLORATION)
+    assert remaining_days > 0
+    loaded.execute(AdvanceTime(remaining_days))
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
     state = loaded._simulation.scientific_exploration.campaigns[ids.CISLUNAR_SCIENCE_EXPLORATION]
     assert state.phase.value == "complete"

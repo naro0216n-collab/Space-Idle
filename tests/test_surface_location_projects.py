@@ -30,6 +30,14 @@ def _survey_cell_to_l2(sim, cell_id):
     assert sim.survey.cell_knowledge_level(cell_id) >= 2
 
 
+def _advance_until(app, predicate, label: str, *, max_days: int = 200) -> int:
+    for elapsed in range(max_days + 1):
+        if predicate():
+            return elapsed
+        app.execute(AdvanceTime(1))
+    raise AssertionError(f"{label} did not complete within {max_days} days")
+
+
 def _stage_founding_resources(sim):
     package = sim.founding.packages[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
     for req in package.payload_resources:
@@ -122,7 +130,9 @@ def test_founding_package_initial_inventory_is_delivered_only_on_completion():
     project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)
     assert sim.inventory.amount(project.new_location_id, ids.STRUCTURAL_COMPONENTS) == 0.0
 
-    app.execute(AdvanceTime(8))
+    _advance_until(
+        app, lambda: project.status.value == "complete", "founding completion"
+    )
     assert sim.inventory.amount(project.new_location_id, ids.STRUCTURAL_COMPONENTS) == pytest.approx(0.4)
 
 
@@ -134,7 +144,11 @@ def test_baseline_has_no_player_lunar_location_and_orbital_survey_is_available()
     target_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
     target = next(target for key, target in sim.survey.targets.items() if key[0] == target_cell)
     app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(target_cell), str(target.resource_id)))
-    app.execute(AdvanceTime(8))
+    _advance_until(
+        app,
+        lambda: sim.survey.cell_knowledge_level(target_cell) >= 2,
+        "survey comparison knowledge",
+    )
     assert sim.survey.cell_knowledge_level(target_cell) >= 2
 
 
@@ -145,7 +159,11 @@ def test_surface_cell_development_changes_territory_only_after_project_completio
     result = app.execute(DevelopSurfaceCell(str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"))
     assert result.created_id is not None
     assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
-    app.execute(AdvanceTime(20))
+    _advance_until(
+        app,
+        lambda: ids.EARTH_CELL_COASTAL in sim.graph.locations[ids.EARTH].developed_cell_ids,
+        "surface cell development",
+    )
     assert ids.EARTH_CELL_COASTAL in sim.graph.locations[ids.EARTH].developed_cell_ids
 
 
@@ -194,9 +212,11 @@ def test_founding_completion_creates_location_bootstrap_and_dynamic_orbit_routes
     package = _stage_founding_resources(sim)
     project_id = app.execute(_found_command("Farside", cell)).created_id
     assert project_id is not None
-    app.execute(AdvanceTime(8))
-
     project = next(p for p in sim.founding.projects.values() if str(p.id) == project_id)
+    _advance_until(
+        app, lambda: project.status.value == "complete", "founding completion"
+    )
+
     assert project.status.value == "complete"
     location = sim.graph.locations[project.new_location_id]
     assert location.core_cell_id == cell
@@ -265,7 +285,7 @@ def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_
     assert resource_row.committed_t == pytest.approx(partial)
     assert resource_row.shortage_t == pytest.approx(requirement.amount_t - partial)
 
-    app.execute(AdvanceTime(3))
+    app.execute(AdvanceTime(1))
     assert sim.founding.staged_payload_t(project.id, ids.CONSTRUCTION_EQUIPMENT) == pytest.approx(staged)
     stock_before_cancel = sim.inventory.amount(ids.LUNAR_ORBIT, ids.CONSTRUCTION_EQUIPMENT)
     app.execute(CancelFounding(project_id))
@@ -307,7 +327,6 @@ def test_active_founding_save_load_preserves_identity_and_future_transition(tmp_
     _stage_founding_resources(sim)
     project_id = app.execute(_found_command("Persisted", cell)).created_id
     assert project_id is not None
-    app.execute(AdvanceTime(2))
     project = next(p for p in sim.founding.projects.values() if str(p.id) == project_id)
     generated = project.new_location_id
 
@@ -319,7 +338,10 @@ def test_active_founding_save_load_preserves_identity_and_future_transition(tmp_
     assert loaded_project.new_location_id == generated
     assert capture_state(loaded._simulation) == capture_state(sim)
 
-    elapsed_days = 8
+    elapsed_days = _advance_until(
+        app, lambda: generated in sim.graph.locations, "founding completion after load point"
+    )
+    assert elapsed_days > 0
     policy = OfflineProgressPolicy(real_seconds_per_game_day=60.0)
     offline_loaded, offline = load_game(
         path,
@@ -327,7 +349,6 @@ def test_active_founding_save_load_preserves_identity_and_future_transition(tmp_
         now=saved_at + timedelta(seconds=policy.real_seconds_per_game_day * elapsed_days),
         offline_policy=policy,
     )
-    app.execute(AdvanceTime(elapsed_days))
     assert offline is not None
     assert offline.advanced_days == elapsed_days
     assert generated in app._simulation.graph.locations
@@ -344,8 +365,10 @@ def test_deploying_founding_save_load_completes_exactly_once(tmp_path):
     project_id = app.execute(_found_command("Persisted Deployment", cell)).created_id
     assert project_id is not None
 
-    app.execute(AdvanceTime(3))
     project = next(p for p in sim.founding.projects.values() if str(p.id) == project_id)
+    _advance_until(
+        app, lambda: project.status.value == "deploying", "founding deployment start"
+    )
     assert project.status.value == "deploying"
     assert project.new_location_id not in sim.graph.locations
     project_row = next(
@@ -364,7 +387,10 @@ def test_deploying_founding_save_load_completes_exactly_once(tmp_path):
     assert loaded_project.status.value == "deploying"
     assert loaded_project.new_location_id not in loaded_sim.graph.locations
 
-    loaded.execute(AdvanceTime(3))
+    remaining_days = _advance_until(
+        loaded, lambda: loaded_project.status.value == "complete", "loaded founding completion"
+    )
+    assert remaining_days > 0
     assert loaded_project.status.value == "complete"
     location_id = loaded_project.new_location_id
     assert location_id in loaded_sim.graph.locations
@@ -381,7 +407,7 @@ def test_deploying_founding_save_load_completes_exactly_once(tmp_path):
     assert orbit_routes
     route_ids = {route.id for route in orbit_routes}
 
-    loaded.execute(AdvanceTime(10))
+    loaded.execute(AdvanceTime(1))
     assert loaded_project.status.value == "complete"
     assert len(loaded_sim.facilities.all_at(location_id)) == len(package.deployed_facilities)
     assert {

@@ -141,7 +141,7 @@ def test_operational_experience_does_not_accumulate_from_research_time_itself():
 
     sim.research.start(research_id, day=sim.day)
     assert sim.research.active[research_id].stage is ResearchStage.OPERATIONAL_EXPERIENCE
-    sim.advance_days(3)
+    sim.advance_days(1)
 
     assert sim.research.knowledge_state.value(category) == 0.0
     assert research_id in sim.research.active

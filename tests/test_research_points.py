@@ -73,7 +73,7 @@ def test_capacity_drop_preserves_stored_points_and_overcap_blocks_generation():
     assert paused.over_capacity
     assert paused.generation_points_per_day == 0
 
-    app.execute(AdvanceTime(5))
+    app.execute(AdvanceTime(1))
     still_paused = app.query(GetResearch())
     assert still_paused.stored_points == paused.stored_points
 

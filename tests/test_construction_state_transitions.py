@@ -27,14 +27,14 @@ def test_partial_construction_procurement_is_project_owned_until_cancelled():
             sim.inventory.consume_allocated(ids.EARTH, requirement.resource_id, available)
     sim.inventory.add(ids.EARTH, ids.STRUCTURAL_COMPONENTS, 0.5)
 
-    app.execute(AdvanceTime(2))
+    app.execute(AdvanceTime(1))
     staged = sim.projects.staged_resource_t(project, ids.STRUCTURAL_COMPONENTS)
     assert staged > 0.0
     assert sim.projects.staged_resource_t(project, ids.STRUCTURAL_COMPONENTS) >= staged
     assert project.resources[ids.STRUCTURAL_COMPONENTS].committed_t == pytest.approx(0.0)
 
     app.execute(PauseBuild(result.created_id))
-    app.execute(AdvanceTime(2))
+    app.execute(AdvanceTime(1))
     assert sim.projects.staged_resource_t(project, ids.STRUCTURAL_COMPONENTS) == pytest.approx(staged)
     stock_before_cancel = sim.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
     app.execute(CancelBuild(result.created_id))

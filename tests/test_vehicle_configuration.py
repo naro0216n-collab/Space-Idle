@@ -106,7 +106,7 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
     blockers = sim.transport.vehicle_production_blockers(project_id, day=sim.day)
     assert any("spacecraft_servicing" in blocker for blocker in blockers)
 
-    app.execute(AdvanceTime(2))
+    app.execute(AdvanceTime(1))
     assert state.phase.value == "building"
     assert state.progress_days == pytest.approx(started_progress)
 

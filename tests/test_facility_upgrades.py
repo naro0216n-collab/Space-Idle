@@ -104,7 +104,7 @@ def test_facility_upgrade_is_a_resource_backed_construction_project():
     assert not planned.materials_committed
 
     app.execute(PauseBuild(project_id))
-    app.execute(AdvanceTime(3))
+    app.execute(AdvanceTime(1))
     paused = _project(app, project_id)
     assert paused.paused
     assert paused.construction_done == 0

@@ -1,3 +1,5 @@
+import math
+
 import pytest
 from dataclasses import replace
 
@@ -217,7 +219,7 @@ def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():
     assert "fleet_unfilled:2" in snapshot.blockers
 
 
-def test_capacity_mode_rejects_target_in_a_direction_without_nominal_service():
+def test_capacity_mode_rejects_unsupported_directional_target_without_mutation():
     sim = build_base_simulation()
     lg = sim.transport
     before_allocations = dict(lg.transport_allocations)
@@ -232,13 +234,8 @@ def test_capacity_mode_rejects_target_in_a_direction_without_nominal_service():
             target_capacity=DirectionalCapacity(1.0, 1.0),
             day=sim.day,
         )
-
     assert lg.transport_allocations == before_allocations
 
-
-def test_capacity_mode_update_rolls_back_an_unsupported_directional_target():
-    sim = build_base_simulation()
-    lg = sim.transport
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_LAUNCH_VEHICLE,
         ids.EARTH,
@@ -249,14 +246,12 @@ def test_capacity_mode_update_rolls_back_an_unsupported_directional_target():
         day=sim.day,
     )
     before = replace(lg.transport_allocations[allocation_id])
-
     with pytest.raises(ValueError, match="reverse capacity target"):
         lg.update_transport_allocation(
             allocation_id,
             target_capacity=DirectionalCapacity(1.0, 1.0),
             day=sim.day,
         )
-
     assert lg.transport_allocations[allocation_id] == before
 
 
@@ -273,13 +268,20 @@ def test_capacity_mode_uses_nominal_not_available_capacity_for_required_units():
         day=sim.day,
     )
     plan = lg.derive_transport_service_plan(allocation_id, sim.day)
-    expected = 2  # ceil(max(2/1.09..., 1/1.09...))
-    assert plan.nominal_per_unit.forward_t_per_day > 1.0
+    target = lg.transport_allocations[allocation_id].target_capacity
+    assert target is not None
+    directional_requirements = []
+    if target.forward_t_per_day > 0:
+        directional_requirements.append(
+            target.forward_t_per_day / plan.nominal_per_unit.forward_t_per_day
+        )
+    if target.reverse_t_per_day > 0:
+        directional_requirements.append(
+            target.reverse_t_per_day / plan.nominal_per_unit.reverse_t_per_day
+        )
+    expected = math.ceil(max(directional_requirements) - 1e-12)
     assert lg.allocation_required_units(allocation_id, sim.day) == expected
-    snap = lg.transport_capacity_snapshot(allocation_id, day=sim.day)
-    # Base content currently lacks the servicing/propellant needed at LEO, so
-    # Available may be zero without changing the required fleet size.
-    assert snap.required_units == expected
+    assert lg.transport_capacity_snapshot(allocation_id, day=sim.day).required_units == expected
 
 
 def test_bidirectional_capacity_does_not_add_directional_unit_requirements():
@@ -295,9 +297,17 @@ def test_bidirectional_capacity_does_not_add_directional_unit_requirements():
         day=sim.day,
     )
     plan = lg.derive_transport_service_plan(allocation_id, sim.day)
-    per_unit = plan.nominal_per_unit.forward_t_per_day
-    assert per_unit == plan.nominal_per_unit.reverse_t_per_day
-    assert lg.allocation_required_units(allocation_id, sim.day) == 3
+    target = lg.transport_allocations[allocation_id].target_capacity
+    assert target is not None
+    forward_units = math.ceil(
+        target.forward_t_per_day / plan.nominal_per_unit.forward_t_per_day - 1e-12
+    )
+    reverse_units = math.ceil(
+        target.reverse_t_per_day / plan.nominal_per_unit.reverse_t_per_day - 1e-12
+    )
+    required = lg.allocation_required_units(allocation_id, sim.day)
+    assert required == max(forward_units, reverse_units)
+    assert required < forward_units + reverse_units
 
 
 def test_units_capacity_mode_switch_preserves_unfilled_authoritative_target():

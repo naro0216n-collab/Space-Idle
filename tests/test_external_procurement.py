@@ -9,9 +9,10 @@ from space_idle.composition.base_simulation import build_base_simulation
 from space_idle.content import base_ids as ids
 from space_idle.external_procurement import ProcurementDeliveryStatus
 from space_idle.persistence import load_game, save_game
+from space_idle.resource_claim import allocate_resource_claims
 from space_idle.resource_demand import ResourceDemand
+from space_idle.service_capacity import ServiceCapacityAllocationPlan
 from space_idle.shared import EntityId
-from space_idle.simulation import TickIntents
 
 
 def _demand(*, destination=ids.EARTH, amount=4.0, source=None) -> ResourceDemand:
@@ -38,8 +39,22 @@ def _enable_for_demand(sim, demand: ResourceDemand, *, period_budget_musd=None):
     )
 
 
-def _empty_intents(demand: ResourceDemand) -> TickIntents:
-    return TickIntents((demand,), (), ())
+def _plan_and_authorize_procurement(sim, demand: ResourceDemand):
+    raw_logistics = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
+    raw_procurement = sim.logistics.plan_external_procurement(
+        sim.day, (demand,), raw_logistics
+    )
+    funds = sim.external_economy.allocate(
+        raw_logistics.spending_requests + raw_procurement.spending_requests,
+        sim.day,
+    )
+    logistics = sim.logistics.authorize_capacity_logistics(
+        raw_logistics, funds, sim.day
+    )
+    procurement = sim.logistics.authorize_external_procurement(
+        raw_procurement, funds
+    )
+    return raw_logistics, raw_procurement, logistics, procurement, funds
 
 
 def test_external_procurement_defaults_to_deny():
@@ -47,11 +62,13 @@ def test_external_procurement_defaults_to_deny():
     demand = _demand(amount=5.0)
     sim.inventory.stock[(ids.EARTH, ids.MACHINERY)] = 0.0
 
-    plan = sim._plan_tick(_empty_intents(demand))
+    logistics = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
+    procurement = sim.logistics.plan_external_procurement(
+        sim.day, (demand,), logistics
+    )
 
-    assert plan.external_demands == (demand,)
-    assert plan.procurement.orders == ()
-    assert plan.procurement.spending_requests == ()
+    assert procurement.orders == ()
+    assert procurement.spending_requests == ()
 
 
 def test_external_procurement_uses_funds_then_latency_and_storage_admission():
@@ -60,24 +77,19 @@ def test_external_procurement_uses_funds_then_latency_and_storage_admission():
     sim.inventory.stock[(ids.EARTH, ids.MACHINERY)] = 0.0
     _enable_for_demand(sim, demand)
 
-    intents = _empty_intents(demand)
-    snapshot = sim._physical_tick_snapshot()
-    plan = sim._plan_tick(intents)
-    allocations = sim._allocate_tick(snapshot, intents, plan)
-
-    assert len(plan.procurement.orders) == 1
-    order = plan.procurement.orders[0]
-    assert order.delivery_node_id == ids.EARTH
-    assert allocations.procurement.orders[0].amount_t == pytest.approx(5.0)
-    assert any(
-        row.request_id == order.funds_request_id for row in allocations.funds.rows
+    _, raw_procurement, _, procurement, funds = _plan_and_authorize_procurement(
+        sim, demand
     )
+
+    assert len(raw_procurement.orders) == 1
+    order = raw_procurement.orders[0]
+    assert order.delivery_node_id == ids.EARTH
+    assert procurement.orders[0].amount_t == pytest.approx(5.0)
+    assert any(row.request_id == order.funds_request_id for row in funds.rows)
 
     before_funds = sim.external_economy.account.funds_musd
     before_stock = sim.inventory.amount(ids.EARTH, ids.MACHINERY)
-    sim.logistics.advance_external_procurement(
-        sim.day, allocations.procurement, allocations.funds
-    )
+    sim.logistics.advance_external_procurement(sim.day, procurement, funds)
 
     assert sim.inventory.amount(ids.EARTH, ids.MACHINERY) == pytest.approx(before_stock)
     delivery = next(iter(sim.logistics.procurement_deliveries.values()))
@@ -108,16 +120,13 @@ def test_external_procurement_budget_scales_physical_order_before_execution():
     assert unit_price is not None
     _enable_for_demand(sim, demand, period_budget_musd=unit_price * 2.5)
 
-    intents = _empty_intents(demand)
-    snapshot = sim._physical_tick_snapshot()
-    plan = sim._plan_tick(intents)
-    allocations = sim._allocate_tick(snapshot, intents, plan)
-
-    assert plan.procurement.orders[0].requested_amount_t == pytest.approx(10.0)
-    assert allocations.procurement.orders[0].amount_t == pytest.approx(2.5)
-    sim.logistics.advance_external_procurement(
-        sim.day, allocations.procurement, allocations.funds
+    _, raw_procurement, _, procurement, funds = _plan_and_authorize_procurement(
+        sim, demand
     )
+
+    assert raw_procurement.orders[0].requested_amount_t == pytest.approx(10.0)
+    assert procurement.orders[0].amount_t == pytest.approx(2.5)
+    sim.logistics.advance_external_procurement(sim.day, procurement, funds)
     delivery = next(iter(sim.logistics.procurement_deliveries.values()))
     assert delivery.amount_t == pytest.approx(2.5)
 
@@ -128,13 +137,8 @@ def test_external_procurement_arrival_waits_for_storage_capacity():
     sim.inventory.stock[(ids.EARTH, ids.MACHINERY)] = 0.0
     _enable_for_demand(sim, demand)
 
-    intents = _empty_intents(demand)
-    snapshot = sim._physical_tick_snapshot()
-    plan = sim._plan_tick(intents)
-    allocations = sim._allocate_tick(snapshot, intents, plan)
-    sim.logistics.advance_external_procurement(
-        sim.day, allocations.procurement, allocations.funds
-    )
+    _, _, _, procurement, funds = _plan_and_authorize_procurement(sim, demand)
+    sim.logistics.advance_external_procurement(sim.day, procurement, funds)
     delivery = next(iter(sim.logistics.procurement_deliveries.values()))
 
     physical = dict(sim.inventory.physical_storage_capacity_t)
@@ -161,13 +165,8 @@ def test_external_procurement_delivery_roundtrips_through_save_load(tmp_path):
     sim.inventory.stock[(ids.EARTH, ids.MACHINERY)] = 0.0
     _enable_for_demand(sim, demand)
 
-    intents = _empty_intents(demand)
-    snapshot = sim._physical_tick_snapshot()
-    plan = sim._plan_tick(intents)
-    allocations = sim._allocate_tick(snapshot, intents, plan)
-    sim.logistics.advance_external_procurement(
-        sim.day, allocations.procurement, allocations.funds
-    )
+    _, _, _, procurement, funds = _plan_and_authorize_procurement(sim, demand)
+    sim.logistics.advance_external_procurement(sim.day, procurement, funds)
     before = next(iter(sim.logistics.procurement_deliveries.values()))
 
     path = tmp_path / "external-procurement.json"
@@ -194,25 +193,24 @@ def test_remote_procurement_replenishes_logistics_source_without_bypassing_trans
     )
     sim.logistics.create_lane(ids.EARTH, ids.LEO, 1.0, 70)
 
-    intents = _empty_intents(demand)
-    snapshot = sim._physical_tick_snapshot()
-    plan = sim._plan_tick(intents)
-    assert plan.logistics.dispatches
-    assert len(plan.procurement.orders) == 1
-    order = plan.procurement.orders[0]
+    raw_logistics, raw_procurement, logistics, procurement, funds = (
+        _plan_and_authorize_procurement(sim, demand)
+    )
+    assert raw_logistics.dispatches
+    assert len(raw_procurement.orders) == 1
+    order = raw_procurement.orders[0]
     assert order.delivery_node_id == ids.EARTH
     assert order.delivery_node_id != demand.destination_id
 
-    allocations = sim._allocate_tick(snapshot, intents, plan)
-    assert allocations.transport.executable_dispatches == ()
-    sim.logistics.advance_external_procurement(
-        sim.day, allocations.procurement, allocations.funds
+    resources = allocate_resource_claims(logistics.claims, sim.inventory)
+    no_services = ServiceCapacityAllocationPlan((), (), {}, {}, {})
+    transport = sim.logistics.allocate_capacity_logistics_execution(
+        sim.day, logistics, resources, no_services
     )
+    assert transport.executable_dispatches == ()
+    sim.logistics.advance_external_procurement(sim.day, procurement, funds)
     sim.logistics.advance_capacity_logistics(
-        sim.day,
-        allocations.logistics,
-        allocations.funds,
-        allocations.transport,
+        sim.day, logistics, funds, transport
     )
 
     assert sim.logistics.cargo_flows == {}

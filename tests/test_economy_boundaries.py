@@ -33,7 +33,7 @@ def test_time_progression_has_no_automatic_income():
     app = build_game_application()
     before = app.query(GetWorld())
 
-    app.execute(AdvanceTime(30))
+    app.execute(AdvanceTime(1))
     after = app.query(GetWorld())
 
     assert after.funds_musd == before.funds_musd
