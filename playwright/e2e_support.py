@@ -13,7 +13,7 @@ from typing import Any, Callable
 # Process coalescing is a runner-specific optimization policy, not a list of tests.
 # The scenario set itself is derived from the current workflow job so additions or
 # reordering cannot silently diverge from what CI declares it will execute.
-COALESCED_CI_WORKFLOWS = frozenset({"Full Validation"})
+COALESCED_CI_WORKFLOW_FILES = frozenset({"full-validation.yml"})
 _WORKFLOW_SCENARIO_RE = re.compile(
     r"^\s*python(?:3)?\s+playwright/([A-Za-z_][A-Za-z0-9_]*)\.py(?:\s.*)?$"
 )
@@ -106,16 +106,16 @@ def _declared_job_scenarios(path: Path, job_name: str) -> tuple[str, ...]:
 def ci_suite() -> tuple[str, ...] | None:
     if os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
         return None
-    workflow_name = os.environ.get("GITHUB_WORKFLOW", "")
-    if workflow_name not in COALESCED_CI_WORKFLOWS:
+    workflow = _workflow_path()
+    if workflow is None:
+        return None
+    if workflow.name not in COALESCED_CI_WORKFLOW_FILES:
         return None
 
     job_name = os.environ.get("GITHUB_JOB", "")
-    workflow = _workflow_path()
-    if not job_name or workflow is None:
+    if not job_name:
         raise RuntimeError(
-            "coalesced CI E2E could not resolve its workflow job; "
-            "GITHUB_JOB and workflow file are required"
+            "coalesced CI E2E could not resolve its workflow job; GITHUB_JOB is required"
         )
     scenarios = _declared_job_scenarios(workflow, job_name)
     if not scenarios:

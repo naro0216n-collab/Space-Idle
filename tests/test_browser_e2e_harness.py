@@ -150,7 +150,7 @@ def test_ci_suite_is_derived_from_current_job_commands_including_future_addition
     monkeypatch, tmp_path
 ) -> None:
     support = _load_module("space_idle_e2e_support_ci_test", PLAYWRIGHT_DIR / "e2e_support.py")
-    workflow = tmp_path / "full.yml"
+    workflow = tmp_path / "full-validation.yml"
     declared = ["acceptance", "interaction_continuity", "future_browser_contract"]
     _write_workflow(workflow, workflow_name="Full Validation", job="webkit-e2e", scenarios=declared)
     _configure_ci(
@@ -176,7 +176,7 @@ def test_ci_fails_closed_when_new_first_scenario_does_not_create_suite_marker(
     monkeypatch, tmp_path
 ) -> None:
     support = _load_module("space_idle_e2e_support_ci_guard_test", PLAYWRIGHT_DIR / "e2e_support.py")
-    workflow = tmp_path / "full.yml"
+    workflow = tmp_path / "full-validation.yml"
     _write_workflow(
         workflow,
         workflow_name="Full Validation",
@@ -201,7 +201,7 @@ def test_ci_fails_closed_when_new_first_scenario_does_not_create_suite_marker(
 
 def test_fast_ci_remains_independent_even_as_its_scenario_list_changes(monkeypatch, tmp_path) -> None:
     support = _load_module("space_idle_e2e_support_fast_test", PLAYWRIGHT_DIR / "e2e_support.py")
-    workflow = tmp_path / "fast.yml"
+    workflow = tmp_path / "ci.yml"
     _write_workflow(
         workflow,
         workflow_name="Fast CI",
@@ -223,8 +223,8 @@ def test_full_browser_jobs_derive_each_declared_suite_and_harness_contract() -> 
         support._declared_job_scenarios(workflow, "webkit-e2e"),
     ]
     assert all(suites)
-    assert "Full Validation" in support.COALESCED_CI_WORKFLOWS
-    assert "Fast CI" not in support.COALESCED_CI_WORKFLOWS
+    assert "full-validation.yml" in support.COALESCED_CI_WORKFLOW_FILES
+    assert "ci.yml" not in support.COALESCED_CI_WORKFLOW_FILES
 
     # Every scenario declared in any coalesced browser job must adopt the generic
     # entrypoint contract. Browser-specific additions are allowed; an unintegrated
