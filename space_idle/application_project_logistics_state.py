@@ -126,7 +126,7 @@ class LogisticsStateProjectorMixin:
                     control_mode=allocation.control_mode.value,
                     target_units=allocation.target_units,
                     target_capacity=None if allocation.target_capacity is None else self._capacity_row(allocation.target_capacity),
-                    active_units=allocation.active_units,
+                    active_units=sim.logistics.transport_active_units(allocation.id),
                     required_units=snapshot.required_units,
                     unfilled_units=snapshot.unfilled_units,
                     nominal=self._capacity_row(snapshot.nominal),

@@ -41,6 +41,7 @@ class TransportControlMode(str, Enum):
 
 
 class FleetReservationKind(str, Enum):
+    TRANSPORT = "transport"
     SCIENTIFIC_EXPLORATION = "scientific_exploration"
     SPECIAL_MISSION = "special_mission"
     OTHER = "other"
@@ -201,14 +202,11 @@ class TransportAllocation:
     path: tuple[RouteId, ...] | None = None
     path_policy: PathPolicy = PathPolicy.FASTEST
     paused: bool = False
-    active_units: int = 0
     last_operated_day: int | None = None
 
     def __post_init__(self) -> None:
         if self.anchor_node_id == self.destination_id:
             raise ValueError("transport allocation endpoints must differ")
-        if self.active_units < 0:
-            raise ValueError("transport allocation active units must be non-negative")
         if self.control_mode is TransportControlMode.UNITS:
             if self.target_units is None or self.target_units < 0 or self.target_capacity is not None:
                 raise ValueError("UNITS allocation requires only target_units")

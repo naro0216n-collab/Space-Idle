@@ -111,7 +111,7 @@ class SteadyLogisticsMixin:
             key=lambda row: (str(row.vehicle_definition_id), str(row.anchor_node_id), str(row.destination_id), str(row.id)),
         ):
             plan = self.derive_transport_service_plan(allocation.id, day)
-            if not plan.feasible or allocation.paused or allocation.active_units <= 0:
+            if not plan.feasible or allocation.paused or self.transport_active_units(allocation.id) <= 0:
                 continue
             snapshot = self.transport_capacity_snapshot(allocation.id, day=day)
             definition = self.vehicle_defs[allocation.vehicle_definition_id]
@@ -1020,7 +1020,7 @@ class SteadyLogisticsMixin:
                 directional.forward_t_per_day > 1e-12
                 or directional.reverse_t_per_day > 1e-12
             ):
-                self.transport_allocations[allocation_id].last_operated_day = day
+                self.record_transport_operation(allocation_id, day)
         return tuple(activities)
 
     def _external_policy_blockers_for_lane(

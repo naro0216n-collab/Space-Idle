@@ -71,7 +71,6 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
                 "path": None if row.path is None else [str(route_id) for route_id in row.path],
                 "path_policy": row.path_policy.value,
                 "paused": row.paused,
-                "active_units": row.active_units,
                 "last_operated_day": row.last_operated_day,
             }
             for row in sorted(lg.transport_allocations.values(), key=lambda row: str(row.id))
@@ -191,7 +190,6 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             target_capacity=None if target is None else DirectionalCapacity(float(target["forward_t_per_day"]), float(target["reverse_t_per_day"])),
             path=None if row.get("path") is None else tuple(RouteId(value) for value in row["path"]),
             path_policy=PathPolicy(row.get("path_policy", "fastest")), paused=bool(row.get("paused", False)),
-            active_units=int(row.get("active_units", 0)),
             last_operated_day=None if row.get("last_operated_day") is None else int(row["last_operated_day"]),
         )
         lg.transport_allocations[allocation.id] = allocation
@@ -438,15 +436,33 @@ def validate_runtime(sim: Any) -> None:
         _require(reservation.vehicle_definition_id in lg.vehicle_defs, f"fleet reservation references unknown vehicle definition: {reservation_id}")
         _require(sim.graph.has_operational_node(reservation.operational_node_id), f"fleet reservation references unknown location: {reservation_id}")
         _require(reservation.units > 0, f"fleet reservation has non-positive units: {reservation_id}")
+        if reservation.kind is FleetReservationKind.TRANSPORT:
+            _require(
+                reservation.owner_id in lg.transport_allocations,
+                f"transport fleet reservation references unknown allocation: {reservation_id}/{reservation.owner_id}",
+            )
+            allocation = lg.transport_allocations[reservation.owner_id]
+            _require(
+                reservation_id == lg._transport_reservation_id(allocation.id),
+                f"transport fleet reservation id mismatch: {reservation_id}/{allocation.id}",
+            )
+            _require(
+                reservation.vehicle_definition_id == allocation.vehicle_definition_id,
+                f"transport fleet reservation vehicle mismatch: {reservation_id}/{allocation.id}",
+            )
+            _require(
+                reservation.operational_node_id == allocation.anchor_node_id,
+                f"transport fleet reservation location mismatch: {reservation_id}/{allocation.id}",
+            )
     for allocation_id, allocation in lg.transport_allocations.items():
         _require(allocation_id == allocation.id, f"transport allocation key mismatch: {allocation_id}")
         _require(allocation.vehicle_definition_id in lg.vehicle_defs, f"transport allocation references unknown vehicle definition: {allocation_id}")
         _require(sim.graph.has_operational_node(allocation.anchor_node_id) and sim.graph.has_operational_node(allocation.destination_id), f"transport allocation references unknown endpoint: {allocation_id}")
-        _require(allocation.active_units >= 0, f"transport allocation has negative active units: {allocation_id}")
         if allocation.path is not None:
             lg.validate_path_structure(allocation.anchor_node_id, allocation.destination_id, allocation.path)
         required = lg.allocation_required_units(allocation_id, sim.day)
-        _require(allocation.active_units <= required, f"transport allocation exceeds target: {allocation_id}")
+        active_units = lg.transport_active_units(allocation_id)
+        _require(active_units <= required, f"transport allocation exceeds target: {allocation_id}")
     for relocation_id, relocation in lg.fleet_relocations.items():
         _require(relocation_id == relocation.id, f"fleet relocation key mismatch: {relocation_id}")
         _require(relocation.vehicle_definition_id in lg.vehicle_defs, f"fleet relocation references unknown vehicle definition: {relocation_id}")

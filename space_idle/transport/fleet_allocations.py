@@ -98,14 +98,32 @@ class FleetAllocationMixin:
         # of requiring the producing/owning Domain to know reconciliation rules.
         self.reconcile_fleet_allocations(day)
 
+    @staticmethod
+    def _transport_reservation_id(allocation_id: EntityId) -> EntityId:
+        return EntityId(f"fleet.transport:{allocation_id}")
+
+    def transport_active_units(self, allocation_id: EntityId) -> int:
+        reservation = self.fleet_reservations.get(
+            self._transport_reservation_id(allocation_id)
+        )
+        if reservation is None:
+            return 0
+        if (
+            reservation.kind is not FleetReservationKind.TRANSPORT
+            or reservation.owner_id != allocation_id
+        ):
+            raise RuntimeError(f"invalid transport fleet reservation: {allocation_id}")
+        return reservation.units
+
     def _allocation_units_at(
         self, vehicle_definition_id: DefinitionId, location_id: SpatialNodeId
     ) -> int:
         return sum(
-            allocation.active_units
-            for allocation in self.transport_allocations.values()
-            if allocation.vehicle_definition_id == vehicle_definition_id
-            and allocation.anchor_node_id == location_id
+            reservation.units
+            for reservation in self.fleet_reservations.values()
+            if reservation.kind is FleetReservationKind.TRANSPORT
+            and reservation.vehicle_definition_id == vehicle_definition_id
+            and reservation.operational_node_id == location_id
         )
 
     def _reserved_units_at(
@@ -144,8 +162,7 @@ class FleetAllocationMixin:
         pool = self.fleet_pools.get(self._pool_key(vehicle_definition_id, location_id))
         total_units = 0 if pool is None else pool.total_units
         committed = (
-            self._allocation_units_at(vehicle_definition_id, location_id)
-            + self._reserved_units_at(vehicle_definition_id, location_id)
+            self._reserved_units_at(vehicle_definition_id, location_id)
             + self._relocating_units_from(vehicle_definition_id, location_id)
             + self._releasing_units_at(vehicle_definition_id, location_id)
         )
@@ -206,7 +223,7 @@ class FleetAllocationMixin:
         return FleetPoolSnapshot(
             vehicle_definition_id, location_id, total_units,
             self.fleet_free_units(vehicle_definition_id, location_id),
-            transport_units, exploration_units, max(0, reserved_units - exploration_units),
+            transport_units, exploration_units, max(0, reserved_units - transport_units - exploration_units),
             relocating_units, releasing_units,
         )
 
@@ -276,6 +293,32 @@ class FleetAllocationMixin:
             location_id,
             units,
         )
+
+    def resize_fleet_reservation(
+        self, reservation_id: EntityId, units: int
+    ) -> None:
+        """Resize an existing exclusive Fleet commitment.
+
+        This is a Fleet-domain state transition. Callers may request a new
+        commitment size but never mutate Fleet reservation state directly.
+        """
+        reservation = self.fleet_reservations.get(reservation_id)
+        if reservation is None:
+            raise KeyError(reservation_id)
+        if units < 0:
+            raise ValueError("fleet reservation units must be non-negative")
+        if units == reservation.units:
+            return
+        if units == 0:
+            del self.fleet_reservations[reservation_id]
+            return
+        if units > reservation.units:
+            additional = units - reservation.units
+            if self.fleet_free_units(
+                reservation.vehicle_definition_id, reservation.operational_node_id
+            ) < additional:
+                raise ValueError("insufficient free fleet units")
+        reservation.units = units
 
     def release_fleet_reservation(
         self, reservation_id: EntityId, *, day: int = 0
@@ -468,20 +511,18 @@ class FleetAllocationMixin:
     ) -> TransportServicePlan:
         """Derive a deterministic service plan without creating authoritative state."""
         preview = TransportAllocation(
-            EntityId(
+            id=EntityId(
                 f"transport.service.preview:{vehicle_definition_id}:{anchor_node_id}:{destination_id}:{path_policy.value}"
             ),
-            vehicle_definition_id,
-            anchor_node_id,
-            destination_id,
-            0,
-            TransportControlMode.UNITS,
-            0,
-            None,
-            path,
-            path_policy,
-            False,
-            0,
+            vehicle_definition_id=vehicle_definition_id,
+            anchor_node_id=anchor_node_id,
+            destination_id=destination_id,
+            priority=0,
+            control_mode=TransportControlMode.UNITS,
+            target_units=0,
+            path=path,
+            path_policy=path_policy,
+            paused=False,
         )
         return self._derive_transport_service_plan(preview, day)
 
@@ -728,18 +769,17 @@ class FleetAllocationMixin:
         self._transport_allocation_counter += 1
         allocation_id = EntityId(f"transport.allocation.{self._transport_allocation_counter}")
         allocation = TransportAllocation(
-            allocation_id,
-            vehicle_definition_id,
-            anchor_node_id,
-            destination_id,
-            priority,
-            control_mode,
-            target_units,
-            target_capacity,
-            path,
-            path_policy,
-            paused,
-            0,
+            id=allocation_id,
+            vehicle_definition_id=vehicle_definition_id,
+            anchor_node_id=anchor_node_id,
+            destination_id=destination_id,
+            priority=priority,
+            control_mode=control_mode,
+            target_units=target_units,
+            target_capacity=target_capacity,
+            path=path,
+            path_policy=path_policy,
+            paused=paused,
         )
         self.transport_allocations[allocation_id] = allocation
         try:
@@ -841,8 +881,12 @@ class FleetAllocationMixin:
 
     def delete_transport_allocation(self, allocation_id: EntityId, *, day: int = 0) -> None:
         allocation = self.transport_allocations[allocation_id]
-        if allocation.active_units > 0 and allocation.last_operated_day is not None:
-            self._new_release(allocation, allocation.active_units, day)
+        active_units = self.transport_active_units(allocation_id)
+        if active_units > 0 and allocation.last_operated_day is not None:
+            self._new_release(allocation, active_units, day)
+        reservation_id = self._transport_reservation_id(allocation_id)
+        if reservation_id in self.fleet_reservations:
+            self.resize_fleet_reservation(reservation_id, 0)
         del self.transport_allocations[allocation_id]
         self.reconcile_fleet_allocations(day)
 
@@ -1191,9 +1235,13 @@ class FleetAllocationMixin:
         )
 
     def reconcile_fleet_allocations(self, day: int = 0) -> None:
-        # Determine desired transport ownership by pool and priority, independent
-        # of insertion order. Existing non-transport commitments and releases are
-        # removed from the allocatable quantity first.
+        """Fulfill Transport targets through Fleet-owned reservations.
+
+        Transport owns target intent and priority. Fleet owns the exclusive unit
+        commitment.  Reconciliation therefore computes desired commitments from
+        Transport state, then changes only Fleet reservation/release state through
+        Fleet-domain operations.
+        """
         groups: dict[tuple[DefinitionId, SpatialNodeId], list[TransportAllocation]] = {}
         for allocation in self.transport_allocations.values():
             groups.setdefault(
@@ -1205,7 +1253,13 @@ class FleetAllocationMixin:
         ):
             pool = self.fleet_pool(definition_id, location_id)
             non_transport = (
-                self._reserved_units_at(definition_id, location_id)
+                sum(
+                    reservation.units
+                    for reservation in self.fleet_reservations.values()
+                    if reservation.kind is not FleetReservationKind.TRANSPORT
+                    and reservation.vehicle_definition_id == definition_id
+                    and reservation.operational_node_id == location_id
+                )
                 + self._relocating_units_from(definition_id, location_id)
                 + self._releasing_units_at(definition_id, location_id)
             )
@@ -1214,31 +1268,72 @@ class FleetAllocationMixin:
             remaining = allocatable
             ordered = sorted(rows, key=self._allocation_order_key)
             for allocation in ordered:
-                required = 0 if allocation.paused else self.allocation_required_units(allocation.id, day)
+                required = (
+                    0
+                    if allocation.paused
+                    else self.allocation_required_units(allocation.id, day)
+                )
                 grant = min(required, remaining)
                 desired[allocation.id] = grant
                 remaining -= grant
 
-            # Units displaced by priority/target changes must physically recover
-            # before they become free again.
+            # First shrink displaced commitments. Recovery remains a Fleet
+            # commitment when recently operated, so shrinking never teleports a
+            # unit into the free pool.
             for allocation in ordered:
+                current_units = self.transport_active_units(allocation.id)
                 target_active = desired[allocation.id]
-                if allocation.active_units > target_active:
-                    delta = allocation.active_units - target_active
-                    if allocation.last_operated_day is not None:
-                        self._new_release(allocation, delta, day)
-                    allocation.active_units = target_active
+                if current_units <= target_active:
+                    continue
+                delta = current_units - target_active
+                if allocation.last_operated_day is not None:
+                    self._new_release(allocation, delta, day)
+                reservation_id = self._transport_reservation_id(allocation.id)
+                self.resize_fleet_reservation(reservation_id, target_active)
 
-            # Newly created releases are still committed, so recompute actual
-            # free quantity before filling target deficits.
+            # Newly created releases still consume Fleet ownership. Fill target
+            # deficits only from the actual free pool.
             free = self.fleet_free_units(definition_id, location_id)
             for allocation in ordered:
+                current_units = self.transport_active_units(allocation.id)
                 target_active = desired[allocation.id]
-                if allocation.active_units >= target_active or free <= 0:
+                if current_units >= target_active or free <= 0:
                     continue
-                delta = min(target_active - allocation.active_units, free)
-                allocation.active_units += delta
+                delta = min(target_active - current_units, free)
+                reservation_id = self._transport_reservation_id(allocation.id)
+                if current_units == 0:
+                    self.reserve_fleet_units(
+                        reservation_id,
+                        allocation.id,
+                        FleetReservationKind.TRANSPORT,
+                        definition_id,
+                        location_id,
+                        delta,
+                    )
+                else:
+                    self.resize_fleet_reservation(
+                        reservation_id, current_units + delta
+                    )
                 free -= delta
+
+        # Remove stale Transport reservations whose Allocation no longer exists.
+        for reservation_id, reservation in tuple(self.fleet_reservations.items()):
+            if (
+                reservation.kind is FleetReservationKind.TRANSPORT
+                and reservation.owner_id not in self.transport_allocations
+            ):
+                raise RuntimeError(
+                    f"orphan transport fleet reservation: {reservation.owner_id}"
+                )
+
+    def record_transport_operation(self, allocation_id: EntityId, day: int) -> None:
+        """Record Transport activity through the Transport-owned state contract."""
+        allocation = self.transport_allocations[allocation_id]
+        if self.transport_active_units(allocation_id) <= 0:
+            raise RuntimeError(
+                f"cannot record operation for unfulfilled transport allocation: {allocation_id}"
+            )
+        allocation.last_operated_day = day
 
     @staticmethod
     def transport_service_request_id(allocation_id: EntityId) -> EntityId:
@@ -1254,7 +1349,7 @@ class FleetAllocationMixin:
         for allocation in sorted(
             self.transport_allocations.values(), key=lambda row: str(row.id)
         ):
-            if allocation.paused or allocation.active_units <= 0:
+            if allocation.paused or self.transport_active_units(allocation.id) <= 0:
                 continue
             definition = self.vehicle_defs[allocation.vehicle_definition_id]
             service_type = definition.turnaround_service_type
@@ -1263,10 +1358,10 @@ class FleetAllocationMixin:
             plan = self.derive_transport_service_plan(allocation.id, day)
             usage = usage_by_allocation.get(allocation.id, DirectionalCapacity())
             nominal_forward = (
-                plan.nominal_per_unit.forward_t_per_day * allocation.active_units
+                plan.nominal_per_unit.forward_t_per_day * self.transport_active_units(allocation.id)
             )
             nominal_reverse = (
-                plan.nominal_per_unit.reverse_t_per_day * allocation.active_units
+                plan.nominal_per_unit.reverse_t_per_day * self.transport_active_units(allocation.id)
             )
             forward_util = (
                 0.0
@@ -1281,7 +1376,7 @@ class FleetAllocationMixin:
             utilization = max(forward_util, reverse_util)
             requested = (
                 plan.servicing_units_per_full_utilization_day
-                * allocation.active_units
+                * self.transport_active_units(allocation.id)
                 * utilization
             )
             if requested <= 1e-12:
@@ -1310,7 +1405,7 @@ class FleetAllocationMixin:
         allocation = self.transport_allocations[allocation_id]
         plan = self.derive_transport_service_plan(allocation_id, day)
         required = self.allocation_required_units(allocation_id, day)
-        active = allocation.active_units
+        active = self.transport_active_units(allocation_id)
         nominal = DirectionalCapacity(
             plan.nominal_per_unit.forward_t_per_day * active,
             plan.nominal_per_unit.reverse_t_per_day * active,
