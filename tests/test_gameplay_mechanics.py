@@ -18,7 +18,7 @@ from space_idle import (
     build_game_application,
 )
 from space_idle.content import base_ids as ids
-from space_idle.logistics import PoweredAscentCapability, TransportPerformanceProfile, VehicleDef
+from space_idle.transport import PoweredAscentCapability, TransportPerformanceProfile, VehicleDef
 from space_idle.shared import DefinitionId, RouteId
 from space_idle.spatial import AtmosphereField, GravityField
 
@@ -88,7 +88,7 @@ def test_vehicle_route_eligibility_is_derived_from_operation_capability_not_vehi
     app = build_game_application()
     sim = app._simulation
     route_id = RouteId("base.route.earth_leo")
-    route = sim.logistics.routes[route_id]
+    route = sim.transport.routes[route_id]
 
     route_view = app.query(GetRoutes(route_id=str(route_id), include_modes=True)).items[0]
     lander_mode = next(mode for mode in route_view.modes if mode.id == str(ids.REUSABLE_SURFACE_CARGO_LANDER))
@@ -98,7 +98,7 @@ def test_vehicle_route_eligibility_is_derived_from_operation_capability_not_vehi
     gravity = sim.environment.require(route.origin_id, GravityField).local_acceleration_m_s2
     pressure = sim.environment.require(route.origin_id, AtmosphereField).pressure_pa
     definition_id = DefinitionId("test.vehicle.integrated_spacecraft")
-    sim.logistics.vehicle_defs[definition_id] = VehicleDef(
+    sim.transport.vehicle_defs[definition_id] = VehicleDef(
         id=definition_id,
         display_name="統合型試験宇宙船",
         performance=TransportPerformanceProfile(
@@ -110,8 +110,8 @@ def test_vehicle_route_eligibility_is_derived_from_operation_capability_not_vehi
             ),
         ),
     )
-    sim.logistics.add_fleet_units(definition_id, 1, ids.EARTH)
-    assert not sim.logistics.vehicle_route_failures(route_id, definition_id, sim.day)
+    sim.transport.add_fleet_units(definition_id, 1, ids.EARTH)
+    assert not sim.transport.vehicle_route_failures(route_id, definition_id, sim.day)
     mode = next(
         row for row in app.query(GetRoutes(route_id=str(route_id), include_modes=True)).items[0].modes
         if row.id == str(definition_id)

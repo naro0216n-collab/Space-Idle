@@ -89,7 +89,7 @@ def _make_nontrivial_state():
 
 
 def _transport_service_allocations(sim, day, plan):
-    requests = sim.logistics.transport_service_capacity_requests(day, plan.planned_usage)
+    requests = sim.transport.transport_service_capacity_requests(day, plan.planned_usage)
     locations = sim._active_locations() | set(sim.graph.operational_node_ids())
     powers = {
         location_id: sim.power.snapshot(location_id, sim.facilities, day)
@@ -214,12 +214,12 @@ def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_pa
         str(ids.REUSABLE_ORBITAL_CARGO_TUG),
     ))
     sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
-    relocation_id = sim.logistics.relocate_fleet(
+    relocation_id = sim.transport.relocate_fleet(
         ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LUNAR_ORBIT, ids.LEO, day=sim.day
     )
     allocation_entity_id = EntityId(allocation_id)
     lane_entity_id = EntityId(lane_id)
-    before_plan = sim.logistics.derive_transport_service_plan(allocation_entity_id, sim.day)
+    before_plan = sim.transport.derive_transport_service_plan(allocation_entity_id, sim.day)
     before_capacity = sim.logistics.current_transport_capacity_snapshot(
         allocation_entity_id, day=sim.day
     )
@@ -235,14 +235,19 @@ def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_pa
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     payload = json.loads(path.read_text(encoding="utf-8"))
     logistics = payload["state"]["logistics"]
+    transport = payload["state"]["transport"]
+    assert "fleet_pools" not in logistics
+    assert "transport_allocations" not in logistics
+    assert "lanes" not in transport
+    assert "cargo_flows" not in transport
     assert "service_plans" not in logistics
     assert "transport_capacity" not in logistics
     assert "vehicles" not in logistics
 
     loaded, _ = load_game(path, build_game_application)
     assert capture_state(loaded._simulation) == capture_state(sim)
-    assert relocation_id in loaded._simulation.logistics.fleet_relocations
-    after_plan = loaded._simulation.logistics.derive_transport_service_plan(
+    assert relocation_id in loaded._simulation.transport.fleet_relocations
+    after_plan = loaded._simulation.transport.derive_transport_service_plan(
         allocation_entity_id, loaded._simulation.day
     )
     after_capacity = loaded._simulation.logistics.current_transport_capacity_snapshot(
@@ -266,7 +271,7 @@ def test_save_load_preserves_vehicle_production_progress_and_completed_fleet_uni
     assert result.created_id is not None
     production_id = EntityId(result.created_id)
     app.execute(AdvanceTime(1))
-    original = app._simulation.logistics.vehicle_production_projects[production_id]
+    original = app._simulation.transport.vehicle_production_projects[production_id]
     assert original.phase.value == "building"
     assert original.progress_days > 0
 
@@ -275,17 +280,17 @@ def test_save_load_preserves_vehicle_production_progress_and_completed_fleet_uni
     loaded, _ = load_game(path, build_game_application)
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
-    before_units = loaded._simulation.logistics.fleet_pool(
+    before_units = loaded._simulation.transport.fleet_pool(
         REUSABLE_ORBITAL_CARGO_TUG, EARTH
     ).total_units
-    days = int(app._simulation.logistics.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production.days)
+    days = int(app._simulation.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production.days)
     app.execute(AdvanceTime(days))
     loaded.execute(AdvanceTime(days))
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
-    state = loaded._simulation.logistics.vehicle_production_projects[production_id]
+    state = loaded._simulation.transport.vehicle_production_projects[production_id]
     assert state.phase.value == "complete"
     assert state.completed_units == 1
-    assert loaded._simulation.logistics.fleet_pool(
+    assert loaded._simulation.transport.fleet_pool(
         REUSABLE_ORBITAL_CARGO_TUG, EARTH
     ).total_units == before_units + 1
 
@@ -293,7 +298,7 @@ def test_save_load_preserves_vehicle_production_progress_and_completed_fleet_uni
 def test_save_load_preserves_partial_vehicle_production_staging(tmp_path):
     app = build_game_application()
     sim = app._simulation
-    definition = sim.logistics.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG]
+    definition = sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG]
     for resource_id, _required_t in definition.production.resources:
         sim.inventory.stock[(EARTH, resource_id)] = 0.0
     sim.inventory.stock[(EARTH, ids.STRUCTURAL_COMPONENTS)] = 1.0
@@ -302,8 +307,8 @@ def test_save_load_preserves_partial_vehicle_production_staging(tmp_path):
     assert result.created_id is not None
     production_id = EntityId(result.created_id)
     app.execute(AdvanceTime(1))
-    state = sim.logistics.vehicle_production_projects[production_id]
-    staged = sim.logistics._vehicle_production_staged_t(
+    state = sim.transport.vehicle_production_projects[production_id]
+    staged = sim.transport._vehicle_production_staged_t(
         state, ids.STRUCTURAL_COMPONENTS
     )
     assert state.phase.value == "awaiting_inputs"
@@ -314,8 +319,8 @@ def test_save_load_preserves_partial_vehicle_production_staging(tmp_path):
     loaded, _ = load_game(path, build_game_application)
 
     assert capture_state(loaded._simulation) == capture_state(sim)
-    loaded_state = loaded._simulation.logistics.vehicle_production_projects[production_id]
-    assert loaded._simulation.logistics._vehicle_production_staged_t(
+    loaded_state = loaded._simulation.transport.vehicle_production_projects[production_id]
+    assert loaded._simulation.transport._vehicle_production_staged_t(
         loaded_state, ids.STRUCTURAL_COMPONENTS
     ) == staged
 

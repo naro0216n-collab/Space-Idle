@@ -107,14 +107,14 @@ class SteadyLogisticsMixin:
     def _service_edges(self, day: int) -> tuple[_ServiceEdge, ...]:
         edges: list[_ServiceEdge] = []
         for allocation in sorted(
-            self.transport_allocations.values(),
+            self.transport.transport_allocations.values(),
             key=lambda row: (str(row.vehicle_definition_id), str(row.anchor_node_id), str(row.destination_id), str(row.id)),
         ):
-            plan = self.derive_transport_service_plan(allocation.id, day)
-            if not plan.feasible or allocation.paused or self.transport_active_units(allocation.id) <= 0:
+            plan = self.transport.derive_transport_service_plan(allocation.id, day)
+            if not plan.feasible or allocation.paused or self.transport.transport_active_units(allocation.id) <= 0:
                 continue
-            snapshot = self.transport_capacity_snapshot(allocation.id, day=day)
-            definition = self.vehicle_defs[allocation.vehicle_definition_id]
+            snapshot = self.transport.transport_capacity_snapshot(allocation.id, day=day)
+            definition = self.transport.vehicle_defs[allocation.vehicle_definition_id]
             propellant_id = definition.propellant_resource_id
             empty_propellant = sum(
                 amount for _loc, rid, amount in plan.resource_t_per_empty_cycle_day
@@ -165,11 +165,11 @@ class SteadyLogisticsMixin:
                     )
                 )
 
-        for service in sorted(self.external_services.values(), key=lambda row: str(row.id)):
+        for service in sorted(self.transport.external_services.values(), key=lambda row: str(row.id)):
             if service.capacity_t_per_day <= 1e-12:
                 continue
-            for route in sorted(self.routes.values(), key=lambda row: str(row.id)):
-                if self.service_route_failures(route.id, service.id, day):
+            for route in sorted(self.transport.routes.values(), key=lambda row: str(row.id)):
+                if self.transport.service_route_failures(route.id, service.id, day):
                     continue
                 edges.append(
                     _ServiceEdge(
@@ -177,7 +177,7 @@ class SteadyLogisticsMixin:
                         route.origin_id,
                         route.destination_id,
                         service.capacity_t_per_day,
-                        self.performance_route_transit_days(
+                        self.transport.performance_route_transit_days(
                             route,
                             service.performance,
                             transit_multiplier=service.transit_time_multiplier,
@@ -385,7 +385,7 @@ class SteadyLogisticsMixin:
     ) -> dict[tuple[SpatialNodeId, DefinitionId], float]:
         totals: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
         for allocation_id, directional in sorted(used.items(), key=lambda row: str(row[0])):
-            snapshot = self.transport_capacity_snapshot(
+            snapshot = self.transport.transport_capacity_snapshot(
                 allocation_id, day=day, used=directional
             )
             for location_id, resource_id, amount in snapshot.operational_resource_demand:
@@ -424,7 +424,7 @@ class SteadyLogisticsMixin:
     ) -> dict[tuple[EntityId, SpatialNodeId, DefinitionId], float]:
         totals: dict[tuple[EntityId, SpatialNodeId, DefinitionId], float] = {}
         for allocation_id, directional in sorted(used.items(), key=lambda row: str(row[0])):
-            snapshot = self.transport_capacity_snapshot(
+            snapshot = self.transport.transport_capacity_snapshot(
                 allocation_id, day=day, used=directional
             )
             for location_id, resource_id, amount in snapshot.operational_resource_demand:
@@ -558,7 +558,7 @@ class SteadyLogisticsMixin:
         ):
             if requested <= 1e-12:
                 continue
-            allocation = self.transport_allocations[allocation_id]
+            allocation = self.transport.transport_allocations[allocation_id]
             claims.append(ResourceClaim(
                 self._operation_claim_id(allocation_id, location_id, resource_id),
                 location_id,
@@ -652,7 +652,7 @@ class SteadyLogisticsMixin:
         ):
             if requested <= 1e-12:
                 continue
-            allocation = self.transport_allocations[allocation_id]
+            allocation = self.transport.transport_allocations[allocation_id]
             claims.append(
                 ResourceClaim(
                     self._operation_claim_id(
@@ -713,7 +713,7 @@ class SteadyLogisticsMixin:
         execution_allocation: LogisticsExecutionAllocation | None = None,
     ) -> TransportCapacitySnapshot:
         """Project capacity from physical state and the resolved Transport node."""
-        snapshot = self.transport_capacity_snapshot(
+        snapshot = self.transport.transport_capacity_snapshot(
             allocation_id,
             day=day,
             used=self._derived_allocation_usage(allocation_id, day),
@@ -808,10 +808,10 @@ class SteadyLogisticsMixin:
             directional.forward_t_per_day > 1e-12
             or directional.reverse_t_per_day > 1e-12
         )
-        allocation = self.transport_allocations[allocation_id]
-        definition = self.vehicle_defs[allocation.vehicle_definition_id]
+        allocation = self.transport.transport_allocations[allocation_id]
+        definition = self.transport.vehicle_defs[allocation.vehicle_definition_id]
         if has_planned_usage and definition.turnaround_service_type is not None:
-            request_id = self.transport_service_request_id(allocation_id)
+            request_id = self.transport.transport_service_request_id(allocation_id)
             try:
                 request = service_allocations.request(request_id)
                 allocated = service_allocations.allocated(request_id)
@@ -831,10 +831,10 @@ class SteadyLogisticsMixin:
                     f"{definition.turnaround_service_type}"
                 )
 
-        service_plan = self.derive_transport_service_plan(allocation_id, day)
+        service_plan = self.transport.derive_transport_service_plan(allocation_id, day)
         surface_locations: set[SpatialNodeId] = set()
         for route_id in service_plan.forward_path + service_plan.reverse_path:
-            geometry = self.route_geometry(route_id)
+            geometry = self.transport.route_geometry(route_id)
             for endpoint in (geometry.origin, geometry.destination):
                 if endpoint.surface_cell_id is not None:
                     surface_locations.add(endpoint.node_id)
@@ -880,7 +880,7 @@ class SteadyLogisticsMixin:
         # ``plan``; location-wide upstream services such as surface
         # distribution are authoritative for the allocation regardless of
         # current cargo demand.
-        for allocation_id in sorted(self.transport_allocations, key=str):
+        for allocation_id in sorted(self.transport.transport_allocations, key=str):
             factor, limiting = self._transport_operation_allocation_factor(
                 allocation_id, plan, allocations, service_allocations, day
             )
@@ -1020,7 +1020,7 @@ class SteadyLogisticsMixin:
                 directional.forward_t_per_day > 1e-12
                 or directional.reverse_t_per_day > 1e-12
             ):
-                self.record_transport_operation(allocation_id, day)
+                self.transport.record_transport_operation(allocation_id, day)
         return tuple(activities)
 
     def _external_policy_blockers_for_lane(

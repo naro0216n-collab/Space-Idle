@@ -123,8 +123,8 @@ def test_current_authorized_transport_is_projected_as_boundary_flow_and_operatio
     app = build_game_application()
     sim = app._simulation
     sim.technology.completed.update({ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS})
-    sim.logistics.external_services.clear()
-    sim.logistics.create_transport_allocation(
+    sim.transport.external_services.clear()
+    sim.transport.create_transport_allocation(
         ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
     )
     sim.logistics.create_lane(EARTH, LEO, 100.0, 100)
@@ -160,8 +160,8 @@ def test_partial_current_dispatch_reduces_but_does_not_hide_unmet_demand():
     app = build_game_application()
     sim = app._simulation
     sim.technology.completed.update({ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS})
-    sim.logistics.external_services.clear()
-    sim.logistics.create_transport_allocation(
+    sim.transport.external_services.clear()
+    sim.transport.create_transport_allocation(
         ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
     )
     sim.logistics.create_lane(EARTH, LEO, 100.0, 100)

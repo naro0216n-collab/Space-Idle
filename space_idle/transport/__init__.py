@@ -31,5 +31,7 @@ __all__ = [
     'DirectionalCapacity', 'TransportAllocation', 'TransportServicePlan',
     'TransportCapacitySnapshot', 'CargoFlowBatch', 'LogisticsLane',
     'OperationEvaluationContext', 'OperationEvaluatorRegistry',
-    'build_default_operation_registry',
+    'build_default_operation_registry', 'TransportService',
 ]
+
+from .service import TransportService

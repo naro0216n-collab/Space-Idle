@@ -21,13 +21,13 @@ from space_idle.transport.models import (
 def _fleet_sim(count: int = 5):
     sim = build_base_simulation()
     # Core invariants must not depend on the provisional initial Fleet content.
-    sim.logistics.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).total_units = count
+    sim.transport.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).total_units = count
     return sim
 
 
 
 def _transport_service_allocations(sim, day, plan):
-    requests = sim.logistics.transport_service_capacity_requests(day, plan.planned_usage)
+    requests = sim.transport.transport_service_capacity_requests(day, plan.planned_usage)
     locations = sim._active_locations() | set(sim.graph.operational_node_ids())
     powers = {
         location_id: sim.power.snapshot(location_id, sim.facilities, day)
@@ -39,7 +39,7 @@ def _transport_service_allocations(sim, day, plan):
 
 def test_transport_fleet_commitment_is_owned_by_fleet_reservation():
     sim = _fleet_sim(2)
-    lg = sim.logistics
+    lg = sim.transport
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
@@ -64,7 +64,7 @@ def test_transport_fleet_commitment_is_owned_by_fleet_reservation():
 
 def test_runtime_validation_rejects_transport_reservation_outside_allocation_contract():
     sim = _fleet_sim(1)
-    lg = sim.logistics
+    lg = sim.transport
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
@@ -84,7 +84,7 @@ def test_runtime_validation_rejects_transport_reservation_outside_allocation_con
 
 def test_fleet_free_is_derived_from_exclusive_commitments():
     sim = _fleet_sim(5)
-    lg = sim.logistics
+    lg = sim.transport
     lg.reserve_fleet_units(
         EntityId("reservation.exploration"),
         EntityId("exploration.alpha"),
@@ -106,7 +106,7 @@ def test_fleet_free_is_derived_from_exclusive_commitments():
 
 def test_adding_fleet_units_immediately_refills_existing_transport_target():
     sim = _fleet_sim(1)
-    lg = sim.logistics
+    lg = sim.transport
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
@@ -126,7 +126,7 @@ def test_adding_fleet_units_immediately_refills_existing_transport_target():
 
 def test_releasing_fleet_reservation_immediately_refills_transport_target():
     sim = _fleet_sim(3)
-    lg = sim.logistics
+    lg = sim.transport
     reservation_id = EntityId("reservation.special")
     lg.reserve_fleet_units(
         reservation_id,
@@ -154,7 +154,7 @@ def test_releasing_fleet_reservation_immediately_refills_transport_target():
 def test_fleet_query_exposes_other_exclusive_reservations_in_pool_balance():
     app = build_game_application()
     sim = app._simulation
-    lg = sim.logistics
+    lg = sim.transport
     lg.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).total_units = 2
     reservation_id = EntityId("reservation.special.query")
     lg.reserve_fleet_units(
@@ -189,7 +189,7 @@ def test_fleet_query_exposes_other_exclusive_reservations_in_pool_balance():
 
 def test_fleet_free_read_does_not_materialize_an_empty_pool():
     sim = build_base_simulation()
-    lg = sim.logistics
+    lg = sim.transport
     before = dict(lg.fleet_pools)
 
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, SpatialNodeId("test.location.absent")) == 0
@@ -198,7 +198,7 @@ def test_fleet_free_read_does_not_materialize_an_empty_pool():
 
 def test_fleet_snapshot_read_does_not_materialize_an_empty_pool():
     sim = build_base_simulation()
-    lg = sim.logistics
+    lg = sim.transport
     before = dict(lg.fleet_pools)
 
     snapshot = lg.fleet_pool_snapshot(
@@ -211,7 +211,7 @@ def test_fleet_snapshot_read_does_not_materialize_an_empty_pool():
 
 def test_fleet_reservation_queries_return_read_only_snapshots_in_stable_order():
     sim = _fleet_sim(3)
-    lg = sim.logistics
+    lg = sim.transport
     later = EntityId("reservation.zeta")
     earlier = EntityId("reservation.alpha")
     for reservation_id, owner_id in (
@@ -238,7 +238,7 @@ def test_fleet_reservation_queries_return_read_only_snapshots_in_stable_order():
 def test_fleet_query_exposes_generic_other_reservations_without_hiding_commitments():
     app = build_game_application()
     sim = app._simulation
-    lg = sim.logistics
+    lg = sim.transport
     vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
     lg.fleet_pool(vehicle_id, ids.LEO).total_units = 2
     lg.reserve_fleet_units(
@@ -262,7 +262,7 @@ def test_fleet_query_exposes_generic_other_reservations_without_hiding_commitmen
 
 def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():
     sim = _fleet_sim(3)
-    lg = sim.logistics
+    lg = sim.transport
     low = lg.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
@@ -293,7 +293,7 @@ def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():
 
 def test_capacity_mode_rejects_target_in_a_direction_without_nominal_service():
     sim = build_base_simulation()
-    lg = sim.logistics
+    lg = sim.transport
     before_counter = lg._transport_allocation_counter
     before_allocations = dict(lg.transport_allocations)
 
@@ -314,7 +314,7 @@ def test_capacity_mode_rejects_target_in_a_direction_without_nominal_service():
 
 def test_capacity_mode_update_rolls_back_an_unsupported_directional_target():
     sim = build_base_simulation()
-    lg = sim.logistics
+    lg = sim.transport
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_LAUNCH_VEHICLE,
         ids.EARTH,
@@ -338,7 +338,7 @@ def test_capacity_mode_update_rolls_back_an_unsupported_directional_target():
 
 def test_capacity_mode_uses_nominal_not_available_capacity_for_required_units():
     sim = _fleet_sim(8)
-    lg = sim.logistics
+    lg = sim.transport
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
@@ -360,7 +360,7 @@ def test_capacity_mode_uses_nominal_not_available_capacity_for_required_units():
 
 def test_bidirectional_capacity_does_not_add_directional_unit_requirements():
     sim = _fleet_sim(10)
-    lg = sim.logistics
+    lg = sim.transport
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
@@ -378,7 +378,7 @@ def test_bidirectional_capacity_does_not_add_directional_unit_requirements():
 
 def test_units_capacity_mode_switch_preserves_unfilled_authoritative_target():
     sim = _fleet_sim(3)
-    lg = sim.logistics
+    lg = sim.transport
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
@@ -405,7 +405,7 @@ def test_units_capacity_mode_switch_preserves_unfilled_authoritative_target():
 
 def test_units_capacity_mode_switch_has_one_authoritative_target():
     sim = _fleet_sim(5)
-    lg = sim.logistics
+    lg = sim.transport
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
@@ -429,7 +429,7 @@ def test_units_capacity_mode_switch_has_one_authoritative_target():
 
 def test_relocation_requires_operational_support_and_propellant():
     sim = _fleet_sim(1)
-    lg = sim.logistics
+    lg = sim.transport
     try:
         lg.relocate_fleet(
             ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO, ids.LUNAR_ORBIT, day=0
@@ -442,7 +442,7 @@ def test_relocation_requires_operational_support_and_propellant():
 
 def test_relocation_plan_is_the_execution_contract_for_time_and_resources():
     sim = _fleet_sim(1)
-    lg = sim.logistics
+    lg = sim.transport
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
@@ -496,7 +496,7 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     from space_idle.resource_demand import ResourceDemand
 
     sim = _fleet_sim(1)
-    lg = sim.logistics
+    lg = sim.transport
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
     sim.refresh_storage()
@@ -513,7 +513,7 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     )
     assert required > 0.0
 
-    lane_id = lg.create_lane(ids.EARTH, ids.LEO, required, 100)
+    lane_id = sim.logistics.create_lane(ids.EARTH, ids.LEO, required, 100)
     sim.external_economy.create_policy(
         enabled=True,
         allowed_service_ids=tuple(lg.external_services),
@@ -530,26 +530,26 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
         100,
         ids.EARTH,
     )
-    plan = lg.plan_capacity_logistics(0, (demand,))
+    plan = sim.logistics.plan_capacity_logistics(0, (demand,))
     funds = sim.external_economy.allocate(plan.spending_requests, 0)
-    plan = lg.authorize_capacity_logistics(plan, funds, 0)
+    plan = sim.logistics.authorize_capacity_logistics(plan, funds, 0)
     allocations = allocate_resource_claims(plan.claims, sim.inventory)
     services = _transport_service_allocations(sim, 0, plan)
-    execution = lg.allocate_capacity_logistics_execution(
+    execution = sim.logistics.allocate_capacity_logistics_execution(
         0, plan, allocations, services
     )
-    lg.advance_capacity_logistics(
+    sim.logistics.advance_capacity_logistics(
         0, plan, funds, execution
     )
     flow = next(
-        row for row in lg.cargo_flows.values()
+        row for row in sim.logistics.cargo_flows.values()
         if row.lane_id == lane_id and row.demand_id == demand.id
     )
     assert flow.ready_day > 0
 
     # Prevent the normal planner from creating another shipment while time moves
     # to the boundary where this seeded Cargo Flow becomes ready.
-    lg.lanes[lane_id].paused = True
+    sim.logistics.lanes[lane_id].paused = True
     lg.external_services.clear()
     sim.advance_to_day(flow.ready_day)
     assert relocation.departure_day is None
@@ -559,12 +559,12 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
 
     assert relocation.departure_day == flow.ready_day
     assert relocation.arrival_day == flow.ready_day + relocation.travel_days
-    assert flow.id not in lg.cargo_flows
+    assert flow.id not in sim.logistics.cargo_flows
 
 
 def test_resource_support_uses_definition_capability_instead_of_magic_refueling_id():
     sim = _fleet_sim(1)
-    lg = sim.logistics
+    lg = sim.transport
     vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
     definition = lg.vehicle_defs[vehicle_id]
     lg.vehicle_defs[vehicle_id] = replace(
@@ -605,7 +605,7 @@ def test_resource_support_uses_definition_capability_instead_of_magic_refueling_
 
 def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execution():
     sim = _fleet_sim(1)
-    lg = sim.logistics
+    lg = sim.transport
     lg.external_services.clear()
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
@@ -637,14 +637,14 @@ def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execut
     assert snapshot.nominal.forward_t_per_day > 0
     assert snapshot.available.forward_t_per_day == 0
     assert snapshot.available.reverse_t_per_day == 0
-    lane_id = lg.create_lane(ids.LEO, ids.LUNAR_ORBIT, 1.0, 50)
-    lane = next(row for row in lg.lane_snapshot((), sim.day).lanes if row.lane_id == lane_id)
+    lane_id = sim.logistics.create_lane(ids.LEO, ids.LUNAR_ORBIT, 1.0, 50)
+    lane = next(row for row in sim.logistics.lane_snapshot((), sim.day).lanes if row.lane_id == lane_id)
     assert lane.effective_capacity_t_per_day == 0
 
 
 def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
     sim = _fleet_sim(1)
-    lg = sim.logistics
+    lg = sim.transport
     vehicle_id = ids.REUSABLE_SURFACE_CARGO_LANDER
     target_id = __import__('space_idle.shared', fromlist=['SpatialNodeId']).SpatialNodeId("test.location.landing_support")
     sim.graph.found_location(target_id, "Target", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS)
@@ -684,7 +684,7 @@ def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
 
 def test_relocation_keeps_units_exclusive_until_arrival():
     sim = _fleet_sim(3)
-    lg = sim.logistics
+    lg = sim.transport
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 10.0)
     relocation_id = lg.relocate_fleet(
@@ -708,7 +708,7 @@ def test_relocation_keeps_units_exclusive_until_arrival():
 def test_same_priority_allocation_result_does_not_depend_on_registration_order():
     def active_by_destination(destinations):
         sim = build_base_simulation()
-        lg = sim.logistics
+        lg = sim.transport
         target_id = __import__('space_idle.shared', fromlist=['SpatialNodeId']).SpatialNodeId("test.location.registration_order")
         sim.graph.found_location(target_id, "Target", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS)
         sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, target_id)
@@ -731,7 +731,7 @@ def test_same_priority_allocation_result_does_not_depend_on_registration_order()
 def test_same_priority_same_relation_with_different_targets_is_registration_order_independent():
     def active_by_target(targets):
         sim = _fleet_sim(2)
-        lg = sim.logistics
+        lg = sim.transport
         for target in targets:
             lg.create_transport_allocation(
                 ids.REUSABLE_ORBITAL_CARGO_TUG,
@@ -751,7 +751,7 @@ def test_same_priority_same_relation_with_different_targets_is_registration_orde
 
 def test_releasing_uses_remaining_cycle_time_not_a_new_full_cycle():
     sim = _fleet_sim(2)
-    lg = sim.logistics
+    lg = sim.transport
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
@@ -778,7 +778,7 @@ def test_releasing_uses_remaining_cycle_time_not_a_new_full_cycle():
 def test_fleet_query_exposes_releasing_units_and_recovery_time():
     app = build_game_application()
     sim = app._simulation
-    lg = sim.logistics
+    lg = sim.transport
     lg.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).total_units = 2
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
@@ -806,7 +806,7 @@ def test_fleet_query_exposes_releasing_units_and_recovery_time():
 def test_fleet_query_filters_transitional_state_with_pool_scope():
     app = build_game_application()
     sim = app._simulation
-    lg = sim.logistics
+    lg = sim.transport
     vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
     lg.fleet_pool(vehicle_id, ids.LEO).total_units = 3
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
@@ -839,7 +839,7 @@ def test_fleet_query_filters_transitional_state_with_pool_scope():
 
 def test_bidirectional_service_resource_use_counts_empty_return_not_loaded_return():
     sim = _fleet_sim(1)
-    lg = sim.logistics
+    lg = sim.transport
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
@@ -872,7 +872,7 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
     from space_idle.resource_demand import ResourceDemand
 
     sim = _fleet_sim(1)
-    lg = sim.logistics
+    lg = sim.transport
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
     allocation_id = lg.create_transport_allocation(
@@ -899,7 +899,7 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
             sim.inventory.consume_allocated(location_id, resource_id, stocked)
         sim.inventory.add(location_id, resource_id, amount / 2.0)
 
-    lane_id = lg.create_lane(
+    lane_id = sim.logistics.create_lane(
         ids.LEO, ids.LUNAR_ORBIT, physical.nominal.forward_t_per_day, 100
     )
     cargo_amount = physical.nominal.forward_t_per_day
@@ -914,15 +914,15 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
         100,
         ids.LEO,
     )
-    raw = lg.plan_capacity_logistics(0, (demand,))
+    raw = sim.logistics.plan_capacity_logistics(0, (demand,))
     funds = sim.external_economy.allocate(raw.spending_requests, 0)
-    logistics_plan = lg.authorize_capacity_logistics(raw, funds, 0)
+    logistics_plan = sim.logistics.authorize_capacity_logistics(raw, funds, 0)
     resources = allocate_resource_claims(logistics_plan.claims, sim.inventory)
     services = _transport_service_allocations(sim, 0, logistics_plan)
-    execution = lg.allocate_capacity_logistics_execution(
+    execution = sim.logistics.allocate_capacity_logistics_execution(
         0, logistics_plan, resources, services
     )
-    available = lg.current_transport_capacity_snapshot(
+    available = sim.logistics.current_transport_capacity_snapshot(
         allocation_id,
         day=0,
         execution_allocation=execution,
@@ -945,14 +945,14 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
     assert actual == pytest.approx(
         {key: amount / 2.0 for key, amount in forward_full.items()}
     )
-    assert lane_id in lg.lanes
+    assert lane_id in sim.logistics.lanes
 
 
 def test_relocation_waits_for_shared_resource_claim_allocation_before_departure():
     from space_idle.resource_claim import allocate_resource_claims
 
     sim = _fleet_sim(1)
-    lg = sim.logistics
+    lg = sim.transport
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
     sim.inventory.stock[(ids.LEO, ids.PROPELLANT)] = 0.0

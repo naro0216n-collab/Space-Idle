@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from ..shared import DefinitionId, RouteId
-from ..logistics import (
+from ..transport import (
     ExternalTransportServiceDef,
     LandingCapability,
-    LogisticsService,
     OperationSupportLocation,
     OperationSupportRequirement,
     ResourceSupportRequirement,

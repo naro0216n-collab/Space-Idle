@@ -15,7 +15,7 @@ from .site import SiteRequirements, evaluate_site_requirements
 from .transport.models import FleetReservationKind, RouteDef, RouteEndpoint, TransportOperationRequirement
 
 if TYPE_CHECKING:
-    from .logistics import LogisticsService
+    from .transport.service import TransportService
 
 
 @dataclass(frozen=True)
@@ -100,7 +100,7 @@ class ScientificExplorationService:
     facilities: FacilityBook
     inventory: InventoryBook
     power: PowerService
-    logistics: "LogisticsService"
+    transport: "TransportService"
     research: ResearchService
     campaigns: dict[DefinitionId, ScientificExplorationState] = field(default_factory=dict)
 
@@ -133,10 +133,10 @@ class ScientificExplorationService:
         day: int,
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[str, ...]:
-        vehicle_def = self.logistics.vehicle_defs[vehicle_definition_id]
+        vehicle_def = self.transport.vehicle_defs[vehicle_definition_id]
         route = definition.compatibility_route()
         failures = list(
-            self.logistics.fleet_campaign_failures(
+            self.transport.fleet_campaign_failures(
                 vehicle_definition_id,
                 route,
                 activity_days=definition.duration_days,
@@ -172,12 +172,12 @@ class ScientificExplorationService:
         day: int = 0,
     ) -> tuple[str, ...]:
         definition = self.definitions[definition_id]
-        if vehicle_definition_id not in self.logistics.vehicle_defs:
+        if vehicle_definition_id not in self.transport.vehicle_defs:
             return ("unknown_vehicle_definition",)
         failures = list(
             self._route_failures_for_fleet(definition, vehicle_definition_id, day)
         )
-        free = self.logistics.fleet_free_units(
+        free = self.transport.fleet_free_units(
             vehicle_definition_id, definition.origin_id
         )
         if free < definition.required_units:
@@ -253,7 +253,7 @@ class ScientificExplorationService:
             )
         definition = self.definitions[definition_id]
         reservation_id = EntityId(f"scientific_exploration:{definition_id}")
-        self.logistics.reserve_fleet_units(
+        self.transport.reserve_fleet_units(
             reservation_id,
             reservation_id,
             FleetReservationKind.SCIENTIFIC_EXPLORATION,
@@ -276,7 +276,7 @@ class ScientificExplorationService:
         definition = self.definitions[definition_id]
         self._restore_staged_inputs(definition)
         reservation_id = EntityId(f"scientific_exploration:{definition_id}")
-        self.logistics.release_fleet_reservation(reservation_id, day=day)
+        self.transport.release_fleet_reservation(reservation_id, day=day)
         state.vehicle_definition_id = None
         state.reserved_units = 0
         state.phase = ScientificExplorationPhase.AWAITING_FLEET
@@ -512,7 +512,7 @@ class ScientificExplorationService:
                 if definition.return_to_origin
                 else definition.destination_id
             )
-            self.logistics.complete_fleet_reservation(
+            self.transport.complete_fleet_reservation(
                 reservation_id,
                 final_location_id=final_location_id,
                 day=day,

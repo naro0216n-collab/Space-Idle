@@ -153,7 +153,7 @@ def test_orbital_survey_player_logistics_and_founding_create_first_surface_locat
 
     app.execute(CreateExternalServicePolicy(
         enabled=True,
-        allowed_service_ids=tuple(map(str, sim.logistics.external_services)),
+        allowed_service_ids=tuple(map(str, sim.transport.external_services)),
     ))
     lane_id = app.execute(CreateLogisticsLane(
         str(ids.EARTH), str(ids.LUNAR_ORBIT), 0.25, priority=70
@@ -224,7 +224,7 @@ def test_founding_requires_orbital_survey_and_does_not_create_target_inventory_b
     assert all(location_id != project.new_location_id for location_id, _resource in sim.inventory.stock)
     assert not any(
         project.new_location_id in {route.origin_id, route.destination_id}
-        for route in sim.logistics.routes.values()
+        for route in sim.transport.routes.values()
     )
 
 
@@ -245,12 +245,12 @@ def test_founding_completion_creates_location_bootstrap_and_dynamic_orbit_routes
     deployed_defs = {f.definition_id for f in sim.facilities.all_at(project.new_location_id)}
     assert {d.facility_def_id for d in package.deployed_facilities} <= deployed_defs
     orbit_routes = [
-        route for route_id, route in sim.logistics.routes.items()
+        route for route_id, route in sim.transport.routes.items()
         if str(route_id).startswith(DERIVED_SURFACE_ORBIT_ROUTE_PREFIX)
         and project.new_location_id in {route.origin_id, route.destination_id}
     ]
     assert len(orbit_routes) == 2
-    assert sim.logistics.fleet_pool(ids.REUSABLE_SURFACE_CARGO_LANDER, project.new_location_id).total_units == 1
+    assert sim.transport.fleet_pool(ids.REUSABLE_SURFACE_CARGO_LANDER, project.new_location_id).total_units == 1
 
 
 def test_founding_and_surface_development_claims_are_mutually_exclusive():
@@ -389,7 +389,7 @@ def test_surface_map_exposes_founding_package_vehicle_and_blockers():
 
 
 def test_active_founding_save_load_preserves_identity_and_future_transition(tmp_path):
-    assert SAVE_SCHEMA_VERSION == 40
+    assert SAVE_SCHEMA_VERSION == 41
     app = build_game_application()
     sim = app._simulation
     cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
@@ -464,7 +464,7 @@ def test_deploying_founding_save_load_completes_exactly_once(tmp_path):
         row.facility_def_id for row in package.deployed_facilities
     }
     orbit_routes = [
-        route for route_id, route in loaded_sim.logistics.routes.items()
+        route for route_id, route in loaded_sim.transport.routes.items()
         if str(route_id).startswith(DERIVED_SURFACE_ORBIT_ROUTE_PREFIX)
         and location_id in {route.origin_id, route.destination_id}
     ]

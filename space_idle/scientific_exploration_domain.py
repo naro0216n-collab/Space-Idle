@@ -85,7 +85,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             f"scientific exploration has duplicate consumable resource: {definition_id}",
         )
         for operation in definition.operations:
-            _require(sim.logistics.operation_registry.supports(operation.operation_type), f"scientific exploration references unknown operation: {definition_id}/{operation.operation_type}")
+            _require(sim.transport.operation_registry.supports(operation.operation_type), f"scientific exploration references unknown operation: {definition_id}/{operation.operation_type}")
         validate_site_requirements(definition.origin_requirements, capabilities, f"scientific_exploration:{definition_id}:origin", ctx.known_service_types)
         validate_site_requirements(definition.destination_requirements, capabilities, f"scientific_exploration:{definition_id}:destination", ctx.known_service_types)
 
@@ -98,7 +98,7 @@ def validate_runtime(sim: Any) -> None:
         _require(-1e-9 <= state.progress_days <= definition.duration_days + 1e-8, f"invalid scientific exploration progress: {definition_id}")
         _require(-1e-9 <= state.research_points_awarded <= definition.research_points_total + 1e-8, f"invalid scientific exploration RP award: {definition_id}")
         reservation_id = EntityId(f"scientific_exploration:{definition_id}")
-        reservation = sim.logistics.fleet_reservation_snapshot(reservation_id)
+        reservation = sim.transport.fleet_reservation_snapshot(reservation_id)
         if state.vehicle_definition_id is None:
             _require(state.reserved_units == 0, f"unassigned scientific exploration retains reserved units: {definition_id}")
             _require(reservation is None, f"unassigned scientific exploration retains Fleet reservation: {definition_id}")
@@ -106,7 +106,7 @@ def validate_runtime(sim: Any) -> None:
             _require(state.reserved_units > 0, f"completed scientific exploration lost Fleet usage record: {definition_id}")
             _require(reservation is None, f"completed scientific exploration retains Fleet reservation: {definition_id}")
         else:
-            _require(state.vehicle_definition_id in sim.logistics.vehicle_defs, f"scientific exploration references unknown vehicle definition: {definition_id}")
+            _require(state.vehicle_definition_id in sim.transport.vehicle_defs, f"scientific exploration references unknown vehicle definition: {definition_id}")
             _require(state.reserved_units == definition.required_units, f"scientific exploration Fleet unit mismatch: {definition_id}")
             _require(reservation is not None, f"scientific exploration lacks Fleet reservation: {definition_id}")
             if reservation is not None:

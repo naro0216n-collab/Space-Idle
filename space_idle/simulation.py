@@ -14,6 +14,7 @@ from .industry import IndustryService
 from .inventory import InventoryBook
 from .knowledge import DomainActivity
 from .logistics import LogisticsService
+from .transport.service import TransportService
 from .maintenance import FacilityMaintenanceService
 from .power import PowerPhysicalSnapshot, PowerService, PowerSnapshot
 from .projects import ProjectService
@@ -127,6 +128,7 @@ class Simulation:
     power: PowerService
     storage: StorageService
     industry: IndustryService
+    transport: TransportService
     logistics: LogisticsService
     projects: ProjectService
     technology: TechnologyState
@@ -155,7 +157,7 @@ class Simulation:
             locations.update(campaign.provider_operational_node_id for campaign in self.survey.campaigns.values())
         locations.update(
             project.operational_node_id
-            for project in self.logistics.vehicle_production_projects.values()
+            for project in self.transport.vehicle_production_projects.values()
         )
         if self.scientific_exploration is not None:
             for definition_id in self.scientific_exploration.campaigns:
@@ -190,8 +192,8 @@ class Simulation:
             demands.extend(self.research.resource_demands(self.day))
         if self.maintenance is not None:
             demands.extend(self.maintenance.resource_demands(self.day))
-        demands.extend(self.logistics.vehicle_production_resource_demands(self.day))
-        demands.extend(self.logistics.fleet_relocation_resource_demands(self.day))
+        demands.extend(self.transport.vehicle_production_resource_demands(self.day))
+        demands.extend(self.transport.fleet_relocation_resource_demands(self.day))
         if self.scientific_exploration is not None:
             demands.extend(self.scientific_exploration.resource_demands(self.day))
         seen: set[object] = set()
@@ -226,8 +228,8 @@ class Simulation:
             claims.extend(self.research.resource_claims(self.day))
         if self.maintenance is not None:
             claims.extend(self.maintenance.resource_claims(self.day))
-        claims.extend(self.logistics.vehicle_production_resource_claims(self.day))
-        claims.extend(self.logistics.fleet_relocation_resource_claims(self.day))
+        claims.extend(self.transport.vehicle_production_resource_claims(self.day))
+        claims.extend(self.transport.fleet_relocation_resource_claims(self.day))
         if self.scientific_exploration is not None:
             claims.extend(self.scientific_exploration.resource_claims(self.day))
         seen: set[object] = set()
@@ -250,7 +252,7 @@ class Simulation:
 
     def _service_capacity_requests(self) -> tuple[ServiceCapacityRequest, ...]:
         requests: list[ServiceCapacityRequest] = list(
-            self.logistics.vehicle_production_service_requests(self.day)
+            self.transport.vehicle_production_service_requests(self.day)
         )
         requests.extend(self.projects.construction_service_requests(self.day))
         requests.extend(self.projects.surface_infrastructure_service_requests(self.day))
@@ -428,7 +430,7 @@ class Simulation:
             service_types.add(self.surface_infrastructure.service_type)
         service_types.update(
             definition.turnaround_service_type
-            for definition in self.logistics.vehicle_defs.values()
+            for definition in self.transport.vehicle_defs.values()
             if definition.turnaround_service_type is not None
         )
         return tuple(sorted(service_types))
@@ -577,10 +579,10 @@ class Simulation:
     def _settle_tick_boundary(self) -> None:
         """Settle state whose completion time was reached before this tick."""
         self.external_economy.settle_periods(self.day)
-        self.logistics.advance_fleet_state(self.day)
+        self.transport.advance_fleet_state(self.day)
         if self.founding is not None:
             self.founding.settle_arrivals(self.day)
-        self.logistics.synchronize_surface_access_routes()
+        self.transport.synchronize_surface_access_routes()
         self.logistics.settle_cargo_arrivals(self.day)
 
         # Procurement wait/policy maturation is a clock-boundary transition.
@@ -715,7 +717,7 @@ class Simulation:
                 authorized_logistics = self.logistics.authorize_capacity_logistics(
                     plan.logistics, funds, self.day
                 )
-                transport_requests = self.logistics.transport_service_capacity_requests(
+                transport_requests = self.transport.transport_service_capacity_requests(
                     self.day, authorized_logistics.planned_usage
                 )
                 service_requests = self._complete_service_requests(
@@ -853,7 +855,7 @@ class Simulation:
         if self.survey is not None:
             self.survey.advance_day(powers, allocations.services, self.day)
 
-        self.logistics.advance_vehicle_production_day(
+        self.transport.advance_vehicle_production_day(
             powers, allocations.resources, allocations.services, self.day
         )
         self.projects.finalize_procurement(allocations.resources, self.day)
@@ -875,7 +877,7 @@ class Simulation:
         # Movement is deliberately after every Domain execution.  It may spend
         # only amounts authorized from the start-of-tick allocation and cannot
         # admit arriving Cargo to Inventory until the next boundary.
-        self.logistics.advance_fleet_relocations(allocations.resources, self.day)
+        self.transport.advance_fleet_relocations(allocations.resources, self.day)
         return self.logistics.advance_capacity_logistics(
             self.day,
             allocations.logistics,
@@ -887,7 +889,7 @@ class Simulation:
         if self.research is not None:
             self.research.settle_completions()
         self.projects.settle_completions(allocations.power_by_location, self.day)
-        self.logistics.synchronize_surface_access_routes()
+        self.transport.synchronize_surface_access_routes()
         next_day = self.day + 1
         if self.contracts is not None:
             self.contracts.advance_day(next_day)

@@ -31,18 +31,18 @@ def _demand(amount_t: float, *, demand_id: str = "demand.test", destination=LEO,
 
 
 def _owned_earth_leo_capacity(sim, units: int = 1):
-    sim.logistics.external_services.clear()
-    return sim.logistics.create_transport_allocation(
+    sim.transport.external_services.clear()
+    return sim.transport.create_transport_allocation(
         REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=units, day=sim.day
     )
 
 
 def _allow_external_transport(sim) -> None:
-    for service_id in sim.logistics.external_services:
+    for service_id in sim.transport.external_services:
         sim.external_economy.register_service(service_id)
     sim.external_economy.create_policy(
         enabled=True,
-        allowed_service_ids=tuple(sim.logistics.external_services),
+        allowed_service_ids=tuple(sim.transport.external_services),
         day=sim.day,
     )
 
@@ -64,7 +64,7 @@ def _advance_logistics(sim, day, demands):
 
 
 def _transport_service_allocations(sim, day, plan):
-    requests = sim.logistics.transport_service_capacity_requests(day, plan.planned_usage)
+    requests = sim.transport.transport_service_capacity_requests(day, plan.planned_usage)
     locations = sim._active_locations() | set(sim.graph.operational_node_ids())
     powers = {
         location_id: sim.power.snapshot(location_id, sim.facilities, day)
@@ -93,13 +93,13 @@ def test_lane_is_resource_agnostic_and_requested_capacity_limits_daily_cargo_flo
 
 def test_lane_uses_parallel_transport_services_until_requested_capacity_is_filled():
     sim = build_game_application()._simulation
-    sim.logistics.transport_allocations.clear()
+    sim.transport.transport_allocations.clear()
     base = next(
-        service for service in sim.logistics.external_services.values()
+        service for service in sim.transport.external_services.values()
         if service.display_name == "商業地表打上げ"
     )
     second_id = DefinitionId("test.service.parallel-earth-leo")
-    sim.logistics.external_services[second_id] = replace(
+    sim.transport.external_services[second_id] = replace(
         base, id=second_id, display_name="Parallel Earth-LEO", capacity_t_per_day=0.4
     )
     _allow_external_transport(sim)
@@ -118,7 +118,7 @@ def test_lane_uses_parallel_transport_services_until_requested_capacity_is_fille
 
 def test_parallel_lanes_share_transport_capacity_without_double_consumption():
     sim = build_game_application()._simulation
-    sim.logistics.transport_allocations.clear()
+    sim.transport.transport_allocations.clear()
     _allow_external_transport(sim)
     high_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
     low_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 50)
@@ -136,7 +136,7 @@ def test_parallel_lanes_share_transport_capacity_without_double_consumption():
         if flow.lane_id in by_lane:
             by_lane[flow.lane_id] += flow.amount_t
     service_capacity = next(
-        service.capacity_t_per_day for service in sim.logistics.external_services.values()
+        service.capacity_t_per_day for service in sim.transport.external_services.values()
         if service.display_name == "商業地表打上げ"
     )
     assert by_lane[high_lane] == pytest.approx(1.0)
@@ -147,7 +147,7 @@ def test_parallel_lanes_share_transport_capacity_without_double_consumption():
 def test_same_priority_lane_capacity_allocation_is_registration_order_independent():
     def run(capacities: tuple[float, float]) -> dict[float, float]:
         sim = build_game_application()._simulation
-        sim.logistics.transport_allocations.clear()
+        sim.transport.transport_allocations.clear()
         _allow_external_transport(sim)
         sim.inventory.add(EARTH, MACHINERY, 3.0)
         lanes = {
@@ -283,7 +283,7 @@ def test_selected_research_prototype_site_declares_material_demand_until_stock_a
 def test_available_capacity_uses_shared_propellant_allocation_without_changing_required_units():
     sim = build_game_application()._simulation
     allocation_id = _owned_earth_leo_capacity(sim)
-    unconstrained = sim.logistics.transport_capacity_snapshot(allocation_id, day=sim.day)
+    unconstrained = sim.transport.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert unconstrained.available.forward_t_per_day > 0
     required = unconstrained.required_units
     sim.logistics.create_lane(EARTH, LEO, 1.0, 50)
@@ -317,8 +317,8 @@ def test_available_capacity_uses_shared_propellant_allocation_without_changing_r
 
 def test_multistage_lane_requires_capacity_on_every_handoff_leg():
     sim = build_game_application()._simulation
-    sim.logistics.external_services.clear()
-    sim.logistics.create_transport_allocation(
+    sim.transport.external_services.clear()
+    sim.transport.create_transport_allocation(
         REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
     )
     lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 10.0, 100)
@@ -334,7 +334,7 @@ def test_multistage_lane_requires_capacity_on_every_handoff_leg():
     sim.refresh_storage()
     sim.inventory.add(LEO, PROPELLANT, 10.0)
     sim.inventory.add(LUNAR_ORBIT, PROPELLANT, 10.0)
-    sim.logistics.create_transport_allocation(
+    sim.transport.create_transport_allocation(
         REUSABLE_ORBITAL_CARGO_TUG, LEO, LUNAR_ORBIT, target_units=1, day=sim.day
     )
     available = sim.logistics.lane_snapshot((demand,), sim.day)
@@ -385,7 +385,7 @@ def test_transport_capacity_uses_only_cargo_settled_at_tick_boundary():
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
     sim.refresh_storage()
-    sim.logistics.create_transport_allocation(
+    sim.transport.create_transport_allocation(
         REUSABLE_ORBITAL_CARGO_TUG,
         LEO,
         LUNAR_ORBIT,
@@ -418,7 +418,7 @@ def test_transport_capacity_uses_only_cargo_settled_at_tick_boundary():
         if flow.lane_id == inbound_lane
     )
     assert arriving.ready_day == 2
-    sim.logistics.external_services.clear()
+    sim.transport.external_services.clear()
 
     sim.inventory.add(LEO, MACHINERY, 1.0)
     outbound = _demand(

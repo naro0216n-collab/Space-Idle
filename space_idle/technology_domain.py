@@ -16,7 +16,7 @@ def restore(sim: Any, data: dict[str, Any]) -> None:
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
-    consumers = [sim.projects.technology_state, sim.logistics.technology_state]
+    consumers = [sim.projects.technology_state, sim.transport.technology_state]
     if sim.research is not None:
         consumers.append(sim.research.technology_state)
     _require(all(state is sim.technology for state in consumers),

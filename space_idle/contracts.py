@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .facilities import FacilityBook
-from .logistics import LogisticsService
 from .power import PowerService
 from .shared import AccountState, ContractId, DefinitionId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
@@ -44,7 +43,6 @@ class ContractState:
 class ContractService:
     templates: dict[DefinitionId, ContractTemplate]
     facilities: FacilityBook
-    logistics: LogisticsService
     power: PowerService
     account: AccountState
     contracts: dict[ContractId, ContractState] = field(default_factory=dict)

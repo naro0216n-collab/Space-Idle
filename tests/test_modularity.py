@@ -105,7 +105,7 @@ def test_major_mutable_domain_states_are_owned_enums_not_distributed_string_sets
     from space_idle.contracts import ContractStatus
     from space_idle.projects import ProjectStatus
     from space_idle.research import ResearchStage
-    from space_idle.logistics import FleetReservationKind, TransportControlMode
+    from space_idle.transport import FleetReservationKind, TransportControlMode
     from space_idle.transport import CargoFlowStatus
     from space_idle.transport.production import VehicleProductionPhase
 
@@ -122,17 +122,16 @@ def test_public_domain_facades_compose_focused_implementations():
     from space_idle.application_command_handlers import ApplicationCommandMixin
     from space_idle.industry import IndustryService
     from space_idle.logistics import LogisticsService
+    from space_idle.transport.service import TransportService
     from space_idle.projects import ProjectService
     from space_idle.research import ResearchService
 
     def bases(cls):
         return {base.__name__ for base in cls.__mro__[1:]}
 
-    assert {
-        "TransportCompatibilityMixin", "FleetAllocationMixin", "TransportLaneMixin",
-        "SteadyLogisticsMixin", "VehicleProductionMixin",
-    }.issubset(bases(LogisticsService))
-    assert not {"TransportPlanningMixin", "TransportExecutionMixin", "FleetManagementMixin"} & bases(LogisticsService)
+    assert {"TransportCompatibilityMixin", "FleetAllocationMixin", "VehicleProductionMixin"}.issubset(bases(TransportService))
+    assert {"TransportLaneMixin", "SteadyLogisticsMixin"}.issubset(bases(LogisticsService))
+    assert not {"FleetAllocationMixin", "TransportCompatibilityMixin", "VehicleProductionMixin"} & bases(LogisticsService)
     assert {"ConstructionRulesMixin", "ConstructionPlanningMixin", "ConstructionProcurementMixin", "ConstructionExecutionMixin"}.issubset(bases(ProjectService))
     assert {"ProcessSelectionMixin", "IndustryPlanningMixin", "IndustryExecutionMixin"}.issubset(bases(IndustryService))
     assert {"ResearchWorkflowMixin", "ResearchCapacityMixin", "ResearchExecutionMixin"}.issubset(bases(ResearchService))

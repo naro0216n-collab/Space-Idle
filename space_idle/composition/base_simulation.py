@@ -8,6 +8,7 @@ from ..founding import LocationFoundingService
 from ..industry import IndustryService
 from ..inventory import InventoryBook
 from ..logistics import LogisticsService
+from ..transport.service import TransportService
 from ..maintenance import FacilityMaintenanceService
 from ..power import PowerService
 from ..projects import ProjectService
@@ -80,23 +81,29 @@ def build_base_simulation() -> Simulation:
     technology = TechnologyState()
     power = PowerService(build_power_specs(), environment)
 
-    logistics = LogisticsService(
+    transport = TransportService(
         routes=build_route_definitions(),
         inventory=inventory,
-        external_economy=external_economy,
         facilities=facilities,
         power=power,
         surface_route_rules=build_surface_route_rules(),
         surface_orbit_route_rules=build_surface_orbit_route_rules(),
         technology_state=technology,
     )
-    logistics.external_services.update(build_external_transport_services())
-    for service_id in logistics.external_services:
+    transport.external_services.update(build_external_transport_services())
+    for service_id in transport.external_services:
         external_economy.register_service(service_id)
-    logistics.vehicle_defs.update(build_vehicle_definitions())
-    logistics.synchronize_surface_access_routes()
+    transport.vehicle_defs.update(build_vehicle_definitions())
+    transport.synchronize_surface_access_routes()
     for vehicle_definition_id, count, location_id in initial_vehicle_deployments():
-        logistics.add_fleet_units(vehicle_definition_id, count, location_id)
+        transport.add_fleet_units(vehicle_definition_id, count, location_id)
+
+    logistics = LogisticsService(
+        transport=transport,
+        inventory=inventory,
+        external_economy=external_economy,
+        facilities=facilities,
+    )
 
     industry = IndustryService(build_process_specs())
 
@@ -124,7 +131,7 @@ def build_base_simulation() -> Simulation:
     storage = StorageService(build_storage_provider_specs(), inventory, facilities)
 
     founding = LocationFoundingService(
-        build_founding_packages(), facilities, inventory, power, logistics, storage,
+        build_founding_packages(), facilities, inventory, power, transport, storage,
         surface_knowledge_level_provider=survey.cell_knowledge_level,
     )
     projects.external_surface_cell_claim_provider = lambda cell_id: (
@@ -143,17 +150,17 @@ def build_base_simulation() -> Simulation:
     )
     scientific_exploration = ScientificExplorationService(
         build_scientific_exploration_definitions(),
-        facilities, inventory, power, logistics, research,
+        facilities, inventory, power, transport, research,
     )
     extraction = ExtractionService(build_extraction_specs(), graph, surface_infrastructure)
 
     # Keep the Contract Domain composed and available for future events,
     # collaboration, or scenario content. Base Game starts with no offers.
-    contracts = ContractService(build_contract_templates(), facilities, logistics, power, account)
+    contracts = ContractService(build_contract_templates(), facilities, power, account)
 
     sim = Simulation(
         day=0, external_economy=external_economy, graph=graph, environment=environment, inventory=inventory,
-        facilities=facilities, power=power, storage=storage, industry=industry, logistics=logistics,
+        facilities=facilities, power=power, storage=storage, industry=industry, transport=transport, logistics=logistics,
         projects=projects, technology=technology, founding=founding, contracts=contracts,
         research=research, survey=survey, extraction=extraction,
         scientific_exploration=scientific_exploration, maintenance=maintenance,

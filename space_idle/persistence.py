@@ -12,7 +12,7 @@ from .domain import validate_extension_registry
 from .simulation import OfflineProgressPolicy, OfflineProgressResult
 
 
-SAVE_SCHEMA_VERSION = 40
+SAVE_SCHEMA_VERSION = 41
 
 
 class SaveFormatError(ValueError):
@@ -54,7 +54,7 @@ def restore_state(sim, data: dict[str, Any]) -> None:
         if codec.key not in data:
             raise SaveFormatError(f"save state is missing domain section: {codec.key}")
         codec.restore(sim, data[codec.key])
-    sim.logistics.synchronize_surface_access_routes()
+    sim.transport.synchronize_surface_access_routes()
     sim.refresh_storage()
 
 

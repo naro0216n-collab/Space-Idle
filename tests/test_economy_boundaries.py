@@ -21,7 +21,7 @@ from space_idle.shared import EntityId
 
 
 def _transport_service_allocations(sim, day, plan):
-    requests = sim.logistics.transport_service_capacity_requests(day, plan.planned_usage)
+    requests = sim.transport.transport_service_capacity_requests(day, plan.planned_usage)
     locations = sim._active_locations() | set(sim.graph.operational_node_ids())
     powers = {
         location_id: sim.power.snapshot(location_id, sim.facilities, day)
@@ -70,8 +70,8 @@ def test_owned_transport_is_physical_while_external_transport_requires_policy_an
 
     owned = build_game_application()
     owned_sim = owned._simulation
-    owned_sim.logistics.external_services.clear()
-    owned_sim.logistics.create_transport_allocation(
+    owned_sim.transport.external_services.clear()
+    owned_sim.transport.create_transport_allocation(
         REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=owned_sim.day
     )
     owned_sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
@@ -83,7 +83,7 @@ def test_owned_transport_is_physical_while_external_transport_requires_policy_an
 
     commercial = build_game_application()
     commercial_sim = commercial._simulation
-    commercial_sim.logistics.transport_allocations.clear()
+    commercial_sim.transport.transport_allocations.clear()
     commercial_sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
     commercial_sim.inventory.add(EARTH, WATER, 2.0)
     commercial_before = commercial.query(GetWorld()).funds_musd

@@ -64,13 +64,13 @@ def test_vehicle_definition_identity_is_consistent_across_catalog_fleet_and_rout
 def test_fleet_decision_queries_do_not_materialize_empty_pools():
     app = build_game_application()
     sim = app._simulation
-    before = dict(sim.logistics.fleet_pools)
+    before = dict(sim.transport.fleet_pools)
 
     app.query(GetRoutes(include_modes=True))
     app.query(GetTransportAllocationOptions(str(ids.LEO), str(ids.LUNAR_ORBIT)))
     app.query(GetScientificExplorations())
 
-    assert sim.logistics.fleet_pools == before
+    assert sim.transport.fleet_pools == before
 
 
 def test_transport_allocation_projection_exposes_target_fulfillment_and_derived_capacity():
@@ -132,7 +132,7 @@ def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
     app = build_game_application()
     sim = app._simulation
     vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
-    sim.logistics.fleet_pool(vehicle_id, ids.LEO).total_units = 1
+    sim.transport.fleet_pool(vehicle_id, ids.LEO).total_units = 1
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
@@ -283,7 +283,7 @@ def test_partial_vehicle_production_procurement_is_durable_project_staging():
     app = build_game_application()
     sim = app._simulation
     vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.logistics.vehicle_defs[vehicle_id]
+    definition = sim.transport.vehicle_defs[vehicle_id]
     for resource_id, _required_t in definition.production.resources:
         sim.inventory.stock[(ids.EARTH, resource_id)] = 0.0
     sim.inventory.stock[(ids.EARTH, ids.STRUCTURAL_COMPONENTS)] = 1.0
@@ -294,15 +294,15 @@ def test_partial_vehicle_production_procurement_is_durable_project_staging():
     assert production_id is not None
     app.execute(AdvanceTime(1))
 
-    state = sim.logistics.vehicle_production_projects[EntityId(production_id)]
-    staged = sim.logistics._vehicle_production_staged_t(
+    state = sim.transport.vehicle_production_projects[EntityId(production_id)]
+    staged = sim.transport._vehicle_production_staged_t(
         state, ids.STRUCTURAL_COMPONENTS
     )
     assert state.phase.value == "awaiting_inputs"
     assert 0.0 < staged < 4.0
 
-    sim.logistics.pause_vehicle_production(state.id)
+    sim.transport.pause_vehicle_production(state.id)
     app.execute(AdvanceTime(2))
-    assert sim.logistics._vehicle_production_staged_t(
+    assert sim.transport._vehicle_production_staged_t(
         state, ids.STRUCTURAL_COMPONENTS
     ) == pytest.approx(staged)

@@ -132,7 +132,7 @@ class SurfaceProjectorMixin:
                 active_founding = sim.founding.active_project_for_cell(cell.id)
                 for staging_id in sorted(sim.graph.operational_node_ids(), key=str):
                     for package in sorted(sim.founding.packages.values(), key=lambda row: str(row.id)):
-                        for vehicle in sorted(sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)):
+                        for vehicle in sorted(sim.transport.vehicle_defs.values(), key=lambda row: str(row.id)):
                             failures = sim.founding.planning_failures(
                                 staging_id, body_id, cell.id, package.id, vehicle.id, sim.day
                             )

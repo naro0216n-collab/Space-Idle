@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .app_contracts.logistics_views import InfrastructureRequirementRow
-from .logistics import OperationAssetDisposition
+from .transport.models import OperationAssetDisposition
 
 
 def vehicle_concept(definition: object) -> str:

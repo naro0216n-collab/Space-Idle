@@ -8,7 +8,7 @@ from typing import Callable
 
 from .facilities import FacilityBook, FacilityPlacementScope
 from .inventory import InventoryBook
-from .logistics import LogisticsService
+from .transport.service import TransportService
 from .power import PowerService, PowerSnapshot
 from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .resource_demand import ResourceDemand
@@ -153,7 +153,7 @@ class LocationFoundingService:
     facilities: FacilityBook
     inventory: InventoryBook
     power: PowerService
-    logistics: LogisticsService
+    transport: TransportService
     storage: StorageService
     surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
     external_cell_claim_provider: Callable[[SurfaceCellId], EntityId | None] | None = None
@@ -248,12 +248,12 @@ class LocationFoundingService:
             self.facilities.environment,
         ):
             failures.append(FoundingBlocker(f"target:{failure.code}", failure.detail))
-        if vehicle_definition_id not in self.logistics.vehicle_defs:
+        if vehicle_definition_id not in self.transport.vehicle_defs:
             failures.append(FoundingBlocker("vehicle_definition", str(vehicle_definition_id)))
             return tuple(failures)
         failures.extend(
             FoundingBlocker("deployment_vehicle", detail)
-            for detail in self.logistics.deployment_vehicle_failures(
+            for detail in self.transport.deployment_vehicle_failures(
                 vehicle_definition_id,
                 staging_node_id,
                 cell_id,
@@ -263,7 +263,7 @@ class LocationFoundingService:
                 day=day,
             )
         )
-        free = self.logistics.fleet_free_units(vehicle_definition_id, staging_node_id)
+        free = self.transport.fleet_free_units(vehicle_definition_id, staging_node_id)
         if free < package.required_units:
             failures.append(FoundingBlocker("fleet_units", f"{free}/{package.required_units}"))
         return tuple(failures)
@@ -307,7 +307,7 @@ class LocationFoundingService:
         )
         self.projects[project_id] = project
         package = self.packages[package_id]
-        self.logistics.reserve_fleet_units(
+        self.transport.reserve_fleet_units(
             self.fleet_reservation_id(project_id),
             EntityId(project_id),
             FleetReservationKind.SPECIAL_MISSION,
@@ -330,12 +330,12 @@ class LocationFoundingService:
         totals: dict[DefinitionId, float] = {
             req.resource_id: req.amount_t for req in package.payload_resources
         }
-        propellant = self.logistics.deployment_propellant_t(
+        propellant = self.transport.deployment_propellant_t(
             vehicle_definition_id,
             package.operations,
             package.payload_t_per_unit,
         ) * package.required_units
-        perf = self.logistics.vehicle_defs[vehicle_definition_id].performance
+        perf = self.transport.vehicle_defs[vehicle_definition_id].performance
         if perf.propellant_resource_id is not None and propellant > 1e-12:
             totals[perf.propellant_resource_id] = (
                 totals.get(perf.propellant_resource_id, 0.0) + propellant
@@ -538,8 +538,8 @@ class LocationFoundingService:
         self._restore_prepared_payload(project)
         project.inputs_consumed = False
         reservation_id = self.fleet_reservation_id(project_id)
-        if reservation_id in self.logistics.fleet_reservations:
-            self.logistics.release_fleet_reservation(reservation_id, day=day)
+        if reservation_id in self.transport.fleet_reservations:
+            self.transport.release_fleet_reservation(reservation_id, day=day)
         project.status = FoundingStatus.CANCELLED
         project.paused = False
 
@@ -650,8 +650,8 @@ class LocationFoundingService:
             for req in package.initial_inventory:
                 self.inventory.add(project.new_location_id, req.resource_id, req.amount_t)
         reservation_id = self.fleet_reservation_id(project.id)
-        if reservation_id in self.logistics.fleet_reservations:
-            disposition = self.logistics.deployment_asset_disposition(
+        if reservation_id in self.transport.fleet_reservations:
+            disposition = self.transport.deployment_asset_disposition(
                 project.vehicle_definition_id, package.operations
             )
             final_location = (
@@ -659,7 +659,7 @@ class LocationFoundingService:
                 if disposition is OperationAssetDisposition.DESTINATION
                 else project.staging_node_id
             )
-            self.logistics.complete_fleet_reservation(
+            self.transport.complete_fleet_reservation(
                 reservation_id, final_location_id=final_location, day=day
             )
         project.status = FoundingStatus.COMPLETE

@@ -195,10 +195,10 @@ def test_surface_and_non_surface_operational_nodes_share_owner_contracts():
     assert sim.inventory.amount(ids.EARTH, generic_resource) == pytest.approx(1.0)
     assert sim.inventory.amount(ids.LEO, generic_resource) == pytest.approx(1.0)
 
-    vehicle_definition = next(iter(sim.logistics.vehicle_defs))
-    before_earth = sim.logistics.fleet_pool(vehicle_definition, ids.EARTH).total_units
-    before_orbit = sim.logistics.fleet_pool(vehicle_definition, ids.LEO).total_units
-    sim.logistics.add_fleet_units(vehicle_definition, 1, ids.EARTH, day=sim.day)
-    sim.logistics.add_fleet_units(vehicle_definition, 1, ids.LEO, day=sim.day)
-    assert sim.logistics.fleet_pool(vehicle_definition, ids.EARTH).total_units == before_earth + 1
-    assert sim.logistics.fleet_pool(vehicle_definition, ids.LEO).total_units == before_orbit + 1
+    vehicle_definition = next(iter(sim.transport.vehicle_defs))
+    before_earth = sim.transport.fleet_pool(vehicle_definition, ids.EARTH).total_units
+    before_orbit = sim.transport.fleet_pool(vehicle_definition, ids.LEO).total_units
+    sim.transport.add_fleet_units(vehicle_definition, 1, ids.EARTH, day=sim.day)
+    sim.transport.add_fleet_units(vehicle_definition, 1, ids.LEO, day=sim.day)
+    assert sim.transport.fleet_pool(vehicle_definition, ids.EARTH).total_units == before_earth + 1
+    assert sim.transport.fleet_pool(vehicle_definition, ids.LEO).total_units == before_orbit + 1

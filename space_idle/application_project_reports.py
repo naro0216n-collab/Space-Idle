@@ -367,12 +367,12 @@ class ApplicationReportProjectorMixin:
         # Route issues are intrinsic endpoint/site constraints. Vehicle/Fleet
         # feasibility is projected through Transport Allocation rather than
         # individual Vehicle availability.
-        for route in sorted(sim.logistics.routes.values(), key=lambda row: str(row.id)):
+        for route in sorted(sim.transport.routes.values(), key=lambda row: str(row.id)):
             if location_filter is not None and location_filter not in {
                 str(route.origin_id), str(route.destination_id)
             }:
                 continue
-            for blocker in sim.logistics.route_failures(route.id, sim.day):
+            for blocker in sim.transport.route_failures(route.id, sim.day):
                 issues.append(self._issue(
                     blocker, blocker, category="logistics", source="route",
                     operational_node_id=location_filter, entity_id=str(route.id),
@@ -397,12 +397,12 @@ class ApplicationReportProjectorMixin:
                 ))
 
         for state in sorted(
-            sim.logistics.vehicle_production_projects.values(), key=lambda row: str(row.id)
+            sim.transport.vehicle_production_projects.values(), key=lambda row: str(row.id)
         ):
             state_location = str(state.operational_node_id)
             if location_filter is not None and state_location != location_filter:
                 continue
-            for blocker in sim.logistics.vehicle_production_blockers(state.id, day=sim.day):
+            for blocker in sim.transport.vehicle_production_blockers(state.id, day=sim.day):
                 code, _, detail = blocker.partition(":")
                 resource_id = None
                 if code == "resource" and detail:

@@ -10,7 +10,7 @@ from .application_views import (
     TransportAllocationOptionRow,
     TransportAllocationOptionsView,
 )
-from .logistics import PathPolicy
+from .transport.models import PathPolicy
 
 
 class LogisticsRouteProjectorMixin:
@@ -25,16 +25,16 @@ class LogisticsRouteProjectorMixin:
         rows: list[RouteModeRow] = []
 
         for definition in sorted(
-            sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)
+            sim.transport.vehicle_defs.values(), key=lambda row: str(row.id)
         ):
-            plan = sim.logistics.transport_service_plan_for(
+            plan = sim.transport.transport_service_plan_for(
                 definition.id,
                 route.origin_id,
                 route.destination_id,
                 day=sim.day,
                 path=(route.id,),
             )
-            fleet = sim.logistics.fleet_pool_snapshot(
+            fleet = sim.transport.fleet_pool_snapshot(
                 definition.id, route.origin_id
             )
             full_load_propellant = None
@@ -70,12 +70,12 @@ class LogisticsRouteProjectorMixin:
             )
 
         for service in sorted(
-            sim.logistics.external_services.values(), key=lambda row: str(row.id)
+            sim.transport.external_services.values(), key=lambda row: str(row.id)
         ):
             blockers = tuple(
                 dict.fromkeys(
-                    sim.logistics.route_failures(route.id, sim.day)
-                    + sim.logistics.service_route_failures(
+                    sim.transport.route_failures(route.id, sim.day)
+                    + sim.transport.service_route_failures(
                         route.id, service.id, sim.day
                     )
                 )
@@ -92,7 +92,7 @@ class LogisticsRouteProjectorMixin:
                         service.capacity_t_per_day, 0.0
                     ),
                     cycle_days=None,
-                    forward_latency_days=sim.logistics.performance_route_transit_days(
+                    forward_latency_days=sim.transport.performance_route_transit_days(
                         route,
                         service.performance,
                         transit_multiplier=service.transit_time_multiplier,
@@ -119,19 +119,19 @@ class LogisticsRouteProjectorMixin:
         include_modes: bool = True,
     ) -> tuple[RouteRow, ...]:
         sim = self._simulation
-        sim.logistics.synchronize_surface_access_routes()
+        sim.transport.synchronize_surface_access_routes()
         rows: list[RouteRow] = []
-        for route in sorted(sim.logistics.routes.values(), key=lambda row: str(row.id)):
+        for route in sorted(sim.transport.routes.values(), key=lambda row: str(row.id)):
             if origin_id is not None and str(route.origin_id) != origin_id:
                 continue
             if destination_id is not None and str(route.destination_id) != destination_id:
                 continue
             if route_id is not None and str(route.id) != route_id:
                 continue
-            route_blockers = sim.logistics.route_failures(route.id, sim.day)
+            route_blockers = sim.transport.route_failures(route.id, sim.day)
             mode_rows = self._route_mode_rows(route)
             try:
-                geometry = sim.logistics.route_geometry(route.id)
+                geometry = sim.transport.route_geometry(route.id)
                 origin_endpoint = RouteEndpointRow(
                     str(geometry.origin.node_id), geometry.origin.locator_kind,
                     geometry.origin.locator_id,
@@ -194,14 +194,14 @@ class LogisticsRouteProjectorMixin:
         self, source_id, destination_id
     ) -> TransportAllocationOptionsView:
         sim = self._simulation
-        sim.logistics.synchronize_surface_access_routes()
+        sim.transport.synchronize_surface_access_routes()
         options: list[TransportAllocationOptionRow] = []
         for definition in sorted(
-            sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)
+            sim.transport.vehicle_defs.values(), key=lambda row: str(row.id)
         ):
-            fleet = sim.logistics.fleet_pool_snapshot(definition.id, source_id)
+            fleet = sim.transport.fleet_pool_snapshot(definition.id, source_id)
             for policy in PathPolicy:
-                plan = sim.logistics.transport_service_plan_for(
+                plan = sim.transport.transport_service_plan_for(
                     definition.id,
                     source_id,
                     destination_id,

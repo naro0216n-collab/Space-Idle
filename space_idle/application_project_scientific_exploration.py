@@ -38,9 +38,9 @@ class ScientificExplorationProjectorMixin:
 
             fleet_options: list[ScientificExplorationFleetOptionRow] = []
             for vehicle_definition in sorted(
-                sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)
+                sim.transport.vehicle_defs.values(), key=lambda row: str(row.id)
             ):
-                fleet = sim.logistics.fleet_pool_snapshot(
+                fleet = sim.transport.fleet_pool_snapshot(
                     vehicle_definition.id, definition.origin_id
                 )
                 option_blockers = service.fleet_failures(

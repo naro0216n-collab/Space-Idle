@@ -95,7 +95,7 @@ def test_scientific_exploration_fleet_contract_checks_usable_payload_and_generic
     exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
     vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
     definition = sim.scientific_exploration.definitions[exploration_id]
-    vehicle = sim.logistics.vehicle_defs[vehicle_id]
+    vehicle = sim.transport.vehicle_defs[vehicle_id]
 
     sim.scientific_exploration.definitions[exploration_id] = replace(
         definition,
@@ -108,7 +108,7 @@ def test_scientific_exploration_fleet_contract_checks_usable_payload_and_generic
     assert any(blocker.startswith("payload_capacity:") for blocker in failures)
     assert "vehicle_capability:docking" in failures
 
-    sim.logistics.vehicle_defs[vehicle_id] = replace(
+    sim.transport.vehicle_defs[vehicle_id] = replace(
         vehicle,
         performance=replace(vehicle.performance, generic_capabilities=("docking",)),
     )

@@ -85,7 +85,7 @@ def test_unfounded_lunar_surface_cell_is_not_a_normal_logistics_destination():
     assert all(location_id != cell_id for location_id, _resource_id in sim.inventory.stock)
     assert not any(
         cell_id in {route.origin_id, route.destination_id}
-        for route in sim.logistics.routes.values()
+        for route in sim.transport.routes.values()
     )
 
 

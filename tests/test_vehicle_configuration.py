@@ -13,9 +13,9 @@ def test_vehicle_resource_specs_reject_duplicate_resource_ids():
     app = build_game_application()
     sim = app._simulation
     vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.logistics.vehicle_defs[vehicle_id]
+    definition = sim.transport.vehicle_defs[vehicle_id]
 
-    sim.logistics.vehicle_defs[vehicle_id] = replace(
+    sim.transport.vehicle_defs[vehicle_id] = replace(
         definition,
         production=replace(
             definition.production,
@@ -25,7 +25,7 @@ def test_vehicle_resource_specs_reject_duplicate_resource_ids():
     with pytest.raises(ConfigurationError, match="duplicate vehicle resource input: production"):
         validate_simulation_configuration(sim)
 
-    sim.logistics.vehicle_defs[vehicle_id] = replace(
+    sim.transport.vehicle_defs[vehicle_id] = replace(
         definition,
         maintenance=replace(
             definition.maintenance,
@@ -40,9 +40,9 @@ def test_vehicle_resource_support_requires_declared_vehicle_interface():
     app = build_game_application()
     sim = app._simulation
     vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.logistics.vehicle_defs[vehicle_id]
+    definition = sim.transport.vehicle_defs[vehicle_id]
 
-    sim.logistics.vehicle_defs[vehicle_id] = replace(
+    sim.transport.vehicle_defs[vehicle_id] = replace(
         definition,
         performance=replace(
             definition.performance,
@@ -76,8 +76,8 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
     app = build_game_application()
     sim = app._simulation
     vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.logistics.vehicle_defs[vehicle_id]
-    sim.logistics.vehicle_defs[vehicle_id] = replace(
+    definition = sim.transport.vehicle_defs[vehicle_id]
+    sim.transport.vehicle_defs[vehicle_id] = replace(
         definition,
         production=replace(
             definition.production,
@@ -93,17 +93,17 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
 
     result = app.execute(ProduceVehicle(str(vehicle_id), str(EARTH)))
     project_id = next(
-        pid for pid in sim.logistics.vehicle_production_projects
+        pid for pid in sim.transport.vehicle_production_projects
         if str(pid) == result.created_id
     )
-    state = sim.logistics.vehicle_production_projects[project_id]
+    state = sim.transport.vehicle_production_projects[project_id]
     app.execute(AdvanceTime(1))
     assert state.phase.value == "building"
     started_progress = state.progress_days
     assert started_progress > 0
 
     app.execute(PauseFacility(str(servicing_id)))
-    blockers = sim.logistics.vehicle_production_blockers(project_id, day=sim.day)
+    blockers = sim.transport.vehicle_production_blockers(project_id, day=sim.day)
     assert any("spacecraft_servicing" in blocker for blocker in blockers)
 
     app.execute(AdvanceTime(2))
@@ -113,7 +113,7 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
 
 def test_operation_asset_disposition_prevents_route_continuation_after_recovery():
     from space_idle.content import base_ids as ids
-    from space_idle.logistics import (
+    from space_idle.transport import (
         LandingCapability, OperationAssetDisposition, PoweredAscentCapability,
         RouteDef, RouteEndpoint, SpaceflightCapability, TransportOperationKind,
         TransportOperationRequirement, TransportPerformanceProfile,
@@ -139,7 +139,7 @@ def test_operation_asset_disposition_prevents_route_continuation_after_recovery(
             SpaceflightCapability(5.0), LandingCapability(2.5, 2.5, 2000.0),
         ),
     )
-    failures = sim.logistics.performance_route_failures(route, profile, sim.day)
+    failures = sim.transport.performance_route_failures(route, profile, sim.day)
     assert "operation:powered_ascent:asset_returns_before_route_complete" in failures
 
 
@@ -147,9 +147,9 @@ def test_transport_endurance_is_profile_level_and_validated():
     app = build_game_application()
     sim = app._simulation
     vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.logistics.vehicle_defs[vehicle_id]
+    definition = sim.transport.vehicle_defs[vehicle_id]
 
-    sim.logistics.vehicle_defs[vehicle_id] = replace(
+    sim.transport.vehicle_defs[vehicle_id] = replace(
         definition,
         performance=replace(definition.performance, endurance_days=0.0),
     )
@@ -161,9 +161,9 @@ def test_generic_vehicle_capabilities_are_intrinsic_and_unique():
     app = build_game_application()
     sim = app._simulation
     vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.logistics.vehicle_defs[vehicle_id]
+    definition = sim.transport.vehicle_defs[vehicle_id]
 
-    sim.logistics.vehicle_defs[vehicle_id] = replace(
+    sim.transport.vehicle_defs[vehicle_id] = replace(
         definition,
         performance=replace(
             definition.performance,
@@ -175,12 +175,12 @@ def test_generic_vehicle_capabilities_are_intrinsic_and_unique():
 
 
 def test_transport_endurance_applies_independently_of_operation_kind():
-    from space_idle.logistics import PoweredAscentCapability, TransportPerformanceProfile
+    from space_idle.transport import PoweredAscentCapability, TransportPerformanceProfile
     from space_idle.shared import RouteId
 
     app = build_game_application()
     sim = app._simulation
-    route = sim.logistics.routes[RouteId("base.route.earth_leo")]
+    route = sim.transport.routes[RouteId("base.route.earth_leo")]
     profile = TransportPerformanceProfile(
         dry_mass_t=10.0,
         payload_t=1.0,
@@ -188,6 +188,6 @@ def test_transport_endurance_applies_independently_of_operation_kind():
         endurance_days=1.0,
     )
 
-    failures = sim.logistics.performance_route_failures(route, profile, sim.day)
+    failures = sim.transport.performance_route_failures(route, profile, sim.day)
 
     assert "endurance:2/1" in failures

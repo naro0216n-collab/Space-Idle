@@ -103,7 +103,7 @@ def validate_runtime(sim: Any) -> None:
     for project_id, p in service.projects.items():
         _require(project_id == p.id, f"founding project key mismatch: {project_id}")
         _require(p.founding_package_id in service.packages, f"founding project package missing: {project_id}")
-        _require(p.vehicle_definition_id in sim.logistics.vehicle_defs, f"founding project vehicle missing: {project_id}")
+        _require(p.vehicle_definition_id in sim.transport.vehicle_defs, f"founding project vehicle missing: {project_id}")
         _require(p.target_core_cell_id in sim.graph.surface_cells, f"founding target cell missing: {project_id}")
         if p.target_core_cell_id in sim.graph.surface_cells:
             _require(sim.graph.surface_cells[p.target_core_cell_id].body_id == p.target_body_id, f"founding target body mismatch: {project_id}")
@@ -144,16 +144,16 @@ def validate_runtime(sim: Any) -> None:
             _require(p.new_location_id not in active_locations, f"duplicate active founding location id: {p.new_location_id}")
             active_cells.add(p.target_core_cell_id)
             active_locations.add(p.new_location_id)
-            _require(reservation_id in sim.logistics.fleet_reservations, f"active founding missing fleet reservation: {project_id}")
-            if reservation_id in sim.logistics.fleet_reservations and package is not None:
-                r = sim.logistics.fleet_reservations[reservation_id]
+            _require(reservation_id in sim.transport.fleet_reservations, f"active founding missing fleet reservation: {project_id}")
+            if reservation_id in sim.transport.fleet_reservations and package is not None:
+                r = sim.transport.fleet_reservations[reservation_id]
                 _require(r.kind is FleetReservationKind.SPECIAL_MISSION, f"founding reservation kind mismatch: {project_id}")
                 _require(r.vehicle_definition_id == p.vehicle_definition_id, f"founding reservation vehicle mismatch: {project_id}")
                 _require(r.location_id == p.staging_node_id, f"founding reservation staging mismatch: {project_id}")
                 _require(r.units == package.required_units, f"founding reservation units mismatch: {project_id}")
             _require(p.new_location_id not in sim.graph.locations, f"active founding location already exists: {project_id}")
         else:
-            _require(reservation_id not in sim.logistics.fleet_reservations, f"inactive founding retains fleet reservation: {project_id}")
+            _require(reservation_id not in sim.transport.fleet_reservations, f"inactive founding retains fleet reservation: {project_id}")
         if p.status is FoundingStatus.PREPARING:
             _require(p.departure_day is None and p.arrival_day is None, f"preparing founding has transit dates: {project_id}")
         elif p.status is FoundingStatus.DEPLOYING:

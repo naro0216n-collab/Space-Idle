@@ -49,7 +49,7 @@ def _request(
 
 
 def _transport_service_allocations(sim, day, plan):
-    requests = sim.logistics.transport_service_capacity_requests(day, plan.planned_usage)
+    requests = sim.transport.transport_service_capacity_requests(day, plan.planned_usage)
     locations = sim._active_locations() | set(sim.graph.operational_node_ids())
     powers = {
         location_id: sim.power.snapshot(location_id, sim.facilities, day)
@@ -140,7 +140,7 @@ def test_duplicate_same_scope_policy_for_same_service_fails_closed():
 def test_lane_projection_exposes_policy_denial_until_authorized():
     app = build_game_application()
     sim = app._simulation
-    sim.logistics.transport_allocations.clear()
+    sim.transport.transport_allocations.clear()
     lane_id = sim.logistics.create_lane(ids.EARTH, ids.LEO, 1.0, 50)
     demand = __import__('space_idle.resource_demand', fromlist=['ResourceDemand']).ResourceDemand(
         EntityId("demand.policy-blocker"), "test", EntityId("owner.policy-blocker"),
@@ -202,7 +202,7 @@ def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
 
     app = build_game_application()
     sim = app._simulation
-    sim.logistics.transport_allocations.clear()
+    sim.transport.transport_allocations.clear()
     sim.external_economy.create_policy(
         enabled=True,
         allowed_service_ids=(ids.EARTH_LEO_LAUNCH_SERVICE, ids.LEO_LUNAR_SERVICE),

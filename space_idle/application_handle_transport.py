@@ -8,7 +8,7 @@ from .application_commands import (
     ResumeLogisticsLane, ResumeTransportAllocation, SetVehicleProductionSettings,
     UpdateLogisticsLane, UpdateTransportAllocation,
 )
-from .logistics import PathPolicy
+from .transport.models import PathPolicy
 from .shared import DefinitionId, EntityId, RouteId
 from .transport.models import DirectionalCapacity, TransportControlMode
 
@@ -24,9 +24,9 @@ class TransportCommandHandlerMixin:
 
     def _handle_transport_command(self, command: Command):
         sim = self._simulation
-        sim.logistics.synchronize_surface_access_routes()
+        sim.transport.synchronize_surface_access_routes()
         if isinstance(command, ProduceVehicle):
-            production_id = sim.logistics.plan_vehicle_production(
+            production_id = sim.transport.plan_vehicle_production(
                 DefinitionId(command.vehicle_definition_id),
                 self._require_operational_node(command.operational_node_id),
                 priority=command.priority,
@@ -34,11 +34,11 @@ class TransportCommandHandlerMixin:
             )
             return CommandResult(str(production_id))
         if isinstance(command, PauseVehicleProduction):
-            sim.logistics.pause_vehicle_production(EntityId(command.production_id)); return CommandResult()
+            sim.transport.pause_vehicle_production(EntityId(command.production_id)); return CommandResult()
         if isinstance(command, ResumeVehicleProduction):
-            sim.logistics.resume_vehicle_production(EntityId(command.production_id)); return CommandResult()
+            sim.transport.resume_vehicle_production(EntityId(command.production_id)); return CommandResult()
         if isinstance(command, SetVehicleProductionSettings):
-            sim.logistics.set_vehicle_production_settings(
+            sim.transport.set_vehicle_production_settings(
                 EntityId(command.production_id), priority=command.priority
             )
             return CommandResult()
@@ -57,7 +57,7 @@ class TransportCommandHandlerMixin:
                 if target_capacity is None:
                     raise ValueError("CAPACITY allocation requires directional targets")
                 target_units = None
-            allocation_id = sim.logistics.create_transport_allocation(
+            allocation_id = sim.transport.create_transport_allocation(
                 DefinitionId(command.vehicle_definition_id),
                 self._require_operational_node(command.anchor_node_id),
                 self._require_operational_node(command.destination_id),
@@ -71,7 +71,7 @@ class TransportCommandHandlerMixin:
             target_capacity = self._capacity_target(
                 command.target_forward_t_per_day, command.target_reverse_t_per_day
             )
-            sim.logistics.update_transport_allocation(
+            sim.transport.update_transport_allocation(
                 EntityId(command.allocation_id), priority=command.priority,
                 target_units=command.target_units, target_capacity=target_capacity,
                 path_policy=None if command.path_policy is None else PathPolicy(command.path_policy),
@@ -79,18 +79,18 @@ class TransportCommandHandlerMixin:
             )
             return CommandResult()
         if isinstance(command, ChangeTransportAllocationMode):
-            sim.logistics.change_transport_allocation_mode(
+            sim.transport.change_transport_allocation_mode(
                 EntityId(command.allocation_id), TransportControlMode(command.control_mode), day=sim.day
             )
             return CommandResult()
         if isinstance(command, PauseTransportAllocation):
-            sim.logistics.update_transport_allocation(EntityId(command.allocation_id), paused=True, day=sim.day); return CommandResult()
+            sim.transport.update_transport_allocation(EntityId(command.allocation_id), paused=True, day=sim.day); return CommandResult()
         if isinstance(command, ResumeTransportAllocation):
-            sim.logistics.update_transport_allocation(EntityId(command.allocation_id), paused=False, day=sim.day); return CommandResult()
+            sim.transport.update_transport_allocation(EntityId(command.allocation_id), paused=False, day=sim.day); return CommandResult()
         if isinstance(command, DeleteTransportAllocation):
-            sim.logistics.delete_transport_allocation(EntityId(command.allocation_id), day=sim.day); return CommandResult()
+            sim.transport.delete_transport_allocation(EntityId(command.allocation_id), day=sim.day); return CommandResult()
         if isinstance(command, RelocateFleet):
-            relocation_id = sim.logistics.relocate_fleet(
+            relocation_id = sim.transport.relocate_fleet(
                 DefinitionId(command.vehicle_definition_id), command.units,
                 self._require_operational_node(command.source_id), self._require_operational_node(command.destination_id),
                 path=None if command.path is None else tuple(RouteId(value) for value in command.path),

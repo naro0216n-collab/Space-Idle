@@ -8,13 +8,15 @@ PACKAGE = Path(__file__).parents[1] / "space_idle"
 
 def test_application_logistics_projection_uses_public_transport_query_boundary():
     from space_idle.logistics import LogisticsService
+    from space_idle.transport.service import TransportService
 
     for public_name in (
         "fleet_pool_snapshot",
         "derive_transport_service_plan",
-        "current_transport_capacity_snapshot",
-        "lane_snapshot",
     ):
+        assert hasattr(TransportService, public_name)
+        assert not hasattr(LogisticsService, public_name)
+    for public_name in ("current_transport_capacity_snapshot", "lane_snapshot"):
         assert hasattr(LogisticsService, public_name)
     assert not hasattr(LogisticsService, "transport_plan")
     for path in PACKAGE.glob("application_project_logistics*.py"):
@@ -40,3 +42,25 @@ def test_construction_owns_demand_without_transport_or_account_state_dependencie
         assert "from ..logistics" not in source
         assert "from .logistics" not in source
 
+
+
+def test_transport_and_logistics_own_disjoint_authoritative_state():
+    from space_idle.logistics import LogisticsService
+    from space_idle.transport.service import TransportService
+
+    logistics_fields = set(LogisticsService.__dataclass_fields__)
+    transport_fields = set(TransportService.__dataclass_fields__)
+
+    assert {"lanes", "cargo_flows", "transport"}.issubset(logistics_fields)
+    assert not {
+        "fleet_pools", "fleet_reservations", "transport_allocations",
+        "fleet_relocations", "fleet_releases", "vehicle_production_projects",
+        "vehicle_defs", "routes", "external_services",
+    } & logistics_fields
+
+    assert {
+        "fleet_pools", "fleet_reservations", "transport_allocations",
+        "fleet_relocations", "fleet_releases", "vehicle_production_projects",
+        "vehicle_defs", "routes", "external_services",
+    }.issubset(transport_fields)
+    assert not {"lanes", "cargo_flows"} & transport_fields
