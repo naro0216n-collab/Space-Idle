@@ -87,7 +87,7 @@ GitHub反映の入口は差分種別で一意に決める。作業者がtranspor
 6. 全payload file作成後に `submit-request.json` の `GitHub.create_file` を1回実行する。requestは事前計算したrequest固有payload subtree OIDを `payload_source.kind = "git-tree"` として参照する。Publish Gatewayはpayload root tree、tree entry順序、各blob OID、payload長、payload SHA-256、Git bundle、publish commit、parent/base、target tree、直前remote HEADを検証する。すべて一致した場合だけexact publish commitを対象branchへnon-force pushし、remote ref/treeを再確認する。
 7. Gatewayは成功receiptを `.publish/receipts/<request-id>.json` へ自動記録し、Fast CIをdispatchする。ローカルではreceiptを取得して `publish_request.py record` に渡す。`record` はmanifest内の `local_target_commit` を自動的に使用し、現在のlocal HEADが次作業へ進んでいてもrequest、receipt、当該local target tree、published commit objectの関係を機械検証した場合だけ次回publish stateを更新する。
 
-Connector transportはrepo-local active transactionにrequest固有payload file群と最終requestのpacketを固定生成する。manifestやplan directoryはhelperが `.git` 配下へ一意に生成し、CLIから指定しない。既にactive transactionがある場合は再計画せず、生成済みpacketを使って続行する。payload file作成が明確に失敗した場合は該当する生成済みpacketだけを忠実に再実行する。結果が不明確な場合に限り、そのremote pathを取得して期待blob OIDと照合する。正常系に独立した確認手順を追加しない。任意budgetへの縮小、payloadの手動分割、Base64再構成、inline requestへの切替は標準経路に含めない。
+Connector transportはrepo-local active transactionにrequest固有payload file群と最終requestのpacketを固定生成する。manifestやplan directoryはhelperが `.git` 配下へ一意に生成し、CLIから指定しない。既にactive transactionがある場合は再計画せず、生成済みpacketを使って続行する。payload file作成が明確に失敗した場合は該当する生成済みpacketだけを忠実に再実行する。結果が不明確な場合に限り、そのremote pathを取得して期待blob OIDと照合する。remote fileが存在するが期待blob OIDと一致しない場合はtransactionやrequestを作り直さず、観測したremote blob SHAを `connector-repair` へ渡して、元のupload packetと同一content/pathから `GitHub.update_file` repair packetを生成する。repair後は当該remote pathを一度取得して期待blob OIDへの一致を確認する。request送信前ならそのまま `submit-request.json` へ進み、request送信後にGateway検証で停止していたなら同じ失敗Gateway jobをrerunする。新しいrequest IDの発行、再prepare、再plan、任意budgetへの縮小、payloadの手動分割、Base64再構成、inline requestへの切替は標準retryに含めない。正常系に独立した確認手順を追加しない。
 
 標準実行例。
 
@@ -103,6 +103,16 @@ python scripts/publish_request.py connector-plan \
 ```
 
 helperが出力した全 `upload-part-*.json` の `GitHub.create_file` を生成順に実行し、最後に `submit-request.json` の `GitHub.create_file` を実行する。Connector返却SHAを別コマンドへ転記しない。
+
+payload fileの作成結果が不明確、またはGateway検証でremote blob OID不一致が判明した場合だけ対象pathを取得する。remote fileが存在し内容が期待OIDと一致しない場合は、active transaction内のpart番号と観測したblob SHAをrepair入力として渡す。
+
+```bash
+python scripts/publish_request.py connector-repair \
+  --part-index <mismatched-part-index> \
+  --remote-blob-sha <observed-remote-blob-sha>
+```
+
+生成された `repair-part-*.json` の `GitHub.update_file` をそのまま実行し、同じremote pathを一度だけ再取得して期待blob OIDとの一致を確認する。request未送信なら既存 `submit-request.json` を実行する。request送信後にPublish Gatewayがpayload検証で失敗していた場合はrequestを再作成せず、同じ失敗Gateway jobだけをrerunする。
 
 Gateway成功後はrequest IDに対応するreceiptを取得し、次回基点を更新する。
 
@@ -169,9 +179,10 @@ workflow maintenanceは通常publish stateへ動的に生成されたGitHub comm
 ### Publish failure handling
 
 - target HEAD不一致: requestを作成しない。remote変更を調査し、必要なら最新source-snapshotから再同期する。
-- payload file作成失敗: 失敗した生成済みupload packetだけを再送する。結果が不明確な場合だけ対象remote pathを取得し、期待blob OIDと一致するか確認してから続行する。
-- payload subtree不一致: requestは送信せず、request固有payload directoryの作成結果を確認し、失敗した生成済みpacketだけを再実行する。
-- tree/blob OID、payload長、payload SHA-256、bundle、parent、target tree不一致: Gatewayが失敗し、対象branchは更新されない。
+- payload file作成失敗: remote fileが存在しないことが明確なら失敗した生成済みupload packetだけを再送する。結果が不明確な場合だけ対象remote pathを取得する。
+- payload blob OID不一致: remote fileの観測blob SHAを `connector-repair --part-index ... --remote-blob-sha ...` へ渡し、生成された `GitHub.update_file` packetだけを実行する。repair後は当該pathを一度だけ再取得し、期待blob OIDと一致しなければ停止する。
+- payload subtree不一致: request未送信ならrequest固有payload directoryの各partを上記規則で修復してから既存 `submit-request.json` を実行する。request送信後にGateway検証で停止した場合は各partを修復した後、同じ失敗Gateway jobをrerunする。新しいrequestを作らない。
+- tree/blob OID、payload長、payload SHA-256、bundle不一致: payload transportを上記retry規則で修復する。parent/base、target tree不一致はpublish対象またはremote基点の不一致なのでrequestを再実行せず原因を調査する。いずれもGateway失敗時は対象branchを更新しない。
 - target branch push競合: forceしない。Gatewayの直前base再確認またはnon-force pushで停止する。
 - `.github/workflows/**` の変更: 通常Gatewayではrequestを生成しない。workflow更新権限を持つ分離されたmaintenance経路を使用し、必要なら `temp` でworkflow自体を隔離検証する。
 

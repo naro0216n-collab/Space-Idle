@@ -290,6 +290,52 @@ def test_fixed_connector_profile_splits_only_when_actual_call_exceeds_limit(tmp_
         assert size <= 144 * 1024
 
 
+def test_connector_repair_generates_update_packet_from_active_upload(tmp_path: Path) -> None:
+    repo, base, _ = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("repair target\n", encoding="utf-8")
+    commit_all(repo, "repair target")
+    run_request(repo, "prepare")
+    plan = json.loads(run_request(repo, "connector-plan", "--target-remote-head", base).stdout)
+    upload = json.loads(Path(plan["upload_packets"][0]).read_text(encoding="utf-8"))
+    observed = "f" * 40
+    assert observed != upload["expected_blob_git_oid"]
+
+    repair = json.loads(
+        run_request(
+            repo,
+            "connector-repair",
+            "--part-index",
+            "0",
+            "--remote-blob-sha",
+            observed,
+        ).stdout
+    )
+    packet = json.loads(Path(repair["repair_packet"]).read_text(encoding="utf-8"))
+    assert packet["action"] == "GitHub.update_file"
+    assert packet["part_index"] == 0
+    assert packet["observed_remote_blob_sha"] == observed
+    assert packet["expected_blob_git_oid"] == upload["expected_blob_git_oid"]
+    assert packet["action_args"]["repository_full_name"] == upload["action_args"]["repository_full_name"]
+    assert packet["action_args"]["branch"] == upload["action_args"]["branch"]
+    assert packet["action_args"]["path"] == upload["action_args"]["path"]
+    assert packet["action_args"]["content"] == upload["action_args"]["content"]
+    assert packet["action_args"]["sha"] == observed
+    assert repair["expected_blob_git_oid"] == upload["expected_blob_git_oid"]
+    assert repair["repair_call_bytes"] <= 144 * 1024
+
+    unnecessary = run_request(
+        repo,
+        "connector-repair",
+        "--part-index",
+        "0",
+        "--remote-blob-sha",
+        upload["expected_blob_git_oid"],
+        check=False,
+    )
+    assert unnecessary.returncode != 0
+    assert "repair is unnecessary" in unnecessary.stderr
+
+
 def test_payload_root_oid_matches_git_tree_object_format(tmp_path: Path) -> None:
     repo, _, _ = init_repo(tmp_path)
     module = PUBLISH_REQUEST
@@ -334,7 +380,7 @@ def test_request_scoped_payload_directory_has_precomputed_subtree_oid(tmp_path: 
 
 def test_standard_cli_has_no_alternative_repository_target_or_transaction_selectors() -> None:
     top = run_request(SCRIPT.parents[1], "--help").stdout
-    assert "{init,prepare,connector-plan,record}" in top
+    assert "{init,prepare,connector-plan,connector-repair,record}" in top
     for forbidden in ("native-publish", " plan ", "--repo"):
         assert forbidden not in f" {top.replace(chr(10), ' ')} "
     command_forbidden = {
@@ -342,6 +388,8 @@ def test_standard_cli_has_no_alternative_repository_target_or_transaction_select
         "prepare": ("--repo", "--target-ref", "--output", "--target-branch", "--message"),
         "connector-plan": ("--repo", "--manifest", "--plan-dir", "--github-repository",
                            "--publish-branch", "--output-dir", "--connector-call-budget-bytes"),
+        "connector-repair": ("--repo", "--manifest", "--plan-dir", "--github-repository",
+                             "--publish-branch", "--path", "--content", "--request-id"),
         "record": ("--repo", "--manifest", "--remote-commit", "--remote-tree", "--local-ref"),
     }
     for command, forbidden_flags in command_forbidden.items():

@@ -764,6 +764,97 @@ def _write_connector_summary(output_dir: Path, summary: dict[str, object]) -> No
     )
 
 
+def _read_connector_state(repo: Path) -> dict[str, object]:
+    path = _connector_state_path(_connector_dir(repo))
+    if not path.is_file():
+        raise PublishStateError(
+            "Connector plan is not initialized; run connector-plan before recovery"
+        )
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PublishStateError(f"invalid Connector state: {exc}") from exc
+    if state.get("version") != 4 or state.get("stage") != "packets-ready":
+        raise PublishStateError("unsupported or incomplete Connector state")
+    request_id = state.get("request_id")
+    if not isinstance(request_id, str) or len(request_id) != 32:
+        raise PublishStateError("invalid Connector state request_id")
+    upload_packets = state.get("upload_packets")
+    expected_oids = state.get("expected_blob_git_oids")
+    remote_paths = state.get("remote_payload_paths")
+    if not isinstance(upload_packets, list) or not upload_packets:
+        raise PublishStateError("Connector state has no payload upload packets")
+    if not isinstance(expected_oids, list) or len(expected_oids) != len(upload_packets):
+        raise PublishStateError("Connector state payload OID list is inconsistent")
+    if not isinstance(remote_paths, list) or len(remote_paths) != len(upload_packets):
+        raise PublishStateError("Connector state payload path list is inconsistent")
+    return state
+
+
+def _connector_repair_packet(
+    repo: Path,
+    state: dict[str, object],
+    part_index: int,
+    observed_remote_blob_sha: str,
+) -> dict[str, object]:
+    upload_packets = state["upload_packets"]
+    expected_oids = state["expected_blob_git_oids"]
+    remote_paths = state["remote_payload_paths"]
+    assert isinstance(upload_packets, list)
+    assert isinstance(expected_oids, list)
+    assert isinstance(remote_paths, list)
+    if part_index < 0 or part_index >= len(upload_packets):
+        raise PublishStateError(
+            f"payload part index {part_index} is outside active transaction range 0..{len(upload_packets) - 1}"
+        )
+    _require_hex_sha(observed_remote_blob_sha, name="observed remote payload blob")
+    expected_oid = str(expected_oids[part_index])
+    _require_hex_sha(expected_oid, name=f"expected payload blob {part_index}")
+    if observed_remote_blob_sha == expected_oid:
+        raise PublishStateError(
+            f"payload part {part_index} already matches expected blob {expected_oid}; repair is unnecessary"
+        )
+
+    upload_path = Path(str(upload_packets[part_index])).resolve()
+    connector_dir = _connector_dir(repo).resolve()
+    if upload_path.parent != connector_dir or not upload_path.is_file():
+        raise PublishStateError("active transaction upload packet path is invalid")
+    try:
+        upload = json.loads(upload_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PublishStateError(f"invalid payload upload packet: {exc}") from exc
+    if upload.get("action") != "GitHub.create_file":
+        raise PublishStateError("payload recovery requires the standard GitHub.create_file upload packet")
+    action_args = upload.get("action_args")
+    if not isinstance(action_args, dict):
+        raise PublishStateError("payload upload packet has no action_args")
+    remote_path = str(remote_paths[part_index])
+    if action_args.get("path") != remote_path:
+        raise PublishStateError("payload upload packet path does not match active Connector state")
+    if upload.get("expected_blob_git_oid") != expected_oid:
+        raise PublishStateError("payload upload packet OID does not match active Connector state")
+
+    request_id = str(state["request_id"])
+    repair_args = dict(action_args)
+    repair_args["message"] = f"Repair publish payload {request_id} part {part_index:04d}"
+    repair_args["sha"] = observed_remote_blob_sha
+    packet = {
+        "stage": "repair-payload-part",
+        "part_index": part_index,
+        "expected_blob_git_oid": expected_oid,
+        "observed_remote_blob_sha": observed_remote_blob_sha,
+        "action": "GitHub.update_file",
+        "action_args": repair_args,
+    }
+    size = _connector_call_bytes(packet)
+    if size > CONNECTOR_CALL_BUDGET_BYTES:
+        raise PublishStateError(
+            f"payload repair part {part_index} needs a {size}-byte Connector call, exceeding "
+            f"the fixed Connector profile {CONNECTOR_CALL_BUDGET_BYTES}-byte budget"
+        )
+    return packet
+
+
 
 def cmd_connector_plan(args: argparse.Namespace) -> int:
     repo = _repo_from_cwd()
@@ -879,6 +970,41 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     }
     _write_connector_summary(output_dir, summary)
     print(json.dumps(summary, indent=2))
+    return 0
+
+
+def cmd_connector_repair(args: argparse.Namespace) -> int:
+    repo = _repo_from_cwd()
+    _verify_prepared_request(repo, _manifest_path(repo))
+    state = _read_connector_state(repo)
+    packet = _connector_repair_packet(
+        repo,
+        state,
+        args.part_index,
+        args.remote_blob_sha,
+    )
+    output_dir = _connector_dir(repo)
+    packet_path = output_dir / f"repair-part-{args.part_index:03d}.json"
+    packet_path.write_text(
+        json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    result = {
+        "stage": "repair-packet-ready",
+        "request_id": state["request_id"],
+        "part_index": args.part_index,
+        "remote_payload_path": packet["action_args"]["path"],
+        "observed_remote_blob_sha": args.remote_blob_sha,
+        "expected_blob_git_oid": packet["expected_blob_git_oid"],
+        "repair_packet": str(packet_path),
+        "repair_call_bytes": _connector_call_bytes(packet),
+        "next": (
+            "execute the generated GitHub.update_file packet, fetch this remote payload path once "
+            "and require the expected blob OID; if the publish request was already submitted, "
+            "rerun the same failed Publish Gateway job instead of creating a new request"
+        ),
+        "verified": True,
+    }
+    print(json.dumps(result, indent=2))
     return 0
 
 
@@ -1031,6 +1157,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="observed develop HEAD from the single pre-publish remote check; verification input, not a target selector",
     )
     connector_plan.set_defaults(func=cmd_connector_plan)
+
+    connector_repair = sub.add_parser(
+        "connector-repair",
+        help="generate the deterministic update packet for one mismatched payload part in the active transaction",
+    )
+    connector_repair.add_argument(
+        "--part-index",
+        required=True,
+        type=int,
+        help="index of the mismatched payload part from the active Connector plan",
+    )
+    connector_repair.add_argument(
+        "--remote-blob-sha",
+        required=True,
+        help="observed blob SHA at that active transaction payload path; verification input, not a content selector",
+    )
+    connector_repair.set_defaults(func=cmd_connector_repair)
 
     record = sub.add_parser("record", help="verify a Gateway receipt and close the active transaction")
     record.add_argument(
