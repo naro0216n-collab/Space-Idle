@@ -21,8 +21,9 @@ CONNECTOR_CALL_BUDGET_BYTES = 144 * 1024
 CONNECTOR_HANDOFF_ELEMENT_CHARS = 6 * 1024
 MAX_PAYLOAD_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
-CONNECTOR_STATE_VERSION = 7
+CONNECTOR_STATE_VERSION = 8
 PAYLOAD_INDEX_VERSION = 1
+MAX_TRANSPORT_ATTEMPTS = 3
 CONNECTOR_SUMMARY_NAME = "summary.json"
 TRANSACTION_DIR_NAME = "space-idle-publish-transaction"
 WORKFLOW_TRANSACTION_DIR_NAME = "space-idle-workflow-maintenance-transaction"
@@ -494,12 +495,14 @@ def _payload_parts_for_tree(
     request_id: str,
     generation: int,
     payload: str,
+    *,
+    handoff_element_chars: int = CONNECTOR_HANDOFF_ELEMENT_CHARS,
 ) -> list[dict[str, object]]:
-    if CONNECTOR_HANDOFF_ELEMENT_CHARS <= 0:
+    if handoff_element_chars <= 0:
         raise PublishStateError("Connector handoff element size must be positive")
     parts: list[dict[str, object]] = []
-    for start in range(0, len(payload), CONNECTOR_HANDOFF_ELEMENT_CHARS):
-        content = payload[start : start + CONNECTOR_HANDOFF_ELEMENT_CHARS]
+    for start in range(0, len(payload), handoff_element_chars):
+        content = payload[start : start + handoff_element_chars]
         index = len(parts)
         remote_path = _payload_file_path(request_id, generation, index)
         parts.append(
@@ -687,10 +690,17 @@ def _generation_plan(
     base_publish_head: str,
     base_publish_tree: str,
     retry: bool,
+    handoff_element_chars: int = CONNECTOR_HANDOFF_ELEMENT_CHARS,
 ) -> dict[str, object]:
     request_id = str(prepared["request_id"])
     payload = str(prepared["payload_b64"])
-    parts = _payload_parts_for_tree(repo, request_id, generation, payload)
+    parts = _payload_parts_for_tree(
+        repo,
+        request_id,
+        generation,
+        payload,
+        handoff_element_chars=handoff_element_chars,
+    )
     elements: list[dict[str, str]] = [
         _tree_content_element(str(part["remote_path"]), str(part["content"]))
         for part in parts
@@ -717,8 +727,9 @@ def _generation_plan(
         "base_publish_head": base_publish_head,
         "base_publish_tree": base_publish_tree,
         "payload_part_count": len(parts),
-        "payload_handoff_element_chars": CONNECTOR_HANDOFF_ELEMENT_CHARS,
+        "payload_handoff_element_chars": handoff_element_chars,
         "expected_payload_blob_git_oids": [str(part["oid"]) for part in parts],
+        "expected_payload_chars": [int(part["chars"]) for part in parts],
         "remote_payload_paths": [str(part["remote_path"]) for part in parts],
         "remote_index_path": index_path,
         "expected_index_blob_git_oid": _git_object_oid(repo, "blob", index_content.encode("utf-8")),
@@ -940,7 +951,13 @@ def _read_connector_state(repo: Path) -> dict[str, object]:
         raise PublishStateError(f"invalid Connector state: {exc}") from exc
     if state.get("version") != CONNECTOR_STATE_VERSION:
         raise PublishStateError("unsupported Connector state version")
-    if state.get("stage") not in {"tree-ready", "commit-packet-ready", "update-packet-ready"}:
+    if state.get("stage") not in {
+        "tree-ready",
+        "commit-packet-ready",
+        "verification-packet-ready",
+        "update-packet-ready",
+        "transport-failed",
+    }:
         raise PublishStateError("unsupported or incomplete Connector state stage")
     request_id = state.get("request_id")
     if not isinstance(request_id, str) or len(request_id) != 32:
@@ -956,11 +973,17 @@ def _read_connector_state(repo: Path) -> dict[str, object]:
             raise PublishStateError("Connector state payload generation sequence is invalid")
         paths = generation.get("remote_payload_paths")
         part_count = generation.get("payload_part_count")
+        expected_oids = generation.get("expected_payload_blob_git_oids")
+        expected_chars = generation.get("expected_payload_chars")
         batches = generation.get("tree_batches")
         if not isinstance(part_count, int) or part_count <= 0:
             raise PublishStateError("Connector generation has no payload handoff fields")
         if not isinstance(paths, list) or len(paths) != part_count:
             raise PublishStateError("Connector generation payload path list is inconsistent")
+        if not isinstance(expected_oids, list) or len(expected_oids) != part_count:
+            raise PublishStateError("Connector generation payload OID list is inconsistent")
+        if not isinstance(expected_chars, list) or len(expected_chars) != part_count:
+            raise PublishStateError("Connector generation payload size list is inconsistent")
         if not isinstance(batches, list) or not batches:
             raise PublishStateError("Connector generation has no tree batches")
         for batch in batches:
@@ -973,6 +996,9 @@ def _read_connector_state(repo: Path) -> dict[str, object]:
                     raise PublishStateError("Connector generation tree element is incomplete")
     if current_generation != int(generations[-1]["generation"]):
         raise PublishStateError("Connector state current generation is inconsistent")
+    transport_attempt = state.get("transport_attempt", 0)
+    if not isinstance(transport_attempt, int) or not 0 <= transport_attempt < MAX_TRANSPORT_ATTEMPTS:
+        raise PublishStateError("Connector state transport attempt is invalid")
     if state.get("stage") == "tree-ready":
         batch_index = state.get("tree_batch_index")
         current = generations[-1]
@@ -1089,6 +1115,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "target_branch": prepared["target_branch"],
         "target_remote_head": args.target_remote_head,
         "current_generation": 0,
+        "transport_attempt": 0,
         "tree_batch_index": 0,
         "tree_packet": materialized["packet"],
         "tree_header": materialized["header"],
@@ -1113,6 +1140,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "normal_publish_transport_probe_calls": 1,
         "blob_response_sha_handoff_required": False,
         "branch_updates_per_generation": 1,
+        "max_transport_attempts": MAX_TRANSPORT_ATTEMPTS,
         "request_verified": bool(verified["verified"]),
         "remote_request_path": _request_file_path(request_id),
         "remote_receipt_path": _receipt_file_path(request_id),
@@ -1136,6 +1164,9 @@ def _write_generation_commit_packet(
         if generation.get("retry")
         else f"Submit publish request {request_id} generation {generation_number:04d}"
     )
+    transport_attempt = int(state.get("transport_attempt", 0))
+    if transport_attempt:
+        message += f" transport attempt {transport_attempt + 1}"
     packet = {
         "stage": "create-publish-generation-commit",
         "generation": generation_number,
@@ -1165,7 +1196,7 @@ def _write_generation_commit_packet(
         "commit_packet": str(packet_path),
         "next": (
             "copy/paste the commit packet action_args into GitHub.create_commit; pass only the "
-            "returned commit SHA to connector-update"
+            "returned commit SHA to connector-commit"
         ),
         "verified": True,
     }
@@ -1209,12 +1240,65 @@ def cmd_connector_tree(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_connector_update(args: argparse.Namespace) -> int:
+def _payload_verification_url(request_id: str, generation: int, commit_sha: str) -> str:
+    generation_name = _payload_generation_name(generation)
+    return (
+        f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/"
+        f".publish/payloads/{request_id}/{generation_name}?ref={commit_sha}"
+    )
+
+
+def _write_payload_verification_packet(
+    repo: Path,
+    state: dict[str, object],
+    generation: dict[str, object],
+    commit_sha: str,
+) -> dict[str, object]:
+    request_id = str(state["request_id"])
+    generation_number = int(generation["generation"])
+    packet = {
+        "stage": "verify-publish-generation-payload",
+        "generation": generation_number,
+        "transport_attempt": int(state.get("transport_attempt", 0)),
+        "action": "GitHub.fetch",
+        "action_args": {
+            "url": _payload_verification_url(request_id, generation_number, commit_sha),
+        },
+    }
+    packet_path = _connector_dir(repo) / f"g{generation_number:04d}-verify-payload.json"
+    packet_path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if _connector_call_bytes(packet) > CONNECTOR_CALL_BUDGET_BYTES:
+        raise PublishStateError("publish payload verification packet exceeds Connector hard ceiling")
+    state["stage"] = "verification-packet-ready"
+    state["verification_commit"] = commit_sha
+    state["verification_packet"] = str(packet_path)
+    state.pop("update_packet", None)
+    state.pop("published_commit_candidate", None)
+    _write_connector_state(_connector_dir(repo), state)
+    summary = {
+        "stage": state["stage"],
+        "request_id": request_id,
+        "generation": generation_number,
+        "transport_attempt": int(state.get("transport_attempt", 0)),
+        "max_transport_attempts": MAX_TRANSPORT_ATTEMPTS,
+        "verification_packet": str(packet_path),
+        "expected_payload_part_count": int(generation["payload_part_count"]),
+        "next": (
+            "execute the generated GitHub.fetch packet once; pass every returned payload file to "
+            "connector-verify as --remote-part NAME=SHA:SIZE"
+        ),
+        "verified": True,
+    }
+    _write_connector_summary(_connector_dir(repo), summary)
+    return summary
+
+
+def cmd_connector_commit(args: argparse.Namespace) -> int:
     repo = _repo_from_cwd()
     state = _read_connector_state(repo)
     if state.get("stage") != "commit-packet-ready":
         raise PublishStateError(
-            f"connector-update requires commit-packet-ready, found {state.get('stage')}"
+            f"connector-commit requires commit-packet-ready, found {state.get('stage')}"
         )
     commit_sha = args.commit_sha
     _require_hex_sha(commit_sha, name="created publish generation commit SHA")
@@ -1222,6 +1306,187 @@ def cmd_connector_update(args: argparse.Namespace) -> int:
     assert isinstance(generations, list)
     generation = generations[-1]
     assert isinstance(generation, dict)
+    summary = _write_payload_verification_packet(repo, state, generation, commit_sha)
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+def _parse_remote_payload_parts(values: list[str]) -> dict[str, tuple[str, int]]:
+    observed: dict[str, tuple[str, int]] = {}
+    for value in values:
+        name, sep, metadata = value.partition("=")
+        if not sep or not name or not metadata:
+            raise PublishStateError(
+                "remote payload part must use NAME=SHA:SIZE from the generated verification response"
+            )
+        sha, sep, raw_size = metadata.partition(":")
+        if not sep:
+            raise PublishStateError(
+                "remote payload part must use NAME=SHA:SIZE from the generated verification response"
+            )
+        _require_hex_sha(sha, name=f"remote payload part {name} SHA")
+        try:
+            size = int(raw_size)
+        except ValueError as exc:
+            raise PublishStateError(f"remote payload part {name} size is invalid") from exc
+        if size < 0:
+            raise PublishStateError(f"remote payload part {name} size is invalid")
+        if name in observed:
+            raise PublishStateError(f"duplicate remote payload part: {name}")
+        observed[name] = (sha, size)
+    return observed
+
+
+def _expected_payload_parts(generation: dict[str, object]) -> dict[str, tuple[str, int]]:
+    paths = generation["remote_payload_paths"]
+    oids = generation["expected_payload_blob_git_oids"]
+    sizes = generation["expected_payload_chars"]
+    assert isinstance(paths, list)
+    assert isinstance(oids, list)
+    assert isinstance(sizes, list)
+    expected: dict[str, tuple[str, int]] = {}
+    for path, oid, size in zip(paths, oids, sizes, strict=True):
+        name = Path(str(path)).name
+        if name in expected:
+            raise PublishStateError(f"duplicate expected payload part: {name}")
+        expected[name] = (str(oid), int(size))
+    return expected
+
+
+def _payload_mismatches(
+    expected: dict[str, tuple[str, int]],
+    observed: dict[str, tuple[str, int]],
+) -> list[dict[str, object]]:
+    mismatches: list[dict[str, object]] = []
+    for name in sorted(expected.keys() - observed.keys()):
+        oid, size = expected[name]
+        mismatches.append(
+            {"name": name, "kind": "missing", "expected_sha": oid, "expected_size": size}
+        )
+    for name in sorted(observed.keys() - expected.keys()):
+        sha, size = observed[name]
+        mismatches.append(
+            {"name": name, "kind": "unexpected", "actual_sha": sha, "actual_size": size}
+        )
+    for name in sorted(expected.keys() & observed.keys()):
+        expected_sha, expected_size = expected[name]
+        actual_sha, actual_size = observed[name]
+        if expected_sha != actual_sha or expected_size != actual_size:
+            mismatches.append(
+                {
+                    "name": name,
+                    "kind": "content",
+                    "expected_sha": expected_sha,
+                    "actual_sha": actual_sha,
+                    "expected_size": expected_size,
+                    "actual_size": actual_size,
+                }
+            )
+    return mismatches
+
+
+def _clear_post_tree_state(state: dict[str, object]) -> None:
+    for key in (
+        "created_tree",
+        "commit_packet",
+        "verification_commit",
+        "verification_packet",
+        "published_commit_candidate",
+        "update_packet",
+    ):
+        state.pop(key, None)
+
+
+def _retry_current_generation(
+    repo: Path,
+    state: dict[str, object],
+    prepared: dict[str, object],
+    generation: dict[str, object],
+    mismatches: list[dict[str, object]],
+) -> dict[str, object]:
+    current_attempt = int(state.get("transport_attempt", 0))
+    next_attempt = current_attempt + 1
+    if next_attempt >= MAX_TRANSPORT_ATTEMPTS:
+        state["stage"] = "transport-failed"
+        state["last_transport_mismatches"] = mismatches
+        _write_connector_state(_connector_dir(repo), state)
+        summary = {
+            "stage": state["stage"],
+            "request_id": state["request_id"],
+            "generation": generation["generation"],
+            "transport_attempt": current_attempt,
+            "max_transport_attempts": MAX_TRANSPORT_ATTEMPTS,
+            "mismatches": mismatches,
+            "next": (
+                "automatic transport retries are exhausted; do not update the publish ref. "
+                "Investigate Connector degradation or explicitly enter higher-level recovery."
+            ),
+            "verified": False,
+        }
+        _write_connector_summary(_connector_dir(repo), summary)
+        raise PublishStateError(
+            f"payload transport verification failed after {MAX_TRANSPORT_ATTEMPTS} attempts; "
+            "publish ref was not updated"
+        )
+
+    generation_number = int(generation["generation"])
+    current_chars = int(generation["payload_handoff_element_chars"])
+    if next_attempt == 1:
+        handoff_chars = current_chars
+    else:
+        payload_chars = len(str(prepared["payload_b64"]))
+        minimum_chars_for_part_limit = max(1, (payload_chars + MAX_PAYLOAD_PARTS - 1) // MAX_PAYLOAD_PARTS)
+        handoff_chars = max(minimum_chars_for_part_limit, current_chars // 2, 1)
+    rebuilt = _generation_plan(
+        repo,
+        prepared,
+        generation_number,
+        base_publish_head=str(generation["base_publish_head"]),
+        base_publish_tree=str(generation["base_publish_tree"]),
+        retry=bool(generation.get("retry")),
+        handoff_element_chars=handoff_chars,
+    )
+    generations = state["generations"]
+    assert isinstance(generations, list)
+    generations[-1] = rebuilt
+    output_dir = _connector_dir(repo)
+    materialized = _write_tree_batch_packet(
+        output_dir,
+        rebuilt,
+        0,
+        str(rebuilt["base_publish_tree"]),
+    )
+    state["stage"] = "tree-ready"
+    state["transport_attempt"] = next_attempt
+    state["tree_batch_index"] = 0
+    state["tree_packet"] = materialized["packet"]
+    state["tree_header"] = materialized["header"]
+    state["tree_element_files"] = materialized["elements"]
+    state["last_transport_mismatches"] = mismatches
+    _clear_post_tree_state(state)
+    _write_connector_state(output_dir, state)
+    result = {
+        **_tree_ready_summary(state, rebuilt, materialized),
+        "stage": "transport-retry-tree-ready",
+        "request_id": state["request_id"],
+        "generation": generation_number,
+        "transport_attempt": next_attempt,
+        "attempt_number": next_attempt + 1,
+        "max_transport_attempts": MAX_TRANSPORT_ATTEMPTS,
+        "mismatches": mismatches,
+        "payload_handoff_element_chars": handoff_chars,
+        "adaptive_handoff": next_attempt >= 2,
+    }
+    _write_connector_summary(output_dir, result)
+    return result
+
+
+def _write_update_packet(
+    repo: Path,
+    state: dict[str, object],
+    generation: dict[str, object],
+    commit_sha: str,
+) -> dict[str, object]:
     generation_number = int(generation["generation"])
     packet = {
         "stage": "advance-publish-transport-ref",
@@ -1244,16 +1509,48 @@ def cmd_connector_update(args: argparse.Namespace) -> int:
         "stage": state["stage"],
         "request_id": state["request_id"],
         "generation": generation_number,
+        "transport_attempt": int(state.get("transport_attempt", 0)),
+        "payload_transport_verified": True,
         "update_packet": str(packet_path),
         "branch_updates_per_generation": 1,
         "next": (
             "copy/paste the ref packet action_args into GitHub.update_ref. A successful non-force "
-            "update publishes the whole payload generation and its request/retry trigger atomically; "
+            "update publishes the verified payload generation and its request/retry trigger atomically; "
             "then wait for the Gateway receipt"
         ),
         "verified": True,
     }
     _write_connector_summary(_connector_dir(repo), summary)
+    return summary
+
+
+def cmd_connector_verify(args: argparse.Namespace) -> int:
+    repo = _repo_from_cwd()
+    manifest = _manifest_path(repo)
+    prepared = _read_prepared_request(manifest)
+    _verify_prepared_request(repo, manifest)
+    state = _read_connector_state(repo)
+    if state.get("stage") != "verification-packet-ready":
+        raise PublishStateError(
+            f"connector-verify requires verification-packet-ready, found {state.get('stage')}"
+        )
+    generations = state["generations"]
+    assert isinstance(generations, list)
+    generation = generations[-1]
+    assert isinstance(generation, dict)
+    expected = _expected_payload_parts(generation)
+    observed = _parse_remote_payload_parts(args.remote_part)
+    mismatches = _payload_mismatches(expected, observed)
+    if mismatches:
+        result = _retry_current_generation(repo, state, prepared, generation, mismatches)
+        print(json.dumps(result, indent=2))
+        return 0
+
+    commit_sha = state.get("verification_commit")
+    if not isinstance(commit_sha, str):
+        raise PublishStateError("Connector state has no verification commit")
+    _require_hex_sha(commit_sha, name="verified publish generation commit SHA")
+    summary = _write_update_packet(repo, state, generation, commit_sha)
     print(json.dumps(summary, indent=2))
     return 0
 
@@ -1309,6 +1606,7 @@ def cmd_connector_repair(args: argparse.Namespace) -> int:
     next_count = int(generation["payload_part_count"])
     generations.append(generation)
     state["current_generation"] = next_generation
+    state["transport_attempt"] = 0
     state["stage"] = "tree-ready"
     state["tree_batch_index"] = 0
     state["tree_packet"] = materialized["packet"]
@@ -1316,8 +1614,11 @@ def cmd_connector_repair(args: argparse.Namespace) -> int:
     state["tree_element_files"] = materialized["elements"]
     state.pop("created_tree", None)
     state.pop("commit_packet", None)
+    state.pop("verification_commit", None)
+    state.pop("verification_packet", None)
     state.pop("published_commit_candidate", None)
     state.pop("update_packet", None)
+    state.pop("last_transport_mismatches", None)
     _write_connector_state(output_dir, state)
     result = {
         "stage": "repair-generation-ready",
@@ -1554,14 +1855,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     connector_tree.set_defaults(func=cmd_connector_tree)
 
-    connector_update = sub.add_parser(
-        "connector-update",
-        help="create the non-force publish ref update packet for the atomic generation commit",
+    connector_commit = sub.add_parser(
+        "connector-commit",
+        help="create the one-read payload verification packet for the atomic generation commit",
     )
-    connector_update.add_argument(
+    connector_commit.add_argument(
         "--commit-sha", required=True, help="commit SHA returned by the generated GitHub.create_commit call"
     )
-    connector_update.set_defaults(func=cmd_connector_update)
+    connector_commit.set_defaults(func=cmd_connector_commit)
+
+    connector_verify = sub.add_parser(
+        "connector-verify",
+        help="verify all payload part OIDs/sizes and either emit the ref update or retry transport",
+    )
+    connector_verify.add_argument(
+        "--remote-part",
+        action="append",
+        required=True,
+        help="one payload file from the verification response as NAME=SHA:SIZE; repeat for every file",
+    )
+    connector_verify.set_defaults(func=cmd_connector_verify)
 
     connector_repair = sub.add_parser(
         "connector-repair",

@@ -68,6 +68,21 @@ def prepared(repo: Path) -> dict[str, object]:
     return json.loads(manifest_path(repo).read_text(encoding="utf-8"))
 
 
+def expected_remote_part_args(repo: Path, *, sha_override: str | None = None, size_delta: int = 0) -> list[str]:
+    state = json.loads((plan_dir(repo) / "connector-state.json").read_text(encoding="utf-8"))
+    generation = state["generations"][-1]
+    args: list[str] = []
+    for path, oid, size in zip(
+        generation["remote_payload_paths"],
+        generation["expected_payload_blob_git_oids"],
+        generation["expected_payload_chars"],
+        strict=True,
+    ):
+        sha = sha_override or oid
+        args.extend(["--remote-part", f"{Path(path).name}={sha}:{int(size) + size_delta}"])
+    return args
+
+
 def test_init_rejects_a_snapshot_that_is_not_the_exact_restored_head(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -277,8 +292,15 @@ def test_connector_plan_builds_one_atomic_publish_generation(tmp_path: Path) -> 
     assert commit_packet["action_args"]["tree_sha"] == "4" * 40
     assert commit_packet["action_args"]["parent_sha"] == base
 
-    update = json.loads(run_request(repo, "connector-update", "--commit-sha", "5" * 40).stdout)
+    verify = json.loads(run_request(repo, "connector-commit", "--commit-sha", "5" * 40).stdout)
+    assert verify["stage"] == "verification-packet-ready"
+    verification_packet = json.loads(Path(verify["verification_packet"]).read_text(encoding="utf-8"))
+    assert verification_packet["action"] == "GitHub.fetch"
+    assert f"/.publish/payloads/{request_id}/g0000?ref={'5' * 40}" in verification_packet["action_args"]["url"]
+
+    update = json.loads(run_request(repo, "connector-verify", *expected_remote_part_args(repo)).stdout)
     update_packet = json.loads(Path(update["update_packet"]).read_text(encoding="utf-8"))
+    assert update["payload_transport_verified"] is True
     assert update_packet["action"] == "GitHub.update_ref"
     assert update_packet["action_args"] == {
         "repository_full_name": "naro0216n-collab/Space-Idle",
@@ -377,6 +399,109 @@ def test_large_handoff_uses_minimum_tree_calls_and_one_branch_update(tmp_path: P
     assert all("content" in element for element in tree_packet["action_args"]["tree_elements"])
     assert "GitHub.create_blob" not in Path(plan["tree_packet"]).read_text(encoding="utf-8")
 
+def _advance_to_verification(repo: Path, *, tree_sha: str, commit_sha: str) -> dict[str, object]:
+    result = json.loads(run_request(repo, "connector-tree", "--tree-sha", tree_sha).stdout)
+    while result["stage"] == "tree-ready":
+        result = json.loads(run_request(repo, "connector-tree", "--tree-sha", tree_sha).stdout)
+    assert result["stage"] == "commit-packet-ready"
+    return json.loads(run_request(repo, "connector-commit", "--commit-sha", commit_sha).stdout)
+
+
+def test_payload_mismatch_retries_same_generation_before_ref_update(tmp_path: Path) -> None:
+    repo, base, base_tree = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("transport retry\n" * 500, encoding="utf-8")
+    commit_all(repo, "transport retry")
+    run_request(repo, "prepare")
+    plan = json.loads(run_request(repo, *_plan_args(base, base_tree)).stdout)
+    initial_chars = plan["payload_handoff_field_chars"]
+
+    _advance_to_verification(repo, tree_sha="4" * 40, commit_sha="5" * 40)
+    retry1 = json.loads(run_request(
+        repo,
+        "connector-verify",
+        *expected_remote_part_args(repo, sha_override="a" * 40),
+    ).stdout)
+    assert retry1["stage"] == "transport-retry-tree-ready"
+    assert retry1["generation"] == 0
+    assert retry1["transport_attempt"] == 1
+    assert retry1["attempt_number"] == 2
+    assert retry1["payload_handoff_element_chars"] == initial_chars
+    assert retry1["adaptive_handoff"] is False
+    state1 = json.loads((plan_dir(repo) / "connector-state.json").read_text(encoding="utf-8"))
+    assert state1["current_generation"] == 0
+    assert state1["transport_attempt"] == 1
+    assert "update_packet" not in state1
+
+    _advance_to_verification(repo, tree_sha="6" * 40, commit_sha="7" * 40)
+    retry2 = json.loads(run_request(
+        repo,
+        "connector-verify",
+        *expected_remote_part_args(repo, sha_override="b" * 40),
+    ).stdout)
+    assert retry2["generation"] == 0
+    assert retry2["transport_attempt"] == 2
+    assert retry2["attempt_number"] == 3
+    assert retry2["payload_handoff_element_chars"] == initial_chars // 2
+    assert retry2["adaptive_handoff"] is True
+    state2 = json.loads((plan_dir(repo) / "connector-state.json").read_text(encoding="utf-8"))
+    assert state2["current_generation"] == 0
+    assert state2["generations"][-1]["payload_handoff_element_chars"] == initial_chars // 2
+
+
+def test_payload_transport_retry_exhaustion_never_generates_ref_update(tmp_path: Path) -> None:
+    repo, base, base_tree = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("retry exhaustion\n" * 450, encoding="utf-8")
+    commit_all(repo, "retry exhaustion")
+    run_request(repo, "prepare")
+    run_request(repo, *_plan_args(base, base_tree))
+
+    for tree_sha, commit_sha, bad_sha in (
+        ("4" * 40, "5" * 40, "a" * 40),
+        ("6" * 40, "7" * 40, "b" * 40),
+    ):
+        _advance_to_verification(repo, tree_sha=tree_sha, commit_sha=commit_sha)
+        result = run_request(
+            repo,
+            "connector-verify",
+            *expected_remote_part_args(repo, sha_override=bad_sha),
+        )
+        parsed = json.loads(result.stdout)
+        assert parsed["stage"] == "transport-retry-tree-ready"
+
+    _advance_to_verification(repo, tree_sha="8" * 40, commit_sha="9" * 40)
+    exhausted = run_request(
+        repo,
+        "connector-verify",
+        *expected_remote_part_args(repo, sha_override="c" * 40),
+        check=False,
+    )
+    assert exhausted.returncode != 0
+    assert "failed after 3 attempts" in exhausted.stderr
+    state = json.loads((plan_dir(repo) / "connector-state.json").read_text(encoding="utf-8"))
+    assert state["stage"] == "transport-failed"
+    assert state["current_generation"] == 0
+    assert state["transport_attempt"] == 2
+    assert "update_packet" not in state
+
+
+def test_payload_transport_retry_can_succeed_without_generation_change(tmp_path: Path) -> None:
+    repo, base, base_tree = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("retry success\n" * 350, encoding="utf-8")
+    commit_all(repo, "retry success")
+    run_request(repo, "prepare")
+    run_request(repo, *_plan_args(base, base_tree))
+
+    _advance_to_verification(repo, tree_sha="4" * 40, commit_sha="5" * 40)
+    run_request(repo, "connector-verify", *expected_remote_part_args(repo, sha_override="a" * 40))
+    _advance_to_verification(repo, tree_sha="6" * 40, commit_sha="7" * 40)
+    success = json.loads(run_request(repo, "connector-verify", *expected_remote_part_args(repo)).stdout)
+    assert success["stage"] == "update-packet-ready"
+    assert success["generation"] == 0
+    assert success["transport_attempt"] == 1
+    packet = json.loads(Path(success["update_packet"]).read_text(encoding="utf-8"))
+    assert packet["action_args"]["sha"] == "7" * 40
+
+
 def test_connector_repair_rebuilds_one_atomic_tree_generation(tmp_path: Path) -> None:
     repo, base, base_tree = init_repo(tmp_path)
     content = "\n".join(
@@ -436,7 +561,8 @@ def test_repair_accepts_previous_atomic_generation_as_new_base(tmp_path: Path) -
     while result["stage"] == "tree-ready":
         result = json.loads(run_request(repo, "connector-tree", "--tree-sha", created_tree).stdout)
     assert result["stage"] == "commit-packet-ready"
-    run_request(repo, "connector-update", "--commit-sha", created_commit)
+    run_request(repo, "connector-commit", "--commit-sha", created_commit)
+    run_request(repo, "connector-verify", *expected_remote_part_args(repo))
 
     repair = json.loads(run_request(
         repo,
@@ -539,7 +665,7 @@ def test_cancel_requires_unchanged_remote_target_and_publish_tree(tmp_path: Path
 
 def test_standard_cli_has_no_alternative_repository_target_or_transaction_selectors() -> None:
     top = run_request(SCRIPT.parents[1], "--help").stdout
-    assert "{init,prepare,connector-plan,connector-tree,connector-update,connector-repair,cancel,record}" in top
+    assert "{init,prepare,connector-plan,connector-tree,connector-commit,connector-verify,connector-repair,cancel,record}" in top
     for forbidden in ("native-publish", "--repo"):
         assert forbidden not in f" {top.replace(chr(10), ' ')} "
     command_forbidden = {
@@ -548,7 +674,8 @@ def test_standard_cli_has_no_alternative_repository_target_or_transaction_select
         "connector-plan": ("--repo", "--manifest", "--plan-dir", "--github-repository",
                            "--publish-branch", "--output-dir", "--connector-call-budget-bytes"),
         "connector-tree": ("--repo", "--manifest", "--base-tree", "--content", "--path"),
-        "connector-update": ("--repo", "--manifest", "--branch", "--force"),
+        "connector-commit": ("--repo", "--manifest", "--branch", "--force"),
+        "connector-verify": ("--repo", "--manifest", "--branch", "--force", "--commit-sha"),
         "connector-repair": ("--repo", "--manifest", "--plan-dir", "--github-repository",
                              "--publish-branch", "--path", "--content", "--request-id",
                              "--part-index", "--remote-blob-sha"),
