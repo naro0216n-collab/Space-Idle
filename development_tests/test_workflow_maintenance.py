@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
+
+from development_tests.script_harness import load_script, run_script
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLISH = ROOT / "scripts" / "publish_request.py"
 MAINTENANCE = ROOT / "scripts" / "workflow_maintenance.py"
+PUBLISH_MODULE = load_script(PUBLISH, "space_idle_test_publish_request_for_maintenance")
+MAINTENANCE_MODULE = load_script(MAINTENANCE, "space_idle_test_workflow_maintenance")
 
 
 def git(repo: Path, *args: str) -> str:
@@ -24,10 +27,8 @@ def commit_all(repo: Path, message: str) -> None:
 
 
 def run(script: Path, repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(script), *args], cwd=repo, check=check, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
+    module = MAINTENANCE_MODULE if script == MAINTENANCE else PUBLISH_MODULE
+    return run_script(module, script, repo, *args, check=check)
 
 
 def maintenance_manifest(repo: Path) -> Path:
@@ -61,14 +62,8 @@ def init_repo(tmp_path: Path) -> tuple[Path, str, str]:
 
 
 def test_workflow_maintenance_is_separate_and_has_no_target_or_path_selectors() -> None:
-    maintenance_help = subprocess.run(
-        [sys.executable, str(MAINTENANCE), "--help"], check=True, text=True,
-        stdout=subprocess.PIPE,
-    ).stdout
-    publish_help = subprocess.run(
-        [sys.executable, str(PUBLISH), "--help"], check=True, text=True,
-        stdout=subprocess.PIPE,
-    ).stdout
+    maintenance_help = run(MAINTENANCE, ROOT, "--help").stdout
+    publish_help = run(PUBLISH, ROOT, "--help").stdout
     assert ".github/workflows-only" in maintenance_help
     assert "Normal source/game changes belong to publish_request.py" in " ".join(maintenance_help.split())
     assert "workflow-maintenance" not in publish_help
@@ -84,8 +79,7 @@ def test_workflow_maintenance_is_separate_and_has_no_target_or_path_selectors() 
         "verify-remote": ("--repo", "--manifest", "--plan-dir", "--target-branch"),
     }
     for command, flags in forbidden_by_command.items():
-        help_text = subprocess.run([sys.executable, str(MAINTENANCE), command, "--help"], check=True,
-                                   text=True, stdout=subprocess.PIPE).stdout
+        help_text = run(MAINTENANCE, ROOT, command, "--help").stdout
         for flag in flags:
             assert flag not in help_text
 

@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import importlib.util
 import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
+
+from development_tests.script_harness import load_script, run_script
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "publish_request.py"
+PUBLISH_REQUEST = load_script(SCRIPT, "space_idle_test_publish_request")
 
 
 def git(repo: Path, *args: str) -> str:
@@ -21,10 +22,7 @@ def git(repo: Path, *args: str) -> str:
 
 
 def run_request(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(SCRIPT), *args], cwd=repo, check=check, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
+    return run_script(PUBLISH_REQUEST, SCRIPT, repo, *args, check=check)
 
 
 def commit_all(repo: Path, message: str) -> None:
@@ -217,10 +215,7 @@ def test_connector_transport_is_one_way_and_root_gated(tmp_path: Path) -> None:
 
 
 def test_fixed_connector_profile_keeps_fleet_sized_payload_in_one_blob(tmp_path: Path) -> None:
-    spec = importlib.util.spec_from_file_location("publish_request", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
+    module = PUBLISH_REQUEST
     repo, _, _ = init_repo(tmp_path)
     parts = module._split_payload_for_blob_calls(
         repo, "naro0216n-collab/Space-Idle", "A" * 81_780, module.CONNECTOR_CALL_BUDGET_BYTES
@@ -248,10 +243,7 @@ def test_fixed_connector_profile_splits_only_when_actual_call_exceeds_limit(tmp_
 
 def test_payload_root_oid_matches_git_tree_object_format(tmp_path: Path) -> None:
     repo, _, _ = init_repo(tmp_path)
-    spec = importlib.util.spec_from_file_location("publish_request", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
+    module = PUBLISH_REQUEST
     contents = [b"alpha", b"beta", b"gamma"]
     oids = [
         subprocess.run(["git", "hash-object", "--stdin"], cwd=repo, input=x, check=True,
@@ -267,8 +259,7 @@ def test_payload_root_oid_matches_git_tree_object_format(tmp_path: Path) -> None
 
 
 def test_standard_cli_has_no_alternative_repository_target_or_transaction_selectors() -> None:
-    top = subprocess.run([sys.executable, str(SCRIPT), "--help"], check=True, text=True,
-                         stdout=subprocess.PIPE).stdout
+    top = run_request(SCRIPT.parents[1], "--help").stdout
     assert "{init,prepare,connector-plan,connector-root,connector-submit,record}" in top
     for forbidden in ("native-publish", " plan ", "--repo"):
         assert forbidden not in f" {top.replace(chr(10), ' ')} "
@@ -282,8 +273,7 @@ def test_standard_cli_has_no_alternative_repository_target_or_transaction_select
         "record": ("--repo", "--manifest", "--remote-commit", "--remote-tree", "--local-ref"),
     }
     for command, forbidden_flags in command_forbidden.items():
-        help_text = subprocess.run([sys.executable, str(SCRIPT), command, "--help"], check=True,
-                                   text=True, stdout=subprocess.PIPE).stdout
+        help_text = run_request(SCRIPT.parents[1], command, "--help").stdout
         for flag in forbidden_flags:
             assert flag not in help_text
 
