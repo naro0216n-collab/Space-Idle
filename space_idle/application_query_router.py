@@ -85,7 +85,9 @@ class ApplicationQueryRouterMixin:
         if isinstance(query, GetScientificExplorations):
             return self._scientific_explorations_view()
         if isinstance(query, GetSurveys):
-            return self._surveys_view(None if query.location_id is None else self._require_location(query.location_id))
+            return self._surveys_view(
+                None if query.provider_location_id is None else self._require_location(query.provider_location_id)
+            )
         if isinstance(query, GetContracts):
             return self._contracts_view()
         raise TypeError(f"unsupported query: {type(query).__name__}")

@@ -34,7 +34,7 @@ from ..content.base_progression import (
     build_extraction_specs,
     build_survey_providers,
     build_survey_targets,
-    initial_known_deposits,
+    initial_known_surface_resource_knowledge,
 )
 from ..content.base_research import build_research_definitions, build_research_providers
 from ..content.base_scientific_exploration import build_scientific_exploration_definitions
@@ -104,10 +104,10 @@ def build_base_simulation() -> Simulation:
         build_scientific_exploration_definitions(),
         facilities, inventory, power, logistics, research,
     )
-    survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities)
-    for location_id, resource_id in initial_known_deposits():
-        survey.initialize_known(location_id, resource_id)
-    extraction = ExtractionService(build_extraction_specs(), survey)
+    survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph)
+    for cell_id, resource_id in initial_known_surface_resource_knowledge():
+        survey.initialize_known(cell_id, resource_id)
+    extraction = ExtractionService(build_extraction_specs(), graph)
 
     # Keep the Contract Domain composed and available for future events,
     # collaboration, or scenario content. Base Game starts with no offers.

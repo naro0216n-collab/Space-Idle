@@ -140,10 +140,10 @@ def test_runtime_snapshot_reads_all_projections_at_one_clock_sync(tmp_path):
     assert result.revision == 1
 
 
-def test_initial_known_deposits_are_knowledge_without_active_survey_campaigns():
+def test_initial_surface_resource_knowledge_has_no_active_survey_campaigns():
     app = build_game_application()
     sim = app._simulation
-    key = (ids.EARTH, ids.WATER)
+    key = (ids.EARTH_CELL_INDUSTRIAL, ids.WATER)
 
     assert sim.survey.is_complete(*key)
     assert key in sim.survey.knowledge_progress
@@ -151,7 +151,7 @@ def test_initial_known_deposits_are_knowledge_without_active_survey_campaigns():
 
     row = next(
         item for item in app.query(GetSurveys(str(ids.EARTH))).items
-        if item.resource_id == str(ids.WATER)
+        if item.cell_id == str(ids.EARTH_CELL_INDUSTRIAL) and item.resource_id == str(ids.WATER)
     )
     assert row.complete is True
     assert row.active is False
@@ -164,10 +164,10 @@ def test_initial_known_deposits_are_knowledge_without_active_survey_campaigns():
 def test_survey_campaign_updates_knowledge_and_is_removed_when_complete():
     app = build_game_application()
     sim = app._simulation
-    key = (ids.SOUTH_POLAR_RIDGE, ids.WATER)
+    key = (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.WATER)
     target = sim.survey.targets[key]
 
-    sim.survey.start(*key, allocation_weight=2.0)
+    sim.survey.start(ids.SOUTH_POLAR_RIDGE, *key, allocation_weight=2.0)
     assert key in sim.survey.campaigns
     assert sim.survey.progress(*key) == 0.0
 
@@ -185,7 +185,7 @@ def test_survey_campaign_updates_knowledge_and_is_removed_when_complete():
 
     row = next(
         item for item in app.query(GetSurveys(str(ids.SOUTH_POLAR_RIDGE))).items
-        if item.resource_id == str(ids.WATER)
+        if item.cell_id == str(ids.MOON_CELL_SOUTH_POLAR_RIDGE) and item.resource_id == str(ids.WATER)
     )
     assert row.complete is True
     assert row.active is False

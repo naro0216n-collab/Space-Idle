@@ -4,6 +4,16 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class SurfaceResourceKnowledgeRow:
+    resource_id: str
+    resource_name: str
+    knowledge_level: int
+    presence_probability: float | None
+    visible_potential: float | None
+    visible_potential_precision_fraction: float | None
+
+
+@dataclass(frozen=True)
 class SurfaceCellRow:
     id: str
     body_id: str
@@ -12,6 +22,7 @@ class SurfaceCellRow:
     longitude_deg: float
     neighbor_ids: tuple[str, ...]
     terrain: tuple[tuple[str, float], ...]
+    resources: tuple[SurfaceResourceKnowledgeRow, ...]
     developed: bool
     location_id: str | None
     is_location_core: bool

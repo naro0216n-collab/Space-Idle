@@ -85,11 +85,28 @@ class ExtractionRow:
     facility_id: str
     facility_definition_id: str
     display_name: str
+    resource_id: str
+    resource_name: str
     output_resource_id: str
     output_resource_name: str
+    nominal_capacity_t_per_day: float
+    effective_opportunity: float
+    marginal_efficiency: float
     scale: float
     output_t_per_day: float
     limiting_factors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ExtractionResourceRow:
+    resource_id: str
+    resource_name: str
+    effective_opportunity: float
+    installed_nominal_capacity_t_per_day: float
+    operational_fulfillment: float
+    diminishing_efficiency: float
+    marginal_efficiency: float
+    output_t_per_day: float
 
 
 @dataclass(frozen=True)
@@ -108,4 +125,5 @@ class LocationView:
     facilities: tuple[FacilityRow, ...]
     industry: tuple[IndustryRow, ...]
     extraction: tuple[ExtractionRow, ...]
+    extraction_resources: tuple[ExtractionResourceRow, ...]
     projects: tuple[ProjectRow, ...]

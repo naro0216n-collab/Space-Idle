@@ -318,7 +318,7 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             self._query_result(GetResearch())
             return
         if path == "/api/v1/surveys":
-            self._query_result(GetSurveys(_one(params, "location_id")))
+            self._query_result(GetSurveys(_one(params, "provider_location_id")))
             return
         if path == "/api/v1/contracts":
             self._query_result(GetContracts())

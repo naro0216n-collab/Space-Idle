@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from .application_views import SurfaceCellRow, SurfaceLocationTerritoryRow, SurfaceMapView
+from .application_views import (
+    SurfaceCellRow,
+    SurfaceLocationTerritoryRow,
+    SurfaceMapView,
+    SurfaceResourceKnowledgeRow,
+)
 from .shared import CelestialBodyId
 
 
@@ -35,6 +40,26 @@ class SurfaceProjectorMixin:
                     key=lambda row: str(row.id),
                 )
             )
+            resources = ()
+            if sim.survey is not None:
+                resources = tuple(
+                    SurfaceResourceKnowledgeRow(
+                        str(resource_id),
+                        self._resource_name(resource_id),
+                        sim.survey.knowledge_level(cell.id, resource_id),
+                        sim.survey.visible_presence_probability(cell.id, resource_id),
+                        sim.survey.visible_potential(cell.id, resource_id),
+                        sim.survey.visible_potential_precision_fraction(cell.id, resource_id),
+                    )
+                    for (target_cell_id, resource_id) in sorted(
+                        (
+                            key
+                            for key in sim.survey.targets
+                            if key[0] == cell.id
+                        ),
+                        key=lambda key: str(key[1]),
+                    )
+                )
             rows.append(
                 SurfaceCellRow(
                     str(cell.id),
@@ -49,6 +74,7 @@ class SurfaceProjectorMixin:
                         ("dust_factor", cell.terrain.dust_factor),
                         ("slope_factor", cell.terrain.slope_factor),
                     ),
+                    resources,
                     owner is not None,
                     None if owner is None else str(owner),
                     owner_state is not None and owner_state.core_cell_id == cell.id,

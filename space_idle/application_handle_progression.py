@@ -5,7 +5,7 @@ from .application_commands import (
     ResumeResearch, ResumeSurvey, SetResearchDemonstrationSite,
     SetResearchPrototypeSite, SetSurveyAllocation, StartResearch, StartSurvey, StartScientificExploration, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
 )
-from .shared import DefinitionId
+from .shared import DefinitionId, SurfaceCellId
 
 
 class ProgressionCommandHandlerMixin:
@@ -53,15 +53,21 @@ class ProgressionCommandHandlerMixin:
         if isinstance(command, (StartSurvey, PauseSurvey, ResumeSurvey, SetSurveyAllocation)):
             if sim.survey is None:
                 raise RuntimeError("survey is not configured")
-            loc = self._require_location(command.location_id)
-            res = self._require_resource(command.resource_id)
+            cell_id = SurfaceCellId(command.cell_id)
+            if cell_id not in sim.graph.surface_cells:
+                raise KeyError(command.cell_id)
+            resource_id = self._require_resource(command.resource_id)
             if isinstance(command, StartSurvey):
-                sim.survey.start(loc, res, allocation_weight=command.allocation_weight)
+                provider_location_id = self._require_location(command.provider_location_id)
+                sim.survey.start(
+                    provider_location_id, cell_id, resource_id,
+                    allocation_weight=command.allocation_weight,
+                )
             elif isinstance(command, PauseSurvey):
-                sim.survey.pause(loc, res)
+                sim.survey.pause(cell_id, resource_id)
             elif isinstance(command, ResumeSurvey):
-                sim.survey.resume(loc, res)
+                sim.survey.resume(cell_id, resource_id)
             else:
-                sim.survey.set_allocation_weight(loc, res, command.weight)
+                sim.survey.set_allocation_weight(cell_id, resource_id, command.weight)
             return CommandResult()
         return NotImplemented

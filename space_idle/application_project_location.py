@@ -6,6 +6,7 @@ from .application_views import (
     CapabilityRow,
     EnvironmentFacetRow,
     ExtractionRow,
+    ExtractionResourceRow,
     FacilityRow,
     IndustryRow,
     InventoryRow,
@@ -253,6 +254,7 @@ class LocationProjectorMixin:
             )
 
         extraction: list[ExtractionRow] = []
+        extraction_resources: list[ExtractionResourceRow] = []
         if sim.extraction is not None:
             for snap in sim.extraction.snapshots(
                 location_id, sim.facilities, sim.inventory, power, sim.day
@@ -263,13 +265,33 @@ class LocationProjectorMixin:
                         str(snap.facility_id),
                         str(snap.facility_def_id),
                         definition.display_name,
+                        str(snap.resource_id),
+                        self._resource_name(snap.resource_id),
                         str(snap.output_resource_id),
                         self._resource_name(snap.output_resource_id),
+                        snap.nominal_capacity_t_per_day,
+                        snap.effective_opportunity,
+                        snap.marginal_efficiency,
                         snap.scale,
                         snap.output_t_per_day,
                         snap.limiting_factors,
                     )
                 )
+            extraction_resources.extend(
+                ExtractionResourceRow(
+                    str(row.resource_id),
+                    self._resource_name(row.resource_id),
+                    row.effective_opportunity,
+                    row.installed_nominal_capacity_t_per_day,
+                    row.operational_fulfillment,
+                    row.diminishing_efficiency,
+                    row.marginal_efficiency,
+                    row.output_t_per_day,
+                )
+                for row in sim.extraction.resource_snapshots(
+                    location_id, sim.facilities, power, sim.day
+                )
+            )
 
         capability_rows = tuple(
             CapabilityRow(
@@ -306,5 +328,6 @@ class LocationProjectorMixin:
             tuple(facilities),
             tuple(industry),
             tuple(extraction),
+            tuple(extraction_resources),
             self._project_rows(location_id),
         )

@@ -79,7 +79,7 @@ class Simulation:
         locations = {facility.location_id for facility in self.facilities.facilities.values()}
         locations.update(project.location_id for project in self.projects.projects.values())
         if self.survey is not None:
-            locations.update(campaign.location_id for campaign in self.survey.campaigns.values())
+            locations.update(campaign.provider_location_id for campaign in self.survey.campaigns.values())
         locations.update(
             project.location_id
             for project in self.logistics.vehicle_production_projects.values()

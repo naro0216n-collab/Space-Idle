@@ -17,18 +17,26 @@ class FundResearchPrototype:
 @dataclass(frozen=True)
 class SetResearchDemonstrationSite:
     research_id: str; location_id: str
+
 @dataclass(frozen=True)
 class StartSurvey:
-    location_id: str; resource_id: str; allocation_weight: float = 1.0
+    provider_location_id: str
+    cell_id: str
+    resource_id: str
+    allocation_weight: float = 1.0
 @dataclass(frozen=True)
 class PauseSurvey:
-    location_id: str; resource_id: str
+    cell_id: str
+    resource_id: str
 @dataclass(frozen=True)
 class ResumeSurvey:
-    location_id: str; resource_id: str
+    cell_id: str
+    resource_id: str
 @dataclass(frozen=True)
 class SetSurveyAllocation:
-    location_id: str; resource_id: str; weight: float
+    cell_id: str
+    resource_id: str
+    weight: float
 
 @dataclass(frozen=True)
 class StartScientificExploration:

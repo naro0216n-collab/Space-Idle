@@ -64,8 +64,14 @@
   }
 
   function renderSurveyTab(){
-    const rows=(state.surveys?.items||[]).map((s)=>{const status=s.complete?'<span class="badge ok">完了</span>':s.active?(s.paused?'<span class="badge warn">停止</span>':'<span class="badge ok">探査中</span>'):'<span class="badge">未開始</span>';return `<tr class="selectable" data-inspect="survey" data-id="${esc(s.resource_id)}"><td><div class="cell-main">${esc(s.resource_name)}</div><div class="cell-sub">知識Lv ${s.knowledge_level}</div></td><td>${status}</td><td>${pct(s.progress)}</td><td>${fmt(s.capacity_points_per_day,2)}</td><td>${s.presence_probability==null?'—':pct(s.presence_probability)}</td><td>${s.visible_reserve_t==null?'—':fmt(s.visible_reserve_t)}</td></tr>`;}).join('');
-    return `<section class="card"><div class="card-heading"><h3>地点探査</h3></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>状態</th><th>進捗</th><th>能力/日</th><th>存在確率</th><th>推定埋蔵量</th></tr></thead><tbody>${rows||'<tr><td colspan="6">この地点に探査対象なし</td></tr>'}</tbody></table></div></section>`;
+    const rows=(state.surveys?.items||[]).map((s)=>{
+      const status=s.complete?'<span class="badge ok">完了</span>':s.active?(s.paused?'<span class="badge warn">停止</span>':'<span class="badge ok">探査中</span>'):'<span class="badge">未開始</span>';
+      const id=`${s.cell_id}::${s.resource_id}`;
+      const potential=s.visible_potential==null?'—':fmt(s.visible_potential,3);
+      const precision=s.visible_potential_precision_fraction==null?'':s.visible_potential_precision_fraction<=0?' · 測定済み':` · 精度 ±${pct(s.visible_potential_precision_fraction)}`;
+      return `<tr class="selectable" data-inspect="survey" data-id="${esc(id)}"><td><div class="cell-main">${esc(s.resource_name)}</div><div class="cell-sub">${esc(s.cell_label)} · 知識Lv ${s.knowledge_level}</div></td><td>${status}</td><td>${pct(s.progress_fraction)}</td><td>${fmt(s.capacity_points_per_day,2)}</td><td>${s.presence_probability==null?'—':pct(s.presence_probability)}</td><td>${potential}${precision}</td></tr>`;
+    }).join('');
+    return `<section class="card"><div class="card-heading"><h3>地表資源Survey</h3></div><div class="table-wrap"><table><thead><tr><th>資源・地域</th><th>状態</th><th>進捗</th><th>能力/日</th><th>存在確率</th><th>Resource Potential</th></tr></thead><tbody>${rows||'<tr><td colspan="6">この天体にSurvey対象なし</td></tr>'}</tbody></table></div></section>`;
   }
 
   function renderActiveTab(){
@@ -88,7 +94,7 @@
       productionSection+=section('生産工程',kv([['現在Process',esc(industry.process_display_name||industry.process_id||'未選択')],['実効稼働率',pct(industry.scale)]])+processControl+`<h4>投入/日</h4>${rateCards(industry.input_rates_per_day)}<h4>生産物/日</h4>${rateCards(industry.output_rates_per_day)}<h4>limiting factor</h4>${limitingHtml(industry.limiting_factors)}`);
     }
     if(extraction){
-      productionSection+=section('採掘',kv([['産出資源',esc(resourceName(extraction.output_resource_id))],['生産物/日',`${fmt(extraction.output_t_per_day,3)} t/日`],['実効稼働率',pct(extraction.scale)]])+`<h4>limiting factor</h4>${limitingHtml(extraction.limiting_factors)}`);
+      productionSection+=section('採掘',kv([['対象資源',esc(resourceName(extraction.resource_id))],['Nominal Capacity',`${fmt(extraction.nominal_capacity_t_per_day,3)} t/日`],['Effective Opportunity',fmt(extraction.effective_opportunity,3)],['限界効率',pct(extraction.marginal_efficiency)],['産出資源',esc(resourceName(extraction.output_resource_id))],['生産物/日',`${fmt(extraction.output_t_per_day,3)} t/日`],['実効稼働率',pct(extraction.scale)]])+`<h4>limiting factor</h4>${limitingHtml(extraction.limiting_factors)}`);
     }
     if(!productionSection)productionSection=section('生産・採掘','<div class="empty-state">この設備には現在の生産・採掘工程がありません。</div>');
     let upgradeSection='';
@@ -191,10 +197,12 @@
   }
 
   function renderSurveyInspector(id){
-    const s=state.surveys?.items?.find((x)=>x.resource_id===id);if(!s)return false;
+    const s=state.surveys?.items?.find((x)=>`${x.cell_id}::${x.resource_id}`===id);if(!s)return false;
     const blockers=s.blockers||[],weightEditable=s.can_start||s.can_set_allocation,weight=s.active?s.allocation_weight:s.default_allocation_weight;
     const actions=lifecycleButton({domain:'survey',id,canStart:s.can_start,canPause:s.can_pause,canResume:s.can_resume,complete:s.complete,startLabel:'探査開始',pauseLabel:'探査停止',resumeLabel:'探査再開',completeLabel:'探査完了'});
-    setInspector(s.resource_name,section('探査状態',kv([['進捗',pct(s.progress)],['知識レベル',String(s.knowledge_level)],['能力/日',fmt(s.capacity_points_per_day,2)],['存在確率',s.presence_probability==null?'—':pct(s.presence_probability)],['推定埋蔵量',s.visible_reserve_t==null?'—':`${fmt(s.visible_reserve_t)} t`]]))+section('現在のblocker',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+section('操作',`<div class="action-stack">${actions}<div class="form-row"><label>探査配分<input id="surveyWeightInput" type="number" min="0" step="0.1" value="${weight}" data-draft-key="survey:${esc(id)}:weight" ${weightEditable?'':'disabled'}></label><button data-set-survey-weight="${esc(id)}" ${s.can_set_allocation?'':'disabled'}>配分を適用</button></div></div>`));return true;
+    const potential=s.visible_potential==null?'—':fmt(s.visible_potential,3);
+    const precision=s.visible_potential_precision_fraction==null?'—':s.visible_potential_precision_fraction<=0?'測定済み':`±${pct(s.visible_potential_precision_fraction)}`;
+    setInspector(`${s.resource_name} · ${s.cell_label}`,section('探査状態',kv([['進捗',pct(s.progress_fraction)],['知識レベル',String(s.knowledge_level)],['Survey能力/日',fmt(s.capacity_points_per_day,2)],['存在確率',s.presence_probability==null?'—':pct(s.presence_probability)],['Resource Potential',potential],['推定精度',precision],['探査実施拠点',s.provider_location_id?esc(locationName(s.provider_location_id)):'—']]))+section('現在のblocker',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+section('操作',`<div class="action-stack">${actions}<div class="form-row"><label>探査配分<input id="surveyWeightInput" type="number" min="0" step="0.1" value="${weight}" data-draft-key="survey:${esc(id)}:weight" ${weightEditable?'':'disabled'}></label><button data-set-survey-weight="${esc(id)}" ${s.can_set_allocation?'':'disabled'}>配分を適用</button></div></div>`));return true;
   }
 
   function renderInspector(){
@@ -244,8 +252,8 @@
     const ea=event.target.closest('[data-exploration-action]');if(ea){const map={start:'StartScientificExploration',pause:'PauseScientificExploration',resume:'ResumeScientificExploration'};try{await command(map[ea.dataset.explorationAction],{exploration_id:ea.dataset.id});}catch{}return;}
     const assign=event.target.closest('[data-exploration-assign]');if(assign){try{await command('AssignExplorationFleet',{exploration_id:assign.dataset.explorationAssign,vehicle_definition_id:assign.dataset.vehicleDefinitionId});}catch{}return;}
     const unassign=event.target.closest('[data-exploration-unassign]');if(unassign){try{await command('UnassignExplorationFleet',{exploration_id:unassign.dataset.explorationUnassign});}catch{}return;}
-    const sa=event.target.closest('[data-survey-action]');if(sa){const map={start:'StartSurvey',pause:'PauseSurvey',resume:'ResumeSurvey'},payload={location_id:state.locationId,resource_id:sa.dataset.id};if(sa.dataset.surveyAction==='start')payload.allocation_weight=Number($('#surveyWeightInput')?.value??1);try{await command(map[sa.dataset.surveyAction],payload);}catch{}return;}
-    const sw=event.target.closest('[data-set-survey-weight]');if(sw){try{await command('SetSurveyAllocation',{location_id:state.locationId,resource_id:sw.dataset.setSurveyWeight,weight:Number($('#surveyWeightInput').value)});}catch{}return;}
+    const sa=event.target.closest('[data-survey-action]');if(sa){const row=(state.surveys?.items||[]).find((x)=>`${x.cell_id}::${x.resource_id}`===sa.dataset.id);if(!row)return;const action=sa.dataset.surveyAction;const map={start:'StartSurvey',pause:'PauseSurvey',resume:'ResumeSurvey'};const payload={cell_id:row.cell_id,resource_id:row.resource_id};if(action==='start'){payload.provider_location_id=state.locationId;payload.allocation_weight=Number($('#surveyWeightInput')?.value??1);}try{await command(map[action],payload);}catch{}return;}
+    const sw=event.target.closest('[data-set-survey-weight]');if(sw){const row=(state.surveys?.items||[]).find((x)=>`${x.cell_id}::${x.resource_id}`===sw.dataset.setSurveyWeight);if(!row)return;try{await command('SetSurveyAllocation',{cell_id:row.cell_id,resource_id:row.resource_id,weight:Number($('#surveyWeightInput').value)});}catch{}return;}
   });
 
   window.SpaceIdleOperations={render};

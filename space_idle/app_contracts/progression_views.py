@@ -109,10 +109,14 @@ class ScientificExplorationsView:
 
 @dataclass(frozen=True)
 class SurveyRow:
-    location_id: str
+    cell_id: str
+    body_id: str
+    cell_label: str
+    location_id: str | None
     resource_id: str
     resource_name: str
     active: bool
+    provider_location_id: str | None
     complete: bool
     paused: bool
     can_start: bool
@@ -120,12 +124,14 @@ class SurveyRow:
     can_resume: bool
     can_set_allocation: bool
     progress: float
+    progress_fraction: float
+    final_threshold: float
     default_allocation_weight: float
     allocation_weight: float
     knowledge_level: int
     presence_probability: float | None
-    visible_concentration: float | None
-    visible_reserve_t: float | None
+    visible_potential: float | None
+    visible_potential_precision_fraction: float | None
     capacity_points_per_day: float
     blockers: tuple[str, ...]
 

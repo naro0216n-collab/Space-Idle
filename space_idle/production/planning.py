@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from ..facilities import FacilityBook, FacilityState
 from ..inventory import InventoryBook
 from ..power import PowerSnapshot
@@ -32,28 +34,29 @@ class IndustryPlanningMixin:
         }
 
         while active:
+            ordered_active = sorted(active, key=str)
             upper_step = min(
                 (upper_limits[facility_id] - scales[facility_id]) / upper_limits[facility_id]
-                for facility_id in active
+                for facility_id in ordered_active
             )
             constraint_steps: list[float] = []
             for resource_id, available in remaining.items():
-                rate = sum(
+                rate = math.fsum(
                     process_by_id[facility_id].inputs_per_day.get(resource_id, 0.0) * upper_limits[facility_id]
-                    for facility_id in active
+                    for facility_id in ordered_active
                 )
                 if rate > 1e-12:
                     constraint_steps.append(max(0.0, available) / rate)
             step = max(0.0, min([upper_step, *constraint_steps]) if constraint_steps else upper_step)
 
             if step > 1e-12:
-                for facility_id in active:
+                for facility_id in ordered_active:
                     scales[facility_id] += upper_limits[facility_id] * step
                 for resource_id in remaining:
-                    used = sum(
+                    used = math.fsum(
                         process_by_id[facility_id].inputs_per_day.get(resource_id, 0.0)
                         * upper_limits[facility_id] * step
-                        for facility_id in active
+                        for facility_id in ordered_active
                     )
                     remaining[resource_id] = max(0.0, remaining[resource_id] - used)
 
@@ -141,12 +144,12 @@ class IndustryPlanningMixin:
                 for storage_class, delta in deltas.items()
                 if delta > 1e-12
             }
-            for storage_class in storage_classes:
+            for storage_class in sorted(storage_classes):
                 capacity = inventory.storage_service_capacity_t.get((location_id, storage_class), 0.0)
                 free = max(0.0, capacity - inventory.stored_in_class(location_id, storage_class))
-                consumers = sum(
+                consumers = math.fsum(
                     -storage_delta[facility.id].get(storage_class, 0.0) * scales[facility.id]
-                    for facility, _process in rows
+                    for facility, _process in sorted(rows, key=lambda row: str(row[0].id))
                     if storage_delta[facility.id].get(storage_class, 0.0) < -1e-12
                 )
                 allowed_positive = free + consumers
@@ -165,19 +168,22 @@ class IndustryPlanningMixin:
                     facility_id for facility_id in producers
                     if scales[facility_id] + 1e-9 < storage_limits[facility_id]
                 }
-                fixed_positive = sum(
+                fixed_positive = math.fsum(
                     storage_delta[facility_id][storage_class] * scales[facility_id]
-                    for facility_id in fixed
+                    for facility_id in sorted(fixed, key=str)
                 )
-                flexible = [facility_id for facility_id in producers if facility_id not in fixed]
+                flexible = sorted(
+                    (facility_id for facility_id in producers if facility_id not in fixed),
+                    key=str,
+                )
                 remainder = max(0.0, allowed_positive - fixed_positive)
-                denominator = sum(
+                denominator = math.fsum(
                     storage_delta[facility_id][storage_class] * power_limits[facility_id]
                     for facility_id in flexible
                 )
                 ratio = 1.0 if denominator <= remainder + 1e-9 else max(0.0, remainder / denominator)
 
-                for facility_id in fixed:
+                for facility_id in sorted(fixed, key=str):
                     next_storage_limits[facility_id] = min(next_storage_limits[facility_id], scales[facility_id])
                 for facility_id in flexible:
                     next_storage_limits[facility_id] = min(
@@ -198,18 +204,19 @@ class IndustryPlanningMixin:
 
         # Derive blocker labels from the final feasible allocation. They explain
         # the physical limiting constraint without prescribing a solution.
+        ordered_rows = sorted(rows, key=lambda row: str(row[0].id))
         total_input = {
-            resource_id: sum(
+            resource_id: math.fsum(
                 process.inputs_per_day.get(resource_id, 0.0) * scales[facility.id]
-                for facility, process in rows
+                for facility, process in ordered_rows
             )
             for _facility, process in rows
             for resource_id in process.inputs_per_day
         }
         class_net = {
-            storage_class: sum(
+            storage_class: math.fsum(
                 storage_delta[facility.id].get(storage_class, 0.0) * scales[facility.id]
-                for facility, _process in rows
+                for facility, _process in ordered_rows
             )
             for storage_class in {c for deltas in storage_delta.values() for c in deltas}
         }

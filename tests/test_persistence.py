@@ -99,11 +99,11 @@ def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
 def test_save_load_preserves_survey_knowledge_separately_from_active_campaign(tmp_path):
     app = build_game_application()
     sim = app._simulation
-    active_key = (ids.SOUTH_POLAR_RIDGE, ids.WATER)
-    known_key = (ids.EARTH, ids.WATER)
+    active_key = (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.WATER)
+    known_key = (ids.EARTH_CELL_INDUSTRIAL, ids.WATER)
     target = sim.survey.targets[active_key]
 
-    app.execute(StartSurvey(str(active_key[0]), str(active_key[1]), allocation_weight=0.75))
+    app.execute(StartSurvey(str(ids.SOUTH_POLAR_RIDGE), str(active_key[0]), str(active_key[1]), allocation_weight=0.75))
     sim.survey.knowledge_progress[active_key] = target.thresholds[0] / 2.0
     assert known_key not in sim.survey.campaigns
 
@@ -276,3 +276,22 @@ def test_resource_demand_reservations_are_derived_and_rebuilt_after_load(tmp_pat
     loaded, _ = load_game(path, build_game_application)
     assert loaded._simulation.inventory.reserved == expected_reservations
     assert capture_state(loaded._simulation) == captured
+
+
+def test_save_load_preserves_active_cell_resource_survey_future_behavior(tmp_path):
+    app = build_game_application()
+    sim = app._simulation
+    sim.facilities.install(ids.ROBOTIC_SURVEY_PACKAGE, ids.SOUTH_POLAR_RIDGE)
+    key = (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.WATER)
+    app.execute(StartSurvey(str(ids.SOUTH_POLAR_RIDGE), str(key[0]), str(key[1]), allocation_weight=1.0))
+
+    path = tmp_path / "active-surface-survey.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application)
+
+    app.execute(AdvanceTime(7))
+    loaded.execute(AdvanceTime(7))
+
+    assert loaded._simulation.survey.knowledge_progress == sim.survey.knowledge_progress
+    assert loaded._simulation.survey.campaigns == sim.survey.campaigns
+    assert capture_state(loaded._simulation) == capture_state(sim)
