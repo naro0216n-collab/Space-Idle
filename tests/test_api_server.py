@@ -89,6 +89,19 @@ def test_http_api_revision_etag_gzip_command_and_save_load(tmp_path):
         assert status == 200 and payload["data"]["items"]
         assert all(not row["modes"] for row in payload["data"]["items"])
 
+        status, _, payload = _request(
+            port,
+            "GET",
+            "/api/v1/logistics/fleet-relocation-preview"
+            "?vehicle_definition_id=base.vehicle.reusable_orbital_cargo_tug"
+            "&units=1&source_id=base.node.low_earth_orbit"
+            "&destination_id=base.node.lunar_orbit&path_policy=fastest",
+        )
+        assert status == 200
+        assert payload["data"]["vehicle_definition_id"] == "base.vehicle.reusable_orbital_cargo_tug"
+        assert "infrastructure_requirements" in payload["data"]
+        assert "blockers" in payload["data"]
+
         status, _, payload = _request(port, "POST", "/api/v1/session/save", {"slot": "ipad-test"})
         assert status == 200 and payload["data"]["saved"] is True
 

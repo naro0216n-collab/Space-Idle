@@ -3,10 +3,11 @@
 
   const A=window.SpaceIdleApp;
   if(!A)throw new Error('SpaceIdleApp must load before logistics_ui.js');
-  const {state,$,esc,fmt,locationName,resourceName,definitionName,capabilityName,operationName,issueHtml,metricHtml,command,banner}=A;
+  const {state,$,esc,fmt,locationName,resourceName,definitionName,capabilityName,operationName,issueHtml,metricHtml,api,command,banner}=A;
   let editingLaneId=null;
   let editingAllocationId=null;
   let relocationContext=null;
+  let relocationPreviewSerial=0;
 
   const ownerLabels={project:'建設',research:'研究',industry:'産業',facility_maintenance:'設備維持',vehicle_production:'機体建造',scientific_exploration:'科学探査',contract:'契約'};
   const ownerLabel=(kind)=>ownerLabels[kind]||kind;
@@ -14,6 +15,30 @@
   const kv=(rows)=>`<dl class="kv-grid">${rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
   const capText=(c)=>c?`${fmt(c.forward_t_per_day,2)} / ${fmt(c.reverse_t_per_day,2)} t/日`:'—';
   const infrastructureText=(rows)=>{const items=rows||[];return items.length?items.map((r)=>`${locationName(r.location_id)}: ${capabilityName(r.capability_id)}${Number(r.minimum_capacity||0)>0?` ≥ ${fmt(r.minimum_capacity,2)}`:''} (${r.mode==='available'?'利用可能':'インフラ'})`).join(' / '):'追加Infrastructure要件なし';};
+
+  function renderRelocationPreview(preview){
+    const root=$('#relocationPreview'),submit=$('#relocationSubmitButton');if(!root)return;
+    if(!preview){root.innerHTML='<div class="cell-sub">移動計画を取得中…</div>';if(submit)submit.disabled=true;return;}
+    const resources=(preview.resource_requirements||[]).map((r)=>`<div class="cell-sub">${esc(locationName(r.location_id))}: ${esc(resourceName(r.resource_id))} ${fmt(r.required_t,2)} t 必要 / ${fmt(r.available_t,2)} t 利用可能</div>`).join('')||'<div class="cell-sub">運用Resource消費なし</div>';
+    const blockers=(preview.blockers||[]).map((row)=>`<div class="issue"><div class="issue-title">${esc(A.userFacingText(row))}</div></div>`).join('');
+    root.innerHTML=`<h3>移動計画 <span class="badge ${preview.feasible?'ok':'warn'}">${preview.feasible?'実行可能':'blockerあり'}</span></h3>${kv([
+      ['経路',(preview.path||[]).length?(preview.path||[]).map((id)=>esc(definitionName(id))).join(' → '):'—'],
+      ['所要時間',preview.arrival_day===null?'—':`${fmt(preview.travel_days,0)} 日（Day ${fmt(preview.arrival_day,0)} 到着）`],
+      ['Infrastructure',esc(infrastructureText(preview.infrastructure_requirements))],
+    ])}<div class="cell-main">必要Resource</div>${resources}${blockers?`<div class="issue-list">${blockers}</div>`:'<div class="cell-sub">現在のblockerなし</div>'}`;
+    if(submit){submit.disabled=!preview.feasible;submit.title=preview.feasible?'':(preview.blockers||[]).map(A.userFacingText).join(' / ');}
+  }
+
+  async function updateRelocationPreview(){
+    if(!relocationContext||!$('#relocationDialog')?.open)return;
+    const destination=$('#relocationDestination').value,units=Number($('#relocationUnits').value),policy=$('#relocationPolicy').value;
+    const serial=++relocationPreviewSerial;renderRelocationPreview(null);
+    try{
+      const params=new URLSearchParams({vehicle_definition_id:relocationContext.vehicle_definition_id,source_id:relocationContext.source_id,destination_id:destination,units:String(units),path_policy:policy});
+      const preview=await api(`/api/v1/logistics/fleet-relocation-preview?${params}`);
+      if(serial===relocationPreviewSerial&&relocationContext)renderRelocationPreview(preview);
+    }catch(err){if(serial===relocationPreviewSerial&&relocationContext){$('#relocationPreview').innerHTML=`<div class="issue"><div class="issue-title">${esc(err.message||'移動計画を取得できません')}</div></div>`;$('#relocationSubmitButton').disabled=true;}}
+  }
 
   function logistics(){return state.logistics||{};}
 
@@ -120,6 +145,7 @@
     $('#relocationVehicle').textContent=definitionName(vehicleDefinitionId);$('#relocationSource').textContent=locationName(sourceId);$('#relocationFree').textContent=String(freeUnits);$('#relocationUnits').max=String(freeUnits);$('#relocationUnits').value=String(Math.min(1,Number(freeUnits)));
     const destination=$('#relocationDestination');if(destination.value===sourceId){const other=[...destination.options].find((o)=>o.value!==sourceId);if(other)destination.value=other.value;}
     $('#relocationDialog').showModal();
+    updateRelocationPreview();
   }
 
   function render(){
@@ -154,9 +180,12 @@
     $('#laneForm').addEventListener('submit',async(event)=>{event.preventDefault();const capacity=Number($('#laneCapacity').value),priority=Number($('#lanePriority').value);try{if(editingLaneId){await command('UpdateLogisticsLane',{lane_id:editingLaneId,requested_capacity_t_per_day:capacity,priority});editingLaneId=null;}else{const source=$('#laneSource').value,destination=$('#laneDestination').value;if(source===destination){banner('Laneの出発地と到着地は異なる必要があります','error');return;}await command('CreateLogisticsLane',{source_id:source,destination_id:destination,requested_capacity_t_per_day:capacity,priority,path:null,path_policy:$('#lanePolicy').value});}$('#laneDialog').close();}catch{}});
     $('#allocationMode').addEventListener('change',updateAllocationModeFields);$('#allocationCloseButton').addEventListener('click',()=>{editingAllocationId=null;$('#allocationDialog').close();});$('#allocationCancelButton').addEventListener('click',()=>{editingAllocationId=null;$('#allocationDialog').close();});
     $('#allocationForm').addEventListener('submit',async(event)=>{event.preventDefault();const mode=$('#allocationMode').value;try{if(editingAllocationId){const payload={allocation_id:editingAllocationId,priority:Number($('#allocationPriority').value),path_policy:$('#allocationPolicy').value};if(mode==='units')payload.target_units=Number($('#allocationUnits').value);else{payload.target_forward_t_per_day=Number($('#allocationForward').value);payload.target_reverse_t_per_day=Number($('#allocationReverse').value);}await command('UpdateTransportAllocation',payload);editingAllocationId=null;}else{const payload={vehicle_definition_id:$('#allocationVehicle').value,anchor_location_id:$('#allocationSource').value,destination_id:$('#allocationDestination').value,priority:Number($('#allocationPriority').value),control_mode:mode,path:null,path_policy:$('#allocationPolicy').value};if(mode==='units')payload.target_units=Number($('#allocationUnits').value);else{payload.target_forward_t_per_day=Number($('#allocationForward').value);payload.target_reverse_t_per_day=Number($('#allocationReverse').value);}await command('CreateTransportAllocation',payload);}$('#allocationDialog').close();}catch{}});
-    $('#relocationCloseButton').addEventListener('click',()=>{relocationContext=null;$('#relocationDialog').close();});$('#relocationCancelButton').addEventListener('click',()=>{relocationContext=null;$('#relocationDialog').close();});
+    $('#relocationCloseButton').addEventListener('click',()=>{relocationContext=null;relocationPreviewSerial++;$('#relocationDialog').close();});$('#relocationCancelButton').addEventListener('click',()=>{relocationContext=null;relocationPreviewSerial++;$('#relocationDialog').close();});
+    $('#relocationDestination').addEventListener('change',updateRelocationPreview);$('#relocationUnits').addEventListener('input',updateRelocationPreview);$('#relocationPolicy').addEventListener('change',updateRelocationPreview);
     $('#relocationForm').addEventListener('submit',async(event)=>{event.preventDefault();if(!relocationContext)return;const destination=$('#relocationDestination').value;if(destination===relocationContext.source_id){banner('Fleet移動の出発地と到着地は異なる必要があります','error');return;}try{await command('RelocateFleet',{vehicle_definition_id:relocationContext.vehicle_definition_id,units:Number($('#relocationUnits').value),source_id:relocationContext.source_id,destination_id:destination,path:null,path_policy:$('#relocationPolicy').value});relocationContext=null;$('#relocationDialog').close();}catch{}});
   });
+
+  document.addEventListener('spaceidle:snapshot',()=>{if(relocationContext&&$('#relocationDialog')?.open)updateRelocationPreview();});
 
   window.SpaceIdleLogistics={render,openLaneDialog,openAllocationDialog};
 })();

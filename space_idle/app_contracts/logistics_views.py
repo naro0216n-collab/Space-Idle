@@ -120,6 +120,14 @@ class FleetReleaseRow:
 
 
 @dataclass(frozen=True)
+class FleetRelocationResourceRequirementRow:
+    location_id: str
+    resource_id: str
+    required_t: float
+    available_t: float
+
+
+@dataclass(frozen=True)
 class CargoFlowRow:
     id: str
     resource_id: str

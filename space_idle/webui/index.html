@@ -111,7 +111,8 @@
         <div class="cell-sub">現在free: <span id="relocationFree">0</span> unit。移動中はsource Fleetとして拘束され、到着時にdestination Poolへ移ります。</div>
         <label>到着地<select id="relocationDestination" required></select></label>
         <div class="field-pair"><label>移動unit数<input id="relocationUnits" type="number" min="1" step="1" value="1" required></label><label>経路方針<select id="relocationPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label></div>
-        <div class="dialog-actions"><button type="button" class="secondary" id="relocationCancelButton">取消</button><button type="submit" class="primary">移動開始</button></div>
+        <div id="relocationPreview" class="inspector-section"><div class="cell-sub">到着地・unit数・経路方針から移動計画を確認します。</div></div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="relocationCancelButton">取消</button><button type="submit" class="primary" id="relocationSubmitButton">移動開始</button></div>
       </form>
     </dialog>
 

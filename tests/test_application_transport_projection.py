@@ -13,6 +13,7 @@ from space_idle import (
     GetCatalog,
     GetContracts,
     GetFleet,
+    GetFleetRelocationPreview,
     GetFlowReport,
     GetLocation,
     GetLogistics,
@@ -114,6 +115,38 @@ def test_transport_service_requirements_are_projected_from_the_same_plan_for_opt
         if row.id == allocation_id
     )
     assert allocation.infrastructure_requirements == option.infrastructure_requirements
+
+
+def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
+    app = build_game_application()
+    sim = app._simulation
+    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
+    sim.logistics.fleet_pool(vehicle_id, ids.LEO).total_units = 1
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
+    sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
+    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
+
+    preview = app.query(GetFleetRelocationPreview(
+        str(vehicle_id), 1, str(ids.LEO), str(ids.LUNAR_ORBIT), "fastest"
+    ))
+    assert preview.feasible
+    assert preview.path
+    assert preview.arrival_day == sim.day + preview.travel_days
+    assert any(
+        row.capability_id == "vehicle_refueling"
+        for row in preview.infrastructure_requirements
+    )
+    assert any(
+        row.resource_id == str(ids.PROPELLANT) and row.required_t > 0
+        for row in preview.resource_requirements
+    )
+
+    relocation_id = app.execute(RelocateFleet(
+        str(vehicle_id), 1, str(ids.LEO), str(ids.LUNAR_ORBIT), path_policy="fastest"
+    )).created_id
+    relocation = next(row for row in app.query(GetFleet()).relocations if row.id == relocation_id)
+    assert relocation.arrival_day == preview.arrival_day
 
 
 def test_transport_allocation_priority_and_routing_policy_update_through_application():

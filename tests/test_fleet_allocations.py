@@ -45,6 +45,15 @@ def test_fleet_free_is_derived_from_exclusive_commitments():
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 1
 
 
+def test_fleet_free_read_does_not_materialize_an_empty_pool():
+    sim = build_base_simulation()
+    lg = sim.logistics
+    before = dict(lg.fleet_pools)
+
+    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.SOUTH_POLAR_RIDGE) == 0
+    assert lg.fleet_pools == before
+
+
 def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():
     sim = _fleet_sim(3)
     lg = sim.logistics
@@ -178,6 +187,46 @@ def test_relocation_requires_operational_support_and_propellant():
         assert "refueling" in str(exc) or "resource" in str(exc)
     else:
         raise AssertionError("relocation unexpectedly ignored operational requirements")
+
+
+def test_relocation_plan_is_the_execution_contract_for_time_and_resources():
+    sim = _fleet_sim(1)
+    lg = sim.logistics
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
+    sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
+    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
+
+    plan = lg.fleet_relocation_plan(
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        1,
+        ids.LEO,
+        ids.LUNAR_ORBIT,
+        day=sim.day,
+    )
+    assert plan.feasible
+    assert plan.path
+    assert plan.travel_days > 0
+    assert plan.arrival_day == sim.day + plan.travel_days
+    assert plan.resource_requirements
+    before = {
+        (row.location_id, row.resource_id): row.available_t
+        for row in plan.resource_requirements
+    }
+
+    relocation_id = lg.relocate_fleet(
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        1,
+        ids.LEO,
+        ids.LUNAR_ORBIT,
+        day=sim.day,
+    )
+    relocation = lg.fleet_relocations[relocation_id]
+    assert relocation.arrival_day == plan.arrival_day
+    for row in plan.resource_requirements:
+        assert lg.inventory.available(row.location_id, row.resource_id) == pytest.approx(
+            before[(row.location_id, row.resource_id)] - row.required_t
+        )
 
 
 def test_resource_support_uses_definition_capability_instead_of_magic_refueling_id():

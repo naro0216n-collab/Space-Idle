@@ -9,6 +9,7 @@ import time
 import urllib.request
 
 from space_idle import build_game_application
+from space_idle.content import base_ids as ids
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.simulation import OfflineProgressPolicy
 
@@ -16,6 +17,16 @@ try:
     from playwright.sync_api import sync_playwright
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("Playwright is required for lane UI E2E") from exc
+
+
+def _build_lane_test_application():
+    app = build_game_application()
+    sim = app._simulation  # noqa: SLF001 - deterministic browser fixture setup
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
+    sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
+    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
+    return app
 
 
 def _wait_for_server(origin: str, timeout: float = 10.0) -> None:
@@ -39,7 +50,7 @@ def run() -> None:
 
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-lane-ui-")
     runtime = GameRuntime(
-        factory=build_game_application,
+        factory=_build_lane_test_application,
         save_dir=Path(temp_dir.name) / "saves",
         offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0),
     )
@@ -122,6 +133,25 @@ def run() -> None:
                 "blocker",
             ):
                 assert required in allocation_headers, f"transport allocation decision surface lacks {required}"
+
+            tug_relocate = page.locator(
+                f'button[data-fleet-relocate="{ids.REUSABLE_ORBITAL_CARGO_TUG}"]'
+                f'[data-fleet-source="{ids.LEO}"]'
+            )
+            tug_relocate.wait_for(timeout=10000)
+            tug_relocate.click()
+            page.locator("#relocationDialog").wait_for(state="visible", timeout=10000)
+            page.locator("#relocationDestination").select_option(str(ids.LUNAR_ORBIT))
+            page.wait_for_function(
+                "() => document.querySelector('#relocationPreview .badge.ok')?.textContent === '実行可能'",
+                timeout=10000,
+            )
+            relocation_text = page.locator("#relocationPreview").inner_text()
+            for required in ("Route", "所要", "Infrastructure", "必要Resource"):
+                assert required in relocation_text, f"relocation decision surface lacks {required}"
+            assert page.locator("#relocationSubmitButton").is_enabled()
+            page.locator("#relocationCancelButton").click()
+            page.locator("#relocationDialog").wait_for(state="hidden", timeout=10000)
 
             page.get_by_role("button", name="Laneを作成").click()
             page.locator("#laneDialog").wait_for(state="visible", timeout=10000)

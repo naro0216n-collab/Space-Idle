@@ -27,7 +27,7 @@ from .app_contracts.contracts import AcceptContract, DeclineContract
 from .app_contracts.queries import (
     GetCatalog, GetWorld, GetLocation, GetFlowReport, GetBottlenecks, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetRoutes, GetFleet,
-    GetTransportAllocations, GetCargoFlows, GetLogisticsLanes, GetTransportAllocationOptions,
+    GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetLogisticsLanes, GetTransportAllocationOptions,
     GetResearch, GetScientificExplorations, GetSurveys, GetContracts,
 )
 
@@ -49,7 +49,7 @@ Command: TypeAlias = (
 Query: TypeAlias = (
     GetCatalog | GetWorld | GetLocation | GetFlowReport | GetBottlenecks | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetRoutes | GetFleet |
-    GetTransportAllocations | GetCargoFlows | GetLogisticsLanes | GetTransportAllocationOptions |
+    GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetLogisticsLanes | GetTransportAllocationOptions |
     GetResearch | GetScientificExplorations | GetSurveys | GetContracts
 )
 

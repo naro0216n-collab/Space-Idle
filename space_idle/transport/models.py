@@ -111,6 +111,33 @@ class FleetRelocation:
             raise ValueError("fleet relocation arrival must follow departure")
 
 
+@dataclass(frozen=True)
+class FleetRelocationResourceRequirement:
+    location_id: SpatialNodeId
+    resource_id: DefinitionId
+    required_t: float
+    available_t: float
+
+
+@dataclass(frozen=True)
+class FleetRelocationPlan:
+    vehicle_definition_id: DefinitionId
+    units: int
+    source_id: SpatialNodeId
+    destination_id: SpatialNodeId
+    path: tuple[RouteId, ...]
+    travel_days: int
+    departure_day: int
+    arrival_day: int | None
+    resource_requirements: tuple[FleetRelocationResourceRequirement, ...] = ()
+    infrastructure_requirements: tuple[tuple[SpatialNodeId, str, float, str], ...] = ()
+    blockers: tuple[str, ...] = ()
+
+    @property
+    def feasible(self) -> bool:
+        return self.arrival_day is not None and not self.blockers
+
+
 @dataclass
 class FleetRelease:
     id: EntityId

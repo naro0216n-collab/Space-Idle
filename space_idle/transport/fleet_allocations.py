@@ -9,6 +9,8 @@ from .models import (
     FleetPool,
     FleetPoolSnapshot,
     FleetRelocation,
+    FleetRelocationPlan,
+    FleetRelocationResourceRequirement,
     FleetRelease,
     FleetReservation,
     FleetReservationKind,
@@ -125,18 +127,19 @@ class FleetAllocationMixin:
     def fleet_free_units(
         self, vehicle_definition_id: DefinitionId, location_id: SpatialNodeId
     ) -> int:
-        pool = self.fleet_pool(vehicle_definition_id, location_id)
+        pool = self.fleet_pools.get(self._pool_key(vehicle_definition_id, location_id))
+        total_units = 0 if pool is None else pool.total_units
         committed = (
             self._allocation_units_at(vehicle_definition_id, location_id)
             + self._reserved_units_at(vehicle_definition_id, location_id)
             + self._relocating_units_from(vehicle_definition_id, location_id)
             + self._releasing_units_at(vehicle_definition_id, location_id)
         )
-        free = pool.total_units - committed
+        free = total_units - committed
         if free < 0:
             raise RuntimeError(
                 f"fleet over-committed: {vehicle_definition_id}/{location_id}: "
-                f"total={pool.total_units} committed={committed}"
+                f"total={total_units} committed={committed}"
             )
         return free
 
@@ -276,6 +279,8 @@ class FleetAllocationMixin:
         day: int,
         policy: PathPolicy,
         explicit_path: tuple[RouteId, ...] | None = None,
+        *,
+        require_destination_disposition: bool = False,
     ) -> tuple[RouteId, ...]:
         if explicit_path is not None:
             self.validate_path_structure(source_id, destination_id, explicit_path)
@@ -289,6 +294,20 @@ class FleetAllocationMixin:
                     f"{route_id}:{','.join(reasons)}" for route_id, reasons in bad
                 )
                 raise ValueError(f"vehicle cannot operate explicit path: {detail}")
+            if require_destination_disposition:
+                bad_disposition = tuple(
+                    route_id
+                    for route_id in explicit_path
+                    if self.vehicle_defs[vehicle_definition_id].route_asset_disposition(
+                        self.routes[route_id]
+                    )
+                    is not OperationAssetDisposition.DESTINATION
+                )
+                if bad_disposition:
+                    raise ValueError(
+                        "fleet relocation path does not move the asset to destination: "
+                        + ",".join(str(route_id) for route_id in bad_disposition)
+                    )
             return explicit_path
 
         # Dijkstra over physical compatibility only. Current resource/support
@@ -313,6 +332,12 @@ class FleetAllocationMixin:
                 if self.vehicle_route_physical_failures(route.id, vehicle_definition_id, day):
                     continue
                 definition = self.vehicle_defs[vehicle_definition_id]
+                if (
+                    require_destination_disposition
+                    and definition.route_asset_disposition(route)
+                    is not OperationAssetDisposition.DESTINATION
+                ):
+                    continue
                 if policy is PathPolicy.FASTEST:
                     edge = max(1, round(route.transit_days * definition.transit_time_multiplier))
                 elif policy is PathPolicy.LOWEST_PROPELLANT:
@@ -326,6 +351,86 @@ class FleetAllocationMixin:
                     (score + float(edge), tuple(str(r) for r in new_path), route.destination_id, new_path),
                 )
         raise ValueError(f"no physically compatible path {source_id} -> {destination_id}")
+
+    def _vehicle_path_infrastructure_requirements(
+        self,
+        definition,
+        routes: tuple,
+        *,
+        resource_requirements: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = (),
+        servicing_location_id: SpatialNodeId | None = None,
+        servicing_rate: float = 0.0,
+    ) -> tuple[tuple[SpatialNodeId, str, float, str], ...]:
+        """Project the infrastructure contract already used by route execution.
+
+        This is derived state for decision surfaces.  Callers supply resource
+        requirements in whatever rate/quantity applies to their operation; only
+        the presence of a positive demand matters for support-interface needs.
+        """
+        infrastructure: dict[tuple[SpatialNodeId, str, str], float] = {}
+
+        def _require(
+            location_id: SpatialNodeId, capability_id: str, minimum: float, mode: str
+        ) -> None:
+            key = (location_id, capability_id, mode)
+            infrastructure[key] = max(
+                infrastructure.get(key, 0.0), max(0.0, minimum)
+            )
+
+        for route in routes:
+            for location_id, site_requirements in (
+                (route.origin_id, route.origin_requirements),
+                (route.destination_id, route.destination_requirements),
+            ):
+                for requirement in site_requirements.capability_requirements:
+                    _require(
+                        location_id,
+                        requirement.capability_id,
+                        requirement.minimum_capacity,
+                        requirement.mode,
+                    )
+            present_operations = {operation.operation_type for operation in route.operations}
+            for support in definition.operation_support_requirements:
+                if support.operation_type not in present_operations:
+                    continue
+                location_id = (
+                    route.origin_id
+                    if support.location is OperationSupportLocation.ORIGIN
+                    else route.destination_id
+                )
+                _require(location_id, support.capability_id, 0.0, "available")
+
+        for location_id, resource_id, amount in resource_requirements:
+            if amount <= 1e-12:
+                continue
+            for support in definition.resource_support_requirements:
+                if support.resource_id == resource_id:
+                    _require(
+                        location_id,
+                        support.infrastructure_capability_id,
+                        0.0,
+                        "available",
+                    )
+
+        if (
+            servicing_location_id is not None
+            and definition.turnaround_capability_id is not None
+            and servicing_rate > 1e-12
+        ):
+            _require(
+                servicing_location_id,
+                definition.turnaround_capability_id,
+                servicing_rate,
+                "available",
+            )
+
+        return tuple(
+            (location_id, capability_id, minimum, mode)
+            for (location_id, capability_id, mode), minimum in sorted(
+                infrastructure.items(),
+                key=lambda row: (str(row[0][0]), row[0][1], row[0][2]),
+            )
+        )
 
     def derive_transport_service_plan(
         self, allocation_id: EntityId, day: int = 0
@@ -528,66 +633,12 @@ class FleetAllocationMixin:
         resources = _per_day(full_resource_per_cycle)
         servicing = 0.0 if cycle_days <= 1e-12 else 1.0 / cycle_days
 
-        # Decision surfaces need the same infrastructure contract that the
-        # service-plan and Available-Capacity paths evaluate.  Keep it on the
-        # derived plan rather than reconstructing support rules in Application/UI.
-        infrastructure: dict[tuple[SpatialNodeId, str, str], float] = {}
-
-        def _require(
-            location_id: SpatialNodeId, capability_id: str, minimum: float, mode: str
-        ) -> None:
-            key = (location_id, capability_id, mode)
-            infrastructure[key] = max(infrastructure.get(key, 0.0), max(0.0, minimum))
-
-        for route in (*forward_routes, *reverse_routes):
-            for location_id, site_requirements in (
-                (route.origin_id, route.origin_requirements),
-                (route.destination_id, route.destination_requirements),
-            ):
-                for requirement in site_requirements.capability_requirements:
-                    _require(
-                        location_id,
-                        requirement.capability_id,
-                        requirement.minimum_capacity,
-                        requirement.mode,
-                    )
-            present_operations = {operation.operation_type for operation in route.operations}
-            for support in definition.operation_support_requirements:
-                if support.operation_type not in present_operations:
-                    continue
-                location_id = (
-                    route.origin_id
-                    if support.location is OperationSupportLocation.ORIGIN
-                    else route.destination_id
-                )
-                _require(location_id, support.capability_id, 0.0, "available")
-
-        for location_id, resource_id, amount in resources:
-            if amount <= 1e-12:
-                continue
-            for support in definition.resource_support_requirements:
-                if support.resource_id == resource_id:
-                    _require(
-                        location_id,
-                        support.infrastructure_capability_id,
-                        0.0,
-                        "available",
-                    )
-
-        if definition.turnaround_capability_id is not None and servicing > 1e-12:
-            _require(
-                allocation.anchor_location_id,
-                definition.turnaround_capability_id,
-                servicing,
-                "available",
-            )
-
-        infrastructure_requirements = tuple(
-            (location_id, capability_id, minimum, mode)
-            for (location_id, capability_id, mode), minimum in sorted(
-                infrastructure.items(),
-                key=lambda row: (str(row[0][0]), row[0][1], row[0][2]),
-            )
+        infrastructure_requirements = self._vehicle_path_infrastructure_requirements(
+            definition,
+            (*forward_routes, *reverse_routes),
+            resource_requirements=resources,
+            servicing_location_id=allocation.anchor_location_id,
+            servicing_rate=servicing,
         )
         return TransportServicePlan(
             allocation.id,
@@ -813,6 +864,124 @@ class FleetAllocationMixin:
             ).total_units += relocation.units
         self.reconcile_fleet_allocations(day)
 
+    def fleet_relocation_plan(
+        self,
+        vehicle_definition_id: DefinitionId,
+        units: int,
+        source_id: SpatialNodeId,
+        destination_id: SpatialNodeId,
+        *,
+        path: tuple[RouteId, ...] | None = None,
+        path_policy: PathPolicy = PathPolicy.FASTEST,
+        day: int = 0,
+    ) -> FleetRelocationPlan:
+        """Derive the exact decision contract used to start a Fleet relocation."""
+        if vehicle_definition_id not in self.vehicle_defs:
+            raise KeyError(vehicle_definition_id)
+        if source_id not in self.facilities.environment.graph.nodes:
+            raise KeyError(source_id)
+        if destination_id not in self.facilities.environment.graph.nodes:
+            raise KeyError(destination_id)
+
+        blockers: list[str] = []
+        if units <= 0:
+            blockers.append("relocation_units:positive_required")
+        if source_id == destination_id:
+            blockers.append("relocation_endpoints:must_differ")
+
+        free_units = self.fleet_free_units(vehicle_definition_id, source_id)
+        if units > 0 and free_units < units:
+            blockers.append(f"fleet_units:{free_units}/{units}")
+
+        route_path: tuple[RouteId, ...] = ()
+        if source_id != destination_id:
+            try:
+                route_path = self._route_path_for_vehicle(
+                    source_id,
+                    destination_id,
+                    vehicle_definition_id,
+                    day,
+                    path_policy,
+                    path,
+                    require_destination_disposition=True,
+                )
+            except ValueError as exc:
+                blockers.append(f"relocation_path:{exc}")
+        if not route_path and source_id != destination_id and not any(
+            row.startswith("relocation_path:") for row in blockers
+        ):
+            blockers.append("relocation_path:empty")
+
+        definition = self.vehicle_defs[vehicle_definition_id]
+        routes = tuple(self.routes[route_id] for route_id in route_path)
+        propellant_requirements: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
+        if route_path:
+            for route in routes:
+                blockers.extend(self.route_failures(route.id, day))
+                blockers.extend(
+                    self.vehicle_route_failures(route.id, vehicle_definition_id, day)
+                )
+                if definition.propellant_resource_id is not None and units > 0:
+                    amount = definition.propellant_t(route, 0.0) * units
+                    if amount > 1e-12:
+                        blockers.extend(
+                            self.resource_support_failures(
+                                definition.performance,
+                                route.origin_id,
+                                definition.propellant_resource_id,
+                                day,
+                            )
+                        )
+                        key = (route.origin_id, definition.propellant_resource_id)
+                        propellant_requirements[key] = (
+                            propellant_requirements.get(key, 0.0) + amount
+                        )
+
+        resource_requirements: list[FleetRelocationResourceRequirement] = []
+        for (location_id, resource_id), amount in sorted(
+            propellant_requirements.items(),
+            key=lambda row: (str(row[0][0]), str(row[0][1])),
+        ):
+            available = self.inventory.available(location_id, resource_id)
+            resource_requirements.append(
+                FleetRelocationResourceRequirement(
+                    location_id, resource_id, amount, available
+                )
+            )
+            if available + 1e-9 < amount:
+                blockers.append(
+                    f"resource:{location_id}:{resource_id}:{available:g}/{amount:g}"
+                )
+
+        travel_days = sum(
+            max(1, round(route.transit_days * definition.transit_time_multiplier))
+            for route in routes
+        )
+        if route_path:
+            blockers.extend(definition.endurance_failures(float(travel_days)))
+        arrival_day = day + max(1, int(math.ceil(travel_days))) if route_path else None
+        infrastructure_requirements = self._vehicle_path_infrastructure_requirements(
+            definition,
+            routes,
+            resource_requirements=tuple(
+                (row.location_id, row.resource_id, row.required_t)
+                for row in resource_requirements
+            ),
+        )
+        return FleetRelocationPlan(
+            vehicle_definition_id=vehicle_definition_id,
+            units=units,
+            source_id=source_id,
+            destination_id=destination_id,
+            path=route_path,
+            travel_days=int(travel_days),
+            departure_day=day,
+            arrival_day=arrival_day,
+            resource_requirements=tuple(resource_requirements),
+            infrastructure_requirements=infrastructure_requirements,
+            blockers=tuple(dict.fromkeys(blockers)),
+        )
+
     def relocate_fleet(
         self,
         vehicle_definition_id: DefinitionId,
@@ -824,67 +993,38 @@ class FleetAllocationMixin:
         path_policy: PathPolicy = PathPolicy.FASTEST,
         day: int = 0,
     ) -> EntityId:
-        if units <= 0:
-            raise ValueError("relocation units must be positive")
-        if vehicle_definition_id not in self.vehicle_defs:
-            raise KeyError(vehicle_definition_id)
-        if source_id == destination_id:
-            raise ValueError("relocation endpoints must differ")
-        if self.fleet_free_units(vehicle_definition_id, source_id) < units:
-            raise ValueError("insufficient free fleet units for relocation")
-        route_path = self._route_path_for_vehicle(
-            source_id, destination_id, vehicle_definition_id, day, path_policy, path
+        plan = self.fleet_relocation_plan(
+            vehicle_definition_id,
+            units,
+            source_id,
+            destination_id,
+            path=path,
+            path_policy=path_policy,
+            day=day,
         )
-        definition = self.vehicle_defs[vehicle_definition_id]
-        if not route_path:
-            raise ValueError("fleet relocation requires a non-empty path")
-        blockers: list[str] = []
-        propellant_requirements: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
-        for route_id in route_path:
-            route = self.routes[route_id]
-            if definition.route_asset_disposition(route) is not OperationAssetDisposition.DESTINATION:
-                raise ValueError(
-                    f"fleet relocation path does not move the asset to destination: {route_id}"
-                )
-            blockers.extend(self.route_failures(route_id, day))
-            blockers.extend(self.vehicle_route_failures(route_id, vehicle_definition_id, day))
-            if definition.propellant_resource_id is not None:
-                amount = definition.propellant_t(route, 0.0) * units
-                if amount > 1e-12:
-                    blockers.extend(
-                        self.resource_support_failures(
-                            definition.performance,
-                            route.origin_id,
-                            definition.propellant_resource_id,
-                            day,
-                        )
-                    )
-                    key = (route.origin_id, definition.propellant_resource_id)
-                    propellant_requirements[key] = propellant_requirements.get(key, 0.0) + amount
-        for (location_id, resource_id), amount in propellant_requirements.items():
-            available = self.inventory.available(location_id, resource_id)
-            if available + 1e-9 < amount:
-                blockers.append(f"resource:{location_id}:{resource_id}:{available:g}/{amount:g}")
-        if blockers:
-            raise ValueError("fleet relocation is not operationally feasible: " + "; ".join(dict.fromkeys(blockers)))
-        travel_days = sum(
-            max(1, round(self.routes[route_id].transit_days * definition.transit_time_multiplier))
-            for route_id in route_path
-        )
-        if definition.endurance_days is not None and travel_days > definition.endurance_days + 1e-9:
+        if plan.blockers:
             raise ValueError(
-                f"fleet relocation exceeds endurance: {travel_days:g}/{definition.endurance_days:g}"
+                "fleet relocation is not operationally feasible: "
+                + "; ".join(plan.blockers)
             )
-        arrival_day = day + max(1, int(math.ceil(travel_days)))
-        for (location_id, resource_id), amount in sorted(
-            propellant_requirements.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
-        ):
-            if amount > 1e-12 and not self.inventory.take_unreserved(location_id, resource_id, amount):
-                raise RuntimeError("fleet relocation propellant changed after feasibility check")
+        assert plan.arrival_day is not None
+        for requirement in plan.resource_requirements:
+            if requirement.required_t > 1e-12 and not self.inventory.take_unreserved(
+                requirement.location_id, requirement.resource_id, requirement.required_t
+            ):
+                raise RuntimeError(
+                    "fleet relocation resources changed after feasibility check"
+                )
         self._fleet_relocation_counter += 1
         relocation_id = EntityId(f"fleet.relocation.{self._fleet_relocation_counter}")
         self.fleet_relocations[relocation_id] = FleetRelocation(
-            relocation_id, vehicle_definition_id, units, source_id, destination_id, day, arrival_day
+            relocation_id,
+            vehicle_definition_id,
+            units,
+            source_id,
+            destination_id,
+            day,
+            plan.arrival_day,
         )
         return relocation_id
 

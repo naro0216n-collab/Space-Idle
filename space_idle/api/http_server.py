@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
-    GetContracts, GetFleet, GetFlowReport, GetLocation, GetLogisticsLanes,
+    GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogisticsLanes,
     GetLogisticsSummary, GetProjects, GetResearch, GetRoutes, GetSurveys,
     GetTransportAllocationOptions, GetTransportAllocations, GetWorld,
 )
@@ -289,6 +289,15 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             self._query_result(GetFleet(
                 location_id=_one(params, "location_id"),
                 vehicle_definition_id=_one(params, "vehicle_definition_id"),
+            ))
+            return
+        if path == "/api/v1/logistics/fleet-relocation-preview":
+            self._query_result(GetFleetRelocationPreview(
+                vehicle_definition_id=_required(params, "vehicle_definition_id"),
+                units=int(_required(params, "units")),
+                source_id=_required(params, "source_id"),
+                destination_id=_required(params, "destination_id"),
+                path_policy=_one(params, "path_policy") or "fastest",
             ))
             return
         if path == "/api/v1/logistics/transport-allocations":

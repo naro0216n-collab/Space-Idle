@@ -60,6 +60,12 @@
 
   function userFacingText(value){
     let text=String(value??'');
+    text=text.replace(/fleet_units:([0-9.+-]+)\/([0-9.+-]+)/g,(_,current,required)=>`free Fleet不足: ${current} / ${required} unit`);
+    text=text.replace(/relocation_units:positive_required/g,'移動unit数は1以上が必要です');
+    text=text.replace(/relocation_endpoints:must_differ/g,'出発地と到着地は異なる必要があります');
+    text=text.replace(/endurance:([0-9.+-]+)\/([0-9.+-]+)/g,(_,required,available)=>`航続期間不足: ${required} / ${available} 日`);
+    text=text.replace(/resource:([^:;]+):([^:;]+):([0-9.+-]+)\/([0-9.+-]+)/g,(_,locationId,resourceId,current,required)=>`${locationName(locationId)}の${resourceName(resourceId)}不足: ${current} / ${required} t`);
+    text=text.replace(/relocation_path:(.+)/g,(_,detail)=>`移動経路不成立: ${detail}`);
     for(const map of definitionMaps()){
       for(const [id,item] of Object.entries(map)){
         if(text.includes(id)&&item?.display_name)text=text.split(id).join(item.display_name);

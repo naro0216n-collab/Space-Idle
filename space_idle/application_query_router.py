@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
-    GetContracts, GetFleet, GetFlowReport, GetLocation, GetLogistics,
+    GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogistics,
     GetLogisticsLanes, GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
     GetScientificExplorations, GetSurveys, GetTransportAllocations,
     GetTransportAllocationOptions, GetWorld, Query,
@@ -55,6 +55,14 @@ class ApplicationQueryRouterMixin:
             if query.vehicle_definition_id is not None and query.vehicle_definition_id not in {str(value) for value in self._simulation.logistics.vehicle_defs}:
                 raise KeyError(query.vehicle_definition_id)
             return self._fleet_view(query)
+        if isinstance(query, GetFleetRelocationPreview):
+            self._require_location(query.source_id)
+            self._require_location(query.destination_id)
+            if query.vehicle_definition_id not in {
+                str(value) for value in self._simulation.logistics.vehicle_defs
+            }:
+                raise KeyError(query.vehicle_definition_id)
+            return self._fleet_relocation_preview_view(query)
         if isinstance(query, GetTransportAllocations):
             return self._transport_allocations_view()
         if isinstance(query, GetCargoFlows):

@@ -30,6 +30,13 @@ class GetFleet:
     location_id: str | None = None
     vehicle_definition_id: str | None = None
 @dataclass(frozen=True)
+class GetFleetRelocationPreview:
+    vehicle_definition_id: str
+    units: int
+    source_id: str
+    destination_id: str
+    path_policy: str = "fastest"
+@dataclass(frozen=True)
 class GetTransportAllocations: pass
 @dataclass(frozen=True)
 class GetCargoFlows: pass

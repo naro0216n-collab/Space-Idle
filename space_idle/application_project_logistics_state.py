@@ -3,9 +3,12 @@ from __future__ import annotations
 from .application_transport_support import infrastructure_requirement_rows
 from .application_views import (
     CargoFlowRow, CargoFlowsView, DirectionalCapacityRow, FleetPoolRow,
+    FleetRelocationPreviewView, FleetRelocationResourceRequirementRow,
     FleetRelocationRow, FleetReleaseRow, FleetView, TransportAllocationRow,
     TransportAllocationsView, VehicleProductionOptionRow, VehicleProductionRow,
 )
+from .logistics import PathPolicy
+from .shared import DefinitionId, SpatialNodeId
 
 
 class LogisticsStateProjectorMixin:
@@ -224,6 +227,43 @@ class LogisticsStateProjectorMixin:
                 location_id=query.location_id,
                 vehicle_definition_id=query.vehicle_definition_id,
             ),
+        )
+
+    def _fleet_relocation_preview_view(self, query) -> FleetRelocationPreviewView:
+        sim = self._simulation
+        policy = PathPolicy(query.path_policy)
+        plan = sim.logistics.fleet_relocation_plan(
+            DefinitionId(query.vehicle_definition_id),
+            int(query.units),
+            SpatialNodeId(query.source_id),
+            SpatialNodeId(query.destination_id),
+            path_policy=policy,
+            day=sim.day,
+        )
+        definition = sim.logistics.vehicle_defs[plan.vehicle_definition_id]
+        return FleetRelocationPreviewView(
+            vehicle_definition_id=str(plan.vehicle_definition_id),
+            display_name=definition.display_name,
+            units=plan.units,
+            source_id=str(plan.source_id),
+            destination_id=str(plan.destination_id),
+            path_policy=policy.value,
+            path=tuple(str(route_id) for route_id in plan.path),
+            travel_days=plan.travel_days,
+            departure_day=plan.departure_day,
+            arrival_day=plan.arrival_day,
+            resource_requirements=tuple(
+                FleetRelocationResourceRequirementRow(
+                    str(row.location_id),
+                    str(row.resource_id),
+                    row.required_t,
+                    row.available_t,
+                )
+                for row in plan.resource_requirements
+            ),
+            infrastructure_requirements=infrastructure_requirement_rows(plan),
+            feasible=plan.feasible,
+            blockers=plan.blockers,
         )
 
     def _transport_allocations_view(self) -> TransportAllocationsView:
