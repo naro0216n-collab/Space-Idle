@@ -42,7 +42,7 @@ Persistence / Validation
 
 世界で共通に成立する規則を担当する。
 
-- Spatial NodeとEnvironment Facet
+- Celestial Body / Surface Cell / Location / non-surface Spatial NodeとEnvironment State
 - SiteRequirements
 - Facility Definition / State
 - Capability
@@ -50,7 +50,7 @@ Persistence / Validation
 - Inventory、Reservation、Storage
 - Power配分
 - Process / Industry
-- Extraction / Deposit
+- Resource Potential / Extraction Opportunity / Extraction response
 - Construction Project
 - Transport Operation、Route、Transport Allocation、Transport Capacity、Cargo Flow、特殊Transport Mission
 - Vehicle Definition / Fleet State / Production / Maintenance / Relocation
@@ -66,16 +66,16 @@ Generic Coreへ `if location == MoonSouthPole`、`if vehicle_type == lunar_lande
 
 具体的な遊びを定義する。
 
-- Celestial Body / Spatial Node
-- 初期Environment
+- Celestial Body / Surface Cell topology / non-surface Spatial Node
+- Static geology / Resource Potential / 初期Environment
 - Resource Definition
 - Facility Definition
 - Process Definition
 - Construction Recipe / maintenance rate
-- Deposit / Extraction Definition
+- Resource Potential / Extraction Definition
 - Research Definition / Research Provider
 - Scientific Exploration Definition
-- Survey Target
+- Survey Target / initial Surface Cell Knowledge
 - Route / Vehicle / External Transport Service
 - Contract / Event Definition
 - 初期施設・Vehicle・資金・在庫
@@ -131,6 +131,7 @@ Power Snapshot
 FacilityDef
   id
   display_name
+  placement_scope: LOCATION | SURFACE_CELL
   installation_environment
   operating_environment
   capability_supplies
@@ -139,6 +140,7 @@ FacilityState
   entity_id
   definition_id
   location_id
+  site_cell_id?
   level
   paused
   power_priority
@@ -156,37 +158,90 @@ Transport Service PlanとTransport Capacityは、Fleet Allocation、Route、Vehi
 
 ## 5. Spatial / Environment / SiteRequirements
 
-Celestial Bodyと、Inventory・Facility・Fleetが実際に存在するSpatial Nodeを分離する。
+### 5.1 Celestial Body / Surface Cell / Location
+
+Celestial Body、物理的な地表、プレイヤーが運営するLocation、軌道等の非地表Spatial Nodeを分離する。
+
+地表を `SurfaceCell` graphとして表現する。UIはヘックス主体で表示してよいが、Coreは完全六角格子、同一Cell面積、常時6隣接を仮定しない。Celestial BodyごとにCell数を変えてよい。
 
 ```text
-Earth
-├ Earth Surface
-└ LEO
+CelestialBody
+  id
+  ...
 
-Moon
-├ Lunar Orbit
-├ South Polar Surface
-├ Polar Cold Trap
-└ Nearside Surface
+SurfaceCellDef
+  id
+  body_id
+  area
+  geometry / centroid
+  neighbor_ids
+  terrain
+  static_geology
+  resource_potential_by_resource
+
+SurfaceCellState / overlays
+  dynamic_environment
 ```
 
-Spatial NodeはGravity、Atmosphere、Illumination、Thermal、Surface、Orbital、Communication等のFacetを持つ。天体所属、移動関係、環境継承を同一視しない。
+Surface CellはInventory Nodeではなく、Facility一般の配置スロットでもない。資源、地形、可変環境、Survey Knowledge、Location開発領域の物理単位とする。
 
-施設設置、Facility運転、Research Prototype / Demonstration、Route端点等の可否は共通SiteRequirementsを使用する。
+地表 `LocationState` はプレイヤーが任意Surface Cellへ設立し、Core Cellと連続した開発Cell集合を所有する経済・産業・物流Nodeとする。
+
+```text
+LocationState
+  id
+  body_id
+  core_cell_id
+  developed_cell_ids
+  ...
+```
+
+`developed_cell_ids` を開発所属のauthoritative stateとし、Surface Cell側の「所属Location」はこの集合から導出する。二重正本を持たない。集合は同一天体上で連結することを基本とし、同一Cellを複数Locationへ同時所属させない。政治的主権と産業開発所属は同一概念とはしない。
+
+Surface LocationのCell数はLocationの物流Node数を増やさない。Inventory、Fleet、通常Facility、Laneの主要所有単位はLocationのままとする。
+
+軌道・宇宙空間等はSurface Cellを要求せず、それぞれの物理・運用構造に適したSpatial Nodeを利用する。
+
+### 5.2 Environment
+
+Surface Cellは静的地質・地形と可変Environmentを分離する。Static geology / Resource Potentialを通常の採掘で消費・減少させない。Dynamic Environmentは将来のテラフォーミング、局所環境改変、自然変化等によって更新可能とする。
+
+Environment評価は必要に応じてCelestial Bodyのglobal stateとSurface Cell local stateを合成する。Location名やCell IDによる特殊分岐を作らない。
+
+通常のLocation-scope FacilityはLocation Coreと拠点Infrastructureが提供する運用環境を参照する。位置依存Facilityは配置Surface Cellの現在Environmentを参照する。
+
+### 5.3 SiteRequirements
+
+Facility設置・運転、Research Prototype / Demonstration、Route端点、Location設立・拡張等の可否は共通SiteRequirements / Environment Requirementを利用する。
 
 Capability Requirementは少なくとも以下を区別する。
 
 - Infrastructure Capability：設備として存在する能力
 - Active Capability：停止されず環境適合している定格能力
-- Available Capability：電力・保守充足率等を反映した現在利用可能な能力
+- Available Capability：電力・保守充足率・Surface Infrastructure等を反映した現在利用可能な能力
 
----
+### 5.4 Location development / Surface Infrastructure
+
+Locationは隣接Surface CellをDevelopment Projectで取り込む。Cell数に固定上限を設けず、Survey、Resource、Construction Capacity、時間、地形・Environment、Surface Infrastructure等を要求する。
+
+Location内部で個別ResourceをCellごとにroutingしない。ただし共通Inventoryによる内部移動を無償・無限とも扱わない。開発領域の規模・広がり・遠隔Cell利用・Gateway接続から集約的なSurface Infrastructure / Local Distribution demandを導出し、そのAvailable Capabilityによって遠隔Resource Opportunity、Gateway荷役、Location内利用能力等を縮退させられる構造とする。
+
+この集約能力はSurface CellをLogistics Lane Nodeへ昇格させるためのものではない。個々のCargo pathではなくLocation内部の運用負荷を表現する。
 
 ## 6. Facility / Maintenanceモデル
 
 ### 6.1 設置と運転
 
 Installation EnvironmentとOperating Environmentを分離する。先行建設や将来の環境変化をLocation特例なしで扱えるようにする。
+
+Facilityは同一Domainのまま配置種別を持つ。
+
+- `LOCATION`: Locationへ所属し、個別Surface Cellを指定しない通常Facility。
+- `SURFACE_CELL`: 物理的位置が性能、Route接続、局所Environment、環境改変等へ本質的に影響する位置依存Facility。
+
+`SURFACE_CELL` Facilityだけ `site_cell_id` を要求し、対象CellはFacilityのLocationが開発済みでなければならない。別のSurface Installation Domainを作って建設・維持・電力・Capabilityを重複実装しない。
+
+ApplicationはLOCATION FacilityのBuild OptionでCell選択を要求しない。SURFACE_CELL FacilityはMap上の候補Cellと可否・blockerをQueryし、空間操作として配置する。
 
 ### 6.2 Pause
 
@@ -217,6 +272,8 @@ StorageはPhysical CapacityとService Capacityを分けられる。輸送中Carg
 
 PowerはLocationごとのフロー制約とする。同一優先度帯では登録順ではなく比例配分し、可能な設備は部分稼働させる。
 
+Location内部のSurface Infrastructure / Local Distributionも集約フロー制約として扱える。個別ResourceをCell間でroutingせず、遠隔Cellの利用、Surface Gatewayとの受渡し、領域拡大等が要求するservice loadとAvailable Capabilityを比較する。Surface CellをInventory Nodeへ分割しない。
+
 ---
 
 ## 8. Industry / Extractionモデル
@@ -231,13 +288,42 @@ Application Queryは設備ごとの選択Process、実効inputs / outputs、稼�
 
 複数Processが同一Resourceを要求する場合、Facility登録順で資源を奪わせない。電力、原料、Storage等を反映した配分を行う。
 
-### 8.3 Extraction
+### 8.3 Extraction / Resource Potential
 
-ExtractionはDeposit / Knowledge / ExtractionSpecから成立させる。
+有限 `Deposit remaining` を採掘の正本にしない。地表資源はSurface Cellごとの静的 `Resource Potential` と、Locationに設置された採掘Facilityが供給するNominal Extraction Capacityから継続的なThroughputを導出する。
 
-月面等ではSurveyによってKnowledgeを段階的に得る。初期地球産業では開始時から既知のDepositをContentとして定義し、低効率の地球採掘Facilityを利用可能にできる。EarthというLocation名へのCore特例は作らない。
+Resource Potentialは残量、Facility slot数、固定最大`t/day`のいずれでもなく、追加採掘能力をどの程度高い限界生産性で利用できる地域かを表す。Cell面積が天体間・Cell間で異なる可能性を考慮し、PotentialはCellの面積・地質を含んだ機会量として扱えるようにする。
 
----
+同一Location・Resourceについて、開発済みCell群からEffective Resource Opportunityを集約する。Static Potentialに加えて現在Environment、Surface Infrastructure等の物理的利用可能性を反映してよいが、通常採掘によってStatic Potentialそのものを減らさない。Survey Knowledgeは物理的Throughputを変化させる係数ではなく、プレイヤーへ公開する推定値・候補・blockerを決める知識状態として分離する。
+
+```text
+EffectiveOpportunity(location, resource)
+  <- developed Surface Cells
+  <- static Resource Potential
+  <- current environment / accessibility
+  <- Surface Infrastructure availability
+
+InstalledNominalCapacity(location, resource)
+  <- active extraction Facilities
+
+ActualExtraction
+  = diminishing_response(
+      InstalledNominalCapacity,
+      EffectiveOpportunity
+    )
+    × operational fulfillment
+```
+
+`diminishing_response` は少なくとも次を満たす一般契約とする。
+
+- Installed Capacity増加に対して総採掘量は単調非減少。
+- 同じOpportunityに対する限界増産量は逓減する。
+- Facility数のハード上限をResource Potentialから直接導出しない。
+- 研究完了だけで既存FacilityのNominal Capacityを変更しない。
+
+研究は新しいFacility Definition、Process、Construction / Modernization手段を解禁する。Throughput上昇には実際のFacility建設・Upgrade・更新が必要となる。
+
+初期地球産業は開始時から高いResource Knowledgeを持つSurface CellをContentとして定義できる。Earthという固有名へのCore特例は作らない。
 
 ## 9. Constructionモデル
 
@@ -279,9 +365,15 @@ Extraction
 
 ### 9.4 Build Project State
 
-Build Projectは少なくとも建設地点、進捗、調達状態、予約、調達元、経路、各Legの輸送方式、priority / allocation、pause状態を持つ。
+Build Projectは少なくともLocation、進捗、調達状態、予約、調達元、経路、各Legの輸送方式、priority / allocation、pause状態を持つ。SURFACE_CELL Facilityだけは追加で配置Cellを持つ。
 
 PauseとCancelを分離する。
+
+### 9.5 Location founding / development
+
+地表Location設立と隣接Surface Cell開発も、Resource・Construction Capacity・時間・SiteRequirementsを消費するProjectとして扱う。Location設立時だけ任意の有効Surface CellをCore Cellとして選べ、既存Location拡張では原則として現在のdeveloped cell集合へ隣接する未所属Cellだけを対象とする。
+
+Location developmentはFacility建設とは別の地理的投資であり、通常FacilityのCell配置へ読み替えない。
 
 ---
 
@@ -301,6 +393,19 @@ Route可否は用途名でなくOperation要件と実性能から判定する。
 必要に応じてDelta-v、Thrust、Endurance、Atmosphere、Gravity、Landing、Docking / Refueling Infrastructure等を使う。Launch Vehicle / Spacecraft / Lander等の名称は表示に利用できるが、可否判定には使わない。
 
 研究技術IDをRouteの直接解除条件にせず、研究で解禁されたVehicle、推進、補給、Infrastructure等の実能力から到達可能性を決める。
+
+Locationは物流上のNodeだが、地表LocationのCore Cellや代表座標をRoute距離の固定正本にしない。位置が意味を持つRouteは、実際に利用するGateway / access interfaceとそのSurface Cellから物理距離、所要時間、Operation要件を導出する。
+
+```text
+RouteEndpoint
+  location_id
+  locator:
+    surface_interface_id | access_cell_id | non_surface_interface
+```
+
+Location拡大によって二つのLocationの開発圏やGatewayが接近した場合、旧Core Cell間の遠距離判定を保持しない。同一天体Surface Transportは実endpoint間geometryから評価する。`surface_interface_id` がSURFACE_CELL Facilityを参照する場合、そのCell位置はFacility Stateから導出し、Endpointへ重複保存しない。専用Gatewayを要求しないTransport Modeでは、開発済み境界Cell等を `access_cell_id` として利用できる。
+
+Surface Cell自体をTransport Capacity Network Nodeにはしない。RouteはLocation間契約を維持し、位置情報はService Plan導出の物理条件として利用する。
 
 ### 10.2 Vehicle Definition / Fleet State
 
@@ -411,21 +516,22 @@ Exploration DomainはFleetの所有状態を直接変更せず、Fleet Domainへ
 
 ### 12.2 Resource Survey
 
-Resource SurveyはLocation × ResourceのKnowledgeを更新する。
+地表Resource Surveyは `SurfaceCell × Resource` のKnowledgeを更新する。固定Location × ResourceをSurvey正本にはしない。
 
 ```text
 Unknown
 → Presence Probability
-→ Concentration
-→ Reserve
-→ fully surveyed
+→ Estimated Resource Potential
+→ Measured Resource Potential
 ```
+
+有限Reserveの残量段階は持たない。Survey KnowledgeはResource Potentialそのものとは分離し、未Surveyでも地質状態が変わるわけではない。
+
+地質Knowledgeは基本的に恒久的な観測結果として扱える一方、Dynamic Environmentは別Stateとして更新され得る。将来のテラフォーミング等で環境由来の資源利用可能性が変わる場合も、Static Resource Potentialと現在Environmentを分離して再評価する。
 
 完了CampaignはSurvey能力配分対象から外し、余剰能力を未完了Campaignへ再配分する。
 
 科学探査のRP獲得とResource SurveyのKnowledge更新を同一状態機械へ混在させない。
-
----
 
 ## 13. Command / Query API
 
@@ -434,7 +540,9 @@ Unknown
 主要カテゴリ：
 
 - Time pause / resume / speed
+- Surface Location found / adjacent Cell develop
 - Build / Upgrade / Cancel / Pause / Resume
+- Surface-cell Facility placement where required
 - Construction priority / allocation / procurement route
 - Facility pause / resume / process / power priority
 - Vehicle produce / Fleet relocate
@@ -452,13 +560,15 @@ Unknown
 
 主要Query：
 
-- Catalog / World / Location
+- Catalog / World / Celestial Body Surface Map / Location
+- Surface Cell / Survey Knowledge / Resource Potential / Environment / development affiliation
 - Flow / Bottleneck
-- Facility / Process inputs / outputs / utilization
+- Facility / placement scope / Process inputs / outputs / utilization
 - Maintenance demand / fulfillment
 - Build Options / Projects
 - Vehicle Production Options
-- Logistics / Routes / Fleet / Transport Allocations / Transport Capacity / Cargo Flow / Lanes / special Missions
+- Logistics / physical Route endpoints / Fleet / Transport Allocations / Transport Capacity / Cargo Flow / Lanes / special Missions
+- Location territory / Surface Infrastructure demand and fulfillment
 - Research Point / Research
 - Scientific Exploration
 - Resource Survey
@@ -472,7 +582,7 @@ Query DTOはJSON化可能なimmutableデータとする。UI側が可否・維�
 
 SaveはApplication単位のversion付きSnapshotとする。静的Definitionは現在Contentから再構築し、可変Stateだけを復元する。
 
-保存対象にはFacility、Inventory、Project、Vehicle Production、Fleet数量と用途配分、Transport Allocation target、Fleet Relocation / Releasing、Cargo Flow / arrival waiting、特殊Mission、Research、Exploration、Survey、Deposit remaining、Environment Overlay等を含める。Transport Service Plan、Nominal / Available Transport Capacity等の派生状態は保存せず、Load後に再導出する。
+保存対象にはLocationのCore Cell・developed cell affiliation、Facility（位置依存Facilityのsite cellを含む）、Inventory、Project、Vehicle Production、Fleet数量と用途配分、Transport Allocation target、Fleet Relocation / Releasing、Cargo Flow / arrival waiting、特殊Mission、Research、Exploration、Survey Knowledge、Dynamic Environment Overlay等を含める。Static Surface Cell topology / geology / Resource PotentialはContentまたはworld definitionから再構築する。Transport Service Plan、Nominal / Available Transport Capacity等の派生状態は保存せず、Load後に再導出する。
 
 ゲーム性評価段階ではschema/content migrationを目的化しない。
 
@@ -492,6 +602,9 @@ Configuration Validation：
 - Vehicle Production / Maintenance定義不整合
 - Transport Allocationの未定義Vehicle / Route / 不正control mode
 - Research / Exploration / Survey参照不整合
+- Surface Cell topology / area / Resource Potential不整合
+- Locationのbody / core cell / developed cell参照不整合
+- SURFACE_CELL Facilityのsite cell参照不整合
 
 Runtime Validation：
 
@@ -504,6 +617,8 @@ Runtime Validation：
 - Facility maintenance demand / fulfillment不整合
 - Research Point負値・容量処理不整合
 - 孤立Reservation / Entity参照
+- Location領域の非連結・Cell重複所属
+- Facility placement scopeとsite cellの不整合
 
 ゲーム性評価段階で優先するテスト：
 
@@ -527,6 +642,16 @@ Runtime Validation：
 - Save / Load後の将来進行同値性
 - Offlineと通常進行の同値性
 - Generic CoreへのLocation固有分岐侵入検知
+- Celestial BodyごとのSurface Cell数・隣接数が可変でも成立する
+- Location領域が連結し、同一Surface Cellを複数Locationが重複利用しない
+- Extraction responseがInstalled Capacityに対して単調非減少かつ限界収益逓減である
+- 通常採掘でStatic Resource Potentialが減少しない
+- Research完了だけで既存FacilityのNominal Extraction Capacityが変化しない
+- LOCATION Facilityへ不要なCell指定を要求せず、SURFACE_CELL Facilityだけ有効なdeveloped cellを参照する
+- Surface CellがInventory / Logistics Nodeへ自動昇格しない
+- 地表Routeの距離・所要時間が実Gateway / access endpointから導出され、Location Core Cellへ固定されない
+- Location拡大時のSurface Infrastructure負荷がCell routingなしで決定論的に導出される
+- Dynamic Environment変化とStatic geology / Resource Potentialの状態所有が分離される
 
 暫定価格、日数、生産量等の仮バランス固定テストは避ける。
 
@@ -546,7 +671,7 @@ GameApplication
 Simulation Core
 ```
 
-UIは設備一覧・InspectorでProcess inputs / outputs、maintenance fulfillment、Vehicle production blocker等を安定配置で表示する。Fleet / Transport UIでは所在・総数・用途配分、Allocation mode / target、必要・投入隻数、Nominal / Available / Used / Spare Capacity、運用Resource需要、blocker / limiting factorをApplication Queryから表示する。必要情報を隠してUIを簡略化しない。
+UIは天体Surface MapでSurvey状態、Resource Potential、Environment、Location領域、隣接開発候補、位置依存Facilityの配置候補を表示する。通常Facilityの建設・運用は設備一覧・Inspectorを中心とし、不要なCell選択を要求しない。設備一覧・InspectorではProcess inputs / outputs、maintenance fulfillment、Vehicle production blocker等を安定配置で表示する。Fleet / Transport UIでは所在・総数・用途配分、Allocation mode / target、必要・投入隻数、Nominal / Available / Used / Spare Capacity、運用Resource需要、blocker / limiting factorをApplication Queryから表示する。必要情報を隠してUIを簡略化しない。
 
 LLMはFAST PATHへ入れない。
 
@@ -575,7 +700,7 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 13. ゲーム性評価段階では後方互換を目的化しない。
 14. 暫定バランス数値をテストで過度に固定しない。
 15. 個別不具合を特殊分岐で塞ぐ前に共通モデル不足を疑う。
-16. Celestial BodyとSurface / Orbit等のSpatial Nodeを分離する。
+16. Celestial Body、Surface Cell、Location、Orbit等の非地表Spatial Nodeを分離する。
 17. Transport可否はVehicle用途名ではなく実性能とOperation要件で判定する。
 18. 発展段階や研究名を物流・航路の強制ゲートへ転用しない。
 19. 建設は2〜3種類の実Resourceを直接消費し、現地代替レイヤーを持たない。
@@ -589,6 +714,15 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 27. LogisticsはFleet Stateを直接操作せず、Transportが供給する共有Capacityを消費する。
 28. 通常物流はCargo Flowとして扱い、個体Vehicle Missionを反復生成しない。
 29. Fleet Allocation解除・地点間再配置には回収・移動時間を持たせ、aggregate Fleetを瞬間移動させない。
+30. Surface Cellは物理地理の単位であり、通常Facility slot、Inventory Node、Logistics Nodeへ兼用しない。
+31. 地表Locationは任意Cellへ設立し、隣接Cellを開発して連結領域として拡大する。
+32. Celestial BodyごとのSurface Cell数、面積、隣接数をCore定数にしない。
+33. Resource Potentialは有限Reserveではなく採掘Opportunityとして所有し、採掘Facilityとのsoft saturationでThroughputを導出する。
+34. ResearchはFacility / Process等を解禁し、既存設備の性能を完了時に暗黙変更しない。
+35. 位置依存FacilityもFacility Domainに統合し、placement scopeでCell配置要否を表す。
+36. Location内部物流は集約Surface Infrastructureとして扱い、Cell単位Cargo routingを通常物流へ持ち込まない。
+37. 地表Location間Routeの物理条件は実Gateway / access endpointから導出し、Location代表座標へ固定しない。
+38. Static geology / Resource PotentialとDynamic Environmentを分離し、将来のテラフォーミングをState更新として接続可能にする。
 
 ---
 
@@ -596,19 +730,19 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 
 | 領域 | 現行/想定責務 |
 |---|---|
-| `spatial.py` | Spatial Graph、Environment Facet |
+| `spatial.py` | Celestial Body、Surface Cell graph、Location territory、Environment State |
 | `site.py` | SiteRequirements / Capability Requirement |
-| `facilities.py` | Facility Definition / State / Capability |
+| `facilities.py` | Facility Definition / State / placement scope / Capability |
 | `power.py` | Power配分 |
 | `inventory.py` / `storage.py` | Inventory / Reservation / Storage |
-| `industry.py` / `production/` | Process inputs / outputs / production flow |
+| `industry.py` / `production/` | Process inputs / outputs / production flow / Resource Potential extraction response |
 | `construction/` / `projects.py` | Construction Recipe、Project、調達、能力配分 |
 | maintenance domain（導入対象） | Facility maintenance demand / fulfillment |
 | `transport/` | Operation、Route、Vehicle Definition、Fleet State、Vehicle production、Transport Allocation、派生Service Plan / Capacity、Fleet relocation |
 | `logistics.py` / logistics domain | Resource Demand、Lane、共有Capacity配分、Cargo Flow / pipeline、arrival waiting |
 | `research.py` | Research Point、Tier / Level、Research状態機械 |
 | exploration domain | Scientific Exploration Campaign / Fleet reservation / RP reward |
-| `survey.py` | Resource Knowledge、Survey Campaign、Extraction |
+| `survey.py` | Surface Cell Resource Knowledge、Survey Campaign |
 | `simulation.py` | 時間進行・処理順序 |
 | `application*.py` | Command / Query / DTO |
 | `persistence.py` | Snapshot / Load / Offline resume |
@@ -624,7 +758,7 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 
 本作のCoreは、
 
-**「天体と地表・軌道等のSpatial Nodeを分離し、環境・設備・能力・Vehicle性能・Transport Operation・資源・物流・維持需要・研究点生成を一般化された条件として組み合わせる。VehicleはFleetとして用途配分し、Transport Allocationから定常Transport Capacityを導出し、Logisticsは共有CapacityをCargo Flowへ配分する。静的Content Definition、可変State、派生状態を分離し、Application Command / Query境界を通して決定論的に進行するSimulation Core」**
+**「Celestial Body、可変数のSurface Cell、プレイヤーが設立・拡張するLocation、軌道等の非地表Spatial Nodeを分離する。Surface Cellは静的地質・Resource Potentialと可変Environmentを持ち、Locationは連結した開発領域を経済・産業・物流Nodeとして束ねる。FacilityはLocation配置と位置依存Cell配置を同一Domainで扱い、Resource PotentialとInstalled Extraction Capacityからsoft saturationで採掘Throughputを導出する。Location内部物流は集約Surface Infrastructure、Location間物流は実Gateway / access endpointに基づくTransport Serviceとして扱う。VehicleはFleetとして用途配分し、Transport Allocationから定常Transport Capacityを導出し、Logisticsは共有CapacityをCargo Flowへ配分する。静的Definition、可変State、派生状態を分離し、Application Command / Query境界を通して決定論的に進行するSimulation Core」**
 
 として維持する。
 
