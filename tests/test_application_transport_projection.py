@@ -40,6 +40,7 @@ from space_idle import (
     RelocateFleet,
     build_game_application,
 )
+from space_idle.shared import EntityId
 from space_idle.api import GameRuntime
 from space_idle.api.codec import to_jsonable
 from space_idle.content.base_game import EARTH, LEO
@@ -275,3 +276,32 @@ def test_vehicle_catalog_exposes_endurance_and_operation_asset_recovery_semantic
     ascent = next(capability for capability in launch.operation_capability_details if capability.operation_type == "powered_ascent")
     assert tug.endurance_days == pytest.approx(60.0)
     assert ("asset_disposition", "origin") in ascent.parameters
+
+
+def test_partial_vehicle_production_procurement_is_durable_project_staging():
+    app = build_game_application()
+    sim = app._simulation
+    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
+    definition = sim.logistics.vehicle_defs[vehicle_id]
+    for resource_id, _required_t in definition.production.resources:
+        sim.inventory.stock[(ids.EARTH, resource_id)] = 0.0
+    sim.inventory.stock[(ids.EARTH, ids.STRUCTURAL_COMPONENTS)] = 1.0
+
+    production_id = app.execute(ProduceVehicle(
+        str(vehicle_id), str(ids.EARTH)
+    )).created_id
+    assert production_id is not None
+    app.execute(AdvanceTime(1))
+
+    state = sim.logistics.vehicle_production_projects[EntityId(production_id)]
+    staged = sim.logistics._vehicle_production_staged_t(
+        state, ids.STRUCTURAL_COMPONENTS
+    )
+    assert state.phase.value == "awaiting_inputs"
+    assert 0.0 < staged < 4.0
+
+    sim.logistics.pause_vehicle_production(state.id)
+    app.execute(AdvanceTime(2))
+    assert sim.logistics._vehicle_production_staged_t(
+        state, ids.STRUCTURAL_COMPONENTS
+    ) == pytest.approx(staged)

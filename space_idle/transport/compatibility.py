@@ -5,9 +5,12 @@ import math
 from ..power import PowerSnapshot
 from ..shared import DefinitionId, RouteId, SpatialNodeId, SurfaceCellId
 from ..site import evaluate_site_requirements
-from ..spatial import AtmosphereField, GravityField, SurfaceField
-from .endpoints import resolve_route_endpoint, route_geometry
+from ..spatial import AtmosphereField, GravityField, SpatialNodeKind, SurfaceField
+from .endpoints import great_circle_distance_km, resolve_route_endpoint, route_geometry
 from .models import (
+    LANDING,
+    POWERED_ASCENT,
+    SPACEFLIGHT,
     OperationAssetDisposition,
     OperationSupportLocation,
     RouteDef,
@@ -68,17 +71,43 @@ class TransportCompatibilityMixin:
         if target_cell_id not in graph.surface_cells:
             return (f"target_cell:{target_cell_id}",)
         failures: list[str] = []
+        origin_node = graph.operational_node(origin_id)
+        target_cell = graph.surface_cells[target_cell_id]
+        same_body = origin_node.body_id is not None and origin_node.body_id == target_cell.body_id
+        present_operations = {operation.operation_type for operation in operations}
+
+        if origin_node.kind is SpatialNodeKind.SURFACE and same_body:
+            surface_path = SURFACE_TRANSPORT in present_operations
+            flight_path = POWERED_ASCENT in present_operations and LANDING in present_operations
+            if not surface_path and not flight_path:
+                failures.append(
+                    "deployment_path:same_body_surface_requires_surface_transport_or_ascent_landing"
+                )
+        else:
+            if origin_node.kind is SpatialNodeKind.SURFACE and POWERED_ASCENT not in present_operations:
+                failures.append("deployment_path:powered_ascent_required")
+            if not same_body and SPACEFLIGHT not in present_operations:
+                failures.append("deployment_path:spaceflight_required")
+            if LANDING not in present_operations:
+                failures.append("deployment_path:landing_required")
+
         origin_surface = self._surface_environment(origin_id, day)
         destination_surface = self._surface_environment(target_cell_id, day)
+        surface_distance_km = None
+        if origin_node.kind is SpatialNodeKind.SURFACE and same_body:
+            origin_location = graph.locations[origin_id]
+            origin_cell = graph.surface_cells[origin_location.core_cell_id]
+            body = graph.bodies[target_cell.body_id]
+            surface_distance_km = great_circle_distance_km(
+                origin_cell.centroid, target_cell.centroid, body.mean_radius_km
+            )
         context = OperationEvaluationContext(
             transit_days=max(1, transit_days),
             origin_surface=origin_surface,
             destination_surface=destination_surface,
-            surface_distance_km=None,
+            surface_distance_km=surface_distance_km,
         )
-        present_operations: set[str] = set()
         for index, operation in enumerate(operations):
-            present_operations.add(operation.operation_type)
             capability = performance.capability_for(operation.operation_type)
             failures.extend(self.operation_registry.evaluate(operation, capability, context))
             if (

@@ -5,7 +5,7 @@ from typing import Any
 from .domain import DomainExtension, StateCodec
 from .validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
 from .research_models import ResearchPhase, ResearchState
-from .shared import DefinitionId, SpatialNodeId
+from .shared import DefinitionId, EntityId, SpatialNodeId
 
 
 def capture_research(sim: Any) -> dict[str, Any]:
@@ -142,6 +142,33 @@ def validate_runtime(sim: Any) -> None:
             state.demonstration_location_id is None or sim.graph.has_operational_node(state.demonstration_location_id),
             f"research demonstration references unknown location: {research_id}",
         )
+    allowed_staging: dict[EntityId, tuple[DefinitionId, SpatialNodeId]] = {}
+    for research_id, state in sim.research.active.items():
+        if (
+            state.status is ResearchPhase.PROTOTYPE
+            and state.prototype_location_id is not None
+        ):
+            allowed_staging[sim.research._prototype_staging_owner_id(research_id)] = (
+                research_id, state.prototype_location_id
+            )
+    for (owner_id, location_id, resource_id), amount in sim.inventory.external_occupancy.items():
+        if not str(owner_id).startswith("research.prototype:"):
+            continue
+        _require(owner_id in allowed_staging, f"orphaned research prototype staging: {owner_id}")
+        if owner_id not in allowed_staging:
+            continue
+        research_id, expected_location_id = allowed_staging[owner_id]
+        prototype = sim.research.definitions[research_id].prototype
+        _require(prototype is not None, f"research prototype staging lacks prototype definition: {research_id}")
+        if prototype is None:
+            continue
+        _require(location_id == expected_location_id, f"research prototype staging at wrong location: {research_id}")
+        _require(resource_id in prototype.resources, f"research prototype stages unexpected resource: {research_id}/{resource_id}")
+        if resource_id in prototype.resources:
+            _require(
+                -1e-9 <= amount <= prototype.resources[resource_id] + 1e-9,
+                f"research prototype staged resource outside requirement: {research_id}/{resource_id}",
+            )
     _require(sim.research.completed.issubset(sim.research.definitions), "completed research contains unknown definition")
 
 

@@ -170,6 +170,69 @@ class InventoryBook:
         self.external_occupancy[occupancy_key] = self.external_occupancy.get(occupancy_key, 0.0) + amount
         return True
 
+    def staged_for(
+        self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId
+    ) -> float:
+        return self.external_occupancy.get((owner_id, location_id, resource_id), 0.0)
+
+    def stage_reserved(
+        self,
+        reservation_owner_id: EntityId,
+        staging_owner_id: EntityId,
+        location_id: SpatialNodeId,
+        resource_id: DefinitionId,
+        amount: float,
+    ) -> None:
+        """Convert reserved site stock into durable owner-scoped staging.
+
+        This is an atomic reclassification of material that is already present at
+        the site.  Physical storage occupancy is unchanged, while the transient
+        reservation becomes persisted external occupancy owned by the finite
+        project that procured it.
+        """
+        if amount < -1e-9:
+            raise ValueError("negative reserved staging amount")
+        if amount <= 1e-12:
+            return
+        reservation_key = (reservation_owner_id, location_id, resource_id)
+        reserved = self.reserved.get(reservation_key, 0.0)
+        if reserved + 1e-9 < amount:
+            raise ValueError("reservation shortfall while staging")
+        stock_key = (location_id, resource_id)
+        stock = self.stock.get(stock_key, 0.0)
+        if stock + 1e-9 < amount:
+            raise ValueError("stock shortfall despite reservation")
+
+        reservation_left = reserved - amount
+        if reservation_left <= 1e-9:
+            self.reserved.pop(reservation_key, None)
+        else:
+            self.reserved[reservation_key] = reservation_left
+        self.stock[stock_key] = max(0.0, stock - amount)
+        occupancy_key = (staging_owner_id, location_id, resource_id)
+        self.external_occupancy[occupancy_key] = (
+            self.external_occupancy.get(occupancy_key, 0.0) + amount
+        )
+
+    def unstage_to_stock(
+        self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float
+    ) -> None:
+        """Return staged stock to ordinary inventory without changing site occupancy.
+
+        This is the inverse of ``stage_unreserved``. Because no material enters the
+        site, current service/admission capacity is irrelevant; the same physical
+        storage remains occupied throughout the reclassification.
+        """
+        if amount < -1e-9:
+            raise ValueError("negative unstaging amount")
+        key = (owner_id, location_id, resource_id)
+        held = self.external_occupancy.get(key, 0.0)
+        if held + 1e-9 < amount:
+            raise ValueError("staged stock shortfall")
+        self.release_storage_occupancy(owner_id, location_id, resource_id, amount)
+        stock_key = (location_id, resource_id)
+        self.stock[stock_key] = self.stock.get(stock_key, 0.0) + amount
+
     def reserve(self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
         if amount < -1e-9:
             raise ValueError("negative reservation")

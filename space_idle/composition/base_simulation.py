@@ -130,8 +130,10 @@ def build_base_simulation() -> Simulation:
         surface_cell_development_recipe_id=ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
     )
 
+    storage = StorageService(build_storage_provider_specs(), inventory, facilities)
+
     founding = LocationFoundingService(
-        build_founding_packages(), facilities, inventory, power, logistics,
+        build_founding_packages(), facilities, inventory, power, logistics, storage,
         surface_knowledge_level_provider=survey.cell_knowledge_level,
     )
     projects.external_surface_cell_claim_provider = lambda cell_id: (
@@ -141,7 +143,6 @@ def build_base_simulation() -> Simulation:
         None if (project := projects.active_spatial_project_for_cell(cell_id)) is None else EntityId(project.id)
     )
 
-    storage = StorageService(build_storage_provider_specs(), inventory, facilities)
     maintenance = FacilityMaintenanceService(facilities, inventory)
 
     research = ResearchService(

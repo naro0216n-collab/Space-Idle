@@ -219,6 +219,7 @@ class ConstructionPlanningMixin:
             raise ValueError("project cannot be cancelled")
         if not project.materials_committed:
             self._release_project_reservations(project)
+            self._restore_staged_resources(project)
         project.status = ProjectStatus.CANCELLED
         project.paused = False
         project.pause_started_day = None

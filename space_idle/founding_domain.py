@@ -72,7 +72,7 @@ def restore_founding(sim: Any, data: dict[str, Any]) -> None:
 def referenced_resources(sim: Any) -> set[DefinitionId]:
     if sim.founding is None:
         return set()
-    return {req.resource_id for package in sim.founding.packages.values() for req in package.resources}
+    return {req.resource_id for package in sim.founding.packages.values() for req in package.payload_resources}
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
@@ -84,15 +84,14 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(bool(package.operations), f"founding package has no deployment operation: {package_id}")
         _require(package.transit_days > 0, f"founding package has invalid transit: {package_id}")
         _require(package.required_units > 0, f"founding package has invalid fleet units: {package_id}")
-        validate_site_requirements(package.site_requirements, ctx.known_capabilities, f"founding:{package_id}")
-        expected = {req.resource_id: req.amount_t for req in package.resources}
-        _require(len(expected) == len(package.resources), f"duplicate founding package resource: {package_id}")
+        validate_site_requirements(package.staging_requirements, ctx.known_capabilities, f"founding:{package_id}:staging")
+        validate_site_requirements(package.target_requirements, ctx.known_capabilities, f"founding:{package_id}:target")
+        _require(
+            not package.target_requirements.capability_requirements,
+            f"founding target requirements cannot depend on pre-location capabilities: {package_id}",
+        )
         for deployment in package.deployed_facilities:
             _require(deployment.facility_def_id in ctx.facility_defs, f"founding package references unknown facility: {package_id}/{deployment.facility_def_id}")
-        actual = package.investment_totals()
-        _require(set(actual) == set(expected), f"founding investment resource set mismatch: {package_id}")
-        for resource_id, amount in expected.items():
-            _require(abs(actual.get(resource_id, 0.0) - amount) <= 1e-9, f"founding investment conservation mismatch: {package_id}/{resource_id}")
 
 
 def validate_runtime(sim: Any) -> None:
@@ -112,6 +111,31 @@ def validate_runtime(sim: Any) -> None:
         if package is not None:
             _require(-1e-9 <= p.preparation_done <= package.preparation_work + 1e-9, f"founding preparation out of range: {project_id}")
         reservation_id = service.fleet_reservation_id(project_id)
+        payload_owner_id = service.payload_owner_id(project_id)
+        if package is not None:
+            required = service._required_resources(p)
+            fully_staged = True
+            for resource_id, amount in required.items():
+                staged = sim.inventory.staged_for(
+                    payload_owner_id, p.staging_node_id, resource_id
+                )
+                if p.status is FoundingStatus.PREPARING:
+                    _require(
+                        -1e-9 <= staged <= amount + 1e-9,
+                        f"founding payload commitment out of range: {project_id}/{resource_id}",
+                    )
+                    if staged + 1e-9 < amount:
+                        fully_staged = False
+                else:
+                    _require(
+                        staged <= 1e-9,
+                        f"inactive founding retains prepared payload: {project_id}/{resource_id}",
+                    )
+            if p.status is FoundingStatus.PREPARING:
+                _require(
+                    p.inputs_consumed == fully_staged,
+                    f"founding payload completion flag mismatch: {project_id}",
+                )
         active = p.status in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}
         if active:
             _require(p.target_core_cell_id not in active_cells, f"duplicate active founding cell: {p.target_core_cell_id}")

@@ -82,6 +82,19 @@ class SiteRequirementFailure:
     detail: str
 
 
+def evaluate_environment_requirements(
+    requirements: SiteRequirements,
+    context_id: SpatialContextId,
+    day: int,
+    environment: EnvironmentResolver,
+) -> tuple[SiteRequirementFailure, ...]:
+    return tuple(
+        SiteRequirementFailure(condition.code, condition.description)
+        for condition in requirements.environment
+        if not condition.matches(environment, context_id, day)
+    )
+
+
 def evaluate_site_requirements(
     requirements: SiteRequirements,
     location_id: SpatialNodeId,
@@ -92,11 +105,8 @@ def evaluate_site_requirements(
     *,
     environment_context_id: SpatialContextId | None = None,
 ) -> tuple[SiteRequirementFailure, ...]:
-    failures: list[SiteRequirementFailure] = []
     context_id = location_id if environment_context_id is None else environment_context_id
-    for condition in requirements.environment:
-        if not condition.matches(environment, context_id, day):
-            failures.append(SiteRequirementFailure(condition.code, condition.description))
+    failures = list(evaluate_environment_requirements(requirements, context_id, day, environment))
 
     for requirement in requirements.capability_requirements:
         if requirement.mode == "infrastructure":

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from space_idle import (
-    FundResearchPrototype, GetResearch, PauseFacility, SetResearchDemonstrationSite,
+    AdvanceTime, FundResearchPrototype, GetResearch, PauseFacility, SetResearchDemonstrationSite,
     SetResearchPrototypeSite, StartResearch, build_game_application,
 )
 from space_idle.research import (
@@ -10,7 +10,7 @@ from space_idle.research import (
 from space_idle.shared import DefinitionId, EntityId
 from space_idle.site import CapabilityRequirement, SiteRequirements
 from space_idle.content import base_ids as ids
-from space_idle.content.base_game import EARTH
+from space_idle.content.base_game import EARTH, LEO
 
 
 def test_explicit_empty_prototype_spec_still_creates_prototype_phase():
@@ -100,3 +100,33 @@ def test_demonstration_site_can_be_selected_despite_transient_available_capabili
     assert any(code == "capability:available" for code, _detail in selected.current_blockers)
     assert selected.can_pause
     assert not selected.can_resume
+
+
+def test_partial_prototype_procurement_is_staged_and_site_change_returns_material_to_old_site():
+    app = build_game_application()
+    sim = app._simulation
+    research_id = DefinitionId("test.research.partial_prototype")
+    resource_id = DefinitionId("test.resource.partial_prototype_material")
+    sim.research.definitions[research_id] = ResearchDefinition(
+        research_id,
+        "Partial Prototype",
+        research_point_cost=0.0,
+        prototype=ResearchPrototypeSpec({resource_id: 1.0}),
+    )
+    sim.inventory.add(EARTH, resource_id, 0.25)
+
+    app.execute(StartResearch(str(research_id)))
+    app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+    app.execute(AdvanceTime(1))
+
+    owner_id = sim.research._prototype_staging_owner_id(research_id)
+    staged = sim.inventory.staged_for(owner_id, EARTH, resource_id)
+    assert staged == 0.25
+    assert sim.inventory.amount(EARTH, resource_id) == 0.0
+    assert not _research_row(app, research_id).can_fund_prototype
+
+    app.execute(SetResearchPrototypeSite(str(research_id), str(LEO)))
+
+    assert sim.inventory.staged_for(owner_id, EARTH, resource_id) == 0.0
+    assert sim.inventory.amount(EARTH, resource_id) == 0.25
+    assert sim.inventory.staged_for(owner_id, LEO, resource_id) == 0.0

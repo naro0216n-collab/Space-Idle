@@ -12,7 +12,8 @@ from .logistics import LogisticsService
 from .power import PowerService, PowerSnapshot
 from .resource_demand import ResourceDemand
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
-from .site import SiteRequirements, evaluate_site_requirements
+from .site import SiteRequirements, evaluate_environment_requirements, evaluate_site_requirements
+from .storage import StorageService
 from .transport.models import (
     FleetReservationKind,
     OperationAssetDisposition,
@@ -41,13 +42,14 @@ class FoundingFacilityDeployment:
 class FoundingPackageDefinition:
     id: DefinitionId
     display_name: str
-    resources: tuple[FoundingResourceRequirement, ...]
     deployed_facilities: tuple[FoundingFacilityDeployment, ...]
     preparation_work: float
     preparation_capability_id: str
     operations: tuple[TransportOperationRequirement, ...]
     transit_days: int
-    site_requirements: SiteRequirements = SiteRequirements()
+    initial_inventory: tuple[FoundingResourceRequirement, ...] = ()
+    staging_requirements: SiteRequirements = SiteRequirements()
+    target_requirements: SiteRequirements = SiteRequirements()
     minimum_survey_knowledge_level: int = 0
     required_units: int = 1
 
@@ -65,20 +67,39 @@ class FoundingPackageDefinition:
         if self.required_units <= 0:
             raise ValueError("founding required units must be positive")
 
-    @property
-    def payload_t(self) -> float:
-        return math.fsum(req.amount_t for req in self.resources)
-
-    @property
-    def payload_t_per_unit(self) -> float:
-        return self.payload_t / self.required_units
+    @staticmethod
+    def _accumulate(requirements, totals: dict[DefinitionId, float]) -> None:
+        for req in requirements:
+            totals[req.resource_id] = totals.get(req.resource_id, 0.0) + req.amount_t
 
     def investment_totals(self) -> dict[DefinitionId, float]:
         totals: dict[DefinitionId, float] = {}
         for deployment in self.deployed_facilities:
-            for req in deployment.invested_resources:
-                totals[req.resource_id] = totals.get(req.resource_id, 0.0) + req.amount_t
+            self._accumulate(deployment.invested_resources, totals)
         return totals
+
+    def initial_inventory_totals(self) -> dict[DefinitionId, float]:
+        totals: dict[DefinitionId, float] = {}
+        self._accumulate(self.initial_inventory, totals)
+        return totals
+
+    @property
+    def payload_resources(self) -> tuple[FoundingResourceRequirement, ...]:
+        totals = self.investment_totals()
+        self._accumulate(self.initial_inventory, totals)
+        return tuple(
+            FoundingResourceRequirement(resource_id, amount_t)
+            for resource_id, amount_t in sorted(totals.items(), key=lambda row: str(row[0]))
+            if amount_t > 1e-12
+        )
+
+    @property
+    def payload_t(self) -> float:
+        return math.fsum(req.amount_t for req in self.payload_resources)
+
+    @property
+    def payload_t_per_unit(self) -> float:
+        return self.payload_t / self.required_units
 
 
 class FoundingStatus(str, Enum):
@@ -122,6 +143,7 @@ class LocationFoundingService:
     inventory: InventoryBook
     power: PowerService
     logistics: LogisticsService
+    storage: StorageService
     surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
     external_cell_claim_provider: Callable[[SurfaceCellId], EntityId | None] | None = None
     projects: dict[ProjectId, LocationFoundingProject] = field(default_factory=dict)
@@ -150,6 +172,10 @@ class LocationFoundingService:
     @staticmethod
     def demand_id(project_id: ProjectId, resource_id: DefinitionId) -> EntityId:
         return EntityId(f"demand.founding:{project_id}:{resource_id}")
+
+    @staticmethod
+    def payload_owner_id(project_id: ProjectId) -> EntityId:
+        return EntityId(f"founding.payload:{project_id}")
 
     def active_project_for_cell(self, cell_id: SurfaceCellId) -> LocationFoundingProject | None:
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
@@ -193,15 +219,21 @@ class LocationFoundingService:
         if self.facilities.available_capability_capacity_at(staging_node_id, package.preparation_capability_id, snapshot, day) <= 1e-12:
             failures.append(FoundingBlocker("staging_capability", package.preparation_capability_id))
         for failure in evaluate_site_requirements(
-            package.site_requirements,
+            package.staging_requirements,
             staging_node_id,
             day,
             self.facilities.environment,
             self.facilities,
             snapshot,
-            environment_context_id=cell_id,
         ):
-            failures.append(FoundingBlocker(failure.code, failure.detail))
+            failures.append(FoundingBlocker(f"staging:{failure.code}", failure.detail))
+        for failure in evaluate_environment_requirements(
+            package.target_requirements,
+            cell_id,
+            day,
+            self.facilities.environment,
+        ):
+            failures.append(FoundingBlocker(f"target:{failure.code}", failure.detail))
         if vehicle_definition_id not in self.logistics.vehicle_defs:
             failures.append(FoundingBlocker("vehicle_definition", str(vehicle_definition_id)))
             return tuple(failures)
@@ -274,7 +306,7 @@ class LocationFoundingService:
     def _required_resources(self, project: LocationFoundingProject) -> dict[DefinitionId, float]:
         package = self.packages[project.founding_package_id]
         totals: dict[DefinitionId, float] = {}
-        for req in package.resources:
+        for req in package.payload_resources:
             totals[req.resource_id] = totals.get(req.resource_id, 0.0) + req.amount_t
         propellant = self.logistics.deployment_propellant_t(
             project.vehicle_definition_id,
@@ -286,37 +318,87 @@ class LocationFoundingService:
             totals[perf.propellant_resource_id] = totals.get(perf.propellant_resource_id, 0.0) + propellant
         return totals
 
+    def _staged_payload_t(
+        self, project: LocationFoundingProject, resource_id: DefinitionId
+    ) -> float:
+        return self.inventory.staged_for(
+            self.payload_owner_id(project.id), project.staging_node_id, resource_id
+        )
+
     def resource_demands(self) -> tuple[ResourceDemand, ...]:
         rows: list[ResourceDemand] = []
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
-            if project.status is not FoundingStatus.PREPARING or project.inputs_consumed:
+            if project.status is not FoundingStatus.PREPARING or project.inputs_consumed or project.paused:
                 continue
             for resource_id, amount in sorted(self._required_resources(project).items(), key=lambda row: str(row[0])):
+                remaining = max(0.0, amount - self._staged_payload_t(project, resource_id))
+                if remaining <= 1e-9:
+                    continue
                 rows.append(ResourceDemand(
                     self.demand_id(project.id, resource_id),
                     "founding",
                     EntityId(project.id),
                     project.staging_node_id,
                     resource_id,
-                    amount,
+                    remaining,
                     project.priority,
                     project.preferred_source_id,
-                    amount,
+                    remaining,
                 ))
         return tuple(rows)
 
-    def _try_consume_inputs(self, project: LocationFoundingProject) -> bool:
+    def _commit_reserved_payload(self, project: LocationFoundingProject) -> bool:
+        """Move presently allocated founding material into project-owned staging.
+
+        Founding is a finite procurement project, so material already allocated to
+        it must become a durable resource commitment rather than returning to the
+        shared daily reservation pool.  Staged material keeps occupying the same
+        storage class and is persisted through Inventory external occupancy.
+        """
         required = self._required_resources(project)
+        payload_owner = self.payload_owner_id(project.id)
+        all_committed = True
         for resource_id, amount in required.items():
+            staged = self._staged_payload_t(project, resource_id)
+            missing = max(0.0, amount - staged)
+            if missing <= 1e-9:
+                continue
             demand_id = self.demand_id(project.id, resource_id)
-            if self.inventory.reserved_for(demand_id, project.staging_node_id, resource_id) + 1e-9 < amount:
-                return False
-        for resource_id, amount in required.items():
-            self.inventory.consume_reserved(
-                self.demand_id(project.id, resource_id), project.staging_node_id, resource_id, amount
+            reserved = self.inventory.reserved_for(
+                demand_id, project.staging_node_id, resource_id
             )
-        project.inputs_consumed = True
-        return True
+            commit = min(missing, reserved)
+            if commit > 1e-12:
+                self.inventory.stage_reserved(
+                    demand_id,
+                    payload_owner,
+                    project.staging_node_id,
+                    resource_id,
+                    commit,
+                )
+                staged += commit
+            if staged + 1e-9 < amount:
+                all_committed = False
+        project.inputs_consumed = all_committed
+        return all_committed
+
+    def _release_prepared_payload(self, project: LocationFoundingProject) -> None:
+        payload_owner = self.payload_owner_id(project.id)
+        for resource_id in self._required_resources(project):
+            staged = self._staged_payload_t(project, resource_id)
+            if staged > 1e-12:
+                self.inventory.release_storage_occupancy(
+                    payload_owner, project.staging_node_id, resource_id, staged
+                )
+
+    def _restore_prepared_payload(self, project: LocationFoundingProject) -> None:
+        payload_owner = self.payload_owner_id(project.id)
+        for resource_id in self._required_resources(project):
+            staged = self._staged_payload_t(project, resource_id)
+            if staged > 1e-12:
+                self.inventory.unstage_to_stock(
+                    payload_owner, project.staging_node_id, resource_id, staged
+                )
 
     def blockers(self, project_id: ProjectId, day: int = 0, power: PowerSnapshot | None = None) -> tuple[FoundingBlocker, ...]:
         project = self.projects[project_id]
@@ -338,8 +420,13 @@ class LocationFoundingService:
                 failures.append(FoundingBlocker("staging_capability", package.preparation_capability_id))
             if not project.inputs_consumed:
                 for resource_id, amount in self._required_resources(project).items():
-                    reserved = self.inventory.reserved_for(self.demand_id(project.id, resource_id), project.staging_node_id, resource_id)
-                    if reserved + 1e-9 < amount:
+                    staged = self._staged_payload_t(project, resource_id)
+                    reserved = self.inventory.reserved_for(
+                        self.demand_id(project.id, resource_id),
+                        project.staging_node_id,
+                        resource_id,
+                    )
+                    if staged + reserved + 1e-9 < amount:
                         failures.append(FoundingBlocker("resource_shortage", str(resource_id)))
         return tuple(failures)
 
@@ -365,6 +452,10 @@ class LocationFoundingService:
         project = self.projects[project_id]
         if project.status is not FoundingStatus.PREPARING:
             raise ValueError("founding cannot be cancelled after deployment begins")
+        for resource_id in self._required_resources(project):
+            self.inventory.release_reservation(self.demand_id(project.id, resource_id))
+        self._restore_prepared_payload(project)
+        project.inputs_consumed = False
         reservation_id = self.fleet_reservation_id(project_id)
         if reservation_id in self.logistics.fleet_reservations:
             self.logistics.release_fleet_reservation(reservation_id, day=day)
@@ -381,7 +472,7 @@ class LocationFoundingService:
                     non_resource = [b for b in self.blockers(project.id, day) if b.code != "resource_shortage"]
                     if non_resource:
                         continue
-                if not project.inputs_consumed and not self._try_consume_inputs(project):
+                if not project.inputs_consumed and not self._commit_reserved_payload(project):
                     continue
                 package = self.packages[project.founding_package_id]
                 snapshot = self.power.snapshot(project.staging_node_id, self.facilities, day)
@@ -392,6 +483,7 @@ class LocationFoundingService:
                 project.preparation_done += min(remaining, max(0.0, capacity))
                 if project.preparation_done + 1e-9 >= package.preparation_work:
                     project.preparation_done = package.preparation_work
+                    self._release_prepared_payload(project)
                     project.status = FoundingStatus.DEPLOYING
                     project.departure_day = day
                     project.arrival_day = day + package.transit_days
@@ -421,6 +513,15 @@ class LocationFoundingService:
                 site_cell_id=site_cell_id,
                 invested_resources={req.resource_id: req.amount_t for req in deployment.invested_resources},
             )
+        if package.initial_inventory:
+            facility_locations = {facility.location_id for facility in self.facilities.facilities.values()}
+            power_by_location = {
+                location_id: self.power.snapshot(location_id, self.facilities, day)
+                for location_id in facility_locations
+            }
+            self.storage.refresh(day, power_by_location)
+            for req in package.initial_inventory:
+                self.inventory.add(project.new_location_id, req.resource_id, req.amount_t)
         reservation_id = self.fleet_reservation_id(project.id)
         if reservation_id in self.logistics.fleet_reservations:
             disposition = self.logistics.deployment_asset_disposition(

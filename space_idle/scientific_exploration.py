@@ -272,6 +272,8 @@ class ScientificExplorationService:
             return
         if not self.can_unassign_fleet(definition_id):
             raise ValueError("started scientific exploration cannot release its Fleet")
+        definition = self.definitions[definition_id]
+        self._restore_staged_inputs(definition)
         reservation_id = EntityId(f"scientific_exploration:{definition_id}")
         self.logistics.release_fleet_reservation(reservation_id, day=day)
         state.vehicle_definition_id = None
@@ -281,6 +283,59 @@ class ScientificExplorationService:
     @staticmethod
     def _resource_demand_id(definition_id: DefinitionId, resource_id: DefinitionId) -> EntityId:
         return EntityId(f"demand.scientific_exploration:{definition_id}:{resource_id}")
+
+    @staticmethod
+    def _input_staging_owner_id(definition_id: DefinitionId) -> EntityId:
+        return EntityId(f"scientific_exploration.inputs:{definition_id}")
+
+    def _staged_input_t(
+        self, definition_id: DefinitionId, resource_id: DefinitionId
+    ) -> float:
+        definition = self.definitions[definition_id]
+        return self.inventory.staged_for(
+            self._input_staging_owner_id(definition_id),
+            definition.origin_id,
+            resource_id,
+        )
+
+    def _stage_input_reservations(
+        self, definition: ScientificExplorationDefinition
+    ) -> None:
+        staging_owner = self._input_staging_owner_id(definition.id)
+        for resource_id, amount_t in definition.consumable_resources:
+            if amount_t <= 1e-12:
+                continue
+            staged = self._staged_input_t(definition.id, resource_id)
+            missing = max(0.0, amount_t - staged)
+            if missing <= 1e-12:
+                continue
+            demand_id = self._resource_demand_id(definition.id, resource_id)
+            reserved = self.inventory.reserved_for(
+                demand_id, definition.origin_id, resource_id
+            )
+            amount = min(missing, reserved)
+            if amount > 1e-12:
+                self.inventory.stage_reserved(
+                    demand_id,
+                    staging_owner,
+                    definition.origin_id,
+                    resource_id,
+                    amount,
+                )
+
+    def _restore_staged_inputs(
+        self, definition: ScientificExplorationDefinition
+    ) -> None:
+        staging_owner = self._input_staging_owner_id(definition.id)
+        for resource_id, _amount_t in definition.consumable_resources:
+            self.inventory.release_reservation(
+                self._resource_demand_id(definition.id, resource_id)
+            )
+            staged = self._staged_input_t(definition.id, resource_id)
+            if staged > 1e-12:
+                self.inventory.unstage_to_stock(
+                    staging_owner, definition.origin_id, resource_id, staged
+                )
 
     def resource_demands(self, day: int = 0) -> tuple[ResourceDemand, ...]:
         demands: list[ResourceDemand] = []
@@ -294,7 +349,10 @@ class ScientificExplorationService:
                 continue
             definition = self.definitions[definition_id]
             for resource_id, amount_t in sorted(definition.consumable_resources, key=lambda row: str(row[0])):
-                if amount_t <= 1e-12:
+                remaining = max(
+                    0.0, amount_t - self._staged_input_t(definition_id, resource_id)
+                )
+                if remaining <= 1e-12:
                     continue
                 demands.append(ResourceDemand(
                     self._resource_demand_id(definition_id, resource_id),
@@ -302,7 +360,7 @@ class ScientificExplorationService:
                     EntityId(f"scientific_exploration:{definition_id}"),
                     definition.origin_id,
                     resource_id,
-                    amount_t,
+                    remaining,
                     70,
                     None,
                 ))
@@ -315,23 +373,20 @@ class ScientificExplorationService:
     ) -> bool:
         if state.inputs_consumed:
             return True
+        self._stage_input_reservations(definition)
         resources = tuple((rid, amount) for rid, amount in definition.consumable_resources if amount > 1e-12)
         if not all(
-            self.inventory.reserved_for(
-                self._resource_demand_id(definition.id, rid),
-                definition.origin_id,
-                rid,
-            ) + 1e-9 >= amount
+            self._staged_input_t(definition.id, rid) + 1e-9 >= amount
             for rid, amount in resources
         ):
             return False
-        for resource_id, amount_t in resources:
-            self.inventory.consume_reserved(
-                self._resource_demand_id(definition.id, resource_id),
-                definition.origin_id,
-                resource_id,
-                amount_t,
-            )
+        staging_owner = self._input_staging_owner_id(definition.id)
+        for resource_id, _amount_t in resources:
+            staged = self._staged_input_t(definition.id, resource_id)
+            if staged > 1e-12:
+                self.inventory.release_storage_occupancy(
+                    staging_owner, definition.origin_id, resource_id, staged
+                )
         state.inputs_consumed = True
         return True
 
@@ -356,10 +411,13 @@ class ScientificExplorationService:
             return tuple(blockers)
         if not state.inputs_consumed:
             for resource_id, amount_t in definition.consumable_resources:
-                allocated = self.inventory.reserved_for(
-                    self._resource_demand_id(definition_id, resource_id),
-                    definition.origin_id,
-                    resource_id,
+                allocated = (
+                    self.inventory.reserved_for(
+                        self._resource_demand_id(definition_id, resource_id),
+                        definition.origin_id,
+                        resource_id,
+                    )
+                    + self._staged_input_t(definition_id, resource_id)
                 )
                 if allocated + 1e-9 < amount_t:
                     blockers.append(f"resource:{resource_id}:{allocated:g}/{amount_t:g}")
@@ -386,6 +444,7 @@ class ScientificExplorationService:
             if state.phase is not ScientificExplorationPhase.ACTIVE or state.paused or state.vehicle_definition_id is None:
                 continue
             definition = self.definitions[definition_id]
+            self._stage_input_reservations(definition)
             if self.blockers(
                 definition_id,
                 day=day,

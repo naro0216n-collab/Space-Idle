@@ -273,3 +273,36 @@ def test_rp_storage_blocker_prevents_input_consumption_and_keeps_fleet_reserved(
     assert state.inputs_consumed is False
     assert state.progress_days == pytest.approx(0.0)
     assert _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == 1
+
+
+def test_partial_exploration_inputs_are_staged_and_unassign_restores_them():
+    app = build_game_application()
+    sim = app._simulation
+    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
+    definition = sim.scientific_exploration.definitions[exploration_id]
+    machinery = ids.MACHINERY
+    electronics = ids.PRECISION_ELECTRONICS
+    sim.inventory.stock[(definition.origin_id, machinery)] = 0.05
+    sim.inventory.stock[(definition.origin_id, electronics)] = 0.0
+
+    app.execute(StartScientificExploration(str(exploration_id)))
+    app.execute(AssignExplorationFleet(
+        str(exploration_id), str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+    ))
+    app.execute(AdvanceTime(1))
+
+    owner_id = sim.scientific_exploration._input_staging_owner_id(exploration_id)
+    staged = sim.inventory.staged_for(owner_id, definition.origin_id, machinery)
+    assert staged > 0.0
+    assert staged < 0.2
+    state = sim.scientific_exploration.campaigns[exploration_id]
+    assert state.inputs_consumed is False
+    assert state.progress_days == 0.0
+
+    before_restore = sim.inventory.amount(definition.origin_id, machinery)
+    app.execute(UnassignExplorationFleet(str(exploration_id)))
+
+    assert sim.inventory.staged_for(owner_id, definition.origin_id, machinery) == 0.0
+    assert sim.inventory.amount(definition.origin_id, machinery) == pytest.approx(
+        before_restore + staged
+    )

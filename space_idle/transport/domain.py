@@ -434,6 +434,18 @@ def validate_runtime(sim: Any) -> None:
         _require(state.progress_days >= -1e-9, f"negative vehicle production progress: {project_id}")
         definition = lg.vehicle_defs[state.vehicle_definition_id]
         _require(state.progress_days <= definition.production.days + 1.0 + 1e-9, f"vehicle production progress exceeds duration: {project_id}")
+        for resource_id, required_t in definition.production.resources:
+            staged = lg._vehicle_production_staged_t(state, resource_id)
+            if state.phase is VehicleProductionPhase.AWAITING_INPUTS:
+                _require(
+                    staged >= -1e-9 and staged <= required_t + 1e-9,
+                    f"vehicle production staged material outside requirement: {project_id}/{resource_id}",
+                )
+            else:
+                _require(
+                    staged <= 1e-9,
+                    f"started vehicle production retains staged input: {project_id}/{resource_id}",
+                )
         if state.phase is VehicleProductionPhase.COMPLETE:
             _require(state.completed_units == 1, f"completed vehicle production has invalid completed unit count: {project_id}")
         else:

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from ..founding import FoundingFacilityDeployment, FoundingPackageDefinition, FoundingResourceRequirement
-from ..site import CapabilityRequirement, SiteRequirements
-from ..spatial import SurfaceField
-from ..site import RequiresFacet
+from . import base_requirements as req
 from ..transport.models import TransportOperationKind, TransportOperationRequirement
 from . import base_ids as ids
 
@@ -16,12 +14,6 @@ def build_founding_packages() -> dict:
     package = FoundingPackageDefinition(
         id=ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE,
         display_name="Robotic Lunar Outpost Founding Package",
-        resources=(
-            _r(ids.STRUCTURAL_COMPONENTS, 3.4),
-            _r(ids.MACHINERY, 1.3),
-            _r(ids.PRECISION_ELECTRONICS, 0.8),
-            _r(ids.CONSTRUCTION_EQUIPMENT, 0.5),
-        ),
         deployed_facilities=(
             FoundingFacilityDeployment(
                 ids.ROBOTIC_SURVEY_PACKAGE,
@@ -45,7 +37,8 @@ def build_founding_packages() -> dict:
         preparation_capability_id="cargo_transfer",
         operations=(TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),),
         transit_days=3,
-        site_requirements=SiteRequirements(environment=(RequiresFacet(SurfaceField, "surface", "surface terrain data is required"),)),
+        staging_requirements=req.ORBIT_SITE,
+        target_requirements=req.VACUUM_SURFACE_SITE,
         minimum_survey_knowledge_level=2,
         required_units=1,
     )

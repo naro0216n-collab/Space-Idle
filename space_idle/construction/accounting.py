@@ -16,6 +16,17 @@ class ConstructionAccountingMixin:
     def _resource_demand_id(project_id, resource_id) -> EntityId:
         return EntityId(f"demand.project:{project_id}:{resource_id}")
 
+    @staticmethod
+    def _resource_staging_owner_id(project_id) -> EntityId:
+        return EntityId(f"project.materials:{project_id}")
+
+    def _staged_resource_t(self, project: ConstructionProject, resource_id) -> float:
+        return self.inventory.staged_for(
+            self._resource_staging_owner_id(project.id),
+            project.location_id,
+            resource_id,
+        )
+
     def _committed_resources(self, project: ConstructionProject) -> dict:
         return {
             resource_id: state.committed_t
@@ -24,10 +35,13 @@ class ConstructionAccountingMixin:
         }
 
     def reserved_resource_t(self, project: ConstructionProject, resource_id) -> float:
-        return self.inventory.reserved_for(
-            self._resource_demand_id(project.id, resource_id),
-            project.location_id,
-            resource_id,
+        return (
+            self.inventory.reserved_for(
+                self._resource_demand_id(project.id, resource_id),
+                project.location_id,
+                resource_id,
+            )
+            + self._staged_resource_t(project, resource_id)
         )
 
     def _reserved_resource_t(self, project: ConstructionProject, resource_id) -> float:
@@ -39,22 +53,58 @@ class ConstructionAccountingMixin:
                 self._resource_demand_id(project.id, resource_id)
             )
 
-    def _commit_materials(self, project: ConstructionProject) -> None:
+    def _stage_project_reservations(self, project: ConstructionProject) -> None:
+        """Turn transient allocation into durable project-owned procurement state.
+
+        Construction is a finite demand.  Material already allocated to it must
+        remain committed to that project across later daily demand resolutions,
+        while continuing to occupy the same physical storage until construction
+        actually consumes it.
+        """
         if project.materials_committed:
             return
         recipe = self._recipe_for_project(project)
+        owner_id = self._resource_staging_owner_id(project.id)
+        for requirement in recipe.resources:
+            resource_id = requirement.resource_id
+            staged = self._staged_resource_t(project, resource_id)
+            missing = max(0.0, requirement.amount_t - staged)
+            if missing <= 1e-12:
+                continue
+            demand_id = self._resource_demand_id(project.id, resource_id)
+            reserved = self.inventory.reserved_for(
+                demand_id, project.location_id, resource_id
+            )
+            amount = min(missing, reserved)
+            if amount <= 1e-12:
+                continue
+            self.inventory.stage_reserved(
+                demand_id, owner_id, project.location_id, resource_id, amount
+            )
+
+    def _restore_staged_resources(self, project: ConstructionProject) -> None:
+        owner_id = self._resource_staging_owner_id(project.id)
+        for resource_id in project.resources:
+            staged = self._staged_resource_t(project, resource_id)
+            if staged > 1e-12:
+                self.inventory.unstage_to_stock(
+                    owner_id, project.location_id, resource_id, staged
+                )
+
+    def _commit_materials(self, project: ConstructionProject) -> None:
+        if project.materials_committed:
+            return
+        self._stage_project_reservations(project)
+        recipe = self._recipe_for_project(project)
+        owner_id = self._resource_staging_owner_id(project.id)
         for requirement in recipe.resources:
             state = project.resources[requirement.resource_id]
-            demand_id = self._resource_demand_id(project.id, requirement.resource_id)
-            held = self._reserved_resource_t(project, requirement.resource_id)
-            if held + 1e-9 < requirement.amount_t:
+            staged = self._staged_resource_t(project, requirement.resource_id)
+            if staged + 1e-9 < requirement.amount_t:
                 raise RuntimeError("construction materials are not fully allocated")
-            if requirement.amount_t > 1e-12:
-                self.inventory.consume_reserved(
-                    demand_id,
-                    project.location_id,
-                    requirement.resource_id,
-                    requirement.amount_t,
+            if staged > 1e-12:
+                self.inventory.release_storage_occupancy(
+                    owner_id, project.location_id, requirement.resource_id, staged
                 )
             state.committed_t = requirement.amount_t
         project.materials_committed = True

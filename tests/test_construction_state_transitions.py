@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle import AdvanceTime, PlanBuild, SetConstructionWeight, build_game_application
+from space_idle import AdvanceTime, CancelBuild, PauseBuild, PlanBuild, SetConstructionWeight, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.construction import ProjectStatus
 from space_idle.validation import validate_runtime_state
@@ -59,6 +59,37 @@ def test_ready_project_keeps_materials_reserved_until_construction_starts():
     )
     validate_runtime_state(sim)
 
+
+
+def test_partial_construction_procurement_is_project_owned_until_cancelled():
+    app = build_game_application()
+    sim = app._simulation
+    result = app.execute(
+        PlanBuild(str(ids.EARTH), str(ids.SURFACE_POWER_GRID), sourcing_policy="local_priority")
+    )
+    project = _project(sim)
+    recipe = sim.projects.recipe_for_project(project)
+    for requirement in recipe.resources:
+        available = sim.inventory.available(ids.EARTH, requirement.resource_id)
+        if available > 1e-12:
+            assert sim.inventory.take_unreserved(ids.EARTH, requirement.resource_id, available)
+    sim.inventory.add(ids.EARTH, ids.STRUCTURAL_COMPONENTS, 0.5)
+
+    app.execute(AdvanceTime(2))
+    staged = sim.projects._staged_resource_t(project, ids.STRUCTURAL_COMPONENTS)
+    assert staged > 0.0
+    assert sim.projects.reserved_resource_t(project, ids.STRUCTURAL_COMPONENTS) >= staged
+    assert project.resources[ids.STRUCTURAL_COMPONENTS].committed_t == pytest.approx(0.0)
+
+    app.execute(PauseBuild(result.created_id))
+    app.execute(AdvanceTime(2))
+    assert sim.projects._staged_resource_t(project, ids.STRUCTURAL_COMPONENTS) == pytest.approx(staged)
+    stock_before_cancel = sim.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
+    app.execute(CancelBuild(result.created_id))
+    assert sim.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS) == pytest.approx(
+        stock_before_cancel + staged
+    )
+    validate_runtime_state(sim)
 
 def test_planned_project_with_unmet_technology_does_not_claim_inventory():
     app = build_game_application()

@@ -175,6 +175,62 @@ class VehicleProductionMixin:
     ) -> EntityId:
         return EntityId(f"demand.{project_id}:{resource_id}")
 
+    @staticmethod
+    def _vehicle_production_staging_owner_id(project_id: EntityId) -> EntityId:
+        return EntityId(f"vehicle_production.materials:{project_id}")
+
+    def _vehicle_production_staged_t(
+        self, state: VehicleProductionState, resource_id: DefinitionId
+    ) -> float:
+        return self.inventory.staged_for(
+            self._vehicle_production_staging_owner_id(state.id),
+            state.location_id,
+            resource_id,
+        )
+
+    def _stage_vehicle_production_reservations(
+        self, state: VehicleProductionState
+    ) -> None:
+        if state.phase is not VehicleProductionPhase.AWAITING_INPUTS:
+            return
+        definition = self.vehicle_defs[state.vehicle_definition_id]
+        staging_owner = self._vehicle_production_staging_owner_id(state.id)
+        for resource_id, required_t in definition.production.resources:
+            if required_t <= 1e-12:
+                continue
+            staged = self._vehicle_production_staged_t(state, resource_id)
+            missing = max(0.0, required_t - staged)
+            if missing <= 1e-12:
+                continue
+            demand_id = self._vehicle_production_demand_id(state.id, resource_id)
+            reserved = self.inventory.reserved_for(
+                demand_id, state.location_id, resource_id
+            )
+            amount = min(missing, reserved)
+            if amount <= 1e-12:
+                continue
+            self.inventory.stage_reserved(
+                demand_id, staging_owner, state.location_id, resource_id, amount
+            )
+
+    def _consume_staged_vehicle_production_inputs(
+        self, state: VehicleProductionState
+    ) -> None:
+        definition = self.vehicle_defs[state.vehicle_definition_id]
+        staging_owner = self._vehicle_production_staging_owner_id(state.id)
+        for resource_id, required_t in definition.production.resources:
+            if required_t <= 1e-12:
+                continue
+            staged = self._vehicle_production_staged_t(state, resource_id)
+            if staged + 1e-9 < required_t:
+                raise RuntimeError(
+                    f"vehicle production inputs are not fully staged: {state.id}/{resource_id}"
+                )
+            if staged > 1e-12:
+                self.inventory.release_storage_occupancy(
+                    staging_owner, state.location_id, resource_id, staged
+                )
+
     def vehicle_production_resource_demands(
         self, day: int = 0
     ) -> tuple[ResourceDemand, ...]:
@@ -188,7 +244,12 @@ class VehicleProductionMixin:
             for resource_id, required_t in sorted(
                 definition.production.resources, key=lambda row: str(row[0])
             ):
-                if required_t <= 1e-12:
+                remaining = max(
+                    0.0,
+                    required_t
+                    - self._vehicle_production_staged_t(state, resource_id),
+                )
+                if remaining <= 1e-12:
                     continue
                 demands.append(
                     ResourceDemand(
@@ -197,7 +258,7 @@ class VehicleProductionMixin:
                         state.id,
                         state.location_id,
                         resource_id,
-                        required_t,
+                        remaining,
                         state.priority,
                     )
                 )
@@ -218,12 +279,7 @@ class VehicleProductionMixin:
             key=lambda row: (-row.priority, str(row.id)),
         )
         for state in waiting:
-            definition = self.vehicle_defs[state.vehicle_definition_id]
-            resources = tuple(
-                (resource_id, amount_t)
-                for resource_id, amount_t in definition.production.resources
-                if amount_t > 1e-12
-            )
+            self._stage_vehicle_production_reservations(state)
             power = power_by_location.get(state.location_id)
             if power is None:
                 power = self.power.snapshot(state.location_id, self.facilities, day)
@@ -233,13 +289,7 @@ class VehicleProductionMixin:
                 power=power,
             ):
                 continue
-            for resource_id, amount_t in resources:
-                self.inventory.consume_reserved(
-                    self._vehicle_production_demand_id(state.id, resource_id),
-                    state.location_id,
-                    resource_id,
-                    amount_t,
-                )
+            self._consume_staged_vehicle_production_inputs(state)
             state.phase = VehicleProductionPhase.BUILDING
 
     def advance_vehicle_production_day(
@@ -333,10 +383,13 @@ class VehicleProductionMixin:
         definition = self.vehicle_defs[state.vehicle_definition_id]
         if state.phase is VehicleProductionPhase.AWAITING_INPUTS:
             for resource_id, required_t in definition.production.resources:
-                allocated = self.inventory.reserved_for(
-                    self._vehicle_production_demand_id(state.id, resource_id),
-                    state.location_id,
-                    resource_id,
+                allocated = (
+                    self.inventory.reserved_for(
+                        self._vehicle_production_demand_id(state.id, resource_id),
+                        state.location_id,
+                        resource_id,
+                    )
+                    + self._vehicle_production_staged_t(state, resource_id)
                 )
                 if allocated + 1e-9 < required_t:
                     blockers.append(

@@ -246,6 +246,36 @@ def test_save_load_preserves_vehicle_production_progress_and_completed_fleet_uni
     ).total_units == before_units + 1
 
 
+def test_save_load_preserves_partial_vehicle_production_staging(tmp_path):
+    app = build_game_application()
+    sim = app._simulation
+    definition = sim.logistics.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG]
+    for resource_id, _required_t in definition.production.resources:
+        sim.inventory.stock[(EARTH, resource_id)] = 0.0
+    sim.inventory.stock[(EARTH, ids.STRUCTURAL_COMPONENTS)] = 1.0
+
+    result = app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
+    assert result.created_id is not None
+    production_id = EntityId(result.created_id)
+    app.execute(AdvanceTime(1))
+    state = sim.logistics.vehicle_production_projects[production_id]
+    staged = sim.logistics._vehicle_production_staged_t(
+        state, ids.STRUCTURAL_COMPONENTS
+    )
+    assert state.phase.value == "awaiting_inputs"
+    assert staged > 0.0
+
+    path = tmp_path / "vehicle-production-partial.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application)
+
+    assert capture_state(loaded._simulation) == capture_state(sim)
+    loaded_state = loaded._simulation.logistics.vehicle_production_projects[production_id]
+    assert loaded._simulation.logistics._vehicle_production_staged_t(
+        loaded_state, ids.STRUCTURAL_COMPONENTS
+    ) == staged
+
+
 def test_offline_progress_preserves_vehicle_production_state_machine(tmp_path):
     saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     policy = OfflineProgressPolicy(real_seconds_per_game_day=60.0, max_game_days_per_resume=20)

@@ -19,7 +19,8 @@ class ConstructionProcurementMixin:
             recipe = self._recipe_for_project(project)
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
-                missing = max(0.0, requirement.amount_t - state.committed_t)
+                staged = self._staged_resource_t(project, requirement.resource_id)
+                missing = max(0.0, requirement.amount_t - state.committed_t - staged)
                 if missing <= 1e-9:
                     continue
                 demands.append(ResourceDemand(
@@ -71,8 +72,11 @@ class ConstructionProcurementMixin:
                 continue
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
-                if state.import_committed_t is None and state.committed_t + 1e-9 < requirement.amount_t:
-                    state.import_committed_t = max(0.0, requirement.amount_t - state.committed_t)
+                staged = self._staged_resource_t(project, requirement.resource_id)
+                if state.import_committed_t is None and state.committed_t + staged + 1e-9 < requirement.amount_t:
+                    state.import_committed_t = max(
+                        0.0, requirement.amount_t - state.committed_t - staged
+                    )
 
     def finalize_procurement(self, day: int) -> None:
         """Synchronize readiness with the shared allocation without consuming it.
@@ -91,8 +95,9 @@ class ConstructionProcurementMixin:
             ):
                 continue
             recipe = self._recipe_for_project(project)
+            self._stage_project_reservations(project)
             ready = all(
-                self._reserved_resource_t(project, requirement.resource_id) + 1e-9
+                self._staged_resource_t(project, requirement.resource_id) + 1e-9
                 >= requirement.amount_t
                 for requirement in recipe.resources
             )

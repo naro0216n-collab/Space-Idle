@@ -7,6 +7,9 @@ from .research_models import ResearchPhase
 
 class ResearchExecutionMixin:
     def advance_day(self, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int = 0) -> None:
+        for state in list(self.active.values()):
+            self._stage_prototype_reservations(state)
+
         generated = self.generation_rate(power_by_location, day)
         self.store_generated_points(generated, power_by_location=power_by_location, day=day)
 
