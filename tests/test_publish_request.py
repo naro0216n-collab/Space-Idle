@@ -113,8 +113,6 @@ def test_prepare_bundle_recreates_exact_target_and_record_advances_baseline(tmp_
             str(manifest),
             "--receipt",
             str(receipt_path),
-            "--local-ref",
-            local_target,
         )
     )
     assert recorded["verified"] is True
@@ -126,6 +124,33 @@ def test_prepare_bundle_recreates_exact_target_and_record_advances_baseline(tmp_
     next_manifest = tmp_path / "next.json"
     run_request(repo, "prepare", "--output", str(next_manifest))
     assert prepared(next_manifest)["base_sha"] == publish_commit
+
+
+def test_record_uses_manifest_target_when_local_head_has_advanced(tmp_path: Path) -> None:
+    repo, _, _ = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("checkpoint\n", encoding="utf-8")
+    commit_all(repo, "checkpoint")
+    checkpoint = git(repo, "rev-parse", "HEAD")
+    checkpoint_tree = git(repo, "rev-parse", "HEAD^{tree}")
+    manifest = tmp_path / "request.json"
+    run_request(repo, "prepare", "--output", str(manifest))
+    request = prepared(manifest)
+
+    (repo / "later.txt").write_text("next work\n", encoding="utf-8")
+    commit_all(repo, "next local work")
+    assert git(repo, "rev-parse", "HEAD") != checkpoint
+
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(make_receipt(repo, manifest)), encoding="utf-8")
+    recorded = json.loads(
+        run_request(repo, "record", "--manifest", str(manifest), "--receipt", str(receipt_path))
+    )
+    assert recorded["verified"] is True
+    assert recorded["local_head"] == checkpoint
+    assert recorded["remote_tree"] == checkpoint_tree
+    state = json.loads((repo / ".git" / "space-idle-publish-state.json").read_text(encoding="utf-8"))
+    assert state["local_head"] == checkpoint
+    assert git(repo, "rev-parse", "HEAD") != checkpoint
 
 
 def test_bundle_payload_is_deterministic_for_same_base_tree_and_message(tmp_path: Path) -> None:
@@ -365,6 +390,7 @@ def test_standard_cli_has_no_patch_or_manual_connector_fallbacks() -> None:
     ).stdout
     assert "--remote-commit" not in record_help
     assert "--remote-tree" not in record_help
+    assert "--local-ref" not in record_help
 
 
 def test_prepare_defaults_to_develop_and_temp_is_explicit_only(tmp_path: Path) -> None:

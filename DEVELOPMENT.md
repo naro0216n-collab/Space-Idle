@@ -84,7 +84,7 @@ git diff --check
 4. Connector経路では `connector-plan` が実際のaction引数をcompact JSONへシリアライズしたbytesでcall容量を判定する。request全体が標準96 KiB予算内なら、`.publish/requests/<request-id>.json` を `GitHub.create_file` で1回作成する。unique pathなのでpublish branch HEAD/treeの事前取得は不要で、Contents APIがtransport commit作成とpublish ref更新を一度に行う。
 5. requestが1 callに収まらない場合だけ、bundle Base64をcall予算から逆算した最少数のpartへ自動分割する。各partは独立した `GitHub.create_blob` として並列送信し、localで事前計算したGit blob OIDを最終requestから参照する。upload返却SHAは後続入力にせず、全part送信後に `GitHub.create_file` でrequestを1回作成する。
 6. Publish Gatewayはrequest作成commitを契機に自動実行する。inline payloadまたはGit blob payloadを取得し、blob OID、payload長、payload SHA-256、Git bundle、publish commit、parent/base、target treeを検証する。すべて一致し、対象branch HEADがbaseのままである場合だけexact publish commitを対象branchへnon-force pushし、直後にremote commit/treeを再検証する。SHA不整合時は対象branchを更新しない。
-7. Gatewayは成功receiptを `.publish/receipts/<request-id>.json` へ自動記録し、Fast CIをdispatchする。ローカルではreceiptを取得して `publish_request.py record` に渡し、request、receipt、local target tree、published commit objectの関係を機械検証した場合だけ次回publish stateを更新する。
+7. Gatewayは成功receiptを `.publish/receipts/<request-id>.json` へ自動記録し、Fast CIをdispatchする。ローカルではreceiptを取得して `publish_request.py record` に渡す。`record` はmanifest内の `local_target_commit` を自動的に使用し、現在のlocal HEADが次作業へ進んでいても、request、receipt、当該local target tree、published commit objectの関係を機械検証した場合だけ次回publish stateを更新する。local target SHAを手動で引き渡さない。
 
 通常サイズのConnector経路でChatGPT側が必要とするGitHub callは、Gateway実行前では対象branch HEAD取得1回とrequest作成1回の計2回である。Gateway内部のbase再確認、target push、remote tree確認、receipt作成、CI dispatchはworkflowが自動実行する。正常系でpublish branch HEAD/tree、chunk/tree SHA、transport commit SHA、ref SHAをチャット側が中継・目視比較しない。
 
@@ -126,7 +126,7 @@ python scripts/publish_request.py connector-plan \
 # upload返却SHAは後続stepへ渡さない。
 ```
 
-Gateway成功後はrequest IDに対応するreceiptを取得し、次回基点を更新する。
+Gateway成功後はrequest IDに対応するreceiptを取得し、次回基点を更新する。対象local commitはmanifestから自動解決されるため、receipt待ちの間に次のlocal作業へ進んでも `--local-ref` 等のSHA指定は不要である。
 
 ```bash
 python scripts/publish_request.py record \

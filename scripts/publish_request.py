@@ -978,8 +978,9 @@ def cmd_record(args: argparse.Namespace) -> int:
     verified = _verify_prepared_request(repo, manifest)
     request = _read_prepared_request(manifest)
     receipt = _read_publish_receipt(Path(args.receipt).resolve())
-    local_head = _git("rev-parse", f"{args.local_ref}^{{commit}}", cwd=repo)
-    local_tree = _git("rev-parse", f"{args.local_ref}^{{tree}}", cwd=repo)
+    local_head = str(request["local_target_commit"])
+    _require_commit_object(repo, local_head)
+    local_tree = _git("rev-parse", f"{local_head}^{{tree}}", cwd=repo)
     receipt_object_checks = _import_receipt_commit_object(repo, receipt)
     remote_commit = str(receipt["published_commit"])
     remote_tree = str(receipt["published_tree"])
@@ -1082,7 +1083,6 @@ def build_parser() -> argparse.ArgumentParser:
     record = sub.add_parser("record", help="verify a Gateway receipt and advance recorded remote state")
     record.add_argument("--manifest", required=True)
     record.add_argument("--receipt", required=True)
-    record.add_argument("--local-ref", default="HEAD")
     record.set_defaults(func=cmd_record)
     return parser
 

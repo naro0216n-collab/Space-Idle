@@ -179,7 +179,7 @@ GitHubへのtransport方式はゲーム実装の構造やcommit境界を決め�
 
 native Git transportが利用できない環境では、記録済みremote commitを親、local target treeをtreeに持つ決定論的commitをGit bundleへ格納し、Publish Gatewayへ渡す。publish直前のChatGPT側確認は対象branch HEADの一度だけとし、それ以外のSHA整合性確認はhelperとGatewayへ移す。Connector actionへ渡す実引数bytesを基準に、bundleを含む一意requestファイルが1 callに収まる場合はContents APIのfile creation一回でtransport commit作成と`publish` ref更新を完了させる。収まらない場合だけpayloadを最少数の独立Git blobへ自動分割して並列送信し、最終requestはlocal算出済みblob OIDを参照する。upload返却SHAを後続stepへ手渡ししない。
 
-Gatewayはrequestを受けたら、Git blob OID、payload SHA-256、bundle、publish commit、parent/base、target tree、直前remote HEADを機械検証する。すべて一致した場合だけ対象branchへexact commitをnon-force publishし、remote ref/treeを再確認してreceiptを記録し、Fast CIを起動する。不一致時は対象branchを更新しない。正常系に個別blob再取得、SHA目視比較、段階的tree assembly、手動commit/ref更新を置かない。
+Gatewayはrequestを受けたら、Git blob OID、payload SHA-256、bundle、publish commit、parent/base、target tree、直前remote HEADを機械検証する。すべて一致した場合だけ対象branchへexact commitをnon-force publishし、remote ref/treeを再確認してreceiptを記録し、Fast CIを起動する。不一致時は対象branchを更新しない。正常系に個別blob再取得、SHA目視比較、段階的tree assembly、手動commit/ref更新を置かない。 ローカルのpublish state更新もreceiptとmanifestを照合して行い、manifestが保持するlocal target commitを正本とする。receipt待ちの間にlocal HEADが進んでも、過去checkpointのSHAを人手で引き渡さない。
 
 `temp` は標準publishの中継やpromotion元にはしない。ユーザー指定時、またはGateway / workflow経路そのものを隔離検証する場合だけ使用する。その検証成果物を通常の `develop` publish入力として再利用しない。
 

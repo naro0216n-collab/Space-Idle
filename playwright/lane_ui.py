@@ -134,8 +134,11 @@ def run() -> None:
             page.locator("#lanePriority").fill("70")
             page.get_by_role("button", name="Lane作成").click()
             page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
-            page.locator("#laneTable tbody tr[data-lane-row]").first.wait_for(timeout=10000)
-            row = page.locator("#laneTable tbody tr[data-lane-row]").first
+            lane_rows = page.locator("#laneTable tbody tr").filter(
+                has=page.locator("button[data-lane-edit]")
+            )
+            lane_rows.first.wait_for(timeout=10000)
+            row = lane_rows.first
             assert "2 t/日" in row.inner_text()
             assert "70" in row.inner_text()
 
@@ -149,29 +152,29 @@ def run() -> None:
             page.get_by_role("button", name="設定を更新").click()
             page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
             page.wait_for_function(
-                "() => document.querySelector('#laneTable tbody tr[data-lane-row]')?.innerText.includes('3 t/日')",
+                "() => document.querySelector('#laneTable tbody button[data-lane-edit]')?.closest('tr')?.innerText.includes('3 t/日')",
                 timeout=10000,
             )
-            row = page.locator("#laneTable tbody tr[data-lane-row]").first
+            row = lane_rows.first
             text = row.inner_text()
             assert "3 t/日" in text
             assert "85" in text
 
             row.get_by_role("button", name="停止").click()
             page.wait_for_function(
-                "() => document.querySelector('#laneTable tbody tr[data-lane-row]')?.innerText.includes('停止')",
+                "() => document.querySelector('#laneTable tbody button[data-lane-edit]')?.closest('tr')?.innerText.includes('停止')",
                 timeout=10000,
             )
-            row = page.locator("#laneTable tbody tr[data-lane-row]").first
+            row = lane_rows.first
             row.get_by_role("button", name="再開").click()
             page.wait_for_function(
-                "() => document.querySelector('#laneTable tbody tr[data-lane-row] .badge')?.textContent === '稼働'",
+                "() => document.querySelector('#laneTable tbody button[data-lane-edit]')?.closest('tr')?.querySelector('.badge')?.textContent === '稼働'",
                 timeout=10000,
             )
 
-            page.locator("#laneTable tbody tr[data-lane-row]").first.get_by_role("button", name="削除").click()
+            lane_rows.first.get_by_role("button", name="削除").click()
             page.wait_for_function(
-                "() => document.querySelectorAll('#laneTable tbody tr[data-lane-row]').length === 0",
+                "() => document.querySelectorAll('#laneTable tbody button[data-lane-edit]').length === 0",
                 timeout=10000,
             )
             browser.close()
