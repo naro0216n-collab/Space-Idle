@@ -106,10 +106,17 @@ class LogisticsStateProjectorMixin:
 
     def _transport_allocation_rows(self) -> tuple[TransportAllocationRow, ...]:
         sim = self._simulation
+        decision = sim.tick_decision_projection()
         rows: list[TransportAllocationRow] = []
         for allocation in sorted(sim.logistics.transport_allocations.values(), key=lambda row: str(row.id)):
             plan = sim.logistics.derive_transport_service_plan(allocation.id, sim.day)
-            snapshot = sim.logistics.current_transport_capacity_snapshot(allocation.id, day=sim.day)
+            snapshot = sim.logistics.current_transport_capacity_snapshot(
+                allocation.id,
+                day=sim.day,
+                logistics_plan=decision.allocations.logistics,
+                resource_allocations=decision.allocations.resources,
+                service_allocations=decision.allocations.services,
+            )
             rows.append(
                 TransportAllocationRow(
                     id=str(allocation.id),

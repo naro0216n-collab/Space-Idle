@@ -234,7 +234,6 @@ class Simulation:
         requests: list[ServiceCapacityRequest] = list(
             self.logistics.vehicle_production_service_requests(self.day)
         )
-        requests.extend(self.logistics.transport_service_capacity_requests(self.day))
         requests.extend(self.projects.construction_service_requests(self.day))
         if self.founding is not None:
             requests.extend(self.founding.service_requests(self.day))
@@ -486,7 +485,16 @@ class Simulation:
             )
             for location_id in snapshot.ordered_locations
         }
-        services = self._allocate_tick_services(power_by_location, intents.service_requests)
+        transport_requests = self.logistics.transport_service_capacity_requests(
+            self.day, authorized_logistics.planned_usage
+        )
+        service_requests = intents.service_requests + transport_requests
+        seen: set[object] = set()
+        for request in service_requests:
+            if request.id in seen:
+                raise RuntimeError(f"duplicate service capacity request id: {request.id}")
+            seen.add(request.id)
+        services = self._allocate_tick_services(power_by_location, service_requests)
         return TickAllocations(
             funds, authorized_logistics, resources, power_by_location, services
         )
@@ -564,6 +572,7 @@ class Simulation:
             allocations.logistics,
             allocations.resources,
             allocations.funds,
+            allocations.services,
         )
 
     def _settle_tick_state_transitions(self, allocations: TickAllocations) -> None:

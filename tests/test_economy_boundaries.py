@@ -19,6 +19,16 @@ from space_idle.shared import EntityId
 
 
 
+
+def _transport_service_allocations(sim, day, plan):
+    requests = sim.logistics.transport_service_capacity_requests(day, plan.planned_usage)
+    locations = sim._active_locations() | set(sim.graph.operational_node_ids())
+    powers = {
+        location_id: sim.power.snapshot(location_id, sim.facilities, day)
+        for location_id in locations
+    }
+    return sim._allocate_tick_services(powers, requests)
+
 def test_time_progression_has_no_automatic_income_and_world_exposes_no_passive_rate():
     app = build_game_application()
     before = app.query(GetWorld())
@@ -50,7 +60,10 @@ def test_owned_transport_is_physical_while_external_transport_requires_policy_an
         funds = sim.external_economy.allocate(raw.spending_requests, sim.day)
         plan = sim.logistics.authorize_capacity_logistics(raw, funds, sim.day)
         resources = allocate_resource_claims(plan.claims, sim.inventory)
-        sim.logistics.advance_capacity_logistics(sim.day, plan, resources, funds)
+        sim.logistics.advance_capacity_logistics(
+            sim.day, plan, resources, funds,
+            _transport_service_allocations(sim, sim.day, plan),
+        )
 
     owned = build_game_application()
     owned_sim = owned._simulation

@@ -52,9 +52,22 @@ def _advance_logistics(sim, day, demands):
     funds = sim.external_economy.allocate(plan.spending_requests, day)
     authorized = sim.logistics.authorize_capacity_logistics(plan, funds, day)
     allocations = allocate_resource_claims(authorized.claims, sim.inventory)
-    sim.logistics.advance_capacity_logistics(day, authorized, allocations, funds)
+    sim.logistics.advance_capacity_logistics(
+        day, authorized, allocations, funds,
+        _transport_service_allocations(sim, day, authorized),
+    )
     return authorized, allocations
 
+
+
+def _transport_service_allocations(sim, day, plan):
+    requests = sim.logistics.transport_service_capacity_requests(day, plan.planned_usage)
+    locations = sim._active_locations() | set(sim.graph.operational_node_ids())
+    powers = {
+        location_id: sim.power.snapshot(location_id, sim.facilities, day)
+        for location_id in locations
+    }
+    return sim._allocate_tick_services(powers, requests)
 
 def test_lane_is_resource_agnostic_and_requested_capacity_limits_daily_cargo_flow():
     sim = build_game_application()._simulation
@@ -264,19 +277,38 @@ def test_selected_research_prototype_site_declares_material_demand_until_stock_a
     assert not hasattr(sim.research, "fund_prototype")
 
 
-def test_available_capacity_tracks_tick_start_propellant_without_changing_required_units():
+def test_available_capacity_uses_shared_propellant_allocation_without_changing_required_units():
     sim = build_game_application()._simulation
     allocation_id = _owned_earth_leo_capacity(sim)
     unconstrained = sim.logistics.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert unconstrained.available.forward_t_per_day > 0
     required = unconstrained.required_units
+    sim.logistics.create_lane(EARTH, LEO, 1.0, 50)
+    sim.inventory.add(EARTH, MACHINERY, 1.0)
 
     available_propellant = sim.inventory.available(EARTH, PROPELLANT)
     sim.inventory.consume_allocated(EARTH, PROPELLANT, available_propellant)
-    constrained = sim.logistics.transport_capacity_snapshot(allocation_id, day=sim.day)
+    raw = sim.logistics.plan_capacity_logistics(
+        sim.day, (_demand(1.0, demand_id="demand.resource-limited-capacity"),)
+    )
+    funds = sim.external_economy.allocate(raw.spending_requests, sim.day)
+    plan = sim.logistics.authorize_capacity_logistics(raw, funds, sim.day)
+    resources = allocate_resource_claims(plan.claims, sim.inventory)
+    services = _transport_service_allocations(sim, sim.day, plan)
+    constrained = sim.logistics.current_transport_capacity_snapshot(
+        allocation_id,
+        day=sim.day,
+        logistics_plan=plan,
+        resource_allocations=resources,
+        service_allocations=services,
+    )
+
     assert constrained.available.forward_t_per_day == 0
     assert constrained.required_units == required
-    assert any(value.startswith("resource:") for value in constrained.limiting_factors)
+    assert any(
+        value.startswith("resource_allocation:")
+        for value in constrained.limiting_factors
+    )
 
 
 def test_multistage_lane_requires_capacity_on_every_handoff_leg():
@@ -460,7 +492,10 @@ def test_dispatch_source_claim_competes_with_higher_priority_local_use():
     funds = sim.external_economy.allocate(plan.spending_requests, sim.day)
     plan = sim.logistics.authorize_capacity_logistics(plan, funds, sim.day)
     allocations = allocate_resource_claims(plan.claims + (local_claim,), sim.inventory)
-    sim.logistics.advance_capacity_logistics(sim.day, plan, allocations, funds)
+    sim.logistics.advance_capacity_logistics(
+        sim.day, plan, allocations, funds,
+        _transport_service_allocations(sim, sim.day, plan),
+    )
 
     assert allocations.allocated(local_claim.id) == pytest.approx(1.0)
     assert allocations.allocated(cargo_claim.id) == pytest.approx(0.0)

@@ -5,11 +5,7 @@ import math
 
 from ..resource_claim import ResourceAllocationPlan, ResourceClaim
 from ..resource_demand import ResourceDemand
-from ..service_capacity import (
-    ServiceCapacityAllocationPlan,
-    ServiceCapacityRequest,
-    allocate_service_capacity,
-)
+from ..service_capacity import ServiceCapacityRequest
 from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .models import (
     DirectionalCapacity,
@@ -1249,8 +1245,11 @@ class FleetAllocationMixin:
         return EntityId(f"service.transport_turnaround:{allocation_id}")
 
     def transport_service_capacity_requests(
-        self, day: int = 0
+        self,
+        day: int,
+        planned_usage: tuple[tuple[EntityId, DirectionalCapacity], ...],
     ) -> tuple[ServiceCapacityRequest, ...]:
+        usage_by_allocation = dict(planned_usage)
         requests: list[ServiceCapacityRequest] = []
         for allocation in sorted(
             self.transport_allocations.values(), key=lambda row: str(row.id)
@@ -1262,8 +1261,28 @@ class FleetAllocationMixin:
             if service_type is None:
                 continue
             plan = self.derive_transport_service_plan(allocation.id, day)
+            usage = usage_by_allocation.get(allocation.id, DirectionalCapacity())
+            nominal_forward = (
+                plan.nominal_per_unit.forward_t_per_day * allocation.active_units
+            )
+            nominal_reverse = (
+                plan.nominal_per_unit.reverse_t_per_day * allocation.active_units
+            )
+            forward_util = (
+                0.0
+                if nominal_forward <= 1e-12
+                else min(1.0, max(0.0, usage.forward_t_per_day / nominal_forward))
+            )
+            reverse_util = (
+                0.0
+                if nominal_reverse <= 1e-12
+                else min(1.0, max(0.0, usage.reverse_t_per_day / nominal_reverse))
+            )
+            utilization = max(forward_util, reverse_util)
             requested = (
-                plan.servicing_units_per_full_utilization_day * allocation.active_units
+                plan.servicing_units_per_full_utilization_day
+                * allocation.active_units
+                * utilization
             )
             if requested <= 1e-12:
                 continue
@@ -1281,49 +1300,12 @@ class FleetAllocationMixin:
             )
         return tuple(requests)
 
-    def transport_service_capacity_plan(
-        self, day: int = 0
-    ) -> ServiceCapacityAllocationPlan:
-        requests = self.transport_service_capacity_requests(day)
-        keys = {
-            (request.operational_node_id, request.service_type)
-            for request in requests
-        }
-        nominal = {}
-        enabled = {}
-        limiting = {}
-        for location_id, service_type in sorted(
-            keys, key=lambda row: (str(row[0]), row[1])
-        ):
-            power = self.power.snapshot(location_id, self.facilities, day)
-            nominal_rate = self.facilities.nominal_service_capacity_at(
-                location_id, service_type, day
-            )
-            enabled_rate = self.facilities.enabled_service_capacity_at(
-                location_id, service_type, power, day
-            )
-            key = (location_id, service_type)
-            nominal[key] = nominal_rate
-            enabled[key] = enabled_rate
-            limiting[key] = (
-                ()
-                if enabled_rate + 1e-9 >= nominal_rate
-                else ("provider_dependency",)
-            )
-        return allocate_service_capacity(
-            requests,
-            nominal_supply=nominal,
-            enabled_supply=enabled,
-            limiting_factors=limiting,
-        )
-
     def transport_capacity_snapshot(
         self,
         allocation_id: EntityId,
         *,
         day: int = 0,
         used: DirectionalCapacity = DirectionalCapacity(),
-        service_allocations: ServiceCapacityAllocationPlan | None = None,
     ) -> TransportCapacitySnapshot:
         allocation = self.transport_allocations[allocation_id]
         plan = self.derive_transport_service_plan(allocation_id, day)
@@ -1381,30 +1363,6 @@ class FleetAllocationMixin:
                     reverse_ratio = 0.0
                     limiting.append(f"infrastructure:{location_id}:{support.capability_id}")
 
-        # Turnaround servicing is a cycle-rate capacity, not merely a boolean
-        # facility prerequisite. A partially provisioned service therefore
-        # lowers Available Capacity without changing the Fleet target.
-        if definition.turnaround_service_type is not None:
-            required_service = plan.servicing_units_per_full_utilization_day * active
-            if required_service > 1e-12:
-                if service_allocations is None:
-                    service_allocations = self.transport_service_capacity_plan(day)
-                try:
-                    allocated_service = service_allocations.allocated(
-                        self.transport_service_request_id(allocation.id)
-                    )
-                except KeyError:
-                    allocated_service = 0.0
-                service_ratio = min(
-                    1.0, max(0.0, allocated_service / required_service)
-                )
-                forward_ratio = min(forward_ratio, service_ratio)
-                reverse_ratio = min(reverse_ratio, service_ratio)
-                if service_ratio < 1.0 - 1e-12:
-                    limiting.append(
-                        f"servicing:{allocation.anchor_node_id}:{definition.turnaround_service_type}"
-                    )
-
         def _resource_map(rows):
             return {(location_id, resource_id): amount for location_id, resource_id, amount in rows}
 
@@ -1412,32 +1370,21 @@ class FleetAllocationMixin:
         forward_increments = _resource_map(plan.resource_t_per_forward_payload_increment_day)
         reverse_increments = _resource_map(plan.resource_t_per_reverse_payload_increment_day)
 
-        def _resource_ratio(increments, direction: str) -> float:
-            ratio = 1.0
-            keys = set(empty_resources) | set(increments)
-            for location_id, resource_id in sorted(keys, key=lambda row: (str(row[0]), str(row[1]))):
-                demand_per_day = empty_resources.get((location_id, resource_id), 0.0) + increments.get(
-                    (location_id, resource_id), 0.0
-                )
-                full_demand = demand_per_day * active
-                if full_demand <= 1e-12:
-                    continue
-                support_failures = self.resource_support_failures(
-                    definition.performance, location_id, resource_id, day
-                )
-                if support_failures:
-                    ratio = 0.0
-                    limiting.extend(support_failures)
-                    continue
-                stock = self.inventory.available(location_id, resource_id)
-                resource_ratio = min(1.0, max(0.0, stock / full_demand))
-                ratio = min(ratio, resource_ratio)
-                if resource_ratio < 1.0 - 1e-12:
-                    limiting.append(f"resource:{direction}:{location_id}:{resource_id}")
-            return ratio
-
-        forward_ratio = min(forward_ratio, _resource_ratio(forward_increments, "forward"))
-        reverse_ratio = min(reverse_ratio, _resource_ratio(reverse_increments, "reverse"))
+        # Resource stock is allocated later through shared Resource Claims.
+        # Only non-scarcity support prerequisites belong in this physical snapshot.
+        required_resource_keys = (
+            set(empty_resources) | set(forward_increments) | set(reverse_increments)
+        )
+        for location_id, resource_id in sorted(
+            required_resource_keys, key=lambda row: (str(row[0]), str(row[1]))
+        ):
+            support_failures = self.resource_support_failures(
+                definition.performance, location_id, resource_id, day
+            )
+            if support_failures:
+                forward_ratio = 0.0
+                reverse_ratio = 0.0
+                limiting.extend(support_failures)
 
         available = DirectionalCapacity(
             nominal.forward_t_per_day * forward_ratio,
@@ -1451,9 +1398,8 @@ class FleetAllocationMixin:
             max(0.0, available.reverse_t_per_day - used_reverse),
         )
 
-        # Utilization is relative to Nominal Capacity. If current resources cap
-        # Available at 50%, fully using that available half means a 50% cycle
-        # rate, not 100% of the design cycle rate.
+        # Operational demand is derived from actual/planned service utilization
+        # against Nominal Capacity. Scarce stock is not interpreted here.
         forward_util = 0.0 if nominal.forward_t_per_day <= 1e-12 else used_forward / nominal.forward_t_per_day
         reverse_util = 0.0 if nominal.reverse_t_per_day <= 1e-12 else used_reverse / nominal.reverse_t_per_day
         utilization = max(forward_util, reverse_util)

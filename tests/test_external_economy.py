@@ -47,6 +47,16 @@ def _request(
     )
 
 
+
+def _transport_service_allocations(sim, day, plan):
+    requests = sim.logistics.transport_service_capacity_requests(day, plan.planned_usage)
+    locations = sim._active_locations() | set(sim.graph.operational_node_ids())
+    powers = {
+        location_id: sim.power.snapshot(location_id, sim.facilities, day)
+        for location_id in locations
+    }
+    return sim._allocate_tick_services(powers, requests)
+
 def test_funds_allocation_is_same_priority_registration_order_independent():
     def run(order: tuple[str, ...]):
         state, service, policy = _economy(10.0)
@@ -213,5 +223,8 @@ def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
     assert row.amount_t == pytest.approx(0.1)
     resources = allocate_resource_claims(plan.claims, sim.inventory)
     before = sim.external_economy.account.funds_musd
-    sim.logistics.advance_capacity_logistics(sim.day, plan, resources, funds)
+    sim.logistics.advance_capacity_logistics(
+            sim.day, plan, resources, funds,
+            _transport_service_allocations(sim, sim.day, plan),
+        )
     assert before - sim.external_economy.account.funds_musd == pytest.approx(0.9)

@@ -23,6 +23,16 @@ def _fleet_sim(count: int = 5):
     return sim
 
 
+
+def _transport_service_allocations(sim, day, plan):
+    requests = sim.logistics.transport_service_capacity_requests(day, plan.planned_usage)
+    locations = sim._active_locations() | set(sim.graph.operational_node_ids())
+    powers = {
+        location_id: sim.power.snapshot(location_id, sim.facilities, day)
+        for location_id in locations
+    }
+    return sim._allocate_tick_services(powers, requests)
+
 def test_fleet_free_is_derived_from_exclusive_commitments():
     sim = _fleet_sim(5)
     lg = sim.logistics
@@ -475,7 +485,9 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     funds = sim.external_economy.allocate(plan.spending_requests, 0)
     plan = lg.authorize_capacity_logistics(plan, funds, 0)
     allocations = allocate_resource_claims(plan.claims, sim.inventory)
-    lg.advance_capacity_logistics(0, plan, allocations, funds)
+    lg.advance_capacity_logistics(
+        0, plan, allocations, funds, _transport_service_allocations(sim, 0, plan)
+    )
     flow = next(
         row for row in lg.cargo_flows.values()
         if row.lane_id == lane_id and row.demand_id == demand.id
@@ -802,7 +814,10 @@ def test_bidirectional_service_resource_use_counts_empty_return_not_loaded_retur
     assert snapshot.utilization == pytest.approx(1.0)
 
 
-def test_resource_limited_available_capacity_uses_nominal_cycle_utilization():
+def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_utilization():
+    from space_idle.resource_claim import allocate_resource_claims
+    from space_idle.resource_demand import ResourceDemand
+
     sim = _fleet_sim(1)
     lg = sim.logistics
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
@@ -811,28 +826,72 @@ def test_resource_limited_available_capacity_uses_nominal_cycle_utilization():
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT,
         target_units=1, day=0,
     )
-    plan = lg.derive_transport_service_plan(allocation_id, 0)
-    empty = {(loc, rid): amount for loc, rid, amount in plan.resource_t_per_empty_cycle_day}
+    service_plan = lg.derive_transport_service_plan(allocation_id, 0)
+    physical = lg.transport_capacity_snapshot(allocation_id, day=0)
+    empty = {
+        (loc, rid): amount
+        for loc, rid, amount in service_plan.resource_t_per_empty_cycle_day
+    }
     forward_increment = {
         (loc, rid): amount
-        for loc, rid, amount in plan.resource_t_per_forward_payload_increment_day
+        for loc, rid, amount in service_plan.resource_t_per_forward_payload_increment_day
     }
     forward_full = {
         key: empty.get(key, 0.0) + forward_increment.get(key, 0.0)
         for key in set(empty) | set(forward_increment)
     }
     for (location_id, resource_id), amount in forward_full.items():
+        stocked = sim.inventory.available(location_id, resource_id)
+        if stocked > 0:
+            sim.inventory.consume_allocated(location_id, resource_id, stocked)
         sim.inventory.add(location_id, resource_id, amount / 2.0)
 
-    available = lg.transport_capacity_snapshot(allocation_id, day=0)
+    lane_id = lg.create_lane(
+        ids.LEO, ids.LUNAR_ORBIT, physical.nominal.forward_t_per_day, 100
+    )
+    cargo_amount = physical.nominal.forward_t_per_day
+    sim.inventory.add(ids.LEO, ids.MACHINERY, cargo_amount)
+    demand = ResourceDemand(
+        EntityId("demand.shared-transport-resource"),
+        "test",
+        EntityId("owner.shared-transport-resource"),
+        ids.LUNAR_ORBIT,
+        ids.MACHINERY,
+        cargo_amount,
+        100,
+        ids.LEO,
+    )
+    raw = lg.plan_capacity_logistics(0, (demand,))
+    funds = sim.external_economy.allocate(raw.spending_requests, 0)
+    logistics_plan = lg.authorize_capacity_logistics(raw, funds, 0)
+    resources = allocate_resource_claims(logistics_plan.claims, sim.inventory)
+    services = _transport_service_allocations(sim, 0, logistics_plan)
+    available = lg.current_transport_capacity_snapshot(
+        allocation_id,
+        day=0,
+        logistics_plan=logistics_plan,
+        resource_allocations=resources,
+        service_allocations=services,
+    )
     assert available.available.forward_t_per_day == pytest.approx(
         available.nominal.forward_t_per_day / 2.0
     )
+    assert any(
+        value.startswith("resource_allocation:")
+        for value in available.limiting_factors
+    )
+
     used = DirectionalCapacity(available.available.forward_t_per_day, 0.0)
     snapshot = lg.transport_capacity_snapshot(allocation_id, day=0, used=used)
     assert snapshot.utilization == pytest.approx(0.5)
-    actual = {(loc, rid): amount for loc, rid, amount in snapshot.operational_resource_demand}
-    assert actual == pytest.approx({key: amount / 2.0 for key, amount in forward_full.items()})
+    actual = {
+        (loc, rid): amount
+        for loc, rid, amount in snapshot.operational_resource_demand
+    }
+    assert actual == pytest.approx(
+        {key: amount / 2.0 for key, amount in forward_full.items()}
+    )
+    assert lane_id in lg.lanes
 
 
 def test_relocation_waits_for_shared_resource_claim_allocation_before_departure():

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import heapq
 
 from ..external_economy import FundsAllocationPlan, FundsRequest
 from ..knowledge import DomainActivity
 from ..resource_claim import ResourceAllocationPlan, ResourceClaim
 from ..resource_demand import ResourceDemand
+from ..service_capacity import ServiceCapacityAllocationPlan
 from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .lanes import DemandSupplyOptions, LaneRuntimeMetrics, LogisticsLaneSnapshot
 from .models import (
@@ -682,13 +683,57 @@ class SteadyLogisticsMixin:
         return DirectionalCapacity(forward, reverse)
 
     def current_transport_capacity_snapshot(
-        self, allocation_id: EntityId, *, day: int = 0
+        self,
+        allocation_id: EntityId,
+        *,
+        day: int = 0,
+        logistics_plan: LogisticsResourcePlan | None = None,
+        resource_allocations: ResourceAllocationPlan | None = None,
+        service_allocations: ServiceCapacityAllocationPlan | None = None,
     ) -> TransportCapacitySnapshot:
-        """Project current capacity with Used re-derived from Cargo Flows."""
-        return self.transport_capacity_snapshot(
+        """Project current capacity from physical state and shared allocations."""
+        snapshot = self.transport_capacity_snapshot(
             allocation_id,
             day=day,
             used=self._derived_allocation_usage(allocation_id, day),
+        )
+        provided = (
+            logistics_plan is not None,
+            resource_allocations is not None,
+            service_allocations is not None,
+        )
+        if not any(provided):
+            return snapshot
+        if not all(provided):
+            raise ValueError(
+                "transport allocation projection requires logistics, resource, and service allocations"
+            )
+        assert logistics_plan is not None
+        assert resource_allocations is not None
+        assert service_allocations is not None
+        factor, allocation_limits = self._transport_operation_allocation_factor(
+            allocation_id, logistics_plan, resource_allocations, service_allocations
+        )
+        available = DirectionalCapacity(
+            snapshot.available.forward_t_per_day * factor,
+            snapshot.available.reverse_t_per_day * factor,
+        )
+        used = DirectionalCapacity(
+            min(snapshot.used.forward_t_per_day, available.forward_t_per_day),
+            min(snapshot.used.reverse_t_per_day, available.reverse_t_per_day),
+        )
+        spare = DirectionalCapacity(
+            max(0.0, available.forward_t_per_day - used.forward_t_per_day),
+            max(0.0, available.reverse_t_per_day - used.reverse_t_per_day),
+        )
+        return replace(
+            snapshot,
+            available=available,
+            used=used,
+            spare=spare,
+            limiting_factors=tuple(
+                dict.fromkeys(snapshot.limiting_factors + allocation_limits)
+            ),
         )
 
     def _derived_lane_usage(self, lane_id: EntityId, day: int) -> float:
@@ -719,11 +764,74 @@ class SteadyLogisticsMixin:
             if flow.amount_t <= 1e-9:
                 del self.cargo_flows[flow_id]
 
+    def _transport_operation_allocation_factor(
+        self,
+        allocation_id: EntityId,
+        plan: LogisticsResourcePlan,
+        resource_allocations: ResourceAllocationPlan,
+        service_allocations: ServiceCapacityAllocationPlan,
+    ) -> tuple[float, tuple[str, ...]]:
+        """Resolve one Transport Allocation's shared dependency fulfillment.
+
+        Planning exposes operation Resource Claims and turnaround Service requests.
+        This method only interprets the shared allocation results; it never reads
+        Inventory or runs a Transport-local allocator.
+        """
+        ratios: list[float] = []
+        limiting: list[str] = []
+        for claim in plan.claims:
+            if claim.owner_kind != "transport_operation" or claim.owner_id != allocation_id:
+                continue
+            if claim.requested_amount <= 1e-12:
+                continue
+            try:
+                allocated = resource_allocations.allocated(claim.id)
+            except KeyError:
+                allocated = 0.0
+            ratio = max(0.0, min(1.0, allocated / claim.requested_amount))
+            ratios.append(ratio)
+            if ratio < 1.0 - 1e-12:
+                limiting.append(
+                    f"resource_allocation:{claim.operational_node_id}:{claim.resource_id}"
+                )
+
+        directional = dict(plan.planned_usage).get(allocation_id, DirectionalCapacity())
+        has_planned_usage = (
+            directional.forward_t_per_day > 1e-12
+            or directional.reverse_t_per_day > 1e-12
+        )
+        allocation = self.transport_allocations[allocation_id]
+        definition = self.vehicle_defs[allocation.vehicle_definition_id]
+        if has_planned_usage and definition.turnaround_service_type is not None:
+            request_id = self.transport_service_request_id(allocation_id)
+            try:
+                request = service_allocations.request(request_id)
+                allocated = service_allocations.allocated(request_id)
+            except KeyError:
+                request = None
+                allocated = 0.0
+            if request is None or request.requested_rate <= 1e-12:
+                ratio = 0.0
+            else:
+                ratio = max(
+                    0.0, min(1.0, allocated / request.requested_rate)
+                )
+            ratios.append(ratio)
+            if ratio < 1.0 - 1e-12:
+                limiting.append(
+                    f"servicing_allocation:{allocation.anchor_node_id}:"
+                    f"{definition.turnaround_service_type}"
+                )
+
+        factor = min(ratios) if ratios else 1.0
+        return max(0.0, min(1.0, factor)), tuple(dict.fromkeys(limiting))
+
     def _project_capacity_logistics_execution(
         self,
         day: int,
         plan: LogisticsResourcePlan,
         allocations: ResourceAllocationPlan,
+        service_allocations: ServiceCapacityAllocationPlan,
     ) -> tuple[
         tuple[tuple[_PlannedDispatch, float], ...],
         dict[EntityId, DirectionalCapacity],
@@ -737,17 +845,11 @@ class SteadyLogisticsMixin:
         """
         operation_factor: dict[EntityId, float] = {}
         for allocation_id, _directional in plan.planned_usage:
-            ratios: list[float] = []
-            for claim in plan.claims:
-                if claim.owner_kind != "transport_operation" or claim.owner_id != allocation_id:
-                    continue
-                try:
-                    allocated = allocations.allocated(claim.id)
-                except KeyError:
-                    allocated = 0.0
-                if claim.requested_amount > 1e-12:
-                    ratios.append(max(0.0, allocated) / claim.requested_amount)
-            operation_factor[allocation_id] = min(1.0, min(ratios)) if ratios else 1.0
+            operation_factor[allocation_id], _limiting = (
+                self._transport_operation_allocation_factor(
+                    allocation_id, plan, allocations, service_allocations
+                )
+            )
 
         cargo_budget: dict[EntityId, float] = {}
         for claim in plan.claims:
@@ -786,9 +888,10 @@ class SteadyLogisticsMixin:
         day: int,
         plan: LogisticsResourcePlan,
         allocations: ResourceAllocationPlan,
+        service_allocations: ServiceCapacityAllocationPlan,
     ) -> LogisticsExecutionProjection:
         executable, _used, operational = self._project_capacity_logistics_execution(
-            day, plan, allocations
+            day, plan, allocations, service_allocations
         )
         dispatches = tuple(
             LogisticsDispatchProjection(
@@ -819,10 +922,11 @@ class SteadyLogisticsMixin:
         plan: LogisticsResourcePlan,
         allocations: ResourceAllocationPlan,
         funds: FundsAllocationPlan,
+        service_allocations: ServiceCapacityAllocationPlan,
     ) -> tuple[DomainActivity, ...]:
-        """Execute only transport work authorized by ResourceAllocation."""
+        """Execute only transport work authorized by shared allocations."""
         executable, used, operational = self._project_capacity_logistics_execution(
-            day, plan, allocations
+            day, plan, allocations, service_allocations
         )
         activities: list[DomainActivity] = []
         requests_by_id = {request.id: request for request in plan.spending_requests}

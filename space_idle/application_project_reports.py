@@ -47,7 +47,10 @@ class ApplicationReportProjectorMixin:
         resource_allocations = decision.allocations.resources
         service_allocations = decision.allocations.services
         logistics_execution = sim.logistics.capacity_logistics_execution_projection(
-            sim.day, decision.allocations.logistics, resource_allocations
+            sim.day,
+            decision.allocations.logistics,
+            resource_allocations,
+            service_allocations,
         )
 
         production: dict[object, float] = defaultdict(float)

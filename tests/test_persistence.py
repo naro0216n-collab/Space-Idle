@@ -87,6 +87,16 @@ def _make_nontrivial_state():
     return app
 
 
+
+def _transport_service_allocations(sim, day, plan):
+    requests = sim.logistics.transport_service_capacity_requests(day, plan.planned_usage)
+    locations = sim._active_locations() | set(sim.graph.operational_node_ids())
+    powers = {
+        location_id: sim.power.snapshot(location_id, sim.facilities, day)
+        for location_id in locations
+    }
+    return sim._allocate_tick_services(powers, requests)
+
 def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
     app = _make_nontrivial_state()
     path = tmp_path / "game.json"
@@ -189,7 +199,8 @@ def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_pa
     )
     allocations = allocate_resource_claims(logistics_plan.claims, sim.inventory)
     sim.logistics.advance_capacity_logistics(
-        sim.day, logistics_plan, allocations, funds
+        sim.day, logistics_plan, allocations, funds,
+        _transport_service_allocations(sim, sim.day, logistics_plan),
     )
     assert sim.logistics.cargo_flows
 
