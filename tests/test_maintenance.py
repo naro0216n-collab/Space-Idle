@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle import GetFlowReport, GetLocation, GetLogistics, SetMaintenancePriority, build_game_application
+from space_idle import GetFlowReport, GetOperationalNode, GetLogistics, SetMaintenancePriority, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.resource_claim import allocate_resource_claims
 from space_idle.shared import EntityId
@@ -23,7 +23,7 @@ def test_facility_maintenance_priority_is_player_visible_and_command_driven():
 
     app.execute(SetMaintenancePriority(str(facility.id), 73))
     row = next(
-        item for item in app.query(GetLocation(str(ids.EARTH))).facilities
+        item for item in app.query(GetOperationalNode(str(ids.EARTH))).facilities
         if item.id == str(facility.id)
     )
 

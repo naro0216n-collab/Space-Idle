@@ -216,15 +216,15 @@ class LogisticsStateProjectorMixin:
     def _fleet_view(self, query) -> FleetView:
         return FleetView(
             self._fleet_pool_rows(
-                location_id=query.location_id,
+                location_id=query.operational_node_id,
                 vehicle_definition_id=query.vehicle_definition_id,
             ),
             self._fleet_relocation_rows(
-                location_id=query.location_id,
+                location_id=query.operational_node_id,
                 vehicle_definition_id=query.vehicle_definition_id,
             ),
             self._fleet_release_rows(
-                location_id=query.location_id,
+                location_id=query.operational_node_id,
                 vehicle_definition_id=query.vehicle_definition_id,
             ),
         )

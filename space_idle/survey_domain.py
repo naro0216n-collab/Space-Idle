@@ -21,7 +21,7 @@ def capture_survey(sim: Any) -> dict[str, Any]:
         ],
         "campaigns": [
             {
-                "provider_location_id": str(c.provider_location_id),
+                "provider_operational_node_id": str(c.provider_operational_node_id),
                 "cell_id": str(c.cell_id),
                 "resource_id": str(c.resource_id),
                 "target_knowledge_level": c.target_knowledge_level,
@@ -45,11 +45,11 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
     }
     sim.survey.campaigns.clear()
     for r in data.get("campaigns", []):
-        provider_location_id = SpatialNodeId(r["provider_location_id"])
+        provider_operational_node_id = SpatialNodeId(r["provider_operational_node_id"])
         cell_id = SurfaceCellId(r["cell_id"])
         resource_id = DefinitionId(r["resource_id"])
         sim.survey.campaigns[(cell_id, resource_id)] = SurveyCampaign(
-            provider_location_id,
+            provider_operational_node_id,
             cell_id,
             resource_id,
             target_knowledge_level=int(r.get("target_knowledge_level", 4)),
@@ -123,20 +123,20 @@ def validate_survey_runtime(sim: Any) -> None:
     for key, campaign in sim.survey.campaigns.items():
         _require(key == (campaign.cell_id, campaign.resource_id), f"survey campaign key mismatch: {key}")
         _require(key in sim.survey.targets, f"campaign references unknown survey target: {key}")
-        _require(sim.graph.has_operational_node(campaign.provider_location_id), f"campaign provider location is unknown: {key}")
-        if key in sim.survey.targets and sim.graph.has_operational_node(campaign.provider_location_id):
-            provider_body = sim.graph.operational_node(campaign.provider_location_id).body_id
+        _require(sim.graph.has_operational_node(campaign.provider_operational_node_id), f"campaign provider operational node is unknown: {key}")
+        if key in sim.survey.targets and sim.graph.has_operational_node(campaign.provider_operational_node_id):
+            provider_body = sim.graph.operational_node(campaign.provider_operational_node_id).body_id
             target_body = sim.graph.surface_cells[campaign.cell_id].body_id
             _require(provider_body == target_body, f"survey campaign crosses celestial bodies: {key}")
             provider_specs = [
                 sim.survey.providers.get(f.definition_id)
-                for f in sim.facilities.all_at(campaign.provider_location_id)
+                for f in sim.facilities.all_at(campaign.provider_operational_node_id)
             ]
             _require(
                 any(
                     spec is not None
                     and sim.survey._provider_covers_target(
-                        campaign.provider_location_id, spec, campaign.cell_id
+                        campaign.provider_operational_node_id, spec, campaign.cell_id
                     )
                     and spec.max_knowledge_level >= campaign.target_knowledge_level
                     for spec in provider_specs

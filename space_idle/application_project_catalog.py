@@ -3,7 +3,7 @@ from __future__ import annotations
 from .application_catalog_core_sections import (
     project_celestial_bodies,
     project_facilities,
-    project_locations,
+    project_operational_nodes,
     project_processes,
     project_research,
     project_resources,
@@ -13,7 +13,7 @@ from .application_catalog_transport_sections import (
     project_transport_services,
     project_vehicles,
 )
-from .application_views import CatalogView, LocationSummary, WorldView
+from .application_views import CatalogView, OperationalNodeSummary, WorldView
 from .shared import DefinitionId
 
 
@@ -24,7 +24,7 @@ class CatalogWorldProjectorMixin:
             project_facilities(self),
             project_vehicles(self),
             project_celestial_bodies(self),
-            project_locations(self),
+            project_operational_nodes(self),
             project_processes(self),
             project_research(self),
             project_routes(self),
@@ -33,14 +33,14 @@ class CatalogWorldProjectorMixin:
 
     def _world_view(self) -> WorldView:
         sim = self._simulation
-        locations = []
+        operational_nodes = []
         for node in sim.graph.operational_nodes():
             facility_count = sum(1 for facility in sim.facilities.facilities.values() if facility.operational_node_id == node.id)
             active_projects = sum(
                 1 for project in sim.projects.projects.values()
                 if project.operational_node_id == node.id and project.status not in {"complete", "cancelled"}
             )
-            locations.append(LocationSummary(
+            operational_nodes.append(OperationalNodeSummary(
                 str(node.id), node.display_name,
                 None if node.parent_id is None else str(node.parent_id),
                 None if node.body_id is None else str(node.body_id),
@@ -50,7 +50,7 @@ class CatalogWorldProjectorMixin:
             sim.content_id,
             sim.day,
             sim.external_economy.account.funds_musd,
-            tuple(locations),
+            tuple(operational_nodes),
         )
 
     def _resource_name(self, resource_id: DefinitionId) -> str:

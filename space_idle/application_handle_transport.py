@@ -28,7 +28,7 @@ class TransportCommandHandlerMixin:
         if isinstance(command, ProduceVehicle):
             production_id = sim.logistics.plan_vehicle_production(
                 DefinitionId(command.vehicle_definition_id),
-                self._require_location(command.operational_node_id),
+                self._require_operational_node(command.operational_node_id),
                 priority=command.priority,
                 day=sim.day,
             )
@@ -59,8 +59,8 @@ class TransportCommandHandlerMixin:
                 target_units = None
             allocation_id = sim.logistics.create_transport_allocation(
                 DefinitionId(command.vehicle_definition_id),
-                self._require_location(command.anchor_node_id),
-                self._require_location(command.destination_id),
+                self._require_operational_node(command.anchor_node_id),
+                self._require_operational_node(command.destination_id),
                 priority=command.priority, control_mode=mode,
                 target_units=target_units, target_capacity=target_capacity,
                 path=None if command.path is None else tuple(RouteId(value) for value in command.path),
@@ -92,14 +92,14 @@ class TransportCommandHandlerMixin:
         if isinstance(command, RelocateFleet):
             relocation_id = sim.logistics.relocate_fleet(
                 DefinitionId(command.vehicle_definition_id), command.units,
-                self._require_location(command.source_id), self._require_location(command.destination_id),
+                self._require_operational_node(command.source_id), self._require_operational_node(command.destination_id),
                 path=None if command.path is None else tuple(RouteId(value) for value in command.path),
                 path_policy=PathPolicy(command.path_policy), day=sim.day,
             )
             return CommandResult(str(relocation_id))
         if isinstance(command, CreateLogisticsLane):
             lane_id = sim.logistics.create_lane(
-                self._require_location(command.source_id), self._require_location(command.destination_id),
+                self._require_operational_node(command.source_id), self._require_operational_node(command.destination_id),
                 command.requested_capacity_t_per_day, command.priority,
                 None if command.path is None else tuple(RouteId(value) for value in command.path),
                 PathPolicy(command.path_policy),

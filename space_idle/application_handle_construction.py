@@ -27,12 +27,12 @@ class ConstructionCommandHandlerMixin:
         if isinstance(command, PlanBuild):
             pid = sim.projects.plan_build(
                 DefinitionId(command.facility_id),
-                self._require_location(command.operational_node_id),
+                self._require_operational_node(command.operational_node_id),
                 command.priority,
                 command.sourcing_policy,
                 day=sim.day,
                 import_source_id=(
-                    None if command.import_source_id is None else self._require_location(command.import_source_id)
+                    None if command.import_source_id is None else self._require_operational_node(command.import_source_id)
                 ),
                 site_cell_id=None if command.site_cell_id is None else SurfaceCellId(command.site_cell_id),
             )
@@ -44,7 +44,7 @@ class ConstructionCommandHandlerMixin:
                 command.sourcing_policy,
                 day=sim.day,
                 import_source_id=(
-                    None if command.import_source_id is None else self._require_location(command.import_source_id)
+                    None if command.import_source_id is None else self._require_operational_node(command.import_source_id)
                 ),
             )
             return CommandResult(str(pid))
@@ -52,14 +52,14 @@ class ConstructionCommandHandlerMixin:
             if sim.founding is None:
                 raise ValueError("founding domain is not configured")
             pid = sim.founding.plan(
-                self._require_location(command.staging_node_id),
+                self._require_operational_node(command.staging_node_id),
                 command.display_name,
                 CelestialBodyId(command.body_id),
                 SurfaceCellId(command.core_cell_id),
                 DefinitionId(command.founding_package_id),
                 DefinitionId(command.vehicle_definition_id),
                 priority=command.priority,
-                preferred_source_id=(None if command.preferred_source_id is None else self._require_location(command.preferred_source_id)),
+                preferred_source_id=(None if command.preferred_source_id is None else self._require_operational_node(command.preferred_source_id)),
                 day=sim.day,
             )
             return CommandResult(str(pid))
@@ -81,12 +81,12 @@ class ConstructionCommandHandlerMixin:
             sim.founding.set_priority(ProjectId(command.project_id), command.priority); return CommandResult()
         if isinstance(command, DevelopSurfaceCell):
             pid = sim.projects.plan_surface_cell_development(
-                self._require_location(command.location_id),
+                self._require_operational_node(command.location_id),
                 SurfaceCellId(command.cell_id),
                 command.priority,
                 command.sourcing_policy,
                 day=sim.day,
-                import_source_id=(None if command.import_source_id is None else self._require_location(command.import_source_id)),
+                import_source_id=(None if command.import_source_id is None else self._require_operational_node(command.import_source_id)),
             )
             return CommandResult(str(pid))
         if isinstance(command, CancelBuild):
@@ -102,6 +102,6 @@ class ConstructionCommandHandlerMixin:
         if isinstance(command, SetProjectImportSource):
             sim.projects.set_import_source(
                 ProjectId(command.project_id),
-                None if command.operational_node_id is None else self._require_location(command.operational_node_id),
+                None if command.operational_node_id is None else self._require_operational_node(command.operational_node_id),
             ); return CommandResult()
         return NotImplemented

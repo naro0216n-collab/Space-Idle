@@ -134,7 +134,7 @@ class CelestialBodyDefinitionRow:
 
 
 @dataclass(frozen=True)
-class LocationDefinitionRow:
+class OperationalNodeDefinitionRow:
     id: str
     display_name: str
     parent_id: str | None
@@ -148,7 +148,7 @@ class CatalogView:
     facilities: tuple[FacilityDefinitionRow, ...]
     vehicles: tuple[VehicleDefinitionRow, ...]
     celestial_bodies: tuple[CelestialBodyDefinitionRow, ...]
-    locations: tuple[LocationDefinitionRow, ...]
+    operational_nodes: tuple[OperationalNodeDefinitionRow, ...]
     processes: tuple[ProcessDefinitionRow, ...] = ()
     research: tuple[ResearchDefinitionRow, ...] = ()
     routes: tuple[RouteDefinitionRow, ...] = ()
@@ -156,7 +156,7 @@ class CatalogView:
 
 
 @dataclass(frozen=True)
-class LocationSummary:
+class OperationalNodeSummary:
     id: str
     display_name: str
     parent_id: str | None
@@ -171,4 +171,4 @@ class WorldView:
     content_id: str
     day: int
     funds_musd: float
-    locations: tuple[LocationSummary, ...]
+    operational_nodes: tuple[OperationalNodeSummary, ...]

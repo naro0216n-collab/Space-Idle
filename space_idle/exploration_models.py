@@ -46,7 +46,7 @@ class SurveyProviderSpec:
 
 @dataclass
 class SurveyCampaign:
-    provider_location_id: SpatialNodeId
+    provider_operational_node_id: SpatialNodeId
     cell_id: SurfaceCellId
     resource_id: DefinitionId
     target_knowledge_level: KnowledgeLevel = 4

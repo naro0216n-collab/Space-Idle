@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_catalog_support import condition_definition_row, site_requirements_definition
 from .application_views import (
-    CelestialBodyDefinitionRow, FacilityDefinitionRow, LocationDefinitionRow,
+    CelestialBodyDefinitionRow, FacilityDefinitionRow, OperationalNodeDefinitionRow,
     ProcessDefinitionRow, ResearchDefinitionRow, ResourceDefinitionRow,
 )
 from .site import SiteRequirements
@@ -84,9 +84,9 @@ def project_celestial_bodies(projector):
     )
 
 
-def project_locations(projector):
+def project_operational_nodes(projector):
     return tuple(
-        LocationDefinitionRow(
+        OperationalNodeDefinitionRow(
             str(node.id), node.display_name,
             None if node.parent_id is None else str(node.parent_id),
             None if node.body_id is None else str(node.body_id), node.kind.value,

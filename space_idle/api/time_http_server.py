@@ -11,7 +11,7 @@ from ..application_commands import (
     GetContracts,
     GetDependencyAnalytics,
     GetFlowReport,
-    GetLocation,
+    GetOperationalNode,
     GetLogistics,
     GetLogisticsLanes,
     GetLogisticsSummary,
@@ -41,10 +41,10 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             return
 
         params = parse_qs(parsed.query, keep_blank_values=False)
-        location_values = params.get("location_id", [])
-        if len(location_values) > 1:
-            raise ApiPayloadError("location_id must appear once")
-        location_id = location_values[0] if location_values else None
+        operational_node_values = params.get("operational_node_id", [])
+        if len(operational_node_values) > 1:
+            raise ApiPayloadError("operational_node_id must appear once")
+        operational_node_id = operational_node_values[0] if operational_node_values else None
         surface_body_values = params.get("surface_body_id", [])
         if len(surface_body_values) > 1:
             raise ApiPayloadError("surface_body_id must appear once")
@@ -65,15 +65,15 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             "lanes": GetLogisticsLanes(),
             "external_economy": GetExternalEconomy(),
         }
-        if location_id:
+        if operational_node_id:
             queries.update({
-                "location": GetLocation(location_id),
-                "flow": GetFlowReport(location_id),
-                "dependency_analytics": GetDependencyAnalytics("operational_nodes", node_ids=(location_id,)),
-                "projects": GetProjects(location_id),
-                "build_options": GetBuildOptions(location_id),
-                "bottlenecks": GetBottlenecks(location_id),
-                "surveys": GetSurveys(location_id),
+                "operational_node": GetOperationalNode(operational_node_id),
+                "flow": GetFlowReport(operational_node_id),
+                "dependency_analytics": GetDependencyAnalytics("operational_nodes", node_ids=(operational_node_id,)),
+                "projects": GetProjects(operational_node_id),
+                "build_options": GetBuildOptions(operational_node_id),
+                "bottlenecks": GetBottlenecks(operational_node_id),
+                "surveys": GetSurveys(operational_node_id),
             })
         if surface_body_id:
             queries["surface_map"] = GetSurfaceMap(surface_body_id)

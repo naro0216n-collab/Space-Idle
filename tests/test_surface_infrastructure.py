@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import json
 
-from space_idle import AdvanceTime, DevelopSurfaceCell, GetLocation, GetProjects, build_game_application
+from space_idle import AdvanceTime, DevelopSurfaceCell, GetOperationalNode, GetProjects, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
 from space_idle.surface_infrastructure import SURFACE_DISTRIBUTION_SERVICE
@@ -86,7 +86,7 @@ def test_location_query_exposes_surface_infrastructure_decision_state_and_improv
     sim = app._simulation
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
 
-    view = app.query(GetLocation(str(ids.EARTH)))
+    view = app.query(GetOperationalNode(str(ids.EARTH)))
     row = view.surface_infrastructure
     assert row is not None
     assert row.requested_capacity > 0.0

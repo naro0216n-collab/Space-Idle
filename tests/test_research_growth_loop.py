@@ -5,7 +5,7 @@ from space_idle import (
     AssignExplorationFleet,
     CreateLogisticsLane,
     CreateTransportAllocation,
-    GetLocation,
+    GetOperationalNode,
     GetLogistics,
     GetProjects,
     GetResearch,
@@ -45,7 +45,7 @@ def _complete_prototype_research(app, research_id) -> None:
     if row.status == "prototype":
         site = next((candidate for candidate in row.prototype_sites if candidate.can_select), None)
         assert site is not None
-        app.execute(SetResearchPrototypeSite(str(research_id), site.location_id))
+        app.execute(SetResearchPrototypeSite(str(research_id), site.operational_node_id))
         _advance_until(
             app, lambda: _research_row(app, research_id).status == "complete", max_days=240
         )
@@ -57,7 +57,7 @@ def test_research_point_growth_loop_is_reachable_through_application_api():
 
     # Opening industry is ordinary finite extraction + production, not a market shortcut.
     app.execute(AdvanceTime(2))
-    earth = app.query(GetLocation(str(ids.EARTH)))
+    earth = app.query(GetOperationalNode(str(ids.EARTH)))
     assert any(row.output_t_per_day > 0 for row in earth.extraction)
     assert any(row.output_rates_per_day for row in earth.industry)
 
@@ -75,7 +75,7 @@ def test_research_point_growth_loop_is_reachable_through_application_api():
         lambda: next(row for row in app.query(GetProjects()).items if row.id == project_id).status == "complete",
     )
     storage = next(
-        row for row in app.query(GetLocation(str(ids.EARTH))).facilities
+        row for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
         if row.definition_id == str(ids.WATER_STORAGE)
     )
     assert storage.invested_resources
@@ -173,7 +173,7 @@ def test_research_point_growth_loop_is_reachable_through_application_api():
         ).status == "complete",
     )
     provider = next(
-        row for row in app.query(GetLocation(str(ids.LEO))).facilities
+        row for row in app.query(GetOperationalNode(str(ids.LEO))).facilities
         if row.definition_id == str(ids.MICROGRAVITY_EXPERIMENT_PLATFORM)
     )
     assert provider.research_tier is not None and provider.research_tier > 1

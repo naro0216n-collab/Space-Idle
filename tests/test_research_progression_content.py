@@ -12,7 +12,7 @@ def test_initial_research_base_has_ground_and_orbital_assets():
     app = build_game_application()
     view = app.query(GetResearch())
     provider_locations = {
-        row.facility_definition_id: row.location_id
+        row.facility_definition_id: row.operational_node_id
         for row in view.providers
     }
 

@@ -15,7 +15,7 @@ from space_idle import (
     GetFleet,
     GetFleetRelocationPreview,
     GetFlowReport,
-    GetLocation,
+    GetOperationalNode,
     GetLogistics,
     GetLogisticsLanes,
     GetLogisticsSummary,
@@ -232,14 +232,14 @@ def test_vehicle_production_exposes_resource_and_service_priority_control():
 
 def test_ui_snapshot_is_json_safe_at_application_boundary(tmp_path):
     runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
-    location_id = runtime.query(GetWorld()).data.locations[0].id
+    location_id = runtime.query(GetWorld()).data.operational_nodes[0].id
     queries = {
         "world": GetWorld(), "global_issues": GetBottlenecks(), "research": GetResearch(),
         "scientific_explorations": GetScientificExplorations(), "contracts": GetContracts(),
         "logistics_summary": GetLogisticsSummary(), "logistics": GetLogistics(),
         "routes": GetRoutes(include_modes=True), "fleet": GetFleet(),
         "transport_allocations": GetTransportAllocations(), "cargo_flows": GetCargoFlows(),
-        "lanes": GetLogisticsLanes(), "location": GetLocation(location_id),
+        "lanes": GetLogisticsLanes(), "operational_node": GetOperationalNode(location_id),
         "flow": GetFlowReport(location_id), "projects": GetProjects(location_id),
         "build_options": GetBuildOptions(location_id), "bottlenecks": GetBottlenecks(location_id),
         "surveys": GetSurveys(location_id),
@@ -247,7 +247,7 @@ def test_ui_snapshot_is_json_safe_at_application_boundary(tmp_path):
     result = runtime.snapshot(queries)
     payload = to_jsonable(result.data)
     assert payload["session"]["day"] == payload["world"]["day"]
-    assert payload["location"]["id"] == location_id
+    assert payload["operational_node"]["id"] == location_id
     assert "pools" in payload["fleet"]
     assert "items" in payload["transport_allocations"]
     assert "items" in payload["cargo_flows"]

@@ -25,11 +25,11 @@ def capture_research(sim: Any) -> dict[str, Any]:
                 "stage_progress": r.stage_progress,
                 "priority": r.priority,
                 "paused": r.paused,
-                "prototype_location_id": (
-                    None if r.prototype_location_id is None else str(r.prototype_location_id)
+                "prototype_operational_node_id": (
+                    None if r.prototype_operational_node_id is None else str(r.prototype_operational_node_id)
                 ),
-                "demonstration_location_id": (
-                    None if r.demonstration_location_id is None else str(r.demonstration_location_id)
+                "demonstration_operational_node_id": (
+                    None if r.demonstration_operational_node_id is None else str(r.demonstration_operational_node_id)
                 ),
             }
             for r in sorted(sim.research.active.values(), key=lambda row: str(row.definition_id))
@@ -59,11 +59,11 @@ def restore_research(sim: Any, data: dict[str, Any]) -> None:
             int(r.get("priority", 50)),
             bool(r["paused"]),
             None
-            if r["prototype_location_id"] is None
-            else SpatialNodeId(r["prototype_location_id"]),
+            if r["prototype_operational_node_id"] is None
+            else SpatialNodeId(r["prototype_operational_node_id"]),
             None
-            if r.get("demonstration_location_id") is None
-            else SpatialNodeId(r["demonstration_location_id"]),
+            if r.get("demonstration_operational_node_id") is None
+            else SpatialNodeId(r["demonstration_operational_node_id"]),
         )
 
 
@@ -237,22 +237,22 @@ def validate_runtime(sim: Any) -> None:
                     f"invalid demonstration progress: {research_id}",
                 )
         _require(
-            state.prototype_location_id is None
-            or sim.graph.has_operational_node(state.prototype_location_id),
+            state.prototype_operational_node_id is None
+            or sim.graph.has_operational_node(state.prototype_operational_node_id),
             f"research prototype references unknown location: {research_id}",
         )
         _require(
-            state.demonstration_location_id is None
-            or sim.graph.has_operational_node(state.demonstration_location_id),
+            state.demonstration_operational_node_id is None
+            or sim.graph.has_operational_node(state.demonstration_operational_node_id),
             f"research demonstration references unknown location: {research_id}",
         )
 
     allowed_staging: dict[EntityId, tuple[DefinitionId, SpatialNodeId]] = {}
     for research_id, state in sim.research.active.items():
-        if state.stage is ResearchStage.PROTOTYPE and state.prototype_location_id is not None:
+        if state.stage is ResearchStage.PROTOTYPE and state.prototype_operational_node_id is not None:
             allowed_staging[sim.research._prototype_staging_owner_id(research_id)] = (
                 research_id,
-                state.prototype_location_id,
+                state.prototype_operational_node_id,
             )
     for (owner_id, location_id, resource_id), amount in sim.inventory.external_occupancy.items():
         if not str(owner_id).startswith("research.prototype:"):

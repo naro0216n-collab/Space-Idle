@@ -53,7 +53,7 @@ def test_found_location_command_keeps_internal_location_identity_out_of_public_c
         decode_command({
             "type": "FoundLocation",
             "payload": {
-                "provider_location_id": str(ids.EARTH),
+                "staging_node_id": str(ids.EARTH),
                 "new_location_id": "client.chosen.location",
                 "display_name": "Client Chosen ID",
                 "body_id": str(ids.EARTH_BODY),
@@ -72,7 +72,7 @@ def test_ui_reports_and_split_logistics_queries_are_json_safe():
     assert to_jsonable(catalog)
 
     flow = app.query(GetFlowReport(str(ids.EARTH)))
-    assert flow.location_id == str(ids.EARTH)
+    assert flow.operational_node_id == str(ids.EARTH)
     assert isinstance(to_jsonable(flow)["issues"], list)
 
     summary = app.query(GetLogisticsSummary())
@@ -104,6 +104,17 @@ def test_http_api_revision_etag_gzip_command_and_save_load(tmp_path):
 
         status, _, payload = _request(port, "GET", "/api/v1/world")
         assert status == 200 and payload["data"]["day"] == 2
+        assert "operational_nodes" in payload["data"]
+        assert "locations" not in payload["data"]
+
+        status, _, payload = _request(
+            port, "GET", f"/api/v1/operational-nodes/{ids.EARTH}"
+        )
+        assert status == 200
+        assert payload["data"]["id"] == str(ids.EARTH)
+
+        status, _, payload = _request(port, "GET", f"/api/v1/locations/{ids.EARTH}")
+        assert status == 404
 
         status, _, payload = _request(port, "GET", f"/api/v1/surfaces/{ids.EARTH_BODY}")
         assert status == 200
@@ -182,7 +193,7 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
     thread.start()
     try:
         status, _, payload = _request(
-            port, "GET", f"/api/v1/ui-state?location_id={ids.EARTH}&surface_body_id={ids.EARTH_BODY}"
+            port, "GET", f"/api/v1/ui-state?operational_node_id={ids.EARTH}&surface_body_id={ids.EARTH_BODY}"
         )
         assert status == 200
         data = payload["data"]
@@ -203,7 +214,7 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
             assert "local_demand_per_day" in dependency_row
             assert "external_inflow_per_day" in dependency_row
         assert data["external_economy"]["policies"] == []
-        surface_infrastructure = data["location"]["surface_infrastructure"]
+        surface_infrastructure = data["operational_node"]["surface_infrastructure"]
         assert surface_infrastructure["fulfillment"] == 1.0
         assert str(ids.SURFACE_DISTRIBUTION_HUB) in surface_infrastructure["improvement_facility_definition_ids"]
         surface_map = data["surface_map"]
@@ -213,7 +224,11 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
         assert any(row["key"] == "thermal" for row in coastal["environment"])
         development = next(row for row in coastal["development_options"] if row["location_id"] == str(ids.EARTH))
         assert "mixed" in development["sourcing_policy_options"]
-        assert data["location"]["extraction_resources"]
+        assert data["operational_node"]["extraction_resources"]
+        assert "resource_claims" in data["operational_node"]
+        if data["operational_node"]["resource_claims"]:
+            claim = data["operational_node"]["resource_claims"][0]
+            assert {"owner_kind", "priority", "requested", "allocated", "unmet"}.issubset(claim)
     finally:
         server.shutdown()
         server.server_close()
@@ -341,6 +356,10 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert "external_inflow_per_day" in operations_js
         assert "構造外部依存/日" in operations_js
         assert "今tick流入/日" in operations_js
+        assert "Current Resource Claims" in operations_js
+        assert "Requested" in operations_js
+        assert "Allocated" in operations_js
+        assert "Unmet" in operations_js
         assert "SetResearchPriority" in operations_js
         assert "FundResearchPrototype" not in operations_js
         assert "StartScientificExploration" in operations_js

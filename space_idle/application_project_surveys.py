@@ -5,14 +5,14 @@ from .shared import SpatialNodeId
 
 
 class SurveyProgressionProjectorMixin:
-    def _surveys_view(self, provider_location_id: SpatialNodeId | None) -> SurveysView:
+    def _surveys_view(self, provider_operational_node_id: SpatialNodeId | None) -> SurveysView:
         sim = self._simulation
         if sim.survey is None:
             return SurveysView(())
         provider_body_id = (
             None
-            if provider_location_id is None
-            else sim.graph.operational_node(provider_location_id).body_id
+            if provider_operational_node_id is None
+            else sim.graph.operational_node(provider_operational_node_id).body_id
         )
         service_plan = sim.service_capacity_allocation_projection()
         rows = []
@@ -24,8 +24,8 @@ class SurveyProgressionProjectorMixin:
             if provider_body_id is not None and cell.body_id != provider_body_id:
                 continue
             campaign = sim.survey.campaigns.get((cell_id, resource_id))
-            active_provider = None if campaign is None else campaign.provider_location_id
-            capacity_provider = active_provider if active_provider is not None else provider_location_id
+            active_provider = None if campaign is None else campaign.provider_operational_node_id
+            capacity_provider = active_provider if active_provider is not None else provider_operational_node_id
             power = None
             capacity = 0.0
             if capacity_provider is not None:
@@ -40,9 +40,9 @@ class SurveyProgressionProjectorMixin:
                 if campaign is not None
                 else (
                     0
-                    if provider_location_id is None
+                    if provider_operational_node_id is None
                     else sim.survey.reachable_knowledge_level(
-                        provider_location_id, cell_id, day=sim.day
+                        provider_operational_node_id, cell_id, day=sim.day
                     )
                 )
             )
@@ -63,9 +63,9 @@ class SurveyProgressionProjectorMixin:
                 blockers = sim.survey.blockers(
                     cell_id, resource_id, power, sim.day, service_plan
                 )
-            elif provider_location_id is not None and not complete:
+            elif provider_operational_node_id is not None and not complete:
                 blockers = sim.survey.start_blockers(
-                    provider_location_id, cell_id, resource_id, sim.day
+                    provider_operational_node_id, cell_id, resource_id, sim.day
                 )
             else:
                 blockers = ()
@@ -79,12 +79,12 @@ class SurveyProgressionProjectorMixin:
                     resource_id=str(resource_id),
                     resource_name=self._resource_name(resource_id),
                     active=campaign is not None,
-                    provider_location_id=None if active_provider is None else str(active_provider),
+                    provider_operational_node_id=None if active_provider is None else str(active_provider),
                     complete=complete,
                     paused=False if campaign is None else campaign.paused,
-                    can_start=provider_location_id is not None
+                    can_start=provider_operational_node_id is not None
                     and sim.survey.can_start(
-                        provider_location_id, cell_id, resource_id, sim.day
+                        provider_operational_node_id, cell_id, resource_id, sim.day
                     ),
                     can_pause=sim.survey.can_pause(cell_id, resource_id),
                     can_resume=sim.survey.can_resume(cell_id, resource_id),

@@ -2,7 +2,7 @@
   'use strict';
 
   const state = {
-    revision:null, session:null, world:null, catalog:null, locationId:null, location:null,
+    revision:null, session:null, world:null, catalog:null, operationalNodeId:null, operationalNode:null,
     flow:null, dependencyAnalytics:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, routes:null,
     fleet:null, transportAllocations:null, cargoFlows:null, lanes:null, demands:[], externalEconomy:null,
@@ -17,10 +17,10 @@
   const pct = (v) => Number.isFinite(Number(v)) ? `${Math.round(Number(v)*100)}%` : '—';
   const byId = (items=[]) => Object.fromEntries(items.map((x)=>[x.id,x]));
   const resourceMap = () => byId(state.catalog?.resources || []);
-  const locationMap = () => byId(state.world?.locations || []);
+  const locationMap = () => byId(state.world?.operational_nodes || []);
   const definitionMaps = () => [
     state.catalog?.resources, state.catalog?.facilities, state.catalog?.vehicles,
-    state.catalog?.locations, state.catalog?.processes, state.catalog?.research,
+    state.catalog?.operational_nodes, state.catalog?.processes, state.catalog?.research,
     state.catalog?.routes, state.catalog?.transport_services,
   ].filter(Boolean).map(byId);
   const definitionName = (id) => {
@@ -176,7 +176,7 @@
     state.research=data.research; state.scientificExplorations=data.scientific_explorations; state.contracts=data.contracts; state.logisticsSummary=data.logistics_summary; state.logistics=data.logistics;
     state.routes=data.routes; state.fleet=data.fleet; state.transportAllocations=data.transport_allocations; state.cargoFlows=data.cargo_flows;
     state.lanes=data.lanes??state.lanes; state.demands=state.lanes?.demands||[]; state.externalEconomy=data.external_economy??state.externalEconomy;
-    if(data.location!==undefined)state.location=data.location;
+    if(data.operational_node!==undefined)state.operationalNode=data.operational_node;
     if(data.flow!==undefined)state.flow=data.flow;
     if(data.dependency_analytics!==undefined)state.dependencyAnalytics=data.dependency_analytics;
     if(data.projects!==undefined)state.projects=data.projects;
@@ -238,7 +238,7 @@
     const timeState=$('#timeState'); if(timeState)timeState.textContent=state.session?.automatic_progress_enabled===false?'自動進行無効':paused?`停止中 · ${speed}×`:`自動進行 · ${speed}×`;
   }
   function renderLocations(){
-    $('#locationList').innerHTML=(state.world?.locations||[]).map((loc)=>`<button type="button" class="location-button ${loc.id===state.locationId?'is-active':''}" data-location-id="${esc(loc.id)}"><span class="location-name">${esc(loc.display_name)}</span><span class="location-meta"><span>${esc(locationKindLabels[loc.kind]||loc.kind)}</span><span>設備 ${loc.facility_count}</span><span>建設 ${loc.active_project_count}</span></span></button>`).join('');
+    $('#locationList').innerHTML=(state.world?.operational_nodes||[]).map((loc)=>`<button type="button" class="location-button ${loc.id===state.operationalNodeId?'is-active':''}" data-location-id="${esc(loc.id)}"><span class="location-name">${esc(loc.display_name)}</span><span class="location-meta"><span>${esc(locationKindLabels[loc.kind]||loc.kind)}</span><span>設備 ${loc.facility_count}</span><span>建設 ${loc.active_project_count}</span></span></button>`).join('');
   }
   function renderGlobalIssues(){
     const issues=state.globalIssues?.items||[];
@@ -251,30 +251,30 @@
   }
 
   function clearLocationSnapshot(){
-    state.location=null; state.flow=null; state.dependencyAnalytics=null; state.bottlenecks=null; state.projects=null;
+    state.operationalNode=null; state.flow=null; state.dependencyAnalytics=null; state.bottlenecks=null; state.projects=null;
     state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.inspector=null;
   }
   async function loadUiSnapshot({preserveInteraction=true}={}){
     while(state.syncInFlight){
       const pending=state.syncInFlight;
-      if(pending.locationId===state.locationId)return pending.promise;
+      if(pending.operationalNodeId===state.operationalNodeId)return pending.promise;
       try{await pending.promise;}catch{}
       if(state.syncInFlight===pending)state.syncInFlight=null;
     }
-    const locationId=state.locationId;
-    const request={locationId,promise:null};
+    const locationId=state.operationalNodeId;
+    const request={operationalNodeId:locationId,promise:null};
     request.promise=(async()=>{
-      const locationSummary=(state.world?.locations||[]).find((row)=>row.id===locationId);
+      const locationSummary=(state.world?.operational_nodes||[]).find((row)=>row.id===locationId);
       const params=new URLSearchParams();
-      if(locationId)params.set('location_id',locationId);
+      if(locationId)params.set('operational_node_id',locationId);
       if(locationSummary?.body_id&&state.activeTab==='surface')params.set('surface_body_id',locationSummary.body_id);
       const suffix=params.size?`?${params.toString()}`:'';
       const data=await api(`/api/v1/ui-state${suffix}`);
-      if(locationId!==state.locationId)return data;
+      if(locationId!==state.operationalNodeId)return data;
       applyUiSnapshot(data);
-      if(!state.locationId||!(state.world?.locations||[]).some((x)=>x.id===state.locationId)){
-        state.locationId=state.world?.locations?.[0]?.id??null;
-        if(state.locationId&&data.location===undefined){const nested=await api(`/api/v1/ui-state?location_id=${encodeURIComponent(state.locationId)}`);applyUiSnapshot(nested);}
+      if(!state.operationalNodeId||!(state.world?.operational_nodes||[]).some((x)=>x.id===state.operationalNodeId)){
+        state.operationalNodeId=state.world?.operational_nodes?.[0]?.id??null;
+        if(state.operationalNodeId&&data.operational_node===undefined){const nested=await api(`/api/v1/ui-state?operational_node_id=${encodeURIComponent(state.operationalNodeId)}`);applyUiSnapshot(nested);}
       }
       const interaction=preserveInteraction?captureInteraction():null;
       renderAll(); restoreInteraction(interaction); setConnection('ok','PC Server');
@@ -285,8 +285,8 @@
     try{return await request.promise;}finally{if(state.syncInFlight===request)state.syncInFlight=null;}
   }
   async function loadLocation(locationId){
-    if(!locationId||locationId===state.locationId)return;
-    state.locationId=locationId;
+    if(!locationId||locationId===state.operationalNodeId)return;
+    state.operationalNodeId=locationId;
     clearLocationSnapshot();
     renderAll();
     await loadUiSnapshot({preserveInteraction:false});
@@ -300,7 +300,7 @@
   async function initialLoad(){
     setConnection('pending','接続中');
     const [catalog,world]=await Promise.all([api('/api/v1/catalog'),api('/api/v1/world')]);
-    state.catalog=catalog; state.world=world; state.locationId=world.locations?.[0]?.id??null;
+    state.catalog=catalog; state.world=world; state.operationalNodeId=world.operational_nodes?.[0]?.id??null;
     await loadUiSnapshot({preserveInteraction:false}); $('#app').setAttribute('aria-busy','false');
   }
 

@@ -11,7 +11,7 @@ from space_idle import (
     CreateLogisticsLane,
     CreateTransportAllocation,
     DevelopSurfaceCell,
-    GetLocation,
+    GetOperationalNode,
     GetResearch,
     GetWorld,
     PauseBuild,
@@ -70,7 +70,7 @@ def _make_nontrivial_state():
     app.execute(AdvanceTime(1))
     assert project_id is not None and lane_id is not None and allocation_id is not None
     lab_id = next(
-        row.id for row in app.query(GetLocation(str(EARTH))).facilities
+        row.id for row in app.query(GetOperationalNode(str(EARTH))).facilities
         if row.definition_id == str(EARTH_RESEARCH_LAB)
     )
     lab_state = next(

@@ -52,7 +52,7 @@ class ScientificExplorationProjectorMixin:
                     ScientificExplorationFleetOptionRow(
                         vehicle_definition_id=str(vehicle_definition.id),
                         display_name=vehicle_definition.display_name,
-                        location_id=str(definition.origin_id),
+                        operational_node_id=str(definition.origin_id),
                         total_units=fleet.total_units,
                         free_units=fleet.free_units,
                         required_units=definition.required_units,

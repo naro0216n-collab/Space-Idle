@@ -11,18 +11,18 @@ class PauseResearch: research_id: str
 class ResumeResearch: research_id: str
 @dataclass(frozen=True)
 class SetResearchPrototypeSite:
-    research_id: str; location_id: str
+    research_id: str; operational_node_id: str
 @dataclass(frozen=True)
 class SetResearchPriority:
     research_id: str
     priority: int
 @dataclass(frozen=True)
 class SetResearchDemonstrationSite:
-    research_id: str; location_id: str
+    research_id: str; operational_node_id: str
 
 @dataclass(frozen=True)
 class StartSurvey:
-    provider_location_id: str
+    provider_operational_node_id: str
     cell_id: str
     resource_id: str
     priority: int = 50

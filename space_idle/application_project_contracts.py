@@ -14,20 +14,20 @@ class ContractProgressionProjectorMixin:
             sim.contracts.contracts.values(), key=lambda row: str(row.id)
         ):
             template = sim.contracts.templates[state.template_id]
-            target_location_id = (
+            target_operational_node_id = (
                 None
-                if template.target_location_id is None
-                else str(template.target_location_id)
+                if template.target_operational_node_id is None
+                else str(template.target_operational_node_id)
             )
-            if template.target_location_id is not None:
+            if template.target_operational_node_id is not None:
                 failures = evaluate_site_requirements(
                     template.site_requirements,
-                    template.target_location_id,
+                    template.target_operational_node_id,
                     sim.day,
                     sim.environment,
                     sim.facilities,
                     sim.power.snapshot(
-                        template.target_location_id, sim.facilities, sim.day
+                        template.target_operational_node_id, sim.facilities, sim.day
                     ),
                 )
                 blockers = tuple(
@@ -57,7 +57,7 @@ class ContractProgressionProjectorMixin:
                     state.status.value,
                     state.deadline_day,
                     template.reward_musd,
-                    target_location_id,
+                    target_operational_node_id,
                     blockers,
                 )
             )

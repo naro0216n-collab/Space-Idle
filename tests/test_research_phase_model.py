@@ -109,13 +109,13 @@ def test_prototype_site_can_be_selected_before_transient_service_capacity_is_ava
     app.execute(StartResearch(str(research_id)))
 
     row = _research_row(app, research_id)
-    earth = next(site for site in row.prototype_sites if site.location_id == str(EARTH))
+    earth = next(site for site in row.prototype_sites if site.operational_node_id == str(EARTH))
     assert any(code == "service_capacity:available" for code, _detail in earth.blockers)
     assert earth.can_select
 
     app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
     selected = _research_row(app, research_id)
-    assert selected.prototype_location_id == str(EARTH)
+    assert selected.prototype_operational_node_id == str(EARTH)
     assert any(
         code == "service_capacity:available"
         for code, _detail in selected.current_blockers
@@ -142,7 +142,7 @@ def test_prototype_site_selection_still_rejects_structural_environment_mismatch(
     app.execute(StartResearch(str(research_id)))
 
     row = _research_row(app, research_id)
-    leo = next(site for site in row.prototype_sites if site.location_id == str(LEO))
+    leo = next(site for site in row.prototype_sites if site.operational_node_id == str(LEO))
     assert leo.blockers
     assert not leo.can_select
     with pytest.raises(ApplicationError, match="prototype site requirements not met"):
@@ -206,13 +206,13 @@ def test_demonstration_site_can_be_selected_despite_transient_active_capability_
     app.execute(StartResearch(str(research_id)))
 
     row = _research_row(app, research_id)
-    earth = next(site for site in row.demonstration_sites if site.location_id == str(EARTH))
+    earth = next(site for site in row.demonstration_sites if site.operational_node_id == str(EARTH))
     assert any(code == "capability:active" for code, _detail in earth.blockers)
     assert earth.can_select
 
     app.execute(SetResearchDemonstrationSite(str(research_id), str(EARTH)))
     selected = _research_row(app, research_id)
-    assert selected.demonstration_location_id == str(EARTH)
+    assert selected.demonstration_operational_node_id == str(EARTH)
     assert any(code == "capability:active" for code, _detail in selected.current_blockers)
     assert selected.can_pause
     assert not selected.can_resume
@@ -272,7 +272,7 @@ def test_demonstration_progress_requires_allocated_research_execution_service():
     app.execute(StartResearch(str(research_id)))
     _remove_earth_research_execution(sim)
     row = _research_row(app, research_id)
-    earth = next(site for site in row.demonstration_sites if site.location_id == str(EARTH))
+    earth = next(site for site in row.demonstration_sites if site.operational_node_id == str(EARTH))
     assert any(code == "service_capacity:available" for code, _detail in earth.blockers)
     assert earth.can_select
     app.execute(SetResearchDemonstrationSite(str(research_id), str(EARTH)))

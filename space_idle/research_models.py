@@ -125,5 +125,5 @@ class ResearchState:
     stage_progress: float = 0.0
     priority: int = 50
     paused: bool = False
-    prototype_location_id: SpatialNodeId | None = None
-    demonstration_location_id: SpatialNodeId | None = None
+    prototype_operational_node_id: SpatialNodeId | None = None
+    demonstration_operational_node_id: SpatialNodeId | None = None

@@ -11,7 +11,8 @@ from .application_views import (
     FacilityRow,
     IndustryRow,
     InventoryRow,
-    LocationView,
+    ResourceClaimRow,
+    OperationalNodeView,
     SurfaceInfrastructureLoadRow,
     SurfaceInfrastructureRow,
     StorageRow,
@@ -117,7 +118,7 @@ class LocationProjectorMixin:
             )
         return tuple(rows)
 
-    def _location_view(self, location_id: SpatialNodeId) -> LocationView:
+    def _operational_node_view(self, location_id: SpatialNodeId) -> OperationalNodeView:
         sim = self._simulation
         node = sim.graph.operational_node(location_id)
         power = sim.power.snapshot(location_id, sim.facilities, sim.day)
@@ -205,6 +206,30 @@ class LocationProjectorMixin:
 
         industry = []
         resource_allocations = sim.resource_allocation_projection({location_id: power})
+        resource_claim_rows = []
+        for claim in resource_allocations.claims:
+            if claim.operational_node_id != location_id:
+                continue
+            allocation = resource_allocations.allocation(claim.id)
+            definition = self._catalog.resources.get(claim.resource_id)
+            resource_claim_rows.append(
+                ResourceClaimRow(
+                    str(claim.id),
+                    str(claim.resource_id),
+                    self._resource_name(claim.resource_id),
+                    "t" if definition is None else definition.unit,
+                    claim.owner_kind,
+                    str(claim.owner_id),
+                    claim.purpose,
+                    claim.priority,
+                    allocation.requested_amount,
+                    allocation.allocated_amount,
+                    allocation.unmet_amount,
+                    claim.effective_minimum_amount,
+                    claim.atomic,
+                    None if claim.demand_id is None else str(claim.demand_id),
+                )
+            )
         snapshots = {
             snap.facility_id: snap
             for snap in sim.industry.snapshots(
@@ -377,7 +402,7 @@ class LocationProjectorMixin:
                 improvement_ids,
             )
 
-        return LocationView(
+        return OperationalNodeView(
             str(location_id),
             node.display_name,
             sim.day,
@@ -390,6 +415,7 @@ class LocationProjectorMixin:
             service_capacity_rows,
             surface_infrastructure,
             self._inventory_rows(location_id),
+            tuple(resource_claim_rows),
             self._storage_rows(location_id),
             tuple(facilities),
             tuple(industry),

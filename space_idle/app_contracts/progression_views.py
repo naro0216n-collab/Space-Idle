@@ -6,7 +6,7 @@ from .catalog_views import SiteRequirementsDefinitionRow
 
 @dataclass(frozen=True)
 class ResearchSiteOptionRow:
-    location_id: str
+    operational_node_id: str
     blockers: tuple[tuple[str, str], ...]
     can_select: bool
 
@@ -15,7 +15,7 @@ class ResearchSiteOptionRow:
 class ResearchProviderRow:
     facility_id: str
     facility_definition_id: str
-    location_id: str
+    operational_node_id: str
     tier: int
     level: int
     generation_points_per_day: float
@@ -71,9 +71,9 @@ class ResearchRow:
     current_blockers: tuple[tuple[str, str], ...]
     start_blockers: tuple[tuple[str, str], ...]
     prototype_resources: tuple[ResearchPrototypeResourceRow, ...]
-    prototype_location_id: str | None
+    prototype_operational_node_id: str | None
     prototype_sites: tuple[ResearchSiteOptionRow, ...]
-    demonstration_location_id: str | None
+    demonstration_operational_node_id: str | None
     demonstration_sites: tuple[ResearchSiteOptionRow, ...]
     demonstration_blockers: tuple[tuple[str, str], ...]
     prototype_blockers: tuple[tuple[str, str], ...]
@@ -97,7 +97,7 @@ class ResearchView:
 class ScientificExplorationFleetOptionRow:
     vehicle_definition_id: str
     display_name: str
-    location_id: str
+    operational_node_id: str
     total_units: int
     free_units: int
     required_units: int
@@ -150,7 +150,7 @@ class SurveyRow:
     resource_id: str
     resource_name: str
     active: bool
-    provider_location_id: str | None
+    provider_operational_node_id: str | None
     complete: bool
     paused: bool
     can_start: bool
@@ -185,7 +185,7 @@ class ContractRow:
     status: str
     deadline_day: int
     reward_musd: float
-    target_location_id: str | None
+    target_operational_node_id: str | None
     blockers: tuple[str, ...]
 
 

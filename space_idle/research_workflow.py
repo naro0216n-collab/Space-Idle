@@ -95,10 +95,10 @@ class ResearchWorkflowMixin:
                 continue
 
             if state.stage is ResearchStage.PROTOTYPE:
-                location_id = state.prototype_location_id
+                location_id = state.prototype_operational_node_id
                 spec = definition.prototype
             elif state.stage is ResearchStage.DEMONSTRATION:
-                location_id = state.demonstration_location_id
+                location_id = state.demonstration_operational_node_id
                 spec = definition.demonstration
             else:
                 continue
@@ -254,14 +254,14 @@ class ResearchWorkflowMixin:
         if (
             state.stage is not ResearchStage.PROTOTYPE
             or state.paused
-            or state.prototype_location_id is None
+            or state.prototype_operational_node_id is None
         ):
             return
         research_id = state.definition_id
         prototype = self.definitions[research_id].prototype
         if prototype is None:
             raise RuntimeError(f"prototype state has no prototype definition: {research_id}")
-        location_id = state.prototype_location_id
+        location_id = state.prototype_operational_node_id
         staging_owner = self._prototype_staging_owner_id(research_id)
         for resource_id, required_t in prototype.resources.items():
             staged = self.prototype_staged_t(research_id, location_id, resource_id)
@@ -296,7 +296,7 @@ class ResearchWorkflowMixin:
 
     def _consume_prototype_staging(self, research_id: DefinitionId) -> None:
         state = self.active[research_id]
-        location_id = state.prototype_location_id
+        location_id = state.prototype_operational_node_id
         prototype = self.definitions[research_id].prototype
         if location_id is None or prototype is None:
             return
@@ -325,17 +325,17 @@ class ResearchWorkflowMixin:
                 "prototype site requirements not met: "
                 + "; ".join(detail for _code, detail in structural)
             )
-        previous = state.prototype_location_id
+        previous = state.prototype_operational_node_id
         if previous is not None and previous != location_id:
             self._restore_prototype_staging(research_id, previous)
-        state.prototype_location_id = location_id
+        state.prototype_operational_node_id = location_id
 
     def resource_demands(self, day: int = 0) -> tuple[ResourceDemand, ...]:
         demands: list[ResourceDemand] = []
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
             if state.paused or state.stage is not ResearchStage.PROTOTYPE:
                 continue
-            location_id = state.prototype_location_id
+            location_id = state.prototype_operational_node_id
             if location_id is None:
                 continue
             prototype = self.definitions[research_id].prototype
@@ -367,7 +367,7 @@ class ResearchWorkflowMixin:
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
             if state.paused or state.stage is not ResearchStage.PROTOTYPE:
                 continue
-            location_id = state.prototype_location_id
+            location_id = state.prototype_operational_node_id
             if location_id is None:
                 continue
             prototype = self.definitions[research_id].prototype
@@ -410,7 +410,7 @@ class ResearchWorkflowMixin:
                 "demonstration site requirements not met: "
                 + "; ".join(detail for _code, detail in structural)
             )
-        state.demonstration_location_id = location_id
+        state.demonstration_operational_node_id = location_id
         state.stage_progress = 0.0
 
     def demonstration_failures(
@@ -504,7 +504,7 @@ class ResearchWorkflowMixin:
         blockers: list[tuple[str, str]] = []
         if state.paused:
             blockers.append(("manual_pause", "研究が手動停止中"))
-        location_id = state.prototype_location_id
+        location_id = state.prototype_operational_node_id
         if location_id is None:
             blockers.append(("prototype_site", "試作地点を選択してください"))
             return tuple(blockers)
@@ -535,7 +535,7 @@ class ResearchWorkflowMixin:
         blockers: list[tuple[str, str]] = []
         if state.paused:
             blockers.append(("manual_pause", "研究が手動停止中"))
-        location_id = state.demonstration_location_id
+        location_id = state.demonstration_operational_node_id
         if location_id is None:
             blockers.append(("demonstration_site", "実証地点を選択してください"))
             return tuple(blockers)
@@ -670,4 +670,4 @@ class ResearchWorkflowMixin:
         state.stage = definition.stages[index + 1]
         state.stage_progress = 0.0
         if state.stage is ResearchStage.DEMONSTRATION:
-            state.demonstration_location_id = None
+            state.demonstration_operational_node_id = None

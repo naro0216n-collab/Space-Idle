@@ -24,52 +24,52 @@ class SurveyService:
     campaigns: dict[tuple[SurfaceCellId, DefinitionId], SurveyCampaign] = field(default_factory=dict)
 
     def _provider_covers_target(
-        self, provider_location_id: SpatialNodeId, spec: SurveyProviderSpec, cell_id: SurfaceCellId
+        self, provider_operational_node_id: SpatialNodeId, spec: SurveyProviderSpec, cell_id: SurfaceCellId
     ) -> bool:
-        if not self.graph.has_operational_node(provider_location_id):
+        if not self.graph.has_operational_node(provider_operational_node_id):
             return False
         target = self.graph.surface_cells.get(cell_id)
         if target is None:
             return False
-        provider_node = self.graph.operational_node(provider_location_id)
+        provider_node = self.graph.operational_node(provider_operational_node_id)
         if provider_node.body_id != target.body_id:
             return False
         if spec.coverage is SurveyCoverage.BODY_REMOTE:
             return True
         if spec.coverage is SurveyCoverage.LOCATION_TERRITORY:
-            location = self.graph.locations.get(provider_location_id)
+            location = self.graph.locations.get(provider_operational_node_id)
             return location is not None and cell_id in location.developed_cell_ids
         return False
 
     def _provider_facilities_for_target(
-        self, provider_location_id: SpatialNodeId, cell_id: SurfaceCellId, *, active_only: bool, day: int = 0
+        self, provider_operational_node_id: SpatialNodeId, cell_id: SurfaceCellId, *, active_only: bool, day: int = 0
     ):
         facilities = (
-            self.facilities.active_compatible_at(provider_location_id, day)
+            self.facilities.active_compatible_at(provider_operational_node_id, day)
             if active_only
-            else self.facilities.all_at(provider_location_id)
+            else self.facilities.all_at(provider_operational_node_id)
         )
         result = []
         for facility in facilities:
             spec = self.providers.get(facility.definition_id)
-            if spec is not None and self._provider_covers_target(provider_location_id, spec, cell_id):
+            if spec is not None and self._provider_covers_target(provider_operational_node_id, spec, cell_id):
                 result.append((facility, spec))
         return result
 
     def reachable_knowledge_level(
-        self, provider_location_id: SpatialNodeId, cell_id: SurfaceCellId, *, day: int = 0
+        self, provider_operational_node_id: SpatialNodeId, cell_id: SurfaceCellId, *, day: int = 0
     ) -> KnowledgeLevel:
         levels = [
             spec.max_knowledge_level
             for _facility, spec in self._provider_facilities_for_target(
-                provider_location_id, cell_id, active_only=False, day=day
+                provider_operational_node_id, cell_id, active_only=False, day=day
             )
         ]
         return max(levels, default=0)  # type: ignore[return-value]
 
     def start_blockers(
         self,
-        provider_location_id: SpatialNodeId,
+        provider_operational_node_id: SpatialNodeId,
         cell_id: SurfaceCellId,
         resource_id: DefinitionId,
         day: int = 0,
@@ -77,20 +77,20 @@ class SurveyService:
         key = (cell_id, resource_id)
         if key not in self.targets:
             return ("unknown_target",)
-        if not self.graph.has_operational_node(provider_location_id):
+        if not self.graph.has_operational_node(provider_operational_node_id):
             return ("unknown_provider_location",)
         provider_specs = [
             self.providers.get(f.definition_id)
-            for f in self.facilities.all_at(provider_location_id)
+            for f in self.facilities.all_at(provider_operational_node_id)
             if self.providers.get(f.definition_id) is not None
         ]
         if not provider_specs:
             return ("survey_provider",)
-        provider_body = self.graph.operational_node(provider_location_id).body_id
+        provider_body = self.graph.operational_node(provider_operational_node_id).body_id
         target_body = self.graph.surface_cells[cell_id].body_id
         if provider_body != target_body:
             return ("different_body",)
-        reachable_level = self.reachable_knowledge_level(provider_location_id, cell_id, day=day)
+        reachable_level = self.reachable_knowledge_level(provider_operational_node_id, cell_id, day=day)
         if reachable_level <= 0:
             return ("survey_coverage",)
         if self.is_complete(cell_id, resource_id):
@@ -103,12 +103,12 @@ class SurveyService:
 
     def can_start(
         self,
-        provider_location_id: SpatialNodeId,
+        provider_operational_node_id: SpatialNodeId,
         cell_id: SurfaceCellId,
         resource_id: DefinitionId,
         day: int = 0,
     ) -> bool:
-        return not self.start_blockers(provider_location_id, cell_id, resource_id, day)
+        return not self.start_blockers(provider_operational_node_id, cell_id, resource_id, day)
 
     def pause_blockers(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> tuple[str, ...]:
         key = (cell_id, resource_id)
@@ -159,7 +159,7 @@ class SurveyService:
         if campaign.paused:
             blockers.append("manual_pause")
         if self.capacity_for_target(
-            campaign.provider_location_id, cell_id, resource_id, power, day
+            campaign.provider_operational_node_id, cell_id, resource_id, power, day
         ) <= 1e-12:
             blockers.append("survey_capacity")
         elif service_allocations is not None and not campaign.paused:
@@ -175,19 +175,19 @@ class SurveyService:
 
     def start(
         self,
-        provider_location_id: SpatialNodeId,
+        provider_operational_node_id: SpatialNodeId,
         cell_id: SurfaceCellId,
         resource_id: DefinitionId,
         *,
         priority: int = DEFAULT_PRIORITY,
         day: int = 0,
     ) -> None:
-        blockers = self.start_blockers(provider_location_id, cell_id, resource_id, day)
+        blockers = self.start_blockers(provider_operational_node_id, cell_id, resource_id, day)
         if blockers:
             raise ValueError("; ".join(blockers))
-        target_level = self.reachable_knowledge_level(provider_location_id, cell_id, day=day)
+        target_level = self.reachable_knowledge_level(provider_operational_node_id, cell_id, day=day)
         self.campaigns[(cell_id, resource_id)] = SurveyCampaign(
-            provider_location_id,
+            provider_operational_node_id,
             cell_id,
             resource_id,
             target_knowledge_level=target_level,
@@ -310,10 +310,10 @@ class SurveyService:
         return spec.points_per_day * utilization * maintenance
 
     def capacity_at(
-        self, provider_location_id: SpatialNodeId, power: PowerSnapshot | None = None, day: int = 0
+        self, provider_operational_node_id: SpatialNodeId, power: PowerSnapshot | None = None, day: int = 0
     ) -> float:
         points = 0.0
-        for facility in self.facilities.active_compatible_at(provider_location_id, day):
+        for facility in self.facilities.active_compatible_at(provider_operational_node_id, day):
             provider = self.providers.get(facility.definition_id)
             if provider is None:
                 continue
@@ -322,7 +322,7 @@ class SurveyService:
 
     def capacity_for_target(
         self,
-        provider_location_id: SpatialNodeId,
+        provider_operational_node_id: SpatialNodeId,
         cell_id: SurfaceCellId,
         resource_id: DefinitionId,
         power: PowerSnapshot | None = None,
@@ -331,7 +331,7 @@ class SurveyService:
         current_level = self.knowledge_level(cell_id, resource_id)
         points = 0.0
         for facility, spec in self._provider_facilities_for_target(
-            provider_location_id, cell_id, active_only=True, day=day
+            provider_operational_node_id, cell_id, active_only=True, day=day
         ):
             if spec.max_knowledge_level <= current_level:
                 continue
@@ -355,13 +355,13 @@ class SurveyService:
             if remaining <= 1e-12:
                 continue
             if self.capacity_for_target(
-                campaign.provider_location_id, campaign.cell_id, campaign.resource_id, None, day
+                campaign.provider_operational_node_id, campaign.cell_id, campaign.resource_id, None, day
             ) <= 1e-12:
                 continue
             requests.append(
                 ServiceCapacityRequest(
                     self.service_request_id(campaign.cell_id, campaign.resource_id),
-                    campaign.provider_location_id,
+                    campaign.provider_operational_node_id,
                     self.SERVICE_TYPE,
                     remaining,
                     campaign.priority,
@@ -372,23 +372,23 @@ class SurveyService:
             )
         return tuple(requests)
 
-    def nominal_service_capacity_at(self, provider_location_id: SpatialNodeId, day: int = 0) -> float:
+    def nominal_service_capacity_at(self, provider_operational_node_id: SpatialNodeId, day: int = 0) -> float:
         return sum(
             spec.points_per_day
-            for facility in self.facilities.all_at(provider_location_id)
+            for facility in self.facilities.all_at(provider_operational_node_id)
             for spec in (self.providers.get(facility.definition_id),)
             if spec is not None
         )
 
     def enabled_service_capacity_at(
         self,
-        provider_location_id: SpatialNodeId,
+        provider_operational_node_id: SpatialNodeId,
         power: PowerSnapshot | None = None,
         day: int = 0,
     ) -> float:
         return sum(
             self._facility_survey_capacity(facility, spec, power)
-            for facility in self.facilities.active_compatible_at(provider_location_id, day)
+            for facility in self.facilities.active_compatible_at(provider_operational_node_id, day)
             for spec in (self.providers.get(facility.definition_id),)
             if spec is not None
         )
@@ -406,13 +406,13 @@ class SurveyService:
                 and self.knowledge_level(campaign.cell_id, campaign.resource_id)
                 < campaign.target_knowledge_level
             ):
-                by_provider.setdefault(campaign.provider_location_id, []).append(campaign)
+                by_provider.setdefault(campaign.provider_operational_node_id, []).append(campaign)
 
-        for provider_location_id, campaigns in by_provider.items():
-            power = power_by_location.get(provider_location_id)
+        for provider_operational_node_id, campaigns in by_provider.items():
+            power = power_by_location.get(provider_operational_node_id)
             provider_rows = sorted(
                 self._provider_facilities_for_target_for_any_campaign(
-                    provider_location_id, campaigns, day
+                    provider_operational_node_id, campaigns, day
                 ),
                 key=lambda row: (
                     row[1].max_knowledge_level,
@@ -446,7 +446,7 @@ class SurveyService:
                     if available <= 1e-12:
                         continue
                     if not self._provider_covers_target(
-                        provider_location_id, spec, campaign.cell_id
+                        provider_operational_node_id, spec, campaign.cell_id
                     ):
                         continue
                     current_level = self.knowledge_level(
@@ -474,15 +474,15 @@ class SurveyService:
                     self.campaigns.pop((campaign.cell_id, campaign.resource_id), None)
 
     def _provider_facilities_for_target_for_any_campaign(
-        self, provider_location_id: SpatialNodeId, campaigns: list[SurveyCampaign], day: int
+        self, provider_operational_node_id: SpatialNodeId, campaigns: list[SurveyCampaign], day: int
     ):
         result = []
-        for facility in self.facilities.active_compatible_at(provider_location_id, day):
+        for facility in self.facilities.active_compatible_at(provider_operational_node_id, day):
             spec = self.providers.get(facility.definition_id)
             if spec is None:
                 continue
             if any(
-                self._provider_covers_target(provider_location_id, spec, campaign.cell_id)
+                self._provider_covers_target(provider_operational_node_id, spec, campaign.cell_id)
                 for campaign in campaigns
             ):
                 result.append((facility, spec))

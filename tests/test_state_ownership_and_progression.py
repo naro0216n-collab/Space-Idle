@@ -34,7 +34,7 @@ def test_research_theory_progresses_into_visible_prototype_and_completes_automat
         if item.id == str(ids.TECH_ORBITAL_OPERATIONS)
     )
     assert row.status == "prototype"
-    earth = next(site for site in row.prototype_sites if site.location_id == str(ids.EARTH))
+    earth = next(site for site in row.prototype_sites if site.operational_node_id == str(ids.EARTH))
     assert earth.can_select
 
     sim.research.set_prototype_site(ids.TECH_ORBITAL_OPERATIONS, ids.EARTH, sim.day)

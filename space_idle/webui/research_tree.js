@@ -94,7 +94,7 @@
       const blocked = (provider.blockers || []).length;
       return `<div class="route-mode-card">
         <div class="mode-title"><span>${esc(provider.facility_definition_id)}</span><span class="badge ${blocked ? 'warn' : 'ok'}">Tier ${fmt(provider.tier,0)} · Lv ${fmt(provider.level,0)}</span></div>
-        <div class="cell-sub">${esc(provider.location_id)} · RP ${fmt(provider.generation_points_per_day,2)}/日 · 貯蔵 ${fmt(provider.storage_capacity_points,1)}</div>
+        <div class="cell-sub">${esc(provider.operational_node_id)} · RP ${fmt(provider.generation_points_per_day,2)}/日 · 貯蔵 ${fmt(provider.storage_capacity_points,1)}</div>
         ${blocked ? `<div class="cell-sub">${blocked} blocker</div>` : ''}
       </div>`;
     }).join('')}</div>`;

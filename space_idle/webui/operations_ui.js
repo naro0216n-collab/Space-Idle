@@ -74,7 +74,7 @@
   };
 
   function renderOverviewTab(){
-    const loc=state.location,flow=state.flow,issues=state.bottlenecks?.items||[];
+    const loc=state.operationalNode,flow=state.flow,issues=state.bottlenecks?.items||[];
     const storageRows=(loc.storage||[]).map((s)=>`<tr><td>${esc(storageClassLabels[s.storage_class]||s.storage_class)}</td><td>${fmt(s.stock_t)}</td><td>${fmt(s.usable_capacity_t)}</td><td>${fmt(s.free_usable_t)}</td><td>${fmt(s.unusable_occupied_t)}</td></tr>`).join('');
     const capabilityRows=(loc.capabilities||[]).map((c)=>`<tr><td>${esc(capabilityName(c.id))}</td><td>${c.installed?'✓':'—'}</td><td>${c.active?'✓':'—'}</td></tr>`).join('');
     const serviceRows=(loc.service_capacities||[]).map((c)=>`<tr><td>${esc(capabilityName(c.service_type))}</td><td>${fmt(c.nominal)}</td><td>${fmt(c.enabled)}</td><td>${fmt(c.requested)}</td><td>${fmt(c.allocated)}</td><td>${fmt(c.spare)}</td><td>${esc((c.limiting_factors||[]).map(A.userFacingText).join(' / ')||'なし')}</td></tr>`).join('');
@@ -89,13 +89,15 @@
   }
 
   function renderFacilitiesTab(){
-    const rows=(state.location?.facilities||[]).map((f)=>{const u=f.next_upgrade;const upgrade=u?(u.active_project_id?`案件 ${esc(u.active_project_id)}`:`→ Lv ${fmt(u.target_level,0)}`):'—';return `<tr class="selectable" data-inspect="facility" data-id="${esc(f.id)}"><td><div class="cell-main">${esc(f.display_name)}</div><div class="cell-sub">${esc(f.id)}</div></td><td>Lv ${fmt(f.level,0)}</td><td>${f.paused?'<span class="badge warn">停止</span>':'<span class="badge ok">稼働</span>'}</td><td>${pct(f.operational_utilization)}</td><td>${pct(f.maintenance_satisfaction)}</td><td>${f.power_priority??'—'}</td><td>${f.maintenance_priority??50}</td><td>${upgrade}</td><td>${(f.activation_blockers||[]).length}</td></tr>`;}).join('');
-    return `<section class="card"><div class="card-heading"><h3>設備一覧</h3><span class="badge">${state.location?.facilities?.length||0}</span></div><div class="table-wrap"><table><thead><tr><th>設備</th><th>Level</th><th>状態</th><th>実効稼働</th><th>維持</th><th>電力優先</th><th>維持優先</th><th>Upgrade</th><th>blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="9">設備なし</td></tr>'}</tbody></table></div></section>`;
+    const rows=(state.operationalNode?.facilities||[]).map((f)=>{const u=f.next_upgrade;const upgrade=u?(u.active_project_id?`案件 ${esc(u.active_project_id)}`:`→ Lv ${fmt(u.target_level,0)}`):'—';return `<tr class="selectable" data-inspect="facility" data-id="${esc(f.id)}"><td><div class="cell-main">${esc(f.display_name)}</div><div class="cell-sub">${esc(f.id)}</div></td><td>Lv ${fmt(f.level,0)}</td><td>${f.paused?'<span class="badge warn">停止</span>':'<span class="badge ok">稼働</span>'}</td><td>${pct(f.operational_utilization)}</td><td>${pct(f.maintenance_satisfaction)}</td><td>${f.power_priority??'—'}</td><td>${f.maintenance_priority??50}</td><td>${upgrade}</td><td>${(f.activation_blockers||[]).length}</td></tr>`;}).join('');
+    return `<section class="card"><div class="card-heading"><h3>設備一覧</h3><span class="badge">${state.operationalNode?.facilities?.length||0}</span></div><div class="table-wrap"><table><thead><tr><th>設備</th><th>Level</th><th>状態</th><th>実効稼働</th><th>維持</th><th>電力優先</th><th>維持優先</th><th>Upgrade</th><th>blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="9">設備なし</td></tr>'}</tbody></table></div></section>`;
   }
 
   function renderInventoryTab(){
     const flowMap=Object.fromEntries((state.flow?.resources||[]).map((r)=>[r.resource_id,r]));
-    const rows=(state.location?.inventory||[]).filter((r)=>r.amount||r.reserved||flowMap[r.resource_id]?.local_production_per_day||flowMap[r.resource_id]?.local_consumption_per_day||flowMap[r.resource_id]?.inbound_in_transit_t||flowMap[r.resource_id]?.arrival_waiting_t).map((r)=>{const f=flowMap[r.resource_id]||{};return `<tr class="selectable" data-inspect="resource" data-id="${esc(r.resource_id)}"><td><div class="cell-main">${esc(r.display_name)}</div><div class="cell-sub">${esc(r.storage_class)}</div></td><td>${fmt(r.amount)}</td><td>${fmt(r.available)}</td><td>${signed(f.local_net_per_day)}</td><td>${fmt(f.inbound_in_transit_t)}</td><td>${fmt(f.outbound_in_transit_t)}</td><td>${fmt(f.arrival_waiting_t)}</td><td>${fmt(r.free_capacity)}</td></tr>`;}).join('');
+    const rows=(state.operationalNode?.inventory||[]).filter((r)=>r.amount||r.reserved||flowMap[r.resource_id]?.local_production_per_day||flowMap[r.resource_id]?.local_consumption_per_day||flowMap[r.resource_id]?.inbound_in_transit_t||flowMap[r.resource_id]?.arrival_waiting_t).map((r)=>{const f=flowMap[r.resource_id]||{};return `<tr class="selectable" data-inspect="resource" data-id="${esc(r.resource_id)}"><td><div class="cell-main">${esc(r.display_name)}</div><div class="cell-sub">${esc(r.storage_class)}</div></td><td>${fmt(r.amount)}</td><td>${fmt(r.available)}</td><td>${signed(f.local_net_per_day)}</td><td>${fmt(f.inbound_in_transit_t)}</td><td>${fmt(f.outbound_in_transit_t)}</td><td>${fmt(f.arrival_waiting_t)}</td><td>${fmt(r.free_capacity)}</td></tr>`;}).join('');
+    const claimRows=(state.operationalNode?.resource_claims||[]).map((c)=>`<tr><td><div class="cell-main">${esc(c.display_name)}</div><div class="cell-sub">${esc(c.resource_id)}</div></td><td><div class="cell-main">${esc(A.userFacingText(c.owner_kind))}</div><div class="cell-sub">${esc(c.owner_id)}</div></td><td>${esc(A.userFacingText(c.purpose))}</td><td>${c.priority}</td><td>${fmt(c.requested,2)}</td><td>${fmt(c.allocated,2)}</td><td>${fmt(c.unmet,2)}</td></tr>`).join('');
+    const claimCard=`<section class="card"><div class="card-heading"><h3>Current Resource Claims</h3><span class="badge ${(state.operationalNode?.resource_claims||[]).some((c)=>Number(c.unmet)>1e-9)?'warn':'ok'}">${state.operationalNode?.resource_claims?.length||0}</span></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>Owner</th><th>用途</th><th>Priority</th><th>Requested</th><th>Allocated</th><th>Unmet</th></tr></thead><tbody>${claimRows||'<tr><td colspan="7">当tickのResource Claimなし</td></tr>'}</tbody></table></div></section>`;
     const analytics=state.dependencyAnalytics;
     const dependencyRows=(analytics?.resources||[]).map((r)=>{
       const sources=(r.dependency_source_node_ids||[]).map(locationName).join(' / ')||'—';
@@ -104,7 +106,7 @@
     }).join('');
     const groupRows=(analytics?.resource_groups||[]).map((r)=>`<tr><td>${esc(r.display_name)}</td><td>${fmt(r.local_production_per_day,2)}</td><td>${fmt(r.local_consumption_per_day,2)}</td><td>${fmt(r.local_demand_per_day,2)}</td><td>${r.local_coverage_ratio==null?'—':pct(r.local_coverage_ratio)}</td><td>${fmt(r.external_dependency_per_day,2)}</td><td>${fmt(r.external_inflow_per_day,2)}</td><td>${fmt(r.external_outflow_per_day,2)}</td><td>${fmt(r.imports_pipeline,2)}</td><td>${fmt(r.exports_pipeline,2)}</td><td>${fmt(r.unmet_demand,2)}</td></tr>`).join('');
     const dependencyCard=`<section class="card"><div class="card-heading"><h3>External Dependency / 産業自立</h3><span class="badge ${(analytics?.critical_dependency_resource_ids||[]).length?'warn':'ok'}">${(analytics?.critical_dependency_resource_ids||[]).length} critical</span></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>現地生産/日</th><th>実消費/日</th><th>必要/日</th><th>Local coverage</th><th>構造外部依存/日</th><th>今tick流入/日</th><th>今tick流出/日</th><th>Import pipeline</th><th>Export pipeline</th><th>未充足</th><th>依存元</th><th>Limiting factor</th></tr></thead><tbody>${dependencyRows||'<tr><td colspan="13">対象フローなし</td></tr>'}</tbody></table></div>${groupRows?`<div class="table-wrap"><table><thead><tr><th>Resource Group</th><th>現地生産/日</th><th>実消費/日</th><th>必要/日</th><th>Local coverage</th><th>構造外部依存/日</th><th>今tick流入/日</th><th>今tick流出/日</th><th>Import pipeline</th><th>Export pipeline</th><th>未充足</th></tr></thead><tbody>${groupRows}</tbody></table></div>`:''}</section>`;
-    return `<div class="card-grid"><section class="card"><div class="card-heading"><h3>在庫・ローカルフロー・物流状態</h3></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>在庫</th><th>利用可</th><th>Local net/日</th><th>入荷中</th><th>出荷中</th><th>到着待機</th><th>空容量</th></tr></thead><tbody>${rows||'<tr><td colspan="8">表示対象なし</td></tr>'}</tbody></table></div></section>${dependencyCard}</div>`;
+    return `<div class="card-grid"><section class="card"><div class="card-heading"><h3>在庫・ローカルフロー・物流状態</h3></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>在庫</th><th>利用可</th><th>Local net/日</th><th>入荷中</th><th>出荷中</th><th>到着待機</th><th>空容量</th></tr></thead><tbody>${rows||'<tr><td colspan="8">表示対象なし</td></tr>'}</tbody></table></div></section>${claimCard}${dependencyCard}</div>`;
   }
 
   function renderConstructionTab(){
@@ -144,7 +146,7 @@
   function renderSurfaceTab(){
     const map=state.surfaceMap;
     if(!map){
-      const summary=(state.world?.locations||[]).find((row)=>row.id===state.locationId);
+      const summary=(state.world?.operational_nodes||[]).find((row)=>row.id===state.operationalNodeId);
       const message=summary?.body_id?'地表マップを取得しています。':'このSpatial Nodeには表示可能な地表天体がありません。';
       return `<section class="card"><div class="card-heading"><h3>地表マップ</h3></div><div class="empty-state">${message}</div></section>`;
     }
@@ -185,11 +187,11 @@
   }
 
   function renderFacilityInspector(id){
-    const f=state.location?.facilities?.find((x)=>x.id===id);if(!f)return false;
+    const f=state.operationalNode?.facilities?.find((x)=>x.id===id);if(!f)return false;
     const blockers=f.operating_blockers||f.activation_blockers||[],u=f.next_upgrade;
     const researchRows=f.research_tier==null?[]:[['Research Tier',fmt(f.research_tier,0)],['RP生成',`${fmt(f.research_generation_points_per_day,2)}/日`],['RP貯蔵',fmt(f.research_storage_capacity_points,1)]];
-    const industry=state.location?.industry?.find((row)=>row.facility_id===id);
-    const extraction=state.location?.extraction?.find((row)=>row.facility_id===id);
+    const industry=state.operationalNode?.industry?.find((row)=>row.facility_id===id);
+    const extraction=state.operationalNode?.extraction?.find((row)=>row.facility_id===id);
     const rateCards=(rows)=>(rows||[]).map(([resourceId,rate])=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(resourceId))}</span><span>${fmt(rate,3)} t/日</span></div></div>`).join('')||'<div class="empty-state">なし</div>';
     let productionSection='';
     if(industry){
@@ -216,14 +218,14 @@
     return true;
   }
   function renderExtractionResourceInspector(id){
-    const row=state.location?.extraction_resources?.find((item)=>item.resource_id===id);if(!row)return false;
-    const infra=state.location?.surface_infrastructure;
+    const row=state.operationalNode?.extraction_resources?.find((item)=>item.resource_id===id);if(!row)return false;
+    const infra=state.operationalNode?.surface_infrastructure;
     const infraLimit=infra?.limiting_factors?.includes('surface_infrastructure');
     setInspector(row.resource_name,section('Resource Opportunity / Extraction',kv([['Effective Opportunity',fmt(row.effective_opportunity,3)],['Installed Nominal Capacity',`${fmt(row.installed_nominal_capacity_t_per_day,3)} t/日`],['Actual Extraction',`${fmt(row.output_t_per_day,3)} t/日`],['Diminishing efficiency',pct(row.diminishing_efficiency)],['Marginal efficiency',pct(row.marginal_efficiency)],['Operational fulfillment',pct(row.operational_fulfillment)]]))+section('Surface Infrastructure',infra?kv([['Fulfillment',pct(infra.fulfillment)],['Limiting factor',infraLimit?'<span class="badge warn">Surface Infrastructure</span>':'<span class="badge ok">なし</span>']]):'<div class="empty-state">非地表Location</div>'));
     return true;
   }
   function renderResourceInspector(id){
-    const inv=state.location?.inventory?.find((x)=>x.resource_id===id),f=state.flow?.resources?.find((x)=>x.resource_id===id);if(!inv)return false;
+    const inv=state.operationalNode?.inventory?.find((x)=>x.resource_id===id),f=state.flow?.resources?.find((x)=>x.resource_id===id);if(!inv)return false;
     setInspector(inv.display_name,section('在庫',kv([['在庫',fmt(inv.amount)],['予約',fmt(inv.reserved)],['利用可能',fmt(inv.available)],['空容量',fmt(inv.free_capacity)],['Storage',esc(inv.storage_class)]]))+section('フロー',kv([['生産/日',signed(f?.local_production_per_day)],['消費/日',signed(f?.local_consumption_per_day)],['Local net/日',signed(f?.local_net_per_day)],['入荷中',fmt(f?.inbound_in_transit_t)],['出荷中',fmt(f?.outbound_in_transit_t)],['到着待機',fmt(f?.arrival_waiting_t)]])));
     return true;
   }
@@ -268,9 +270,9 @@
   }
   function researchBlockers(r){return r.current_blockers||[];}
   function siteOptionsHtml(r,kind){
-    const options=kind==='prototype'?(r.prototype_sites||[]):(r.demonstration_sites||[]),selected=kind==='prototype'?r.prototype_location_id:r.demonstration_location_id;
+    const options=kind==='prototype'?(r.prototype_sites||[]):(r.demonstration_sites||[]),selected=kind==='prototype'?r.prototype_operational_node_id:r.demonstration_operational_node_id;
     if(!options.length)return '<div class="empty-state">候補地点なし</div>';
-    return options.map((site)=>{const blockers=site.blockers||[],blocked=blockers.length,isSelected=site.location_id===selected,canSelect=Boolean(site.can_select),attr=kind==='prototype'?'data-research-prototype-site':'data-research-demo-site';const badge=isSelected?'選択中':canSelect?(blocked?`選択可 · ${blocked} 稼働blocker`:'選択可'):`${blocked||1} blocker`;return `<div class="route-mode-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(locationName(site.location_id))}</span><span class="badge ${blocked?'warn':canSelect||isSelected?'ok':''}">${badge}</span></div>${blocked?`<div class="issue-stack">${blockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:''}<button type="button" ${attr}="${esc(site.location_id)}" data-id="${esc(r.id)}" ${!canSelect||isSelected?'disabled':''}>${kind==='prototype'?'試作地点に設定':'実証地点に設定'}</button></div>`;}).join('');
+    return options.map((site)=>{const blockers=site.blockers||[],blocked=blockers.length,isSelected=site.operational_node_id===selected,canSelect=Boolean(site.can_select),attr=kind==='prototype'?'data-research-prototype-site':'data-research-demo-site';const badge=isSelected?'選択中':canSelect?(blocked?`選択可 · ${blocked} 稼働blocker`:'選択可'):`${blocked||1} blocker`;return `<div class="route-mode-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(locationName(site.operational_node_id))}</span><span class="badge ${blocked?'warn':canSelect||isSelected?'ok':''}">${badge}</span></div>${blocked?`<div class="issue-stack">${blockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:''}<button type="button" ${attr}="${esc(site.operational_node_id)}" data-id="${esc(r.id)}" ${!canSelect||isSelected?'disabled':''}>${kind==='prototype'?'試作地点に設定':'実証地点に設定'}</button></div>`;}).join('');
   }
   function prototypeResourceHtml(r){
     const rows=r.prototype_resources||[];
@@ -289,9 +291,9 @@
     if(r.status==='theory'){
       phase=section('Theory',kv([['進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)} RP`],['RP requested',`${fmt(r.rp_requested,2)} /日`],['RP allocated',`${fmt(r.rp_allocated,2)} /日`],['Theory残り',`${fmt(r.rp_remaining,1)} RP`],['Research execution requested',`${fmt(r.execution_requested,2)} /日`],['Research execution allocated',`${fmt(r.execution_allocated,2)} /日`]]));
     }else if(r.status==='prototype'){
-      phase=section('Prototype',`<div class="cell-sub">地点 ${r.prototype_location_id?esc(locationName(r.prototype_location_id)):'未選択'} · Research execution ${fmt(r.execution_allocated,2)}/${fmt(r.execution_requested,2)} /日</div>${siteOptionsHtml(r,'prototype')}<h3>Resource Claim / staging / pipeline</h3>${prototypeResourceHtml(r)}`);
+      phase=section('Prototype',`<div class="cell-sub">地点 ${r.prototype_operational_node_id?esc(locationName(r.prototype_operational_node_id)):'未選択'} · Research execution ${fmt(r.execution_allocated,2)}/${fmt(r.execution_requested,2)} /日</div>${siteOptionsHtml(r,'prototype')}<h3>Resource Claim / staging / pipeline</h3>${prototypeResourceHtml(r)}`);
     }else if(r.status==='demonstration'){
-      phase=section('Demonstration',`<div class="cell-sub">進捗 ${fmt(r.stage_progress,1)}/${fmt(r.stage_required,1)}日 · 地点 ${r.demonstration_location_id?esc(locationName(r.demonstration_location_id)):'未選択'} · Research execution ${fmt(r.execution_allocated,2)}/${fmt(r.execution_requested,2)} /日</div>${siteOptionsHtml(r,'demonstration')}`);
+      phase=section('Demonstration',`<div class="cell-sub">進捗 ${fmt(r.stage_progress,1)}/${fmt(r.stage_required,1)}日 · 地点 ${r.demonstration_operational_node_id?esc(locationName(r.demonstration_operational_node_id)):'未選択'} · Research execution ${fmt(r.execution_allocated,2)}/${fmt(r.execution_requested,2)} /日</div>${siteOptionsHtml(r,'demonstration')}`);
     }else if(r.status==='operational_experience'){
       phase=section('Operational Experience',experienceHtml(r));
     }
@@ -309,7 +311,7 @@
     const vehicleRows=(x.fleet_options||[]).map((v)=>{
       const blockers=v.blockers||[];const selected=v.vehicle_definition_id===x.assigned_vehicle_definition_id;
       const badge=selected?'予約中':blockers.length?'不適合':v.can_assign?'割当可':'Fleet不足';
-      return `<div class="route-mode-card"><div class="mode-title"><span>${esc(v.display_name)}</span><span class="badge ${selected||v.can_assign?'ok':blockers.length?'warn':''}">${badge}</span></div><div class="cell-sub">${esc(locationName(v.location_id))} · total ${fmt(v.total_units,0)} / free ${fmt(v.free_units,0)} / required ${fmt(v.required_units,0)}</div>${blockers.length?`<div class="issue-stack" style="margin-top:7px">${blockers.map((b)=>issueHtml(['exploration',b])).join('')}</div>`:''}<div class="action-row" style="margin-top:8px"><button type="button" data-exploration-assign="${esc(x.id)}" data-vehicle-definition-id="${esc(v.vehicle_definition_id)}" ${v.can_assign?'':'disabled'}>Fleetを割り当て</button></div></div>`;
+      return `<div class="route-mode-card"><div class="mode-title"><span>${esc(v.display_name)}</span><span class="badge ${selected||v.can_assign?'ok':blockers.length?'warn':''}">${badge}</span></div><div class="cell-sub">${esc(locationName(v.operational_node_id))} · total ${fmt(v.total_units,0)} / free ${fmt(v.free_units,0)} / required ${fmt(v.required_units,0)}</div>${blockers.length?`<div class="issue-stack" style="margin-top:7px">${blockers.map((b)=>issueHtml(['exploration',b])).join('')}</div>`:''}<div class="action-row" style="margin-top:8px"><button type="button" data-exploration-assign="${esc(x.id)}" data-vehicle-definition-id="${esc(v.vehicle_definition_id)}" ${v.can_assign?'':'disabled'}>Fleetを割り当て</button></div></div>`;
     }).join('')||'<div class="empty-state">Fleet候補なし</div>';
     const inputs=(x.consumable_resources||[]).map(([rid,amount])=>`${esc(resourceName(rid))} ${fmt(amount)}t`).join(' / ')||'追加消耗資源なし';
     const operations=(x.operations||[]).map(([op,dv])=>`${esc(A.operationName(op))} ${fmt(dv,2)} km/s`).join(' / ')||'—';
@@ -333,7 +335,7 @@
     const actions=lifecycleButton({domain:'survey',id,canStart:s.can_start,canPause:s.can_pause,canResume:s.can_resume,complete:s.complete,startLabel:'探査開始',pauseLabel:'探査停止',resumeLabel:'探査再開',completeLabel:'探査完了'});
     const potential=s.visible_potential==null?'—':fmt(s.visible_potential,3);
     const precision=s.visible_potential_precision_fraction==null?'—':s.visible_potential_precision_fraction<=0?'測定済み':`±${pct(s.visible_potential_precision_fraction)}`;
-    setInspector(`${s.resource_name} · ${s.cell_label}`,section('探査状態',kv([['進捗',pct(s.progress_fraction)],['知識レベル',String(s.knowledge_level)],['Survey能力/日',fmt(s.capacity_points_per_day,2)],['Service要求/割当',`${fmt(s.requested_service_points_per_day,2)} / ${fmt(s.allocated_service_points_per_day,2)}`],['優先度',String(priority)],['存在確率',s.presence_probability==null?'—':pct(s.presence_probability)],['Resource Potential',potential],['推定精度',precision],['探査実施拠点',s.provider_location_id?esc(locationName(s.provider_location_id)):'—']]))+section('現在のblocker',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+section('操作',`<div class="action-stack">${actions}<div class="form-row"><label>優先度<input id="surveyPriorityInput" type="number" step="1" value="${priority}" data-draft-key="survey:${esc(id)}:priority" ${priorityEditable?'':'disabled'}></label><button data-set-survey-priority="${esc(id)}" ${s.can_set_priority?'':'disabled'}>優先度を適用</button></div></div>`));return true;
+    setInspector(`${s.resource_name} · ${s.cell_label}`,section('探査状態',kv([['進捗',pct(s.progress_fraction)],['知識レベル',String(s.knowledge_level)],['Survey能力/日',fmt(s.capacity_points_per_day,2)],['Service要求/割当',`${fmt(s.requested_service_points_per_day,2)} / ${fmt(s.allocated_service_points_per_day,2)}`],['優先度',String(priority)],['存在確率',s.presence_probability==null?'—':pct(s.presence_probability)],['Resource Potential',potential],['推定精度',precision],['探査実施拠点',s.provider_operational_node_id?esc(locationName(s.provider_operational_node_id)):'—']]))+section('現在のblocker',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+section('操作',`<div class="action-stack">${actions}<div class="form-row"><label>優先度<input id="surveyPriorityInput" type="number" step="1" value="${priority}" data-draft-key="survey:${esc(id)}:priority" ${priorityEditable?'':'disabled'}></label><button data-set-survey-priority="${esc(id)}" ${s.can_set_priority?'':'disabled'}>優先度を適用</button></div></div>`));return true;
   }
 
 
@@ -398,9 +400,9 @@
   }
 
   function render(){
-    const loc=state.location;
+    const loc=state.operationalNode;
     if(!loc){
-      $('#locationTitle').textContent=locationName(state.locationId);
+      $('#locationTitle').textContent=locationName(state.operationalNodeId);
       $('#locationKind').textContent='地点状態を取得中';
       $('#headlineMetrics').innerHTML='';
       $$('.tab-button').forEach((b)=>b.classList.toggle('is-active',b.dataset.tab===state.activeTab));
@@ -409,7 +411,7 @@
       return;
     }
     $('#locationTitle').textContent=loc.display_name;
-    const kind=(state.world?.locations||[]).find((x)=>x.id===loc.id)?.kind;
+    const kind=(state.world?.operational_nodes||[]).find((x)=>x.id===loc.id)?.kind;
     $('#locationKind').textContent=`${A.locationKindLabels[kind]||kind||'拠点'}拠点`;
     $('#headlineMetrics').innerHTML=[['発電',`${fmt(loc.power_generation_mw)} MW`],['需要',`${fmt(loc.power_demand_mw)} MW`],['建設能力',`${fmt(loc.construction_capacity_per_day)} /日`],['設備',`${loc.facilities.length}`]].map(A.metricHtml).join('');
     $$('.tab-button').forEach((b)=>b.classList.toggle('is-active',b.dataset.tab===state.activeTab));
@@ -423,7 +425,7 @@
     const surfaceBuild=event.target.closest('[data-surface-build]');if(surfaceBuild){const plan=surfacePlanPayload(surfaceBuild);try{await command('PlanBuild',{operational_node_id:surfaceBuild.dataset.locationId,facility_id:surfaceBuild.dataset.surfaceBuild,site_cell_id:surfaceBuild.dataset.cellId,...plan});banner('Surface Cell建設Projectを作成しました');}catch{}return;}
     const surfaceDevelop=event.target.closest('[data-surface-develop]');if(surfaceDevelop){const plan=surfacePlanPayload(surfaceDevelop);try{await command('DevelopSurfaceCell',{location_id:surfaceDevelop.dataset.surfaceDevelop,cell_id:surfaceDevelop.dataset.cellId,...plan});banner('Surface Cell開発Projectを作成しました');}catch{}return;}
     const surfaceFound=event.target.closest('[data-surface-found]');if(surfaceFound){const card=surfaceFound.closest('.surface-action-card'),displayName=card?.querySelector('[data-new-location-name]')?.value.trim();if(!displayName){banner('Location名を入力してください','error');return;}const priority=Number(card?.querySelector('[data-founding-priority]')?.value??50),preferredSource=card?.querySelector('[data-founding-source]')?.value||null;try{await command('FoundLocation',{staging_node_id:surfaceFound.dataset.stagingNodeId,display_name:displayName,body_id:surfaceFound.dataset.bodyId,core_cell_id:surfaceFound.dataset.cellId,founding_package_id:surfaceFound.dataset.packageId,vehicle_definition_id:surfaceFound.dataset.vehicleId,priority,preferred_source_id:preferredSource});banner('Founding Deploymentを開始しました');}catch{}return;}
-    const build=event.target.closest('[data-build]');if(build){const prefix=build.dataset.planPrefix||'buildPlan',priority=Number($(`#${prefix}PriorityInput`)?.value??50),sourcingPolicy=$(`#${prefix}SourcingPolicy`)?.value||'mixed',source=$(`#${prefix}ImportSource`)?.value||null;try{await command('PlanBuild',{operational_node_id:state.locationId,facility_id:build.dataset.build,priority,sourcing_policy:sourcingPolicy,import_source_id:source});banner('建設計画を作成しました');}catch{}return;}
+    const build=event.target.closest('[data-build]');if(build){const prefix=build.dataset.planPrefix||'buildPlan',priority=Number($(`#${prefix}PriorityInput`)?.value??50),sourcingPolicy=$(`#${prefix}SourcingPolicy`)?.value||'mixed',source=$(`#${prefix}ImportSource`)?.value||null;try{await command('PlanBuild',{operational_node_id:state.operationalNodeId,facility_id:build.dataset.build,priority,sourcing_policy:sourcingPolicy,import_source_id:source});banner('建設計画を作成しました');}catch{}return;}
     const upgrade=event.target.closest('[data-upgrade]');if(upgrade){const prefix=upgrade.dataset.planPrefix||'upgradePlan',priority=Number($(`#${prefix}PriorityInput`)?.value??50),sourcingPolicy=$(`#${prefix}SourcingPolicy`)?.value||'mixed',source=$(`#${prefix}ImportSource`)?.value||null;try{const result=await command('PlanFacilityUpgrade',{facility_id:upgrade.dataset.upgrade,priority,sourcing_policy:sourcingPolicy,import_source_id:source});banner(`Upgrade案件 ${result?.created_id||''} を作成しました`);}catch{}return;}
     const cmd=event.target.closest('[data-command]');if(cmd){const payload={};if(cmd.dataset.facilityId)payload.facility_id=cmd.dataset.facilityId;if(cmd.dataset.projectId)payload.project_id=cmd.dataset.projectId;try{await command(cmd.dataset.command,payload);}catch{}return;}
     const process=event.target.closest('[data-set-facility-process]');if(process){const select=$('#facilityProcessSelect');if(select?.value){try{await command('SetFacilityProcess',{facility_id:process.dataset.setFacilityProcess,process_id:select.value});banner('生産Processを更新しました');}catch{}}return;}
@@ -434,13 +436,13 @@
     const projectSourcing=event.target.closest('[data-set-project-sourcing]');if(projectSourcing){try{await command('SetProjectSourcingPolicy',{project_id:projectSourcing.dataset.setProjectSourcing,sourcing_policy:$('#projectSourcingPolicy').value});}catch{}return;}
     const projectSource=event.target.closest('[data-set-project-source]');if(projectSource){const source=$('#projectImportSource').value||null;try{await command('SetProjectImportSource',{project_id:projectSource.dataset.setProjectSource,operational_node_id:source});}catch{}return;}
     const ra=event.target.closest('[data-research-action]');if(ra){const map={start:'StartResearch',pause:'PauseResearch',resume:'ResumeResearch'},payload={research_id:ra.dataset.id};if(ra.dataset.researchAction==='start')payload.priority=Number($('#researchPriorityInput')?.value??50);try{await command(map[ra.dataset.researchAction],payload);}catch{}return;}
-    const protoSite=event.target.closest('[data-research-prototype-site]');if(protoSite){try{await command('SetResearchPrototypeSite',{research_id:protoSite.dataset.id,location_id:protoSite.dataset.researchPrototypeSite});}catch{}return;}
+    const protoSite=event.target.closest('[data-research-prototype-site]');if(protoSite){try{await command('SetResearchPrototypeSite',{research_id:protoSite.dataset.id,operational_node_id:protoSite.dataset.researchPrototypeSite});}catch{}return;}
     const researchPriority=event.target.closest('[data-set-research-priority]');if(researchPriority){try{await command('SetResearchPriority',{research_id:researchPriority.dataset.setResearchPriority,priority:Number($('#researchPriorityInput').value)});}catch{}return;}
-    const demo=event.target.closest('[data-research-demo-site]');if(demo){try{await command('SetResearchDemonstrationSite',{research_id:demo.dataset.id,location_id:demo.dataset.researchDemoSite});}catch{}return;}
+    const demo=event.target.closest('[data-research-demo-site]');if(demo){try{await command('SetResearchDemonstrationSite',{research_id:demo.dataset.id,operational_node_id:demo.dataset.researchDemoSite});}catch{}return;}
     const ea=event.target.closest('[data-exploration-action]');if(ea){const map={start:'StartScientificExploration',pause:'PauseScientificExploration',resume:'ResumeScientificExploration'};try{await command(map[ea.dataset.explorationAction],{exploration_id:ea.dataset.id});}catch{}return;}
     const assign=event.target.closest('[data-exploration-assign]');if(assign){try{await command('AssignExplorationFleet',{exploration_id:assign.dataset.explorationAssign,vehicle_definition_id:assign.dataset.vehicleDefinitionId});}catch{}return;}
     const unassign=event.target.closest('[data-exploration-unassign]');if(unassign){try{await command('UnassignExplorationFleet',{exploration_id:unassign.dataset.explorationUnassign});}catch{}return;}
-    const sa=event.target.closest('[data-survey-action]');if(sa){const row=(state.surveys?.items||[]).find((x)=>`${x.cell_id}::${x.resource_id}`===sa.dataset.id);if(!row)return;const action=sa.dataset.surveyAction;const map={start:'StartSurvey',pause:'PauseSurvey',resume:'ResumeSurvey'};const payload={cell_id:row.cell_id,resource_id:row.resource_id};if(action==='start'){payload.provider_location_id=state.locationId;payload.priority=Number($('#surveyPriorityInput')?.value??50);}try{await command(map[action],payload);}catch{}return;}
+    const sa=event.target.closest('[data-survey-action]');if(sa){const row=(state.surveys?.items||[]).find((x)=>`${x.cell_id}::${x.resource_id}`===sa.dataset.id);if(!row)return;const action=sa.dataset.surveyAction;const map={start:'StartSurvey',pause:'PauseSurvey',resume:'ResumeSurvey'};const payload={cell_id:row.cell_id,resource_id:row.resource_id};if(action==='start'){payload.provider_operational_node_id=state.operationalNodeId;payload.priority=Number($('#surveyPriorityInput')?.value??50);}try{await command(map[action],payload);}catch{}return;}
     const sp=event.target.closest('[data-set-survey-priority]');if(sp){const row=(state.surveys?.items||[]).find((x)=>`${x.cell_id}::${x.resource_id}`===sp.dataset.setSurveyPriority);if(!row)return;try{await command('SetSurveyPriority',{cell_id:row.cell_id,resource_id:row.resource_id,priority:Number($('#surveyPriorityInput').value)});}catch{}return;}
   });
 

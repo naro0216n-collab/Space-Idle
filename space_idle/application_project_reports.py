@@ -255,7 +255,7 @@ class ApplicationReportProjectorMixin:
         *,
         category: str,
         source: str,
-        location_id: str | None = None,
+        operational_node_id: str | None = None,
         entity_id: str | None = None,
         definition_id: str | None = None,
         resource_id: str | None = None,
@@ -266,14 +266,14 @@ class ApplicationReportProjectorMixin:
             message=str(message if message else code),
             category=category,
             source=source,
-            location_id=location_id,
+            operational_node_id=operational_node_id,
             entity_id=entity_id,
             definition_id=definition_id,
             resource_id=resource_id,
             impact=impact,
         )
 
-    def _location_operational_issues(self, location_id: SpatialNodeId) -> tuple[IssueRow, ...]:
+    def _operational_node_issues(self, location_id: SpatialNodeId) -> tuple[IssueRow, ...]:
         sim = self._simulation
         loc = str(location_id)
         issues: list[IssueRow] = []
@@ -283,7 +283,7 @@ class ApplicationReportProjectorMixin:
             issues.append(self._issue(
                 "power_shortage",
                 f"需要 {power.demand_mw:g} MW に対して {power.allocated_mw:g} MW を配分",
-                category="capacity", source="power", location_id=loc, impact="limited",
+                category="capacity", source="power", operational_node_id=loc, impact="limited",
             ))
 
         for facility in sorted(sim.facilities.all_at(location_id), key=lambda row: str(row.id)):
@@ -291,7 +291,7 @@ class ApplicationReportProjectorMixin:
             for code, detail in sim.facilities.activation_failures(facility, sim.day):
                 issues.append(self._issue(
                     code, detail, category="facility", source="facility",
-                    location_id=loc, entity_id=str(facility.id), definition_id=str(definition.id),
+                    operational_node_id=loc, entity_id=str(facility.id), definition_id=str(definition.id),
                 ))
 
         resource_allocations = sim.resource_allocation_projection({location_id: power})
@@ -312,7 +312,7 @@ class ApplicationReportProjectorMixin:
                 if not sim.facilities.activation_failures(facility, sim.day):
                     issues.append(self._issue(
                         "process:unselected", "生産工程が未選択",
-                        category="industry", source="industry", location_id=loc,
+                        category="industry", source="industry", operational_node_id=loc,
                         entity_id=str(facility.id), definition_id=str(facility.definition_id),
                     ))
                 continue
@@ -320,7 +320,7 @@ class ApplicationReportProjectorMixin:
                 for factor in snap.limiting_factors:
                     issues.append(self._issue(
                         factor, factor, category="industry", source="industry",
-                        location_id=loc, entity_id=str(facility.id),
+                        operational_node_id=loc, entity_id=str(facility.id),
                         definition_id=str(facility.definition_id), impact="limited",
                     ))
 
@@ -334,7 +334,7 @@ class ApplicationReportProjectorMixin:
                 for factor in snap.limiting_factors:
                     issues.append(self._issue(
                         factor, factor, category="extraction", source="extraction",
-                        location_id=loc, entity_id=str(snap.facility_id),
+                        operational_node_id=loc, entity_id=str(snap.facility_id),
                         definition_id=str(snap.facility_def_id),
                         resource_id=str(snap.output_resource_id), impact="limited",
                     ))
@@ -346,7 +346,7 @@ class ApplicationReportProjectorMixin:
             for code, detail in self._project_blockers(project, power):
                 issues.append(self._issue(
                     code, detail, category="construction", source="project",
-                    location_id=loc, entity_id=str(project.id), definition_id=definition_id,
+                    operational_node_id=loc, entity_id=str(project.id), definition_id=definition_id,
                 ))
 
         for row in self._storage_rows(location_id):
@@ -354,7 +354,7 @@ class ApplicationReportProjectorMixin:
                 issues.append(self._issue(
                     "storage_usable_capacity_shortage",
                     f"{row.storage_class} のUsable Capacity超過占有 {row.unusable_occupied_t:g} t",
-                    category="storage", source="storage", location_id=loc, impact="limited",
+                    category="storage", source="storage", operational_node_id=loc, impact="limited",
                 ))
 
         return tuple(issues)
@@ -374,7 +374,7 @@ class ApplicationReportProjectorMixin:
             for blocker in sim.logistics.route_failures(route.id, sim.day):
                 issues.append(self._issue(
                     blocker, blocker, category="logistics", source="route",
-                    location_id=location_filter, entity_id=str(route.id),
+                    operational_node_id=location_filter, entity_id=str(route.id),
                 ))
 
         for allocation in self._transport_allocation_rows():
@@ -385,13 +385,13 @@ class ApplicationReportProjectorMixin:
             for blocker in allocation.blockers:
                 issues.append(self._issue(
                     blocker, blocker, category="logistics", source="transport_allocation",
-                    location_id=allocation.anchor_node_id, entity_id=allocation.id,
+                    operational_node_id=allocation.anchor_node_id, entity_id=allocation.id,
                     definition_id=allocation.vehicle_definition_id,
                 ))
             for limiting in allocation.limiting_factors:
                 issues.append(self._issue(
                     limiting, limiting, category="logistics", source="transport_capacity",
-                    location_id=allocation.anchor_node_id, entity_id=allocation.id,
+                    operational_node_id=allocation.anchor_node_id, entity_id=allocation.id,
                     definition_id=allocation.vehicle_definition_id, impact="limited",
                 ))
 
@@ -409,7 +409,7 @@ class ApplicationReportProjectorMixin:
                 issues.append(self._issue(
                     code, detail or blocker,
                     category="vehicle_production", source="vehicle_production",
-                    location_id=state_location, entity_id=str(state.id),
+                    operational_node_id=state_location, entity_id=str(state.id),
                     definition_id=str(state.vehicle_definition_id), resource_id=resource_id,
                 ))
 
@@ -423,7 +423,7 @@ class ApplicationReportProjectorMixin:
             for blocker in lane.blockers:
                 issues.append(self._issue(
                     blocker, blocker, category="logistics", source="logistics_lane",
-                    location_id=location_filter, entity_id=lane.id,
+                    operational_node_id=location_filter, entity_id=lane.id,
                 ))
 
         for demand in self._demand_rows(demands, lane_snapshot):
@@ -437,7 +437,7 @@ class ApplicationReportProjectorMixin:
                 "demand_unassigned",
                 f"未割当需要 {demand.remaining_t:g} t",
                 category="logistics", source="resource_demand",
-                location_id=demand.destination_id, entity_id=demand.id,
+                operational_node_id=demand.destination_id, entity_id=demand.id,
                 resource_id=demand.resource_id, impact="limited",
             ))
         return tuple(issues)
@@ -450,9 +450,9 @@ class ApplicationReportProjectorMixin:
             if row.status in {"available", "locked"}:
                 groups.append(("research_start", row.start_blockers, None))
             elif row.status == "prototype":
-                groups.append(("research_prototype", row.prototype_blockers, row.prototype_location_id))
+                groups.append(("research_prototype", row.prototype_blockers, row.prototype_operational_node_id))
             elif row.status == "demonstration":
-                groups.append(("research_demonstration", row.demonstration_blockers, row.demonstration_location_id))
+                groups.append(("research_demonstration", row.demonstration_blockers, row.demonstration_operational_node_id))
 
             for source, blockers, selected_location in groups:
                 if location_filter is not None and selected_location != location_filter:
@@ -460,7 +460,7 @@ class ApplicationReportProjectorMixin:
                 for code, detail in blockers:
                     issues.append(self._issue(
                         code, detail, category="research", source=source,
-                        location_id=selected_location, definition_id=row.id,
+                        operational_node_id=selected_location, definition_id=row.id,
                     ))
 
         explorations = self._scientific_explorations_view()
@@ -482,7 +482,7 @@ class ApplicationReportProjectorMixin:
                 issues.append(self._issue(
                     code, detail or blocker,
                     category="exploration", source="scientific_exploration",
-                    location_id=issue_location, definition_id=row.id,
+                    operational_node_id=issue_location, definition_id=row.id,
                     resource_id=resource_id,
                 ))
 
@@ -493,7 +493,7 @@ class ApplicationReportProjectorMixin:
             for blocker in row.blockers:
                 issues.append(self._issue(
                     blocker, blocker, category="survey", source="survey",
-                    location_id=row.location_id, resource_id=row.resource_id,
+                    operational_node_id=row.location_id, resource_id=row.resource_id,
                 ))
 
         if location_filter is None:
@@ -513,9 +513,9 @@ class ApplicationReportProjectorMixin:
         issues: list[IssueRow] = []
         if location_id is None:
             for node in sim.graph.operational_nodes():
-                issues.extend(self._location_operational_issues(node.id))
+                issues.extend(self._operational_node_issues(node.id))
         else:
-            issues.extend(self._location_operational_issues(location_id))
+            issues.extend(self._operational_node_issues(location_id))
         issues.extend(self._global_logistics_issues(location_filter))
         issues.extend(self._progression_issues(location_filter))
 
@@ -523,7 +523,7 @@ class ApplicationReportProjectorMixin:
         seen: set[tuple] = set()
         for issue in issues:
             key = (
-                issue.code, issue.category, issue.source, issue.location_id,
+                issue.code, issue.category, issue.source, issue.operational_node_id,
                 issue.entity_id, issue.definition_id, issue.resource_id,
             )
             if key in seen:
@@ -612,5 +612,5 @@ class ApplicationReportProjectorMixin:
             str(location_id), sim.day, power.generation_mw, power.demand_mw,
             power.allocated_mw, utilization,
             sim.projects.construction_capacity_at(location_id, power, sim.day),
-            tuple(rows), self._location_operational_issues(location_id),
+            tuple(rows), self._operational_node_issues(location_id),
         )

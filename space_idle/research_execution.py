@@ -50,9 +50,9 @@ class ResearchExecutionMixin:
         if spec is None:
             return False
         location_id = (
-            state.prototype_location_id
+            state.prototype_operational_node_id
             if stage is ResearchStage.PROTOTYPE
-            else state.demonstration_location_id
+            else state.demonstration_operational_node_id
         )
         if location_id is None:
             return False
@@ -144,7 +144,7 @@ class ResearchExecutionMixin:
             if state.paused:
                 continue
             if state.stage is ResearchStage.PROTOTYPE:
-                location_id = state.prototype_location_id
+                location_id = state.prototype_operational_node_id
                 prototype = self.definitions[research_id].prototype
                 if location_id is None or prototype is None:
                     continue
@@ -163,7 +163,7 @@ class ResearchExecutionMixin:
                 ):
                     state.stage_progress = 1.0
             elif state.stage is ResearchStage.DEMONSTRATION:
-                location_id = state.demonstration_location_id
+                location_id = state.demonstration_operational_node_id
                 demonstration = self.definitions[research_id].demonstration
                 if location_id is None or demonstration is None:
                     continue

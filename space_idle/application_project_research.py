@@ -153,15 +153,15 @@ class ResearchProgressionProjectorMixin:
                             for category, required in spec.requirements.items()
                         )
 
-            prototype_location_id = (
+            prototype_operational_node_id = (
                 None
-                if state is None or state.prototype_location_id is None
-                else str(state.prototype_location_id)
+                if state is None or state.prototype_operational_node_id is None
+                else str(state.prototype_operational_node_id)
             )
-            demonstration_location_id = (
+            demonstration_operational_node_id = (
                 None
-                if state is None or state.demonstration_location_id is None
-                else str(state.demonstration_location_id)
+                if state is None or state.demonstration_operational_node_id is None
+                else str(state.demonstration_operational_node_id)
             )
             prototype_sites = (
                 self._research_site_options(definition, demonstration=False)
@@ -182,7 +182,7 @@ class ResearchProgressionProjectorMixin:
 
             prototype_resources: list[ResearchPrototypeResourceRow] = []
             if definition.prototype is not None:
-                location_id = None if state is None else state.prototype_location_id
+                location_id = None if state is None else state.prototype_operational_node_id
                 for resource_id, required in sorted(
                     definition.prototype.resources.items(), key=lambda row: str(row[0])
                 ):
@@ -247,9 +247,9 @@ class ResearchProgressionProjectorMixin:
                 current_blockers,
                 start_blockers,
                 tuple(prototype_resources),
-                prototype_location_id,
+                prototype_operational_node_id,
                 prototype_sites,
-                demonstration_location_id,
+                demonstration_operational_node_id,
                 demonstration_sites,
                 demonstration_blockers,
                 prototype_blockers,

@@ -94,7 +94,7 @@
   function logistics(){return state.logistics||{};}
 
   function renderRouteFilters(){
-    const locs=state.world?.locations||[];
+    const locs=state.world?.operational_nodes||[];
     for(const [selId,label] of [['#routeOriginFilter','全出発地'],['#routeDestinationFilter','全到着地']]){
       const sel=$(selId); if(!sel)continue; const current=sel.value;
       sel.innerHTML=`<option value="">${label}</option>`+locs.map((l)=>`<option value="${esc(l.id)}">${esc(l.display_name)}</option>`).join('');
@@ -129,7 +129,7 @@
     return positions;
   }
   function renderNetwork(){
-    const svg=$('#networkSvg'),nodes=$('#networkNodes'),routes=state.routes?.items||[],locations=state.world?.locations||[],positions=networkPositions(locations);
+    const svg=$('#networkSvg'),nodes=$('#networkNodes'),routes=state.routes?.items||[],locations=state.world?.operational_nodes||[],positions=networkPositions(locations);
     svg.innerHTML=routes.map((r)=>{const a=positions[r.origin_id],b=positions[r.destination_id];if(!a||!b)return'';return `<line x1="${a[0]*9}" y1="${a[1]*4.7}" x2="${b[0]*9}" y2="${b[1]*4.7}" class="network-line ${r.service_feasible_now?'available':''} ${r.id===state.selectedRouteId?'selected':''}" data-route-line="${esc(r.id)}" />`;}).join('');
     nodes.innerHTML=locations.map((loc)=>{const p=positions[loc.id]||[50,50];return `<div class="network-node" style="left:${p[0]}%;top:${p[1]}%"><button type="button" data-network-location="${esc(loc.id)}"><span class="node-name">${esc(loc.display_name)}</span><span class="node-meta">設備 ${loc.facility_count} · 建設 ${loc.active_project_count}</span></button></div>`;}).join('');
   }
@@ -217,7 +217,7 @@
   }
 
   function populateLocationSelects(){
-    const opts=(state.world?.locations||[]).map((l)=>`<option value="${esc(l.id)}">${esc(l.display_name)}</option>`).join('');
+    const opts=(state.world?.operational_nodes||[]).map((l)=>`<option value="${esc(l.id)}">${esc(l.display_name)}</option>`).join('');
     for(const id of ['laneSource','laneDestination','allocationSource','allocationDestination','relocationDestination']){const el=$('#'+id);if(el){const current=el.value;el.innerHTML=opts;if([...el.options].some((o)=>o.value===current))el.value=current;}}
     const vehicle=$('#allocationVehicle'); if(vehicle){const current=vehicle.value;vehicle.innerHTML=(state.catalog?.vehicles||[]).map((v)=>`<option value="${esc(v.id)}">${esc(v.display_name)}</option>`).join('');if([...vehicle.options].some((o)=>o.value===current))vehicle.value=current;}
   }

@@ -6,7 +6,7 @@ import pytest
 
 from space_idle import (
     AdvanceTime,
-    GetLocation,
+    GetOperationalNode,
     GetProjects,
     PauseBuild,
     PlanFacilityUpgrade,
@@ -22,7 +22,7 @@ from space_idle.shared import EntityId
 def _earth_lab(app):
     row = next(
         facility
-        for facility in app.query(GetLocation(str(EARTH))).facilities
+        for facility in app.query(GetOperationalNode(str(EARTH))).facilities
         if facility.definition_id == str(EARTH_RESEARCH_LAB)
     )
     state = app._simulation.facilities.facilities[EntityId(row.id)]

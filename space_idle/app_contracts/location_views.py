@@ -18,6 +18,24 @@ class InventoryRow:
 
 
 @dataclass(frozen=True)
+class ResourceClaimRow:
+    id: str
+    resource_id: str
+    display_name: str
+    unit: str
+    owner_kind: str
+    owner_id: str
+    purpose: str
+    priority: int
+    requested: float
+    allocated: float
+    unmet: float
+    minimum: float
+    atomic: bool
+    demand_id: str | None
+
+
+@dataclass(frozen=True)
 class StorageRow:
     storage_class: str
     stock_t: float
@@ -142,7 +160,7 @@ class ExtractionResourceRow:
 
 
 @dataclass(frozen=True)
-class LocationView:
+class OperationalNodeView:
     id: str
     display_name: str
     day: int
@@ -155,6 +173,7 @@ class LocationView:
     service_capacities: tuple[ServiceCapacityRow, ...]
     surface_infrastructure: SurfaceInfrastructureRow | None
     inventory: tuple[InventoryRow, ...]
+    resource_claims: tuple[ResourceClaimRow, ...]
     storage: tuple[StorageRow, ...]
     facilities: tuple[FacilityRow, ...]
     industry: tuple[IndustryRow, ...]

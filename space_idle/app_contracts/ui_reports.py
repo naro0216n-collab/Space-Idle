@@ -10,7 +10,7 @@ class IssueRow:
     message: str
     category: str
     source: str
-    location_id: str | None = None
+    operational_node_id: str | None = None
     entity_id: str | None = None
     definition_id: str | None = None
     resource_id: str | None = None
@@ -37,7 +37,7 @@ class ResourceFlowRow:
 
 @dataclass(frozen=True)
 class FlowReportView:
-    location_id: str
+    operational_node_id: str
     day: int
     power_generation_mw: float
     power_demand_mw: float
@@ -51,5 +51,5 @@ class FlowReportView:
 @dataclass(frozen=True)
 class BottlenecksView:
     day: int
-    location_id: str | None
+    operational_node_id: str | None
     items: tuple[IssueRow, ...]

@@ -25,11 +25,11 @@ class ProgressionCommandHandlerMixin:
             elif isinstance(command, ResumeResearch):
                 sim.research.resume(rid)
             elif isinstance(command, SetResearchPrototypeSite):
-                sim.research.set_prototype_site(rid, self._require_location(command.location_id), sim.day)
+                sim.research.set_prototype_site(rid, self._require_operational_node(command.operational_node_id), sim.day)
             elif isinstance(command, SetResearchPriority):
                 sim.research.set_priority(rid, command.priority)
             else:
-                sim.research.set_demonstration_site(rid, self._require_location(command.location_id), sim.day)
+                sim.research.set_demonstration_site(rid, self._require_operational_node(command.operational_node_id), sim.day)
             return CommandResult()
         if isinstance(command, (
             StartScientificExploration, PauseScientificExploration, ResumeScientificExploration,
@@ -57,9 +57,9 @@ class ProgressionCommandHandlerMixin:
                 raise KeyError(command.cell_id)
             resource_id = self._require_resource(command.resource_id)
             if isinstance(command, StartSurvey):
-                provider_location_id = self._require_location(command.provider_location_id)
+                provider_operational_node_id = self._require_operational_node(command.provider_operational_node_id)
                 sim.survey.start(
-                    provider_location_id, cell_id, resource_id,
+                    provider_operational_node_id, cell_id, resource_id,
                     priority=command.priority,
                     day=sim.day,
                 )

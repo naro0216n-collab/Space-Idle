@@ -8,20 +8,20 @@ class GetWorld: pass
 @dataclass(frozen=True)
 class GetSurfaceMap: body_id: str
 @dataclass(frozen=True)
-class GetLocation: location_id: str
+class GetOperationalNode: operational_node_id: str
 @dataclass(frozen=True)
-class GetFlowReport: location_id: str
+class GetFlowReport: operational_node_id: str
 @dataclass(frozen=True)
 class GetDependencyAnalytics:
     scope_kind: str = "player"
     scope_id: str | None = None
     node_ids: tuple[str, ...] = ()
 @dataclass(frozen=True)
-class GetBottlenecks: location_id: str | None = None
+class GetBottlenecks: operational_node_id: str | None = None
 @dataclass(frozen=True)
-class GetProjects: location_id: str | None = None
+class GetProjects: operational_node_id: str | None = None
 @dataclass(frozen=True)
-class GetBuildOptions: location_id: str
+class GetBuildOptions: operational_node_id: str
 @dataclass(frozen=True)
 class GetLogistics: pass
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ class GetRoutes:
     include_modes: bool = True
 @dataclass(frozen=True)
 class GetFleet:
-    location_id: str | None = None
+    operational_node_id: str | None = None
     vehicle_definition_id: str | None = None
 @dataclass(frozen=True)
 class GetFleetRelocationPreview:
@@ -58,7 +58,7 @@ class GetResearch: pass
 @dataclass(frozen=True)
 class GetScientificExplorations: pass
 @dataclass(frozen=True)
-class GetSurveys: provider_location_id: str | None = None
+class GetSurveys: provider_operational_node_id: str | None = None
 @dataclass(frozen=True)
 class GetContracts: pass
 @dataclass(frozen=True)

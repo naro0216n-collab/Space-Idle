@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import pytest
 
-from space_idle import GetLocation, GetSurfaceMap, build_game_application
+from space_idle import GetOperationalNode, GetSurfaceMap, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.content.base_facilities import build_facility_definitions
 from space_idle.extraction_service import ExtractionService
@@ -157,7 +157,7 @@ def test_application_queries_expose_surface_knowledge_and_extraction_decision_st
     assert metal.visible_potential is not None
     assert metal.visible_potential_precision_fraction == 0.0
 
-    location = app.query(GetLocation(str(ids.EARTH)))
+    location = app.query(GetOperationalNode(str(ids.EARTH)))
     extraction = next(row for row in location.extraction_resources if row.resource_id == str(ids.METAL_ORE))
     assert extraction.effective_opportunity > 0.0
     assert extraction.installed_nominal_capacity_t_per_day > 0.0

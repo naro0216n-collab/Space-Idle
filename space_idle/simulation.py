@@ -133,7 +133,7 @@ class Simulation:
                 if project.status.value in {"preparing", "deploying"}
             )
         if self.survey is not None:
-            locations.update(campaign.provider_location_id for campaign in self.survey.campaigns.values())
+            locations.update(campaign.provider_operational_node_id for campaign in self.survey.campaigns.values())
         locations.update(
             project.operational_node_id
             for project in self.logistics.vehicle_production_projects.values()

@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
-    GetContracts, GetDependencyAnalytics, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogisticsLanes,
+    GetContracts, GetDependencyAnalytics, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode, GetLogisticsLanes,
     GetLogisticsSummary, GetProjects, GetResearch, GetRoutes, GetSurveys,
     GetTransportAllocationOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
 )
@@ -275,10 +275,10 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             self._query_result(GetDependencyAnalytics(scope_kind, scope_id, node_ids))
             return
         if path == "/api/v1/bottlenecks":
-            self._query_result(GetBottlenecks(_one(params, "location_id")))
+            self._query_result(GetBottlenecks(_one(params, "operational_node_id")))
             return
         if path == "/api/v1/projects":
-            self._query_result(GetProjects(_one(params, "location_id")))
+            self._query_result(GetProjects(_one(params, "operational_node_id")))
             return
         if path == "/api/v1/logistics/summary":
             self._query_result(GetLogisticsSummary())
@@ -300,7 +300,7 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/v1/logistics/fleet":
             self._query_result(GetFleet(
-                location_id=_one(params, "location_id"),
+                operational_node_id=_one(params, "operational_node_id"),
                 vehicle_definition_id=_one(params, "vehicle_definition_id"),
             ))
             return
@@ -331,30 +331,30 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             self._query_result(GetResearch())
             return
         if path == "/api/v1/surveys":
-            self._query_result(GetSurveys(_one(params, "provider_location_id")))
+            self._query_result(GetSurveys(_one(params, "provider_operational_node_id")))
             return
         if path == "/api/v1/contracts":
             self._query_result(GetContracts())
             return
 
-        prefix = "/api/v1/locations/"
+        prefix = "/api/v1/operational-nodes/"
         if path.startswith(prefix):
             rest = path[len(prefix):]
             if rest.endswith("/flow"):
-                location_id = unquote(rest[:-5].rstrip("/"))
-                if not location_id:
-                    raise ApiPayloadError("location id is required")
-                self._query_result(GetFlowReport(location_id))
+                operational_node_id = unquote(rest[:-5].rstrip("/"))
+                if not operational_node_id:
+                    raise ApiPayloadError("operational node id is required")
+                self._query_result(GetFlowReport(operational_node_id))
                 return
             if rest.endswith("/build-options"):
-                location_id = unquote(rest[:-14].rstrip("/"))
-                if not location_id:
-                    raise ApiPayloadError("location id is required")
-                self._query_result(GetBuildOptions(location_id))
+                operational_node_id = unquote(rest[:-14].rstrip("/"))
+                if not operational_node_id:
+                    raise ApiPayloadError("operational node id is required")
+                self._query_result(GetBuildOptions(operational_node_id))
                 return
-            location_id = unquote(rest)
-            if location_id:
-                self._query_result(GetLocation(location_id))
+            operational_node_id = unquote(rest)
+            if operational_node_id:
+                self._query_result(GetOperationalNode(operational_node_id))
                 return
 
         self._error(HTTPStatus.NOT_FOUND, "not_found", "endpoint not found")

@@ -107,3 +107,49 @@ def test_real_maintenance_and_industry_claims_compete_in_the_same_allocator():
         maintenance_total
     )
     assert sum(forward.allocated(claim.id) for claim in industry_claims) == pytest.approx(0.0)
+
+
+def test_operational_node_query_exposes_shared_resource_claim_allocation_decision_surface():
+    from space_idle import GetOperationalNode, build_game_application
+    from space_idle.content import base_ids as ids
+
+    app = build_game_application()
+    sim = app._simulation
+    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+    maintenance_claims = tuple(
+        claim for claim in sim.maintenance.resource_claims(sim.day)
+        if claim.operational_node_id == ids.EARTH
+        and claim.resource_id == ids.STRUCTURAL_COMPONENTS
+    )
+    industry_claims = tuple(
+        claim for claim in sim.industry.resource_claims(
+            ids.EARTH, sim.facilities, power, sim.day
+        )
+        if claim.resource_id == ids.STRUCTURAL_COMPONENTS
+    )
+    assert maintenance_claims and industry_claims
+    for claim in maintenance_claims:
+        sim.facilities.facilities[claim.owner_id].maintenance_priority = 80
+    maintenance_claims = tuple(
+        claim for claim in sim.maintenance.resource_claims(sim.day)
+        if claim.operational_node_id == ids.EARTH
+        and claim.resource_id == ids.STRUCTURAL_COMPONENTS
+    )
+    maintenance_total = sum(claim.requested_amount for claim in maintenance_claims)
+    sim.inventory.stock[(ids.EARTH, ids.STRUCTURAL_COMPONENTS)] = maintenance_total
+
+    view = app.query(GetOperationalNode(str(ids.EARTH)))
+    rows = tuple(
+        row for row in view.resource_claims
+        if row.resource_id == str(ids.STRUCTURAL_COMPONENTS)
+        and row.owner_kind in {"facility_maintenance", "industry_process"}
+    )
+
+    assert rows
+    assert all(row.requested == pytest.approx(row.allocated + row.unmet) for row in rows)
+    maintenance_rows = tuple(row for row in rows if row.owner_kind == "facility_maintenance")
+    industry_rows = tuple(row for row in rows if row.owner_kind == "industry_process")
+    assert sum(row.allocated for row in maintenance_rows) == pytest.approx(maintenance_total)
+    assert sum(row.allocated for row in industry_rows) == pytest.approx(0.0)
+    assert all(row.priority == 80 for row in maintenance_rows)
+    assert all(row.unmet > 0.0 for row in industry_rows)

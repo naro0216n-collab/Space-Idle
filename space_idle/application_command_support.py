@@ -5,8 +5,8 @@ from .shared import DefinitionId, SpatialNodeId
 
 
 class ApplicationCommandSupportMixin:
-    def _require_location(self, location_id: str) -> SpatialNodeId:
-        value = SpatialNodeId(location_id)
+    def _require_operational_node(self, operational_node_id: str) -> SpatialNodeId:
+        value = SpatialNodeId(operational_node_id)
         if not self._simulation.graph.has_operational_node(value):
             raise KeyError(value)
         return value

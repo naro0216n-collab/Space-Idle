@@ -17,7 +17,7 @@ class CapabilityContractTemplate:
     site_requirements: SiteRequirements
     duration_days: int
     reward_musd: float
-    target_location_id: SpatialNodeId | None = None
+    target_operational_node_id: SpatialNodeId | None = None
 
 
 ContractTemplate = CapabilityContractTemplate
@@ -79,8 +79,8 @@ class ContractService:
         self, template: CapabilityContractTemplate, day: int
     ) -> bool:
         locations = (
-            (template.target_location_id,)
-            if template.target_location_id is not None
+            (template.target_operational_node_id,)
+            if template.target_operational_node_id is not None
             else self.facilities.environment.graph.operational_node_ids()
         )
         return any(
