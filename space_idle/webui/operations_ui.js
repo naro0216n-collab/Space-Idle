@@ -141,7 +141,12 @@
 
   function renderActiveTab(){
     const renderers={overview:renderOverviewTab,facilities:renderFacilitiesTab,inventory:renderInventoryTab,construction:renderConstructionTab,research:renderResearchTab,'scientific-exploration':renderScientificExplorationTab,survey:renderSurveyTab,surface:renderSurfaceTab};
-    $('#operationsTabContent').innerHTML=(renderers[state.activeTab]||renderOverviewTab)();
+    const root=$('#operationsTabContent');
+    const html=(renderers[state.activeTab]||renderOverviewTab)();
+    // Keep the current interaction surface mounted when the authoritative view is
+    // unchanged. Periodic synchronization must not detach a button while the user
+    // is clicking it or replace in-progress form controls with identical markup.
+    if(root.innerHTML!==html)root.innerHTML=html;
   }
 
   function renderFacilityInspector(id){

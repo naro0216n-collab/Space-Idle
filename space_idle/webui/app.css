@@ -160,10 +160,10 @@ tbody tr.selectable:hover, tbody tr.is-selected { background: #13283a; }
 
 .surface-layout { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 12px; }
 .surface-map-card { min-width: 0; }
-.surface-map-stage { position: relative; min-height: 480px; margin: 12px; border: 1px solid var(--line-soft); border-radius: 9px; overflow: hidden; background: #09131d; }
+.surface-map-stage { position: relative; min-height: 480px; margin: 12px; border: 1px solid var(--line-soft); border-radius: 9px; overflow: hidden; background: #09131d; isolation: isolate; pointer-events: none; }
 .surface-map-links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .surface-map-links line { stroke: #31506a; stroke-width: 2; vector-effect: non-scaling-stroke; }
-.surface-cell-button { position: absolute; width: 150px; min-height: 64px; transform: translate(-50%, -50%); padding: 7px 9px; text-align: left; border-color: #334654; background: #101b25; z-index: 2; }
+.surface-cell-button { position: absolute; width: 150px; min-height: 64px; transform: translate(-50%, -50%); padding: 7px 9px; text-align: left; border-color: #334654; background: #101b25; z-index: 2; pointer-events: auto; }
 .surface-cell-button.is-developed { border-color: #477d6b; background: #10241f; }
 .surface-cell-button.is-core { box-shadow: 0 0 0 2px #4f8fb4 inset; }
 .surface-cell-button.is-selected { border-color: var(--accent); background: #163249; }
