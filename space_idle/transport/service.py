@@ -21,6 +21,7 @@ from .models import (
 from .operations import OperationEvaluatorRegistry, build_default_operation_registry
 from .production import VehicleProductionMixin, VehicleProductionState
 from .surface_routes import SurfaceOrbitRouteRule, SurfaceTransportRouteRule
+from .supply import TransportSupplyMixin
 
 
 @dataclass
@@ -28,6 +29,7 @@ class TransportService(
     TransportCompatibilityMixin,
     FleetAllocationMixin,
     VehicleProductionMixin,
+    TransportSupplyMixin,
 ):
     """Authoritative Fleet and Transport state owner.
 

@@ -11,29 +11,20 @@ from .service_capacity import ServiceCapacityAllocationPlan
 from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .logistics_lanes import DemandSupplyOptions, LaneRuntimeMetrics, LogisticsLaneSnapshot
 from .logistics_models import CargoFlowBatch, CargoFlowStatus, LogisticsLane
-from .transport.models import DirectionalCapacity, PathPolicy, TransportCapacitySnapshot
-
-
-@dataclass(frozen=True)
-class _ServiceEdge:
-    key: str
-    source_id: SpatialNodeId
-    destination_id: SpatialNodeId
-    capacity_t_per_day: float
-    latency_days: int
-    route_path: tuple[RouteId, ...]
-    allocation_id: EntityId | None = None
-    direction: str | None = None
-    external_service_id: DefinitionId | None = None
-    cost_musd_per_t: float = 0.0
-    propellant_t_per_t: float = 0.0
+from .transport.models import (
+    DirectionalCapacity,
+    PathPolicy,
+    TransportCapacitySnapshot,
+    TransportOperationDependencyProjection,
+    TransportServiceSupply,
+)
 
 
 @dataclass(frozen=True)
 class _PlannedDispatch:
     lane_id: EntityId
     demand: ResourceDemand
-    path: tuple[_ServiceEdge, ...]
+    path: tuple[TransportServiceSupply, ...]
     amount_t: float
     cargo_claim_id: EntityId
     spending_request_ids: tuple[EntityId, ...] = ()
@@ -98,93 +89,11 @@ class LogisticsFlowMixin:
     services. Logistics consumes it; it does not select or resize Fleet assets.
     """
 
-    def _service_edges(self, day: int) -> tuple[_ServiceEdge, ...]:
-        edges: list[_ServiceEdge] = []
-        for allocation in sorted(
-            self.transport.transport_allocations.values(),
-            key=lambda row: (str(row.vehicle_definition_id), str(row.anchor_node_id), str(row.destination_id), str(row.id)),
-        ):
-            plan = self.transport.derive_transport_service_plan(allocation.id, day)
-            if not plan.feasible or allocation.paused or self.transport.transport_active_units(allocation.id) <= 0:
-                continue
-            snapshot = self.transport.transport_capacity_snapshot(allocation.id, day=day)
-            definition = self.transport.vehicle_defs[allocation.vehicle_definition_id]
-            propellant_id = definition.propellant_resource_id
-            empty_propellant = sum(
-                amount for _loc, rid, amount in plan.resource_t_per_empty_cycle_day
-                if rid == propellant_id
-            )
-            forward_increment = sum(
-                amount for _loc, rid, amount in plan.resource_t_per_forward_payload_increment_day
-                if rid == propellant_id
-            )
-            reverse_increment = sum(
-                amount for _loc, rid, amount in plan.resource_t_per_reverse_payload_increment_day
-                if rid == propellant_id
-            )
-            forward_propellant_per_t = (
-                0.0 if plan.nominal_per_unit.forward_t_per_day <= 1e-12
-                else (empty_propellant + forward_increment) / plan.nominal_per_unit.forward_t_per_day
-            )
-            reverse_propellant_per_t = (
-                0.0 if plan.nominal_per_unit.reverse_t_per_day <= 1e-12
-                else (empty_propellant + reverse_increment) / plan.nominal_per_unit.reverse_t_per_day
-            )
-            if snapshot.available.forward_t_per_day > 1e-12:
-                edges.append(
-                    _ServiceEdge(
-                        f"allocation:{allocation.id}:forward",
-                        allocation.anchor_node_id,
-                        allocation.destination_id,
-                        snapshot.available.forward_t_per_day,
-                        max(1, plan.forward_latency_days),
-                        plan.forward_path,
-                        allocation.id,
-                        "forward",
-                        propellant_t_per_t=forward_propellant_per_t,
-                    )
-                )
-            if snapshot.available.reverse_t_per_day > 1e-12 and plan.reverse_path:
-                edges.append(
-                    _ServiceEdge(
-                        f"allocation:{allocation.id}:reverse",
-                        allocation.destination_id,
-                        allocation.anchor_node_id,
-                        snapshot.available.reverse_t_per_day,
-                        max(1, plan.reverse_latency_days or 1),
-                        plan.reverse_path,
-                        allocation.id,
-                        "reverse",
-                        propellant_t_per_t=reverse_propellant_per_t,
-                    )
-                )
-
-        for service in sorted(self.transport.external_services.values(), key=lambda row: str(row.id)):
-            if service.capacity_t_per_day <= 1e-12:
-                continue
-            for route in sorted(self.transport.routes.values(), key=lambda row: str(row.id)):
-                if self.transport.service_route_failures(route.id, service.id, day):
-                    continue
-                edges.append(
-                    _ServiceEdge(
-                        f"external:{service.id}:{route.id}",
-                        route.origin_id,
-                        route.destination_id,
-                        service.capacity_t_per_day,
-                        self.transport.performance_route_transit_days(
-                            route,
-                            service.performance,
-                            transit_multiplier=service.transit_time_multiplier,
-                        ),
-                        (route.id,),
-                        external_service_id=service.id,
-                        cost_musd_per_t=service.cost_musd_per_t,
-                    )
-                )
-        return tuple(edges)
+    def _service_edges(self, day: int) -> tuple[TransportServiceSupply, ...]:
+        return self.transport.transport_service_supplies(day)
 
     @staticmethod
-    def _edge_score(edge: _ServiceEdge, policy: PathPolicy) -> float:
+    def _edge_score(edge: TransportServiceSupply, policy: PathPolicy) -> float:
         if policy is PathPolicy.FASTEST:
             return float(edge.latency_days)
         if policy is PathPolicy.LOWEST_COST:
@@ -195,13 +104,13 @@ class LogisticsFlowMixin:
         self,
         source_id: SpatialNodeId,
         destination_id: SpatialNodeId,
-        edges: tuple[_ServiceEdge, ...],
+        edges: tuple[TransportServiceSupply, ...],
         policy: PathPolicy,
-    ) -> tuple[_ServiceEdge, ...]:
-        by_source: dict[SpatialNodeId, list[_ServiceEdge]] = {}
+    ) -> tuple[TransportServiceSupply, ...]:
+        by_source: dict[SpatialNodeId, list[TransportServiceSupply]] = {}
         for edge in edges:
             by_source.setdefault(edge.source_id, []).append(edge)
-        queue: list[tuple[float, tuple[str, ...], SpatialNodeId, tuple[_ServiceEdge, ...]]] = [
+        queue: list[tuple[float, tuple[str, ...], SpatialNodeId, tuple[TransportServiceSupply, ...]]] = [
             (0.0, (), source_id, ())
         ]
         best: dict[SpatialNodeId, tuple[float, tuple[str, ...]]] = {}
@@ -231,12 +140,12 @@ class LogisticsFlowMixin:
         source_id: SpatialNodeId,
         destination_id: SpatialNodeId,
         route_path: tuple[RouteId, ...],
-        edges: tuple[_ServiceEdge, ...],
+        edges: tuple[TransportServiceSupply, ...],
         policy: PathPolicy,
-    ) -> tuple[_ServiceEdge, ...]:
+    ) -> tuple[TransportServiceSupply, ...]:
         candidates = sorted(edges, key=lambda edge: (self._edge_score(edge, policy), edge.key))
 
-        def search(node: SpatialNodeId, index: int) -> tuple[_ServiceEdge, ...] | None:
+        def search(node: SpatialNodeId, index: int) -> tuple[TransportServiceSupply, ...] | None:
             if index == len(route_path):
                 return () if node == destination_id else None
             for edge in candidates:
@@ -259,10 +168,10 @@ class LogisticsFlowMixin:
         self,
         lane: LogisticsLane,
         day: int,
-        edges: tuple[_ServiceEdge, ...] | None = None,
+        edges: tuple[TransportServiceSupply, ...] | None = None,
         *,
         enforce_external_policy: bool = True,
-    ) -> tuple[_ServiceEdge, ...]:
+    ) -> tuple[TransportServiceSupply, ...]:
         available = self._service_edges(day) if edges is None else edges
         if enforce_external_policy:
             available = tuple(
@@ -287,15 +196,15 @@ class LogisticsFlowMixin:
 
     @staticmethod
     def _edges_with_remaining(
-        edges: tuple[_ServiceEdge, ...], remaining: dict[str, float]
-    ) -> tuple[_ServiceEdge, ...]:
+        edges: tuple[TransportServiceSupply, ...], remaining: dict[str, float]
+    ) -> tuple[TransportServiceSupply, ...]:
         return tuple(edge for edge in edges if remaining.get(edge.key, 0.0) > 1e-12)
 
     def _lane_transport_capacity(
         self,
         lane: LogisticsLane,
         day: int,
-        edges: tuple[_ServiceEdge, ...],
+        edges: tuple[TransportServiceSupply, ...],
         remaining: dict[str, float],
     ) -> float:
         """Return capacity available to one Lane across parallel Service paths.
@@ -352,7 +261,7 @@ class LogisticsFlowMixin:
     def _allocation_used_after(
         self,
         used: dict[EntityId, DirectionalCapacity],
-        path: tuple[_ServiceEdge, ...],
+        path: tuple[TransportServiceSupply, ...],
         amount: float,
     ) -> dict[EntityId, DirectionalCapacity]:
         result = dict(used)
@@ -436,6 +345,10 @@ class LogisticsFlowMixin:
         Resource allocator with every local Domain consumer.
         """
         edges = self._service_edges(day)
+        operation_dependencies = {
+            row.allocation_id: row
+            for row in self.transport.transport_operation_dependencies(day)
+        }
         remaining = {edge.key: edge.capacity_t_per_day for edge in edges}
         demand_rows = tuple(sorted(demands, key=lambda row: (-row.priority, str(row.id))))
         pipeline = self._flow_pipeline_by_demand({row.id for row in demand_rows})
@@ -552,13 +465,13 @@ class LogisticsFlowMixin:
         ):
             if requested <= 1e-12:
                 continue
-            allocation = self.transport.transport_allocations[allocation_id]
+            dependency = operation_dependencies[allocation_id]
             claims.append(ResourceClaim(
                 self._operation_claim_id(allocation_id, location_id, resource_id),
                 location_id,
                 resource_id,
                 requested,
-                allocation.priority,
+                dependency.priority,
                 "transport_operation",
                 allocation_id,
                 "sustained_transport",
@@ -585,6 +498,10 @@ class LogisticsFlowMixin:
         """
         dispatches: list[_PlannedDispatch] = []
         used: dict[EntityId, DirectionalCapacity] = {}
+        operation_dependencies = {
+            row.allocation_id: row
+            for row in self.transport.transport_operation_dependencies(day)
+        }
         requests_by_id = {request.id: request for request in plan.spending_requests}
         for row in plan.dispatches:
             amount = row.amount_t
@@ -646,7 +563,7 @@ class LogisticsFlowMixin:
         ):
             if requested <= 1e-12:
                 continue
-            allocation = self.transport.transport_allocations[allocation_id]
+            dependency = operation_dependencies[allocation_id]
             claims.append(
                 ResourceClaim(
                     self._operation_claim_id(
@@ -655,7 +572,7 @@ class LogisticsFlowMixin:
                     location_id,
                     resource_id,
                     requested,
-                    allocation.priority,
+                    dependency.priority,
                     "transport_operation",
                     allocation_id,
                     "sustained_transport",
@@ -767,11 +684,10 @@ class LogisticsFlowMixin:
 
     def _transport_operation_allocation_factor(
         self,
-        allocation_id: EntityId,
+        dependency: TransportOperationDependencyProjection,
         plan: LogisticsResourcePlan,
         resource_allocations: ResourceAllocationPlan,
         service_allocations: ServiceCapacityAllocationPlan,
-        day: int,
     ) -> tuple[float, tuple[str, ...]]:
         """Resolve one Transport Allocation's shared dependency fulfillment.
 
@@ -779,6 +695,7 @@ class LogisticsFlowMixin:
         This method only interprets the shared allocation results; it never reads
         Inventory or runs a Transport-local allocator.
         """
+        allocation_id = dependency.allocation_id
         ratios: list[float] = []
         limiting: list[str] = []
         for claim in plan.claims:
@@ -802,10 +719,12 @@ class LogisticsFlowMixin:
             directional.forward_t_per_day > 1e-12
             or directional.reverse_t_per_day > 1e-12
         )
-        allocation = self.transport.transport_allocations[allocation_id]
-        definition = self.transport.vehicle_defs[allocation.vehicle_definition_id]
-        if has_planned_usage and definition.turnaround_service_type is not None:
-            request_id = self.transport.transport_service_request_id(allocation_id)
+        if has_planned_usage and dependency.turnaround_service_type is not None:
+            request_id = dependency.turnaround_request_id
+            if request_id is None:
+                raise RuntimeError(
+                    f"transport dependency missing turnaround request: {allocation_id}"
+                )
             try:
                 request = service_allocations.request(request_id)
                 allocated = service_allocations.allocated(request_id)
@@ -821,18 +740,11 @@ class LogisticsFlowMixin:
             ratios.append(ratio)
             if ratio < 1.0 - 1e-12:
                 limiting.append(
-                    f"servicing_allocation:{allocation.anchor_node_id}:"
-                    f"{definition.turnaround_service_type}"
+                    f"servicing_allocation:{dependency.anchor_node_id}:"
+                    f"{dependency.turnaround_service_type}"
                 )
 
-        service_plan = self.transport.derive_transport_service_plan(allocation_id, day)
-        surface_locations: set[SpatialNodeId] = set()
-        for route_id in service_plan.forward_path + service_plan.reverse_path:
-            geometry = self.transport.route_geometry(route_id)
-            for endpoint in (geometry.origin, geometry.destination):
-                if endpoint.surface_cell_id is not None:
-                    surface_locations.add(endpoint.node_id)
-        for location_id in sorted(surface_locations, key=str):
+        for location_id in dependency.surface_service_locations:
             request_id = EntityId(f"service.surface_distribution:{location_id}")
             try:
                 request = service_allocations.request(request_id)
@@ -874,9 +786,10 @@ class LogisticsFlowMixin:
         # ``plan``; location-wide upstream services such as surface
         # distribution are authoritative for the allocation regardless of
         # current cargo demand.
-        for allocation_id in sorted(self.transport.transport_allocations, key=str):
+        for dependency in self.transport.transport_operation_dependencies(day):
+            allocation_id = dependency.allocation_id
             factor, limiting = self._transport_operation_allocation_factor(
-                allocation_id, plan, allocations, service_allocations, day
+                dependency, plan, allocations, service_allocations
             )
             operation_factor[allocation_id] = factor
             operation_limits[allocation_id] = limiting
@@ -1018,7 +931,7 @@ class LogisticsFlowMixin:
         return tuple(activities)
 
     def _external_policy_blockers_for_lane(
-        self, lane: LogisticsLane, day: int, edges: tuple[_ServiceEdge, ...]
+        self, lane: LogisticsLane, day: int, edges: tuple[TransportServiceSupply, ...]
     ) -> tuple[str, ...]:
         try:
             physical_path = self.lane_service_path(
@@ -1043,7 +956,7 @@ class LogisticsFlowMixin:
         self,
         day: int,
         execution_allocation: LogisticsExecutionAllocation | None,
-    ) -> tuple[_ServiceEdge, ...]:
+    ) -> tuple[TransportServiceSupply, ...]:
         edges = self._service_edges(day)
         if execution_allocation is None:
             return edges

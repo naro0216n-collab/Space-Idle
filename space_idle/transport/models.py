@@ -273,6 +273,49 @@ class TransportCapacitySnapshot:
     limiting_factors: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class TransportServiceSupply:
+    """Transport-owned projection of one directional service offered to Logistics."""
+
+    key: str
+    source_id: SpatialNodeId
+    destination_id: SpatialNodeId
+    capacity_t_per_day: float
+    latency_days: int
+    route_path: tuple[RouteId, ...]
+    allocation_id: EntityId | None = None
+    direction: str | None = None
+    external_service_id: DefinitionId | None = None
+    cost_musd_per_t: float = 0.0
+    propellant_t_per_t: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.capacity_t_per_day < 0:
+            raise ValueError("transport service supply capacity must be non-negative")
+        if self.latency_days <= 0:
+            raise ValueError("transport service supply latency must be positive")
+        if self.source_id == self.destination_id:
+            raise ValueError("transport service supply endpoints must differ")
+        if (self.allocation_id is None) != (self.direction is None):
+            raise ValueError("owned transport supply requires allocation and direction together")
+        if self.direction not in (None, "forward", "reverse"):
+            raise ValueError("transport service supply direction must be forward or reverse")
+        if self.cost_musd_per_t < 0 or self.propellant_t_per_t < 0:
+            raise ValueError("transport service supply costs must be non-negative")
+
+
+@dataclass(frozen=True)
+class TransportOperationDependencyProjection:
+    """Transport-owned dependencies Logistics must submit to shared allocators."""
+
+    allocation_id: EntityId
+    priority: int
+    anchor_node_id: SpatialNodeId
+    turnaround_service_type: str | None
+    turnaround_request_id: EntityId | None
+    surface_service_locations: tuple[SpatialNodeId, ...] = ()
+
+
 class OperationSupportLocation(str, Enum):
     ORIGIN = "origin"
     DESTINATION = "destination"

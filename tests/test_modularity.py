@@ -131,6 +131,27 @@ def test_transport_package_does_not_own_logistics_state_or_flow_implementation()
     assert (PACKAGE / "logistics_flow.py").exists()
 
 
+def test_logistics_consumes_transport_projection_instead_of_transport_state_containers():
+    tree = ast.parse(
+        (PACKAGE / "logistics_flow.py").read_text(encoding="utf-8"),
+        filename="logistics_flow.py",
+    )
+    forbidden_state = {"transport_allocations", "vehicle_defs", "routes", "external_services"}
+    direct_state_reads = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute) or node.attr not in forbidden_state:
+            continue
+        owner = node.value
+        if (
+            isinstance(owner, ast.Attribute)
+            and owner.attr == "transport"
+            and isinstance(owner.value, ast.Name)
+            and owner.value.id == "self"
+        ):
+            direct_state_reads.append(node.attr)
+    assert direct_state_reads == []
+
+
 def test_public_domain_facades_compose_focused_implementations():
     from space_idle.application_query_projectors import ApplicationQueryMixin
     from space_idle.application_command_handlers import ApplicationCommandMixin
@@ -143,7 +164,12 @@ def test_public_domain_facades_compose_focused_implementations():
     def bases(cls):
         return {base.__name__ for base in cls.__mro__[1:]}
 
-    assert {"TransportCompatibilityMixin", "FleetAllocationMixin", "VehicleProductionMixin"}.issubset(bases(TransportService))
+    assert {
+        "TransportCompatibilityMixin",
+        "FleetAllocationMixin",
+        "VehicleProductionMixin",
+        "TransportSupplyMixin",
+    }.issubset(bases(TransportService))
     assert {"LogisticsLaneMixin", "LogisticsFlowMixin"}.issubset(bases(LogisticsService))
     assert not {"FleetAllocationMixin", "TransportCompatibilityMixin", "VehicleProductionMixin"} & bases(LogisticsService)
     assert {"ConstructionRulesMixin", "ConstructionPlanningMixin", "ConstructionProcurementMixin", "ConstructionExecutionMixin"}.issubset(bases(ProjectService))

@@ -10,7 +10,8 @@ from .models import (
     VehicleMaintenanceSpec, VehicleDef, ExternalTransportServiceDef,
     FleetPool, FleetReservation, FleetReservationSnapshot, FleetRelocation, FleetRelease,
     DirectionalCapacity, TransportAllocation, TransportServicePlan,
-    TransportCapacitySnapshot,
+    TransportCapacitySnapshot, TransportServiceSupply,
+    TransportOperationDependencyProjection,
 )
 from .operations import (
     OperationEvaluationContext, OperationEvaluatorRegistry,
@@ -29,7 +30,8 @@ __all__ = [
     'VehicleMaintenanceSpec', 'VehicleDef', 'ExternalTransportServiceDef',
     'FleetPool', 'FleetReservation', 'FleetReservationSnapshot', 'FleetRelocation', 'FleetRelease',
     'DirectionalCapacity', 'TransportAllocation', 'TransportServicePlan',
-    'TransportCapacitySnapshot',
+    'TransportCapacitySnapshot', 'TransportServiceSupply',
+    'TransportOperationDependencyProjection',
     'OperationEvaluationContext', 'OperationEvaluatorRegistry',
     'build_default_operation_registry', 'TransportService',
 ]
