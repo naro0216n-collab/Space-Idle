@@ -161,7 +161,7 @@
   async function beginMutation(){
     while(state.busy)await new Promise((resolve)=>setTimeout(resolve,20));
     state.busy=true; document.body.classList.add('is-busy');
-    const pending=state.syncInFlight; if(pending){try{await pending;}catch{}}
+    const pending=state.syncInFlight?.promise; if(pending){try{await pending;}catch{}}
   }
   function endMutation(){state.busy=false;document.body.classList.remove('is-busy');}
   async function command(type,payload={}){
@@ -221,11 +221,24 @@
     else window.SpaceIdleLogistics?.render();
   }
 
+  function clearLocationSnapshot(){
+    state.location=null; state.flow=null; state.bottlenecks=null; state.projects=null;
+    state.buildOptions=null; state.surveys=null; state.inspector=null;
+  }
   async function loadUiSnapshot({preserveInteraction=true}={}){
-    if(state.syncInFlight)return state.syncInFlight;
-    state.syncInFlight=(async()=>{
-      const suffix=state.locationId?`?location_id=${encodeURIComponent(state.locationId)}`:'';
-      const data=await api(`/api/v1/ui-state${suffix}`); applyUiSnapshot(data);
+    while(state.syncInFlight){
+      const pending=state.syncInFlight;
+      if(pending.locationId===state.locationId)return pending.promise;
+      try{await pending.promise;}catch{}
+      if(state.syncInFlight===pending)state.syncInFlight=null;
+    }
+    const locationId=state.locationId;
+    const request={locationId,promise:null};
+    request.promise=(async()=>{
+      const suffix=locationId?`?location_id=${encodeURIComponent(locationId)}`:'';
+      const data=await api(`/api/v1/ui-state${suffix}`);
+      if(locationId!==state.locationId)return data;
+      applyUiSnapshot(data);
       if(!state.locationId||!(state.world?.locations||[]).some((x)=>x.id===state.locationId)){
         state.locationId=state.world?.locations?.[0]?.id??null;
         if(state.locationId&&data.location===undefined){const nested=await api(`/api/v1/ui-state?location_id=${encodeURIComponent(state.locationId)}`);applyUiSnapshot(nested);}
@@ -235,14 +248,14 @@
       document.dispatchEvent(new CustomEvent('spaceidle:snapshot',{detail:state}));
       return data;
     })();
-    try{return await state.syncInFlight;}finally{state.syncInFlight=null;}
+    state.syncInFlight=request;
+    try{return await request.promise;}finally{if(state.syncInFlight===request)state.syncInFlight=null;}
   }
   async function loadLocation(locationId){
-    if(!locationId)return;
-    const pending=state.syncInFlight;
-    if(pending){try{await pending;}catch{}}
+    if(!locationId||locationId===state.locationId)return;
     state.locationId=locationId;
-    state.inspector=null;
+    clearLocationSnapshot();
+    renderAll();
     await loadUiSnapshot({preserveInteraction:false});
   }
   function setActiveView(view){
