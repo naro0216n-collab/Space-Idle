@@ -42,7 +42,10 @@ class LogisticsLaneProjectorMixin:
         rows: list[ResourceDemandRow] = []
         for resolution in resolutions:
             demand = resolution.demand
-            pipeline_t = pipeline.get(demand.id, 0.0)
+            procurement_pipeline_t = sim.logistics.procurement_pipeline_t(
+                demand.id, delivery_node_id=demand.destination_id
+            )
+            pipeline_t = pipeline.get(demand.id, 0.0) + procurement_pipeline_t
             remaining_t = max(0.0, resolution.external_required_t - pipeline_t)
             options = sim.logistics.demand_supply_options(
                 demand,
@@ -53,11 +56,26 @@ class LogisticsLaneProjectorMixin:
             runway = None if rate is None else runway_by_key.get(
                 (demand.destination_id, demand.resource_id), 0.0
             )
+            procurement_arrivals = [
+                row.ready_day
+                for row in sim.logistics.procurement_deliveries.values()
+                if row.demand_id == demand.id
+                and row.delivery_node_id == demand.destination_id
+            ]
+            arrival_days = [
+                value
+                for value in (
+                    options.earliest_confirmed_arrival_day,
+                    min(procurement_arrivals) if procurement_arrivals else None,
+                )
+                if value is not None
+            ]
+            earliest_arrival_day = min(arrival_days) if arrival_days else None
             gap = None
-            if runway is not None and options.earliest_confirmed_arrival_day is not None:
+            if runway is not None and earliest_arrival_day is not None:
                 gap = max(
                     0.0,
-                    float(options.earliest_confirmed_arrival_day - sim.day) - runway,
+                    float(earliest_arrival_day - sim.day) - runway,
                 )
 
             if resolution.external_required_t <= 1e-9:
@@ -100,7 +118,7 @@ class LogisticsLaneProjectorMixin:
                 demand.priority,
                 rate,
                 runway,
-                options.earliest_confirmed_arrival_day,
+                earliest_arrival_day,
                 gap,
                 len(options.eligible_lane_ids),
                 len(options.operational_lane_ids),

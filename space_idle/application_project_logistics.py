@@ -29,6 +29,7 @@ class LogisticsProjectorMixin(
             vehicle_production_options=self._vehicle_production_option_rows(),
             vehicle_production=self._vehicle_production_rows(),
             cargo_flows=self._cargo_flow_rows(),
+            procurement_deliveries=self._procurement_delivery_rows(),
             lanes=self._lane_rows(demands, snapshot, decision),
             demands=self._demand_rows(
                 demands, snapshot, decision.allocations.transport
@@ -41,6 +42,7 @@ class LogisticsProjectorMixin(
         pools = self._fleet_pool_rows()
         allocations = self._transport_allocation_rows()
         flows = self._cargo_flow_rows()
+        procurement_deliveries = self._procurement_delivery_rows()
         decision = sim.tick_decision_projection()
         demands = decision.plan.external_demands
         snapshot = sim.logistics.lane_snapshot(
@@ -59,11 +61,17 @@ class LogisticsProjectorMixin(
             free_fleet_units=sum(row.free_units for row in pools),
             allocation_count=len(allocations),
             unfilled_allocation_units=sum(row.unfilled_units for row in allocations),
-            cargo_flow_count=len(flows),
+            cargo_flow_count=len(flows) + len(procurement_deliveries),
             lane_count=len(lanes),
             paused_lane_count=sum(1 for row in lanes if row.paused),
             demand_count=len(demand_rows),
             queued_demand_t=sum(row.remaining_t for row in demand_rows),
-            in_transit_t=sum(row.amount_t for row in flows if row.status == "in_transit"),
-            arrival_waiting_t=sum(row.amount_t for row in flows if row.status == "arrival_waiting"),
+            in_transit_t=(
+                sum(row.amount_t for row in flows if row.status == "in_transit")
+                + sum(row.amount_t for row in procurement_deliveries if row.status == "in_transit")
+            ),
+            arrival_waiting_t=(
+                sum(row.amount_t for row in flows if row.status == "arrival_waiting")
+                + sum(row.amount_t for row in procurement_deliveries if row.status == "arrival_waiting")
+            ),
         )

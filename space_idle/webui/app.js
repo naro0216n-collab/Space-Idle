@@ -21,7 +21,7 @@
   const definitionMaps = () => [
     state.catalog?.resources, state.catalog?.facilities, state.catalog?.vehicles,
     state.catalog?.operational_nodes, state.catalog?.processes, state.catalog?.research,
-    state.catalog?.routes, state.catalog?.transport_services,
+    state.catalog?.routes, state.catalog?.transport_services, state.catalog?.procurement_services,
   ].filter(Boolean).map(byId);
   const definitionName = (id) => {
     if(!id)return '—';

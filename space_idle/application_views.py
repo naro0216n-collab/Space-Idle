@@ -5,7 +5,7 @@ from .app_contracts.catalog_views import (
     SiteRequirementsDefinitionRow,
     OperationCapabilityDefinitionRow, ResourceDefinitionRow, FacilityDefinitionRow,
     ProcessDefinitionRow, ResearchDefinitionRow, VehicleDefinitionRow, RouteDefinitionRow,
-    TransportServiceDefinitionRow, CelestialBodyDefinitionRow, OperationalNodeDefinitionRow,
+    TransportServiceDefinitionRow, ProcurementServiceDefinitionRow, CelestialBodyDefinitionRow, OperationalNodeDefinitionRow,
     CatalogView, OperationalNodeSummary, WorldView,
 )
 from .app_contracts.project_views import (
@@ -19,7 +19,7 @@ from .app_contracts.location_views import (
 )
 from .app_contracts.logistics_views import (
     InfrastructureRequirementRow, RouteEndpointRow, RouteModeRow, RouteRow, DirectionalCapacityRow, FleetPoolRow, TransportAllocationRow,
-    FleetRelocationResourceRequirementRow, FleetRelocationRow, FleetReleaseRow, CargoFlowRow, VehicleProductionOptionRow, VehicleProductionRow,
+    FleetRelocationResourceRequirementRow, FleetRelocationRow, FleetReleaseRow, CargoFlowRow, ProcurementDeliveryRow, VehicleProductionOptionRow, VehicleProductionRow,
     ResourceDemandRow, LogisticsLaneRow, LogisticsView, TransportAllocationOptionRow,
     TransportAllocationOptionsView,
 )

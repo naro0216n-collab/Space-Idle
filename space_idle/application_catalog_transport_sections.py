@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_catalog_support import operation_capability_definition, site_requirements_definition
 from .application_transport_support import vehicle_concept
-from .application_views import RouteDefinitionRow, TransportServiceDefinitionRow, VehicleDefinitionRow
+from .application_views import ProcurementServiceDefinitionRow, RouteDefinitionRow, TransportServiceDefinitionRow, VehicleDefinitionRow
 
 
 def project_vehicles(projector):
@@ -47,4 +47,20 @@ def project_transport_services(projector):
             site_requirements_definition(service.destination_requirements),
         )
         for service in sorted(projector._simulation.transport.external_services.values(), key=lambda row: str(row.id))
+    )
+
+
+def project_procurement_services(projector):
+    return tuple(
+        ProcurementServiceDefinitionRow(
+            str(service.id),
+            service.display_name,
+            str(service.delivery_node_id),
+            service.delivery_latency_days,
+            tuple((str(resource_id), price) for resource_id, price in service.resource_prices_musd_per_t),
+        )
+        for service in sorted(
+            projector._simulation.logistics.procurement_services.values(),
+            key=lambda row: str(row.id),
+        )
     )

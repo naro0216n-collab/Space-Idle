@@ -128,6 +128,15 @@ class TransportServiceDefinitionRow:
 
 
 @dataclass(frozen=True)
+class ProcurementServiceDefinitionRow:
+    id: str
+    display_name: str
+    delivery_node_id: str
+    delivery_latency_days: int
+    resource_prices_musd_per_t: tuple[tuple[str, float], ...]
+
+
+@dataclass(frozen=True)
 class CelestialBodyDefinitionRow:
     id: str
     display_name: str
@@ -153,6 +162,7 @@ class CatalogView:
     research: tuple[ResearchDefinitionRow, ...] = ()
     routes: tuple[RouteDefinitionRow, ...] = ()
     transport_services: tuple[TransportServiceDefinitionRow, ...] = ()
+    procurement_services: tuple[ProcurementServiceDefinitionRow, ...] = ()
 
 
 @dataclass(frozen=True)

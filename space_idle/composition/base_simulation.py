@@ -36,6 +36,7 @@ from ..content.base_founding import build_founding_packages
 from ..content.base_industry import build_process_specs
 from ..content.base_initial_state import configure_initial_inventory
 from ..content.base_power import build_power_specs
+from ..content.base_procurement import build_external_procurement_services
 from ..content.base_progression import (
     build_extraction_specs,
     build_survey_providers,
@@ -104,6 +105,9 @@ def build_base_simulation() -> Simulation:
         external_economy=external_economy,
         facilities=facilities,
     )
+    logistics.procurement_services.update(build_external_procurement_services())
+    for service_id in logistics.procurement_services:
+        external_economy.register_service(service_id)
 
     industry = IndustryService(build_process_specs())
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from .application_transport_support import infrastructure_requirement_rows
 from .application_views import (
     CargoFlowRow, CargoFlowsView, DirectionalCapacityRow, FleetPoolRow,
+    ProcurementDeliveryRow,
     FleetRelocationPreviewView, FleetRelocationResourceRequirementRow,
     FleetRelocationRow, FleetReleaseRow, FleetView, TransportAllocationRow,
     TransportAllocationsView, VehicleProductionOptionRow, VehicleProductionRow,
@@ -165,6 +166,27 @@ class LogisticsStateProjectorMixin:
                 departure_day=flow.departure_day, ready_day=flow.ready_day, status=flow.status.value,
             )
             for flow in sorted(sim.logistics.cargo_flows.values(), key=lambda row: str(row.id))
+        )
+
+    def _procurement_delivery_rows(self) -> tuple[ProcurementDeliveryRow, ...]:
+        sim = self._simulation
+        return tuple(
+            ProcurementDeliveryRow(
+                id=str(row.id),
+                service_id=str(row.service_id),
+                demand_id=str(row.demand_id),
+                owner_kind=row.owner_kind,
+                owner_id=str(row.owner_id),
+                delivery_node_id=str(row.delivery_node_id),
+                resource_id=str(row.resource_id),
+                amount_t=row.amount_t,
+                order_day=row.order_day,
+                ready_day=row.ready_day,
+                status=row.status.value,
+            )
+            for row in sorted(
+                sim.logistics.procurement_deliveries.values(), key=lambda row: str(row.id)
+            )
         )
 
     def _vehicle_production_option_rows(self) -> tuple[VehicleProductionOptionRow, ...]:

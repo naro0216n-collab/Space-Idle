@@ -161,6 +161,21 @@ class CargoFlowRow:
 
 
 @dataclass(frozen=True)
+class ProcurementDeliveryRow:
+    id: str
+    service_id: str
+    demand_id: str
+    owner_kind: str
+    owner_id: str
+    delivery_node_id: str
+    resource_id: str
+    amount_t: float
+    order_day: int
+    ready_day: int
+    status: str
+
+
+@dataclass(frozen=True)
 class VehicleProductionOptionRow:
     vehicle_definition_id: str
     display_name: str
@@ -242,6 +257,7 @@ class LogisticsView:
     vehicle_production_options: tuple[VehicleProductionOptionRow, ...]
     vehicle_production: tuple[VehicleProductionRow, ...]
     cargo_flows: tuple[CargoFlowRow, ...]
+    procurement_deliveries: tuple[ProcurementDeliveryRow, ...]
     lanes: tuple[LogisticsLaneRow, ...]
     demands: tuple[ResourceDemandRow, ...]
 

@@ -171,7 +171,7 @@
   }
 
   function externalServiceDefinitions(){
-    return state.catalog?.transport_services||[];
+    return [...(state.catalog?.transport_services||[]), ...(state.catalog?.procurement_services||[])];
   }
   function externalServiceOptions(selected=[]){
     const chosen=new Set(selected||[]);
@@ -198,8 +198,12 @@
   }
 
   function renderCargoFlows(){
-    const items=state.cargoFlows?.items||logistics().cargo_flows||[]; $('#cargoCountBadge').textContent=`${items.length}件`;
-    const rows=items.map((f)=>`<tr><td><div class="cell-main">${esc(resourceName(f.resource_id))}</div><div class="cell-sub">${esc(ownerLabel(f.owner_kind))} · ${esc(f.owner_id)}</div></td><td>${esc(locationName(f.source_id))} → ${esc(locationName(f.destination_id))}</td><td>${fmt(f.amount_t)} t</td><td>${esc(f.status)}</td><td>Day ${fmt(f.departure_day,0)} → ${fmt(f.ready_day,0)}</td><td>${esc((f.service_ids||[]).map(definitionName).join(' → '))}</td></tr>`).join('');
+    const cargo=state.cargoFlows?.items||logistics().cargo_flows||[];
+    const procurement=logistics().procurement_deliveries||[];
+    $('#cargoCountBadge').textContent=`${cargo.length+procurement.length}件`;
+    const cargoRows=cargo.map((f)=>`<tr><td><div class="cell-main">${esc(resourceName(f.resource_id))}</div><div class="cell-sub">${esc(ownerLabel(f.owner_kind))} · ${esc(f.owner_id)}</div></td><td>${esc(locationName(f.source_id))} → ${esc(locationName(f.destination_id))}</td><td>${fmt(f.amount_t)} t</td><td>${esc(f.status)}</td><td>Day ${fmt(f.departure_day,0)} → ${fmt(f.ready_day,0)}</td><td>${esc((f.service_ids||[]).map(definitionName).join(' → '))}</td></tr>`).join('');
+    const procurementRows=procurement.map((f)=>`<tr><td><div class="cell-main">${esc(resourceName(f.resource_id))}</div><div class="cell-sub">${esc(ownerLabel(f.owner_kind))} · ${esc(f.owner_id)}</div></td><td>External → ${esc(locationName(f.delivery_node_id))}</td><td>${fmt(f.amount_t)} t</td><td>${esc(f.status)}</td><td>Day ${fmt(f.order_day,0)} → ${fmt(f.ready_day,0)}</td><td>${esc(definitionName(f.service_id))}</td></tr>`).join('');
+    const rows=cargoRows+procurementRows;
     $('#cargoTable').innerHTML=`<table><thead><tr><th>資源 / 発生元</th><th>区間</th><th>量</th><th>状態</th><th>dispatch / arrival</th><th>Service path</th></tr></thead><tbody>${rows||'<tr><td colspan="6">輸送中・到着待機Cargo Flowなし</td></tr>'}</tbody></table>`;
   }
 

@@ -140,6 +140,7 @@ EARTH_LEO_LAUNCH_SERVICE = DefinitionId("base.transport_service.commercial_earth
 LEO_LUNAR_SERVICE = DefinitionId("base.transport_service.commercial_orbital_transfer")
 LUNAR_LANDING_SERVICE = DefinitionId("base.transport_service.commercial_vacuum_lander")
 DIRECT_LUNAR_SERVICE = DefinitionId("base.transport_service.commercial_earth_lunar_direct")
+EARTH_INDUSTRIAL_MARKET = DefinitionId("base.procurement_service.earth_industrial_market")
 
 # Scientific Exploration campaigns are finite science activities, separate from resource survey.
 CISLUNAR_SCIENCE_EXPLORATION = DefinitionId("base.scientific_exploration.cislunar_environment_observation")

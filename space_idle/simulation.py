@@ -8,6 +8,7 @@ from .contracts import ContractService
 from .construction.models import CONSTRUCTION_SERVICE_TYPE
 from .domain import DomainExtension
 from .external_economy import ExternalEconomyState, FundsAllocationPlan, FundsRequest
+from .external_procurement import ExternalProcurementPlan
 from .facilities import FacilityBook, FacilityPlacementScope
 from .founding import LocationFoundingService
 from .industry import IndustryService
@@ -84,12 +85,23 @@ class TickIntents:
 class TickPlan:
     external_demands: tuple[ResourceDemand, ...]
     logistics: LogisticsResourcePlan
+    procurement: ExternalProcurementPlan
+
+    @property
+    def spending_requests(self) -> tuple[FundsRequest, ...]:
+        return tuple(
+            sorted(
+                self.logistics.spending_requests + self.procurement.spending_requests,
+                key=lambda row: str(row.id),
+            )
+        )
 
 
 @dataclass(frozen=True)
 class TickAllocations:
     funds: FundsAllocationPlan
     logistics: LogisticsResourcePlan
+    procurement: ExternalProcurementPlan
     resources: ResourceAllocationPlan
     power_by_location: dict[SpatialNodeId, PowerSnapshot]
     services: ServiceCapacityAllocationPlan
@@ -539,7 +551,7 @@ class Simulation:
     def external_funds_projection(self) -> tuple[tuple[FundsRequest, ...], FundsAllocationPlan]:
         """Expose Funds requests and authorization from the shared tick DAG."""
         decision = self.tick_decision_projection()
-        return decision.plan.logistics.spending_requests, decision.allocations.funds
+        return decision.plan.spending_requests, decision.allocations.funds
 
     def resource_allocation_projection(self) -> ResourceAllocationPlan:
         """Derive the current shared Resource allocation without mutating state."""
@@ -584,6 +596,7 @@ class Simulation:
             self.founding.settle_arrivals(self.day)
         self.transport.synchronize_surface_access_routes()
         self.logistics.settle_cargo_arrivals(self.day)
+        self.logistics.settle_procurement_arrivals(self.day)
 
         # Procurement wait/policy maturation is a clock-boundary transition.
         # It may expose intents for this tick but never consumes inventory.
@@ -618,7 +631,10 @@ class Simulation:
         logistics_plan = self.logistics.plan_capacity_logistics(
             self.day, external_demands
         )
-        return TickPlan(external_demands, logistics_plan)
+        procurement_plan = self.logistics.plan_external_procurement(
+            self.day, external_demands, logistics_plan
+        )
+        return TickPlan(external_demands, logistics_plan, procurement_plan)
 
     def _complete_service_requests(
         self, requests: tuple[ServiceCapacityRequest, ...]
@@ -698,6 +714,7 @@ class Simulation:
 
         funds: FundsAllocationPlan | None = None
         authorized_logistics: LogisticsResourcePlan | None = None
+        authorized_procurement: ExternalProcurementPlan | None = None
         resources: ResourceAllocationPlan | None = None
         maintenance_factors: dict[EntityId, float] | None = None
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None
@@ -708,7 +725,7 @@ class Simulation:
         for node in order:
             if node == ALLOCATION_FUNDS:
                 funds = self.external_economy.allocate(
-                    plan.logistics.spending_requests, self.day
+                    plan.spending_requests, self.day
                 )
                 continue
             if node == ALLOCATION_LOGISTICS:
@@ -716,6 +733,9 @@ class Simulation:
                     raise RuntimeError("allocation graph resolved logistics before funds")
                 authorized_logistics = self.logistics.authorize_capacity_logistics(
                     plan.logistics, funds, self.day
+                )
+                authorized_procurement = self.logistics.authorize_external_procurement(
+                    plan.procurement, funds
                 )
                 transport_requests = self.transport.transport_service_capacity_requests(
                     self.day, authorized_logistics.planned_usage
@@ -795,6 +815,7 @@ class Simulation:
         if (
             funds is None
             or authorized_logistics is None
+            or authorized_procurement is None
             or resources is None
             or power_by_location is None
             or transport is None
@@ -804,6 +825,7 @@ class Simulation:
         return TickAllocations(
             funds,
             authorized_logistics,
+            authorized_procurement,
             resources,
             power_by_location,
             services,
@@ -878,6 +900,9 @@ class Simulation:
         # only amounts authorized from the start-of-tick allocation and cannot
         # admit arriving Cargo to Inventory until the next boundary.
         self.transport.advance_fleet_relocations(allocations.resources, self.day)
+        self.logistics.advance_external_procurement(
+            self.day, allocations.procurement, allocations.funds
+        )
         return self.logistics.advance_capacity_logistics(
             self.day,
             allocations.logistics,

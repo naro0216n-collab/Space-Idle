@@ -9,6 +9,7 @@ from .application_catalog_core_sections import (
     project_resources,
 )
 from .application_catalog_transport_sections import (
+    project_procurement_services,
     project_routes,
     project_transport_services,
     project_vehicles,
@@ -29,6 +30,7 @@ class CatalogWorldProjectorMixin:
             project_research(self),
             project_routes(self),
             project_transport_services(self),
+            project_procurement_services(self),
         )
 
     def _world_view(self) -> WorldView:
