@@ -187,6 +187,18 @@ def run() -> None:
             for required in ("経路", "所要", "Infrastructure", "必要Resource"):
                 assert required in relocation_text, f"relocation decision surface lacks {required}"
             assert page.locator("#relocationSubmitButton").is_enabled()
+            refresh_state = page.evaluate(
+                """() => {
+                    document.dispatchEvent(new CustomEvent('spaceidle:snapshot'));
+                    return {
+                        text: document.querySelector('#relocationPreview')?.innerText || '',
+                        disabled: Boolean(document.querySelector('#relocationSubmitButton')?.disabled),
+                    };
+                }"""
+            )
+            assert not refresh_state["disabled"], "background snapshot disabled a valid relocation action"
+            for required in ("経路", "所要", "Infrastructure", "必要Resource"):
+                assert required in refresh_state["text"], f"background snapshot hid relocation {required}"
             page.locator("#relocationCancelButton").click()
             page.locator("#relocationDialog").wait_for(state="hidden", timeout=10000)
 
