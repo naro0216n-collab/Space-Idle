@@ -222,13 +222,16 @@ class Simulation:
             }
             self.storage.refresh(self.day, power_before)
 
-            # Re-evaluate previous-day discrete claims before production. This
-            # protects already allocated high-priority material from being
-            # consumed by a lower-priority process simply because industry runs
-            # earlier in the daily orchestrator.
-            reconcile_local_resource_claims(
-                self._gross_resource_demands(power_before), self.inventory
-            )
+            # Determine all current need and Transport availability before any
+            # same-tick production or arrivals can alter the resource snapshot.
+            gross_demands = self._gross_resource_demands(power_before)
+            reconcile_local_resource_claims(gross_demands, self.inventory)
+            external_demands = external_resource_demands(gross_demands, self.inventory)
+            self.logistics.advance_capacity_logistics(self.day, external_demands)
+
+            # Arrivals may serve later Domain work in this tick, but cannot feed
+            # back into the already fixed Transport capacity above.
+            reconcile_local_resource_claims(gross_demands, self.inventory)
 
             for loc in ordered_locations:
                 self.industry.advance_day(
@@ -239,9 +242,6 @@ class Simulation:
                         loc, self.facilities, self.inventory, power_before[loc], self.day
                     )
 
-            # Production changes physical stock. Rebuild the derived allocation
-            # before the progression and maintenance steps that follow it in the
-            # canonical daily order.
             reconcile_local_resource_claims(
                 self._gross_resource_demands(power_before), self.inventory
             )
@@ -252,30 +252,12 @@ class Simulation:
                 self.scientific_exploration.advance_day(power_before, self.day)
             if self.survey is not None:
                 self.survey.advance_day(power_before, self.day)
-
-            # Maintenance is fulfilled from stock available before today's
-            # logistics progression. Logistics replenishes future demand; it is
-            # not retroactively available to an earlier daily Domain step.
             if self.maintenance is not None:
                 self.maintenance.advance_day(self.day)
 
-            # Sourcing policy determines whether residual shortage may leave the
-            # site. It does not reserve local stock itself.
             self.projects.advance_procurement(self.day)
-            gross_demands = self._gross_resource_demands(power_before)
-            external_demands = external_resource_demands(gross_demands, self.inventory)
-            self.logistics.advance_automation(self.day, external_demands)
-            self.logistics.advance_day(self.day)
-
-            # Cargo that arrived this tick may serve later daily steps such as
-            # vehicle production and construction, using the same shared
-            # Location × Resource allocation as pre-existing inventory.
-            reconcile_local_resource_claims(gross_demands, self.inventory)
 
             self.logistics.advance_vehicle_production_day(power_before, self.day)
-
-            # Construction commits material only after the common allocator has
-            # assigned every required resource to the project in the same tick.
             self.projects.finalize_procurement(self.day)
             self.projects.advance_construction(power_before, self.day)
             self.refresh_storage()
@@ -283,6 +265,4 @@ class Simulation:
             if self.contracts is not None:
                 self.contracts.advance_day(next_day)
             self.day = next_day
-            # Reservations are derived from the state visible at the new day.
-            # Never leave an end-of-tick allocation as authoritative state.
             self.refresh_resource_claims()

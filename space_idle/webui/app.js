@@ -5,7 +5,7 @@
     revision:null, session:null, world:null, catalog:null, locationId:null, location:null,
     flow:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, contracts:null, logisticsSummary:null, logistics:null, routes:null,
-    vehicles:null, orders:null, missions:null, lanes:null, demands:[],
+    fleet:null, transportAllocations:null, cargoFlows:null, lanes:null, demands:[],
     selectedRouteId:null, activeView:'operations', activeTab:'overview', inspector:null,
     busy:false, syncInFlight:null,
   };
@@ -147,7 +147,7 @@
   function applyUiSnapshot(data){
     state.session=data.session; state.world=data.world; state.globalIssues=data.global_issues;
     state.research=data.research; state.scientificExplorations=data.scientific_explorations; state.contracts=data.contracts; state.logisticsSummary=data.logistics_summary; state.logistics=data.logistics;
-    state.routes=data.routes; state.vehicles=data.vehicles; state.orders=data.orders; state.missions=data.missions;
+    state.routes=data.routes; state.fleet=data.fleet; state.transportAllocations=data.transport_allocations; state.cargoFlows=data.cargo_flows;
     state.lanes=data.lanes??state.lanes; state.demands=state.lanes?.demands||[];
     if(data.location!==undefined)state.location=data.location;
     if(data.flow!==undefined)state.flow=data.flow;

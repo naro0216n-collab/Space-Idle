@@ -125,10 +125,6 @@ class LogisticsLaneProjectorMixin:
                 metrics[lane.id].queued_t,
                 lane.priority,
                 None if lane.path is None else tuple(str(route_id) for route_id in lane.path),
-                tuple(
-                    (str(route_id), mode_id)
-                    for route_id, mode_id in sorted(lane.mode_by_route.items(), key=lambda row: str(row[0]))
-                ),
                 lane.path_policy.value,
                 lane.paused,
                 metrics[lane.id].blockers,

@@ -1,7 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from .logistics_views import (
-    CargoOrderRow, LogisticsLaneRow, ResourceDemandRow, RouteRow, TransportMissionRow, VehicleRow,
+    CargoFlowRow, FleetPoolRow, FleetRelocationRow, LogisticsLaneRow,
+    ResourceDemandRow, RouteRow, TransportAllocationRow,
 )
 
 
@@ -9,16 +10,15 @@ from .logistics_views import (
 class LogisticsSummaryView:
     route_count: int
     usable_route_count: int
-    vehicle_count: int
-    available_vehicle_count: int
-    mission_count: int
-    order_count: int
-    blocked_order_count: int
+    fleet_units: int
+    free_fleet_units: int
+    allocation_count: int
+    unfilled_allocation_units: int
+    cargo_flow_count: int
     lane_count: int
     paused_lane_count: int
     demand_count: int
     queued_demand_t: float
-    waiting_t: float
     in_transit_t: float
     arrival_waiting_t: float
 
@@ -29,21 +29,22 @@ class RoutesView:
 
 
 @dataclass(frozen=True)
-class VehiclesView:
-    items: tuple[VehicleRow, ...]
+class FleetView:
+    pools: tuple[FleetPoolRow, ...]
+    relocations: tuple[FleetRelocationRow, ...]
 
 
 @dataclass(frozen=True)
-class CargoOrdersView:
-    items: tuple[CargoOrderRow, ...]
+class TransportAllocationsView:
+    items: tuple[TransportAllocationRow, ...]
+
+
+@dataclass(frozen=True)
+class CargoFlowsView:
+    items: tuple[CargoFlowRow, ...]
 
 
 @dataclass(frozen=True)
 class LogisticsLanesView:
     items: tuple[LogisticsLaneRow, ...]
     demands: tuple[ResourceDemandRow, ...]
-
-
-@dataclass(frozen=True)
-class TransportMissionsView:
-    items: tuple[TransportMissionRow, ...]

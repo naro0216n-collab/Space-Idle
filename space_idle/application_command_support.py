@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .application_commands import ApplicationError, Command, CommandResult
-from .shared import DefinitionId, RouteId, SpatialNodeId
+from .shared import DefinitionId, SpatialNodeId
 
 
 class ApplicationCommandSupportMixin:
@@ -16,19 +16,6 @@ class ApplicationCommandSupportMixin:
         if value not in self._catalog.resources:
             raise KeyError(value)
         return value
-
-    def _route_mode_map(self, rows: tuple[tuple[str, str], ...]) -> dict[RouteId, str]:
-        result: dict[RouteId, str] = {}
-        for route_id_raw, mode_id in rows:
-            route_id = RouteId(route_id_raw)
-            if route_id not in self._simulation.logistics.routes:
-                raise KeyError(route_id)
-            if route_id in result:
-                raise ValueError(f"duplicate transport mode selection for route: {route_id}")
-            if not mode_id:
-                raise ValueError("transport mode id must not be empty")
-            result[route_id] = mode_id
-        return result
 
     def execute(self, command: Command) -> CommandResult:
         try:

@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from space_idle import AdvanceTime, GetCatalog, GetContracts, GetWorld, SubmitCargo, build_game_application
+from space_idle import AdvanceTime, GetCatalog, GetContracts, GetWorld, build_game_application
 from space_idle.content.base_game import (
     EARTH,
-    EARTH_LEO_LAUNCH_SERVICE,
     LEO,
     REUSABLE_LAUNCH_VEHICLE,
     WATER,
 )
 
 
-EARTH_LEO_ROUTE = "base.route.earth_leo"
+from space_idle.resource_demand import ResourceDemand
+from space_idle.shared import EntityId
+
 
 
 def test_time_progression_has_no_automatic_income_and_world_exposes_no_passive_rate():
@@ -33,23 +34,34 @@ def test_base_game_starts_without_contract_offers_or_contract_only_resources():
 
 
 def test_owned_transport_is_physical_while_commercial_transport_uses_money():
+    def demand():
+        return ResourceDemand(
+            EntityId("demand.economy"), "test", EntityId("owner.economy"),
+            LEO, WATER, 1.0, 100, EARTH, 0.0,
+        )
+
     owned = build_game_application()
+    owned_sim = owned._simulation
+    owned_sim.logistics.external_services.clear()
+    owned_sim.logistics.create_transport_allocation(
+        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=owned_sim.day
+    )
+    owned_sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
+    owned_sim.inventory.add(EARTH, WATER, 1.0)
     owned_before = owned.query(GetWorld()).funds_musd
-    owned.execute(SubmitCargo(
-        str(EARTH), str(LEO), str(WATER), 1.0, 100,
-        (EARTH_LEO_ROUTE,), ((EARTH_LEO_ROUTE, str(REUSABLE_LAUNCH_VEHICLE)),),
-    ))
-    owned.execute(AdvanceTime(1))
+    owned_sim.logistics.advance_capacity_logistics(owned_sim.day, (demand(),))
     assert owned.query(GetWorld()).funds_musd == owned_before
+    assert owned_sim.logistics.cargo_flows
 
     commercial = build_game_application()
+    commercial_sim = commercial._simulation
+    commercial_sim.logistics.transport_allocations.clear()
+    commercial_sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
+    commercial_sim.inventory.add(EARTH, WATER, 1.0)
     commercial_before = commercial.query(GetWorld()).funds_musd
-    commercial.execute(SubmitCargo(
-        str(EARTH), str(LEO), str(WATER), 1.0, 100,
-        (EARTH_LEO_ROUTE,), ((EARTH_LEO_ROUTE, str(EARTH_LEO_LAUNCH_SERVICE)),),
-    ))
-    commercial.execute(AdvanceTime(1))
+    commercial_sim.logistics.advance_capacity_logistics(commercial_sim.day, (demand(),))
     assert commercial.query(GetWorld()).funds_musd < commercial_before
+    assert commercial_sim.logistics.cargo_flows
 
 
 def test_extraction_stops_when_output_storage_service_is_full():

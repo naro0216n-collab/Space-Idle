@@ -16,40 +16,28 @@ from .app_contracts.location_views import (
     EnvironmentFacetRow, ExtractionRow, LocationView,
 )
 from .app_contracts.logistics_views import (
-    RouteModeRow, RouteRow, VehicleRow, VehicleProductionOptionRow, VehicleProductionRow, CargoOrderRow, ResourceDemandRow,
-    LogisticsLaneRow, TransportMissionRow, LogisticsView, TransportPathOptionRow,
-    TransportPlansView,
+    RouteModeRow, RouteRow, DirectionalCapacityRow, FleetPoolRow, TransportAllocationRow,
+    FleetRelocationRow, CargoFlowRow, VehicleProductionOptionRow, VehicleProductionRow,
+    ResourceDemandRow, LogisticsLaneRow, LogisticsView, TransportAllocationOptionRow,
+    TransportAllocationOptionsView,
 )
 from .app_contracts.logistics_reports import (
-    LogisticsSummaryView, RoutesView, VehiclesView, CargoOrdersView,
-    LogisticsLanesView, TransportMissionsView,
+    LogisticsSummaryView, RoutesView, FleetView, TransportAllocationsView,
+    CargoFlowsView, LogisticsLanesView,
 )
 from .app_contracts.progression_views import (
-    ResearchProviderRow, ResearchRow, ResearchView, ScientificExplorationVehicleOptionRow, ScientificExplorationRow, ScientificExplorationsView, SurveyRow, SurveysView, ContractRow, ContractsView,
+    ResearchProviderRow, ResearchRow, ResearchView, ScientificExplorationFleetOptionRow,
+    ScientificExplorationRow, ScientificExplorationsView, SurveyRow, SurveysView,
+    ContractRow, ContractsView,
 )
 from .app_contracts.ui_reports import IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView
 
 QueryResult: TypeAlias = (
     CatalogView | WorldView | LocationView | FlowReportView | BottlenecksView |
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
-    RoutesView | VehiclesView | CargoOrdersView | LogisticsLanesView |
-    TransportMissionsView | TransportPlansView | ResearchView | ScientificExplorationsView | SurveysView |
-    ContractsView
+    RoutesView | FleetView | TransportAllocationsView | CargoFlowsView |
+    LogisticsLanesView | TransportAllocationOptionsView | ResearchView |
+    ScientificExplorationsView | SurveysView | ContractsView
 )
 
-__all__ = [
-    "RequirementConditionRow", "CapabilityRequirementRow", "SiteRequirementsDefinitionRow",
-    "OperationCapabilityDefinitionRow", "ResourceDefinitionRow", "FacilityDefinitionRow",
-    "ProcessDefinitionRow", "ResearchDefinitionRow", "VehicleDefinitionRow", "RouteDefinitionRow",
-    "TransportServiceDefinitionRow", "CelestialBodyDefinitionRow", "LocationDefinitionRow",
-    "CatalogView", "LocationSummary", "WorldView", "ProjectResourceRow", "BuildResourceOption",
-    "BuildOptionRow", "FacilityUpgradeOption", "BuildOptionsView", "ProjectRow", "ProjectsView",
-    "InventoryRow", "StorageRow", "FacilityRow", "CapabilityRow", "IndustryRow", "EnvironmentFacetRow",
-    "ExtractionRow", "LocationView", "RouteModeRow", "RouteRow", "VehicleRow", "VehicleProductionOptionRow", "VehicleProductionRow", "CargoOrderRow",
-    "ResourceDemandRow", "LogisticsLaneRow", "TransportMissionRow", "LogisticsView",
-    "TransportPathOptionRow", "TransportPlansView", "LogisticsSummaryView", "RoutesView",
-    "VehiclesView", "CargoOrdersView", "LogisticsLanesView", "TransportMissionsView",
-    "IssueRow", "ResourceFlowRow", "FlowReportView", "BottlenecksView",
-    "ResearchProviderRow", "ResearchRow", "ResearchView", "ScientificExplorationVehicleOptionRow", "ScientificExplorationRow", "ScientificExplorationsView", "SurveyRow", "SurveysView", "ContractRow",
-    "ContractsView", "QueryResult",
-]
+__all__ = [name for name in globals() if not name.startswith('_') and name not in {'TypeAlias'}]

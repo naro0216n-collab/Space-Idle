@@ -78,9 +78,10 @@
         <div class="logistics-bottom-grid">
           <section class="card"><div class="card-heading"><h3>物流Lane</h3><span id="laneCountBadge" class="badge"></span></div><div id="laneTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Resource Demand</h3><span id="demandCountBadge" class="badge"></span></div><div id="demandTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>輸送資産</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
+          <section class="card"><div class="card-heading"><h3>Fleet</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
+          <section class="card"><div class="card-heading"><h3>Transport Allocation</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Vehicle Production</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>CargoOrder</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
+          <section class="card"><div class="card-heading"><h3>Cargo Flow</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
         </div>
       </section>
 
@@ -102,14 +103,30 @@
       </form>
     </dialog>
 
-    <dialog id="cargoDialog" class="modal-dialog">
-      <form method="dialog" id="cargoForm">
-        <div class="dialog-heading"><div><div class="eyebrow">TRANSPORT PLAN</div><h2 id="cargoDialogTitle">単発資源輸送</h2></div><button type="button" class="icon-button" id="cargoCloseButton">×</button></div>
-        <label>出発地<select id="cargoSource" required></select></label><label>到着地<select id="cargoDestination" required></select></label><label>資源<select id="cargoResource" required></select></label>
-        <div class="field-pair"><label>数量 (t)<input id="cargoAmount" type="number" min="0.01" step="0.01" value="1" required></label><label>優先度<input id="cargoPriority" type="number" min="0" max="100" step="1" value="50" required></label></div>
-        <label>経路方針<select id="cargoPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
-        <label>輸送計画<select id="cargoPlan" required></select></label><div id="cargoLegChoices" class="card-body"></div>
-        <div class="dialog-actions"><button type="button" class="secondary" id="cargoCancelButton">取消</button><button type="submit" class="primary" id="cargoSubmitButton">輸送登録</button></div>
+
+    <dialog id="relocationDialog" class="modal-dialog">
+      <form method="dialog" id="relocationForm">
+        <div class="dialog-heading"><div><div class="eyebrow">FLEET RELOCATION</div><h2>Fleetを移動</h2></div><button type="button" class="icon-button" id="relocationCloseButton">×</button></div>
+        <div class="field-pair"><label>Vehicle type<div id="relocationVehicle" class="cell-main">—</div></label><label>出発地<div id="relocationSource" class="cell-main">—</div></label></div>
+        <div class="cell-sub">現在free: <span id="relocationFree">0</span> unit。移動中はsource Fleetとして拘束され、到着時にdestination Poolへ移ります。</div>
+        <label>到着地<select id="relocationDestination" required></select></label>
+        <div class="field-pair"><label>移動unit数<input id="relocationUnits" type="number" min="1" step="1" value="1" required></label><label>経路方針<select id="relocationPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label></div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="relocationCancelButton">取消</button><button type="submit" class="primary">移動開始</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="allocationDialog" class="modal-dialog">
+      <form method="dialog" id="allocationForm">
+        <div class="dialog-heading"><div><div class="eyebrow">TRANSPORT ALLOCATION</div><h2>Fleetを輸送へ配分</h2></div><button type="button" class="icon-button" id="allocationCloseButton">×</button></div>
+        <label>Vehicle type<select id="allocationVehicle" required></select></label>
+        <label>Anchor / 出発地<select id="allocationSource" required></select></label>
+        <label>Transport relation / 到着地<select id="allocationDestination" required></select></label>
+        <div class="field-pair"><label>Control mode<select id="allocationMode"><option value="units">UNITS</option><option value="capacity">CAPACITY</option></select></label><label>Allocation priority<input id="allocationPriority" type="number" min="0" max="100" step="1" value="50" required></label></div>
+        <div id="allocationUnitsGroup"><label>Authoritative target units<input id="allocationUnits" type="number" min="0" step="1" value="1" required></label></div>
+        <div id="allocationCapacityGroup" hidden><div class="field-pair"><label>Forward target (t/日)<input id="allocationForward" type="number" min="0" step="0.01" value="1"></label><label>Reverse target (t/日)<input id="allocationReverse" type="number" min="0" step="0.01" value="0"></label></div></div>
+        <label>経路方針<select id="allocationPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
+        <div class="cell-sub">UNITSではunit数だけ、CAPACITYでは方向別capacityだけが正本です。Fleet不足でもtargetは保持され、active / unfilledとして表示されます。</div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="allocationCancelButton">取消</button><button type="submit" class="primary">Allocation作成</button></div>
       </form>
     </dialog>
   </div>

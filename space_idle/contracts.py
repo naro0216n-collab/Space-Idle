@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
 from enum import Enum
 
 from .facilities import FacilityBook
 from .logistics import LogisticsService
 from .power import PowerService
-from .shared import AccountState, CargoOrderId, ContractId, DefinitionId, EntityId, RouteId, SpatialNodeId
+from .shared import AccountState, ContractId, DefinitionId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
 
 
@@ -21,20 +20,7 @@ class CapabilityContractTemplate:
     target_location_id: SpatialNodeId | None = None
 
 
-@dataclass(frozen=True)
-class CargoContractTemplate:
-    id: DefinitionId
-    display_name: str
-    source_id: SpatialNodeId
-    destination_id: SpatialNodeId
-    resource_id: DefinitionId
-    cargo_t: float
-    duration_days: int
-    reward_musd: float
-    priority: int
-
-
-ContractTemplate = CapabilityContractTemplate | CargoContractTemplate
+ContractTemplate = CapabilityContractTemplate
 
 
 class ContractStatus(str, Enum):
@@ -52,7 +38,6 @@ class ContractState:
     offered_day: int
     deadline_day: int
     status: ContractStatus = ContractStatus.OFFERED
-    cargo_order_id: CargoOrderId | None = None
 
 
 @dataclass
@@ -71,52 +56,18 @@ class ContractService:
             raise ValueError("contract duration must be non-negative")
         self._counter += 1
         cid = ContractId(f"contract.{self._counter}")
-        self.contracts[cid] = ContractState(cid, template_id, day, day + template.duration_days)
+        self.contracts[cid] = ContractState(
+            cid, template_id, day, day + template.duration_days
+        )
         return cid
 
     def accept(self, contract_id: ContractId, day: int) -> None:
         state = self.contracts[contract_id]
-        template = self.templates[state.template_id]
         if state.status != ContractStatus.OFFERED:
             raise ValueError("contract not offered")
         if day > state.deadline_day:
             raise ValueError("contract deadline has passed")
-        # Acceptance commits to the objective but does not choose a logistics
-        # path on the player's behalf. Cargo dispatch is a separate decision.
         state.status = ContractStatus.ACCEPTED
-
-    def dispatch_cargo(
-        self,
-        contract_id: ContractId,
-        day: int,
-        *,
-        path: tuple[RouteId, ...] | None = None,
-        mode_by_route: dict[RouteId, str] | None = None,
-    ) -> CargoOrderId:
-        state = self.contracts[contract_id]
-        template = self.templates[state.template_id]
-        if not isinstance(template, CargoContractTemplate):
-            raise ValueError("contract is not a cargo contract")
-        if state.status != ContractStatus.ACCEPTED:
-            raise ValueError("cargo contract must be accepted before dispatch")
-        if state.cargo_order_id is not None:
-            raise ValueError("cargo contract has already been dispatched")
-        if day > state.deadline_day:
-            raise ValueError("contract deadline has passed")
-        order_id = self.logistics.submit_order(
-            template.source_id,
-            template.destination_id,
-            template.resource_id,
-            template.cargo_t,
-            template.priority,
-            "contract",
-            EntityId(contract_id),
-            day=day,
-            path=path,
-            mode_by_route=mode_by_route,
-        )
-        state.cargo_order_id = order_id
-        return order_id
 
     def decline(self, contract_id: ContractId) -> None:
         state = self.contracts[contract_id]
@@ -124,11 +75,14 @@ class ContractService:
             raise ValueError("contract not offered")
         state.status = ContractStatus.DECLINED
 
-    def _capability_contract_complete(self, template: CapabilityContractTemplate, day: int) -> bool:
-        if template.target_location_id is not None:
-            locations = (template.target_location_id,)
-        else:
-            locations = tuple(self.facilities.environment.graph.nodes)
+    def _capability_contract_complete(
+        self, template: CapabilityContractTemplate, day: int
+    ) -> bool:
+        locations = (
+            (template.target_location_id,)
+            if template.target_location_id is not None
+            else tuple(self.facilities.environment.graph.nodes)
+        )
         return any(
             not evaluate_site_requirements(
                 template.site_requirements,
@@ -146,18 +100,11 @@ class ContractService:
             if state.status not in {ContractStatus.OFFERED, ContractStatus.ACCEPTED}:
                 continue
             template = self.templates[state.template_id]
-            if state.status == ContractStatus.ACCEPTED and isinstance(template, CapabilityContractTemplate):
-                if self._capability_contract_complete(template, day):
-                    state.status = ContractStatus.COMPLETED
-                    self.account.earn(template.reward_musd)
-                    continue
-            if state.status == ContractStatus.ACCEPTED and isinstance(template, CargoContractTemplate):
-                if state.cargo_order_id is not None and self.logistics.order_complete(state.cargo_order_id):
-                    if day <= state.deadline_day:
-                        state.status = ContractStatus.COMPLETED
-                        self.account.earn(template.reward_musd)
-                    else:
-                        state.status = ContractStatus.FAILED
-                    continue
+            if state.status == ContractStatus.ACCEPTED and self._capability_contract_complete(
+                template, day
+            ):
+                state.status = ContractStatus.COMPLETED
+                self.account.earn(template.reward_musd)
+                continue
             if day > state.deadline_day:
                 state.status = ContractStatus.FAILED

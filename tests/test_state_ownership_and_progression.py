@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from space_idle import GetResearch, GetSurveys, GetWorld, StartSurvey, build_game_application
+import pytest
+
+from space_idle import GetResearch, GetRoutes, GetSurveys, GetWorld, StartSurvey, build_game_application
 from space_idle.api import GameRuntime
 from space_idle.content import base_ids as ids
-from space_idle.logistics import PathPolicy
 from space_idle.research import ResearchPhase
+from space_idle.resource_demand import ResourceDemand
 from space_idle.shared import EntityId, RouteId
 from space_idle.simulation import OfflineProgressPolicy
 
@@ -76,30 +78,51 @@ def test_direct_earth_to_south_pole_cargo_actually_dispatches_and_arrives():
     app = build_game_application()
     sim = app._simulation
     route_id = RouteId("base.route.earth_ridge_direct")
-    service_mode = str(ids.DIRECT_LUNAR_SERVICE)
+    demand_id = EntityId("test.demand.direct_lunar")
+    route = app.query(GetRoutes(route_id=str(route_id), include_modes=True)).items[0]
+    external_mode = next(
+        mode for mode in route.modes
+        if mode.kind == "external_service" and mode.service_feasible
+    )
+    amount_t = external_mode.nominal_capacity.forward_t_per_day / 2.0
+    assert amount_t > 0
+    destination_before = sim.inventory.amount(
+        ids.SOUTH_POLAR_RIDGE, ids.STRUCTURAL_COMPONENTS
+    )
+    if sim.inventory.available(ids.EARTH, ids.STRUCTURAL_COMPONENTS) < amount_t:
+        sim.inventory.add(ids.EARTH, ids.STRUCTURAL_COMPONENTS, amount_t)
 
-    order_id = sim.logistics.submit_order(
+    lane_id = sim.logistics.create_lane(
         ids.EARTH,
         ids.SOUTH_POLAR_RIDGE,
-        ids.STRUCTURAL_COMPONENTS,
-        1.0,
-        50,
-        "player",
-        EntityId("player"),
-        day=sim.day,
+        requested_capacity_t_per_day=1.0,
+        priority=50,
         path=(route_id,),
-        mode_by_route={route_id: service_mode},
-        path_policy=PathPolicy.FASTEST,
     )
-    assert sim.logistics.waiting[(order_id, 0)] == 1.0
+    demand = ResourceDemand(
+        demand_id,
+        "test",
+        EntityId("test.owner"),
+        ids.SOUTH_POLAR_RIDGE,
+        ids.STRUCTURAL_COMPONENTS,
+        amount_t,
+        priority=50,
+        source_id=ids.EARTH,
+        local_claim_t=0.0,
+    )
 
-    sim.advance_days(1)
-    assert any(mission.order_id == order_id for mission in sim.logistics.missions.values())
-    assert sim.logistics.waiting.get((order_id, 0), 0.0) < 1.0
+    sim.logistics.advance_capacity_logistics(sim.day, (demand,))
+    flows = tuple(sim.logistics.cargo_flows.values())
+    assert len(flows) == 1
+    assert flows[0].lane_id == lane_id
+    assert flows[0].demand_id == demand_id
+    assert flows[0].amount_t == pytest.approx(amount_t)
 
     sim.advance_days(20)
-    assert sim.logistics.order_complete(order_id)
-    assert sim.inventory.amount(ids.SOUTH_POLAR_RIDGE, ids.STRUCTURAL_COMPONENTS) >= 1.0 - 1e-9
+    assert not sim.logistics.cargo_flows
+    assert sim.inventory.amount(
+        ids.SOUTH_POLAR_RIDGE, ids.STRUCTURAL_COMPONENTS
+    ) == pytest.approx(destination_before + amount_t)
 
 
 def test_runtime_snapshot_reads_all_projections_at_one_clock_sync(tmp_path):

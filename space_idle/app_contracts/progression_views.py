@@ -60,12 +60,13 @@ class ResearchView:
 
 
 @dataclass(frozen=True)
-class ScientificExplorationVehicleOptionRow:
-    vehicle_id: str
+class ScientificExplorationFleetOptionRow:
     vehicle_definition_id: str
     display_name: str
-    location_id: str | None
-    status: str
+    location_id: str
+    total_units: int
+    free_units: int
+    required_units: int
     blockers: tuple[str, ...]
     can_assign: bool = False
 
@@ -88,18 +89,21 @@ class ScientificExplorationRow:
     research_points_per_day: float
     research_points_awarded: float
     consumable_resources: tuple[tuple[str, float], ...]
-    assigned_vehicle_id: str | None
+    required_units: int
+    assigned_vehicle_definition_id: str | None
+    reserved_units: int
     blockers: tuple[str, ...]
     can_start: bool
     can_pause: bool
     can_resume: bool
     can_unassign: bool
-    vehicle_options: tuple[ScientificExplorationVehicleOptionRow, ...]
+    fleet_options: tuple[ScientificExplorationFleetOptionRow, ...]
 
 
 @dataclass(frozen=True)
 class ScientificExplorationsView:
     items: tuple[ScientificExplorationRow, ...]
+
 
 @dataclass(frozen=True)
 class SurveyRow:
@@ -134,15 +138,9 @@ class ContractRow:
     id: str
     template_id: str
     display_name: str
-    kind: str
     status: str
     deadline_day: int
     reward_musd: float
-    source_id: str | None
-    destination_id: str | None
-    resource_id: str | None
-    cargo_t: float | None
-    cargo_order_id: str | None
     target_location_id: str | None
     blockers: tuple[str, ...]
 

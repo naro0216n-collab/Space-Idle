@@ -26,18 +26,19 @@ class GetRoutes:
     route_id: str | None = None
     include_modes: bool = True
 @dataclass(frozen=True)
-class GetVehicles:
+class GetFleet:
     location_id: str | None = None
-    status: str | None = None
+    vehicle_definition_id: str | None = None
 @dataclass(frozen=True)
-class GetCargoOrders: pass
+class GetTransportAllocations: pass
+@dataclass(frozen=True)
+class GetCargoFlows: pass
 @dataclass(frozen=True)
 class GetLogisticsLanes: pass
 @dataclass(frozen=True)
-class GetTransportMissions: pass
-@dataclass(frozen=True)
-class GetTransportPlans:
-    source_id: str; destination_id: str
+class GetTransportAllocationOptions:
+    source_id: str
+    destination_id: str
 @dataclass(frozen=True)
 class GetResearch: pass
 @dataclass(frozen=True)

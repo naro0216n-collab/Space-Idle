@@ -142,9 +142,9 @@ def test_catalog_exposes_vehicle_definitions_even_when_no_instance_is_owned():
     from space_idle.content.base_game import REUSABLE_ORBITAL_CARGO_TUG
 
     app = build_game_application()
-    app._simulation.logistics.vehicles = {
-        vid: state for vid, state in app._simulation.logistics.vehicles.items()
-        if state.definition_id != REUSABLE_ORBITAL_CARGO_TUG
+    app._simulation.logistics.fleet_pools = {
+        key: pool for key, pool in app._simulation.logistics.fleet_pools.items()
+        if key[0] != REUSABLE_ORBITAL_CARGO_TUG
     }
     catalog = app.query(GetCatalog())
     row = next(vehicle for vehicle in catalog.vehicles if vehicle.id == str(REUSABLE_ORBITAL_CARGO_TUG))

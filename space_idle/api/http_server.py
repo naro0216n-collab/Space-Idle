@@ -11,10 +11,10 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..application_commands import (
-    ApplicationError, GetBottlenecks, GetBuildOptions, GetCargoOrders,
-    GetCatalog, GetContracts, GetFlowReport, GetLocation, GetLogisticsLanes,
+    ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
+    GetContracts, GetFleet, GetFlowReport, GetLocation, GetLogisticsLanes,
     GetLogisticsSummary, GetProjects, GetResearch, GetRoutes, GetSurveys,
-    GetTransportMissions, GetTransportPlans, GetVehicles, GetWorld,
+    GetTransportAllocationOptions, GetTransportAllocations, GetWorld,
 )
 from ..persistence import SaveFormatError
 from .codec import ApiPayloadError, command_schema, decode_command, to_jsonable
@@ -285,24 +285,25 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
                 raise ApiPayloadError("route id is required")
             self._query_result(GetRoutes(route_id=route_id, include_modes=True))
             return
-        if path == "/api/v1/logistics/vehicles":
-            self._query_result(GetVehicles(
-                location_id=_one(params, "location_id"), status=_one(params, "status")
+        if path == "/api/v1/logistics/fleet":
+            self._query_result(GetFleet(
+                location_id=_one(params, "location_id"),
+                vehicle_definition_id=_one(params, "vehicle_definition_id"),
             ))
             return
-        if path == "/api/v1/logistics/orders":
-            self._query_result(GetCargoOrders())
+        if path == "/api/v1/logistics/transport-allocations":
+            self._query_result(GetTransportAllocations())
+            return
+        if path == "/api/v1/logistics/cargo-flows":
+            self._query_result(GetCargoFlows())
             return
         if path == "/api/v1/logistics/lanes":
             self._query_result(GetLogisticsLanes())
             return
-        if path == "/api/v1/logistics/missions":
-            self._query_result(GetTransportMissions())
-            return
-        if path == "/api/v1/transport-plans":
+        if path == "/api/v1/transport-allocation-options":
             source_id = _required(params, "source_id")
             destination_id = _required(params, "destination_id")
-            self._query_result(GetTransportPlans(source_id, destination_id))
+            self._query_result(GetTransportAllocationOptions(source_id, destination_id))
             return
         if path == "/api/v1/research":
             self._query_result(GetResearch())

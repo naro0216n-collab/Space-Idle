@@ -6,7 +6,8 @@ from urllib.parse import parse_qs, urlsplit
 from ..application_commands import (
     GetBottlenecks,
     GetBuildOptions,
-    GetCargoOrders,
+    GetCargoFlows,
+    GetFleet,
     GetContracts,
     GetFlowReport,
     GetLocation,
@@ -18,8 +19,7 @@ from ..application_commands import (
     GetScientificExplorations,
     GetRoutes,
     GetSurveys,
-    GetTransportMissions,
-    GetVehicles,
+    GetTransportAllocations,
     GetWorld,
 )
 from .codec import ApiPayloadError
@@ -52,10 +52,10 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             "logistics_summary": GetLogisticsSummary(),
             "logistics": GetLogistics(),
             "routes": GetRoutes(include_modes=True),
-            "vehicles": GetVehicles(),
-            "orders": GetCargoOrders(),
+            "fleet": GetFleet(),
+            "transport_allocations": GetTransportAllocations(),
+            "cargo_flows": GetCargoFlows(),
             "lanes": GetLogisticsLanes(),
-            "missions": GetTransportMissions(),
         }
         if location_id:
             queries.update({

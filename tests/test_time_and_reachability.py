@@ -64,6 +64,6 @@ def test_route_reachability_is_not_directly_gated_by_research_completion():
 
     route = app.query(GetRoutes(route_id=str(route_id), include_modes=True)).items[0]
     assert route.available
-    assert route.usable_now
+    assert route.service_feasible_now
     assert route.modes
-    assert any(mode.usable_now for mode in route.modes)
+    assert any(mode.service_feasible for mode in route.modes)

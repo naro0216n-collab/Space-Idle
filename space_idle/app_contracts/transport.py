@@ -3,19 +3,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 PathPolicyLiteral = Literal["fastest", "lowest_cost", "lowest_propellant"]
-
-
-@dataclass(frozen=True)
-class DispatchVehicle:
-    vehicle_id: str
-    route_id: str
-    carrier_vehicle_id: str | None = None
-
-
-@dataclass(frozen=True)
-class RefuelVehicle:
-    vehicle_id: str
-    amount_t: float | None = None
+TransportControlModeLiteral = Literal["units", "capacity"]
 
 
 @dataclass(frozen=True)
@@ -44,14 +32,58 @@ class SetVehicleProductionSettings:
 
 
 @dataclass(frozen=True)
-class SubmitCargo:
+class CreateTransportAllocation:
+    vehicle_definition_id: str
+    anchor_location_id: str
+    destination_id: str
+    priority: int = 50
+    control_mode: TransportControlModeLiteral = "units"
+    target_units: int | None = None
+    target_forward_t_per_day: float | None = None
+    target_reverse_t_per_day: float | None = None
+    path: tuple[str, ...] | None = None
+    path_policy: PathPolicyLiteral = "fastest"
+    paused: bool = False
+
+
+@dataclass(frozen=True)
+class UpdateTransportAllocation:
+    allocation_id: str
+    priority: int | None = None
+    target_units: int | None = None
+    target_forward_t_per_day: float | None = None
+    target_reverse_t_per_day: float | None = None
+    path_policy: PathPolicyLiteral | None = None
+
+
+@dataclass(frozen=True)
+class ChangeTransportAllocationMode:
+    allocation_id: str
+    control_mode: TransportControlModeLiteral
+
+
+@dataclass(frozen=True)
+class PauseTransportAllocation:
+    allocation_id: str
+
+
+@dataclass(frozen=True)
+class ResumeTransportAllocation:
+    allocation_id: str
+
+
+@dataclass(frozen=True)
+class DeleteTransportAllocation:
+    allocation_id: str
+
+
+@dataclass(frozen=True)
+class RelocateFleet:
+    vehicle_definition_id: str
+    units: int
     source_id: str
     destination_id: str
-    resource_id: str
-    amount_t: float
-    priority: int = 50
     path: tuple[str, ...] | None = None
-    route_modes: tuple[tuple[str, str], ...] = ()
     path_policy: PathPolicyLiteral = "fastest"
 
 
@@ -62,7 +94,6 @@ class CreateLogisticsLane:
     requested_capacity_t_per_day: float
     priority: int = 50
     path: tuple[str, ...] | None = None
-    route_modes: tuple[tuple[str, str], ...] = ()
     path_policy: PathPolicyLiteral = "fastest"
 
 

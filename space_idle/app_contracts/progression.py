@@ -40,9 +40,9 @@ class PauseScientificExploration:
 class ResumeScientificExploration:
     exploration_id: str
 @dataclass(frozen=True)
-class AssignExplorationVehicle:
+class AssignExplorationFleet:
     exploration_id: str
-    vehicle_id: str
+    vehicle_definition_id: str
 @dataclass(frozen=True)
-class UnassignExplorationVehicle:
+class UnassignExplorationFleet:
     exploration_id: str

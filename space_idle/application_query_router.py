@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from .application_commands import (
-    ApplicationError, GetBottlenecks, GetBuildOptions, GetCargoOrders,
-    GetCatalog, GetContracts, GetFlowReport, GetLocation, GetLogistics,
+    ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
+    GetContracts, GetFleet, GetFlowReport, GetLocation, GetLogistics,
     GetLogisticsLanes, GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
-    GetScientificExplorations, GetSurveys, GetTransportMissions, GetTransportPlans, GetVehicles, GetWorld,
-    Query,
+    GetScientificExplorations, GetSurveys, GetTransportAllocations,
+    GetTransportAllocationOptions, GetWorld, Query,
 )
 from .application_views import ProjectsView, QueryResult
 
@@ -49,18 +49,20 @@ class ApplicationQueryRouterMixin:
             if query.destination_id is not None:
                 self._require_location(query.destination_id)
             return self._routes_view(query)
-        if isinstance(query, GetVehicles):
+        if isinstance(query, GetFleet):
             if query.location_id is not None:
                 self._require_location(query.location_id)
-            return self._vehicles_view(query)
-        if isinstance(query, GetCargoOrders):
-            return self._cargo_orders_view()
+            if query.vehicle_definition_id is not None and query.vehicle_definition_id not in {str(value) for value in self._simulation.logistics.vehicle_defs}:
+                raise KeyError(query.vehicle_definition_id)
+            return self._fleet_view(query)
+        if isinstance(query, GetTransportAllocations):
+            return self._transport_allocations_view()
+        if isinstance(query, GetCargoFlows):
+            return self._cargo_flows_view()
         if isinstance(query, GetLogisticsLanes):
             return self._logistics_lanes_view()
-        if isinstance(query, GetTransportMissions):
-            return self._transport_missions_view()
-        if isinstance(query, GetTransportPlans):
-            return self._transport_plans_view(
+        if isinstance(query, GetTransportAllocationOptions):
+            return self._transport_allocation_options_view(
                 self._require_location(query.source_id),
                 self._require_location(query.destination_id),
             )
@@ -69,9 +71,7 @@ class ApplicationQueryRouterMixin:
         if isinstance(query, GetScientificExplorations):
             return self._scientific_explorations_view()
         if isinstance(query, GetSurveys):
-            return self._surveys_view(
-                None if query.location_id is None else self._require_location(query.location_id)
-            )
+            return self._surveys_view(None if query.location_id is None else self._require_location(query.location_id))
         if isinstance(query, GetContracts):
             return self._contracts_view()
         raise TypeError(f"unsupported query: {type(query).__name__}")

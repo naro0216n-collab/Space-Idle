@@ -22,7 +22,7 @@ class ResourceDemand:
     Demand describes need, not transport. Domains may constrain the source when
     their procurement policy requires it. Logistics decides whether an eligible
     player-configured lane can carry the residual demand and creates ordinary
-    CargoOrders for the allocation.
+    Cargo Flow batches for the allocation.
     """
 
     id: EntityId

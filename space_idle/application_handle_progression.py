@@ -3,9 +3,9 @@ from __future__ import annotations
 from .application_commands import (
     Command, CommandResult, FundResearchPrototype, PauseResearch, PauseSurvey,
     ResumeResearch, ResumeSurvey, SetResearchDemonstrationSite,
-    SetResearchPrototypeSite, SetSurveyAllocation, StartResearch, StartSurvey, StartScientificExploration, PauseScientificExploration, ResumeScientificExploration, AssignExplorationVehicle, UnassignExplorationVehicle,
+    SetResearchPrototypeSite, SetSurveyAllocation, StartResearch, StartSurvey, StartScientificExploration, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
 )
-from .shared import DefinitionId, EntityId
+from .shared import DefinitionId
 
 
 class ProgressionCommandHandlerMixin:
@@ -34,7 +34,7 @@ class ProgressionCommandHandlerMixin:
             return CommandResult()
         if isinstance(command, (
             StartScientificExploration, PauseScientificExploration, ResumeScientificExploration,
-            AssignExplorationVehicle, UnassignExplorationVehicle,
+            AssignExplorationFleet, UnassignExplorationFleet,
         )):
             if sim.scientific_exploration is None:
                 raise RuntimeError("scientific exploration is not configured")
@@ -45,10 +45,10 @@ class ProgressionCommandHandlerMixin:
                 sim.scientific_exploration.pause(exploration_id)
             elif isinstance(command, ResumeScientificExploration):
                 sim.scientific_exploration.resume(exploration_id)
-            elif isinstance(command, AssignExplorationVehicle):
-                sim.scientific_exploration.assign_vehicle(exploration_id, EntityId(command.vehicle_id), day=sim.day)
+            elif isinstance(command, AssignExplorationFleet):
+                sim.scientific_exploration.assign_fleet(exploration_id, DefinitionId(command.vehicle_definition_id), day=sim.day)
             else:
-                sim.scientific_exploration.unassign_vehicle(exploration_id)
+                sim.scientific_exploration.unassign_fleet(exploration_id, day=sim.day)
             return CommandResult()
         if isinstance(command, (StartSurvey, PauseSurvey, ResumeSurvey, SetSurveyAllocation)):
             if sim.survey is None:

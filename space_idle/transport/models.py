@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable
 
-from ..shared import CargoOrderId, DefinitionId, EntityId, RouteId, SpatialNodeId
+from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from ..site import SiteRequirements
 
 POWERED_ASCENT = "powered_ascent"
@@ -33,21 +33,216 @@ class PathPolicy(str, Enum):
     LOWEST_PROPELLANT = "lowest_propellant"
 
 
-class VehicleStatus(str, Enum):
-    AVAILABLE = "available"
-    TURNAROUND = "turnaround"
-    MAINTENANCE_WAIT = "maintenance_wait"
-    TRANSIT = "transit"
-    TRANSIT_RETURN = "transit_return"
-    UNLOADING = "unloading"
-    WAYPOINT_WAIT = "waypoint_wait"
-    ASSIGNED = "assigned"
+class TransportControlMode(str, Enum):
+    UNITS = "units"
+    CAPACITY = "capacity"
 
 
-class MissionStatus(str, Enum):
+class FleetReservationKind(str, Enum):
+    SCIENTIFIC_EXPLORATION = "scientific_exploration"
+    SPECIAL_MISSION = "special_mission"
+    OTHER = "other"
+
+
+@dataclass(frozen=True)
+class DirectionalCapacity:
+    forward_t_per_day: float = 0.0
+    reverse_t_per_day: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.forward_t_per_day < 0 or self.reverse_t_per_day < 0:
+            raise ValueError("directional transport capacity must be non-negative")
+
+
+@dataclass
+class FleetPool:
+    vehicle_definition_id: DefinitionId
+    location_id: SpatialNodeId
+    total_units: int = 0
+
+    def __post_init__(self) -> None:
+        if self.total_units < 0:
+            raise ValueError("fleet total units must be non-negative")
+
+
+@dataclass(frozen=True)
+class FleetPoolSnapshot:
+    vehicle_definition_id: DefinitionId
+    location_id: SpatialNodeId
+    total_units: int
+    free_units: int
+    transport_units: int
+    exploration_units: int
+    other_reserved_units: int
+    relocating_units: int
+    releasing_units: int
+
+
+@dataclass
+class FleetReservation:
+    id: EntityId
+    owner_id: EntityId
+    kind: FleetReservationKind
+    vehicle_definition_id: DefinitionId
+    location_id: SpatialNodeId
+    units: int
+
+    def __post_init__(self) -> None:
+        if self.units <= 0:
+            raise ValueError("fleet reservation units must be positive")
+
+
+@dataclass
+class FleetRelocation:
+    id: EntityId
+    vehicle_definition_id: DefinitionId
+    units: int
+    source_id: SpatialNodeId
+    destination_id: SpatialNodeId
+    departure_day: int
+    arrival_day: int
+
+    def __post_init__(self) -> None:
+        if self.units <= 0:
+            raise ValueError("fleet relocation units must be positive")
+        if self.source_id == self.destination_id:
+            raise ValueError("fleet relocation endpoints must differ")
+        if self.arrival_day <= self.departure_day:
+            raise ValueError("fleet relocation arrival must follow departure")
+
+
+@dataclass
+class FleetRelease:
+    id: EntityId
+    allocation_id: EntityId
+    vehicle_definition_id: DefinitionId
+    location_id: SpatialNodeId
+    units: int
+    release_day: int
+
+    def __post_init__(self) -> None:
+        if self.units <= 0:
+            raise ValueError("fleet releasing units must be positive")
+
+
+@dataclass
+class TransportAllocation:
+    id: EntityId
+    vehicle_definition_id: DefinitionId
+    anchor_location_id: SpatialNodeId
+    destination_id: SpatialNodeId
+    priority: int
+    control_mode: TransportControlMode
+    target_units: int | None = None
+    target_capacity: DirectionalCapacity | None = None
+    path: tuple[RouteId, ...] | None = None
+    path_policy: PathPolicy = PathPolicy.FASTEST
+    paused: bool = False
+    active_units: int = 0
+    last_operated_day: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.anchor_location_id == self.destination_id:
+            raise ValueError("transport allocation endpoints must differ")
+        if self.active_units < 0:
+            raise ValueError("transport allocation active units must be non-negative")
+        if self.control_mode is TransportControlMode.UNITS:
+            if self.target_units is None or self.target_units < 0 or self.target_capacity is not None:
+                raise ValueError("UNITS allocation requires only target_units")
+        elif self.control_mode is TransportControlMode.CAPACITY:
+            if self.target_capacity is None or self.target_units is not None:
+                raise ValueError("CAPACITY allocation requires only target_capacity")
+        else:
+            raise ValueError(f"unsupported transport control mode: {self.control_mode}")
+
+
+@dataclass(frozen=True)
+class TransportServiceLeg:
+    route_id: RouteId
+    direction: str
+    cargo_capable: bool
+    payload_t: float
+    transit_days: float
+    propellant_t_at_full_payload: float
+
+
+@dataclass(frozen=True)
+class TransportServicePlan:
+    allocation_id: EntityId
+    vehicle_definition_id: DefinitionId
+    anchor_location_id: SpatialNodeId
+    destination_id: SpatialNodeId
+    forward_path: tuple[RouteId, ...]
+    reverse_path: tuple[RouteId, ...]
+    legs: tuple[TransportServiceLeg, ...]
+    cycle_days: float
+    turnaround_days: float
+    forward_payload_t: float
+    reverse_payload_t: float
+    forward_latency_days: int
+    reverse_latency_days: int | None
+    nominal_per_unit: DirectionalCapacity
+    resource_t_per_full_utilization_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
+    servicing_units_per_full_utilization_day: float = 0.0
+    blockers: tuple[str, ...] = ()
+    resource_t_per_empty_cycle_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
+    resource_t_per_forward_payload_increment_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
+    resource_t_per_reverse_payload_increment_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
+
+    @property
+    def feasible(self) -> bool:
+        return not self.blockers and self.cycle_days > 0 and self.forward_payload_t > 0
+
+
+@dataclass(frozen=True)
+class TransportCapacitySnapshot:
+    allocation_id: EntityId
+    target: DirectionalCapacity | None
+    required_units: int
+    active_units: int
+    unfilled_units: int
+    nominal: DirectionalCapacity
+    available: DirectionalCapacity
+    used: DirectionalCapacity
+    spare: DirectionalCapacity
+    utilization: float
+    operational_resource_demand: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+    blockers: tuple[str, ...] = ()
+    limiting_factors: tuple[str, ...] = ()
+
+
+class CargoFlowStatus(str, Enum):
     IN_TRANSIT = "in_transit"
+    HANDOFF_WAITING = "handoff_waiting"
     ARRIVAL_WAITING = "arrival_waiting"
-    WAYPOINT_WAIT = "waypoint_wait"
+
+
+@dataclass
+class CargoFlowBatch:
+    id: EntityId
+    resource_id: DefinitionId
+    amount_t: float
+    source_id: SpatialNodeId
+    destination_id: SpatialNodeId
+    lane_id: EntityId | None
+    demand_id: EntityId | None
+    owner_kind: str
+    owner_id: EntityId
+    priority: int
+    service_ids: tuple[str, ...]
+    service_destinations: tuple[SpatialNodeId, ...]
+    departure_day: int
+    ready_day: int
+    leg_index: int = 0
+    status: CargoFlowStatus = CargoFlowStatus.IN_TRANSIT
+
+    def __post_init__(self) -> None:
+        if self.amount_t <= 0:
+            raise ValueError("cargo flow amount must be positive")
+        if not self.service_ids or len(self.service_ids) != len(self.service_destinations):
+            raise ValueError("cargo flow requires aligned service path")
+        if self.leg_index < 0 or self.leg_index >= len(self.service_ids):
+            raise ValueError("cargo flow leg index out of range")
 
 
 class OperationSupportLocation(str, Enum):
@@ -189,7 +384,7 @@ class TransportPerformanceProfile:
 
 @dataclass(frozen=True)
 class VehicleEconomicsSpec:
-    operating_cost_musd_per_mission: float = 0.0
+    operating_cost_musd_per_cycle: float = 0.0
     operating_cost_musd_per_cargo_t: float = 0.0
 
 
@@ -236,7 +431,7 @@ class VehicleDef:
     @property
     def endurance_days(self) -> float | None: return self.performance.endurance_days
     @property
-    def operating_cost_musd_per_mission(self) -> float: return self.economics.operating_cost_musd_per_mission
+    def operating_cost_musd_per_cycle(self) -> float: return self.economics.operating_cost_musd_per_cycle
     @property
     def operating_cost_musd_per_cargo_t(self) -> float: return self.economics.operating_cost_musd_per_cargo_t
     @property
@@ -294,54 +489,6 @@ class ExternalTransportServiceDef:
 
 
 @dataclass
-class VehicleState:
-    id: EntityId
-    definition_id: DefinitionId
-    location_id: SpatialNodeId | None
-    status: VehicleStatus = VehicleStatus.AVAILABLE
-    available_day: int = 0
-    transit_destination_id: SpatialNodeId | None = None
-    propellant_t: float = 0.0
-    assignment_id: EntityId | None = None
-    assignment_kind: str | None = None
-
-
-@dataclass
-class TransportMissionState:
-    id: EntityId
-    order_id: CargoOrderId
-    leg_index: int
-    amount_t: float
-    mode_id: str
-    departure_day: int
-    arrival_day: int
-    vehicle_id: EntityId | None = None
-    vehicle_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
-    status: MissionStatus = MissionStatus.IN_TRANSIT
-    onboard: bool = True
-    handoff_vehicle_id: EntityId | None = None
-
-
-@dataclass
-class CargoOrder:
-    id: CargoOrderId
-    source_id: SpatialNodeId
-    destination_id: SpatialNodeId
-    resource_id: DefinitionId
-    amount_t: float
-    priority: int
-    owner_kind: str
-    owner_id: EntityId
-    path: tuple[RouteId, ...]
-    mode_by_route: dict[RouteId, str] = field(default_factory=dict)
-    path_policy: PathPolicy = PathPolicy.FASTEST
-    delivered_t: float = 0.0
-    created_day: int = 0
-    lane_id: EntityId | None = None
-    demand_id: EntityId | None = None
-
-
-@dataclass
 class LogisticsLane:
     id: EntityId
     source_id: SpatialNodeId
@@ -349,7 +496,6 @@ class LogisticsLane:
     requested_capacity_t_per_day: float
     priority: int
     path: tuple[RouteId, ...] | None = None
-    mode_by_route: dict[RouteId, str] = field(default_factory=dict)
     path_policy: PathPolicy = PathPolicy.FASTEST
     paused: bool = False
 
@@ -358,20 +504,3 @@ class LogisticsLane:
             raise ValueError("logistics lane endpoints must differ")
         if self.requested_capacity_t_per_day <= 0:
             raise ValueError("logistics lane requested capacity must be positive")
-
-
-@dataclass(frozen=True)
-class TransportMode:
-    mode_id: str
-    vehicle_definition_id: DefinitionId | None
-    dispatch_capacity_t: float
-    cost_musd_per_t: float
-    available_vehicle_ids: tuple[EntityId, ...] = ()
-
-
-@dataclass(frozen=True)
-class VehicleTransit:
-    vehicle_id: EntityId
-    route_id: RouteId
-    arrival_day: int
-    used_for_mission: bool = True

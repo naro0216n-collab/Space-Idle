@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from space_idle import (
     AdvanceTime,
-    AssignExplorationVehicle,
+    AssignExplorationFleet,
     CreateLogisticsLane,
-    DispatchVehicle,
+    CreateTransportAllocation,
     FundResearchPrototype,
     GetLocation,
     GetLogistics,
     GetProjects,
     GetResearch,
     GetScientificExplorations,
-    GetVehicles,
+    GetFleet,
     PlanBuild,
     ProduceVehicle,
     SetResearchPrototypeSite,
@@ -79,49 +79,46 @@ def test_research_point_growth_loop_is_reachable_through_application_api():
     # Unlock the initial orbital operating method using the normal RP/prototype path.
     _complete_prototype_research(app, ids.TECH_ORBITAL_OPERATIONS)
 
-    # A player-built spacecraft does not exist until resource/capability/time production completes.
-    vehicle_ids_before = {row.id for row in app.query(GetVehicles()).items}
+    # Vehicle production increases the authoritative Fleet Pool rather than creating an individual ID.
+    before_pool = next(
+        row for row in app.query(GetFleet()).pools
+        if row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+        and row.location_id == str(ids.EARTH)
+    ) if any(
+        row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG) and row.location_id == str(ids.EARTH)
+        for row in app.query(GetFleet()).pools
+    ) else None
+    before_units = 0 if before_pool is None else before_pool.total_units
     production_id = app.execute(ProduceVehicle(
-        str(ids.REUSABLE_ORBITAL_CARGO_TUG),
-        str(ids.EARTH),
+        str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(ids.EARTH),
     )).created_id
     assert production_id is not None
-    assert {row.id for row in app.query(GetVehicles()).items} == vehicle_ids_before
 
     def production_complete():
-        row = next(
-            item for item in app.query(GetLogistics()).vehicle_production
-            if item.id == production_id
-        )
+        row = next(item for item in app.query(GetLogistics()).vehicle_production if item.id == production_id)
         return row.phase == "complete"
 
     _advance_until(app, production_complete)
-    production = next(
-        item for item in app.query(GetLogistics()).vehicle_production
-        if item.id == production_id
-    )
-    assert production.completed_vehicle_id is not None
-    built_vehicle_id = production.completed_vehicle_id
-    assert built_vehicle_id not in vehicle_ids_before
-
-    # Existing generic carrier/handoff transport moves the newly built spacecraft to LEO.
-    carrier = next(
-        row for row in app.query(GetVehicles()).items
-        if row.definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
+    produced_pool = next(
+        row for row in app.query(GetFleet()).pools
+        if row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
         and row.location_id == str(ids.EARTH)
-        and row.status == "available"
     )
-    app.execute(DispatchVehicle(built_vehicle_id, "base.route.earth_leo", carrier.id))
-    _advance_until(
-        app,
-        lambda: next(row for row in app.query(GetVehicles()).items if row.id == built_vehicle_id).location_id
-        == str(ids.LEO),
-    )
+    assert produced_pool.total_units == before_units + 1
 
-    # The physical asset is then explicitly diverted from logistics into a finite science campaign.
+    # Scientific Exploration reserves units from an existing Fleet Pool by vehicle definition.
     exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
     app.execute(StartScientificExploration(str(exploration_id)))
-    app.execute(AssignExplorationVehicle(str(exploration_id), built_vehicle_id))
+    exploration_before = next(
+        row for row in app.query(GetScientificExplorations()).items
+        if row.id == str(exploration_id)
+    )
+    option = next(
+        row for row in exploration_before.fleet_options
+        if row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+    )
+    assert option.can_assign
+    app.execute(AssignExplorationFleet(str(exploration_id), option.vehicle_definition_id))
     research_points_before = app.query(GetResearch()).stored_points
     _advance_until(
         app,
@@ -139,6 +136,14 @@ def test_research_point_growth_loop_is_reachable_through_application_api():
 
     # RP enables a higher-generation research method, which must still be physically built.
     _complete_prototype_research(app, ids.TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS)
+    if not any(
+        row.anchor_location_id == str(ids.EARTH) and row.destination_id == str(ids.LEO)
+        for row in app.query(GetLogistics()).allocations
+    ):
+        app.execute(CreateTransportAllocation(
+            str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
+            control_mode="units", target_units=1, priority=70,
+        ))
     if not any(
         row.source_id == str(ids.EARTH) and row.destination_id == str(ids.LEO)
         for row in app.query(GetLogistics()).lanes

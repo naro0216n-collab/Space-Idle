@@ -1,20 +1,31 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+
+@dataclass(frozen=True)
+class DirectionalCapacityRow:
+    forward_t_per_day: float
+    reverse_t_per_day: float
+
+
 @dataclass(frozen=True)
 class RouteModeRow:
     id: str
     display_name: str
     kind: str
     vehicle_definition_id: str | None
-    available_vehicle_count: int
-    dispatch_capacity_t: float
-    transit_days: int
+    fleet_total_units: int
+    fleet_free_units: int
+    nominal_capacity: DirectionalCapacityRow
+    cycle_days: float | None
+    forward_latency_days: int
+    reverse_latency_days: int | None
     cost_musd_per_t: float
     propellant_resource_id: str | None
     full_load_propellant_t: float | None
-    usable_now: bool
+    service_feasible: bool
     blockers: tuple[str, ...]
+
 
 @dataclass(frozen=True)
 class RouteRow:
@@ -23,37 +34,86 @@ class RouteRow:
     origin_id: str
     destination_id: str
     available: bool
-    usable_now: bool
-    dispatch_capacity_t: float
+    service_feasible_now: bool
     transit_days: int
     delta_v_km_s: float
     operations: tuple[tuple[str, float], ...]
     blockers: tuple[str, ...]
-    operational_blockers: tuple[str, ...]
     modes: tuple[RouteModeRow, ...]
 
+
 @dataclass(frozen=True)
-class VehicleRow:
-    id: str
-    definition_id: str
+class FleetPoolRow:
+    vehicle_definition_id: str
     display_name: str
-    concept: str
-    location_id: str | None
-    status: str
-    available_day: int
-    payload_t: float
-    dry_mass_t: float
-    propellant_t: float
-    propellant_capacity_t: float
-    propellant_resource_id: str | None
-    capabilities: tuple[str, ...]
-    transit_destination_id: str | None
-    turnaround_capability_id: str | None
-    turnaround_cost_musd: float
-    turnaround_resources: tuple[tuple[str, float], ...]
+    location_id: str
+    total_units: int
+    free_units: int
+    transport_units: int
+    exploration_units: int
+    relocating_units: int
+    releasing_units: int
+
+
+@dataclass(frozen=True)
+class TransportAllocationRow:
+    id: str
+    vehicle_definition_id: str
+    display_name: str
+    anchor_location_id: str
+    destination_id: str
+    priority: int
+    control_mode: str
+    target_units: int | None
+    target_capacity: DirectionalCapacityRow | None
+    active_units: int
+    required_units: int
+    unfilled_units: int
+    nominal: DirectionalCapacityRow
+    available: DirectionalCapacityRow
+    used: DirectionalCapacityRow
+    spare: DirectionalCapacityRow
+    utilization: float
+    path: tuple[str, ...] | None
+    path_policy: str
+    paused: bool
+    cycle_days: float
+    forward_latency_days: int
+    reverse_latency_days: int | None
+    operational_resource_demand: tuple[tuple[str, str, float], ...]
     blockers: tuple[str, ...]
-    assignment_id: str | None = None
-    assignment_kind: str | None = None
+    limiting_factors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FleetRelocationRow:
+    id: str
+    vehicle_definition_id: str
+    display_name: str
+    units: int
+    source_id: str
+    destination_id: str
+    departure_day: int
+    arrival_day: int
+
+
+@dataclass(frozen=True)
+class CargoFlowRow:
+    id: str
+    resource_id: str
+    amount_t: float
+    source_id: str
+    destination_id: str
+    lane_id: str | None
+    demand_id: str | None
+    owner_kind: str
+    owner_id: str
+    priority: int
+    service_ids: tuple[str, ...]
+    service_destinations: tuple[str, ...]
+    departure_day: int
+    ready_day: int
+    status: str
 
 
 @dataclass(frozen=True)
@@ -86,29 +146,8 @@ class VehicleProductionRow:
     priority_editable: bool
     allocation_editable: bool
     blockers: tuple[str, ...]
-    completed_vehicle_id: str | None
+    completed_units: int
 
-@dataclass(frozen=True)
-class CargoOrderRow:
-    id: str
-    owner_kind: str
-    owner_id: str
-    source_id: str
-    destination_id: str
-    resource_id: str
-    amount_t: float
-    delivered_t: float
-    priority: int
-    path: tuple[str, ...]
-    route_modes: tuple[tuple[str, str], ...]
-    path_policy: str
-    status: str
-    waiting_t: float
-    in_transit_t: float
-    arrival_waiting_t: float
-    blockers: tuple[str, ...]
-    lane_id: str | None = None
-    demand_id: str | None = None
 
 @dataclass(frozen=True)
 class ResourceDemandRow:
@@ -134,6 +173,7 @@ class ResourceDemandRow:
     supply_state: str = "covered"
     blockers: tuple[str, ...] = ()
 
+
 @dataclass(frozen=True)
 class LogisticsLaneRow:
     id: str
@@ -145,49 +185,45 @@ class LogisticsLaneRow:
     queued_t: float
     priority: int
     path: tuple[str, ...] | None
-    route_modes: tuple[tuple[str, str], ...]
     path_policy: str
     paused: bool
     blockers: tuple[str, ...]
 
-@dataclass(frozen=True)
-class TransportMissionRow:
-    id: str
-    order_id: str
-    leg_index: int
-    route_id: str
-    amount_t: float
-    mode_id: str
-    vehicle_id: str | None
-    vehicle_disposition: str
-    status: str
-    departure_day: int
-    arrival_day: int
-    onboard: bool
-    handoff_vehicle_id: str | None
 
 @dataclass(frozen=True)
 class LogisticsView:
     routes: tuple[RouteRow, ...]
-    vehicles: tuple[VehicleRow, ...]
+    fleet_pools: tuple[FleetPoolRow, ...]
+    relocations: tuple[FleetRelocationRow, ...]
+    allocations: tuple[TransportAllocationRow, ...]
     vehicle_production_options: tuple[VehicleProductionOptionRow, ...]
     vehicle_production: tuple[VehicleProductionRow, ...]
-    missions: tuple[TransportMissionRow, ...]
-    orders: tuple[CargoOrderRow, ...]
+    cargo_flows: tuple[CargoFlowRow, ...]
     lanes: tuple[LogisticsLaneRow, ...]
     demands: tuple[ResourceDemandRow, ...]
 
-@dataclass(frozen=True)
-class TransportPathOptionRow:
-    policy: str
-    path: tuple[str, ...]
-    route_modes: tuple[tuple[str, str], ...]
-    transit_days: int
-    estimated_cost_musd_per_t: float
-    estimated_propellant_t_per_cargo_t: float
 
 @dataclass(frozen=True)
-class TransportPlansView:
+class TransportAllocationOptionRow:
+    vehicle_definition_id: str
+    display_name: str
     source_id: str
     destination_id: str
-    options: tuple[TransportPathOptionRow, ...]
+    policy: str
+    forward_path: tuple[str, ...]
+    reverse_path: tuple[str, ...]
+    cycle_days: float
+    forward_latency_days: int
+    reverse_latency_days: int | None
+    nominal_capacity: DirectionalCapacityRow
+    fleet_total_units: int
+    fleet_free_units: int
+    operational_resource_demand_at_full_unit: tuple[tuple[str, str, float], ...]
+    blockers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TransportAllocationOptionsView:
+    source_id: str
+    destination_id: str
+    options: tuple[TransportAllocationOptionRow, ...]

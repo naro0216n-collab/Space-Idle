@@ -6,11 +6,9 @@ from typing import NewType
 EntityId = NewType("EntityId", str)
 DefinitionId = NewType("DefinitionId", str)
 CelestialBodyId = NewType("CelestialBodyId", str)
-VehicleId = NewType("VehicleId", str)
 SpatialNodeId = NewType("SpatialNodeId", str)
 RouteId = NewType("RouteId", str)
 ProjectId = NewType("ProjectId", str)
-CargoOrderId = NewType("CargoOrderId", str)
 ContractId = NewType("ContractId", str)
 
 

@@ -105,9 +105,14 @@ def test_major_mutable_domain_states_are_owned_enums_not_distributed_string_sets
     from space_idle.contracts import ContractStatus
     from space_idle.projects import ProjectStatus
     from space_idle.research import ResearchPhase
-    from space_idle.logistics import MissionStatus, VehicleStatus
+    from space_idle.logistics import FleetReservationKind, TransportControlMode
+    from space_idle.transport import CargoFlowStatus
+    from space_idle.transport.production import VehicleProductionPhase
 
-    for state_type in (ContractStatus, ProjectStatus, ResearchPhase, MissionStatus, VehicleStatus):
+    for state_type in (
+        ContractStatus, ProjectStatus, ResearchPhase, FleetReservationKind,
+        TransportControlMode, CargoFlowStatus, VehicleProductionPhase,
+    ):
         assert issubclass(state_type, Enum)
         assert issubclass(state_type, str)
 
@@ -123,7 +128,11 @@ def test_public_domain_facades_compose_focused_implementations():
     def bases(cls):
         return {base.__name__ for base in cls.__mro__[1:]}
 
-    assert {"TransportPlanningMixin", "TransportExecutionMixin", "FleetManagementMixin"}.issubset(bases(LogisticsService))
+    assert {
+        "TransportCompatibilityMixin", "FleetAllocationMixin", "TransportLaneMixin",
+        "SteadyLogisticsMixin", "VehicleProductionMixin",
+    }.issubset(bases(LogisticsService))
+    assert not {"TransportPlanningMixin", "TransportExecutionMixin", "FleetManagementMixin"} & bases(LogisticsService)
     assert {"ConstructionRulesMixin", "ConstructionPlanningMixin", "ConstructionProcurementMixin", "ConstructionExecutionMixin"}.issubset(bases(ProjectService))
     assert {"ProcessSelectionMixin", "IndustryPlanningMixin", "IndustryExecutionMixin"}.issubset(bases(IndustryService))
     assert {"ResearchWorkflowMixin", "ResearchCapacityMixin", "ResearchExecutionMixin"}.issubset(bases(ResearchService))

@@ -77,7 +77,7 @@ def build_base_simulation() -> Simulation:
     logistics.external_services.update(build_external_transport_services())
     logistics.vehicle_defs.update(build_vehicle_definitions())
     for vehicle_definition_id, count, location_id in initial_vehicle_deployments():
-        logistics.add_vehicles(vehicle_definition_id, count, location_id)
+        logistics.add_fleet_units(vehicle_definition_id, count, location_id)
 
     industry = IndustryService(build_process_specs())
 

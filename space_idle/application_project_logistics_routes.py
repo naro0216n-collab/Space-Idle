@@ -1,12 +1,114 @@
 from __future__ import annotations
 
 from .application_transport_support import vehicle_concept
-from .application_views import RouteModeRow, RouteRow, RoutesView, TransportPathOptionRow, TransportPlansView
+from .application_views import (
+    DirectionalCapacityRow,
+    RouteModeRow,
+    RouteRow,
+    RoutesView,
+    TransportAllocationOptionRow,
+    TransportAllocationOptionsView,
+)
 from .logistics import PathPolicy
-from .shared import DefinitionId, SpatialNodeId
 
 
 class LogisticsRouteProjectorMixin:
+    @staticmethod
+    def _directional_capacity_row(value) -> DirectionalCapacityRow:
+        return DirectionalCapacityRow(
+            value.forward_t_per_day, value.reverse_t_per_day
+        )
+
+    def _route_mode_rows(self, route) -> tuple[RouteModeRow, ...]:
+        sim = self._simulation
+        rows: list[RouteModeRow] = []
+
+        for definition in sorted(
+            sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)
+        ):
+            plan = sim.logistics.transport_service_plan_for(
+                definition.id,
+                route.origin_id,
+                route.destination_id,
+                day=sim.day,
+                path=(route.id,),
+            )
+            fleet = sim.logistics.fleet_pool_snapshot(
+                definition.id, route.origin_id
+            )
+            full_load_propellant = None
+            if definition.propellant_resource_id is not None:
+                full_load_propellant = definition.propellant_t(
+                    route, max(0.0, plan.forward_payload_t)
+                )
+            rows.append(
+                RouteModeRow(
+                    id=str(definition.id),
+                    display_name=definition.display_name,
+                    kind=vehicle_concept(definition),
+                    vehicle_definition_id=str(definition.id),
+                    fleet_total_units=fleet.total_units,
+                    fleet_free_units=fleet.free_units,
+                    nominal_capacity=self._directional_capacity_row(
+                        plan.nominal_per_unit
+                    ),
+                    cycle_days=plan.cycle_days,
+                    forward_latency_days=plan.forward_latency_days,
+                    reverse_latency_days=plan.reverse_latency_days,
+                    cost_musd_per_t=definition.operating_cost_musd_per_cargo_t,
+                    propellant_resource_id=(
+                        None
+                        if definition.propellant_resource_id is None
+                        else str(definition.propellant_resource_id)
+                    ),
+                    full_load_propellant_t=full_load_propellant,
+                    service_feasible=plan.feasible,
+                    blockers=plan.blockers,
+                )
+            )
+
+        for service in sorted(
+            sim.logistics.external_services.values(), key=lambda row: str(row.id)
+        ):
+            blockers = tuple(
+                dict.fromkeys(
+                    sim.logistics.route_failures(route.id, sim.day)
+                    + sim.logistics.service_route_failures(
+                        route.id, service.id, sim.day
+                    )
+                )
+            )
+            rows.append(
+                RouteModeRow(
+                    id=str(service.id),
+                    display_name=service.display_name,
+                    kind="external_service",
+                    vehicle_definition_id=None,
+                    fleet_total_units=0,
+                    fleet_free_units=0,
+                    nominal_capacity=DirectionalCapacityRow(
+                        service.capacity_t_per_day, 0.0
+                    ),
+                    cycle_days=None,
+                    forward_latency_days=max(
+                        1,
+                        round(
+                            route.transit_days
+                            * service.transit_time_multiplier
+                        ),
+                    ),
+                    reverse_latency_days=None,
+                    cost_musd_per_t=service.cost_musd_per_t,
+                    propellant_resource_id=None,
+                    full_load_propellant_t=None,
+                    service_feasible=(
+                        service.capacity_t_per_day > 1e-12 and not blockers
+                    ),
+                    blockers=blockers,
+                )
+            )
+        return tuple(rows)
+
     def _route_rows(
         self,
         *,
@@ -25,59 +127,27 @@ class LogisticsRouteProjectorMixin:
             if route_id is not None and str(route.id) != route_id:
                 continue
             route_blockers = sim.logistics.route_failures(route.id, sim.day)
-            operational_blockers = sim.logistics.route_operational_failures(route.id, sim.day)
-            modes: list[RouteModeRow] = []
-            if include_modes:
-                for mode_id in sim.logistics.route_mode_ids(route.id, sim.day):
-                    service = sim.logistics.external_services.get(DefinitionId(mode_id))
-                    if service is not None:
-                        vehicle_definition_id = None
-                        available_count = 0
-                        cost = service.cost_musd_per_t
-                        propellant_resource_id = None
-                        full_load_propellant = None
-                        kind = "external_service"
-                        display_name = service.display_name
-                    else:
-                        definition_id = DefinitionId(mode_id)
-                        vehicle = sim.logistics.vehicle_defs[definition_id]
-                        vehicle_definition_id = mode_id
-                        available_count = len(sim.logistics.available_vehicle_ids(route.id, definition_id, sim.day))
-                        cost = vehicle.operating_cost_musd_per_cargo_t
-                        propellant_resource_id = None if vehicle.propellant_resource_id is None else str(vehicle.propellant_resource_id)
-                        full_load_propellant = vehicle.propellant_t(route, vehicle.max_cargo_for_route(route))
-                        kind = vehicle_concept(vehicle)
-                        display_name = vehicle.display_name
-                    mode_blockers = sim.logistics.route_operational_failures(route.id, sim.day, mode_id)
-                    modes.append(RouteModeRow(
-                        mode_id,
-                        display_name,
-                        kind,
-                        vehicle_definition_id,
-                        available_count,
-                        sim.logistics.route_dispatch_capacity_t(route.id, sim.day, mode_id),
-                        sim.logistics.route_mode_transit_days(route.id, mode_id, sim.day),
-                        cost,
-                        propellant_resource_id,
-                        full_load_propellant,
-                        not mode_blockers,
-                        mode_blockers,
-                    ))
-            rows.append(RouteRow(
-                str(route.id),
-                route.display_name or str(route.id),
-                str(route.origin_id),
-                str(route.destination_id),
-                not route_blockers,
-                not operational_blockers,
-                sim.logistics.route_dispatch_capacity_t(route.id, sim.day),
-                route.transit_days,
-                route.delta_v_km_s,
-                tuple((operation.operation_type, operation.delta_v_km_s) for operation in route.operations),
-                route_blockers,
-                operational_blockers,
-                tuple(modes),
-            ))
+            mode_rows = self._route_mode_rows(route)
+            rows.append(
+                RouteRow(
+                    id=str(route.id),
+                    display_name=route.display_name or str(route.id),
+                    origin_id=str(route.origin_id),
+                    destination_id=str(route.destination_id),
+                    available=not route_blockers,
+                    service_feasible_now=any(
+                        row.service_feasible for row in mode_rows
+                    ),
+                    transit_days=route.transit_days,
+                    delta_v_km_s=route.delta_v_km_s,
+                    operations=tuple(
+                        (operation.operation_type, operation.delta_v_km_s)
+                        for operation in route.operations
+                    ),
+                    blockers=route_blockers,
+                    modes=mode_rows if include_modes else (),
+                )
+            )
         return tuple(rows)
 
     def _routes_view(self, query) -> RoutesView:
@@ -91,22 +161,48 @@ class LogisticsRouteProjectorMixin:
             raise KeyError(query.route_id)
         return RoutesView(rows)
 
-    def _transport_plans_view(
-        self, source_id: SpatialNodeId, destination_id: SpatialNodeId
-    ) -> TransportPlansView:
+    def _transport_allocation_options_view(
+        self, source_id, destination_id
+    ) -> TransportAllocationOptionsView:
         sim = self._simulation
-        options: list[TransportPathOptionRow] = []
-        for policy in PathPolicy:
-            try:
-                plan = sim.logistics.transport_plan(source_id, destination_id, sim.day, policy)
-            except ValueError:
-                continue
-            options.append(TransportPathOptionRow(
-                policy.value,
-                tuple(str(route_id) for route_id in plan.path),
-                tuple((str(route_id), mode_id) for route_id, mode_id in plan.mode_by_route),
-                plan.transit_days,
-                plan.estimated_cost_musd_per_t,
-                plan.estimated_propellant_t_per_cargo_t,
-            ))
-        return TransportPlansView(str(source_id), str(destination_id), tuple(options))
+        options: list[TransportAllocationOptionRow] = []
+        for definition in sorted(
+            sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)
+        ):
+            fleet = sim.logistics.fleet_pool_snapshot(definition.id, source_id)
+            for policy in PathPolicy:
+                plan = sim.logistics.transport_service_plan_for(
+                    definition.id,
+                    source_id,
+                    destination_id,
+                    day=sim.day,
+                    path_policy=policy,
+                )
+                options.append(
+                    TransportAllocationOptionRow(
+                        vehicle_definition_id=str(definition.id),
+                        display_name=definition.display_name,
+                        source_id=str(source_id),
+                        destination_id=str(destination_id),
+                        policy=policy.value,
+                        forward_path=tuple(str(value) for value in plan.forward_path),
+                        reverse_path=tuple(str(value) for value in plan.reverse_path),
+                        cycle_days=plan.cycle_days,
+                        forward_latency_days=plan.forward_latency_days,
+                        reverse_latency_days=plan.reverse_latency_days,
+                        nominal_capacity=self._directional_capacity_row(
+                            plan.nominal_per_unit
+                        ),
+                        fleet_total_units=fleet.total_units,
+                        fleet_free_units=fleet.free_units,
+                        operational_resource_demand_at_full_unit=tuple(
+                            (str(location_id), str(resource_id), amount)
+                            for location_id, resource_id, amount
+                            in plan.resource_t_per_full_utilization_day
+                        ),
+                        blockers=plan.blockers,
+                    )
+                )
+        return TransportAllocationOptionsView(
+            str(source_id), str(destination_id), tuple(options)
+        )

@@ -57,10 +57,10 @@
     const rows=items.map((x)=>{
       const rewardLeft=Math.max(0,Number(x.research_points_total||0)-Number(x.research_points_awarded||0));
       const blocked=(x.blockers||[]).length;
-      const assigned=x.assigned_vehicle_id?definitionName((state.vehicles?.items||[]).find((v)=>v.id===x.assigned_vehicle_id)?.definition_id||x.assigned_vehicle_id):'未割当';
+      const assigned=x.assigned_vehicle_definition_id?`${definitionName(x.assigned_vehicle_definition_id)} · ${fmt(x.reserved_units,0)} unit`:'未割当';
       return `<tr class="selectable" data-inspect="scientific-exploration" data-id="${esc(x.id)}"><td><div class="cell-main">${esc(x.display_name)}</div><div class="cell-sub">${esc(locationName(x.origin_id))} → ${esc(locationName(x.destination_id))}</div></td><td>${esc(stateLabels[x.status]||x.status)}</td><td>${fmt(x.progress_days,1)}/${fmt(x.duration_days,1)}日<div class="cell-sub">Mission Duration ${fmt(x.mission_duration_days,0)}日</div></td><td>${fmt(x.research_points_awarded,1)}/${fmt(x.research_points_total,1)} RP<div class="cell-sub">残り ${fmt(rewardLeft,1)}</div></td><td>${esc(assigned)}</td><td>${blocked}</td></tr>`;
     }).join('');
-    return `<section class="card"><div class="card-heading"><h3>Scientific Exploration</h3><span class="badge">${items.length}</span></div><div class="card-body"><div class="cell-sub">Vehicleを輸送へ使うか科学探査へ拘束するかを選択します。Campaign報酬は有限で、資源Surveyとは別状態です。</div></div><div class="table-wrap"><table><thead><tr><th>Campaign</th><th>状態</th><th>期間</th><th>Research Point</th><th>割当Vehicle</th><th>blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="6">Scientific Exploration候補なし</td></tr>'}</tbody></table></div></section>`;
+    return `<section class="card"><div class="card-heading"><h3>Scientific Exploration</h3><span class="badge">${items.length}</span></div><div class="card-body"><div class="cell-sub">Vehicleを輸送へ使うか科学探査へ拘束するかを選択します。Campaign報酬は有限で、資源Surveyとは別状態です。</div></div><div class="table-wrap"><table><thead><tr><th>Campaign</th><th>状態</th><th>期間</th><th>Research Point</th><th>割当Fleet</th><th>blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="6">Scientific Exploration候補なし</td></tr>'}</tbody></table></div></section>`;
   }
 
   function renderSurveyTab(){
@@ -169,21 +169,21 @@
   }
   function renderScientificExplorationInspector(id){
     const x=state.scientificExplorations?.items?.find((row)=>row.id===id);if(!x)return false;
-    const vehicleRows=(x.vehicle_options||[]).map((v)=>{
-      const blockers=v.blockers||[];const selected=v.vehicle_id===x.assigned_vehicle_id;
-      const badge=selected?'割当中':blockers.length?'不適合':v.can_assign?'割当可':'待機';
-      return `<div class="route-mode-card"><div class="mode-title"><span>${esc(v.display_name)}</span><span class="badge ${selected||v.can_assign?'ok':blockers.length?'warn':''}">${badge}</span></div><div class="cell-sub">${esc(v.vehicle_id)} · ${esc(locationName(v.location_id))} · ${esc(stateLabels[v.status]||v.status)}</div>${blockers.length?`<div class="issue-stack" style="margin-top:7px">${blockers.map((b)=>issueHtml(['exploration',b])).join('')}</div>`:''}<div class="action-row" style="margin-top:8px"><button type="button" data-exploration-assign="${esc(x.id)}" data-vehicle-id="${esc(v.vehicle_id)}" ${v.can_assign?'':'disabled'}>割り当て</button></div></div>`;
-    }).join('')||'<div class="empty-state">Vehicle候補なし</div>';
+    const vehicleRows=(x.fleet_options||[]).map((v)=>{
+      const blockers=v.blockers||[];const selected=v.vehicle_definition_id===x.assigned_vehicle_definition_id;
+      const badge=selected?'予約中':blockers.length?'不適合':v.can_assign?'割当可':'Fleet不足';
+      return `<div class="route-mode-card"><div class="mode-title"><span>${esc(v.display_name)}</span><span class="badge ${selected||v.can_assign?'ok':blockers.length?'warn':''}">${badge}</span></div><div class="cell-sub">${esc(locationName(v.location_id))} · total ${fmt(v.total_units,0)} / free ${fmt(v.free_units,0)} / required ${fmt(v.required_units,0)}</div>${blockers.length?`<div class="issue-stack" style="margin-top:7px">${blockers.map((b)=>issueHtml(['exploration',b])).join('')}</div>`:''}<div class="action-row" style="margin-top:8px"><button type="button" data-exploration-assign="${esc(x.id)}" data-vehicle-definition-id="${esc(v.vehicle_definition_id)}" ${v.can_assign?'':'disabled'}>Fleetを割り当て</button></div></div>`;
+    }).join('')||'<div class="empty-state">Fleet候補なし</div>';
     const inputs=(x.consumable_resources||[]).map(([rid,amount])=>`${esc(resourceName(rid))} ${fmt(amount)}t`).join(' / ')||'追加消耗資源なし';
     const operations=(x.operations||[]).map(([op,dv])=>`${esc(A.operationName(op))} ${fmt(dv,2)} km/s`).join(' / ')||'—';
     const blockers=x.blockers||[];
     let action=lifecycleButton({domain:'exploration',id:x.id,canStart:x.can_start,canPause:x.can_pause,canResume:x.can_resume,complete:x.status==='complete',startLabel:'Campaign開始',pauseLabel:'停止',resumeLabel:'再開',completeLabel:'Campaign完了'});
-    if(x.can_unassign)action+=`<button type="button" data-exploration-unassign="${esc(x.id)}">Vehicle割当解除</button>`;
+    if(x.can_unassign)action+=`<button type="button" data-exploration-unassign="${esc(x.id)}">Fleet割当解除</button>`;
     setInspector(x.display_name,
-      section('Campaign',kv([['出発',esc(locationName(x.origin_id))],['対象/到着',esc(locationName(x.destination_id))],['Mission Duration要件',`${fmt(x.mission_duration_days,0)}日`],['Campaign所要期間',`${fmt(x.duration_days,1)}日`],['進捗',`${fmt(x.progress_days,1)}日`],['期待RP',fmt(x.research_points_total,1)],['RP/日',fmt(x.research_points_per_day,2)],['獲得済RP',fmt(x.research_points_awarded,1)],['割当Vehicle',x.assigned_vehicle_id?esc(x.assigned_vehicle_id):'未割当']]))+
+      section('Campaign',kv([['出発',esc(locationName(x.origin_id))],['対象/到着',esc(locationName(x.destination_id))],['Mission Duration要件',`${fmt(x.mission_duration_days,0)}日`],['Campaign所要期間',`${fmt(x.duration_days,1)}日`],['進捗',`${fmt(x.progress_days,1)}日`],['期待RP',fmt(x.research_points_total,1)],['RP/日',fmt(x.research_points_per_day,2)],['獲得済RP',fmt(x.research_points_awarded,1)],['必要unit',fmt(x.required_units,0)],['割当Fleet',x.assigned_vehicle_definition_id?`${esc(definitionName(x.assigned_vehicle_definition_id))} · ${fmt(x.reserved_units,0)} unit`:'未割当']]))+
       section('必要条件',`<div class="cell-sub">Operation: ${operations}</div><div class="cell-sub">消耗資源: ${inputs}</div><h3>${esc(locationName(x.origin_id))} の地点条件</h3>${siteRequirementsHtml(x.origin_requirements)}<h3>${esc(locationName(x.destination_id))} の地点条件</h3>${siteRequirementsHtml(x.destination_requirements)}`)+
       section('現在のblocker',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['exploration',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+
-      section('Vehicle適合性',vehicleRows)+
+      section('Fleet適合性',vehicleRows)+
       section('操作',`<div class="action-stack">${action||'<span class="badge">操作なし</span>'}</div>`)
     );
     return true;
@@ -232,8 +232,8 @@
     const protoFund=event.target.closest('[data-research-prototype-fund]');if(protoFund){try{await command('FundResearchPrototype',{research_id:protoFund.dataset.researchPrototypeFund});}catch{}return;}
     const demo=event.target.closest('[data-research-demo-site]');if(demo){try{await command('SetResearchDemonstrationSite',{research_id:demo.dataset.id,location_id:demo.dataset.researchDemoSite});}catch{}return;}
     const ea=event.target.closest('[data-exploration-action]');if(ea){const map={start:'StartScientificExploration',pause:'PauseScientificExploration',resume:'ResumeScientificExploration'};try{await command(map[ea.dataset.explorationAction],{exploration_id:ea.dataset.id});}catch{}return;}
-    const assign=event.target.closest('[data-exploration-assign]');if(assign){try{await command('AssignExplorationVehicle',{exploration_id:assign.dataset.explorationAssign,vehicle_id:assign.dataset.vehicleId});}catch{}return;}
-    const unassign=event.target.closest('[data-exploration-unassign]');if(unassign){try{await command('UnassignExplorationVehicle',{exploration_id:unassign.dataset.explorationUnassign});}catch{}return;}
+    const assign=event.target.closest('[data-exploration-assign]');if(assign){try{await command('AssignExplorationFleet',{exploration_id:assign.dataset.explorationAssign,vehicle_definition_id:assign.dataset.vehicleDefinitionId});}catch{}return;}
+    const unassign=event.target.closest('[data-exploration-unassign]');if(unassign){try{await command('UnassignExplorationFleet',{exploration_id:unassign.dataset.explorationUnassign});}catch{}return;}
     const sa=event.target.closest('[data-survey-action]');if(sa){const map={start:'StartSurvey',pause:'PauseSurvey',resume:'ResumeSurvey'},payload={location_id:state.locationId,resource_id:sa.dataset.id};if(sa.dataset.surveyAction==='start')payload.allocation_weight=Number($('#surveyWeightInput')?.value??1);try{await command(map[sa.dataset.surveyAction],payload);}catch{}return;}
     const sw=event.target.closest('[data-set-survey-weight]');if(sw){try{await command('SetSurveyAllocation',{location_id:state.locationId,resource_id:sw.dataset.setSurveyWeight,weight:Number($('#surveyWeightInput').value)});}catch{}return;}
   });

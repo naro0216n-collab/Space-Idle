@@ -25,7 +25,7 @@ class VehicleProductionState:
     progress_days: float = 0.0
     phase: VehicleProductionPhase = VehicleProductionPhase.AWAITING_INPUTS
     paused: bool = False
-    completed_vehicle_id: EntityId | None = None
+    completed_units: int = 0
     created_day: int = 0
 
     def __post_init__(self) -> None:
@@ -311,11 +311,10 @@ class VehicleProductionMixin:
             key=lambda row: str(row.id),
         )
         for state in completed:
-            vehicle_id = self.add_vehicle(
-                state.vehicle_definition_id, state.location_id
-            )
+            self.add_fleet_units(state.vehicle_definition_id, 1, state.location_id)
             state.phase = VehicleProductionPhase.COMPLETE
-            state.completed_vehicle_id = vehicle_id
+            state.completed_units = 1
+            self.reconcile_fleet_allocations(day)
 
     def vehicle_production_blockers(
         self,

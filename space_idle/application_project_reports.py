@@ -113,29 +113,39 @@ class ApplicationReportProjectorMixin:
     def _global_logistics_issues(self, location_filter: str | None) -> tuple[IssueRow, ...]:
         sim = self._simulation
         issues: list[IssueRow] = []
+
+        # Route issues are intrinsic endpoint/site constraints. Vehicle/Fleet
+        # feasibility is projected through Transport Allocation rather than
+        # individual Vehicle availability.
         for route in sorted(sim.logistics.routes.values(), key=lambda row: str(row.id)):
             if location_filter is not None and location_filter not in {
                 str(route.origin_id), str(route.destination_id)
             }:
                 continue
-            for blocker in sim.logistics.route_operational_failures(route.id, sim.day):
+            for blocker in sim.logistics.route_failures(route.id, sim.day):
                 issues.append(self._issue(
                     blocker, blocker, category="logistics", source="route",
                     location_id=location_filter, entity_id=str(route.id),
                 ))
-        for state in sorted(sim.logistics.vehicles.values(), key=lambda row: str(row.id)):
-            state_location = None if state.location_id is None else str(state.location_id)
-            if location_filter is not None and state_location != location_filter and (
-                state.transit_destination_id is None
-                or str(state.transit_destination_id) != location_filter
-            ):
+
+        for allocation in self._transport_allocation_rows():
+            if location_filter is not None and location_filter not in {
+                allocation.anchor_location_id, allocation.destination_id
+            }:
                 continue
-            for blocker in sim.logistics.vehicle_blockers(state.id, sim.day):
+            for blocker in allocation.blockers:
                 issues.append(self._issue(
-                    blocker, blocker, category="logistics", source="vehicle",
-                    location_id=state_location, entity_id=str(state.id),
-                    definition_id=str(state.definition_id),
+                    blocker, blocker, category="logistics", source="transport_allocation",
+                    location_id=allocation.anchor_location_id, entity_id=allocation.id,
+                    definition_id=allocation.vehicle_definition_id,
                 ))
+            for limiting in allocation.limiting_factors:
+                issues.append(self._issue(
+                    limiting, limiting, category="logistics", source="transport_capacity",
+                    location_id=allocation.anchor_location_id, entity_id=allocation.id,
+                    definition_id=allocation.vehicle_definition_id, impact="limited",
+                ))
+
         for state in sorted(
             sim.logistics.vehicle_production_projects.values(), key=lambda row: str(row.id)
         ):
@@ -153,49 +163,33 @@ class ApplicationReportProjectorMixin:
                     location_id=state_location, entity_id=str(state.id),
                     definition_id=str(state.vehicle_definition_id), resource_id=resource_id,
                 ))
-        for order in sorted(sim.logistics.orders.values(), key=lambda row: str(row.id)):
-            if location_filter is not None and location_filter not in {
-                str(order.source_id), str(order.destination_id)
-            }:
-                continue
-            for blocker in sim.logistics.order_blockers(order.id, sim.day):
-                issues.append(self._issue(
-                    blocker, blocker, category="logistics", source="cargo_order",
-                    location_id=location_filter, entity_id=str(order.id),
-                    resource_id=str(order.resource_id),
-                ))
-        for lane in sorted(sim.logistics.lanes.values(), key=lambda row: str(row.id)):
-            if location_filter is not None and location_filter not in {
-                str(lane.source_id), str(lane.destination_id)
-            }:
-                continue
-            for blocker in sim.logistics.lane_blockers(lane.id, sim.day):
-                issues.append(self._issue(
-                    blocker, blocker, category="logistics", source="logistics_lane",
-                    location_id=location_filter, entity_id=str(lane.id),
-                ))
 
         demands = sim.resource_demands()
-        for demand in demands:
-            if location_filter is not None and location_filter != str(demand.destination_id):
+        lane_snapshot = sim.logistics.lane_snapshot(demands, sim.day)
+        for lane in self._lane_rows(demands, lane_snapshot):
+            if location_filter is not None and location_filter not in {
+                lane.source_id, lane.destination_id
+            }:
                 continue
-            # Project-facing supply blockers are already composed from the same
-            # Logistics demand contract in _location_operational_issues. Do not
-            # surface the same missing lane twice under a generic demand issue.
-            if demand.owner_kind == "project":
+            for blocker in lane.blockers:
+                issues.append(self._issue(
+                    blocker, blocker, category="logistics", source="logistics_lane",
+                    location_id=location_filter, entity_id=lane.id,
+                ))
+
+        for demand in self._demand_rows(demands, lane_snapshot):
+            if location_filter is not None and location_filter != demand.destination_id:
                 continue
-            remaining = sim.logistics.demand_remaining_t(demand)
-            if remaining <= 1e-9:
+            if demand.owner_kind == "project" or demand.remaining_t <= 1e-9:
                 continue
-            options = sim.logistics.demand_supply_options(demand, sim.day)
-            if options.eligible_lane_ids:
+            if demand.eligible_lane_count > 0:
                 continue
             issues.append(self._issue(
                 "demand_unassigned",
-                f"未割当需要 {remaining:g} t",
+                f"未割当需要 {demand.remaining_t:g} t",
                 category="logistics", source="resource_demand",
-                location_id=str(demand.destination_id), entity_id=str(demand.id),
-                resource_id=str(demand.resource_id), impact="limited",
+                location_id=demand.destination_id, entity_id=demand.id,
+                resource_id=demand.resource_id, impact="limited",
             ))
         return tuple(issues)
 
@@ -319,23 +313,15 @@ class ApplicationReportProjectorMixin:
             for snap in sim.extraction.snapshots(location_id, sim.facilities, sim.inventory, power, sim.day):
                 production[snap.output_resource_id] += snap.output_t_per_day
 
-        for (order_id, leg_index), amount in sim.logistics.waiting.items():
-            order = sim.logistics.orders[order_id]
-            route = sim.logistics.routes[order.path[leg_index]]
-            if route.origin_id == location_id:
-                outbound_waiting[order.resource_id] += amount
-        for mission in sim.logistics.missions.values():
-            order = sim.logistics.orders[mission.order_id]
-            route_id = order.path[mission.leg_index]
-            route = sim.logistics.routes[route_id]
-            status = getattr(mission.status, "value", mission.status)
+        for flow in sim.logistics.cargo_flows.values():
+            status = getattr(flow.status, "value", flow.status)
             if status == "in_transit":
-                if route.origin_id == location_id:
-                    outbound_transit[order.resource_id] += mission.amount_t
-                if route.destination_id == location_id:
-                    inbound_transit[order.resource_id] += mission.amount_t
-            elif status in {"arrival_waiting", "waypoint_wait"} and route.destination_id == location_id:
-                arrival_waiting[order.resource_id] += mission.amount_t
+                if flow.source_id == location_id:
+                    outbound_transit[flow.resource_id] += flow.amount_t
+                if flow.destination_id == location_id:
+                    inbound_transit[flow.resource_id] += flow.amount_t
+            elif status == "arrival_waiting" and flow.destination_id == location_id:
+                arrival_waiting[flow.resource_id] += flow.amount_t
 
         resource_ids = (
             set(production) | set(consumption) | set(outbound_waiting) |

@@ -242,13 +242,15 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert "SpaceIdleResearchTree.render" in operations_js
         assert "FundResearchPrototype" in operations_js
         assert "StartScientificExploration" in operations_js
-        assert "AssignExplorationVehicle" in operations_js
+        assert "AssignExplorationFleet" in operations_js
+        assert "AssignExplorationVehicle" not in operations_js
 
         status, headers, body = _raw_request(port, "/logistics_ui.js")
         logistics_js = body.decode("utf-8")
         assert status == 200
         assert headers["Content-Type"].startswith("text/javascript")
-        assert "SubmitCargo" in logistics_js
+        assert "CreateTransportAllocation" in logistics_js
+        assert "SubmitCargo" not in logistics_js
         assert "CreateLogisticsLane" in logistics_js
         assert "ProduceVehicle" in logistics_js
         assert "PauseVehicleProduction" in logistics_js

@@ -14,18 +14,20 @@ from .app_contracts.progression import (
     FundResearchPrototype, SetResearchDemonstrationSite, StartSurvey,
     PauseSurvey, ResumeSurvey, SetSurveyAllocation, StartScientificExploration,
     PauseScientificExploration, ResumeScientificExploration,
-    AssignExplorationVehicle, UnassignExplorationVehicle,
+    AssignExplorationFleet, UnassignExplorationFleet,
 )
 from .app_contracts.transport import (
-    DispatchVehicle, RefuelVehicle, ProduceVehicle, PauseVehicleProduction,
-    ResumeVehicleProduction, SetVehicleProductionSettings, SubmitCargo, CreateLogisticsLane,
+    ProduceVehicle, PauseVehicleProduction, ResumeVehicleProduction,
+    SetVehicleProductionSettings, CreateTransportAllocation, UpdateTransportAllocation,
+    ChangeTransportAllocationMode, PauseTransportAllocation, ResumeTransportAllocation,
+    DeleteTransportAllocation, RelocateFleet, CreateLogisticsLane,
     UpdateLogisticsLane, PauseLogisticsLane, ResumeLogisticsLane, DeleteLogisticsLane,
 )
-from .app_contracts.contracts import AcceptContract, DispatchContractCargo, DeclineContract
+from .app_contracts.contracts import AcceptContract, DeclineContract
 from .app_contracts.queries import (
     GetCatalog, GetWorld, GetLocation, GetFlowReport, GetBottlenecks, GetProjects,
-    GetBuildOptions, GetLogistics, GetLogisticsSummary, GetRoutes, GetVehicles,
-    GetCargoOrders, GetLogisticsLanes, GetTransportMissions, GetTransportPlans,
+    GetBuildOptions, GetLogistics, GetLogisticsSummary, GetRoutes, GetFleet,
+    GetTransportAllocations, GetCargoFlows, GetLogisticsLanes, GetTransportAllocationOptions,
     GetResearch, GetScientificExplorations, GetSurveys, GetContracts,
 )
 
@@ -36,16 +38,18 @@ Command: TypeAlias = (
     SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
     FundResearchPrototype | SetResearchDemonstrationSite | StartSurvey | PauseSurvey |
     ResumeSurvey | SetSurveyAllocation | StartScientificExploration | PauseScientificExploration |
-    ResumeScientificExploration | AssignExplorationVehicle | UnassignExplorationVehicle |
-    DispatchVehicle | RefuelVehicle | ProduceVehicle | PauseVehicleProduction |
-    ResumeVehicleProduction | SetVehicleProductionSettings | SubmitCargo | CreateLogisticsLane | UpdateLogisticsLane |
-    PauseLogisticsLane | ResumeLogisticsLane | DeleteLogisticsLane | AcceptContract |
-    DispatchContractCargo | DeclineContract | AdvanceTime
+    ResumeScientificExploration | AssignExplorationFleet | UnassignExplorationFleet |
+    ProduceVehicle | PauseVehicleProduction | ResumeVehicleProduction | SetVehicleProductionSettings |
+    CreateTransportAllocation | UpdateTransportAllocation | ChangeTransportAllocationMode |
+    PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |
+    CreateLogisticsLane | UpdateLogisticsLane | PauseLogisticsLane |
+    ResumeLogisticsLane | DeleteLogisticsLane | AcceptContract |
+    DeclineContract | AdvanceTime
 )
 Query: TypeAlias = (
     GetCatalog | GetWorld | GetLocation | GetFlowReport | GetBottlenecks | GetProjects |
-    GetBuildOptions | GetLogistics | GetLogisticsSummary | GetRoutes | GetVehicles |
-    GetCargoOrders | GetLogisticsLanes | GetTransportMissions | GetTransportPlans |
+    GetBuildOptions | GetLogistics | GetLogisticsSummary | GetRoutes | GetFleet |
+    GetTransportAllocations | GetCargoFlows | GetLogisticsLanes | GetTransportAllocationOptions |
     GetResearch | GetScientificExplorations | GetSurveys | GetContracts
 )
 

@@ -11,7 +11,7 @@ from .research import ResearchService
 from .resource_demand import ResourceDemand
 from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
-from .transport.models import RouteDef, TransportOperationRequirement
+from .transport.models import FleetReservationKind, RouteDef, TransportOperationRequirement
 
 if TYPE_CHECKING:
     from .logistics import LogisticsService
@@ -31,6 +31,7 @@ class ScientificExplorationDefinition:
     origin_requirements: SiteRequirements = SiteRequirements()
     destination_requirements: SiteRequirements = SiteRequirements()
     return_to_origin: bool = False
+    required_units: int = 1
 
     def __post_init__(self) -> None:
         if self.mission_duration_days <= 0:
@@ -41,6 +42,8 @@ class ScientificExplorationDefinition:
             raise ValueError("scientific exploration reward must be positive")
         if any(amount < 0 for _resource, amount in self.consumable_resources):
             raise ValueError("scientific exploration consumables must be non-negative")
+        if self.required_units <= 0:
+            raise ValueError("scientific exploration required units must be positive")
 
     @property
     def points_per_day(self) -> float:
@@ -60,7 +63,7 @@ class ScientificExplorationDefinition:
 
 
 class ScientificExplorationPhase(str, Enum):
-    AWAITING_VEHICLE = "awaiting_vehicle"
+    AWAITING_FLEET = "awaiting_fleet"
     ACTIVE = "active"
     COMPLETE = "complete"
 
@@ -68,8 +71,9 @@ class ScientificExplorationPhase(str, Enum):
 @dataclass
 class ScientificExplorationState:
     definition_id: DefinitionId
-    phase: ScientificExplorationPhase = ScientificExplorationPhase.AWAITING_VEHICLE
-    vehicle_id: EntityId | None = None
+    phase: ScientificExplorationPhase = ScientificExplorationPhase.AWAITING_FLEET
+    vehicle_definition_id: DefinitionId | None = None
+    reserved_units: int = 0
     progress_days: float = 0.0
     research_points_awarded: float = 0.0
     inputs_consumed: bool = False
@@ -109,22 +113,22 @@ class ScientificExplorationService:
             raise ValueError("completed scientific exploration cannot be resumed")
         state.paused = False
 
-    def _route_failures_for_vehicle(
+    def _route_failures_for_fleet(
         self,
         definition: ScientificExplorationDefinition,
-        vehicle_id: EntityId,
+        vehicle_definition_id: DefinitionId,
         day: int,
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[str, ...]:
-        vehicle = self.logistics.vehicles[vehicle_id]
-        vehicle_def = self.logistics.vehicle_defs[vehicle.definition_id]
+        vehicle_def = self.logistics.vehicle_defs[vehicle_definition_id]
         route = definition.compatibility_route()
         failures = list(
-            self.logistics.performance_route_failures(
+            self.logistics.fleet_campaign_failures(
+                vehicle_definition_id,
                 route,
-                vehicle_def.performance,
-                day,
-                power_by_location=power_by_location,
+                activity_days=definition.duration_days,
+                return_to_origin=definition.return_to_origin,
+                day=day,
             )
         )
         for prefix, location_id, requirements in (
@@ -143,25 +147,27 @@ class ScientificExplorationService:
                 snapshot,
             ):
                 failures.append(f"{prefix}:{failure.code}:{failure.detail}")
-        return tuple(failures)
+        return tuple(dict.fromkeys(failures))
 
-    def vehicle_failures(
+    def fleet_failures(
         self,
         definition_id: DefinitionId,
-        vehicle_id: EntityId,
+        vehicle_definition_id: DefinitionId,
         *,
         day: int = 0,
     ) -> tuple[str, ...]:
         definition = self.definitions[definition_id]
-        if vehicle_id not in self.logistics.vehicles:
-            return ("unknown_vehicle",)
+        if vehicle_definition_id not in self.logistics.vehicle_defs:
+            return ("unknown_vehicle_definition",)
         failures = list(
-            self.logistics.exclusive_assignment_failures(
-                vehicle_id, definition.origin_id, day
-            )
+            self._route_failures_for_fleet(definition, vehicle_definition_id, day)
         )
-        failures.extend(self._route_failures_for_vehicle(definition, vehicle_id, day))
-        return tuple(failures)
+        free = self.logistics.fleet_free_units(
+            vehicle_definition_id, definition.origin_id
+        )
+        if free < definition.required_units:
+            failures.append(f"fleet_units:{free}/{definition.required_units}")
+        return tuple(dict.fromkeys(failures))
 
     def can_start(self, definition_id: DefinitionId) -> bool:
         return definition_id in self.definitions and definition_id not in self.campaigns
@@ -182,10 +188,10 @@ class ScientificExplorationService:
             and state.paused
         )
 
-    def can_assign_vehicle(
+    def can_assign_fleet(
         self,
         definition_id: DefinitionId,
-        vehicle_id: EntityId,
+        vehicle_definition_id: DefinitionId,
         *,
         day: int = 0,
     ) -> bool:
@@ -193,63 +199,72 @@ class ScientificExplorationService:
         if (
             state is None
             or state.phase is ScientificExplorationPhase.COMPLETE
-            or state.vehicle_id is not None
+            or state.vehicle_definition_id is not None
         ):
             return False
-        return not self.vehicle_failures(definition_id, vehicle_id, day=day)
+        return not self.fleet_failures(
+            definition_id, vehicle_definition_id, day=day
+        )
 
-    def can_unassign_vehicle(self, definition_id: DefinitionId) -> bool:
+    def can_unassign_fleet(self, definition_id: DefinitionId) -> bool:
         state = self.campaigns.get(definition_id)
         return (
             state is not None
             and state.phase is not ScientificExplorationPhase.COMPLETE
-            and state.vehicle_id is not None
+            and state.vehicle_definition_id is not None
             and state.progress_days <= 1e-9
             and not state.inputs_consumed
         )
 
-    def assign_vehicle(
+    def assign_fleet(
         self,
         definition_id: DefinitionId,
-        vehicle_id: EntityId,
+        vehicle_definition_id: DefinitionId,
         *,
         day: int = 0,
     ) -> None:
         state = self.campaigns[definition_id]
         if state.phase is ScientificExplorationPhase.COMPLETE:
             raise ValueError("scientific exploration is complete")
-        if state.vehicle_id is not None:
-            raise ValueError("scientific exploration already has a vehicle")
-        failures = self.vehicle_failures(definition_id, vehicle_id, day=day)
-        if failures:
-            raise ValueError("vehicle is not compatible with scientific exploration: " + "; ".join(failures))
-        assignment_id = EntityId(f"scientific_exploration:{definition_id}")
-        self.logistics.assign_vehicle_exclusively(
-            vehicle_id,
-            assignment_id,
-            "scientific_exploration",
-            self.definitions[definition_id].origin_id,
-            day,
+        if state.vehicle_definition_id is not None:
+            raise ValueError("scientific exploration already has Fleet assigned")
+        failures = self.fleet_failures(
+            definition_id, vehicle_definition_id, day=day
         )
-        state.vehicle_id = vehicle_id
+        if failures:
+            raise ValueError(
+                "Fleet is not compatible with scientific exploration: "
+                + "; ".join(failures)
+            )
+        definition = self.definitions[definition_id]
+        reservation_id = EntityId(f"scientific_exploration:{definition_id}")
+        self.logistics.reserve_fleet_units(
+            reservation_id,
+            reservation_id,
+            FleetReservationKind.SCIENTIFIC_EXPLORATION,
+            vehicle_definition_id,
+            definition.origin_id,
+            definition.required_units,
+        )
+        state.vehicle_definition_id = vehicle_definition_id
+        state.reserved_units = definition.required_units
         state.phase = ScientificExplorationPhase.ACTIVE
+        self.logistics.reconcile_fleet_allocations(day)
 
-    def unassign_vehicle(self, definition_id: DefinitionId) -> None:
+    def unassign_fleet(self, definition_id: DefinitionId, *, day: int = 0) -> None:
         state = self.campaigns[definition_id]
         if state.phase is ScientificExplorationPhase.COMPLETE:
             raise ValueError("scientific exploration is complete")
-        if state.vehicle_id is None:
+        if state.vehicle_definition_id is None:
             return
-        if not self.can_unassign_vehicle(definition_id):
-            raise ValueError("started scientific exploration cannot release its vehicle")
-        assignment_id = EntityId(f"scientific_exploration:{definition_id}")
-        self.logistics.release_vehicle_assignment(
-            state.vehicle_id,
-            assignment_id,
-            self.definitions[definition_id].origin_id,
-        )
-        state.vehicle_id = None
-        state.phase = ScientificExplorationPhase.AWAITING_VEHICLE
+        if not self.can_unassign_fleet(definition_id):
+            raise ValueError("started scientific exploration cannot release its Fleet")
+        reservation_id = EntityId(f"scientific_exploration:{definition_id}")
+        self.logistics.release_fleet_reservation(reservation_id)
+        state.vehicle_definition_id = None
+        state.reserved_units = 0
+        state.phase = ScientificExplorationPhase.AWAITING_FLEET
+        self.logistics.reconcile_fleet_allocations(day)
 
     @staticmethod
     def _resource_demand_id(definition_id: DefinitionId, resource_id: DefinitionId) -> EntityId:
@@ -262,7 +277,7 @@ class ScientificExplorationService:
                 state.phase is not ScientificExplorationPhase.ACTIVE
                 or state.paused
                 or state.inputs_consumed
-                or state.vehicle_id is None
+                or state.vehicle_definition_id is None
             ):
                 continue
             definition = self.definitions[definition_id]
@@ -306,12 +321,6 @@ class ScientificExplorationService:
                 amount_t,
             )
         state.inputs_consumed = True
-        if state.vehicle_id is not None and definition.destination_id != definition.origin_id:
-            self.logistics.move_assigned_vehicle(
-                state.vehicle_id,
-                EntityId(f"scientific_exploration:{definition.id}"),
-                definition.destination_id,
-            )
         return True
 
     def blockers(
@@ -330,8 +339,8 @@ class ScientificExplorationService:
         blockers: list[str] = []
         if state.paused:
             blockers.append("manual_pause")
-        if state.vehicle_id is None:
-            blockers.append("vehicle_unassigned")
+        if state.vehicle_definition_id is None:
+            blockers.append("fleet_unassigned")
             return tuple(blockers)
         if not state.inputs_consumed:
             for resource_id, amount_t in definition.consumable_resources:
@@ -343,9 +352,9 @@ class ScientificExplorationService:
                 if allocated + 1e-9 < amount_t:
                     blockers.append(f"resource:{resource_id}:{allocated:g}/{amount_t:g}")
         blockers.extend(
-            self._route_failures_for_vehicle(
+            self._route_failures_for_fleet(
                 definition,
-                state.vehicle_id,
+                state.vehicle_definition_id,
                 day,
                 power_by_location,
             )
@@ -362,7 +371,7 @@ class ScientificExplorationService:
         day: int,
     ) -> None:
         for definition_id, state in sorted(self.campaigns.items(), key=lambda row: str(row[0])):
-            if state.phase is not ScientificExplorationPhase.ACTIVE or state.paused or state.vehicle_id is None:
+            if state.phase is not ScientificExplorationPhase.ACTIVE or state.paused or state.vehicle_definition_id is None:
                 continue
             definition = self.definitions[definition_id]
             if self.blockers(
@@ -403,11 +412,16 @@ class ScientificExplorationService:
         state: ScientificExplorationState,
         day: int,
     ) -> None:
-        if state.vehicle_id is not None:
-            self.logistics.release_vehicle_assignment(
-                state.vehicle_id,
-                EntityId(f"scientific_exploration:{definition.id}"),
-                definition.origin_id if definition.return_to_origin else definition.destination_id,
-                available_day=day + 1,
-            )
+        if state.vehicle_definition_id is not None:
+            reservation_id = EntityId(f"scientific_exploration:{definition.id}")
+            vehicle_definition_id = state.vehicle_definition_id
+            units = state.reserved_units
+            self.logistics.release_fleet_reservation(reservation_id)
+            if not definition.return_to_origin and definition.destination_id != definition.origin_id:
+                source = self.logistics.fleet_pool(vehicle_definition_id, definition.origin_id)
+                if source.total_units < units:
+                    raise RuntimeError("scientific exploration Fleet exceeds source pool")
+                source.total_units -= units
+                self.logistics.fleet_pool(vehicle_definition_id, definition.destination_id).total_units += units
+            self.logistics.reconcile_fleet_allocations(day)
         state.phase = ScientificExplorationPhase.COMPLETE

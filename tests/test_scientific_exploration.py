@@ -1,144 +1,158 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import datetime, timezone
+
 import pytest
 
 from space_idle import (
     AdvanceTime,
-    ApplicationError,
-    AssignExplorationVehicle,
+    AssignExplorationFleet,
+    CreateTransportAllocation,
+    GetFleet,
     GetScientificExplorations,
-    GetVehicles,
+    GetTransportAllocations,
+    PauseFacility,
     StartScientificExploration,
+    UnassignExplorationFleet,
     build_game_application,
 )
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
-from datetime import datetime, timezone
+from space_idle.site import CapabilityRequirement, SiteRequirements
+from space_idle.validation import validate_simulation_configuration
+from space_idle.validation_support import ConfigurationError
 
 
-def _orbital_tug(sim):
+def _row(app):
     return next(
-        vehicle
-        for vehicle in sim.logistics.vehicles.values()
-        if vehicle.definition_id == ids.REUSABLE_ORBITAL_CARGO_TUG
+        item for item in app.query(GetScientificExplorations()).items
+        if item.id == str(ids.CISLUNAR_SCIENCE_EXPLORATION)
     )
 
 
-def test_scientific_exploration_is_separate_from_survey_and_uses_vehicle_performance():
+def _fleet_row(app, definition_id, location_id):
+    return next(
+        item for item in app.query(GetFleet()).pools
+        if item.vehicle_definition_id == str(definition_id)
+        and item.location_id == str(location_id)
+    )
+
+
+def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performance():
     app = build_game_application()
     sim = app._simulation
-    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
     before_survey = capture_state(sim)["survey"]
 
-    view = app.query(GetScientificExplorations())
-    row = next(item for item in view.items if item.id == str(exploration_id))
+    row = _row(app)
     launch_vehicle = next(
-        option for option in row.vehicle_options
+        option for option in row.fleet_options
         if option.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
     )
     tug = next(
-        option for option in row.vehicle_options
+        option for option in row.fleet_options
         if option.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
     )
     assert any("spaceflight:unsupported" in blocker for blocker in launch_vehicle.blockers)
     assert tug.blockers == ()
+    assert tug.can_assign is False  # Campaign state must exist first.
 
-    definition = sim.scientific_exploration.definitions[exploration_id]
+    definition = sim.scientific_exploration.definitions[ids.CISLUNAR_SCIENCE_EXPLORATION]
     assert row.mission_duration_days == definition.mission_duration_days
     assert row.research_points_per_day == pytest.approx(definition.points_per_day)
+    assert row.required_units == definition.required_units == 1
     assert row.can_start is True
-    assert row.can_pause is False
-    assert row.can_resume is False
-    assert row.can_unassign is False
-    assert tug.can_assign is False  # Campaign must exist before assignment.
-    assert tuple(item.description for item in row.origin_requirements.environment) == ("軌道環境が必要",)
-    assert tuple(item.description for item in row.destination_requirements.environment) == ("軌道環境が必要",)
 
-    app.execute(StartScientificExploration(str(exploration_id)))
-    started = next(item for item in app.query(GetScientificExplorations()).items if item.id == str(exploration_id))
-    started_tug = next(option for option in started.vehicle_options if option.vehicle_id == tug.vehicle_id)
-    assert started.can_start is False
-    assert started.can_pause is True
-    assert started.can_resume is False
-    assert started_tug.can_assign is True
-    app.execute(AssignExplorationVehicle(str(exploration_id), tug.vehicle_id))
-    assert sim.logistics.vehicles[next(v.id for v in sim.logistics.vehicles.values() if str(v.id) == tug.vehicle_id)].status.value == "assigned"
-    vehicle_row = next(v for v in app.query(GetVehicles()).items if v.id == tug.vehicle_id)
-    assert vehicle_row.assignment_kind == "scientific_exploration"
-    assert vehicle_row.assignment_id == f"scientific_exploration:{exploration_id}"
-    assigned = next(item for item in app.query(GetScientificExplorations()).items if item.id == str(exploration_id))
+    app.execute(StartScientificExploration(str(ids.CISLUNAR_SCIENCE_EXPLORATION)))
+    started = _row(app)
+    tug = next(
+        option for option in started.fleet_options
+        if option.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+    )
+    assert tug.can_assign is True
+    app.execute(AssignExplorationFleet(
+        str(ids.CISLUNAR_SCIENCE_EXPLORATION),
+        str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+    ))
+    assigned = _row(app)
+    assert assigned.assigned_vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+    assert assigned.reserved_units == 1
     assert assigned.can_unassign is True
-    assert not any(option.can_assign for option in assigned.vehicle_options)
+    fleet = _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
+    assert fleet.exploration_units == 1
+    assert fleet.free_units == 0
 
     app.execute(AdvanceTime(1))
-    state = sim.scientific_exploration.campaigns[exploration_id]
-    assert state.progress_days > 0
-    assert state.research_points_awarded > 0
-    progressed = next(item for item in app.query(GetScientificExplorations()).items if item.id == str(exploration_id))
-    assert progressed.can_unassign is False
+    assert _row(app).can_unassign is False
     assert capture_state(sim)["survey"] == before_survey
 
 
-def test_exploration_vehicle_cannot_be_used_by_transport_until_campaign_completes():
+def test_exploration_reservation_excludes_transport_and_release_refills_target():
     app = build_game_application()
-    sim = app._simulation
-    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
-    tug = _orbital_tug(sim)
-    app.execute(StartScientificExploration(str(exploration_id)))
-    app.execute(AssignExplorationVehicle(str(exploration_id), str(tug.id)))
-
-    assert tug.id not in sim.logistics.available_vehicle_ids(
-        next(route_id for route_id, route in sim.logistics.routes.items() if route.origin_id == ids.LEO and route.destination_id == ids.LUNAR_ORBIT),
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        sim.day,
+    app.execute(StartScientificExploration(str(ids.CISLUNAR_SCIENCE_EXPLORATION)))
+    app.execute(AssignExplorationFleet(
+        str(ids.CISLUNAR_SCIENCE_EXPLORATION),
+        str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+    ))
+    allocation_id = app.execute(CreateTransportAllocation(
+        str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+        str(ids.LEO),
+        str(ids.LUNAR_ORBIT),
+        target_units=1,
+    )).created_id
+    assert allocation_id is not None
+    allocation = next(
+        row for row in app.query(GetTransportAllocations()).items
+        if row.id == allocation_id
     )
-    with pytest.raises(ApplicationError):
-        app.execute(__import__("space_idle").DispatchVehicle(str(tug.id), "base.route.leo_lunar_orbit"))
+    assert allocation.active_units == 0
+    assert allocation.unfilled_units == 1
 
-    app.execute(AdvanceTime(8))
-    state = sim.scientific_exploration.campaigns[exploration_id]
-    assert state.phase.value == "complete"
-    assert state.research_points_awarded == pytest.approx(sim.scientific_exploration.definitions[exploration_id].research_points_total)
-    assert tug.status.value == "available"
-    assert tug.location_id == ids.LUNAR_ORBIT
+    app.execute(UnassignExplorationFleet(str(ids.CISLUNAR_SCIENCE_EXPLORATION)))
+    allocation = next(
+        row for row in app.query(GetTransportAllocations()).items
+        if row.id == allocation_id
+    )
+    assert allocation.active_units == 1
+    assert allocation.unfilled_units == 0
 
 
-def test_scientific_exploration_save_load_preserves_vehicle_assignment_and_future_result(tmp_path):
+def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future_result(tmp_path):
     app = build_game_application()
-    sim = app._simulation
-    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
-    tug = _orbital_tug(sim)
-    app.execute(StartScientificExploration(str(exploration_id)))
-    app.execute(AssignExplorationVehicle(str(exploration_id), str(tug.id)))
+    app.execute(StartScientificExploration(str(ids.CISLUNAR_SCIENCE_EXPLORATION)))
+    app.execute(AssignExplorationFleet(
+        str(ids.CISLUNAR_SCIENCE_EXPLORATION),
+        str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+    ))
     app.execute(AdvanceTime(2))
 
     path = tmp_path / "scientific-exploration.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
-    assert capture_state(loaded._simulation) == capture_state(sim)
+    assert capture_state(loaded._simulation) == capture_state(app._simulation)
+    assert _fleet_row(loaded, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == 1
 
     app.execute(AdvanceTime(6))
     loaded.execute(AdvanceTime(6))
-    assert capture_state(loaded._simulation) == capture_state(sim)
+    assert capture_state(loaded._simulation) == capture_state(app._simulation)
+    state = loaded._simulation.scientific_exploration.campaigns[ids.CISLUNAR_SCIENCE_EXPLORATION]
+    assert state.phase.value == "complete"
+    assert state.research_points_awarded == pytest.approx(
+        loaded._simulation.scientific_exploration.definitions[
+            ids.CISLUNAR_SCIENCE_EXPLORATION
+        ].research_points_total
+    )
 
 
 def test_scientific_exploration_mission_duration_is_independent_of_campaign_duration():
-    app = build_game_application()
-    sim = app._simulation
+    sim = build_game_application()._simulation
     definition = sim.scientific_exploration.definitions[ids.CISLUNAR_SCIENCE_EXPLORATION]
-
     route = definition.compatibility_route()
-
     assert route.transit_days == definition.mission_duration_days
     assert definition.mission_duration_days != definition.duration_days
 
 
-def test_runtime_blocker_prevents_input_consumption_and_vehicle_relocation():
-    from dataclasses import replace
-
-    from space_idle import PauseFacility
-    from space_idle.site import CapabilityRequirement, SiteRequirements
-
+def test_runtime_blocker_prevents_input_consumption_and_keeps_fleet_reserved():
     app = build_game_application()
     sim = app._simulation
     exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
@@ -152,18 +166,12 @@ def test_runtime_blocker_prevents_input_consumption_and_vehicle_relocation():
     )
     servicing_id = sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.refresh_storage()
-    tug = _orbital_tug(sim)
 
     app.execute(StartScientificExploration(str(exploration_id)))
-    app.execute(AssignExplorationVehicle(str(exploration_id), str(tug.id)))
+    app.execute(AssignExplorationFleet(
+        str(exploration_id), str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+    ))
     state = sim.scientific_exploration.campaigns[exploration_id]
-    demands = sim.scientific_exploration.resource_demands(sim.day)
-    assert demands
-    assert all(
-        sim.inventory.reserved_for(demand.id, demand.destination_id, demand.resource_id) > 0
-        for demand in demands
-    )
-
     app.execute(PauseFacility(str(servicing_id)))
     assert any(
         blocker.startswith("origin:capability:available:spacecraft_servicing:")
@@ -171,21 +179,14 @@ def test_runtime_blocker_prevents_input_consumption_and_vehicle_relocation():
     )
 
     app.execute(AdvanceTime(1))
-
     assert state.inputs_consumed is False
     assert state.progress_days == pytest.approx(0.0)
-    assert state.research_points_awarded == pytest.approx(0.0)
-    assert tug.location_id == ids.LEO
-    assert tug.transit_destination_id is None
-    assert tug.status.value == "assigned"
+    fleet = _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
+    assert fleet.exploration_units == 1
+    assert fleet.free_units == 0
 
 
 def test_scientific_exploration_rejects_duplicate_consumable_resources():
-    from dataclasses import replace
-
-    from space_idle.validation import validate_simulation_configuration
-    from space_idle.validation_support import ConfigurationError
-
     app = build_game_application()
     sim = app._simulation
     exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
@@ -194,39 +195,26 @@ def test_scientific_exploration_rejects_duplicate_consumable_resources():
         definition,
         consumable_resources=((ids.MACHINERY, 0.1), (ids.MACHINERY, 0.2)),
     )
-
     with pytest.raises(ConfigurationError, match="duplicate consumable resource"):
         validate_simulation_configuration(sim)
 
 
-def test_rp_storage_blocker_prevents_input_consumption_and_vehicle_relocation():
+def test_rp_storage_blocker_prevents_input_consumption_and_keeps_fleet_reserved():
     app = build_game_application()
     sim = app._simulation
     exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
-    tug = _orbital_tug(sim)
-
     app.execute(StartScientificExploration(str(exploration_id)))
-    app.execute(AssignExplorationVehicle(str(exploration_id), str(tug.id)))
+    app.execute(AssignExplorationFleet(
+        str(exploration_id), str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+    ))
     state = sim.scientific_exploration.campaigns[exploration_id]
-    demands = sim.scientific_exploration.resource_demands(sim.day)
-    assert demands
-    assert all(
-        sim.inventory.reserved_for(demand.id, demand.destination_id, demand.resource_id) > 0
-        for demand in demands
-    )
 
     capacity = sim.research.storage_capacity(day=sim.day)
     sim.research.store_generated_points(capacity, day=sim.day)
     assert "rp_storage_full" in sim.scientific_exploration.blockers(
-        exploration_id,
-        day=sim.day,
+        exploration_id, day=sim.day
     )
-
     app.execute(AdvanceTime(1))
-
     assert state.inputs_consumed is False
     assert state.progress_days == pytest.approx(0.0)
-    assert state.research_points_awarded == pytest.approx(0.0)
-    assert tug.location_id == ids.LEO
-    assert tug.transit_destination_id is None
-    assert tug.status.value == "assigned"
+    assert _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == 1

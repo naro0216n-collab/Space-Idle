@@ -16,13 +16,16 @@ def test_ready_project_keeps_materials_reserved_until_construction_starts():
     app = build_game_application()
     sim = app._simulation
     result = app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.SURFACE_POWER_GRID), sourcing_policy="import_now")
+        PlanBuild(str(ids.EARTH), str(ids.SURFACE_POWER_GRID), sourcing_policy="local_priority")
     )
     app.execute(SetConstructionWeight(result.created_id, 0.0))
 
-    app.execute(AdvanceTime(1))
-
     project = _project(sim)
+    for _ in range(5):
+        app.execute(AdvanceTime(1))
+        if project.status is ProjectStatus.READY:
+            break
+
     recipe = sim.projects.recipe_for_project(project)
     assert project.status is ProjectStatus.READY
     assert project.materials_committed is False
@@ -82,18 +85,21 @@ def test_planned_project_with_unmet_technology_does_not_claim_inventory():
 def test_parallel_projects_share_construction_capacity_by_weight():
     app = build_game_application()
     first = app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.WATER_STORAGE), priority=100, sourcing_policy="import_now")
+        PlanBuild(str(ids.EARTH), str(ids.WATER_STORAGE), priority=100, sourcing_policy="local_priority")
     ).created_id
     second = app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.BULK_STORAGE), priority=100, sourcing_policy="import_now")
+        PlanBuild(str(ids.EARTH), str(ids.BULK_STORAGE), priority=100, sourcing_policy="local_priority")
     ).created_id
     assert first is not None and second is not None
 
     app.execute(SetConstructionWeight(first, 3.0))
     app.execute(SetConstructionWeight(second, 1.0))
-    app.execute(AdvanceTime(1))
-
     projects = {str(project.id): project for project in app._simulation.projects.projects.values()}
+    for _ in range(5):
+        app.execute(AdvanceTime(1))
+        if all(project.status is ProjectStatus.BUILDING for project in projects.values()):
+            break
+
     assert projects[first].status is ProjectStatus.BUILDING
     assert projects[second].status is ProjectStatus.BUILDING
     assert projects[first].construction_done == pytest.approx(

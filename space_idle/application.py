@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 from .application_commands import (
-    AcceptContract, AdvanceTime, ApplicationError, CancelBuild, CreateLogisticsLane,
-    DeclineContract, DeleteLogisticsLane, DispatchContractCargo, DispatchVehicle,
-    FundResearchPrototype, GetBuildOptions, GetCatalog, GetContracts, GetLocation,
-    GetFlowReport, GetBottlenecks, GetLogistics, GetLogisticsSummary, GetRoutes,
-    GetVehicles, GetCargoOrders, GetLogisticsLanes, GetTransportMissions,
-    GetProjects, GetResearch, GetScientificExplorations, GetSurveys, GetTransportPlans,
-    GetWorld, PauseBuild, PauseFacility, PauseLogisticsLane, PauseResearch,
-    PauseSurvey, PauseScientificExploration, PlanBuild, PlanFacilityUpgrade,
-    ProduceVehicle, PauseVehicleProduction, ResumeVehicleProduction,
-    SetVehicleProductionSettings, RefuelVehicle,
-    ResumeBuild, ResumeFacility, ResumeLogisticsLane, ResumeResearch, ResumeSurvey,
-    ResumeScientificExploration, SetConstructionWeight, SetFacilityProcess,
-    SetPowerPriority, SetMaintenancePriority, SetTimeControl, SetProjectImportSource,
-    SetProjectPriority, SetProjectSourcingPolicy, SetResearchPrototypeSite,
-    SetResearchDemonstrationSite, SetSurveyAllocation, StartResearch, StartSurvey,
-    StartScientificExploration, AssignExplorationVehicle, UnassignExplorationVehicle,
-    SubmitCargo, UpdateLogisticsLane,
+    AcceptContract, AdvanceTime, ApplicationError, CancelBuild, ChangeTransportAllocationMode,
+    CreateLogisticsLane, CreateTransportAllocation, DeclineContract, DeleteLogisticsLane,
+    DeleteTransportAllocation, FundResearchPrototype, GetBottlenecks,
+    GetBuildOptions, GetCatalog, GetCargoFlows, GetContracts, GetFleet, GetFlowReport,
+    GetLocation, GetLogistics, GetLogisticsLanes, GetLogisticsSummary, GetProjects,
+    GetResearch, GetRoutes, GetScientificExplorations, GetSurveys, GetTransportAllocations,
+    GetTransportAllocationOptions, GetWorld, PauseBuild, PauseFacility, PauseLogisticsLane,
+    PauseResearch, PauseScientificExploration, PauseSurvey, PauseTransportAllocation,
+    PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, ProduceVehicle, RelocateFleet,
+    ResumeBuild, ResumeFacility, ResumeLogisticsLane, ResumeResearch,
+    ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
+    ResumeVehicleProduction, SetConstructionWeight, SetFacilityProcess, SetMaintenancePriority,
+    SetPowerPriority, SetProjectImportSource, SetProjectPriority, SetProjectSourcingPolicy,
+    SetResearchDemonstrationSite, SetResearchPrototypeSite, SetSurveyAllocation,
+    SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration,
+    StartSurvey, UnassignExplorationFleet, UpdateLogisticsLane,
+    UpdateTransportAllocation, AssignExplorationFleet,
 )
+
 from .application_command_handlers import ApplicationCommandMixin
 from .application_query_projectors import ApplicationQueryMixin
 from .catalog import GameCatalog
