@@ -79,14 +79,14 @@ git diff --check
 通常publishは次の順序に固定する。
 
 1. ローカル変更を責務としてまとまったcommitにする。publish対象は明示したcommitted `target-ref` のtreeであり、その後にworking treeへ別の未commit作業があっても対象へ混入させない。
-2. `scripts/publish_request.py prepare` で、記録済みremote commitを親、local target treeをtreeに持つ決定論的publish commitを作り、Git bundleへ格納する。生成物はv5 JSON requestで、bundle Base64、payload SHA-256、base commit、target tree、publish commit、local target commitを保持し、生成時にbundle/parent/treeを自己検証する。
+2. `scripts/publish_request.py prepare` で、記録済みremote commitを親、local target treeをtreeに持つ決定論的publish commitを作り、Git bundleへ格納する。生成物はv6 JSON requestで、bundle Base64、payload SHA-256、base commit、target tree、publish commit、local target commitを保持し、生成時にbundle/parent/treeを自己検証する。
 3. publish直前に対象branch HEADを一度だけ取得する。`connector-plan`へ渡し、manifestの `base_sha` と一致しない場合は送信せず原因を調査する。
-4. Connector経路では `connector-plan` が実際のaction引数をcompact JSONへシリアライズしたbytesでcall容量を判定する。request全体が標準96 KiB予算内なら、`.publish/requests/<request-id>.json` を `GitHub.create_file` で1回作成する。unique pathなのでpublish branch HEAD/treeの事前取得は不要で、Contents APIがtransport commit作成とpublish ref更新を一度に行う。
-5. requestが1 callに収まらない場合だけ、bundle Base64をcall予算から逆算した最少数のpartへ自動分割する。各partは独立した `GitHub.create_blob` として並列送信し、localで事前計算したGit blob OIDを最終requestから参照する。upload返却SHAは後続入力にせず、全part送信後に `GitHub.create_file` でrequestを1回作成する。
-6. Publish Gatewayはrequest作成commitを契機に自動実行する。inline payloadまたはGit blob payloadを取得し、blob OID、payload長、payload SHA-256、Git bundle、publish commit、parent/base、target treeを検証する。すべて一致し、対象branch HEADがbaseのままである場合だけexact publish commitを対象branchへnon-force pushし、直後にremote commit/treeを再検証する。SHA不整合時は対象branchを更新しない。
+4. Connector経路では `connector-plan` がbundle Base64を必ず独立Git blobとしてmaterializeする。実際のaction引数をcompact JSONへシリアライズしたbytesでcall容量を判定し、必要な場合だけcall予算から逆算した最少数のpartへ自動分割する。各partは独立した `GitHub.create_blob` として並列送信する。payloadをrequest本文へ直接埋め込むinline経路は使わない。
+5. helperは各partのGit blob OIDと、それらを順序付きで参照するpayload root tree OIDを事前計算する。全part送信後、事前計算blob OIDだけを使う `GitHub.create_tree` を1回実行する。各 `create_blob` の返却SHAは後続入力にしない。root treeの返却SHA一つだけを `connector-finalize` へ渡し、helperが事前計算tree OIDと一致すると確認した場合だけ、小さい `GitHub.create_file` request packetを生成する。
+6. Publish Gatewayはrequest作成commitを契機に自動実行する。payload root treeを取得し、root tree OID、各blob OID、payload長、payload SHA-256、Git bundle、publish commit、parent/base、target treeを検証する。すべて一致し、対象branch HEADがbaseのままである場合だけexact publish commitを対象branchへnon-force pushし、直後にremote commit/treeを再検証する。SHA不整合時は対象branchを更新しない。
 7. Gatewayは成功receiptを `.publish/receipts/<request-id>.json` へ自動記録し、Fast CIをdispatchする。ローカルではreceiptを取得して `publish_request.py record` に渡す。`record` はmanifest内の `local_target_commit` を自動的に使用し、現在のlocal HEADが次作業へ進んでいても、request、receipt、当該local target tree、published commit objectの関係を機械検証した場合だけ次回publish stateを更新する。local target SHAを手動で引き渡さない。
 
-通常サイズのConnector経路でChatGPT側が必要とするGitHub callは、Gateway実行前では対象branch HEAD取得1回とrequest作成1回の計2回である。Gateway成功後にreceiptを1回取得するため、正常な1 publishのConnector callは通常合計3回となる。Gateway内部のbase再確認、target push、remote tree確認、receipt作成、CI dispatchはworkflowが自動実行する。正常系でpublish branch HEAD/tree、chunk/tree SHA、transport commit SHA、ref SHAをチャット側が中継・目視比較しない。
+Connector経路でChatGPT側が必要とするGitHub callは、Gateway実行前では対象branch HEAD取得1回、1個以上のblob upload、payload root tree作成1回、最終request作成1回である。Gateway成功後にreceiptを1回取得する。Gateway内部のbase再確認、target push、remote tree確認、receipt作成、CI dispatchはworkflowが自動実行する。正常系でpublish branch HEAD/tree、各blob返却SHA、transport commit SHA、ref SHAをチャット側が中継・目視比較しない。payload全体の集約確認としてroot tree SHA一つだけをhelperへ返す。
 
 複数の未publish commitがある場合だけ、必要に応じてtransport量を比較する。
 
@@ -118,12 +118,21 @@ python scripts/publish_request.py connector-plan \
   --github-repository naro0216n-collab/Space-Idle \
   --target-remote-head <current-target-head>
 
-# single-request-file:
-#   submit-request.json の GitHub.create_file を1回実行する。
-# parallel-blobs-then-request-file:
+# blobs-root-tree-then-request-file:
 #   upload-part-*.json の GitHub.create_blob を並列実行後、
+#   assemble-payload-root.json の GitHub.create_tree を実行する。
+#   返却root SHAを connector-finalize へ渡し、一致確認後に生成された
 #   submit-request.json の GitHub.create_file を1回実行する。
-# upload返却SHAは後続stepへ渡さない。
+# payloadサイズにかかわらずこの経路を使い、blob返却SHAは後続stepへ渡さない。
+```
+
+分割transportではroot tree作成結果だけをhelperへ戻し、最終request packetを生成する。
+
+```bash
+python scripts/publish_request.py connector-finalize \
+  --manifest /tmp/space-idle-publish.json \
+  --github-repository naro0216n-collab/Space-Idle \
+  --payload-tree-sha <create-tree-returned-sha>
 ```
 
 Gateway成功後はrequest IDに対応するreceiptを取得し、次回基点を更新する。対象local commitはmanifestから自動解決されるため、receipt待ちの間に次のlocal作業へ進んでも `--local-ref` 等のSHA指定は不要である。
@@ -134,12 +143,12 @@ python scripts/publish_request.py record \
   --receipt /tmp/publish-receipt.json
 ```
 
-標準Connector経路はGit bundle v5だけを扱う。旧patch transport、段階的 `connector-publish-step`、remote chunks-treeの個別verify、manual `record --remote-commit/--remote-tree` は通常経路にも互換経路にも残さない。障害時は生成済みrequestとGatewayログから原因を確認し、正常系へ診断stepを追加しない。
+標準Connector経路はGit bundle request v6だけを扱う。旧patch transport、段階的 `connector-publish-step`、remote chunks-treeの個別verify、manual `record --remote-commit/--remote-tree` は通常経路にも互換経路にも残さない。障害時は生成済みrequestとGatewayログから原因を確認し、正常系へ診断stepを追加しない。
 
 ### Publish failure handling
 
 - target HEAD不一致: requestを作成しない。remote変更を調査し、必要なら最新source-snapshotから再同期する。
-- `create_blob`失敗: 失敗partだけ再送できる。返却SHAを人手で比較せず、最終requestはlocal事前計算OIDを参照する。
+- `create_blob`失敗: 失敗したcallを再送する。root tree作成失敗時はrequestを作成せず、helper生成upload packetを再実行してからroot作成を再試行する。blob返却SHAは比較・中継せず、root SHAだけを `connector-finalize` が機械照合する。
 - blob OID、payload長、payload SHA-256、bundle、parent、target tree不一致: Gatewayが失敗し、対象branchは更新されない。
 - target branch push競合: forceしない。Gatewayの直前base再確認またはnon-force pushで停止する。
 - Gateway自体の変更: まずローカルで構文・契約を検証し、固定 `publish` branchのcontrol planeへ候補Gatewayを反映した後、明示的に `temp` をtargetとするrequestで実動作を隔離検証する。成功後に同じsource変更を通常の `develop` publish対象へ含める。`temp` のcommit・tree・request・payload等を `develop` publish入力として再利用しない。

@@ -67,7 +67,7 @@ def make_receipt(repo: Path, manifest: Path) -> dict[str, object]:
     return {
         "version": 3,
         "request_id": request["request_id"],
-        "request_version": 5,
+        "request_version": 6,
         "target_branch": request["target_branch"],
         "base_commit": request["base_sha"],
         "target_tree": request["target_tree"],
@@ -88,7 +88,7 @@ def test_prepare_bundle_recreates_exact_target_and_record_advances_baseline(tmp_
     manifest = tmp_path / "request.json"
     meta = json.loads(run_request(repo, "prepare", "--output", str(manifest)))
     request = prepared(manifest)
-    assert request["version"] == 5
+    assert request["version"] == 6
     assert request["target_branch"] == "develop"
     assert request["base_sha"] == base_commit
     assert request["target_tree"] == target_tree
@@ -207,7 +207,7 @@ def test_plan_reports_combined_and_sequential_bundle_transport(tmp_path: Path) -
     assert plan["combined_request"]["target_tree"] == git(repo, "rev-parse", "HEAD^{tree}")
 
 
-def test_connector_plan_uses_one_request_file_when_payload_fits(tmp_path: Path) -> None:
+def test_connector_plan_always_materializes_payload_as_blob_root_tree(tmp_path: Path) -> None:
     repo, base_commit, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("connector transport\n" * 400, encoding="utf-8")
     commit_all(repo, "connector transport")
@@ -228,50 +228,78 @@ def test_connector_plan_uses_one_request_file_when_payload_fits(tmp_path: Path) 
             str(plan_dir),
         )
     )
-    assert plan["strategy"] == "single-request-file"
-    assert plan["upload_call_count"] == 0
+    assert plan["strategy"] == "blobs-root-tree-then-request-file"
+    assert plan["upload_call_count"] == 1
     assert plan["normal_remote_target_probe_calls"] == 1
     assert plan["normal_publish_transport_probe_calls"] == 0
-    assert plan["normal_github_mutation_calls"] == 1
-    assert plan["normal_github_calls_before_gateway"] == 2
-    assert plan["normal_sha_handoffs"] == 0
+    assert plan["normal_github_mutation_calls"] == 3
+    assert plan["normal_github_calls_before_gateway"] == 4
+    assert plan["normal_sha_handoffs"] == 1
     assert plan["normal_per_upload_verification_calls"] == 0
+    assert plan["returned_upload_blob_shas_are_not_required"] is True
+    assert plan["returned_root_tree_sha_is_required"] is True
+    assert plan["submit_deferred_until_root_verified"] is True
+    assert plan["submit_request_packet"] is None
     assert plan["gateway_completes_target_publish"] is True
 
-    packet = json.loads(Path(plan["submit_request_packet"]).read_text(encoding="utf-8"))
-    assert packet["action"] == "GitHub.create_file"
-    assert packet["action_args"]["branch"] == "publish"
-    assert packet["action_args"]["path"].startswith(".publish/requests/")
+    upload = json.loads(Path(plan["upload_packets"][0]).read_text(encoding="utf-8"))
+    assert upload["action"] == "GitHub.create_blob"
+    root = json.loads(Path(plan["payload_root_packet"]).read_text(encoding="utf-8"))
+    assert root["action"] == "GitHub.create_tree"
+    assert root["action_args"]["tree_elements"] == [
+        {
+            "mode": "100644",
+            "path": "0000.b64",
+            "sha": upload["expected_blob_git_oid"],
+            "type": "blob",
+        }
+    ]
+
+    finalized = json.loads(
+        run_request(
+            repo,
+            "connector-finalize",
+            "--manifest",
+            str(manifest),
+            "--github-repository",
+            "owner/repo",
+            "--payload-tree-sha",
+            root["expected_tree_git_oid"],
+            "--output-dir",
+            str(plan_dir),
+        )
+    )
+    packet = json.loads(Path(finalized["submit_request_packet"]).read_text(encoding="utf-8"))
     transport_request = json.loads(packet["action_args"]["content"])
-    assert transport_request["version"] == 5
-    assert transport_request["payload_source"]["kind"] == "inline"
+    assert transport_request["version"] == 6
+    assert transport_request["payload_source"] == {
+        "kind": "git-tree",
+        "oid": root["expected_tree_git_oid"],
+        "part_count": 1,
+    }
     assert transport_request["base_sha"] == base_commit
 
 
-def test_fleet_sized_base64_payload_fits_one_request_file_call(tmp_path: Path) -> None:
+def test_fleet_sized_payload_uses_one_blob_plus_root_not_inline_request(tmp_path: Path) -> None:
     spec = importlib.util.spec_from_file_location("publish_request", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
 
+    repo, _, _ = init_repo(tmp_path)
     payload = "A" * 81_780
-    prepared_request = {
-        "request_id": "1" * 32,
-        "target_branch": "develop",
-        "base_sha": "2" * 40,
-        "target_tree": "3" * 40,
-        "publish_commit": "4" * 40,
-        "payload_sha256": "5" * 64,
-        "payload_b64": payload,
-    }
-    transport = module._transport_request(
-        prepared_request, {"kind": "inline", "data": payload}
+    parts = module._split_payload_for_blob_calls(
+        repo, "naro0216n-collab/Space-Idle", payload, 96 * 1024
     )
-    packet = module._connector_submit_packet("naro0216n-collab/Space-Idle", "publish", transport)
-    assert module._connector_call_bytes(packet) < 96 * 1024
+    assert len(parts) == 1
+    assert module._connector_call_bytes(parts[0]["packet"]) < 96 * 1024
+    root = module._connector_payload_root_packet(
+        repo, "naro0216n-collab/Space-Idle", [parts[0]["oid"]]
+    )
+    assert module._connector_call_bytes(root) < 96 * 1024
 
 
-def test_connector_plan_splits_overflow_into_independent_git_blobs(tmp_path: Path) -> None:
+def test_connector_plan_splits_overflow_into_blobs_then_precomputed_root_tree(tmp_path: Path) -> None:
     repo, base_commit, _ = init_repo(tmp_path)
     content = "\n".join(
         f"{index:06d}:{hashlib.sha256(str(index).encode()).hexdigest()}" for index in range(3000)
@@ -302,13 +330,16 @@ def test_connector_plan_splits_overflow_into_independent_git_blobs(tmp_path: Pat
             str(plan_dir),
         )
     )
-    assert plan["strategy"] == "parallel-blobs-then-request-file"
+    assert plan["strategy"] == "blobs-root-tree-then-request-file"
     assert plan["upload_call_count"] >= 2
     assert plan["connector_uploads_may_run_in_parallel"] is True
     assert plan["returned_upload_blob_shas_are_not_required"] is True
-    assert plan["normal_github_mutation_calls"] == plan["upload_call_count"] + 1
-    assert plan["normal_github_calls_before_gateway"] == plan["upload_call_count"] + 2
-    assert plan["normal_sha_handoffs"] == 0
+    assert plan["returned_root_tree_sha_is_required"] is True
+    assert plan["submit_deferred_until_root_verified"] is True
+    assert plan["submit_request_packet"] is None
+    assert plan["normal_github_mutation_calls"] == plan["upload_call_count"] + 2
+    assert plan["normal_github_calls_before_gateway"] == plan["upload_call_count"] + 3
+    assert plan["normal_sha_handoffs"] == 1
 
     oids = []
     for packet_name in plan["upload_packets"]:
@@ -328,12 +359,140 @@ def test_connector_plan_splits_overflow_into_independent_git_blobs(tmp_path: Pat
         assert actual == packet["expected_blob_git_oid"]
         oids.append(actual)
 
-    submit = json.loads(Path(plan["submit_request_packet"]).read_text(encoding="utf-8"))
+    root = json.loads(Path(plan["payload_root_packet"]).read_text(encoding="utf-8"))
+    assert root["action"] == "GitHub.create_tree"
+    assert len(json.dumps(root["action_args"], separators=(",", ":")).encode("utf-8")) <= 20_000
+    assert [entry["sha"] for entry in root["action_args"]["tree_elements"]] == oids
+    assert [entry["path"] for entry in root["action_args"]["tree_elements"]] == [
+        f"{index:04d}.b64" for index in range(len(oids))
+    ]
+    assert root["expected_tree_git_oid"] == plan["expected_payload_tree_git_oid"]
+
+    spec = importlib.util.spec_from_file_location("publish_request", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    assert root["expected_tree_git_oid"] == module._git_tree_oid(repo, oids)
+
+    finalized = json.loads(
+        run_request(
+            repo,
+            "connector-finalize",
+            "--manifest",
+            str(manifest),
+            "--github-repository",
+            "owner/repo",
+            "--payload-tree-sha",
+            root["expected_tree_git_oid"],
+            "--output-dir",
+            str(plan_dir),
+        )
+    )
+    assert finalized["verified"] is True
+    assert finalized["payload_tree_sha"] == root["expected_tree_git_oid"]
+    submit = json.loads(Path(finalized["submit_request_packet"]).read_text(encoding="utf-8"))
     assert submit["action"] == "GitHub.create_file"
     assert len(json.dumps(submit["action_args"], separators=(",", ":")).encode("utf-8")) <= 20_000
     transport = json.loads(submit["action_args"]["content"])
-    assert transport["payload_source"]["kind"] == "git-blobs"
-    assert [part["oid"] for part in transport["payload_source"]["parts"]] == oids
+    assert transport["payload_source"] == {
+        "kind": "git-tree",
+        "oid": root["expected_tree_git_oid"],
+        "part_count": len(oids),
+    }
+
+
+def test_connector_finalize_rejects_wrong_payload_root_sha(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
+    content = "\n".join(
+        f"{index:06d}:{hashlib.sha256(f'wrong-root-{index}'.encode()).hexdigest()}"
+        for index in range(3000)
+    )
+    (repo / "payload.txt").write_text(content + "\n", encoding="utf-8")
+    commit_all(repo, "large connector transport")
+    manifest = tmp_path / "request.json"
+    run_request(
+        repo,
+        "prepare",
+        "--output",
+        str(manifest),
+        "--connector-call-budget-bytes",
+        "12000",
+    )
+    plan_dir = tmp_path / "connector"
+    plan = json.loads(
+        run_request(
+            repo,
+            "connector-plan",
+            "--manifest",
+            str(manifest),
+            "--github-repository",
+            "owner/repo",
+            "--target-remote-head",
+            base_commit,
+            "--output-dir",
+            str(plan_dir),
+        )
+    )
+    assert plan["payload_root_packet"] is not None
+    wrong = "f" * 40
+    if wrong == plan["expected_payload_tree_git_oid"]:
+        wrong = "e" * 40
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "connector-finalize",
+            "--manifest",
+            str(manifest),
+            "--github-repository",
+            "owner/repo",
+            "--payload-tree-sha",
+            wrong,
+            "--output-dir",
+            str(plan_dir),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert result.returncode != 0
+    assert "payload root tree SHA mismatch" in result.stderr
+    assert not (plan_dir / "submit-request.json").exists()
+
+
+def test_payload_tree_oid_matches_git_tree_object_format(tmp_path: Path) -> None:
+    repo, _, _ = init_repo(tmp_path)
+    spec = importlib.util.spec_from_file_location("publish_request", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    contents = [b"alpha", b"beta", b"gamma"]
+    oids = [
+        subprocess.run(
+            ["git", "hash-object", "--stdin"],
+            cwd=repo,
+            input=content,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout.decode().strip()
+        for content in contents
+    ]
+    expected = subprocess.run(
+        ["git", "mktree", "--missing"],
+        cwd=repo,
+        input="".join(
+            f"100644 blob {oid}\t{index:04d}.b64\n" for index, oid in enumerate(oids)
+        ),
+        text=True,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout.strip()
+    assert module._git_tree_oid(repo, oids) == expected
 
 
 def test_connector_plan_rejects_target_head_mismatch_before_transport(tmp_path: Path) -> None:
@@ -405,23 +564,25 @@ def test_prepare_defaults_to_develop_and_temp_is_explicit_only(tmp_path: Path) -
     assert prepared(isolated)["target_branch"] == "temp"
 
 
-def test_gateway_accepts_only_v5_request_files_and_completes_publish_after_verification() -> None:
+def test_gateway_accepts_only_v6_request_files_and_completes_publish_after_verification() -> None:
     workflow = (SCRIPT.parents[1] / ".github" / "workflows" / "publish-gateway.yml").read_text(encoding="utf-8")
     assert "'.publish/requests/*.json'" in workflow
     assert ".publish/request.patch" not in workflow
-    assert "request['version'] != 5" in workflow
+    assert "request['version'] != 6" in workflow
     assert "payload_source" in workflow
-    assert "git-blobs" in workflow
+    assert "git-tree" in workflow
+    assert "git-blobs" not in workflow
     assert "git hash-object" not in workflow  # command is expressed as argv in Python, not shell text
     assert "['git', 'hash-object', '--stdin']" in workflow
-    assert "GitHub blob Git OID mismatch" in workflow
+    assert "GitHub payload blob Git OID mismatch" in workflow
+    assert "GitHub payload tree Git OID mismatch" in workflow
     assert "bundle sha256 mismatch" in workflow
     assert "git bundle verify" in workflow
     assert 'actual_parent="$(git rev-parse "${PUBLISH_COMMIT}^")"' in workflow
     assert 'actual_tree="$(git rev-parse "${PUBLISH_COMMIT}^{tree}")"' in workflow
     assert 'git push origin "${PUBLISH_COMMIT}:refs/heads/${TARGET_BRANCH}"' in workflow
     assert "'version': 3" in workflow
-    assert "'request_version': 5" in workflow
+    assert "'request_version': 6" in workflow
     assert "Dispatch Fast CI for published branch" in workflow
 
 
