@@ -24,9 +24,7 @@ class LogisticsRouteProjectorMixin:
         sim = self._simulation
         rows: list[RouteModeRow] = []
 
-        for definition in sorted(
-            sim.transport.vehicle_defs.values(), key=lambda row: str(row.id)
-        ):
+        for definition in sim.transport.vehicle_definitions():
             plan = sim.transport.transport_service_plan_for(
                 definition.id,
                 route.origin_id,
@@ -69,9 +67,7 @@ class LogisticsRouteProjectorMixin:
                 )
             )
 
-        for service in sorted(
-            sim.transport.external_services.values(), key=lambda row: str(row.id)
-        ):
+        for service in sim.transport.external_transport_service_definitions():
             blockers = tuple(
                 dict.fromkeys(
                     sim.transport.route_failures(route.id, sim.day)
@@ -121,7 +117,7 @@ class LogisticsRouteProjectorMixin:
         sim = self._simulation
         sim.transport.synchronize_surface_access_routes()
         rows: list[RouteRow] = []
-        for route in sorted(sim.transport.routes.values(), key=lambda row: str(row.id)):
+        for route in sim.transport.route_definitions():
             if origin_id is not None and str(route.origin_id) != origin_id:
                 continue
             if destination_id is not None and str(route.destination_id) != destination_id:
@@ -196,9 +192,7 @@ class LogisticsRouteProjectorMixin:
         sim = self._simulation
         sim.transport.synchronize_surface_access_routes()
         options: list[TransportAllocationOptionRow] = []
-        for definition in sorted(
-            sim.transport.vehicle_defs.values(), key=lambda row: str(row.id)
-        ):
+        for definition in sim.transport.vehicle_definitions():
             fleet = sim.transport.fleet_pool_snapshot(definition.id, source_id)
             for policy in PathPolicy:
                 plan = sim.transport.transport_service_plan_for(

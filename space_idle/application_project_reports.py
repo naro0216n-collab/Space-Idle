@@ -368,7 +368,7 @@ class ApplicationReportProjectorMixin:
         # Route issues are intrinsic endpoint/site constraints. Vehicle/Fleet
         # feasibility is projected through Transport Allocation rather than
         # individual Vehicle availability.
-        for route in sorted(sim.transport.routes.values(), key=lambda row: str(row.id)):
+        for route in sim.transport.route_definitions():
             if location_filter is not None and location_filter not in {
                 str(route.origin_id), str(route.destination_id)
             }:
@@ -397,9 +397,7 @@ class ApplicationReportProjectorMixin:
                     definition_id=allocation.vehicle_definition_id, impact="limited",
                 ))
 
-        for state in sorted(
-            sim.transport.vehicle_production_projects.values(), key=lambda row: str(row.id)
-        ):
+        for state in sim.transport.vehicle_production_snapshots():
             state_location = str(state.operational_node_id)
             if location_filter is not None and state_location != location_filter:
                 continue

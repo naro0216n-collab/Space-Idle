@@ -20,7 +20,7 @@ def project_vehicles(projector):
             tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.turnaround_resources),
             tuple(operation_capability_definition(capability) for capability in definition.performance.operation_capabilities),
         )
-        for definition in sorted(sim.transport.vehicle_defs.values(), key=lambda d: str(d.id))
+        for definition in sim.transport.vehicle_definitions()
     )
 
 
@@ -33,7 +33,7 @@ def project_routes(projector):
             site_requirements_definition(route.origin_requirements),
             site_requirements_definition(route.destination_requirements),
         )
-        for route in sorted(projector._simulation.transport.routes.values(), key=lambda row: str(row.id))
+        for route in projector._simulation.transport.route_definitions()
     )
 
 
@@ -46,7 +46,7 @@ def project_transport_services(projector):
             site_requirements_definition(service.origin_requirements),
             site_requirements_definition(service.destination_requirements),
         )
-        for service in sorted(projector._simulation.transport.external_services.values(), key=lambda row: str(row.id))
+        for service in projector._simulation.transport.external_transport_service_definitions()
     )
 
 

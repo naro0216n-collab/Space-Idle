@@ -177,6 +177,31 @@ def test_founding_and_exploration_use_transport_fleet_facade():
     assert violations == []
 
 
+def test_application_reads_transport_through_public_facade():
+    forbidden_state = {
+        "vehicle_defs",
+        "routes",
+        "external_services",
+        "fleet_pools",
+        "fleet_reservations",
+        "transport_allocations",
+        "fleet_relocations",
+        "fleet_releases",
+        "vehicle_production_projects",
+    }
+    violations: list[tuple[str, str]] = []
+    for path in sorted(PACKAGE.glob("application*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute) or node.attr not in forbidden_state:
+                continue
+            owner = node.value
+            if not (isinstance(owner, ast.Attribute) and owner.attr == "transport"):
+                continue
+            violations.append((path.name, node.attr))
+    assert violations == []
+
+
 def test_public_domain_facades_compose_focused_implementations():
     from space_idle.application_query_projectors import ApplicationQueryMixin
     from space_idle.application_command_handlers import ApplicationCommandMixin

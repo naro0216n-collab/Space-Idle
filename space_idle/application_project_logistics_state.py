@@ -19,6 +19,12 @@ class LogisticsStateProjectorMixin:
             value.forward_t_per_day, value.reverse_t_per_day
         )
 
+    def _vehicle_definition(self, definition_id: DefinitionId):
+        definition = self._simulation.transport.vehicle_definition(definition_id)
+        if definition is None:
+            raise RuntimeError(f"Transport projection references unknown Vehicle: {definition_id}")
+        return definition
+
     def _fleet_pool_rows(
         self,
         *,
@@ -26,11 +32,11 @@ class LogisticsStateProjectorMixin:
         vehicle_definition_id: str | None = None,
     ) -> tuple[FleetPoolRow, ...]:
         sim = self._simulation
-        keys = set(sim.transport.fleet_pools)
+        keys = set(sim.transport.fleet_pool_keys())
         # Allocations/reservations can make a zero-total pool decision-relevant.
         keys.update(
             (row.vehicle_definition_id, row.anchor_node_id)
-            for row in sim.transport.transport_allocations.values()
+            for row in sim.transport.transport_allocation_snapshots()
         )
         keys.update(
             (row.vehicle_definition_id, row.operational_node_id)
@@ -46,7 +52,7 @@ class LogisticsStateProjectorMixin:
             rows.append(
                 FleetPoolRow(
                     str(definition_id),
-                    sim.transport.vehicle_defs[definition_id].display_name,
+                    self._vehicle_definition(definition_id).display_name,
                     str(node_id),
                     snapshot.total_units,
                     snapshot.free_units,
@@ -69,11 +75,11 @@ class LogisticsStateProjectorMixin:
         return tuple(
             FleetRelocationRow(
                 str(row.id), str(row.vehicle_definition_id),
-                sim.transport.vehicle_defs[row.vehicle_definition_id].display_name,
+                self._vehicle_definition(row.vehicle_definition_id).display_name,
                 row.units, str(row.source_id), str(row.destination_id),
                 row.departure_day, row.arrival_day,
             )
-            for row in sorted(sim.transport.fleet_relocations.values(), key=lambda row: str(row.id))
+            for row in sim.transport.fleet_relocation_snapshots()
             if (vehicle_definition_id is None or str(row.vehicle_definition_id) == vehicle_definition_id)
             and (
                 location_id is None
@@ -94,13 +100,13 @@ class LogisticsStateProjectorMixin:
                 str(row.id),
                 str(row.allocation_id),
                 str(row.vehicle_definition_id),
-                sim.transport.vehicle_defs[row.vehicle_definition_id].display_name,
+                self._vehicle_definition(row.vehicle_definition_id).display_name,
                 str(row.operational_node_id),
                 row.units,
                 row.release_day,
                 max(0, row.release_day - sim.day),
             )
-            for row in sorted(sim.transport.fleet_releases.values(), key=lambda row: str(row.id))
+            for row in sim.transport.fleet_release_snapshots()
             if (location_id is None or str(row.operational_node_id) == location_id)
             and (vehicle_definition_id is None or str(row.vehicle_definition_id) == vehicle_definition_id)
         )
@@ -109,7 +115,7 @@ class LogisticsStateProjectorMixin:
         sim = self._simulation
         decision = sim.tick_decision_projection()
         rows: list[TransportAllocationRow] = []
-        for allocation in sorted(sim.transport.transport_allocations.values(), key=lambda row: str(row.id)):
+        for allocation in sim.transport.transport_allocation_snapshots():
             plan = sim.transport.derive_transport_service_plan(allocation.id, sim.day)
             snapshot = sim.logistics.current_transport_capacity_snapshot(
                 allocation.id,
@@ -120,7 +126,7 @@ class LogisticsStateProjectorMixin:
                 TransportAllocationRow(
                     id=str(allocation.id),
                     vehicle_definition_id=str(allocation.vehicle_definition_id),
-                    display_name=sim.transport.vehicle_defs[allocation.vehicle_definition_id].display_name,
+                    display_name=self._vehicle_definition(allocation.vehicle_definition_id).display_name,
                     anchor_node_id=str(allocation.anchor_node_id),
                     destination_id=str(allocation.destination_id),
                     priority=allocation.priority,
@@ -193,7 +199,7 @@ class LogisticsStateProjectorMixin:
         sim = self._simulation
         powers = sim.tick_decision_projection().allocations.power_by_location
         rows: list[VehicleProductionOptionRow] = []
-        for definition in sorted(sim.transport.vehicle_defs.values(), key=lambda row: str(row.id)):
+        for definition in sim.transport.vehicle_definitions():
             if definition.production.service_type is None or definition.production.days <= 1e-12:
                 continue
             for node in sim.graph.operational_nodes():
@@ -218,8 +224,8 @@ class LogisticsStateProjectorMixin:
         sim = self._simulation
         powers = sim.tick_decision_projection().allocations.power_by_location
         rows: list[VehicleProductionRow] = []
-        for state in sorted(sim.transport.vehicle_production_projects.values(), key=lambda row: str(row.id)):
-            definition = sim.transport.vehicle_defs[state.vehicle_definition_id]
+        for state in sim.transport.vehicle_production_snapshots():
+            definition = self._vehicle_definition(state.vehicle_definition_id)
             power = powers[state.operational_node_id]
             blockers = sim.transport.vehicle_production_blockers(state.id, day=sim.day, power=power)
             remaining_days = max(0.0, definition.production.days - state.progress_days)
@@ -270,7 +276,7 @@ class LogisticsStateProjectorMixin:
             path_policy=policy,
             day=sim.day,
         )
-        definition = sim.transport.vehicle_defs[plan.vehicle_definition_id]
+        definition = self._vehicle_definition(plan.vehicle_definition_id)
         return FleetRelocationPreviewView(
             vehicle_definition_id=str(plan.vehicle_definition_id),
             display_name=definition.display_name,

@@ -170,7 +170,7 @@ class Simulation:
             locations.update(campaign.provider_operational_node_id for campaign in self.survey.campaigns.values())
         locations.update(
             project.operational_node_id
-            for project in self.transport.vehicle_production_projects.values()
+            for project in self.transport.vehicle_production_snapshots()
         )
         if self.scientific_exploration is not None:
             for definition_id in self.scientific_exploration.campaigns:

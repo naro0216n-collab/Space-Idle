@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ..facilities import FacilityBook
 from ..inventory import InventoryBook
 from ..power import PowerService
-from ..shared import DefinitionId, EntityId, SpatialNodeId
+from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from ..technology import TechnologyState
 from .compatibility import TransportCompatibilityMixin
 from .fleet_allocations import FleetAllocationMixin
@@ -15,6 +15,7 @@ from .models import (
     FleetRelocation,
     FleetRelease,
     FleetReservation,
+    RouteDef,
     TransportAllocation,
     VehicleDef,
 )
@@ -70,3 +71,63 @@ class TransportService(
     def vehicle_definitions(self) -> tuple[VehicleDef, ...]:
         """Return immutable Vehicle definitions in deterministic order."""
         return tuple(sorted(self.vehicle_defs.values(), key=lambda row: str(row.id)))
+    def route_definition(self, route_id: RouteId) -> RouteDef | None:
+        """Return one immutable Route definition through the Transport facade."""
+        return self.routes.get(route_id)
+
+    def route_definitions(self) -> tuple[RouteDef, ...]:
+        """Return immutable Route definitions in deterministic order."""
+        return tuple(sorted(self.routes.values(), key=lambda row: str(row.id)))
+
+    def external_transport_service_definition(
+        self, service_id: DefinitionId
+    ) -> ExternalTransportServiceDef | None:
+        """Return one immutable external Transport service definition."""
+        return self.external_services.get(service_id)
+
+    def external_transport_service_definitions(
+        self,
+    ) -> tuple[ExternalTransportServiceDef, ...]:
+        """Return immutable external Transport service definitions."""
+        return tuple(sorted(self.external_services.values(), key=lambda row: str(row.id)))
+
+    def fleet_pool_keys(self) -> tuple[tuple[DefinitionId, SpatialNodeId], ...]:
+        """Return Fleet pool identities without exposing the mutable pool container."""
+        return tuple(sorted(self.fleet_pools, key=lambda row: (str(row[0]), str(row[1]))))
+
+    def transport_allocation_snapshot(
+        self, allocation_id: EntityId
+    ) -> TransportAllocation | None:
+        """Return a detached snapshot of one mutable Transport allocation."""
+        allocation = self.transport_allocations.get(allocation_id)
+        return None if allocation is None else replace(allocation)
+
+    def transport_allocation_snapshots(self) -> tuple[TransportAllocation, ...]:
+        """Return detached Transport allocation snapshots in deterministic order."""
+        return tuple(
+            replace(row)
+            for row in sorted(self.transport_allocations.values(), key=lambda row: str(row.id))
+        )
+
+    def fleet_relocation_snapshots(self) -> tuple[FleetRelocation, ...]:
+        """Return detached Fleet relocation snapshots in deterministic order."""
+        return tuple(
+            replace(row)
+            for row in sorted(self.fleet_relocations.values(), key=lambda row: str(row.id))
+        )
+
+    def fleet_release_snapshots(self) -> tuple[FleetRelease, ...]:
+        """Return detached Fleet release snapshots in deterministic order."""
+        return tuple(
+            replace(row)
+            for row in sorted(self.fleet_releases.values(), key=lambda row: str(row.id))
+        )
+
+    def vehicle_production_snapshots(self) -> tuple[VehicleProductionState, ...]:
+        """Return detached Vehicle-production snapshots in deterministic order."""
+        return tuple(
+            replace(row)
+            for row in sorted(
+                self.vehicle_production_projects.values(), key=lambda row: str(row.id)
+            )
+        )

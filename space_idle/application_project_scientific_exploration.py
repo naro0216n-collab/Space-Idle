@@ -42,9 +42,7 @@ class ScientificExplorationProjectorMixin:
                 )
 
             fleet_options: list[ScientificExplorationFleetOptionRow] = []
-            for vehicle_definition in sorted(
-                sim.transport.vehicle_defs.values(), key=lambda row: str(row.id)
-            ):
+            for vehicle_definition in sim.transport.vehicle_definitions():
                 fleet = sim.transport.fleet_pool_snapshot(
                     vehicle_definition.id, definition.origin_id
                 )
