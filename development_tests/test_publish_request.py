@@ -192,22 +192,6 @@ def test_verify_rejects_corrupted_payload(tmp_path: Path) -> None:
     assert "sha256 mismatch" in result.stderr or "invalid publish bundle" in result.stderr
 
 
-def test_plan_reports_combined_and_sequential_bundle_transport(tmp_path: Path) -> None:
-    repo, _, _ = init_repo(tmp_path)
-    (repo / "payload.txt").write_text("first\n" * 300, encoding="utf-8")
-    commit_all(repo, "first checkpoint")
-    first = git(repo, "rev-parse", "HEAD")
-    (repo / "second.txt").write_text("second\n" * 300, encoding="utf-8")
-    commit_all(repo, "second checkpoint")
-    second = git(repo, "rev-parse", "HEAD")
-    plan = json.loads(run_request(repo, "plan"))
-    assert plan["transport"] == "git-bundle"
-    assert plan["target_ref"] == second
-    assert plan["sequential_local_commits_available"] is True
-    assert [item["local_commit"] for item in plan["sequential_requests"]] == [first, second]
-    assert all(item["payload_bytes"] > 0 for item in plan["sequential_requests"])
-    assert plan["combined_request"]["target_tree"] == git(repo, "rev-parse", "HEAD^{tree}")
-
 
 def test_connector_transport_is_staged_until_root_creation_is_verified(tmp_path: Path) -> None:
     repo, base_commit, _ = init_repo(tmp_path)
@@ -217,19 +201,15 @@ def test_connector_transport_is_staged_until_root_creation_is_verified(tmp_path:
     run_request(repo, "prepare", "--output", str(manifest))
     assert "connector_call_budget_bytes" not in prepared(manifest)
 
-    plan_dir = tmp_path / "connector"
+    plan_dir = Path(f"{manifest}.connector")
     plan = json.loads(
         run_request(
             repo,
             "connector-plan",
             "--manifest",
             str(manifest),
-            "--github-repository",
-            "owner/repo",
             "--target-remote-head",
             base_commit,
-            "--output-dir",
-            str(plan_dir),
         )
     )
     assert plan["strategy"] == "staged-blobs-root-then-request"
@@ -245,6 +225,8 @@ def test_connector_transport_is_staged_until_root_creation_is_verified(tmp_path:
 
     upload = json.loads(Path(plan["upload_packets"][0]).read_text(encoding="utf-8"))
     assert upload["action"] == "GitHub.create_blob"
+    assert upload["action_args"]["repository_full_name"] == "naro0216n-collab/Space-Idle"
+    assert plan["publish_branch"] == "publish"
 
     root_meta = json.loads(run_request(repo, "connector-root", "--plan-dir", str(plan_dir)))
     assert root_meta["stage"] == "root-packet-ready"
@@ -333,19 +315,15 @@ def test_connector_plan_splits_overflow_with_fixed_profile_then_stages_root_and_
     commit_all(repo, "large connector transport")
     manifest = tmp_path / "request.json"
     run_request(repo, "prepare", "--output", str(manifest))
-    plan_dir = tmp_path / "connector"
+    plan_dir = Path(f"{manifest}.connector")
     plan = json.loads(
         run_request(
             repo,
             "connector-plan",
             "--manifest",
             str(manifest),
-            "--github-repository",
-            "owner/repo",
             "--target-remote-head",
             base_commit,
-            "--output-dir",
-            str(plan_dir),
         )
     )
     assert plan["strategy"] == "staged-blobs-root-then-request"
@@ -401,17 +379,13 @@ def test_connector_plan_cannot_replan_an_initialized_stage(tmp_path: Path) -> No
     commit_all(repo, "change")
     manifest = tmp_path / "request.json"
     run_request(repo, "prepare", "--output", str(manifest))
-    plan_dir = tmp_path / "connector"
+    plan_dir = Path(f"{manifest}.connector")
     args = (
         "connector-plan",
         "--manifest",
         str(manifest),
-        "--github-repository",
-        "owner/repo",
         "--target-remote-head",
         base_commit,
-        "--output-dir",
-        str(plan_dir),
     )
     run_request(repo, *args)
     result = subprocess.run(
@@ -472,8 +446,6 @@ def test_connector_plan_rejects_target_head_mismatch_before_transport(tmp_path: 
             "connector-plan",
             "--manifest",
             str(manifest),
-            "--github-repository",
-            "owner/repo",
             "--target-remote-head",
             "3" * 40,
         ],
@@ -485,39 +457,52 @@ def test_connector_plan_rejects_target_head_mismatch_before_transport(tmp_path: 
     assert "target branch HEAD moved since prepare" in result.stderr
 
 
-def test_standard_cli_has_no_patch_or_manual_connector_fallbacks() -> None:
+def test_standard_cli_exposes_no_legacy_or_transport_choice_mutations() -> None:
     top_help = subprocess.run(
         [sys.executable, str(SCRIPT), "--help"],
         check=True,
         text=True,
         stdout=subprocess.PIPE,
     ).stdout
+    assert "native-publish" not in top_help
+    assert " plan " not in f" {top_help.replace(chr(10), ' ')} "
     assert "connector-publish-step" not in top_help
     assert "connector-finalize" not in top_help
     assert "verify-transport" not in top_help
     assert "patch" not in top_help.lower()
+    assert "git push" not in SCRIPT.read_text(encoding="utf-8")
 
-    plan_help = subprocess.run(
-        [sys.executable, str(SCRIPT), "plan", "--help"],
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-    ).stdout
-    assert "--transport" not in plan_help
     prepare_help = subprocess.run(
         [sys.executable, str(SCRIPT), "prepare", "--help"],
         check=True,
         text=True,
         stdout=subprocess.PIPE,
     ).stdout
+    for forbidden in ("--target-branch", "--message", "--connector-call-budget-bytes"):
+        assert forbidden not in prepare_help
+
     connector_plan_help = subprocess.run(
         [sys.executable, str(SCRIPT), "connector-plan", "--help"],
         check=True,
         text=True,
         stdout=subprocess.PIPE,
     ).stdout
-    assert "--connector-call-budget-bytes" not in prepare_help
-    assert "--connector-call-budget-bytes" not in connector_plan_help
+    for forbidden in (
+        "--github-repository",
+        "--publish-branch",
+        "--output-dir",
+        "--connector-call-budget-bytes",
+    ):
+        assert forbidden not in connector_plan_help
+
+    init_help = subprocess.run(
+        [sys.executable, str(SCRIPT), "init", "--help"],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    ).stdout
+    assert "--local-ref" not in init_help
+
     record_help = subprocess.run(
         [sys.executable, str(SCRIPT), "record", "--help"],
         check=True,
@@ -529,16 +514,25 @@ def test_standard_cli_has_no_patch_or_manual_connector_fallbacks() -> None:
     assert "--local-ref" not in record_help
 
 
-def test_prepare_defaults_to_develop_and_temp_is_explicit_only(tmp_path: Path) -> None:
+def test_prepare_is_develop_only_with_deterministic_message(tmp_path: Path) -> None:
     repo, _, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("changed\n", encoding="utf-8")
     commit_all(repo, "change")
-    standard = tmp_path / "develop.json"
-    isolated = tmp_path / "temp.json"
-    run_request(repo, "prepare", "--output", str(standard))
-    run_request(repo, "prepare", "--target-branch", "temp", "--output", str(isolated))
-    assert prepared(standard)["target_branch"] == "develop"
-    assert prepared(isolated)["target_branch"] == "temp"
+    manifest = tmp_path / "develop.json"
+    run_request(repo, "prepare", "--output", str(manifest))
+    request = prepared(manifest)
+    assert request["target_branch"] == "develop"
+    raw = subprocess.run(
+        ["git", "cat-file", "commit", str(request["publish_commit"])],
+        cwd=repo,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout
+    header, sep, body = raw.partition(b"\n\n")
+    assert sep
+    assert f"tree {request['target_tree']}".encode() in header.splitlines()
+    assert body == b"change\n"
 
 
 def test_standard_gateway_prepare_rejects_workflow_changes(tmp_path: Path) -> None:
@@ -590,103 +584,6 @@ def test_gateway_accepts_only_v6_request_files_and_completes_publish_after_verif
     assert "Dispatch Fast CI for published branch" in workflow
 
 
-def make_commit_tree(repo: Path, tree: str, parent: str, message: str) -> str:
-    return subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=Gateway",
-            "-c",
-            "user.email=gateway@example.com",
-            "commit-tree",
-            tree,
-            "-p",
-            parent,
-        ],
-        cwd=repo,
-        check=True,
-        text=True,
-        input=message.rstrip() + "\n",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    ).stdout.strip()
-
-
-def test_native_publish_uses_remote_head_as_parent_without_rewriting_local_history(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    remote = tmp_path / "remote.git"
-    repo.mkdir()
-    git(repo, "init")
-    git(tmp_path, "init", "--bare", str(remote))
-    (repo / "payload.txt").write_text("base\n", encoding="utf-8")
-    commit_all(repo, "base")
-    base_commit = git(repo, "rev-parse", "HEAD")
-    base_tree = git(repo, "rev-parse", "HEAD^{tree}")
-    git(repo, "push", str(remote), f"{base_commit}:refs/heads/develop")
-    run_request(repo, "init", "--remote-commit", base_commit, "--remote-tree", base_tree)
-
-    (repo / "payload.txt").write_text("target\n", encoding="utf-8")
-    commit_all(repo, "local checkpoint")
-    local_commit = git(repo, "rev-parse", "HEAD")
-    local_tree = git(repo, "rev-parse", "HEAD^{tree}")
-    result = json.loads(
-        run_request(
-            repo,
-            "native-publish",
-            "--remote",
-            str(remote),
-            "--target-branch",
-            "develop",
-        )
-    )
-    published = result["published_commit"]
-    assert git(repo, "rev-parse", f"{published}^") == base_commit
-    assert git(repo, "rev-parse", f"{published}^{{tree}}") == local_tree
-    assert git(repo, "rev-parse", "HEAD") == local_commit
-    assert git(repo, "ls-remote", "--heads", str(remote), "refs/heads/develop").split()[0] == published
-    state = json.loads((repo / ".git" / "space-idle-publish-state.json").read_text(encoding="utf-8"))
-    assert state["remote_commit"] == published
-    assert state["remote_tree"] == local_tree
-    assert state["local_head"] == local_commit
-
-
-def test_native_publish_rejects_remote_head_move_before_mutation(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    remote = tmp_path / "remote.git"
-    repo.mkdir()
-    git(repo, "init")
-    git(tmp_path, "init", "--bare", str(remote))
-    (repo / "payload.txt").write_text("base\n", encoding="utf-8")
-    commit_all(repo, "base")
-    recorded_remote = git(repo, "rev-parse", "HEAD")
-    base_tree = git(repo, "rev-parse", "HEAD^{tree}")
-    git(repo, "push", str(remote), f"{recorded_remote}:refs/heads/develop")
-    run_request(repo, "init", "--remote-commit", recorded_remote, "--remote-tree", base_tree)
-
-    moved_remote = make_commit_tree(repo, base_tree, recorded_remote, "remote moved")
-    git(repo, "push", str(remote), f"{moved_remote}:refs/heads/develop")
-    (repo / "payload.txt").write_text("target\n", encoding="utf-8")
-    commit_all(repo, "local checkpoint")
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            "--repo",
-            str(repo),
-            "native-publish",
-            "--remote",
-            str(remote),
-            "--target-branch",
-            "develop",
-        ],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert result.returncode != 0
-    assert "remote target moved before native publish" in result.stderr
-    assert git(repo, "ls-remote", "--heads", str(remote), "refs/heads/develop").split()[0] == moved_remote
-
 
 def test_prepare_excludes_newer_uncommitted_work(tmp_path: Path) -> None:
     repo, _, _ = init_repo(tmp_path)
@@ -714,17 +611,3 @@ def test_prepare_excludes_newer_uncommitted_work(tmp_path: Path) -> None:
     assert result["uncommitted_changes_excluded"] is True
     assert (repo / "payload.txt").read_text(encoding="utf-8") == "uncommitted follow-up\n"
     assert (repo / "later.txt").read_text(encoding="utf-8") == "not published yet\n"
-
-
-def test_plan_excludes_uncommitted_work(tmp_path: Path) -> None:
-    repo, _, _ = init_repo(tmp_path)
-    (repo / "payload.txt").write_text("checkpoint\n", encoding="utf-8")
-    commit_all(repo, "checkpoint")
-    checkpoint = git(repo, "rev-parse", "HEAD")
-    checkpoint_tree = git(repo, "rev-parse", "HEAD^{tree}")
-    (repo / "payload.txt").write_text("later\n", encoding="utf-8")
-    result = json.loads(run_request(repo, "plan", "--target-ref", checkpoint))
-    assert result["target_ref"] == checkpoint
-    assert result["combined_request"]["target_tree"] == checkpoint_tree
-    assert result["working_tree_clean"] is False
-    assert result["uncommitted_changes_excluded"] is True

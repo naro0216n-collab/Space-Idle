@@ -97,17 +97,10 @@ GitHub反映の入口は差分種別で一意に決める。作業者がtranspor
 
 Connector transportはstageを `uploads-planned -> root-packet-ready -> submit-ready` としてローカルstateへ記録する。既に初期化されたplan directoryを再計画せず、そのstageで生成済みのpacketを使って続行する。payload uploadの失敗は該当packetを再送する。root作成が失敗した場合は、期待blobがmaterializeされていないtransport integrity failureとしてrequest生成前に停止し、upload packetの忠実な再送またはconnector実装自体の修正を行う。任意budgetへの縮小、payloadの手動分割、Base64再構成、inline requestへの切替は標準経路に含めない。
 
-複数の未publish commitがある場合だけ、必要に応じてtransport量を比較する。
-
-```bash
-python scripts/publish_request.py plan --target-ref HEAD
-```
-
 request生成例:
 
 ```bash
 python scripts/publish_request.py prepare \
-  --target-branch develop \
   --target-ref HEAD \
   --output /tmp/space-idle-publish.json
 ```
@@ -124,7 +117,6 @@ python scripts/publish_request.py verify \
 ```bash
 python scripts/publish_request.py connector-plan \
   --manifest /tmp/space-idle-publish.json \
-  --github-repository naro0216n-collab/Space-Idle \
   --target-remote-head <current-target-head>
 ```
 
@@ -171,7 +163,6 @@ python scripts/workflow_maintenance.py prepare \
 ```bash
 python scripts/workflow_maintenance.py connector-plan \
   --manifest /tmp/space-idle-workflow-maintenance.json \
-  --github-repository naro0216n-collab/Space-Idle \
   --target-remote-head <current-develop-head>
 ```
 
@@ -223,7 +214,7 @@ workflow maintenanceは通常publish stateへ動的に生成されたGitHub comm
 - target branch push競合: forceしない。Gatewayの直前base再確認またはnon-force pushで停止する。
 - `.github/workflows/**` の変更: 通常Gatewayではrequestを生成しない。workflow更新権限を持つ分離されたmaintenance経路を使用し、必要なら `temp` でworkflow自体を隔離検証する。
 
-認証済みnative `git push` が利用できる実行環境では、それを第一選択としPublish Gatewayを経由しない。native Git経路も記録済みremote HEAD/treeとの一致を確認し、local target treeを親remote HEAD上へcommitしてnon-force pushし、remote ref/tree一致を確認する。workflow変更に使用する場合は、その認証主体がworkflow更新権限を明示的に持つことを前提とする。
+通常helperにはnative Git、temp publish、任意commit message、repository切替、plan directory切替などの代替mutation入口を置かない。これらは一見便利でも、標準Gateway・workflow maintenanceとの取り違えでremote更新経路を分岐させるためである。将来、認証済みnative Git環境を正式採用する場合は、既存helperへサブコマンドを再追加せず、その実行環境でtransportを一意に選択する専用入口として設計し、同一環境でGatewayとの選択を作業者へ委ねない。
 
 ## CI
 

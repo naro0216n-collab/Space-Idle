@@ -15,6 +15,7 @@ CONNECTOR_STATE_NAME = "workflow-maintenance-state.json"
 SUMMARY_NAME = "summary.json"
 TARGET_BRANCH = "develop"
 WORKFLOW_PREFIX = ".github/workflows/"
+GITHUB_REPOSITORY = "naro0216n-collab/Space-Idle"
 
 
 class WorkflowMaintenanceError(RuntimeError):
@@ -255,7 +256,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         raise WorkflowMaintenanceError(
             "develop HEAD moved since workflow maintenance prepare; do not create connector packets"
         )
-    plan_dir = Path(args.output_dir).resolve() if args.output_dir else Path(str(manifest_path) + ".connector")
+    plan_dir = Path(str(manifest_path) + ".connector")
     if _state_path(plan_dir).exists():
         raise WorkflowMaintenanceError(
             "workflow maintenance connector plan already exists; continue its recorded stage instead of replanning"
@@ -269,7 +270,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         packet = {
             "action": "GitHub.create_blob",
             "action_args": {
-                "repository_full_name": args.github_repository,
+                "repository_full_name": GITHUB_REPOSITORY,
                 "content": change["content_b64"],
                 "encoding": "base64",
             },
@@ -289,7 +290,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "version": 1,
         "stage": "uploads-planned",
         "manifest": str(manifest_path),
-        "github_repository": args.github_repository,
+        "github_repository": GITHUB_REPOSITORY,
         "target_branch": TARGET_BRANCH,
         "base_commit": manifest["base_commit"],
         "base_tree": manifest["base_tree"],
@@ -491,9 +492,7 @@ def build_parser() -> argparse.ArgumentParser:
         "connector-plan", help="after one develop HEAD check, generate workflow blob upload packets only"
     )
     connector_plan.add_argument("--manifest", required=True)
-    connector_plan.add_argument("--github-repository", required=True)
     connector_plan.add_argument("--target-remote-head", required=True)
-    connector_plan.add_argument("--output-dir")
     connector_plan.set_defaults(func=cmd_connector_plan)
 
     connector_tree = sub.add_parser(

@@ -68,7 +68,13 @@ def test_workflow_maintenance_is_a_separate_clear_entrypoint() -> None:
     assert ".github/workflows-only" in maintenance_help
     assert "Normal source/game changes belong to publish_request.py" in " ".join(maintenance_help.split())
     assert "workflow-maintenance" not in publish_help
-    assert "--connector-call-budget-bytes" not in maintenance_help
+    for forbidden in (
+        "--github-repository",
+        "--output-dir",
+        "--connector-call-budget-bytes",
+        "--target-branch",
+    ):
+        assert forbidden not in maintenance_help
 
 
 def test_workflow_maintenance_prepare_rejects_nonworkflow_and_mixed_changes(tmp_path: Path) -> None:
@@ -118,7 +124,7 @@ def test_workflow_maintenance_stages_packets_and_requires_rehydration_after_succ
     assert prepared["target_branch"] == "develop"
     assert prepared["workflow_paths"] == [".github/workflows/ci.yml"]
 
-    plan_dir = tmp_path / "connector"
+    plan_dir = Path(f"{manifest}.connector")
     plan = json.loads(
         run(
             MAINTENANCE,
@@ -126,16 +132,14 @@ def test_workflow_maintenance_stages_packets_and_requires_rehydration_after_succ
             "connector-plan",
             "--manifest",
             str(manifest),
-            "--github-repository",
-            "owner/repo",
             "--target-remote-head",
             base,
-            "--output-dir",
-            str(plan_dir),
         ).stdout
     )
     assert plan["stage"] == "uploads-planned"
     assert plan["upload_call_count"] == 1
+    upload_packet = json.loads(Path(plan["upload_packets"][0]).read_text(encoding="utf-8"))
+    assert upload_packet["action_args"]["repository_full_name"] == "naro0216n-collab/Space-Idle"
     assert not (plan_dir / "assemble-workflow-tree.json").exists()
     assert not (plan_dir / "create-workflow-commit.json").exists()
     assert not (plan_dir / "advance-workflow-ref.json").exists()
@@ -197,7 +201,7 @@ def test_workflow_maintenance_stages_packets_and_requires_rehydration_after_succ
     assert verified["verified"] is True
     assert verified["rehydrate_required"] is True
 
-    blocked = run(PUBLISH, repo, "plan", check=False)
+    blocked = run(PUBLISH, repo, "prepare", "--output", str(tmp_path / "blocked.json"), check=False)
     assert blocked.returncode != 0
     assert "restore the latest source-snapshot" in blocked.stderr
 
@@ -213,19 +217,15 @@ def test_workflow_maintenance_stage_machine_rejects_skips_and_replanning(tmp_pat
     commit_all(repo, "workflow")
     manifest = tmp_path / "maintenance.json"
     run(MAINTENANCE, repo, "prepare", "--output", str(manifest))
-    plan_dir = tmp_path / "connector"
+    plan_dir = Path(f"{manifest}.connector")
     run(
         MAINTENANCE,
         repo,
         "connector-plan",
         "--manifest",
         str(manifest),
-        "--github-repository",
-        "owner/repo",
         "--target-remote-head",
         base,
-        "--output-dir",
-        str(plan_dir),
     )
 
     skipped = run(
@@ -247,12 +247,8 @@ def test_workflow_maintenance_stage_machine_rejects_skips_and_replanning(tmp_pat
         "connector-plan",
         "--manifest",
         str(manifest),
-        "--github-repository",
-        "owner/repo",
         "--target-remote-head",
         base,
-        "--output-dir",
-        str(plan_dir),
         check=False,
     )
     assert replanned.returncode != 0
@@ -266,19 +262,15 @@ def test_workflow_maintenance_refuses_moved_develop_before_any_packets(tmp_path:
     commit_all(repo, "workflow")
     manifest = tmp_path / "maintenance.json"
     run(MAINTENANCE, repo, "prepare", "--output", str(manifest))
-    plan_dir = tmp_path / "connector"
+    plan_dir = Path(f"{manifest}.connector")
     result = run(
         MAINTENANCE,
         repo,
         "connector-plan",
         "--manifest",
         str(manifest),
-        "--github-repository",
-        "owner/repo",
         "--target-remote-head",
         "f" * 40,
-        "--output-dir",
-        str(plan_dir),
         check=False,
     )
     assert result.returncode != 0

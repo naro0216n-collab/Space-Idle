@@ -23,6 +23,9 @@ PUBLISH_BUNDLE_REF = "refs/space-idle/publish-request"
 PUBLISH_IDENTITY_NAME = "space-idle-publish-gateway"
 PUBLISH_IDENTITY_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 PUBLISH_COMMIT_DATE = "946684800 +0000"
+GITHUB_REPOSITORY = "naro0216n-collab/Space-Idle"
+PUBLISH_BRANCH = "publish"
+TARGET_BRANCH = "develop"
 
 
 class PublishStateError(RuntimeError):
@@ -252,24 +255,6 @@ def _git_object_oid(repo: Path, object_type: str, content: bytes) -> str:
     return hashlib.new(object_format, header + content).hexdigest()
 
 
-def _bundle_payload_metrics(
-    repo: Path,
-    base_commit: str,
-    target_tree: str,
-    message: bytes,
-) -> dict[str, object]:
-    publish_commit = _create_publish_commit(repo, base_commit, target_tree, message)
-    bundle = _bundle_bytes(repo, base_commit, publish_commit)
-    payload = base64.b64encode(bundle).decode("ascii")
-    return {
-        "transport": "git-bundle",
-        "payload_bytes": len(bundle),
-        "payload_chars": len(payload),
-        "payload_sha256": hashlib.sha256(bundle).hexdigest(),
-        "publish_commit": publish_commit,
-    }
-
-
 def _read_prepared_request(path: Path) -> dict[str, object]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -299,8 +284,8 @@ def _read_prepared_request(path: Path) -> dict[str, object]:
         int(request_id, 16)
     except ValueError as exc:
         raise PublishStateError("invalid prepared request id") from exc
-    if data["target_branch"] not in {"develop", "temp"}:
-        raise PublishStateError("invalid prepared target branch")
+    if data["target_branch"] != TARGET_BRANCH:
+        raise PublishStateError("invalid prepared target branch; standard publish targets develop only")
     for key in ("base_sha", "target_tree", "publish_commit", "local_target_commit"):
         value = data[key]
         if not isinstance(value, str):
@@ -567,8 +552,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     _require_hex_sha(args.remote_commit, name="remote commit")
     _require_hex_sha(args.remote_tree, name="remote tree")
-    local_commit = _git("rev-parse", f"{args.local_ref}^{{commit}}", cwd=repo)
-    local_tree = _git("rev-parse", f"{args.local_ref}^{{tree}}", cwd=repo)
+    local_commit = _git("rev-parse", "HEAD^{commit}", cwd=repo)
+    local_tree = _git("rev-parse", "HEAD^{tree}", cwd=repo)
     if local_tree != args.remote_tree:
         raise PublishStateError(
             f"artifact/local tree mismatch: local={local_tree} remote={args.remote_tree}"
@@ -578,63 +563,6 @@ def cmd_init(args: argparse.Namespace) -> int:
     if marker.exists():
         marker.unlink()
     print(json.dumps({"remote_commit": args.remote_commit, "remote_tree": args.remote_tree, "local_head": local_commit}, indent=2))
-    return 0
-
-
-def cmd_plan(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    state = _read_state(repo)
-    target_commit = _git("rev-parse", f"{args.target_ref}^{{commit}}", cwd=repo)
-    target_tree = _git("rev-parse", f"{args.target_ref}^{{tree}}", cwd=repo)
-    combined = _bundle_payload_metrics(
-        repo,
-        state["remote_commit"],
-        target_tree,
-        _message_bytes(_default_message(repo, state, args.target_ref)),
-    )
-    combined.update({"target_ref": target_commit, "target_tree": target_tree})
-
-    commits: list[dict[str, object]] = []
-    local_head = state["local_head"]
-    ancestor = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", local_head, target_commit],
-        cwd=repo,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode == 0
-    if ancestor:
-        previous_remote_commit = state["remote_commit"]
-        for commit_id in _git("rev-list", "--reverse", f"{local_head}..{target_commit}", cwd=repo).splitlines():
-            commit_tree = _git("rev-parse", f"{commit_id}^{{tree}}", cwd=repo)
-            message = _message_bytes(_git("show", "-s", "--format=%B", commit_id, cwd=repo).rstrip() + "\n")
-            metrics = _bundle_payload_metrics(repo, previous_remote_commit, commit_tree, message)
-            previous_remote_commit = str(metrics["publish_commit"])
-            metrics.update(
-                {
-                    "local_commit": commit_id,
-                    "subject": _git("show", "-s", "--format=%s", commit_id, cwd=repo),
-                    "target_tree": commit_tree,
-                }
-            )
-            commits.append(metrics)
-
-    print(
-        json.dumps(
-            {
-                "recorded_remote_commit": state["remote_commit"],
-                "recorded_remote_tree": state["remote_tree"],
-                "recorded_local_head": local_head,
-                "working_tree_clean": _working_tree_clean(repo),
-                "uncommitted_changes_excluded": not _working_tree_clean(repo),
-                "target_ref": target_commit,
-                "transport": "git-bundle",
-                "combined_request": combined,
-                "sequential_local_commits_available": ancestor,
-                "sequential_requests": commits,
-            },
-            indent=2,
-        )
-    )
     return 0
 
 
@@ -652,15 +580,14 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             "use `python scripts/workflow_maintenance.py prepare` for a workflow-only commit: "
             + ", ".join(workflow_paths)
         )
-    message_text = args.message if args.message is not None else _default_message(repo, state, args.target_ref)
-    message = _message_bytes(message_text)
+    message = _message_bytes(_default_message(repo, state, args.target_ref))
     publish_commit = _create_publish_commit(repo, state["remote_commit"], target_tree, message)
     payload_bytes = _bundle_bytes(repo, state["remote_commit"], publish_commit)
     payload_b64 = base64.b64encode(payload_bytes).decode("ascii")
     request = {
         "version": REQUEST_VERSION,
         "request_id": uuid.uuid4().hex,
-        "target_branch": args.target_branch,
+        "target_branch": TARGET_BRANCH,
         "base_sha": state["remote_commit"],
         "target_tree": target_tree,
         "publish_commit": publish_commit,
@@ -784,7 +711,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
             f"expected={prepared['base_sha']} actual={args.target_remote_head}"
         )
 
-    output_dir = Path(args.output_dir).resolve() if args.output_dir else Path(f"{manifest}.connector")
+    output_dir = Path(f"{manifest}.connector")
     if output_dir.exists() and any(output_dir.iterdir()):
         raise PublishStateError(
             f"Connector plan directory is already initialized: {output_dir}; "
@@ -794,7 +721,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
 
     payload = str(prepared["payload_b64"])
     parts = _split_payload_for_blob_calls(
-        repo, args.github_repository, payload, CONNECTOR_CALL_BUDGET_BYTES
+        repo, GITHUB_REPOSITORY, payload, CONNECTOR_CALL_BUDGET_BYTES
     )
     upload_packets: list[str] = []
     blob_oids: list[str] = []
@@ -809,7 +736,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         blob_oids.append(str(part["oid"]))
         upload_call_bytes.append(int(part["packet_bytes"]))
 
-    root_packet = _connector_payload_root_packet(repo, args.github_repository, blob_oids)
+    root_packet = _connector_payload_root_packet(repo, GITHUB_REPOSITORY, blob_oids)
     root_call_bytes = _connector_call_bytes(root_packet)
     if root_call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
         raise PublishStateError(
@@ -823,8 +750,8 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "stage": "uploads-planned",
         "manifest": str(manifest),
         "request_id": prepared["request_id"],
-        "github_repository": args.github_repository,
-        "publish_branch": args.publish_branch,
+        "github_repository": GITHUB_REPOSITORY,
+        "publish_branch": PUBLISH_BRANCH,
         "target_branch": prepared["target_branch"],
         "target_remote_head": args.target_remote_head,
         "expected_blob_git_oids": blob_oids,
@@ -837,8 +764,8 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "strategy": "staged-blobs-root-then-request",
         "manifest": str(manifest),
         "request_id": prepared["request_id"],
-        "github_repository": args.github_repository,
-        "publish_branch": args.publish_branch,
+        "github_repository": GITHUB_REPOSITORY,
+        "publish_branch": PUBLISH_BRANCH,
         "target_branch": prepared["target_branch"],
         "target_remote_head": args.target_remote_head,
         "connector_profile": "github-connector-fixed",
@@ -962,146 +889,6 @@ def cmd_connector_submit(args: argparse.Namespace) -> int:
     return 0
 
 
-def _remote_branch_head(repo: Path, remote: str, branch: str) -> str:
-    result = subprocess.run(
-        ["git", "ls-remote", "--heads", remote, f"refs/heads/{branch}"],
-        cwd=repo,
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    rows = [line.split() for line in result.stdout.splitlines() if line.strip()]
-    if len(rows) != 1 or len(rows[0]) < 2:
-        raise PublishStateError(f"could not resolve exactly one remote head for {remote}:{branch}")
-    head = rows[0][0]
-    _require_hex_sha(head, name="remote branch head")
-    return head
-
-
-def _fetch_remote_branch_tree(repo: Path, remote: str, branch: str) -> str:
-    subprocess.run(
-        ["git", "fetch", "--quiet", "--no-tags", remote, f"refs/heads/{branch}"],
-        cwd=repo,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    tree = _git("rev-parse", "FETCH_HEAD^{tree}", cwd=repo)
-    _require_hex_sha(tree, name="remote branch tree")
-    return tree
-
-
-def _commit_identity_env(repo: Path, target_commit: str) -> dict[str, str]:
-    fields = _git(
-        "show",
-        "-s",
-        "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI",
-        target_commit,
-        cwd=repo,
-    ).split("\x00")
-    if len(fields) != 6 or not all(fields):
-        raise PublishStateError("could not derive commit identity from local target commit")
-    env = os.environ.copy()
-    env.update(
-        {
-            "GIT_AUTHOR_NAME": fields[0],
-            "GIT_AUTHOR_EMAIL": fields[1],
-            "GIT_AUTHOR_DATE": fields[2],
-            "GIT_COMMITTER_NAME": fields[3],
-            "GIT_COMMITTER_EMAIL": fields[4],
-            "GIT_COMMITTER_DATE": fields[5],
-        }
-    )
-    return env
-
-
-def cmd_native_publish(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    state = _read_state(repo)
-    target_commit = _git("rev-parse", f"{args.target_ref}^{{commit}}", cwd=repo)
-    target_tree = _git("rev-parse", f"{target_commit}^{{tree}}", cwd=repo)
-    _require_hex_sha(target_commit, name="local target commit")
-    _require_hex_sha(target_tree, name="local target tree")
-
-    remote_before = _remote_branch_head(repo, args.remote, args.target_branch)
-    checks: dict[str, bool] = {
-        "remote_head_matches_recorded_base": remote_before == state["remote_commit"],
-    }
-    if not checks["remote_head_matches_recorded_base"]:
-        raise PublishStateError(
-            "remote target moved before native publish: "
-            f"recorded={state['remote_commit']} remote={remote_before}"
-        )
-    remote_tree_before = _fetch_remote_branch_tree(repo, args.remote, args.target_branch)
-    checks["remote_tree_matches_recorded_base"] = remote_tree_before == state["remote_tree"]
-    if not checks["remote_tree_matches_recorded_base"]:
-        raise PublishStateError(
-            "remote target tree does not match recorded publish base: "
-            f"recorded={state['remote_tree']} remote={remote_tree_before}"
-        )
-    if target_tree == remote_tree_before:
-        raise PublishStateError("local target tree is already published; nothing to publish")
-
-    message = args.message or _default_message(repo, state, target_commit)
-    if not message.strip():
-        raise PublishStateError("native publish commit message is empty")
-    commit_result = subprocess.run(
-        ["git", "commit-tree", target_tree, "-p", remote_before],
-        cwd=repo,
-        check=True,
-        text=True,
-        input=message.rstrip() + "\n",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=_commit_identity_env(repo, target_commit),
-    )
-    published_commit = commit_result.stdout.strip()
-    _require_hex_sha(published_commit, name="native publish commit")
-    subprocess.run(
-        ["git", "push", args.remote, f"{published_commit}:refs/heads/{args.target_branch}"],
-        cwd=repo,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    remote_after = _remote_branch_head(repo, args.remote, args.target_branch)
-    checks["remote_head_matches_published_commit"] = remote_after == published_commit
-    if not checks["remote_head_matches_published_commit"]:
-        raise PublishStateError(
-            "native publish remote ref verification failed: "
-            f"expected={published_commit} remote={remote_after}"
-        )
-    remote_tree_after = _fetch_remote_branch_tree(repo, args.remote, args.target_branch)
-    checks["remote_tree_matches_local_target"] = remote_tree_after == target_tree
-    if not checks["remote_tree_matches_local_target"]:
-        raise PublishStateError(
-            "native publish remote tree verification failed: "
-            f"local={target_tree} remote={remote_tree_after}"
-        )
-    _write_state(repo, published_commit, target_tree, target_commit)
-    print(
-        json.dumps(
-            {
-                "transport": "native-git",
-                "target_branch": args.target_branch,
-                "remote": args.remote,
-                "base_commit": remote_before,
-                "published_commit": published_commit,
-                "published_tree": target_tree,
-                "local_head": target_commit,
-                "working_tree_clean": _working_tree_clean(repo),
-                "uncommitted_changes_excluded": not _working_tree_clean(repo),
-                "checks": checks,
-                "verified": all(checks.values()),
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
-    return 0
-
-
 def _read_publish_receipt(path: Path) -> dict[str, object]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -1125,8 +912,8 @@ def _read_publish_receipt(path: Path) -> dict[str, object]:
         raise PublishStateError(f"unsupported publish receipt version: {data['version']}")
     if data["request_version"] != REQUEST_VERSION:
         raise PublishStateError(f"unsupported receipt request version: {data['request_version']}")
-    if data["target_branch"] not in {"develop", "temp"}:
-        raise PublishStateError("invalid publish receipt target_branch")
+    if data["target_branch"] != TARGET_BRANCH:
+        raise PublishStateError("invalid publish receipt target_branch; standard publish targets develop only")
     for key in ("base_commit", "target_tree", "published_commit", "published_tree"):
         value = data[key]
         if not isinstance(value, str):
@@ -1233,32 +1020,10 @@ def build_parser() -> argparse.ArgumentParser:
     init = sub.add_parser("init", help="initialize state from a verified source artifact")
     init.add_argument("--remote-commit", required=True)
     init.add_argument("--remote-tree", required=True)
-    init.add_argument("--local-ref", default="HEAD")
     init.set_defaults(func=cmd_init)
 
-    native_publish = sub.add_parser(
-        "native-publish",
-        help="publish a committed target directly with native git when authenticated push is available",
-    )
-    native_publish.add_argument("--remote", default="origin")
-    native_publish.add_argument("--target-branch", choices=("develop", "temp"), default="develop")
-    native_publish.add_argument("--target-ref", default="HEAD")
-    native_publish.add_argument("--message")
-    native_publish.set_defaults(func=cmd_native_publish)
-
-    plan = sub.add_parser("plan", help="estimate combined and per-local-commit Git bundle transport")
-    plan.add_argument("--target-ref", default="HEAD")
-    plan.set_defaults(func=cmd_plan)
-
     prepare = sub.add_parser("prepare", help="generate one verified Git bundle publish request")
-    prepare.add_argument(
-        "--target-branch",
-        choices=("develop", "temp"),
-        default="develop",
-        help="develop is standard; temp is only for explicitly requested isolated validation",
-    )
     prepare.add_argument("--target-ref", default="HEAD")
-    prepare.add_argument("--message")
     prepare.add_argument("--output", required=True)
     prepare.set_defaults(func=cmd_prepare)
 
@@ -1267,10 +1032,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="generate minimum-call Connector packets; Gateway performs commit/ref publication after verification",
     )
     connector_plan.add_argument("--manifest", required=True)
-    connector_plan.add_argument("--github-repository", required=True)
     connector_plan.add_argument("--target-remote-head", required=True)
-    connector_plan.add_argument("--publish-branch", default="publish")
-    connector_plan.add_argument("--output-dir")
     connector_plan.set_defaults(func=cmd_connector_plan)
 
     connector_root = sub.add_parser(
