@@ -6,17 +6,21 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import uuid
 from pathlib import Path
 
 STATE_NAME = "space-idle-publish-state.json"
+ACTIVE_SESSION_DIR_NAME = "space-idle-publish-active"
 REQUEST_VERSION = 5
 RECEIPT_VERSION = 3
 DEFAULT_CONNECTOR_CALL_BUDGET_BYTES = 96 * 1024
 MAX_BLOB_PARTS = 256
 PUBLISH_BUNDLE_REF = "refs/space-idle/publish-request"
+GITHUB_REPOSITORY = "naro0216n-collab/Space-Idle"
+PUBLISH_BRANCH = "publish"
 PUBLISH_IDENTITY_NAME = "space-idle-publish-gateway"
 PUBLISH_IDENTITY_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 PUBLISH_COMMIT_DATE = "946684800 +0000"
@@ -57,6 +61,14 @@ def _git_dir(repo: Path) -> Path:
 
 def _state_path(repo: Path) -> Path:
     return _git_dir(repo) / STATE_NAME
+
+
+def _active_session_dir(repo: Path) -> Path:
+    return _git_dir(repo) / ACTIVE_SESSION_DIR_NAME
+
+
+def _active_session_path(repo: Path) -> Path:
+    return _active_session_dir(repo) / "session.json"
 
 
 def _read_state(repo: Path) -> dict[str, str]:
@@ -361,13 +373,14 @@ def _verify_bundle_payload(
     }
 
 
-def _verify_prepared_request(repo: Path, path: Path) -> dict[str, object]:
-    state = _read_state(repo)
+def _verify_prepared_request(
+    repo: Path, path: Path, *, expected_base_sha: str | None = None
+) -> dict[str, object]:
     request = _read_prepared_request(path)
-    if request["base_sha"] != state["remote_commit"]:
+    if expected_base_sha is not None and request["base_sha"] != expected_base_sha:
         raise PublishStateError(
-            "publish request base does not match recorded remote commit: "
-            f"request={request['base_sha']} state={state['remote_commit']}"
+            "publish request base does not match the expected target-branch base: "
+            f"request={request['base_sha']} expected={expected_base_sha}"
         )
     local_target = str(request["local_target_commit"])
     local_tree = _git("rev-parse", f"{local_target}^{{tree}}", cwd=repo)
@@ -578,26 +591,38 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_prepare(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
+def _prepare_request(
+    repo: Path,
+    *,
+    target_branch: str,
+    target_ref: str,
+    message_text: str | None,
+    connector_call_budget_bytes: int,
+    output: Path,
+    base_sha: str | None = None,
+) -> dict[str, object]:
     state = _read_state(repo)
-    target_commit = _git("rev-parse", f"{args.target_ref}^{{commit}}", cwd=repo)
-    target_tree = _git("rev-parse", f"{args.target_ref}^{{tree}}", cwd=repo)
-    if target_tree == state["remote_tree"]:
-        raise PublishStateError("local target tree already matches the last published tree")
-    message_text = args.message if args.message is not None else _default_message(repo, state, args.target_ref)
-    message = _message_bytes(message_text)
-    publish_commit = _create_publish_commit(repo, state["remote_commit"], target_tree, message)
-    payload_bytes = _bundle_bytes(repo, state["remote_commit"], publish_commit)
+    request_base = base_sha or state["remote_commit"]
+    _require_hex_sha(request_base, name="publish request base")
+    _require_commit_object(repo, request_base)
+    base_tree = _git("rev-parse", f"{request_base}^{{tree}}", cwd=repo)
+    target_commit = _git("rev-parse", f"{target_ref}^{{commit}}", cwd=repo)
+    target_tree = _git("rev-parse", f"{target_ref}^{{tree}}", cwd=repo)
+    if target_tree == base_tree:
+        raise PublishStateError("local target tree already matches the target branch tree")
+    resolved_message = message_text if message_text is not None else _default_message(repo, state, target_ref)
+    message = _message_bytes(resolved_message)
+    publish_commit = _create_publish_commit(repo, request_base, target_tree, message)
+    payload_bytes = _bundle_bytes(repo, request_base, publish_commit)
     payload_b64 = base64.b64encode(payload_bytes).decode("ascii")
-    budget = args.connector_call_budget_bytes
+    budget = connector_call_budget_bytes
     if budget <= 0:
         raise PublishStateError("Connector call budget must be positive")
     request = {
         "version": REQUEST_VERSION,
         "request_id": uuid.uuid4().hex,
-        "target_branch": args.target_branch,
-        "base_sha": state["remote_commit"],
+        "target_branch": target_branch,
+        "base_sha": request_base,
         "target_tree": target_tree,
         "publish_commit": publish_commit,
         "payload_sha256": hashlib.sha256(payload_bytes).hexdigest(),
@@ -606,64 +631,56 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "connector_call_budget_bytes": budget,
         "local_target_commit": target_commit,
     }
-    if not args.output:
-        raise PublishStateError("prepare requires --output")
-    output = Path(args.output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(request, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    verified = _verify_prepared_request(repo, output)
-    print(
-        json.dumps(
-            {
-                "manifest": str(output),
-                "request_id": request["request_id"],
-                "remote_request_path": _request_file_path(str(request["request_id"])),
-                "remote_receipt_path": _receipt_file_path(str(request["request_id"])),
-                "transport": "git-bundle",
-                "connector_call_budget_bytes": budget,
-                "payload_bytes": len(payload_bytes),
-                "payload_chars": len(payload_b64),
-                "payload_sha256": request["payload_sha256"],
-                "publish_commit": publish_commit,
-                "target_tree": target_tree,
-                "local_target_commit": target_commit,
-                "working_tree_clean": _working_tree_clean(repo),
-                "uncommitted_changes_excluded": not _working_tree_clean(repo),
-                "verified": verified["verified"],
-            },
-            indent=2,
-        )
-    )
-    return 0
+    verified = _verify_prepared_request(repo, output, expected_base_sha=request_base)
+    return {
+        "manifest": str(output),
+        "request_id": request["request_id"],
+        "remote_request_path": _request_file_path(str(request["request_id"])),
+        "remote_receipt_path": _receipt_file_path(str(request["request_id"])),
+        "transport": "git-bundle",
+        "connector_call_budget_bytes": budget,
+        "payload_bytes": len(payload_bytes),
+        "payload_chars": len(payload_b64),
+        "payload_sha256": request["payload_sha256"],
+        "publish_commit": publish_commit,
+        "target_tree": target_tree,
+        "local_target_commit": target_commit,
+        "working_tree_clean": _working_tree_clean(repo),
+        "uncommitted_changes_excluded": not _working_tree_clean(repo),
+        "verified": verified["verified"],
+    }
 
 
-def cmd_verify(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    verified = _verify_prepared_request(repo, Path(args.manifest).resolve())
-    print(json.dumps(verified, indent=2))
-    return 0
-
-
-def cmd_connector_plan(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    manifest = Path(args.manifest).resolve()
+def _build_connector_plan(
+    repo: Path,
+    *,
+    manifest: Path,
+    github_repository: str,
+    target_remote_head: str,
+    publish_branch: str,
+    output_dir: Path,
+    connector_call_budget_bytes: int | None = None,
+    defer_submit_for_split: bool = False,
+    always_blob: bool = False,
+) -> dict[str, object]:
     verified = _verify_prepared_request(repo, manifest)
     prepared = _read_prepared_request(manifest)
-    _require_hex_sha(args.target_remote_head, name="target remote HEAD")
-    if args.target_remote_head != prepared["base_sha"]:
+    _require_hex_sha(target_remote_head, name="target remote HEAD")
+    if target_remote_head != prepared["base_sha"]:
         raise PublishStateError(
             "target branch HEAD moved since prepare: "
-            f"expected={prepared['base_sha']} actual={args.target_remote_head}"
+            f"expected={prepared['base_sha']} actual={target_remote_head}"
         )
     call_budget = (
-        args.connector_call_budget_bytes
-        if args.connector_call_budget_bytes is not None
+        connector_call_budget_bytes
+        if connector_call_budget_bytes is not None
         else int(prepared["connector_call_budget_bytes"])
     )
     if call_budget <= 0:
         raise PublishStateError("Connector call budget must be positive")
 
-    output_dir = Path(args.output_dir).resolve() if args.output_dir else Path(f"{manifest}.connector")
     output_dir.mkdir(parents=True, exist_ok=True)
     for stale in output_dir.glob("upload-part-*.json"):
         stale.unlink()
@@ -674,19 +691,23 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     payload = str(prepared["payload_b64"])
     inline_request = _transport_request(prepared, {"kind": "inline", "data": payload})
     inline_packet = _connector_submit_packet(
-        args.github_repository, args.publish_branch, inline_request
+        github_repository, publish_branch, inline_request
     )
     inline_call_bytes = _connector_call_bytes(inline_packet)
     upload_packets: list[str] = []
     blob_parts: list[dict[str, object]] = []
 
-    if inline_call_bytes <= call_budget:
+    if not always_blob and inline_call_bytes <= call_budget:
         strategy = "single-request-file"
         submit_packet = inline_packet
     else:
-        strategy = "parallel-blobs-then-request-file"
+        strategy = (
+            "verified-blobs-then-request-file"
+            if always_blob
+            else "parallel-blobs-then-request-file"
+        )
         parts = _split_payload_for_blob_calls(
-            repo, args.github_repository, payload, call_budget
+            repo, github_repository, payload, call_budget
         )
         for part in parts:
             packet_path = output_dir / f"upload-part-{int(part['index']):03d}.json"
@@ -696,33 +717,43 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
             )
             upload_packets.append(str(packet_path))
             blob_parts.append({"oid": part["oid"], "chars": part["chars"]})
-        submit_request = _transport_request(
-            prepared, {"kind": "git-blobs", "parts": blob_parts}
-        )
-        submit_packet = _connector_submit_packet(
-            args.github_repository, args.publish_branch, submit_request
-        )
-        submit_bytes = _connector_call_bytes(submit_packet)
-        if submit_bytes > call_budget:
-            raise PublishStateError(
-                f"publish request metadata needs a {submit_bytes}-byte Connector call, exceeding "
-                f"the configured {call_budget}-byte budget"
+        if defer_submit_for_split:
+            submit_packet = None
+        else:
+            submit_request = _transport_request(
+                prepared, {"kind": "git-blobs", "parts": blob_parts}
             )
+            submit_packet = _connector_submit_packet(
+                github_repository, publish_branch, submit_request
+            )
+            submit_bytes = _connector_call_bytes(submit_packet)
+            if submit_bytes > call_budget:
+                raise PublishStateError(
+                    f"publish request metadata needs a {submit_bytes}-byte Connector call, exceeding "
+                    f"the configured {call_budget}-byte budget"
+                )
 
-    submit_path.write_text(
-        json.dumps(submit_packet, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    submit_call_bytes = _connector_call_bytes(submit_packet)
+    if submit_packet is not None:
+        submit_path.write_text(
+            json.dumps(submit_packet, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        submit_call_bytes = _connector_call_bytes(submit_packet)
+        submit_packet_path: str | None = str(submit_path)
+    else:
+        if submit_path.exists():
+            submit_path.unlink()
+        submit_call_bytes = 0
+        submit_packet_path = None
     upload_call_count = len(upload_packets)
     summary = {
         "strategy": strategy,
         "manifest": str(manifest),
         "request_id": prepared["request_id"],
-        "github_repository": args.github_repository,
-        "publish_branch": args.publish_branch,
+        "github_repository": github_repository,
+        "publish_branch": publish_branch,
         "target_branch": prepared["target_branch"],
-        "target_remote_head": args.target_remote_head,
+        "target_remote_head": target_remote_head,
         "connector_call_budget_bytes": call_budget,
         "inline_submit_call_bytes": inline_call_bytes,
         "submit_call_bytes": submit_call_bytes,
@@ -731,8 +762,12 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "upload_packets": upload_packets,
         "uploads_are_independent": bool(upload_packets),
         "connector_uploads_may_run_in_parallel": bool(upload_packets),
-        "returned_upload_blob_shas_are_not_required": True,
-        "submit_request_packet": str(submit_path),
+        "returned_upload_blob_shas_are_required": bool(always_blob and upload_packets),
+        "returned_upload_blob_shas_are_not_required": bool(upload_packets and not always_blob),
+        "submit_request_packet": submit_packet_path,
+        "submit_deferred_until_upload_phase_complete": bool(
+            defer_submit_for_split and upload_packets
+        ),
         "remote_request_path": _request_file_path(str(prepared["request_id"])),
         "remote_receipt_path": _receipt_file_path(str(prepared["request_id"])),
         "normal_remote_target_probe_calls": 1,
@@ -745,7 +780,11 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "next_after_transport": (
             "execute submit-request.json; the Gateway validates the request and publishes the exact target commit automatically"
             if not upload_packets
-            else "execute all upload-part packets in parallel, then submit-request.json; returned blob SHAs are not inputs to later steps and the Gateway validates OIDs before publishing"
+            else (
+                "execute all upload-part packets, then pass their returned blob SHAs to gateway-submit; the helper verifies exact upload identity before generating the final request action"
+                if defer_submit_for_split
+                else "execute all upload-part packets in parallel, then submit-request.json; returned blob SHAs are not inputs to later steps and the Gateway validates OIDs before publishing"
+            )
         ),
         "request_verified": bool(verified["verified"]),
         "verified": True,
@@ -754,7 +793,501 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    print(json.dumps(summary, indent=2))
+    return summary
+
+
+def _read_active_session(repo: Path) -> dict[str, object]:
+    path = _active_session_path(repo)
+    if not path.exists():
+        raise PublishStateError("no active Gateway publish session")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PublishStateError(f"invalid active Gateway publish session: {exc}") from exc
+    required = {
+        "version",
+        "request_id",
+        "manifest",
+        "connector_dir",
+        "strategy",
+        "phase",
+        "target_branch",
+        "base_sha",
+        "target_tree",
+        "publish_commit",
+        "local_target_commit",
+        "remote_request_path",
+        "remote_receipt_path",
+        "upload_packets",
+        "payload_parts",
+        "next_packet_index",
+    }
+    missing = required - data.keys()
+    if missing:
+        raise PublishStateError(
+            f"invalid active Gateway publish session: missing fields {sorted(missing)}"
+        )
+    if data["version"] != 2:
+        raise PublishStateError(
+            f"unsupported active Gateway publish session version: {data['version']}"
+        )
+    return data
+
+
+def _write_active_session(repo: Path, session: dict[str, object]) -> None:
+    path = _active_session_path(repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(session, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _clear_active_session(repo: Path) -> None:
+    directory = _active_session_dir(repo)
+    if directory.exists():
+        shutil.rmtree(directory)
+
+
+def _packet_action_summary(path: str) -> dict[str, object]:
+    packet_path = Path(path)
+    packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    action = packet.get("action")
+    if not isinstance(action, str) or not action:
+        raise PublishStateError(f"invalid Connector packet action: {packet_path}")
+    return {
+        "action": action,
+        "connector_namespace": action.split(".", 1)[0],
+        "connector_function": action.split(".", 1)[1] if "." in action else action,
+        "packet": str(packet_path),
+        "stage": packet.get("stage"),
+        "part_index": packet.get("part_index"),
+    }
+
+
+def cmd_gateway_begin(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    active_dir = _active_session_dir(repo)
+    if _active_session_path(repo).exists():
+        active = _read_active_session(repo)
+        raise PublishStateError(
+            "an active Gateway publish session already exists: "
+            f"request_id={active['request_id']} phase={active['phase']}; "
+            "continue it through gateway-submit/gateway-complete or inspect it with gateway-status"
+        )
+    if active_dir.exists():
+        shutil.rmtree(active_dir)
+    active_dir.mkdir(parents=True, exist_ok=True)
+
+    state = _read_state(repo)
+    target_remote_head = str(args.target_remote_head).lower()
+    _require_hex_sha(target_remote_head, name="target remote HEAD")
+    if args.target_branch == "develop" and target_remote_head != state["remote_commit"]:
+        _clear_active_session(repo)
+        raise PublishStateError(
+            "develop HEAD moved since the recorded publish base: "
+            f"recorded={state['remote_commit']} actual={target_remote_head}"
+        )
+    try:
+        _require_commit_object(repo, target_remote_head)
+    except PublishStateError:
+        _clear_active_session(repo)
+        raise
+
+    manifest = active_dir / "manifest.json"
+    prepared_summary = _prepare_request(
+        repo,
+        target_branch=args.target_branch,
+        target_ref=args.target_ref,
+        message_text=args.message,
+        connector_call_budget_bytes=DEFAULT_CONNECTOR_CALL_BUDGET_BYTES,
+        output=manifest,
+        base_sha=target_remote_head,
+    )
+    connector_dir = active_dir / "connector"
+    plan = _build_connector_plan(
+        repo,
+        manifest=manifest,
+        github_repository=GITHUB_REPOSITORY,
+        target_remote_head=target_remote_head,
+        publish_branch=PUBLISH_BRANCH,
+        output_dir=connector_dir,
+        connector_call_budget_bytes=DEFAULT_CONNECTOR_CALL_BUDGET_BYTES,
+        defer_submit_for_split=True,
+        always_blob=True,
+    )
+    prepared = _read_prepared_request(manifest)
+    phase = "upload-payload-parts"
+    connector_actions = [
+        _packet_action_summary(path) for path in list(plan["upload_packets"])
+    ]
+    next_helper_command = (
+        "python scripts/publish_request.py gateway-submit "
+        "--uploaded-blob-sha <SHA returned by each create_blob action>"
+    )
+    session = {
+        "version": 2,
+        "request_id": prepared["request_id"],
+        "manifest": str(manifest),
+        "connector_dir": str(connector_dir),
+        "strategy": plan["strategy"],
+        "phase": phase,
+        "target_branch": prepared["target_branch"],
+        "base_sha": prepared["base_sha"],
+        "target_tree": prepared["target_tree"],
+        "publish_commit": prepared["publish_commit"],
+        "local_target_commit": prepared["local_target_commit"],
+        "remote_request_path": plan["remote_request_path"],
+        "remote_receipt_path": plan["remote_receipt_path"],
+        "upload_packets": list(plan["upload_packets"]),
+        "payload_parts": [
+            {
+                "packet": path,
+                "oid": json.loads(Path(path).read_text(encoding="utf-8"))["expected_blob_git_oid"],
+                "chars": len(json.loads(Path(path).read_text(encoding="utf-8"))["action_args"]["content"]),
+                "confirmed_sha": None,
+            }
+            for path in list(plan["upload_packets"])
+        ],
+        "next_packet_index": len(list(plan["upload_packets"])),
+        "submit_request_packet": plan["submit_request_packet"],
+    }
+    _write_active_session(repo, session)
+    print(
+        json.dumps(
+            {
+                "entrypoint": "gateway-begin",
+                "session": str(_active_session_path(repo)),
+                "request_id": prepared["request_id"],
+                "strategy": plan["strategy"],
+                "phase": phase,
+                "target_branch": prepared["target_branch"],
+                "target_remote_head": target_remote_head,
+                "target_tree": prepared["target_tree"],
+                "local_target_commit": prepared["local_target_commit"],
+                "initial_connector_action_budget_bytes": DEFAULT_CONNECTOR_CALL_BUDGET_BYTES,
+                "adaptive_split_on_blob_sha_mismatch": True,
+                "metadata_call_budget_bytes": DEFAULT_CONNECTOR_CALL_BUDGET_BYTES,
+                "connector_actions": connector_actions,
+                "connector_action_selection_is_not_a_decision": True,
+                "execute_packet_action_exactly": True,
+                "next_helper_command": next_helper_command,
+                "remote_receipt_path": plan["remote_receipt_path"],
+                "after_gateway_success": (
+                    "observe the target branch HEAD once and run gateway-complete; "
+                    "gateway-record remains available only for receipt-based audit/recovery"
+                ),
+                "prepared": prepared_summary,
+                "verified": True,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _split_failed_payload_part(
+    repo: Path,
+    *,
+    github_repository: str,
+    part: dict[str, object],
+    next_packet_index: int,
+    connector_dir: Path,
+) -> tuple[list[dict[str, object]], int]:
+    packet_path = Path(str(part["packet"]))
+    packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    args_data = packet.get("action_args")
+    content = args_data.get("content") if isinstance(args_data, dict) else None
+    if not isinstance(content, str) or len(content) <= 1:
+        raise PublishStateError(
+            "payload upload SHA mismatch persisted at the minimum splittable size; "
+            "stop and inspect the Connector transport"
+        )
+    midpoint = len(content) // 2
+    children: list[dict[str, object]] = []
+    for child_content in (content[:midpoint], content[midpoint:]):
+        index = next_packet_index
+        next_packet_index += 1
+        child_packet = _connector_blob_packet(repo, github_repository, child_content, index)
+        child_path = connector_dir / f"upload-part-{index:03d}.json"
+        child_path.write_text(
+            json.dumps(child_packet, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        children.append(
+            {
+                "packet": str(child_path),
+                "oid": child_packet["expected_blob_git_oid"],
+                "chars": len(child_content),
+                "confirmed_sha": None,
+            }
+        )
+    return children, next_packet_index
+
+
+def cmd_gateway_submit(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    session = _read_active_session(repo)
+    if session["strategy"] not in {
+        "verified-blobs-then-request-file",
+        "parallel-blobs-then-request-file",
+    }:
+        raise PublishStateError("gateway-submit requires a blob-upload Gateway session")
+    if session["phase"] not in {"upload-payload-parts", "submit-request"}:
+        raise PublishStateError(f"invalid Gateway publish phase: {session['phase']}")
+
+    if session["phase"] == "submit-request":
+        raise PublishStateError(
+            "payload uploads are already verified and the final request action has been generated"
+        )
+
+    payload_parts = session.get("payload_parts")
+    if not isinstance(payload_parts, list) or not payload_parts:
+        raise PublishStateError("active Gateway session is missing ordered payload parts")
+    pending_parts = [
+        part for part in payload_parts
+        if isinstance(part, dict) and part.get("confirmed_sha") is None
+    ]
+    provided_upload_oids = [str(value).lower() for value in args.uploaded_blob_sha]
+    if len(provided_upload_oids) != len(pending_parts):
+        raise PublishStateError(
+            "uploaded blob SHA count does not match the current helper-generated upload actions; "
+            f"expected={len(pending_parts)} actual={len(provided_upload_oids)}"
+        )
+    for oid in provided_upload_oids:
+        _require_hex_sha(oid, name="uploaded blob SHA")
+
+    connector_dir = Path(str(session["connector_dir"]))
+    next_packet_index = int(session.get("next_packet_index", len(payload_parts)))
+    replacement_by_packet: dict[str, list[dict[str, object]]] = {}
+    mismatches = 0
+    for part, actual_oid in zip(pending_parts, provided_upload_oids, strict=True):
+        expected_oid = str(part.get("oid", "")).lower()
+        _require_hex_sha(expected_oid, name="expected upload blob SHA")
+        if actual_oid == expected_oid:
+            part["confirmed_sha"] = actual_oid
+            continue
+        mismatches += 1
+        children, next_packet_index = _split_failed_payload_part(
+            repo,
+            github_repository=GITHUB_REPOSITORY,
+            part=part,
+            next_packet_index=next_packet_index,
+            connector_dir=connector_dir,
+        )
+        replacement_by_packet[str(part["packet"])] = children
+
+    if mismatches:
+        rebuilt: list[dict[str, object]] = []
+        for part in payload_parts:
+            if not isinstance(part, dict):
+                raise PublishStateError("invalid ordered payload part in active Gateway session")
+            replacement = replacement_by_packet.get(str(part.get("packet")))
+            if replacement is not None:
+                rebuilt.extend(replacement)
+            else:
+                rebuilt.append(part)
+        payload_parts = rebuilt
+        pending_paths = [
+            str(part["packet"])
+            for part in payload_parts
+            if part.get("confirmed_sha") is None
+        ]
+        session["payload_parts"] = payload_parts
+        session["upload_packets"] = pending_paths
+        session["next_packet_index"] = next_packet_index
+        _write_active_session(repo, session)
+        print(
+            json.dumps(
+                {
+                    "entrypoint": "gateway-submit",
+                    "request_id": session["request_id"],
+                    "phase": "upload-payload-parts",
+                    "verified_upload_parts": sum(
+                        1 for part in payload_parts if part.get("confirmed_sha") is not None
+                    ),
+                    "resplit_mismatched_parts": mismatches,
+                    "connector_actions": [
+                        _packet_action_summary(path) for path in pending_paths
+                    ],
+                    "connector_action_selection_is_not_a_decision": True,
+                    "execute_packet_action_exactly": True,
+                    "next_helper_command": (
+                        "python scripts/publish_request.py gateway-submit "
+                        "--uploaded-blob-sha <SHA returned by each newly emitted create_blob action>"
+                    ),
+                    "request_action_generated": False,
+                    "verified": True,
+                },
+                indent=2,
+            )
+        )
+        return 0
+
+    if any(part.get("confirmed_sha") is None for part in payload_parts):
+        raise PublishStateError("not all payload parts are verified")
+
+    manifest = Path(str(session["manifest"]))
+    prepared = _read_prepared_request(manifest)
+    blob_parts = [
+        {"oid": str(part["oid"]), "chars": int(part["chars"])}
+        for part in payload_parts
+    ]
+    submit_request = _transport_request(
+        prepared, {"kind": "git-blobs", "parts": blob_parts}
+    )
+    submit_packet = _connector_submit_packet(
+        GITHUB_REPOSITORY, PUBLISH_BRANCH, submit_request
+    )
+    size = _connector_call_bytes(submit_packet)
+    if size > DEFAULT_CONNECTOR_CALL_BUDGET_BYTES:
+        raise PublishStateError(
+            f"publish request metadata needs a {size}-byte Connector call, exceeding "
+            f"the fixed {DEFAULT_CONNECTOR_CALL_BUDGET_BYTES}-byte normal budget"
+        )
+    submit_path = connector_dir / "submit-request.json"
+    submit_path.write_text(
+        json.dumps(submit_packet, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    session["phase"] = "submit-request"
+    session["submit_request_packet"] = str(submit_path)
+    session["upload_packets"] = []
+    session["payload_parts"] = payload_parts
+    _write_active_session(repo, session)
+    print(
+        json.dumps(
+            {
+                "entrypoint": "gateway-submit",
+                "request_id": session["request_id"],
+                "phase": "submit-request",
+                "verified_payload_part_count": len(payload_parts),
+                "connector_action": _packet_action_summary(str(submit_path)),
+                "connector_action_selection_is_not_a_decision": True,
+                "execute_packet_action_exactly": True,
+                "remote_receipt_path": session["remote_receipt_path"],
+                "after_gateway_success": (
+                    "observe the target branch HEAD once and run gateway-complete; "
+                    "do not fetch or rewrite payload data"
+                ),
+                "verified": True,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_gateway_complete(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    session = _read_active_session(repo)
+    if session["phase"] != "submit-request":
+        raise PublishStateError(
+            "Gateway request has not reached submit-request phase; verify payload uploads "
+            "with gateway-submit first"
+        )
+    observed = str(args.target_remote_head).lower()
+    _require_hex_sha(observed, name="target remote HEAD")
+    expected = str(session["publish_commit"]).lower()
+    if observed != expected:
+        raise PublishStateError(
+            "target branch has not reached the deterministic publish commit: "
+            f"expected={expected} actual={observed}; keep the active session and inspect Gateway status"
+        )
+    state = _read_state(repo)
+    if session["target_branch"] == "develop" and state["remote_commit"] != session["base_sha"]:
+        raise PublishStateError(
+            "recorded develop publish base changed during the active session: "
+            f"session={session['base_sha']} state={state['remote_commit']}"
+        )
+    local_target = str(session["local_target_commit"])
+    local_tree = _git("rev-parse", f"{local_target}^{{tree}}", cwd=repo)
+    if local_tree != session["target_tree"]:
+        raise PublishStateError(
+            "active session target tree no longer matches its local target commit"
+        )
+    update_state = session["target_branch"] == "develop"
+    if update_state:
+        _write_state(repo, observed, str(session["target_tree"]), local_target)
+    request_id = session["request_id"]
+    target_branch = session["target_branch"]
+    _clear_active_session(repo)
+    print(
+        json.dumps(
+            {
+                "entrypoint": "gateway-complete",
+                "request_id": request_id,
+                "target_branch": target_branch,
+                "remote_commit": observed,
+                "remote_tree": local_tree,
+                "local_head": local_target,
+                "publish_state_updated": update_state,
+                "develop_publish_state_unchanged": target_branch == "temp",
+                "active_session_cleared": True,
+                "verified": True,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_gateway_reconcile(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    if _active_session_path(repo).exists():
+        raise PublishStateError(
+            "cannot reconcile while a Gateway session is active; finish or inspect that session first"
+        )
+    state = _read_state(repo)
+    observed = str(args.target_remote_head).lower()
+    _require_hex_sha(observed, name="target remote HEAD")
+    local_target = _git("rev-parse", f"{args.target_ref}^{{commit}}", cwd=repo)
+    target_tree = _git("rev-parse", f"{args.target_ref}^{{tree}}", cwd=repo)
+    resolved_message = (
+        args.message
+        if args.message is not None
+        else _default_message(repo, state, args.target_ref)
+    )
+    expected = _create_publish_commit(
+        repo, state["remote_commit"], target_tree, _message_bytes(resolved_message)
+    )
+    if observed != expected:
+        raise PublishStateError(
+            "observed develop HEAD is not the deterministic publish commit for the recorded base "
+            "and selected local checkpoint: "
+            f"expected={expected} actual={observed}"
+        )
+    _write_state(repo, observed, target_tree, local_target)
+    print(
+        json.dumps(
+            {
+                "entrypoint": "gateway-reconcile",
+                "previous_remote_commit": state["remote_commit"],
+                "remote_commit": observed,
+                "remote_tree": target_tree,
+                "local_head": local_target,
+                "publish_state_updated": True,
+                "verified": True,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_gateway_status(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    state = _read_state(repo)
+    active = None
+    if _active_session_path(repo).exists():
+        active = _read_active_session(repo)
+    print(
+        json.dumps(
+            {
+                "publish_state": state,
+                "active_session": active,
+                "working_tree_clean": _working_tree_clean(repo),
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -875,7 +1408,8 @@ def cmd_native_publish(args: argparse.Namespace) -> int:
             "native publish remote tree verification failed: "
             f"local={target_tree} remote={remote_tree_after}"
         )
-    _write_state(repo, published_commit, target_tree, target_commit)
+    if args.target_branch == "develop":
+        _write_state(repo, published_commit, target_tree, target_commit)
     print(
         json.dumps(
             {
@@ -886,6 +1420,7 @@ def cmd_native_publish(args: argparse.Namespace) -> int:
                 "published_commit": published_commit,
                 "published_tree": target_tree,
                 "local_head": target_commit,
+                "publish_state_updated": args.target_branch == "develop",
                 "working_tree_clean": _working_tree_clean(repo),
                 "uncommitted_changes_excluded": not _working_tree_clean(repo),
                 "checks": checks,
@@ -971,13 +1506,17 @@ def _import_receipt_commit_object(repo: Path, receipt: dict[str, object]) -> dic
     }
 
 
-def cmd_record(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
+def _record_publish(
+    repo: Path,
+    *,
+    manifest: Path,
+    receipt_path: Path,
+    update_state: bool = True,
+) -> dict[str, object]:
     state = _read_state(repo)
-    manifest = Path(args.manifest).resolve()
     verified = _verify_prepared_request(repo, manifest)
     request = _read_prepared_request(manifest)
-    receipt = _read_publish_receipt(Path(args.receipt).resolve())
+    receipt = _read_publish_receipt(receipt_path)
     local_head = str(request["local_target_commit"])
     _require_commit_object(repo, local_head)
     local_tree = _git("rev-parse", f"{local_head}^{{tree}}", cwd=repo)
@@ -988,30 +1527,83 @@ def cmd_record(args: argparse.Namespace) -> int:
         "request_verified": bool(verified["verified"]),
         "receipt_request_matches_manifest": receipt["request_id"] == request["request_id"],
         "receipt_branch_matches_manifest": receipt["target_branch"] == request["target_branch"],
-        "receipt_base_matches_recorded_remote": receipt["base_commit"] == state["remote_commit"],
         "receipt_base_matches_manifest": receipt["base_commit"] == request["base_sha"],
         "receipt_target_matches_manifest": receipt["target_tree"] == request["target_tree"],
         "published_commit_matches_manifest": receipt["published_commit"] == request["publish_commit"],
         "published_tree_matches_receipt_target": remote_tree == receipt["target_tree"],
         "published_tree_matches_local_tree": remote_tree == local_tree,
         "local_ref_matches_prepared_target": local_head == request["local_target_commit"],
-        "remote_commit_advanced": remote_commit != state["remote_commit"],
+        "remote_commit_advanced": remote_commit != request["base_sha"],
     }
+    if update_state:
+        checks["receipt_base_matches_recorded_remote"] = (
+            receipt["base_commit"] == state["remote_commit"]
+        )
     checks.update(receipt_object_checks)
     failed = [name for name, passed in checks.items() if not passed]
     if failed:
         raise PublishStateError("publish receipt verification failed: " + ", ".join(failed))
-    _write_state(repo, remote_commit, remote_tree, local_head)
+    if update_state:
+        _write_state(repo, remote_commit, remote_tree, local_head)
+    return {
+        "remote_commit": remote_commit,
+        "remote_tree": remote_tree,
+        "local_head": local_head,
+        "publish_state_updated": update_state,
+        "working_tree_clean": _working_tree_clean(repo),
+        "uncommitted_changes_excluded": not _working_tree_clean(repo),
+        "checks": checks,
+        "verified": all(checks.values()),
+    }
+
+
+def cmd_gateway_record(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    session = _read_active_session(repo)
+    if session["phase"] != "submit-request":
+        raise PublishStateError(
+            "Gateway request has not reached submit-request phase; "
+            "finish payload uploads with gateway-submit first"
+        )
+    recorded = _record_publish(
+        repo,
+        manifest=Path(str(session["manifest"])),
+        receipt_path=Path(args.receipt).resolve(),
+        update_state=session["target_branch"] == "develop",
+    )
+    request_id = session["request_id"]
+    _clear_active_session(repo)
+    recorded.update(
+        {
+            "entrypoint": "gateway-record",
+            "request_id": request_id,
+            "active_session_cleared": True,
+            "develop_publish_state_unchanged": session["target_branch"] == "temp",
+        }
+    )
+    print(json.dumps(recorded, indent=2))
+    return 0
+
+
+def cmd_gateway_abort(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    session = _read_active_session(repo)
+    if args.request_id != session["request_id"]:
+        raise PublishStateError(
+            "gateway-abort request id does not match the active session: "
+            f"active={session['request_id']} provided={args.request_id}"
+        )
+    _clear_active_session(repo)
     print(
         json.dumps(
             {
-                "remote_commit": remote_commit,
-                "remote_tree": remote_tree,
-                "local_head": local_head,
-                "working_tree_clean": _working_tree_clean(repo),
-                "uncommitted_changes_excluded": not _working_tree_clean(repo),
-                "checks": checks,
-                "verified": all(checks.values()),
+                "entrypoint": "gateway-abort",
+                "request_id": args.request_id,
+                "active_session_cleared": True,
+                "note": (
+                    "This only discards local helper state. Use it only after confirming the "
+                    "request was not submitted or cannot still publish."
+                ),
             },
             indent=2,
         )
@@ -1046,44 +1638,85 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--target-ref", default="HEAD")
     plan.set_defaults(func=cmd_plan)
 
-    prepare = sub.add_parser("prepare", help="generate one verified Git bundle publish request")
-    prepare.add_argument(
+    gateway_begin = sub.add_parser(
+        "gateway-begin",
+        help=(
+            "prepare the exact target and emit the only allowed Connector action phase for "
+            "the standard Publish Gateway path"
+        ),
+    )
+    gateway_begin.add_argument(
         "--target-branch",
         choices=("develop", "temp"),
         default="develop",
         help="develop is standard; temp is only for explicitly requested isolated validation",
     )
-    prepare.add_argument("--target-ref", default="HEAD")
-    prepare.add_argument("--message")
-    prepare.add_argument(
-        "--connector-call-budget-bytes",
-        type=int,
-        default=DEFAULT_CONNECTOR_CALL_BUDGET_BYTES,
-        help=f"verified serialized Connector action budget (default: {DEFAULT_CONNECTOR_CALL_BUDGET_BYTES})",
+    gateway_begin.add_argument(
+        "--target-ref",
+        required=True,
+        help="committed local checkpoint to publish; selection of the responsibility boundary is explicit",
     )
-    prepare.add_argument("--output", required=True)
-    prepare.set_defaults(func=cmd_prepare)
-
-    connector_plan = sub.add_parser(
-        "connector-plan",
-        help="generate minimum-call Connector packets; Gateway performs commit/ref publication after verification",
+    gateway_begin.add_argument(
+        "--target-remote-head",
+        required=True,
+        help="the single target-branch HEAD observation made immediately before publish",
     )
-    connector_plan.add_argument("--manifest", required=True)
-    connector_plan.add_argument("--github-repository", required=True)
-    connector_plan.add_argument("--target-remote-head", required=True)
-    connector_plan.add_argument("--publish-branch", default="publish")
-    connector_plan.add_argument("--output-dir")
-    connector_plan.add_argument("--connector-call-budget-bytes", type=int)
-    connector_plan.set_defaults(func=cmd_connector_plan)
+    gateway_begin.add_argument("--message")
+    gateway_begin.set_defaults(func=cmd_gateway_begin)
 
-    verify = sub.add_parser("verify", help="re-run local verification of a prepared request")
-    verify.add_argument("--manifest", required=True)
-    verify.set_defaults(func=cmd_verify)
+    gateway_submit = sub.add_parser(
+        "gateway-submit",
+        help=(
+            "verify the blob SHAs returned by Connector uploads, then emit the final small request action"
+        ),
+    )
+    gateway_submit.add_argument(
+        "--uploaded-blob-sha",
+        action="append",
+        required=True,
+        help="blob SHA returned by each helper-specified GitHub.create_blob action; repeat once per upload",
+    )
+    gateway_submit.set_defaults(func=cmd_gateway_submit)
 
-    record = sub.add_parser("record", help="verify a Gateway receipt and advance recorded remote state")
-    record.add_argument("--manifest", required=True)
-    record.add_argument("--receipt", required=True)
-    record.set_defaults(func=cmd_record)
+    gateway_complete = sub.add_parser(
+        "gateway-complete",
+        help="verify the observed target HEAD equals the deterministic publish commit and close the session",
+    )
+    gateway_complete.add_argument(
+        "--target-remote-head",
+        required=True,
+        help="target branch HEAD observed after the Gateway has processed the request",
+    )
+    gateway_complete.set_defaults(func=cmd_gateway_complete)
+
+    gateway_reconcile = sub.add_parser(
+        "gateway-reconcile",
+        help="repair a missed develop state handoff only when remote HEAD equals the deterministic expected publish commit",
+    )
+    gateway_reconcile.add_argument("--target-ref", required=True)
+    gateway_reconcile.add_argument("--target-remote-head", required=True)
+    gateway_reconcile.add_argument("--message")
+    gateway_reconcile.set_defaults(func=cmd_gateway_reconcile)
+
+    gateway_record = sub.add_parser(
+        "gateway-record",
+        help="verify the Gateway receipt for the active session and advance publish state",
+    )
+    gateway_record.add_argument("--receipt", required=True)
+    gateway_record.set_defaults(func=cmd_gateway_record)
+
+    gateway_status = sub.add_parser(
+        "gateway-status",
+        help="show recorded publish state and the active Gateway session without mutation",
+    )
+    gateway_status.set_defaults(func=cmd_gateway_status)
+
+    gateway_abort = sub.add_parser(
+        "gateway-abort",
+        help="discard an unsubmitted or irrecoverably failed active Gateway session",
+    )
+    gateway_abort.add_argument("--request-id", required=True)
+    gateway_abort.set_defaults(func=cmd_gateway_abort)
     return parser
 
 

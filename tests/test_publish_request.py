@@ -77,7 +77,50 @@ def make_receipt(repo: Path, manifest: Path) -> dict[str, object]:
     }
 
 
-def test_prepare_bundle_recreates_exact_target_and_record_advances_baseline(tmp_path: Path) -> None:
+def load_module():
+    spec = importlib.util.spec_from_file_location("publish_request", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def active_manifest(repo: Path) -> Path:
+    return repo / ".git" / "space-idle-publish-active" / "manifest.json"
+
+
+def gateway_begin(
+    repo: Path,
+    remote_head: str,
+    *,
+    target_ref: str = "HEAD",
+    target_branch: str = "develop",
+) -> dict[str, object]:
+    return json.loads(
+        run_request(
+            repo,
+            "gateway-begin",
+            "--target-ref",
+            target_ref,
+            "--target-branch",
+            target_branch,
+            "--target-remote-head",
+            remote_head,
+        )
+    )
+
+
+def gateway_submit_expected(repo: Path) -> dict[str, object]:
+    session_path = repo / ".git" / "space-idle-publish-active" / "session.json"
+    session = json.loads(session_path.read_text(encoding="utf-8"))
+    args: list[str] = ["gateway-submit"]
+    for packet_name in session["upload_packets"]:
+        packet = json.loads(Path(packet_name).read_text(encoding="utf-8"))
+        args.extend(["--uploaded-blob-sha", packet["expected_blob_git_oid"]])
+    return json.loads(run_request(repo, *args))
+
+
+def test_gateway_begin_recreates_exact_target_and_record_advances_baseline(tmp_path: Path) -> None:
     repo, base_commit, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("target\n", encoding="utf-8")
     (repo / "new.txt").write_text("new\n", encoding="utf-8")
@@ -85,67 +128,61 @@ def test_prepare_bundle_recreates_exact_target_and_record_advances_baseline(tmp_
     local_target = git(repo, "rev-parse", "HEAD")
     target_tree = git(repo, "rev-parse", "HEAD^{tree}")
 
-    manifest = tmp_path / "request.json"
-    meta = json.loads(run_request(repo, "prepare", "--output", str(manifest)))
+    meta = gateway_begin(repo, base_commit)
+    manifest = active_manifest(repo)
     request = prepared(manifest)
+    assert meta["entrypoint"] == "gateway-begin"
+    assert meta["strategy"] == "verified-blobs-then-request-file"
+    assert meta["phase"] == "upload-payload-parts"
+    assert len(meta["connector_actions"]) >= 1
+    assert all(row["action"] == "GitHub.create_blob" for row in meta["connector_actions"])
     assert request["version"] == 5
     assert request["target_branch"] == "develop"
     assert request["base_sha"] == base_commit
     assert request["target_tree"] == target_tree
     assert request["local_target_commit"] == local_target
-    assert request["payload_encoding"] == "git-bundle-base64"
     payload = base64.b64decode(str(request["payload_b64"]), validate=True)
     assert hashlib.sha256(payload).hexdigest() == request["payload_sha256"]
-    assert meta["verified"] is True
-    assert json.loads(run_request(repo, "verify", "--manifest", str(manifest)))["verified"] is True
 
     publish_commit = str(request["publish_commit"])
     assert git(repo, "rev-parse", f"{publish_commit}^") == base_commit
     assert git(repo, "rev-parse", f"{publish_commit}^{{tree}}") == target_tree
 
+    submitted = gateway_submit_expected(repo)
+    assert submitted["connector_action"]["action"] == "GitHub.create_file"
     receipt_path = tmp_path / "receipt.json"
     receipt_path.write_text(json.dumps(make_receipt(repo, manifest)), encoding="utf-8")
-    recorded = json.loads(
-        run_request(
-            repo,
-            "record",
-            "--manifest",
-            str(manifest),
-            "--receipt",
-            str(receipt_path),
-        )
-    )
+    recorded = json.loads(run_request(repo, "gateway-record", "--receipt", str(receipt_path)))
     assert recorded["verified"] is True
+    assert recorded["active_session_cleared"] is True
     assert recorded["remote_commit"] == publish_commit
     assert recorded["remote_tree"] == target_tree
+    assert not (repo / ".git" / "space-idle-publish-active").exists()
 
     (repo / "new.txt").write_text("newer\n", encoding="utf-8")
     commit_all(repo, "next")
-    next_manifest = tmp_path / "next.json"
-    run_request(repo, "prepare", "--output", str(next_manifest))
-    assert prepared(next_manifest)["base_sha"] == publish_commit
+    next_meta = gateway_begin(repo, publish_commit)
+    assert prepared(active_manifest(repo))["base_sha"] == publish_commit
+    assert next_meta["verified"] is True
 
 
-def test_record_uses_manifest_target_when_local_head_has_advanced(tmp_path: Path) -> None:
-    repo, _, _ = init_repo(tmp_path)
+def test_gateway_record_uses_session_target_when_local_head_has_advanced(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("checkpoint\n", encoding="utf-8")
     commit_all(repo, "checkpoint")
     checkpoint = git(repo, "rev-parse", "HEAD")
     checkpoint_tree = git(repo, "rev-parse", "HEAD^{tree}")
-    manifest = tmp_path / "request.json"
-    run_request(repo, "prepare", "--output", str(manifest))
-    request = prepared(manifest)
+    gateway_begin(repo, base_commit, target_ref=checkpoint)
+    manifest = active_manifest(repo)
 
     (repo / "later.txt").write_text("next work\n", encoding="utf-8")
     commit_all(repo, "next local work")
     assert git(repo, "rev-parse", "HEAD") != checkpoint
 
+    gateway_submit_expected(repo)
     receipt_path = tmp_path / "receipt.json"
     receipt_path.write_text(json.dumps(make_receipt(repo, manifest)), encoding="utf-8")
-    recorded = json.loads(
-        run_request(repo, "record", "--manifest", str(manifest), "--receipt", str(receipt_path))
-    )
-    assert recorded["verified"] is True
+    recorded = json.loads(run_request(repo, "gateway-record", "--receipt", str(receipt_path)))
     assert recorded["local_head"] == checkpoint
     assert recorded["remote_tree"] == checkpoint_tree
     state = json.loads((repo / ".git" / "space-idle-publish-state.json").read_text(encoding="utf-8"))
@@ -157,11 +194,26 @@ def test_bundle_payload_is_deterministic_for_same_base_tree_and_message(tmp_path
     repo, _, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("target\n" * 200, encoding="utf-8")
     commit_all(repo, "same checkpoint")
+    module = load_module()
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"
-    run_request(repo, "prepare", "--output", str(first))
+    module._prepare_request(
+        repo,
+        target_branch="develop",
+        target_ref="HEAD",
+        message_text=None,
+        connector_call_budget_bytes=module.DEFAULT_CONNECTOR_CALL_BUDGET_BYTES,
+        output=first,
+    )
     time.sleep(1.05)
-    run_request(repo, "prepare", "--output", str(second))
+    module._prepare_request(
+        repo,
+        target_branch="develop",
+        target_ref="HEAD",
+        message_text=None,
+        connector_call_budget_bytes=module.DEFAULT_CONNECTOR_CALL_BUDGET_BYTES,
+        output=second,
+    )
     a = prepared(first)
     b = prepared(second)
     assert a["request_id"] != b["request_id"]
@@ -170,24 +222,30 @@ def test_bundle_payload_is_deterministic_for_same_base_tree_and_message(tmp_path
     assert a["payload_b64"] == b["payload_b64"]
 
 
-def test_verify_rejects_corrupted_payload(tmp_path: Path) -> None:
+def test_internal_verify_rejects_corrupted_payload(tmp_path: Path) -> None:
     repo, _, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("changed\n", encoding="utf-8")
     commit_all(repo, "change")
+    module = load_module()
     manifest = tmp_path / "request.json"
-    run_request(repo, "prepare", "--output", str(manifest))
+    module._prepare_request(
+        repo,
+        target_branch="develop",
+        target_ref="HEAD",
+        message_text=None,
+        connector_call_budget_bytes=module.DEFAULT_CONNECTOR_CALL_BUDGET_BYTES,
+        output=manifest,
+    )
     request = prepared(manifest)
     payload = str(request["payload_b64"])
     request["payload_b64"] = ("A" if payload[0] != "A" else "B") + payload[1:]
     manifest.write_text(json.dumps(request), encoding="utf-8")
-    result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--repo", str(repo), "verify", "--manifest", str(manifest)],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert result.returncode != 0
-    assert "sha256 mismatch" in result.stderr or "invalid publish bundle" in result.stderr
+    try:
+        module._verify_prepared_request(repo, manifest)
+    except module.PublishStateError as exc:
+        assert "sha256 mismatch" in str(exc) or "invalid publish bundle" in str(exc)
+    else:
+        raise AssertionError("corrupted publish payload was accepted")
 
 
 def test_plan_reports_combined_and_sequential_bundle_transport(tmp_path: Path) -> None:
@@ -207,152 +265,161 @@ def test_plan_reports_combined_and_sequential_bundle_transport(tmp_path: Path) -
     assert plan["combined_request"]["target_tree"] == git(repo, "rev-parse", "HEAD^{tree}")
 
 
-def test_connector_plan_uses_one_request_file_when_payload_fits(tmp_path: Path) -> None:
+def test_gateway_begin_uses_verified_blob_before_small_request(tmp_path: Path) -> None:
     repo, base_commit, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("connector transport\n" * 400, encoding="utf-8")
     commit_all(repo, "connector transport")
-    manifest = tmp_path / "request.json"
-    run_request(repo, "prepare", "--output", str(manifest))
-    plan_dir = tmp_path / "connector"
-    plan = json.loads(
-        run_request(
-            repo,
-            "connector-plan",
-            "--manifest",
-            str(manifest),
-            "--github-repository",
-            "owner/repo",
-            "--target-remote-head",
-            base_commit,
-            "--output-dir",
-            str(plan_dir),
-        )
+    plan = gateway_begin(repo, base_commit)
+    assert plan["strategy"] == "verified-blobs-then-request-file"
+    assert plan["phase"] == "upload-payload-parts"
+    assert plan["initial_connector_action_budget_bytes"] == 96 * 1024
+    assert plan["adaptive_split_on_blob_sha_mismatch"] is True
+    assert plan["metadata_call_budget_bytes"] == 96 * 1024
+    assert plan["connector_action_selection_is_not_a_decision"] is True
+    assert plan["execute_packet_action_exactly"] is True
+    assert len(plan["connector_actions"]) == 1
+    action = plan["connector_actions"][0]
+    assert action["action"] == "GitHub.create_blob"
+    assert action["connector_namespace"] == "GitHub"
+    assert action["connector_function"] == "create_blob"
+    packet = json.loads(Path(action["packet"]).read_text(encoding="utf-8"))
+    assert packet["action_args"]["repository_full_name"] == "naro0216n-collab/Space-Idle"
+    submitted = gateway_submit_expected(repo)
+    assert submitted["connector_action"]["action"] == "GitHub.create_file"
+    assert submitted["connector_action"]["connector_namespace"] == "GitHub"
+    assert submitted["connector_action"]["connector_function"] == "create_file"
+    submit_packet = json.loads(
+        Path(submitted["connector_action"]["packet"]).read_text(encoding="utf-8")
     )
-    assert plan["strategy"] == "single-request-file"
-    assert plan["upload_call_count"] == 0
-    assert plan["normal_remote_target_probe_calls"] == 1
-    assert plan["normal_publish_transport_probe_calls"] == 0
-    assert plan["normal_github_mutation_calls"] == 1
-    assert plan["normal_github_calls_before_gateway"] == 2
-    assert plan["normal_sha_handoffs"] == 0
-    assert plan["normal_per_upload_verification_calls"] == 0
-    assert plan["gateway_completes_target_publish"] is True
-
-    packet = json.loads(Path(plan["submit_request_packet"]).read_text(encoding="utf-8"))
-    assert packet["action"] == "GitHub.create_file"
-    assert packet["action_args"]["branch"] == "publish"
-    assert packet["action_args"]["path"].startswith(".publish/requests/")
-    transport_request = json.loads(packet["action_args"]["content"])
-    assert transport_request["version"] == 5
-    assert transport_request["payload_source"]["kind"] == "inline"
+    transport_request = json.loads(submit_packet["action_args"]["content"])
+    assert transport_request["payload_source"]["kind"] == "git-blobs"
     assert transport_request["base_sha"] == base_commit
 
 
-def test_fleet_sized_base64_payload_fits_one_request_file_call(tmp_path: Path) -> None:
-    spec = importlib.util.spec_from_file_location("publish_request", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-
-    payload = "A" * 81_780
-    prepared_request = {
-        "request_id": "1" * 32,
-        "target_branch": "develop",
-        "base_sha": "2" * 40,
-        "target_tree": "3" * 40,
-        "publish_commit": "4" * 40,
-        "payload_sha256": "5" * 64,
-        "payload_b64": payload,
-    }
-    transport = module._transport_request(
-        prepared_request, {"kind": "inline", "data": payload}
+def test_gateway_begin_starts_at_connector_budget_and_defers_failed_parts_to_sha_handshake(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("\n".join(hashlib.sha256(str(i).encode()).hexdigest() for i in range(400)) + "\n", encoding="utf-8")
+    commit_all(repo, "adaptive bridge")
+    plan = gateway_begin(repo, base_commit)
+    assert plan["initial_connector_action_budget_bytes"] == 96 * 1024
+    assert plan["adaptive_split_on_blob_sha_mismatch"] is True
+    assert len(plan["connector_actions"]) == 1
+    module = load_module()
+    assert all(
+        module._connector_call_bytes(json.loads(Path(action["packet"]).read_text(encoding="utf-8"))) <= 96 * 1024
+        for action in plan["connector_actions"]
     )
-    packet = module._connector_submit_packet("naro0216n-collab/Space-Idle", "publish", transport)
-    assert module._connector_call_bytes(packet) < 96 * 1024
 
 
-def test_connector_plan_splits_overflow_into_independent_git_blobs(tmp_path: Path) -> None:
+def test_gateway_submit_resplits_only_mismatched_payload_part(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("adaptive split\n" * 40, encoding="utf-8")
+    commit_all(repo, "adaptive split")
+    plan = gateway_begin(repo, base_commit)
+    assert len(plan["connector_actions"]) == 1
+    result = json.loads(run_request(repo, "gateway-submit", "--uploaded-blob-sha", "0" * 40))
+    assert result["phase"] == "upload-payload-parts"
+    assert result["request_action_generated"] is False
+    assert result["resplit_mismatched_parts"] == 1
+    assert len(result["connector_actions"]) == 2
+    submitted = gateway_submit_expected(repo)
+    assert submitted["phase"] == "submit-request"
+    assert submitted["connector_action"]["action"] == "GitHub.create_file"
+
+
+def test_overflow_begin_emits_only_blob_actions_and_submit_is_separate(tmp_path: Path) -> None:
     repo, base_commit, _ = init_repo(tmp_path)
     content = "\n".join(
         f"{index:06d}:{hashlib.sha256(str(index).encode()).hexdigest()}" for index in range(3000)
     )
     (repo / "payload.txt").write_text(content + "\n", encoding="utf-8")
     commit_all(repo, "large connector transport")
-    manifest = tmp_path / "request.json"
-    run_request(
+    module = load_module()
+    active_dir = repo / ".git" / "space-idle-publish-active"
+    active_dir.mkdir(parents=True)
+    manifest = active_dir / "manifest.json"
+    module._prepare_request(
         repo,
-        "prepare",
-        "--output",
-        str(manifest),
-        "--connector-call-budget-bytes",
-        "20000",
+        target_branch="develop",
+        target_ref="HEAD",
+        message_text=None,
+        connector_call_budget_bytes=20_000,
+        output=manifest,
     )
-    plan_dir = tmp_path / "connector"
-    plan = json.loads(
-        run_request(
-            repo,
-            "connector-plan",
-            "--manifest",
-            str(manifest),
-            "--github-repository",
-            "owner/repo",
-            "--target-remote-head",
-            base_commit,
-            "--output-dir",
-            str(plan_dir),
-        )
+    connector_dir = active_dir / "connector"
+    plan = module._build_connector_plan(
+        repo,
+        manifest=manifest,
+        github_repository=module.GITHUB_REPOSITORY,
+        target_remote_head=base_commit,
+        publish_branch=module.PUBLISH_BRANCH,
+        output_dir=connector_dir,
+        connector_call_budget_bytes=20_000,
+        defer_submit_for_split=True,
+        always_blob=True,
     )
-    assert plan["strategy"] == "parallel-blobs-then-request-file"
-    assert plan["upload_call_count"] >= 2
-    assert plan["connector_uploads_may_run_in_parallel"] is True
-    assert plan["returned_upload_blob_shas_are_not_required"] is True
-    assert plan["normal_github_mutation_calls"] == plan["upload_call_count"] + 1
-    assert plan["normal_github_calls_before_gateway"] == plan["upload_call_count"] + 2
-    assert plan["normal_sha_handoffs"] == 0
-
-    oids = []
+    assert plan["strategy"] == "verified-blobs-then-request-file"
+    assert plan["submit_request_packet"] is None
+    assert plan["submit_deferred_until_upload_phase_complete"] is True
+    assert not (connector_dir / "submit-request.json").exists()
+    assert len(plan["upload_packets"]) >= 2
     for packet_name in plan["upload_packets"]:
         packet = json.loads(Path(packet_name).read_text(encoding="utf-8"))
         assert packet["action"] == "GitHub.create_blob"
-        compact_size = len(json.dumps(packet["action_args"], separators=(",", ":")).encode("utf-8"))
-        assert compact_size <= 20_000
-        raw = packet["action_args"]["content"].encode("ascii")
-        actual = subprocess.run(
-            ["git", "hash-object", "--stdin"],
-            cwd=repo,
-            input=raw,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        ).stdout.decode().strip()
-        assert actual == packet["expected_blob_git_oid"]
-        oids.append(actual)
 
-    submit = json.loads(Path(plan["submit_request_packet"]).read_text(encoding="utf-8"))
-    assert submit["action"] == "GitHub.create_file"
-    assert len(json.dumps(submit["action_args"], separators=(",", ":")).encode("utf-8")) <= 20_000
-    transport = json.loads(submit["action_args"]["content"])
-    assert transport["payload_source"]["kind"] == "git-blobs"
-    assert [part["oid"] for part in transport["payload_source"]["parts"]] == oids
+    prepared_request = prepared(manifest)
+    session = {
+        "version": 2,
+        "request_id": prepared_request["request_id"],
+        "manifest": str(manifest),
+        "connector_dir": str(connector_dir),
+        "strategy": plan["strategy"],
+        "phase": "upload-payload-parts",
+        "target_branch": prepared_request["target_branch"],
+        "base_sha": prepared_request["base_sha"],
+        "target_tree": prepared_request["target_tree"],
+        "publish_commit": prepared_request["publish_commit"],
+        "local_target_commit": prepared_request["local_target_commit"],
+        "remote_request_path": plan["remote_request_path"],
+        "remote_receipt_path": plan["remote_receipt_path"],
+        "upload_packets": list(plan["upload_packets"]),
+        "payload_parts": [
+            {
+                "packet": packet_name,
+                "oid": json.loads(Path(packet_name).read_text(encoding="utf-8"))["expected_blob_git_oid"],
+                "chars": len(json.loads(Path(packet_name).read_text(encoding="utf-8"))["action_args"]["content"]),
+                "confirmed_sha": None,
+            }
+            for packet_name in plan["upload_packets"]
+        ],
+        "next_packet_index": len(plan["upload_packets"]),
+        "submit_request_packet": None,
+    }
+    (active_dir / "session.json").write_text(json.dumps(session), encoding="utf-8")
+    submit_args = ["gateway-submit"]
+    for packet_name in session["upload_packets"]:
+        packet = json.loads(Path(packet_name).read_text(encoding="utf-8"))
+        submit_args.extend(["--uploaded-blob-sha", packet["expected_blob_git_oid"]])
+    submitted = json.loads(run_request(repo, *submit_args))
+    assert submitted["connector_action"]["action"] == "GitHub.create_file"
+    assert (connector_dir / "submit-request.json").exists()
+    updated_session = json.loads((active_dir / "session.json").read_text(encoding="utf-8"))
+    assert updated_session["phase"] == "submit-request"
 
 
-def test_connector_plan_rejects_target_head_mismatch_before_transport(tmp_path: Path) -> None:
+def test_gateway_begin_rejects_target_head_mismatch_before_transport(tmp_path: Path) -> None:
     repo, _, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("changed\n", encoding="utf-8")
     commit_all(repo, "change")
-    manifest = tmp_path / "request.json"
-    run_request(repo, "prepare", "--output", str(manifest))
     result = subprocess.run(
         [
             sys.executable,
             str(SCRIPT),
             "--repo",
             str(repo),
-            "connector-plan",
-            "--manifest",
-            str(manifest),
-            "--github-repository",
-            "owner/repo",
+            "gateway-begin",
+            "--target-ref",
+            "HEAD",
             "--target-remote-head",
             "3" * 40,
         ],
@@ -361,48 +428,274 @@ def test_connector_plan_rejects_target_head_mismatch_before_transport(tmp_path: 
         stderr=subprocess.PIPE,
     )
     assert result.returncode != 0
-    assert "target branch HEAD moved since prepare" in result.stderr
+    assert "develop HEAD moved" in result.stderr
+    assert not (repo / ".git" / "space-idle-publish-active").exists()
 
 
-def test_standard_cli_has_no_patch_or_manual_connector_fallbacks() -> None:
+def test_gateway_begin_rejects_second_active_session(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("changed\n", encoding="utf-8")
+    commit_all(repo, "change")
+    first = gateway_begin(repo, base_commit)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "gateway-begin",
+            "--target-ref",
+            "HEAD",
+            "--target-remote-head",
+            base_commit,
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert result.returncode != 0
+    assert first["request_id"] in result.stderr
+    assert "active Gateway publish session" in result.stderr
+
+
+def test_standard_cli_has_one_gateway_entry_and_no_low_level_connector_knobs() -> None:
     top_help = subprocess.run(
         [sys.executable, str(SCRIPT), "--help"],
         check=True,
         text=True,
         stdout=subprocess.PIPE,
     ).stdout
+    assert "gateway-begin" in top_help
+    assert "gateway-submit" in top_help
+    assert "gateway-record" in top_help
+    assert "gateway-complete" in top_help
+    assert "gateway-reconcile" in top_help
+    command_set = top_help.split("{", 1)[1].split("}", 1)[0].split(",")
+    assert "prepare" not in command_set
+    assert "connector-plan" not in command_set
+    assert "verify" not in command_set
+    assert "record" not in command_set
     assert "connector-publish-step" not in top_help
-    assert "verify-transport" not in top_help
     assert "patch" not in top_help.lower()
 
-    plan_help = subprocess.run(
-        [sys.executable, str(SCRIPT), "plan", "--help"],
+    begin_help = subprocess.run(
+        [sys.executable, str(SCRIPT), "gateway-begin", "--help"],
         check=True,
         text=True,
         stdout=subprocess.PIPE,
     ).stdout
-    assert "--transport" not in plan_help
-    record_help = subprocess.run(
-        [sys.executable, str(SCRIPT), "record", "--help"],
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-    ).stdout
-    assert "--remote-commit" not in record_help
-    assert "--remote-tree" not in record_help
-    assert "--local-ref" not in record_help
+    assert "--target-ref" in begin_help
+    assert "--target-remote-head" in begin_help
+    assert "--connector-call-budget-bytes" not in begin_help
+    assert "--github-repository" not in begin_help
+    assert "--publish-branch" not in begin_help
+    assert "--output" not in begin_help
 
 
-def test_prepare_defaults_to_develop_and_temp_is_explicit_only(tmp_path: Path) -> None:
-    repo, _, _ = init_repo(tmp_path)
+def test_gateway_begin_defaults_to_develop_and_temp_is_explicit_only(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("changed\n", encoding="utf-8")
     commit_all(repo, "change")
-    standard = tmp_path / "develop.json"
-    isolated = tmp_path / "temp.json"
-    run_request(repo, "prepare", "--output", str(standard))
-    run_request(repo, "prepare", "--target-branch", "temp", "--output", str(isolated))
-    assert prepared(standard)["target_branch"] == "develop"
-    assert prepared(isolated)["target_branch"] == "temp"
+    standard = gateway_begin(repo, base_commit)
+    assert prepared(active_manifest(repo))["target_branch"] == "develop"
+    request_id = standard["request_id"]
+    run_request(repo, "gateway-abort", "--request-id", request_id)
+    isolated = gateway_begin(repo, base_commit, target_branch="temp")
+    assert prepared(active_manifest(repo))["target_branch"] == "temp"
+    assert isolated["target_branch"] == "temp"
+
+
+def test_gateway_begin_temp_uses_observed_temp_head_not_develop_publish_state(tmp_path: Path) -> None:
+    repo, develop_base, develop_tree = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("temp base\n", encoding="utf-8")
+    commit_all(repo, "temp base")
+    temp_base = git(repo, "rev-parse", "HEAD")
+    (repo / "payload.txt").write_text("temp target\n", encoding="utf-8")
+    commit_all(repo, "temp target")
+    target = git(repo, "rev-parse", "HEAD")
+
+    begun = gateway_begin(repo, temp_base, target_ref=target, target_branch="temp")
+    request = prepared(active_manifest(repo))
+    assert begun["target_remote_head"] == temp_base
+    assert request["base_sha"] == temp_base
+    assert git(repo, "rev-parse", f"{request['publish_commit']}^") == temp_base
+
+    gateway_submit_expected(repo)
+    completed = json.loads(
+        run_request(
+            repo,
+            "gateway-complete",
+            "--target-remote-head",
+            str(request["publish_commit"]),
+        )
+    )
+    assert completed["develop_publish_state_unchanged"] is True
+    state = json.loads((repo / ".git" / "space-idle-publish-state.json").read_text(encoding="utf-8"))
+    assert state == {
+        "local_head": develop_base,
+        "remote_commit": develop_base,
+        "remote_tree": develop_tree,
+    }
+
+
+def test_gateway_record_temp_verifies_without_advancing_develop_state(tmp_path: Path) -> None:
+    repo, base_commit, base_tree = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("isolated temp validation\n", encoding="utf-8")
+    commit_all(repo, "temp validation")
+    gateway_begin(repo, base_commit, target_branch="temp")
+    manifest = active_manifest(repo)
+    gateway_submit_expected(repo)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(make_receipt(repo, manifest)), encoding="utf-8")
+
+    recorded = json.loads(run_request(repo, "gateway-record", "--receipt", str(receipt_path)))
+    assert recorded["verified"] is True
+    assert recorded["publish_state_updated"] is False
+    assert recorded["develop_publish_state_unchanged"] is True
+    state = json.loads((repo / ".git" / "space-idle-publish-state.json").read_text(encoding="utf-8"))
+    assert state == {
+        "local_head": base_commit,
+        "remote_commit": base_commit,
+        "remote_tree": base_tree,
+    }
+
+
+def test_gateway_submit_refines_wrong_returned_blob_sha_without_request(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("changed\n", encoding="utf-8")
+    commit_all(repo, "change")
+    gateway_begin(repo, base_commit)
+    result = json.loads(
+        run_request(
+            repo,
+            "gateway-submit",
+            "--uploaded-blob-sha",
+            "1" * 40,
+        )
+    )
+    assert result["phase"] == "upload-payload-parts"
+    assert result["request_action_generated"] is False
+    assert result["resplit_mismatched_parts"] == 1
+    assert len(result["connector_actions"]) == 2
+    session = json.loads(
+        (repo / ".git" / "space-idle-publish-active" / "session.json").read_text(encoding="utf-8")
+    )
+    assert session["phase"] == "upload-payload-parts"
+    assert session["submit_request_packet"] is None
+
+
+def test_gateway_complete_advances_develop_without_receipt_copy(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("changed\n", encoding="utf-8")
+    commit_all(repo, "change")
+    target = git(repo, "rev-parse", "HEAD")
+    target_tree = git(repo, "rev-parse", "HEAD^{tree}")
+    gateway_begin(repo, base_commit)
+    gateway_submit_expected(repo)
+    manifest = prepared(active_manifest(repo))
+    completed = json.loads(
+        run_request(
+            repo,
+            "gateway-complete",
+            "--target-remote-head",
+            str(manifest["publish_commit"]),
+        )
+    )
+    assert completed["verified"] is True
+    assert completed["publish_state_updated"] is True
+    state = json.loads((repo / ".git" / "space-idle-publish-state.json").read_text(encoding="utf-8"))
+    assert state["remote_commit"] == manifest["publish_commit"]
+    assert state["remote_tree"] == target_tree
+    assert state["local_head"] == target
+    assert not (repo / ".git" / "space-idle-publish-active").exists()
+
+
+def test_gateway_complete_temp_uses_observed_temp_base_without_mutating_develop_state(tmp_path: Path) -> None:
+    repo, base_commit, base_tree = init_repo(tmp_path)
+    (repo / "temp-base.txt").write_text("temp base\n", encoding="utf-8")
+    commit_all(repo, "temp base")
+    temp_base = git(repo, "rev-parse", "HEAD")
+    (repo / "payload.txt").write_text("temp target\n", encoding="utf-8")
+    commit_all(repo, "temp target")
+
+    started = gateway_begin(repo, temp_base, target_branch="temp")
+    manifest = prepared(active_manifest(repo))
+    assert started["target_remote_head"] == temp_base
+    assert manifest["base_sha"] == temp_base
+    assert git(repo, "rev-parse", f"{manifest['publish_commit']}^") == temp_base
+
+    gateway_submit_expected(repo)
+    completed = json.loads(
+        run_request(
+            repo,
+            "gateway-complete",
+            "--target-remote-head",
+            str(manifest["publish_commit"]),
+        )
+    )
+    assert completed["develop_publish_state_unchanged"] is True
+    state = json.loads((repo / ".git" / "space-idle-publish-state.json").read_text(encoding="utf-8"))
+    assert state == {
+        "local_head": base_commit,
+        "remote_commit": base_commit,
+        "remote_tree": base_tree,
+    }
+
+
+def test_gateway_record_temp_accepts_temp_base_distinct_from_develop_state(tmp_path: Path) -> None:
+    repo, base_commit, base_tree = init_repo(tmp_path)
+    (repo / "temp-base.txt").write_text("temp base\n", encoding="utf-8")
+    commit_all(repo, "temp base")
+    temp_base = git(repo, "rev-parse", "HEAD")
+    (repo / "payload.txt").write_text("temp target\n", encoding="utf-8")
+    commit_all(repo, "temp target")
+
+    gateway_begin(repo, temp_base, target_branch="temp")
+    manifest_path = active_manifest(repo)
+    gateway_submit_expected(repo)
+    receipt_path = tmp_path / "temp-receipt.json"
+    receipt_path.write_text(json.dumps(make_receipt(repo, manifest_path)), encoding="utf-8")
+    recorded = json.loads(run_request(repo, "gateway-record", "--receipt", str(receipt_path)))
+
+    assert recorded["verified"] is True
+    assert recorded["develop_publish_state_unchanged"] is True
+    state = json.loads((repo / ".git" / "space-idle-publish-state.json").read_text(encoding="utf-8"))
+    assert state == {
+        "local_head": base_commit,
+        "remote_commit": base_commit,
+        "remote_tree": base_tree,
+    }
+
+
+def test_gateway_reconcile_repairs_missed_state_handoff_only_for_expected_commit(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("published already\n", encoding="utf-8")
+    commit_all(repo, "published already")
+    target = git(repo, "rev-parse", "HEAD")
+    target_tree = git(repo, "rev-parse", "HEAD^{tree}")
+    module = load_module()
+    state = module._read_state(repo)
+    expected = module._create_publish_commit(
+        repo,
+        state["remote_commit"],
+        target_tree,
+        module._message_bytes(module._default_message(repo, state, target)),
+    )
+    reconciled = json.loads(
+        run_request(
+            repo,
+            "gateway-reconcile",
+            "--target-ref",
+            target,
+            "--target-remote-head",
+            expected,
+        )
+    )
+    assert reconciled["verified"] is True
+    state_after = json.loads((repo / ".git" / "space-idle-publish-state.json").read_text(encoding="utf-8"))
+    assert state_after["remote_commit"] == expected
+    assert state_after["remote_tree"] == target_tree
+    assert state_after["local_head"] == target
 
 
 def test_gateway_accepts_only_v5_request_files_and_completes_publish_after_verification() -> None:
@@ -523,8 +816,8 @@ def test_native_publish_rejects_remote_head_move_before_mutation(tmp_path: Path)
     assert git(repo, "ls-remote", "--heads", str(remote), "refs/heads/develop").split()[0] == moved_remote
 
 
-def test_prepare_excludes_newer_uncommitted_work(tmp_path: Path) -> None:
-    repo, _, _ = init_repo(tmp_path)
+def test_gateway_begin_excludes_newer_uncommitted_work(tmp_path: Path) -> None:
+    repo, base_commit, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("checkpoint\n", encoding="utf-8")
     commit_all(repo, "checkpoint")
     checkpoint = git(repo, "rev-parse", "HEAD")
@@ -532,21 +825,11 @@ def test_prepare_excludes_newer_uncommitted_work(tmp_path: Path) -> None:
     (repo / "payload.txt").write_text("uncommitted follow-up\n", encoding="utf-8")
     (repo / "later.txt").write_text("not published yet\n", encoding="utf-8")
 
-    manifest = tmp_path / "request.json"
-    result = json.loads(
-        run_request(
-            repo,
-            "prepare",
-            "--target-ref",
-            checkpoint,
-            "--output",
-            str(manifest),
-        )
-    )
+    result = gateway_begin(repo, base_commit, target_ref=checkpoint)
     assert result["target_tree"] == checkpoint_tree
     assert result["local_target_commit"] == checkpoint
-    assert result["working_tree_clean"] is False
-    assert result["uncommitted_changes_excluded"] is True
+    assert result["prepared"]["working_tree_clean"] is False
+    assert result["prepared"]["uncommitted_changes_excluded"] is True
     assert (repo / "payload.txt").read_text(encoding="utf-8") == "uncommitted follow-up\n"
     assert (repo / "later.txt").read_text(encoding="utf-8") == "not published yet\n"
 

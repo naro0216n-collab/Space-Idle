@@ -76,73 +76,69 @@ git diff --check
 
 通常の実装はローカルGitで完結させ、GitHubへの転送だけを固定 `publish` branch上のPublish Gatewayへ委ねる。`publish` はゲーム開発branchではなく、Connector制約下でnative `git push`を代替するtransport control planeである。`temp` は通常publishの中継には使わず、ユーザー指定時またはGateway / workflow自体の隔離検証時だけ使用する。
 
+Connector経路の正常入口は `gateway-begin` に一本化する。`prepare`、`connector-plan`、`verify`、低水準 `record` を個別に組み合わせる手順は公開しない。helperがrequest生成、自己検証、call容量判定、packet生成、active session管理までまとめて行う。
+
 通常publishは次の順序に固定する。
 
 1. ローカル変更を責務としてまとまったcommitにする。publish対象は明示したcommitted `target-ref` のtreeであり、その後にworking treeへ別の未commit作業があっても対象へ混入させない。
-2. `scripts/publish_request.py prepare` で、記録済みremote commitを親、local target treeをtreeに持つ決定論的publish commitを作り、Git bundleへ格納する。生成物はv5 JSON requestで、bundle Base64、payload SHA-256、base commit、target tree、publish commit、local target commitを保持し、生成時にbundle/parent/treeを自己検証する。
-3. publish直前に対象branch HEADを一度だけ取得する。`connector-plan`へ渡し、manifestの `base_sha` と一致しない場合は送信せず原因を調査する。
-4. Connector経路では `connector-plan` が実際のaction引数をcompact JSONへシリアライズしたbytesでcall容量を判定する。request全体が標準96 KiB予算内なら、`.publish/requests/<request-id>.json` を `GitHub.create_file` で1回作成する。unique pathなのでpublish branch HEAD/treeの事前取得は不要で、Contents APIがtransport commit作成とpublish ref更新を一度に行う。
-5. requestが1 callに収まらない場合だけ、bundle Base64をcall予算から逆算した最少数のpartへ自動分割する。各partは独立した `GitHub.create_blob` として並列送信し、localで事前計算したGit blob OIDを最終requestから参照する。upload返却SHAは後続入力にせず、全part送信後に `GitHub.create_file` でrequestを1回作成する。
-6. Publish Gatewayはrequest作成commitを契機に自動実行する。inline payloadまたはGit blob payloadを取得し、blob OID、payload長、payload SHA-256、Git bundle、publish commit、parent/base、target treeを検証する。すべて一致し、対象branch HEADがbaseのままである場合だけexact publish commitを対象branchへnon-force pushし、直後にremote commit/treeを再検証する。SHA不整合時は対象branchを更新しない。
-7. Gatewayは成功receiptを `.publish/receipts/<request-id>.json` へ自動記録し、Fast CIをdispatchする。ローカルではreceiptを取得して `publish_request.py record` に渡す。`record` はmanifest内の `local_target_commit` を自動的に使用し、現在のlocal HEADが次作業へ進んでいても、request、receipt、当該local target tree、published commit objectの関係を機械検証した場合だけ次回publish stateを更新する。local target SHAを手動で引き渡さない。
+2. publish直前に対象branch HEADを一度だけ取得する。これはChatGPT側が正常系で取得する唯一のpublish整合性入力である。
+3. 取得したHEADとpublish対象commitを `gateway-begin` へ渡す。`develop`では取得HEADが記録済みpublish基点と一致することをhelperが検証する。隔離検証用`temp`では取得した`temp` HEADそのものをそのsessionのbaseとし、developのpublish stateとは独立に扱う。その上でhelperは決定論的publish commit、Git bundle、v5 request、payload SHA-256、Connector packet、active sessionを一括生成する。GitHub repository、固定 `publish` branch、Connector call容量、manifest/packet出力先はhelper所有であり、publishごとに指定しない。
+4. `gateway-begin` はConnector本来のcall容量を上限として、payloadを最小数の `GitHub.create_blob` actionへ分ける。ChatGPT側bridgeの経験的な固定上限は設けない。helperが出力する`connector_namespace` / `connector_function`を実行入口とし、別のConnector write actionへ読み替えない。action名・part境界・初回分割数は判断対象ではない。
+5. 各 `GitHub.create_blob` が返したSHAを、helperが事前計算したGit blob OIDと照合する。全文再取得・全文比較は正常系で行わない。`gateway-submit --uploaded-blob-sha ...` へ現在のupload action順で返却SHAを渡し、一致したpartは確定する。不一致partがあればhelperはそのpartだけを二分し、新しい `create_blob` actionを返す。成功済みpartは再送しない。この照合・再分割を必要なpartだけ反復するため、より小さい固定上限を事前推測したりChatGPTがBase64境界を作り直したりしない。全partのOIDが一致した場合に限って小さい最終 `GitHub.create_file` request actionを生成する。
+6. `gateway-submit` が生成した最終actionをそのまま実行する。長いBase64 payloadを `create_file` 引数へ直接転記する正常経路は持たない。
+7. Gatewayはpayload、Git object、bundle、publish commit、parent/base、target tree、対象branch HEADを検証し、すべて一致した場合だけexact commitを対象branchへnon-force publishする。成功時はreceiptを記録しFast CIを起動する。
+8. Gateway処理後に対象branch HEADを一度取得し、`gateway-complete --target-remote-head <head>`へ渡す。helperはそのHEADが事前計算したpublish commitと完全一致する場合だけsessionを閉じる。`develop` requestだけが通常publish stateを更新する。隔離検証用`temp` requestは観測したtemp HEADを独立baseとして使用し、成功してもdevelop基点を変更しない。receiptはGateway側監査記録であり、通常完了入力にはしない。
 
-通常サイズのConnector経路でChatGPT側が必要とするGitHub callは、Gateway実行前では対象branch HEAD取得1回とrequest作成1回の計2回である。Gateway成功後にreceiptを1回取得するため、正常な1 publishのConnector callは通常合計3回となる。Gateway内部のbase再確認、target push、remote tree確認、receipt作成、CI dispatchはworkflowが自動実行する。正常系でpublish branch HEAD/tree、chunk/tree SHA、transport commit SHA、ref SHAをチャット側が中継・目視比較しない。
+active Gateway sessionは一つだけ存在できる。未完了sessionがある状態で別の `gateway-begin` は開始できない。状態確認には `gateway-status` を使う。`gateway-abort` はrequestが未送信である、または既存requestが再びpublishし得ないことを確認した障害時だけ使用し、正常手順には含めない。
 
-複数の未publish commitがある場合だけ、必要に応じてtransport量を比較する。
+通常サイズの開始例:
+
+```bash
+# 1. GitHubで develop HEADを一度取得する。
+# 2. helperへその値と責務checkpointを渡す。
+python scripts/publish_request.py gateway-begin \
+  --target-ref <committed-checkpoint> \
+  --target-remote-head <current-develop-head>
+```
+
+`gateway-begin` は常に `phase: upload-payload-parts` を返す。現在表示されているupload actionを実行し、その返却SHAをaction順で次へ渡す。
+
+```bash
+python scripts/publish_request.py gateway-submit --uploaded-blob-sha <sha> [--uploaded-blob-sha <sha> ...]
+```
+
+SHA不一致partがあれば `gateway-submit` は `phase: upload-payload-parts` のまま再分割したupload actionだけを返す。そのactionを実行して再度 `gateway-submit` する。全part一致時だけ単一request actionが返る。request actionをupload検証より先に生成・送信する手順は存在しない。
+
+Gateway処理後に対象branch HEADを一度取得して完了する。
+
+```bash
+python scripts/publish_request.py gateway-complete \
+  --target-remote-head <observed-target-head>
+```
+
+receipt照合が必要な監査・復旧時だけ `gateway-record` を使用する。通常系ではreceipt JSONをローカルへ転記しない。
+
+現在状態の確認:
+
+```bash
+python scripts/publish_request.py gateway-status
+```
+
+複数の未publish commitがある場合にtransport量やcheckpoint候補を確認したいときだけ `plan` を使う。`plan` はpublish実行入口ではない。
 
 ```bash
 python scripts/publish_request.py plan --target-ref HEAD
 ```
 
-request生成例:
-
-```bash
-python scripts/publish_request.py prepare \
-  --target-branch develop \
-  --target-ref HEAD \
-  --output /tmp/space-idle-publish.json
-```
-
-`prepare` は自動検証する。生成物の診断を独立実行する場合だけ `verify` を使う。
-
-```bash
-python scripts/publish_request.py verify \
-  --manifest /tmp/space-idle-publish.json
-```
-
-対象branch HEADを一度取得した後、Connector packetを生成する。
-
-```bash
-python scripts/publish_request.py connector-plan \
-  --manifest /tmp/space-idle-publish.json \
-  --github-repository naro0216n-collab/Space-Idle \
-  --target-remote-head <current-target-head>
-
-# single-request-file:
-#   submit-request.json の GitHub.create_file を1回実行する。
-# parallel-blobs-then-request-file:
-#   upload-part-*.json の GitHub.create_blob を並列実行後、
-#   submit-request.json の GitHub.create_file を1回実行する。
-# upload返却SHAは後続stepへ渡さない。
-```
-
-Gateway成功後はrequest IDに対応するreceiptを取得し、次回基点を更新する。対象local commitはmanifestから自動解決されるため、receipt待ちの間に次のlocal作業へ進んでも `--local-ref` 等のSHA指定は不要である。
-
-```bash
-python scripts/publish_request.py record \
-  --manifest /tmp/space-idle-publish.json \
-  --receipt /tmp/publish-receipt.json
-```
-
-標準Connector経路はGit bundle v5だけを扱う。旧patch transport、段階的 `connector-publish-step`、remote chunks-treeの個別verify、manual `record --remote-commit/--remote-tree` は通常経路にも互換経路にも残さない。障害時は生成済みrequestとGatewayログから原因を確認し、正常系へ診断stepを追加しない。
+正常系でChatGPTが手作業するのは、責務checkpointの選択、開始時の対象branch HEAD取得、helperが指定した`connector_namespace` / `connector_function`へのaction args転送、Connectorが返した短いblob SHAのhelperへの受け渡し、Gateway後の対象branch HEAD確認だけである。Connector function自体を推測・代替しない。Base64、Git blob OID、part境界、call予算、manifest path、packet順序、publish branch、receipt JSONを人手で再構成しない。
 
 ### Publish failure handling
 
-- target HEAD不一致: requestを作成しない。remote変更を調査し、必要なら最新source-snapshotから再同期する。
-- `create_blob`失敗: 失敗partだけ再送できる。返却SHAを人手で比較せず、最終requestはlocal事前計算OIDを参照する。
+- `gateway-begin`でtarget HEAD不一致: Connector actionは生成しない。remote変更を調査し、必要なら最新source-snapshotから再同期する。
+- `GitHub.create_blob`失敗: requestはまだ生成されない。該当actionだけ再実行する。返却SHA不一致: helperが不一致partだけを二分して再発行する。全文照合や手動part編集は行わず、全partがhelper計算OIDと一致した後だけ最終requestを生成する。
 - blob OID、payload長、payload SHA-256、bundle、parent、target tree不一致: Gatewayが失敗し、対象branchは更新されない。
 - target branch push競合: forceしない。Gatewayの直前base再確認またはnon-force pushで停止する。
-- Gateway自体の変更: まずローカルで構文・契約を検証し、固定 `publish` branchのcontrol planeへ候補Gatewayを反映した後、明示的に `temp` をtargetとするrequestで実動作を隔離検証する。成功後に同じsource変更を通常の `develop` publish対象へ含める。`temp` のcommit・tree・request・payload等を `develop` publish入力として再利用しない。
+- helper/Connector/Gateway経路そのものを変更した場合: ローカル契約テスト後、必要に応じて `temp` をtargetとする隔離検証を行う。`temp` の成果物を `develop` publish入力として再利用しない。
 
 認証済みnative `git push` が利用できる実行環境では、それを第一選択としPublish Gatewayを経由しない。native Git経路も記録済みremote HEAD/treeとの一致を確認し、local target treeを親remote HEAD上へcommitしてnon-force pushし、remote ref/tree一致を確認する。
 

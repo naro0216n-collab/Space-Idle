@@ -177,9 +177,13 @@ GitHubへのtransport方式はゲーム実装の構造やcommit境界を決め�
 
 認証済みnative Gitを利用できる環境では、記録済みremote HEAD/treeを基点としてlocal target treeを指すcommitを生成し、non-force push後にremote ref/treeを再検証する経路を優先する。
 
-native Git transportが利用できない環境では、記録済みremote commitを親、local target treeをtreeに持つ決定論的commitをGit bundleへ格納し、Publish Gatewayへ渡す。publish直前のChatGPT側確認は対象branch HEADの一度だけとし、それ以外のSHA整合性確認はhelperとGatewayへ移す。Connector actionへ渡す実引数bytesを基準に、bundleを含む一意requestファイルが1 callに収まる場合はContents APIのfile creation一回でtransport commit作成と`publish` ref更新を完了させる。収まらない場合だけpayloadを最少数の独立Git blobへ自動分割して並列送信し、最終requestはlocal算出済みblob OIDを参照する。upload返却SHAを後続stepへ手渡ししない。
+native Git transportが利用できない環境では、Publish Gateway経路の正常入口を`scripts/publish_request.py gateway-begin`に一本化する。ChatGPT側がpublish直前に取得する外部情報は対象branch HEADの一度だけであり、`gateway-begin`へcommitted target-refとそのHEADを渡す。`develop`ではそのHEADを記録済みpublish基点と照合する。隔離検証用`temp`では観測した`temp` HEADをsession固有baseとして使用し、develop publish stateと混同しない。request生成、Git bundle、publish commit、payload SHA-256、Connector call容量内での初回分割、session保存、Connector packet生成はhelperが一括して行う。GitHub repository、固定`publish` branch、call容量、manifest/packet出力先は正常系の選択肢にしない。
 
-Gatewayはrequestを受けたら、Git blob OID、payload SHA-256、bundle、publish commit、parent/base、target tree、直前remote HEADを機械検証する。すべて一致した場合だけ対象branchへexact commitをnon-force publishし、remote ref/treeを再確認してreceiptを記録し、Fast CIを起動する。不一致時は対象branchを更新しない。正常系に個別blob再取得、SHA目視比較、段階的tree assembly、手動commit/ref更新を置かない。 ローカルのpublish state更新もreceiptとmanifestを照合して行い、manifestが保持するlocal target commitを正本とする。receipt待ちの間にlocal HEADが進んでも、過去checkpointのSHAを人手で引き渡さない。
+Connector actionの種類と順序もhelperの出力を実行契約とする。`gateway-begin`はConnector本来のcall容量を上限として最小数の`GitHub.create_blob` upload actionを提示する。各uploadの返却SHAはhelperが事前計算したGit blob OIDと照合し、一致したpartを確定する。不一致partだけをhelperが二分して再発行し、成功済みpartは再送しない。この検証付きadaptive splitを必要なpartだけ反復し、全partのOID一致後にだけ短い最終`GitHub.create_file` actionを生成する。全文再取得・全文比較や経験的なbridge固定上限を正常系の判断材料にしない。ChatGPTはactionを選び直したり、part境界・Base64・OID・request本文を再構成しない。
+
+同時に一つだけactive Gateway sessionを持つ。active sessionがある間は新しい`gateway-begin`を開始しない。Gateway処理後は対象branch HEADを一度確認し、`gateway-complete`が決定論的publish commitとの一致を検証してsessionを閉じる。`develop` requestだけが通常publish stateを更新する。隔離検証用`temp` requestは観測したtemp HEADを独立baseとして使用し、成功してもdevelop stateを変更しない。receiptを使う`gateway-record`は監査・復旧経路とし正常系の入力にしない。`gateway-reconcile`はrecord脱落時に、記録済みbaseとlocal checkpointから再計算したpublish commitがremote HEADと完全一致する場合だけstateを追従させる。`gateway-abort`はrequest未送信または再実行不能が確認できた障害時だけ使用する。低水準のprepare、Connector packet組立、call-budget調整、manifest path選択を正常手順として人手で組み合わせない。
+
+Gatewayはrequestを受けたら、Git blob OID、payload SHA-256、bundle、publish commit、parent/base、target tree、直前remote HEADを機械検証する。すべて一致した場合だけ対象branchへexact commitをnon-force publishし、remote ref/treeを再確認してreceiptを記録し、Fast CIを起動する。不一致時は対象branchを更新しない。正常系に個別blob再取得、SHA目視比較、段階的tree assembly、手動commit/ref更新を置かない。ローカルpublish stateは`gateway-complete`がactive sessionの決定論的publish commitと観測target HEADを照合した場合だけ更新し、manifestが保持するlocal target commitを正本とする。Gateway処理待ちの間にlocal HEADが進んでも、過去checkpointのSHAを人手で引き渡さない。
 
 `temp` は標準publishの中継やpromotion元にはしない。ユーザー指定時、またはGateway / workflow経路そのものを隔離検証する場合だけ使用する。その検証成果物を通常の `develop` publish入力として再利用しない。
 
