@@ -43,6 +43,15 @@ class ExternalProcurementMixin:
             and (delivery_node_id is None or row.delivery_node_id == delivery_node_id)
         )
 
+    def procurement_delivery_snapshots(self) -> tuple[ProcurementDeliveryBatch, ...]:
+        """Return detached external Procurement pipeline state for projections."""
+        return tuple(
+            replace(row)
+            for row in sorted(
+                self.procurement_deliveries.values(), key=lambda row: str(row.id)
+            )
+        )
+
     def _procurement_service_for(
         self,
         demand: ResourceDemand,

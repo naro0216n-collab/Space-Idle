@@ -258,6 +258,13 @@ class LogisticsFlowMixin:
     def cargo_flow_pipeline_t(self, demand_id: EntityId) -> float:
         return self._flow_pipeline_by_demand({demand_id})[demand_id]
 
+    def cargo_flow_snapshots(self) -> tuple[CargoFlowBatch, ...]:
+        """Return detached Cargo Flow state for cross-layer read projections."""
+        return tuple(
+            replace(row)
+            for row in sorted(self.cargo_flows.values(), key=lambda row: str(row.id))
+        )
+
     def _allocation_used_after(
         self,
         used: dict[EntityId, DirectionalCapacity],

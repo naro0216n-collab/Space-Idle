@@ -119,7 +119,24 @@ class ApplicationReportProjectorMixin:
             else:
                 external_outflow[dispatch.resource_id] += dispatch.amount_t
 
-        for flow in sim.logistics.cargo_flows.values():
+        # External Procurement crosses the player-system boundary without a source
+        # Operational Node. Authorized orders are this tick's external inflow;
+        # persisted delivery batches are pipeline stock until Storage admission.
+        projected_procurement_by_destination: dict[
+            tuple[object, SpatialNodeId], float
+        ] = defaultdict(float)
+        for order in decision.allocations.procurement.orders:
+            projected_procurement_by_destination[
+                (order.demand.id, order.delivery_node_id)
+            ] += order.amount_t
+            if order.delivery_node_id in scope:
+                external_inflow[order.demand.resource_id] += order.amount_t
+
+        for delivery in sim.logistics.procurement_delivery_snapshots():
+            if delivery.delivery_node_id in scope:
+                imports_pipeline[delivery.resource_id] += delivery.amount_t
+
+        for flow in sim.logistics.cargo_flow_snapshots():
             source_inside = flow.source_id in scope
             destination_inside = flow.destination_id in scope
             if source_inside == destination_inside:
@@ -140,14 +157,20 @@ class ApplicationReportProjectorMixin:
             remaining = max(
                 0.0,
                 sim.logistics.demand_remaining_t(demand)
-                - projected_dispatch_by_demand[demand.id],
+                - sim.logistics.procurement_pipeline_t(
+                    demand.id, delivery_node_id=demand.destination_id
+                )
+                - projected_dispatch_by_demand[demand.id]
+                - projected_procurement_by_destination[
+                    (demand.id, demand.destination_id)
+                ],
             )
             if remaining <= 1e-12:
                 continue
             unmet[demand.resource_id] += remaining
             if demand.source_id is not None and demand.source_id not in scope:
                 dependency_sources[demand.resource_id].add(demand.source_id)
-            for lane in sim.logistics.lanes.values():
+            for lane in sim.logistics.lane_definitions():
                 if (
                     lane.source_id not in scope
                     and sim.logistics.lane_accepts_demand(lane, demand)
@@ -581,7 +604,7 @@ class ApplicationReportProjectorMixin:
             ):
                 production[snap.output_resource_id] += snap.output_t_per_day
 
-        for flow in sim.logistics.cargo_flows.values():
+        for flow in sim.logistics.cargo_flow_snapshots():
             status = getattr(flow.status, "value", flow.status)
             if status == "in_transit":
                 if flow.source_id == location_id:

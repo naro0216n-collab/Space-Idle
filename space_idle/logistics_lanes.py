@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .resource_demand import ResourceDemand
 from .shared import EntityId, RouteId, SpatialNodeId
@@ -104,6 +104,13 @@ class LogisticsLaneMixin:
 
     def lane_accepts_demand(self, lane: LogisticsLane, demand: ResourceDemand) -> bool:
         return self._lane_accepts_demand(lane, demand)
+
+    def lane_definitions(self) -> tuple[LogisticsLane, ...]:
+        """Return detached Lane configuration for cross-layer read projections."""
+        return tuple(
+            replace(row)
+            for row in sorted(self.lanes.values(), key=lambda row: str(row.id))
+        )
 
     def demand_remaining_t(self, demand: ResourceDemand) -> float:
         return max(0.0, demand.amount_t - self.cargo_flow_pipeline_t(demand.id))

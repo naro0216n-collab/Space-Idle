@@ -13,6 +13,7 @@ from space_idle.shared import DefinitionId, EntityId
 from space_idle.validation import validate_catalog_coverage
 from space_idle.validation_support import ConfigurationError
 from space_idle.logistics_models import CargoFlowBatch
+from space_idle.external_procurement import ProcurementDeliveryBatch
 
 
 def _resource(view, resource_id):
@@ -183,6 +184,156 @@ def test_partial_current_dispatch_reduces_but_does_not_hide_unmet_demand():
     assert row.unmet_demand > 0
     assert row.unmet_demand < machinery.amount_t
 
+
+
+def test_authorized_external_procurement_is_current_inflow_and_not_unmet():
+    app = build_game_application()
+    sim = app._simulation
+    project_id = sim.projects.plan_build(
+        ids.CARGO_WAREHOUSE, EARTH, 70, "import_now", day=sim.day
+    )
+    sim.projects.advance_procurement(sim.day)
+    project_demands = tuple(
+        demand
+        for demand in sim.projects.resource_demands(sim.day)
+        if demand.owner_id == EntityId(str(project_id))
+    )
+    assert project_demands
+    for demand in project_demands:
+        sim.inventory.stock[(EARTH, demand.resource_id)] = 0.0
+
+    before = app.query(
+        GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),))
+    )
+    sim.external_economy.create_policy(
+        enabled=True,
+        allowed_service_ids=(ids.EARTH_INDUSTRIAL_MARKET,),
+        scope_kind="project",
+        scope_id=EntityId(str(project_id)),
+        day=sim.day,
+    )
+    decision = sim.tick_decision_projection()
+    orders = tuple(
+        order
+        for order in decision.allocations.procurement.orders
+        if order.demand.owner_id == EntityId(str(project_id))
+        and order.delivery_node_id == EARTH
+    )
+    assert orders
+
+    view = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),)))
+    for demand in project_demands:
+        expected = sum(
+            order.amount_t
+            for order in orders
+            if order.demand.id == demand.id
+        )
+        before_row = _resource(before, demand.resource_id)
+        row = _resource(view, demand.resource_id)
+        assert row.external_inflow_per_day - before_row.external_inflow_per_day == pytest.approx(
+            expected
+        )
+        assert before_row.unmet_demand - row.unmet_demand == pytest.approx(expected)
+
+
+
+def test_external_procurement_delivery_to_destination_reduces_unmet_and_is_pipeline():
+    app = build_game_application()
+    sim = app._simulation
+    project_id = sim.projects.plan_build(
+        ids.CARGO_WAREHOUSE, EARTH, 70, "import_now", day=sim.day
+    )
+    sim.projects.advance_procurement(sim.day)
+    demand = next(
+        demand
+        for demand in sim.projects.resource_demands(sim.day)
+        if demand.owner_id == EntityId(str(project_id))
+        and demand.resource_id == ids.MACHINERY
+    )
+    sim.inventory.stock[(EARTH, ids.MACHINERY)] = 0.0
+    before = app.query(
+        GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),))
+    )
+    pipeline_amount = min(0.4, demand.amount_t)
+    sim.logistics.procurement_deliveries[EntityId("procurement.delivery.analytics.direct")] = (
+        ProcurementDeliveryBatch(
+            EntityId("procurement.delivery.analytics.direct"),
+            ids.EARTH_INDUSTRIAL_MARKET,
+            demand.id,
+            demand.owner_kind,
+            demand.owner_id,
+            EARTH,
+            demand.resource_id,
+            pipeline_amount,
+            sim.day,
+            sim.day + 2,
+        )
+    )
+
+    after = app.query(
+        GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),))
+    )
+    before_row = _resource(before, ids.MACHINERY)
+    after_row = _resource(after, ids.MACHINERY)
+    assert after_row.imports_pipeline - before_row.imports_pipeline == pytest.approx(
+        pipeline_amount
+    )
+    assert before_row.unmet_demand - after_row.unmet_demand == pytest.approx(
+        pipeline_amount
+    )
+
+def test_external_procurement_delivery_is_pipeline_only_at_its_delivery_scope():
+    app = build_game_application()
+    sim = app._simulation
+    sim.technology.completed.update(
+        {ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS}
+    )
+    project_id = sim.projects.plan_build(
+        ids.ORBITAL_LOGISTICS_NODE, LEO, 70, "import_now",
+        day=sim.day, import_source_id=EARTH,
+    )
+    sim.projects.advance_procurement(sim.day)
+    demand = next(
+        demand
+        for demand in sim.projects.resource_demands(sim.day)
+        if demand.owner_id == EntityId(str(project_id))
+        and demand.resource_id == ids.MACHINERY
+    )
+    sim.inventory.stock[(LEO, ids.MACHINERY)] = 0.0
+    earth_before = app.query(
+        GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),))
+    )
+    leo_before = app.query(
+        GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),))
+    )
+    sim.logistics.procurement_deliveries[EntityId("procurement.delivery.analytics")] = (
+        ProcurementDeliveryBatch(
+            EntityId("procurement.delivery.analytics"),
+            ids.EARTH_INDUSTRIAL_MARKET,
+            demand.id,
+            demand.owner_kind,
+            demand.owner_id,
+            EARTH,
+            demand.resource_id,
+            demand.amount_t,
+            sim.day,
+            sim.day + 2,
+        )
+    )
+
+    earth = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),)))
+    leo = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),)))
+
+    assert (
+        _resource(earth, ids.MACHINERY).imports_pipeline
+        - _resource(earth_before, ids.MACHINERY).imports_pipeline
+    ) == pytest.approx(demand.amount_t)
+    assert _resource(leo, ids.MACHINERY).imports_pipeline == pytest.approx(
+        _resource(leo_before, ids.MACHINERY).imports_pipeline
+    )
+    assert _resource(leo, ids.MACHINERY).unmet_demand == pytest.approx(
+        _resource(leo_before, ids.MACHINERY).unmet_demand
+    )
 
 def test_dependency_analytics_query_is_observational():
     app = build_game_application()
