@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_views import (
     CargoFlowRow, CargoFlowsView, DirectionalCapacityRow, FleetPoolRow,
-    FleetRelocationRow, FleetView, TransportAllocationRow,
+    FleetRelocationRow, FleetReleaseRow, FleetView, TransportAllocationRow,
     TransportAllocationsView, VehicleProductionOptionRow, VehicleProductionRow,
 )
 
@@ -63,6 +63,22 @@ class LogisticsStateProjectorMixin:
                 row.departure_day, row.arrival_day,
             )
             for row in sorted(sim.logistics.fleet_relocations.values(), key=lambda row: str(row.id))
+        )
+
+    def _fleet_release_rows(self) -> tuple[FleetReleaseRow, ...]:
+        sim = self._simulation
+        return tuple(
+            FleetReleaseRow(
+                str(row.id),
+                str(row.allocation_id),
+                str(row.vehicle_definition_id),
+                sim.logistics.vehicle_defs[row.vehicle_definition_id].display_name,
+                str(row.location_id),
+                row.units,
+                row.release_day,
+                max(0, row.release_day - sim.day),
+            )
+            for row in sorted(sim.logistics.fleet_releases.values(), key=lambda row: str(row.id))
         )
 
     def _transport_allocation_rows(self) -> tuple[TransportAllocationRow, ...]:
@@ -181,6 +197,7 @@ class LogisticsStateProjectorMixin:
                 vehicle_definition_id=query.vehicle_definition_id,
             ),
             self._fleet_relocation_rows(),
+            self._fleet_release_rows(),
         )
 
     def _transport_allocations_view(self) -> TransportAllocationsView:

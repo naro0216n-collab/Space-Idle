@@ -1,5 +1,6 @@
 import pytest
 
+from space_idle import GetFleet, build_game_application
 from space_idle.composition.base_simulation import build_base_simulation
 from space_idle.content import base_ids as ids
 from space_idle.shared import EntityId
@@ -264,6 +265,34 @@ def test_releasing_uses_remaining_cycle_time_not_a_new_full_cycle():
     lg.update_transport_allocation(allocation_id, target_units=0, day=release.release_day)
     assert not lg.fleet_releases
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 2
+
+
+def test_fleet_query_exposes_releasing_units_and_recovery_time():
+    app = build_game_application()
+    sim = app._simulation
+    lg = sim.logistics
+    lg.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).total_units = 2
+    allocation_id = lg.create_transport_allocation(
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        ids.LEO,
+        ids.LUNAR_ORBIT,
+        target_units=2,
+        day=0,
+    )
+    allocation = lg.transport_allocations[allocation_id]
+    allocation.last_operated_day = 2
+    sim.day = 3
+    lg.update_transport_allocation(allocation_id, target_units=1, day=sim.day)
+
+    fleet = app.query(GetFleet())
+    assert len(fleet.releases) == 1
+    release = fleet.releases[0]
+    assert release.allocation_id == str(allocation_id)
+    assert release.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+    assert release.location_id == str(ids.LEO)
+    assert release.units == 1
+    assert release.release_day > sim.day
+    assert release.remaining_days == release.release_day - sim.day
 
 
 def test_bidirectional_service_resource_use_counts_empty_return_not_loaded_return():

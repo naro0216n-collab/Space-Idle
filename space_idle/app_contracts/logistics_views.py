@@ -98,6 +98,18 @@ class FleetRelocationRow:
 
 
 @dataclass(frozen=True)
+class FleetReleaseRow:
+    id: str
+    allocation_id: str
+    vehicle_definition_id: str
+    display_name: str
+    location_id: str
+    units: int
+    release_day: int
+    remaining_days: int
+
+
+@dataclass(frozen=True)
 class CargoFlowRow:
     id: str
     resource_id: str
@@ -195,6 +207,7 @@ class LogisticsView:
     routes: tuple[RouteRow, ...]
     fleet_pools: tuple[FleetPoolRow, ...]
     relocations: tuple[FleetRelocationRow, ...]
+    releases: tuple[FleetReleaseRow, ...]
     allocations: tuple[TransportAllocationRow, ...]
     vehicle_production_options: tuple[VehicleProductionOptionRow, ...]
     vehicle_production: tuple[VehicleProductionRow, ...]

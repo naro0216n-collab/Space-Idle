@@ -19,6 +19,7 @@ class LogisticsProjectorMixin(
             routes=self._route_rows(),
             fleet_pools=self._fleet_pool_rows(),
             relocations=self._fleet_relocation_rows(),
+            releases=self._fleet_release_rows(),
             allocations=self._transport_allocation_rows(),
             vehicle_production_options=self._vehicle_production_option_rows(),
             vehicle_production=self._vehicle_production_rows(),
