@@ -498,32 +498,6 @@ def _connector_payload_root_packet(
     }
 
 
-def _connector_direct_payload_root_packet(
-    repo: Path,
-    github_repository: str,
-    payload: str,
-) -> dict[str, object]:
-    blob_oid = _git_object_oid(repo, "blob", payload.encode("ascii"))
-    root_oid = _git_tree_oid(repo, [blob_oid])
-    return {
-        "stage": "materialize-payload-root",
-        "expected_blob_git_oid": blob_oid,
-        "expected_tree_git_oid": root_oid,
-        "action": "GitHub.create_tree",
-        "action_args": {
-            "repository_full_name": github_repository,
-            "tree_elements": [
-                {
-                    "path": _payload_tree_path(0),
-                    "mode": "100644",
-                    "type": "blob",
-                    "content": payload,
-                }
-            ],
-        },
-    }
-
-
 def _connector_call_bytes(packet: dict[str, object]) -> int:
     action_args = packet.get("action_args")
     if not isinstance(action_args, dict):
@@ -733,51 +707,30 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     for stale in output_dir.glob("upload-part-*.json"):
         stale.unlink()
-    root_path = output_dir / "assemble-payload-root.json"
-    if root_path.exists():
-        root_path.unlink()
+    stale_root = output_dir / "assemble-payload-root.json"
+    if stale_root.exists():
+        stale_root.unlink()
     submit_path = output_dir / "submit-request.json"
     if submit_path.exists():
         submit_path.unlink()
 
     payload = str(prepared["payload_b64"])
+    strategy = "blobs-root-tree-then-request-file"
+    parts = _split_payload_for_blob_calls(
+        repo, args.github_repository, payload, call_budget
+    )
     upload_packets: list[str] = []
     blob_oids: list[str] = []
+    for part in parts:
+        packet_path = output_dir / f"upload-part-{int(part['index']):03d}.json"
+        packet_path.write_text(
+            json.dumps(part["packet"], indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        upload_packets.append(str(packet_path))
+        blob_oids.append(str(part["oid"]))
 
-    direct_root = _connector_direct_payload_root_packet(
-        repo, args.github_repository, payload
-    )
-    direct_root_call_bytes = _connector_call_bytes(direct_root)
-    if direct_root_call_bytes <= call_budget:
-        strategy = "direct-root-tree-then-request-file"
-        root_packet = direct_root
-        blob_oids = [str(direct_root["expected_blob_git_oid"])]
-        next_after_transport = (
-            "execute assemble-payload-root.json, then submit-request.json; "
-            "no returned SHA is a later input"
-        )
-    else:
-        strategy = "blobs-root-tree-then-request-file"
-        parts = _split_payload_for_blob_calls(
-            repo, args.github_repository, payload, call_budget
-        )
-        for part in parts:
-            packet_path = output_dir / f"upload-part-{int(part['index']):03d}.json"
-            packet_path.write_text(
-                json.dumps(part["packet"], indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            upload_packets.append(str(packet_path))
-            blob_oids.append(str(part["oid"]))
-        root_packet = _connector_payload_root_packet(
-            repo, args.github_repository, blob_oids
-        )
-        next_after_transport = (
-            "execute all upload-part packets in parallel, then "
-            "assemble-payload-root.json, then submit-request.json; "
-            "no returned SHA is a later input"
-        )
-
+    root_packet = _connector_payload_root_packet(repo, args.github_repository, blob_oids)
     root_call_bytes = _connector_call_bytes(root_packet)
     if root_call_bytes > call_budget:
         raise PublishStateError(
@@ -785,6 +738,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
             f"the configured {call_budget}-byte budget"
         )
     expected_root_oid = str(root_packet["expected_tree_git_oid"])
+    root_path = output_dir / "assemble-payload-root.json"
     root_path.write_text(
         json.dumps(root_packet, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -831,7 +785,6 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "connector_uploads_may_run_in_parallel": bool(upload_packets),
         "returned_upload_blob_shas_are_not_required": True,
         "payload_root_packet": root_packet_path,
-        "payload_root_materializes_content": strategy == "direct-root-tree-then-request-file",
         "expected_payload_tree_git_oid": expected_root_oid,
         "root_tree_call_bytes": root_call_bytes,
         "returned_root_tree_sha_is_required": False,
@@ -846,7 +799,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "normal_sha_handoffs": 0,
         "normal_per_upload_verification_calls": 0,
         "gateway_completes_target_publish": True,
-        "next_after_transport": next_after_transport,
+        "next_after_transport": "execute all upload-part packets in parallel, then assemble-payload-root.json, then submit-request.json; no returned SHA is a later input",
         "request_verified": bool(verified["verified"]),
         "verified": True,
     }

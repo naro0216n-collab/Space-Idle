@@ -207,7 +207,7 @@ def test_plan_reports_combined_and_sequential_bundle_transport(tmp_path: Path) -
     assert plan["combined_request"]["target_tree"] == git(repo, "rev-parse", "HEAD^{tree}")
 
 
-def test_connector_plan_materializes_normal_payload_directly_as_root_tree(tmp_path: Path) -> None:
+def test_connector_plan_keeps_materialization_separate_from_root_binding(tmp_path: Path) -> None:
     repo, base_commit, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("connector transport\n" * 400, encoding="utf-8")
     commit_all(repo, "connector transport")
@@ -228,12 +228,12 @@ def test_connector_plan_materializes_normal_payload_directly_as_root_tree(tmp_pa
             str(plan_dir),
         )
     )
-    assert plan["strategy"] == "direct-root-tree-then-request-file"
-    assert plan["upload_call_count"] == 0
+    assert plan["strategy"] == "blobs-root-tree-then-request-file"
+    assert plan["upload_call_count"] == 1
     assert plan["normal_remote_target_probe_calls"] == 1
     assert plan["normal_publish_transport_probe_calls"] == 0
-    assert plan["normal_github_mutation_calls"] == 2
-    assert plan["normal_github_calls_before_gateway"] == 3
+    assert plan["normal_github_mutation_calls"] == 3
+    assert plan["normal_github_calls_before_gateway"] == 4
     assert plan["normal_sha_handoffs"] == 0
     assert plan["normal_per_upload_verification_calls"] == 0
     assert plan["returned_upload_blob_shas_are_not_required"] is True
@@ -242,25 +242,18 @@ def test_connector_plan_materializes_normal_payload_directly_as_root_tree(tmp_pa
     assert plan["submit_request_packet"] is not None
     assert plan["gateway_completes_target_publish"] is True
 
-    assert plan["upload_packets"] == []
-    assert plan["payload_root_materializes_content"] is True
+    upload = json.loads(Path(plan["upload_packets"][0]).read_text(encoding="utf-8"))
+    assert upload["action"] == "GitHub.create_blob"
     root = json.loads(Path(plan["payload_root_packet"]).read_text(encoding="utf-8"))
     assert root["action"] == "GitHub.create_tree"
-    elements = root["action_args"]["tree_elements"]
-    assert len(elements) == 1
-    assert elements[0]["mode"] == "100644"
-    assert elements[0]["path"] == "0000.b64"
-    assert elements[0]["type"] == "blob"
-    assert elements[0]["content"] == prepared(manifest)["payload_b64"]
-    actual_blob_oid = subprocess.run(
-        ["git", "hash-object", "--stdin"],
-        cwd=repo,
-        input=elements[0]["content"].encode("ascii"),
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    ).stdout.decode().strip()
-    assert actual_blob_oid == root["expected_blob_git_oid"]
+    assert root["action_args"]["tree_elements"] == [
+        {
+            "mode": "100644",
+            "path": "0000.b64",
+            "sha": upload["expected_blob_git_oid"],
+            "type": "blob",
+        }
+    ]
 
     packet = json.loads(Path(plan["submit_request_packet"]).read_text(encoding="utf-8"))
     transport_request = json.loads(packet["action_args"]["content"])
@@ -273,7 +266,7 @@ def test_connector_plan_materializes_normal_payload_directly_as_root_tree(tmp_pa
     assert transport_request["base_sha"] == base_commit
 
 
-def test_fleet_sized_payload_fits_direct_root_tree_call(tmp_path: Path) -> None:
+def test_fleet_sized_payload_uses_one_blob_plus_root_not_inline_request(tmp_path: Path) -> None:
     spec = importlib.util.spec_from_file_location("publish_request", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -281,11 +274,15 @@ def test_fleet_sized_payload_fits_direct_root_tree_call(tmp_path: Path) -> None:
 
     repo, _, _ = init_repo(tmp_path)
     payload = "A" * 81_780
-    root = module._connector_direct_payload_root_packet(
-        repo, "naro0216n-collab/Space-Idle", payload
+    parts = module._split_payload_for_blob_calls(
+        repo, "naro0216n-collab/Space-Idle", payload, 96 * 1024
+    )
+    assert len(parts) == 1
+    assert module._connector_call_bytes(parts[0]["packet"]) < 96 * 1024
+    root = module._connector_payload_root_packet(
+        repo, "naro0216n-collab/Space-Idle", [parts[0]["oid"]]
     )
     assert module._connector_call_bytes(root) < 96 * 1024
-    assert root["action_args"]["tree_elements"][0]["content"] == payload
 
 
 def test_connector_plan_splits_overflow_into_blobs_then_precomputed_root_tree(tmp_path: Path) -> None:
@@ -320,7 +317,6 @@ def test_connector_plan_splits_overflow_into_blobs_then_precomputed_root_tree(tm
         )
     )
     assert plan["strategy"] == "blobs-root-tree-then-request-file"
-    assert plan["payload_root_materializes_content"] is False
     assert plan["upload_call_count"] >= 2
     assert plan["connector_uploads_may_run_in_parallel"] is True
     assert plan["returned_upload_blob_shas_are_not_required"] is True
