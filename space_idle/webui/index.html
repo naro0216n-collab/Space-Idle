@@ -126,6 +126,7 @@
         <div id="allocationUnitsGroup"><label>Authoritative target units<input id="allocationUnits" type="number" min="0" step="1" value="1" required></label></div>
         <div id="allocationCapacityGroup" hidden><div class="field-pair"><label>Forward target (t/日)<input id="allocationForward" type="number" min="0" step="0.01" value="1"></label><label>Reverse target (t/日)<input id="allocationReverse" type="number" min="0" step="0.01" value="0"></label></div></div>
         <label>経路方針<select id="allocationPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
+        <div id="allocationServiceOptions" class="inspector-section"><div class="cell-sub">出発地と到着地からTransport Service候補を取得します。</div></div>
         <div class="cell-sub">UNITSではunit数だけ、CAPACITYでは方向別capacityだけが正本です。Fleet不足でもtargetは保持され、active / unfilledとして表示されます。</div>
         <div class="dialog-actions"><button type="button" class="secondary" id="allocationCancelButton">取消</button><button type="submit" class="primary">Allocation作成</button></div>
       </form>

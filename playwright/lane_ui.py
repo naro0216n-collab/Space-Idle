@@ -134,6 +134,34 @@ def run() -> None:
             ):
                 assert required in allocation_headers, f"transport allocation decision surface lacks {required}"
 
+            page.get_by_role("button", name="Allocationを作成").click()
+            page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
+            page.locator("#allocationSource").select_option(str(ids.LEO))
+            page.locator("#allocationDestination").select_option(str(ids.LUNAR_ORBIT))
+            page.wait_for_function(
+                f"""() => [...document.querySelectorAll('[data-allocation-option]')]
+                    .some((button) => button.dataset.allocationOption === '{ids.REUSABLE_ORBITAL_CARGO_TUG}'
+                        && button.dataset.allocationOptionPolicy === 'fastest')""",
+                timeout=10000,
+            )
+            option_surface = page.locator("#allocationServiceOptions").inner_text()
+            for required in ("Transport Service候補", "往路", "復路 / 回収", "Nominal F/R", "Cycle / latency", "Fleet", "Infrastructure", "Full-use Resource"):
+                assert required in option_surface, f"allocation candidate surface lacks {required}"
+            page.locator(
+                f'[data-allocation-option="{ids.REUSABLE_ORBITAL_CARGO_TUG}"]'
+                '[data-allocation-option-policy="fastest"]'
+            ).click()
+            assert page.locator("#allocationVehicle").input_value() == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+            assert page.locator("#allocationPolicy").input_value() == "fastest"
+            page.locator("#allocationUnits").fill("1")
+            page.locator("#allocationPriority").fill("65")
+            page.get_by_role("button", name="Allocation作成", exact=True).click()
+            page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
+            page.wait_for_function(
+                "() => document.querySelectorAll('#allocationTable tbody button[data-allocation-edit]').length > 0",
+                timeout=10000,
+            )
+
             tug_relocate = page.locator(
                 f'button[data-fleet-relocate="{ids.REUSABLE_ORBITAL_CARGO_TUG}"]'
                 f'[data-fleet-source="{ids.LEO}"]'
@@ -176,9 +204,10 @@ def run() -> None:
             page.locator("#laneDialog").wait_for(state="visible", timeout=10000)
             assert page.locator("#laneSource").is_disabled()
             assert page.locator("#laneDestination").is_disabled()
-            assert page.locator("#lanePolicy").is_disabled()
+            assert page.locator("#lanePolicy").is_enabled()
             page.locator("#laneCapacity").fill("3")
             page.locator("#lanePriority").fill("85")
+            page.locator("#lanePolicy").select_option("lowest_propellant")
             page.get_by_role("button", name="設定を更新").click()
             page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
             page.wait_for_function(
@@ -189,6 +218,7 @@ def run() -> None:
             text = row.inner_text()
             assert "3 t/日" in text
             assert "85" in text
+            assert "lowest_propellant" in text
 
             row.get_by_role("button", name="停止").click()
             page.wait_for_function(

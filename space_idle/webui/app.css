@@ -143,6 +143,7 @@ tbody tr.selectable:hover, tbody tr.is-selected { background: #13283a; }
 .route-mode-card.is-usable { border-color: #2f6b5a; }
 .mode-title { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 650; }
 .modal-dialog { width: min(520px, 80vw); border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 0; box-shadow: 0 24px 80px #000b; }
+#allocationDialog { width: min(760px, 90vw); max-height: 88vh; overflow: auto; }
 .modal-dialog::backdrop { background: #0009; }
 .modal-dialog form { display: grid; gap: 12px; padding: 16px; }
 .dialog-heading { display: flex; justify-content: space-between; align-items: center; }

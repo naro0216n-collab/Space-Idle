@@ -92,6 +92,18 @@ def test_http_api_revision_etag_gzip_command_and_save_load(tmp_path):
         status, _, payload = _request(
             port,
             "GET",
+            "/api/v1/transport-allocation-options"
+            "?source_id=base.node.low_earth_orbit"
+            "&destination_id=base.node.lunar_orbit",
+        )
+        assert status == 200
+        assert payload["data"]["options"]
+        assert all("nominal_capacity" in row for row in payload["data"]["options"])
+        assert all("blockers" in row for row in payload["data"]["options"])
+
+        status, _, payload = _request(
+            port,
+            "GET",
             "/api/v1/logistics/fleet-relocation-preview"
             "?vehicle_definition_id=base.vehicle.reusable_orbital_cargo_tug"
             "&units=1&source_id=base.node.low_earth_orbit"

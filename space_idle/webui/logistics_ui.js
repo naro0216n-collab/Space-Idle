@@ -6,6 +6,8 @@
   const {state,$,esc,fmt,locationName,resourceName,definitionName,capabilityName,operationName,issueHtml,metricHtml,api,command,banner}=A;
   let editingLaneId=null;
   let editingAllocationId=null;
+  let allocationOptionsView=null;
+  let allocationOptionSerial=0;
   let relocationContext=null;
   let relocationPreviewSerial=0;
 
@@ -15,6 +17,51 @@
   const kv=(rows)=>`<dl class="kv-grid">${rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
   const capText=(c)=>c?`${fmt(c.forward_t_per_day,2)} / ${fmt(c.reverse_t_per_day,2)} t/日`:'—';
   const infrastructureText=(rows)=>{const items=rows||[];return items.length?items.map((r)=>`${locationName(r.location_id)}: ${capabilityName(r.capability_id)}${Number(r.minimum_capacity||0)>0?` ≥ ${fmt(r.minimum_capacity,2)}`:''} (${r.mode==='available'?'利用可能':'インフラ'})`).join(' / '):'追加Infrastructure要件なし';};
+  const policyLabels={fastest:'最速',lowest_cost:'最低コスト',lowest_propellant:'推進剤最少'};
+  const policyLabel=(value)=>policyLabels[value]||value;
+  const pathText=(path)=>{const rows=path||[];return rows.length?rows.map((id)=>definitionName(id)).join(' → '):'—';};
+
+  function renderAllocationServiceOptions(view=allocationOptionsView){
+    const root=$('#allocationServiceOptions');if(!root)return;
+    if(!view){root.innerHTML='<div class="cell-sub">Transport Service候補を取得中…</div>';return;}
+    const selectedVehicle=$('#allocationVehicle')?.value,selectedPolicy=$('#allocationPolicy')?.value;
+    const cards=(view.options||[]).map((option)=>{
+      const selected=option.vehicle_definition_id===selectedVehicle&&option.policy===selectedPolicy;
+      const resources=(option.operational_resource_demand_at_full_unit||[]).map(([locationId,resourceId,amount])=>`${locationName(locationId)}: ${resourceName(resourceId)} ${fmt(amount,2)} t/日`).join(' / ')||'追加運用Resourceなし';
+      const blockers=(option.blockers||[]).length?`<div class="issue-stack">${option.blockers.map((b)=>issueHtml(['transport',b])).join('')}</div>`:'<span class="badge ok">Service成立</span>';
+      return `<div class="route-mode-card ${selected?'is-usable':''}" data-allocation-option-card="${esc(option.vehicle_definition_id)}:${esc(option.policy)}"><div class="mode-title"><span>${esc(option.display_name)} · ${esc(policyLabel(option.policy))}</span><button type="button" class="secondary" data-allocation-option="${esc(option.vehicle_definition_id)}" data-allocation-option-policy="${esc(option.policy)}">${selected?'選択中':'この候補を選択'}</button></div>${kv([
+        ['往路',esc(pathText(option.forward_path))],
+        ['復路 / 回収',esc(pathText(option.reverse_path))],
+        ['Nominal F/R',esc(capText(option.nominal_capacity))],
+        ['Cycle / latency',`${fmt(option.cycle_days,1)} 日 / F ${fmt(option.forward_latency_days,0)} 日${option.reverse_latency_days==null?'':` / R ${fmt(option.reverse_latency_days,0)} 日`}`],
+        ['Fleet',`${fmt(option.fleet_free_units,0)} free / ${fmt(option.fleet_total_units,0)} total`],
+        ['Infrastructure',esc(infrastructureText(option.infrastructure_requirements))],
+        ['Full-use Resource',esc(resources)],
+      ])}${blockers}</div>`;
+    }).join('');
+    root.innerHTML=`<h3>Transport Service候補</h3><div class="cell-sub">Vehicle性能と経路・運用PolicyからApplicationが導出した候補です。戦略上異なる方式をここで比較して選択します。</div>${cards||'<div class="empty-state">候補なし</div>'}`;
+  }
+
+  async function updateAllocationServiceOptions(){
+    if(!$('#allocationDialog')?.open)return;
+    const source=$('#allocationSource').value,destination=$('#allocationDestination').value;
+    const serial=++allocationOptionSerial;allocationOptionsView=null;
+    if(!source||!destination||source===destination){
+      const root=$('#allocationServiceOptions');if(root)root.innerHTML='<h3>Transport Service候補</h3><div class="cell-sub">異なる出発地と到着地を選択してください。</div>';
+      return;
+    }
+    renderAllocationServiceOptions(null);
+    try{
+      const params=new URLSearchParams({source_id:source,destination_id:destination});
+      const view=await api(`/api/v1/transport-allocation-options?${params}`);
+      if(serial!==allocationOptionSerial||!$('#allocationDialog')?.open)return;
+      allocationOptionsView=view;renderAllocationServiceOptions(view);
+    }catch(err){
+      if(serial===allocationOptionSerial&&$('#allocationDialog')?.open){
+        const root=$('#allocationServiceOptions');if(root)root.innerHTML=`<h3>Transport Service候補</h3><div class="issue"><div class="issue-title">${esc(err.message||'候補を取得できません')}</div></div>`;
+      }
+    }
+  }
 
   function renderRelocationPreview(preview){
     const root=$('#relocationPreview'),submit=$('#relocationSubmitButton');if(!root)return;
@@ -148,7 +195,7 @@
   }
   function updateAllocationModeFields(){const capacity=$('#allocationMode').value==='capacity';$('#allocationUnitsGroup').hidden=capacity;$('#allocationCapacityGroup').hidden=!capacity;}
   function openAllocationDialog(route=null,allocation=null){
-    editingAllocationId=allocation?.id||null;populateLocationSelects();const editing=Boolean(allocation);
+    editingAllocationId=allocation?.id||null;allocationOptionsView=null;allocationOptionSerial++;populateLocationSelects();const editing=Boolean(allocation);
     $('#allocationDialog h2').textContent=editing?'Transport Allocationを編集':'Fleetを輸送へ配分';
     $('#allocationForm button[type="submit"]').textContent=editing?'設定を更新':'Allocation作成';
     for(const id of ['allocationVehicle','allocationSource','allocationDestination','allocationMode'])$('#'+id).disabled=editing;
@@ -156,7 +203,8 @@
       $('#allocationVehicle').value=allocation.vehicle_definition_id;$('#allocationSource').value=allocation.anchor_location_id;$('#allocationDestination').value=allocation.destination_id;$('#allocationMode').value=allocation.control_mode;$('#allocationPriority').value=String(allocation.priority);$('#allocationPolicy').value=allocation.path_policy;
       if(allocation.control_mode==='units')$('#allocationUnits').value=String(allocation.target_units??0);else{$('#allocationForward').value=String(allocation.target_capacity?.forward_t_per_day??0);$('#allocationReverse').value=String(allocation.target_capacity?.reverse_t_per_day??0);}
     }else if(route){$('#allocationSource').value=route.origin_id;$('#allocationDestination').value=route.destination_id;}
-    updateAllocationModeFields();$('#allocationDialog').showModal();
+    else if($('#allocationSource').value===$('#allocationDestination').value){const other=[...$('#allocationDestination').options].find((o)=>o.value!==$('#allocationSource').value);if(other)$('#allocationDestination').value=other.value;}
+    updateAllocationModeFields();$('#allocationDialog').showModal();updateAllocationServiceOptions();
   }
   function openRelocationDialog(vehicleDefinitionId,sourceId,freeUnits){
     relocationContext={vehicle_definition_id:vehicleDefinitionId,source_id:sourceId};populateLocationSelects();
@@ -180,6 +228,7 @@
     if(event.target.closest('#newLaneButton')){openLaneDialog();return;} if(event.target.closest('#routeLaneButton')){openLaneDialog((state.routes?.items||[]).find((x)=>x.id===state.selectedRouteId));return;}
     if(event.target.closest('#newAllocationButton')){openAllocationDialog();return;} if(event.target.closest('#routeAllocationButton')){openAllocationDialog((state.routes?.items||[]).find((x)=>x.id===state.selectedRouteId));return;}
     const allocationEdit=event.target.closest('[data-allocation-edit]');if(allocationEdit){const a=(state.transportAllocations?.items||[]).find((x)=>x.id===allocationEdit.dataset.allocationEdit);if(a)openAllocationDialog(null,a);return;}
+    const allocationOption=event.target.closest('[data-allocation-option]');if(allocationOption){$('#allocationVehicle').value=allocationOption.dataset.allocationOption;$('#allocationPolicy').value=allocationOption.dataset.allocationOptionPolicy;renderAllocationServiceOptions();return;}
     const relocate=event.target.closest('[data-fleet-relocate]');if(relocate){openRelocationDialog(relocate.dataset.fleetRelocate,relocate.dataset.fleetSource,Number(relocate.dataset.fleetFree));return;}
     const allocationMode=event.target.closest('[data-allocation-mode]');if(allocationMode){try{await command('ChangeTransportAllocationMode',{allocation_id:allocationMode.dataset.allocationMode,control_mode:allocationMode.dataset.mode==='units'?'capacity':'units'});}catch{}return;}
     const allocationToggle=event.target.closest('[data-allocation-toggle]');if(allocationToggle){try{await command(allocationToggle.dataset.paused==='1'?'ResumeTransportAllocation':'PauseTransportAllocation',{allocation_id:allocationToggle.dataset.allocationToggle});}catch{}return;}
@@ -196,7 +245,7 @@
     $('#routeOriginFilter').addEventListener('change',renderRouteList);$('#routeDestinationFilter').addEventListener('change',renderRouteList);
     $('#laneCloseButton').addEventListener('click',()=>{editingLaneId=null;$('#laneDialog').close();});$('#laneCancelButton').addEventListener('click',()=>{editingLaneId=null;$('#laneDialog').close();});
     $('#laneForm').addEventListener('submit',async(event)=>{event.preventDefault();const capacity=Number($('#laneCapacity').value),priority=Number($('#lanePriority').value);try{if(editingLaneId){await command('UpdateLogisticsLane',{lane_id:editingLaneId,requested_capacity_t_per_day:capacity,priority,path_policy:$('#lanePolicy').value});editingLaneId=null;}else{const source=$('#laneSource').value,destination=$('#laneDestination').value;if(source===destination){banner('Laneの出発地と到着地は異なる必要があります','error');return;}await command('CreateLogisticsLane',{source_id:source,destination_id:destination,requested_capacity_t_per_day:capacity,priority,path:null,path_policy:$('#lanePolicy').value});}$('#laneDialog').close();}catch{}});
-    $('#allocationMode').addEventListener('change',updateAllocationModeFields);$('#allocationCloseButton').addEventListener('click',()=>{editingAllocationId=null;$('#allocationDialog').close();});$('#allocationCancelButton').addEventListener('click',()=>{editingAllocationId=null;$('#allocationDialog').close();});
+    $('#allocationMode').addEventListener('change',updateAllocationModeFields);$('#allocationVehicle').addEventListener('change',()=>renderAllocationServiceOptions());$('#allocationPolicy').addEventListener('change',()=>renderAllocationServiceOptions());$('#allocationSource').addEventListener('change',updateAllocationServiceOptions);$('#allocationDestination').addEventListener('change',updateAllocationServiceOptions);$('#allocationCloseButton').addEventListener('click',()=>{editingAllocationId=null;allocationOptionSerial++;allocationOptionsView=null;$('#allocationDialog').close();});$('#allocationCancelButton').addEventListener('click',()=>{editingAllocationId=null;allocationOptionSerial++;allocationOptionsView=null;$('#allocationDialog').close();});
     $('#allocationForm').addEventListener('submit',async(event)=>{event.preventDefault();const mode=$('#allocationMode').value;try{if(editingAllocationId){const payload={allocation_id:editingAllocationId,priority:Number($('#allocationPriority').value),path_policy:$('#allocationPolicy').value};if(mode==='units')payload.target_units=Number($('#allocationUnits').value);else{payload.target_forward_t_per_day=Number($('#allocationForward').value);payload.target_reverse_t_per_day=Number($('#allocationReverse').value);}await command('UpdateTransportAllocation',payload);editingAllocationId=null;}else{const payload={vehicle_definition_id:$('#allocationVehicle').value,anchor_location_id:$('#allocationSource').value,destination_id:$('#allocationDestination').value,priority:Number($('#allocationPriority').value),control_mode:mode,path:null,path_policy:$('#allocationPolicy').value};if(mode==='units')payload.target_units=Number($('#allocationUnits').value);else{payload.target_forward_t_per_day=Number($('#allocationForward').value);payload.target_reverse_t_per_day=Number($('#allocationReverse').value);}await command('CreateTransportAllocation',payload);}$('#allocationDialog').close();}catch{}});
     $('#relocationCloseButton').addEventListener('click',()=>{relocationContext=null;relocationPreviewSerial++;$('#relocationDialog').close();});$('#relocationCancelButton').addEventListener('click',()=>{relocationContext=null;relocationPreviewSerial++;$('#relocationDialog').close();});
     $('#relocationDestination').addEventListener('change',updateRelocationPreview);$('#relocationUnits').addEventListener('input',updateRelocationPreview);$('#relocationPolicy').addEventListener('change',updateRelocationPreview);
