@@ -26,30 +26,19 @@ def test_suite_runner_reuses_one_process_without_dropping_scenarios(monkeypatch,
     imported: list[str] = []
     executed: list[str] = []
 
-    shared_browser = object()
-
     def fake_import(name: str):
         imported.append(name)
-        return SimpleNamespace(run=lambda *, browser: executed.append((name, browser)))
-
-    class FakeBrowserManager:
-        def __enter__(self):
-            return shared_browser
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(runner, "managed_browser", lambda _browser_name: FakeBrowserManager())
+        return SimpleNamespace(run=lambda: executed.append(name))
 
     monkeypatch.setattr(runner.importlib, "import_module", fake_import)
     selected = ["acceptance", "interaction_continuity", "logistics_ui"]
     runner.run_scenarios(selected)
 
     assert imported == selected
-    assert executed == [(name, shared_browser) for name in selected]
+    assert executed == selected
     output = capsys.readouterr().out
     assert "E2E suite bootstrap:" in output
-    assert "E2E browser ready: chromium" in output
+    assert "each scenario owns a fresh browser process" in output
     assert "E2E suite complete: 3 scenario(s)" in output
 
 
