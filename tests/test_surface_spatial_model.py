@@ -27,6 +27,7 @@ def _cell(cell_id: str, body_id: CelestialBodyId, neighbors: tuple[str, ...]) ->
         SurfacePoint(0.0, 0.0),
         frozenset(SurfaceCellId(value) for value in neighbors),
         SurfaceField(),
+        display_name=cell_id,
     )
 
 
@@ -78,6 +79,8 @@ def test_base_surface_map_exposes_affiliation_without_creating_cell_inventory_no
     assert len(view.locations) == 3
     assert any(not cell.developed for cell in view.cells)
     assert all(cell.environment for cell in view.cells)
+    assert all(cell.display_name for cell in view.cells)
+    assert {cell.display_name for cell in view.cells} >= {"南極高地縁辺", "極域永久影クレーター", "表側海地域"}
     assert all(cell.id not in {str(value) for value in sim.graph.operational_node_ids()} for cell in sim.graph.surface_cells.values())
     assert {location_id for location_id, _resource_id in sim.inventory.stock} == before_inventory_locations
 

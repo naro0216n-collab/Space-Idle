@@ -23,7 +23,7 @@ from . import base_ids as ids
 
 
 def _earth_cell(
-    cell_id, latitude: float, longitude: float, neighbors, terrain: SurfaceField,
+    cell_id, display_name: str, latitude: float, longitude: float, neighbors, terrain: SurfaceField,
     resource_potential_by_resource,
 ) -> SurfaceCellDef:
     return SurfaceCellDef(
@@ -35,11 +35,12 @@ def _earth_cell(
         terrain=terrain,
         static_geology={"crust_accessibility": 1.0},
         resource_potential_by_resource=resource_potential_by_resource,
+        display_name=display_name,
     )
 
 
 def _moon_cell(
-    cell_id, latitude: float, longitude: float, neighbors, terrain: SurfaceField,
+    cell_id, display_name: str, latitude: float, longitude: float, neighbors, terrain: SurfaceField,
     resource_potential_by_resource,
 ) -> SurfaceCellDef:
     return SurfaceCellDef(
@@ -51,6 +52,7 @@ def _moon_cell(
         terrain=terrain,
         static_geology={"regolith_accessibility": 1.0},
         resource_potential_by_resource=resource_potential_by_resource,
+        display_name=display_name,
     )
 
 
@@ -82,6 +84,7 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
     earth_cells = (
         _earth_cell(
             ids.EARTH_CELL_INDUSTRIAL,
+            "産業中核地域",
             35.0,
             139.0,
             (ids.EARTH_CELL_COASTAL, ids.EARTH_CELL_INLAND),
@@ -90,6 +93,7 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
         ),
         _earth_cell(
             ids.EARTH_CELL_COASTAL,
+            "沿岸地域",
             20.0,
             150.0,
             (ids.EARTH_CELL_INDUSTRIAL,),
@@ -98,6 +102,7 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
         ),
         _earth_cell(
             ids.EARTH_CELL_INLAND,
+            "内陸地域",
             45.0,
             110.0,
             (ids.EARTH_CELL_INDUSTRIAL,),
@@ -108,6 +113,7 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
     moon_cells = (
         _moon_cell(
             ids.MOON_CELL_SOUTH_POLAR_RIDGE,
+            "南極高地縁辺",
             -88.0,
             30.0,
             (ids.MOON_CELL_POLAR_COLD_TRAP, ids.MOON_CELL_SOUTH_POLAR_PLAIN),
@@ -116,6 +122,7 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
         ),
         _moon_cell(
             ids.MOON_CELL_POLAR_COLD_TRAP,
+            "極域永久影クレーター",
             -89.0,
             50.0,
             (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.MOON_CELL_SOUTH_POLAR_PLAIN),
@@ -124,6 +131,7 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
         ),
         _moon_cell(
             ids.MOON_CELL_SOUTH_POLAR_PLAIN,
+            "南極平原",
             -82.0,
             40.0,
             (
@@ -136,6 +144,7 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
         ),
         _moon_cell(
             ids.MOON_CELL_NEARSIDE_MARE,
+            "表側海地域",
             0.0,
             20.0,
             (ids.MOON_CELL_EQUATORIAL_HIGHLANDS,),
@@ -144,6 +153,7 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
         ),
         _moon_cell(
             ids.MOON_CELL_EQUATORIAL_HIGHLANDS,
+            "赤道高地",
             5.0,
             90.0,
             (
@@ -156,6 +166,7 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
         ),
         _moon_cell(
             ids.MOON_CELL_FARSIDE_HIGHLANDS,
+            "裏側高地",
             5.0,
             170.0,
             (ids.MOON_CELL_EQUATORIAL_HIGHLANDS,),

@@ -34,9 +34,9 @@
   const surfaceCellLabel=(id)=>{
     const cell=surfaceCell(id);
     if(!cell)return id||'—';
-    if(cell.is_location_core&&cell.location_id)return `${locationName(cell.location_id)} 中心Cell`;
-    const tail=String(id).split('.').pop().replaceAll('_',' ');
-    return cell.location_id?`${locationName(cell.location_id)} · ${tail}`:tail;
+    const name=cell.display_name||'名称未設定地域';
+    if(cell.is_location_core&&cell.location_id)return `${locationName(cell.location_id)} 中心 · ${name}`;
+    return cell.location_id?`${locationName(cell.location_id)} · ${name}`:name;
   };
   const environmentValue=(value)=>{
     if(value==null)return '—';

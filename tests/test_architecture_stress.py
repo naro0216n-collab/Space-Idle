@@ -67,10 +67,12 @@ def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and
     graph = SpatialGraph()
     graph.add_body(CelestialBodyDef(mars_body, "火星", 1000.0))
     graph.add_surface_cell(SurfaceCellDef(
-        cell_a, mars_body, 100.0, SurfacePoint(5.0, 10.0), frozenset({cell_b}), SurfaceField()
+        cell_a, mars_body, 100.0, SurfacePoint(5.0, 10.0), frozenset({cell_b}), SurfaceField(),
+        display_name="Stress Cell A",
     ))
     graph.add_surface_cell(SurfaceCellDef(
-        cell_b, mars_body, 120.0, SurfacePoint(8.0, 12.0), frozenset({cell_a}), SurfaceField()
+        cell_b, mars_body, 120.0, SurfacePoint(8.0, 12.0), frozenset({cell_a}), SurfaceField(),
+        display_name="Stress Cell B",
     ))
     graph.add_location(LocationState(site_a, "火星A", mars_body, cell_a))
     graph.add_location(LocationState(site_b, "火星B", mars_body, cell_b))

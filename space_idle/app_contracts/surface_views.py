@@ -76,6 +76,7 @@ class SurfaceCellRow:
     development_options: tuple[SurfaceCellDevelopmentOption, ...]
     facility_placement_options: tuple[SurfaceFacilityPlacementOption, ...] = ()
     foundation_options: tuple[SurfaceCellFoundationOption, ...] = ()
+    display_name: str = ""
 
 
 @dataclass(frozen=True)

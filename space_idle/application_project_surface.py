@@ -169,6 +169,7 @@ class SurfaceProjectorMixin:
                     development_options,
                     facility_placement_options,
                     foundation_options,
+                    cell.display_name or str(cell.id),
                 )
             )
         return SurfaceMapView(str(body.id), body.display_name, tuple(rows), locations)

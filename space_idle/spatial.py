@@ -159,10 +159,13 @@ class SurfaceCellDef:
     terrain: SurfaceField = SurfaceField()
     static_geology: Mapping[str, float] = field(default_factory=dict)
     resource_potential_by_resource: Mapping[DefinitionId, float] = field(default_factory=dict)
+    display_name: str = ""
 
     def __post_init__(self) -> None:
         if self.area_km2 <= 0:
             raise ValueError("surface cell area must be positive")
+        if not self.display_name.strip():
+            raise ValueError("surface cell display name must not be empty")
         if self.id in self.neighbor_ids:
             raise ValueError("surface cell cannot be adjacent to itself")
         if any(not key for key in self.static_geology):
