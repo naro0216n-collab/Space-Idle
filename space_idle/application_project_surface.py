@@ -16,7 +16,7 @@ class SurfaceProjectorMixin:
         body = sim.graph.bodies[body_id]
         locations = tuple(
             SurfaceLocationTerritoryRow(
-                str(location.id),
+                str(location.operational_node_id),
                 location.display_name,
                 str(location.body_id),
                 str(location.core_cell_id),
@@ -24,7 +24,7 @@ class SurfaceProjectorMixin:
             )
             for location in sorted(
                 (row for row in sim.graph.locations.values() if row.body_id == body_id),
-                key=lambda row: str(row.id),
+                key=lambda row: str(row.operational_node_id),
             )
         )
         rows: list[SurfaceCellRow] = []
@@ -39,27 +39,27 @@ class SurfaceProjectorMixin:
             active_spatial_project = sim.projects.active_spatial_project_for_cell(cell.id)
             for location in sorted(
                 (row for row in sim.graph.locations.values() if row.body_id == body_id),
-                key=lambda row: str(row.id),
+                key=lambda row: str(row.operational_node_id),
             ):
-                location_power = sim.power.snapshot(location.id, sim.facilities, sim.day)
+                location_power = sim.power.snapshot(location.operational_node_id, sim.facilities, sim.day)
                 failures = sim.projects.surface_cell_development_failures(
-                    location.id, cell.id, sim.day, location_power
+                    location.operational_node_id, cell.id, sim.day, location_power
                 )
                 blockers = tuple((failure.code, failure.detail) for failure in failures)
                 projected_demand = None
                 projected_fulfillment = None
                 limiting_factors: tuple[str, ...] = ()
-                graph_blockers = sim.graph.surface_cell_development_failures(location.id, cell.id)
+                graph_blockers = sim.graph.surface_cell_development_failures(location.operational_node_id, cell.id)
                 if not graph_blockers and sim.surface_infrastructure is not None:
                     projected = sim.surface_infrastructure.prospective_development_snapshot(
-                        location.id, cell.id, sim.facilities, location_power, sim.day
+                        location.operational_node_id, cell.id, sim.facilities, location_power, sim.day
                     )
                     projected_demand = projected.demand
                     projected_fulfillment = projected.fulfillment
                     limiting_factors = projected.limiting_factors
                 development_options_list.append(
                     SurfaceCellDevelopmentOption(
-                        str(location.id), blockers, projected_demand, projected_fulfillment, limiting_factors,
+                        str(location.operational_node_id), blockers, projected_demand, projected_fulfillment, limiting_factors,
                         None if development_recipe is None else development_recipe.construction_work,
                         () if development_recipe is None else tuple(
                             (str(req.resource_id), req.amount_t) for req in development_recipe.resources
@@ -69,7 +69,7 @@ class SurfaceProjectorMixin:
                         )),
                         None if active_spatial_project is None else str(active_spatial_project.id),
                         tuple(sim.projects.sourcing_policy_options()),
-                        tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(location.id)),
+                        tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(location.operational_node_id)),
                     )
                 )
             development_options = tuple(development_options_list)

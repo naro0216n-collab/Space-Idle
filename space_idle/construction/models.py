@@ -128,7 +128,7 @@ class ConstructionResourceProviderSpec:
 
 @dataclass
 class ProjectResourceState:
-    """Mutable accounting for a recipe resource at the build host Location."""
+    """Mutable accounting for a recipe resource at the build host Operational Node."""
 
     committed_t: float = 0.0
     # None while the project is still waiting for host inventory. Once set,
@@ -142,8 +142,8 @@ class ConstructionProject:
     target: ConstructionTarget
     # Existing operational Location/Node that owns procurement and supplies
     # construction flow. For surface-cell development this is the Location being
-    # expanded; for founding it is the explicit staging/provider Location.
-    location_id: SpatialNodeId
+    # expanded; for founding it is the explicit staging/provider Operational Node.
+    operational_node_id: SpatialNodeId
     priority: int
     sourcing_policy: SourcingPolicy
     import_source_id: SpatialNodeId | None

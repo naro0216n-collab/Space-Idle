@@ -50,6 +50,11 @@ class TransportLaneMixin:
         path: tuple[RouteId, ...] | None = None,
         path_policy: PathPolicy = PathPolicy.FASTEST,
     ) -> EntityId:
+        graph = self.facilities.environment.graph
+        if not graph.has_operational_node(source_id):
+            raise KeyError(source_id)
+        if not graph.has_operational_node(destination_id):
+            raise KeyError(destination_id)
         if path is not None:
             self.validate_path_structure(source_id, destination_id, path)
         self._lane_counter += 1

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import heapq
 
+from ..resource_claim import ResourceAllocationPlan, ResourceClaim
 from ..resource_demand import ResourceDemand
 from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .lanes import DemandSupplyOptions, LaneRuntimeMetrics, LogisticsLaneSnapshot
@@ -31,6 +32,22 @@ class _ServiceEdge:
     propellant_t_per_t: float = 0.0
 
 
+@dataclass(frozen=True)
+class _PlannedDispatch:
+    lane_id: EntityId
+    demand: ResourceDemand
+    path: tuple[_ServiceEdge, ...]
+    amount_t: float
+    cargo_claim_id: EntityId
+
+
+@dataclass(frozen=True)
+class LogisticsResourcePlan:
+    dispatches: tuple[_PlannedDispatch, ...]
+    claims: tuple[ResourceClaim, ...]
+    planned_usage: tuple[tuple[EntityId, DirectionalCapacity], ...]
+
+
 class SteadyLogisticsMixin:
     """Shared sustained-capacity allocation and Cargo Flow execution.
 
@@ -42,7 +59,7 @@ class SteadyLogisticsMixin:
         edges: list[_ServiceEdge] = []
         for allocation in sorted(
             self.transport_allocations.values(),
-            key=lambda row: (str(row.vehicle_definition_id), str(row.anchor_location_id), str(row.destination_id), str(row.id)),
+            key=lambda row: (str(row.vehicle_definition_id), str(row.anchor_node_id), str(row.destination_id), str(row.id)),
         ):
             plan = self.derive_transport_service_plan(allocation.id, day)
             if not plan.feasible or allocation.paused or allocation.active_units <= 0:
@@ -74,7 +91,7 @@ class SteadyLogisticsMixin:
                 edges.append(
                     _ServiceEdge(
                         f"allocation:{allocation.id}:forward",
-                        allocation.anchor_location_id,
+                        allocation.anchor_node_id,
                         allocation.destination_id,
                         snapshot.available.forward_t_per_day,
                         max(1, plan.forward_latency_days),
@@ -89,7 +106,7 @@ class SteadyLogisticsMixin:
                     _ServiceEdge(
                         f"allocation:{allocation.id}:reverse",
                         allocation.destination_id,
-                        allocation.anchor_location_id,
+                        allocation.anchor_node_id,
                         snapshot.available.reverse_t_per_day,
                         max(1, plan.reverse_latency_days or 1),
                         plan.reverse_path,
@@ -313,58 +330,151 @@ class SteadyLogisticsMixin:
                 totals[key] = totals.get(key, 0.0) + amount
         return totals
 
-    def _candidate_amount_is_fundable(
-        self,
-        lane: LogisticsLane,
-        demand: ResourceDemand,
-        path: tuple[_ServiceEdge, ...],
-        amount: float,
-        used: dict[EntityId, DirectionalCapacity],
-        stock_budget: dict[tuple[SpatialNodeId, DefinitionId], float],
-        current_operational: dict[tuple[SpatialNodeId, DefinitionId], float],
-        funds_budget: float,
-        day: int,
-    ) -> bool:
-        if amount <= 1e-12:
-            return True
-        proposed_used = self._allocation_used_after(used, path, amount)
-        proposed_operational = self._operational_resource_totals(proposed_used, day)
-        required: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
-        required[(lane.source_id, demand.resource_id)] = amount
-        for key, total in proposed_operational.items():
-            increment = max(0.0, total - current_operational.get(key, 0.0))
-            required[key] = required.get(key, 0.0) + increment
-        if any(stock_budget.get(key, 0.0) + 1e-9 < needed for key, needed in required.items()):
-            return False
-        cost = amount * sum(edge.cost_musd_per_t for edge in path)
-        return funds_budget + 1e-9 >= cost
+    @staticmethod
+    def _cargo_claim_id(lane_id: EntityId, demand_id: EntityId) -> EntityId:
+        return EntityId(f"claim.logistics.cargo:{lane_id}:{demand_id}")
 
-    def _feasible_dispatch_amount(
+    @staticmethod
+    def _operation_claim_id(
+        allocation_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId
+    ) -> EntityId:
+        return EntityId(
+            f"claim.transport.operation:{allocation_id}:{location_id}:{resource_id}"
+        )
+
+    def _operational_resource_totals_by_allocation(
         self,
-        lane: LogisticsLane,
-        demand: ResourceDemand,
-        path: tuple[_ServiceEdge, ...],
-        upper: float,
         used: dict[EntityId, DirectionalCapacity],
-        stock_budget: dict[tuple[SpatialNodeId, DefinitionId], float],
-        current_operational: dict[tuple[SpatialNodeId, DefinitionId], float],
-        funds_budget: float,
         day: int,
+    ) -> dict[tuple[EntityId, SpatialNodeId, DefinitionId], float]:
+        totals: dict[tuple[EntityId, SpatialNodeId, DefinitionId], float] = {}
+        for allocation_id, directional in sorted(used.items(), key=lambda row: str(row[0])):
+            snapshot = self.transport_capacity_snapshot(
+                allocation_id, day=day, used=directional
+            )
+            for location_id, resource_id, amount in snapshot.operational_resource_demand:
+                key = (allocation_id, location_id, resource_id)
+                totals[key] = totals.get(key, 0.0) + amount
+        return totals
+
+    @staticmethod
+    def _funds_limited_amount(
+        path: tuple[_ServiceEdge, ...], upper: float, funds_budget: float
     ) -> float:
-        if self._candidate_amount_is_fundable(
-            lane, demand, path, upper, used, stock_budget, current_operational, funds_budget, day
-        ):
+        cost_per_t = sum(edge.cost_musd_per_t for edge in path)
+        if cost_per_t <= 1e-12:
             return upper
-        lo, hi = 0.0, upper
-        for _ in range(36):
-            mid = (lo + hi) / 2.0
-            if self._candidate_amount_is_fundable(
-                lane, demand, path, mid, used, stock_budget, current_operational, funds_budget, day
-            ):
-                lo = mid
-            else:
-                hi = mid
-        return lo
+        return min(upper, max(0.0, funds_budget) / cost_per_t)
+
+    def plan_capacity_logistics(
+        self, day: int, demands: tuple[ResourceDemand, ...]
+    ) -> LogisticsResourcePlan:
+        """Plan transport and expose all current inventory use as ResourceClaims.
+
+        Transport capacity and routing are resolved without spending source stock.
+        Cargo and owned-fleet operational resources then compete in the shared
+        Resource allocator with every local Domain consumer.
+        """
+        edges = self._service_edges(day)
+        remaining = {edge.key: edge.capacity_t_per_day for edge in edges}
+        demand_rows = tuple(sorted(demands, key=lambda row: (-row.priority, str(row.id))))
+        pipeline = self._flow_pipeline_by_demand({row.id for row in demand_rows})
+        used: dict[EntityId, DirectionalCapacity] = {}
+        funds_budget = self.account.funds_musd
+        dispatches: list[_PlannedDispatch] = []
+
+        for lane in sorted(self.lanes.values(), key=self._lane_execution_key):
+            if lane.paused:
+                continue
+            lane_capacity = self._lane_transport_capacity(lane, day, edges, remaining)
+            if lane_capacity <= 1e-12:
+                continue
+            used_lane = 0.0
+            for demand in demand_rows:
+                if used_lane + 1e-9 >= lane_capacity:
+                    break
+                if not self._lane_accepts_demand(lane, demand):
+                    continue
+                while used_lane + 1e-9 < lane_capacity:
+                    gap = max(0.0, demand.amount_t - pipeline[demand.id])
+                    if gap <= 1e-9:
+                        break
+                    available_edges = self._edges_with_remaining(edges, remaining)
+                    if not available_edges:
+                        break
+                    try:
+                        path = self.lane_service_path(lane, day, available_edges)
+                    except ValueError:
+                        break
+                    if not path:
+                        break
+                    path_capacity = min(remaining[edge.key] for edge in path)
+                    upper = min(gap, lane_capacity - used_lane, path_capacity)
+                    amount = self._funds_limited_amount(path, upper, funds_budget)
+                    if amount <= 1e-9:
+                        break
+
+                    used = self._allocation_used_after(used, path, amount)
+                    cost = amount * sum(edge.cost_musd_per_t for edge in path)
+                    funds_budget -= cost
+                    for edge in path:
+                        remaining[edge.key] -= amount
+                    used_lane += amount
+                    pipeline[demand.id] += amount
+                    dispatches.append(_PlannedDispatch(
+                        lane.id,
+                        demand,
+                        path,
+                        amount,
+                        self._cargo_claim_id(lane.id, demand.id),
+                    ))
+
+        cargo_totals: dict[EntityId, float] = {}
+        cargo_meta: dict[EntityId, _PlannedDispatch] = {}
+        for row in dispatches:
+            cargo_totals[row.cargo_claim_id] = cargo_totals.get(row.cargo_claim_id, 0.0) + row.amount_t
+            cargo_meta.setdefault(row.cargo_claim_id, row)
+
+        claims: list[ResourceClaim] = []
+        for claim_id, requested in sorted(cargo_totals.items(), key=lambda row: str(row[0])):
+            row = cargo_meta[claim_id]
+            demand = row.demand
+            lane = self.lanes[row.lane_id]
+            claims.append(ResourceClaim(
+                claim_id,
+                lane.source_id,
+                demand.resource_id,
+                requested,
+                demand.priority,
+                "logistics_dispatch",
+                demand.owner_id,
+                f"lane:{lane.id}",
+                demand_id=demand.id,
+            ))
+
+        operational = self._operational_resource_totals_by_allocation(used, day)
+        for (allocation_id, location_id, resource_id), requested in sorted(
+            operational.items(), key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2]))
+        ):
+            if requested <= 1e-12:
+                continue
+            allocation = self.transport_allocations[allocation_id]
+            claims.append(ResourceClaim(
+                self._operation_claim_id(allocation_id, location_id, resource_id),
+                location_id,
+                resource_id,
+                requested,
+                allocation.priority,
+                "transport_operation",
+                allocation_id,
+                "sustained_transport",
+            ))
+
+        return LogisticsResourcePlan(
+            tuple(dispatches),
+            tuple(claims),
+            tuple(sorted(used.items(), key=lambda row: str(row[0]))),
+        )
 
     def _latest_completed_transport_day(self, day: int) -> int:
         """Resolve the dispatch day represented by current decision projections.
@@ -430,126 +540,89 @@ class SteadyLogisticsMixin:
                 del self.cargo_flows[flow_id]
 
     def advance_capacity_logistics(
-        self, day: int, demands: tuple[ResourceDemand, ...]
+        self,
+        day: int,
+        plan: LogisticsResourcePlan,
+        allocations: ResourceAllocationPlan,
     ) -> None:
-        # Derive transport availability before any arrivals in this tick. This
-        # snapshot is never retroactively increased by cargo received below.
-        self.advance_fleet_state(day)
-        edges = self._service_edges(day)
-        remaining = {edge.key: edge.capacity_t_per_day for edge in edges}
-        demand_rows = tuple(sorted(demands, key=lambda row: (-row.priority, str(row.id))))
-        pipeline = self._flow_pipeline_by_demand({row.id for row in demand_rows})
-        stock_budget = {
-            (location_id, resource_id): self.inventory.available(location_id, resource_id)
-            for location_id in self.facilities.environment.graph.operational_node_ids()
-            for resource_id in {row.resource_id for row in demand_rows}
-        }
-        # Operational resources may not appear in the demand set.
-        for allocation in self.transport_allocations.values():
-            plan = self.derive_transport_service_plan(allocation.id, day)
-            for location_id, resource_id, _amount in plan.resource_t_per_full_utilization_day:
-                stock_budget.setdefault(
-                    (location_id, resource_id), self.inventory.available(location_id, resource_id)
-                )
+        """Execute only transport work authorized by ResourceAllocation."""
+        operation_factor: dict[EntityId, float] = {}
+        for allocation_id, _directional in plan.planned_usage:
+            ratios: list[float] = []
+            for claim in plan.claims:
+                if claim.owner_kind != "transport_operation" or claim.owner_id != allocation_id:
+                    continue
+                try:
+                    allocated = allocations.allocated(claim.id)
+                except KeyError:
+                    allocated = 0.0
+                if claim.requested_amount > 1e-12:
+                    ratios.append(max(0.0, allocated) / claim.requested_amount)
+            operation_factor[allocation_id] = min(1.0, min(ratios)) if ratios else 1.0
+
+        cargo_budget: dict[EntityId, float] = {}
+        for claim in plan.claims:
+            if claim.owner_kind != "logistics_dispatch":
+                continue
+            try:
+                cargo_budget[claim.id] = allocations.allocated(claim.id)
+            except KeyError:
+                cargo_budget[claim.id] = 0.0
 
         used: dict[EntityId, DirectionalCapacity] = {}
-        operational_reserved: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
-        funds_budget = self.account.funds_musd
-        for lane in sorted(self.lanes.values(), key=self._lane_execution_key):
-            if lane.paused:
+        for row in plan.dispatches:
+            path_factor = min(
+                (operation_factor.get(edge.allocation_id, 1.0) for edge in row.path if edge.allocation_id is not None),
+                default=1.0,
+            )
+            allowed_by_operation = row.amount_t * max(0.0, min(1.0, path_factor))
+            allowed_by_cargo = cargo_budget.get(row.cargo_claim_id, 0.0)
+            amount = min(allowed_by_operation, allowed_by_cargo)
+            if amount <= 1e-9:
                 continue
-            lane_capacity = self._lane_transport_capacity(lane, day, edges, remaining)
-            if lane_capacity <= 1e-12:
-                continue
 
-            used_lane = 0.0
-            for demand in demand_rows:
-                if used_lane + 1e-9 >= lane_capacity:
-                    break
-                if not self._lane_accepts_demand(lane, demand):
-                    continue
-                while used_lane + 1e-9 < lane_capacity:
-                    gap = max(0.0, demand.amount_t - pipeline[demand.id])
-                    if gap <= 1e-9:
-                        break
-                    available_edges = self._edges_with_remaining(edges, remaining)
-                    if not available_edges:
-                        break
-                    try:
-                        path = self.lane_service_path(lane, day, available_edges)
-                    except ValueError:
-                        break
-                    if not path:
-                        break
-                    path_capacity = min(remaining[edge.key] for edge in path)
-                    upper = min(gap, lane_capacity - used_lane, path_capacity)
-                    amount = self._feasible_dispatch_amount(
-                        lane,
-                        demand,
-                        path,
-                        upper,
-                        used,
-                        stock_budget,
-                        operational_reserved,
-                        funds_budget,
-                        day,
-                    )
-                    if amount <= 1e-9:
-                        # The policy-selected path is currently unfundable by
-                        # resource/funds budgets. Do not burn its shared capacity;
-                        # stop this Lane rather than looping or silently changing
-                        # the player's policy.
-                        break
+            lane = self.lanes[row.lane_id]
+            demand = row.demand
+            cost = amount * sum(edge.cost_musd_per_t for edge in row.path)
+            self.inventory.consume_allocated(lane.source_id, demand.resource_id, amount)
+            if cost > 1e-12 and not self.account.spend(cost):
+                raise RuntimeError("external transport funds changed after planning")
+            cargo_budget[row.cargo_claim_id] = max(0.0, allowed_by_cargo - amount)
+            used = self._allocation_used_after(used, row.path, amount)
 
-                    proposed_used = self._allocation_used_after(used, path, amount)
-                    proposed_operational = self._operational_resource_totals(proposed_used, day)
-                    for key, total in proposed_operational.items():
-                        increment = max(0.0, total - operational_reserved.get(key, 0.0))
-                        stock_budget[key] = stock_budget.get(key, 0.0) - increment
-                    operational_reserved = proposed_operational
-                    cargo_key = (lane.source_id, demand.resource_id)
-                    stock_budget[cargo_key] = stock_budget.get(cargo_key, 0.0) - amount
-                    used = proposed_used
-                    cost = amount * sum(edge.cost_musd_per_t for edge in path)
-                    funds_budget -= cost
-                    for edge in path:
-                        remaining[edge.key] -= amount
-                    used_lane += amount
-                    pipeline[demand.id] += amount
+            self._cargo_flow_counter += 1
+            flow_id = EntityId(f"cargo.flow.{self._cargo_flow_counter}")
+            self.cargo_flows[flow_id] = CargoFlowBatch(
+                flow_id,
+                demand.resource_id,
+                amount,
+                lane.source_id,
+                lane.destination_id,
+                lane.id,
+                demand.id,
+                demand.owner_kind,
+                demand.owner_id,
+                demand.priority,
+                tuple(edge.key for edge in row.path),
+                tuple(edge.destination_id for edge in row.path),
+                day,
+                day + sum(edge.latency_days for edge in row.path),
+            )
 
-                    if not self.inventory.take_unreserved(lane.source_id, demand.resource_id, amount):
-                        raise RuntimeError("cargo stock changed after tick-start allocation")
-                    if cost > 1e-12 and not self.account.spend(cost):
-                        raise RuntimeError("external transport funds changed after tick-start allocation")
-                    self._cargo_flow_counter += 1
-                    flow_id = EntityId(f"cargo.flow.{self._cargo_flow_counter}")
-                    self.cargo_flows[flow_id] = CargoFlowBatch(
-                        flow_id,
-                        demand.resource_id,
-                        amount,
-                        lane.source_id,
-                        lane.destination_id,
-                        lane.id,
-                        demand.id,
-                        demand.owner_kind,
-                        demand.owner_id,
-                        demand.priority,
-                        tuple(edge.key for edge in path),
-                        tuple(edge.destination_id for edge in path),
-                        day,
-                        day + sum(edge.latency_days for edge in path),
-                    )
-
-        # Consume operational resources only after Lane usage is known. These
-        # amounts came from tick-start budgets, so same-tick arrivals cannot fund
-        # this tick's Transport Capacity.
-        for (location_id, resource_id), amount in sorted(
-            operational_reserved.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
+        operational = self._operational_resource_totals_by_allocation(used, day)
+        for (allocation_id, location_id, resource_id), amount in sorted(
+            operational.items(), key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2]))
         ):
             if amount <= 1e-12:
                 continue
-            if not self.inventory.take_unreserved(location_id, resource_id, amount):
-                raise RuntimeError("transport operational resource budget was overcommitted")
+            claim_id = self._operation_claim_id(allocation_id, location_id, resource_id)
+            try:
+                allocated = allocations.allocated(claim_id)
+            except KeyError:
+                allocated = 0.0
+            if amount > allocated + 1e-8:
+                raise RuntimeError("transport operation exceeded allocated resource")
+            self.inventory.consume_allocated(location_id, resource_id, amount)
 
         for allocation_id, directional in used.items():
             if directional.forward_t_per_day > 1e-12 or directional.reverse_t_per_day > 1e-12:

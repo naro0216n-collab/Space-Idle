@@ -10,7 +10,7 @@ class DirectionalCapacityRow:
 
 @dataclass(frozen=True)
 class InfrastructureRequirementRow:
-    location_id: str
+    operational_node_id: str
     capability_id: str
     minimum_capacity: float
     mode: str
@@ -20,7 +20,7 @@ class InfrastructureRequirementRow:
 
 @dataclass(frozen=True)
 class RouteEndpointRow:
-    location_id: str
+    node_id: str
     locator_kind: str
     locator_id: str
     surface_cell_id: str | None
@@ -69,7 +69,7 @@ class RouteRow:
 class FleetPoolRow:
     vehicle_definition_id: str
     display_name: str
-    location_id: str
+    operational_node_id: str
     total_units: int
     free_units: int
     transport_units: int
@@ -84,7 +84,7 @@ class TransportAllocationRow:
     id: str
     vehicle_definition_id: str
     display_name: str
-    anchor_location_id: str
+    anchor_node_id: str
     destination_id: str
     priority: int
     control_mode: str
@@ -118,8 +118,8 @@ class FleetRelocationRow:
     units: int
     source_id: str
     destination_id: str
-    departure_day: int
-    arrival_day: int
+    departure_day: int | None
+    arrival_day: int | None
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,7 @@ class FleetReleaseRow:
     allocation_id: str
     vehicle_definition_id: str
     display_name: str
-    location_id: str
+    operational_node_id: str
     units: int
     release_day: int
     remaining_days: int
@@ -136,7 +136,7 @@ class FleetReleaseRow:
 
 @dataclass(frozen=True)
 class FleetRelocationResourceRequirementRow:
-    location_id: str
+    operational_node_id: str
     resource_id: str
     required_t: float
     available_t: float
@@ -165,7 +165,7 @@ class CargoFlowRow:
 class VehicleProductionOptionRow:
     vehicle_definition_id: str
     display_name: str
-    location_id: str
+    operational_node_id: str
     production_capability_id: str | None
     production_days: float
     resources: tuple[tuple[str, float], ...]
@@ -177,7 +177,7 @@ class VehicleProductionRow:
     id: str
     vehicle_definition_id: str
     display_name: str
-    location_id: str
+    operational_node_id: str
     phase: str
     paused: bool
     progress_days: float

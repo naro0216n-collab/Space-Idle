@@ -37,7 +37,7 @@ class StorageService:
     inventory: InventoryBook
     facilities: FacilityBook
 
-    def refresh(self, day: int, power_by_location: dict[SpatialNodeId, PowerSnapshot]) -> None:
+    def refresh(self, day: int, power_by_operational_node: dict[SpatialNodeId, PowerSnapshot]) -> None:
         """Rebuild current physical and serviced capacities from static site state
         plus installed facilities.
 
@@ -53,7 +53,7 @@ class StorageService:
             if provider is None:
                 continue
             compatible = self.facilities.is_environmentally_compatible(facility, day)
-            snapshot = power_by_location.get(facility.location_id)
+            snapshot = power_by_operational_node.get(facility.operational_node_id)
             utilization = 1.0
             if snapshot is not None:
                 utilization = max(0.0, min(1.0, snapshot.utilization_by_facility.get(facility.id, 1.0)))
@@ -66,7 +66,7 @@ class StorageService:
             )
 
             for storage_class, capacity in provider.capacity_t_by_class.items():
-                key = (facility.location_id, storage_class)
+                key = (facility.operational_node_id, storage_class)
                 physical[key] = physical.get(key, 0.0) + capacity
                 if not compatible:
                     factor = 0.0

@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from .power import PowerSnapshot
+from .resource_claim import ResourceAllocationPlan
 from .shared import SpatialNodeId
 from .research_models import ResearchPhase
 
 
 class ResearchExecutionMixin:
-    def advance_day(self, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int = 0) -> None:
+    def advance_day(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        resource_allocations: ResourceAllocationPlan,
+        day: int = 0,
+    ) -> None:
         for state in list(self.active.values()):
-            self._stage_prototype_reservations(state)
+            self._stage_prototype_allocations(state, resource_allocations)
 
         generated = self.generation_rate(power_by_location, day)
         self.store_generated_points(generated, power_by_location=power_by_location, day=day)

@@ -70,12 +70,12 @@ class PowerService:
             * illumination.availability
         )
 
-    def snapshot(self, location_id: SpatialNodeId, facilities: FacilityBook, day: int) -> PowerSnapshot:
+    def snapshot(self, operational_node_id: SpatialNodeId, facilities: FacilityBook, day: int) -> PowerSnapshot:
         rows: list[tuple[int, EntityId, float]] = []
         generation = 0.0
         demand = 0.0
         maintenance_factors: dict[EntityId, float] = {}
-        for facility in facilities.all_at(location_id):
+        for facility in facilities.all_at(operational_node_id):
             if not facilities.is_environmentally_compatible(facility, day):
                 continue
             spec = self.specs.get(facility.definition_id)

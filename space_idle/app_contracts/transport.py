@@ -9,7 +9,7 @@ TransportControlModeLiteral = Literal["units", "capacity"]
 @dataclass(frozen=True)
 class ProduceVehicle:
     vehicle_definition_id: str
-    location_id: str
+    operational_node_id: str
     priority: int = 50
     allocation_weight: float = 1.0
 
@@ -34,7 +34,7 @@ class SetVehicleProductionSettings:
 @dataclass(frozen=True)
 class CreateTransportAllocation:
     vehicle_definition_id: str
-    anchor_location_id: str
+    anchor_node_id: str
     destination_id: str
     priority: int = 50
     control_mode: TransportControlModeLiteral = "units"

@@ -111,7 +111,7 @@ def test_fleet_query_exposes_other_exclusive_reservations_in_pool_balance():
         item
         for item in app.query(GetFleet()).pools
         if item.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
-        and item.location_id == str(ids.LEO)
+        and item.operational_node_id == str(ids.LEO)
     )
 
     assert row.total_units == 2
@@ -194,7 +194,7 @@ def test_fleet_query_exposes_generic_other_reservations_without_hiding_commitmen
     row = next(
         item for item in app.query(GetFleet()).pools
         if item.vehicle_definition_id == str(vehicle_id)
-        and item.location_id == str(ids.LEO)
+        and item.operational_node_id == str(ids.LEO)
     )
     assert row.total_units == 2
     assert row.free_units == 1
@@ -402,7 +402,7 @@ def test_relocation_plan_is_the_execution_contract_for_time_and_resources():
     assert plan.arrival_day == sim.day + plan.travel_days
     assert plan.resource_requirements
     before = {
-        (row.location_id, row.resource_id): row.available_t
+        (row.operational_node_id, row.resource_id): row.available_t
         for row in plan.resource_requirements
     }
 
@@ -414,10 +414,19 @@ def test_relocation_plan_is_the_execution_contract_for_time_and_resources():
         day=sim.day,
     )
     relocation = lg.fleet_relocations[relocation_id]
+    assert relocation.arrival_day is None
+    for row in plan.resource_requirements:
+        assert lg.inventory.available(row.operational_node_id, row.resource_id) == pytest.approx(
+            before[(row.operational_node_id, row.resource_id)]
+        )
+
+    sim.advance_days(1)
+    relocation = lg.fleet_relocations[relocation_id]
+    assert relocation.departure_day == 0
     assert relocation.arrival_day == plan.arrival_day
     for row in plan.resource_requirements:
-        assert lg.inventory.available(row.location_id, row.resource_id) == pytest.approx(
-            before[(row.location_id, row.resource_id)] - row.required_t
+        assert lg.inventory.available(row.operational_node_id, row.resource_id) == pytest.approx(
+            before[(row.operational_node_id, row.resource_id)] - row.required_t
         )
 
 
@@ -554,6 +563,8 @@ def test_relocation_keeps_units_exclusive_until_arrival():
         day=0,
     )
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 1
+    sim.advance_days(1)
+    assert lg.fleet_relocations[relocation_id].departure_day == 0
     lg.advance_fleet_state(4)
     assert relocation_id in lg.fleet_relocations
     lg.advance_fleet_state(5)
@@ -654,7 +665,7 @@ def test_fleet_query_exposes_releasing_units_and_recovery_time():
     release = fleet.releases[0]
     assert release.allocation_id == str(allocation_id)
     assert release.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
-    assert release.location_id == str(ids.LEO)
+    assert release.operational_node_id == str(ids.LEO)
     assert release.units == 1
     assert release.release_day > sim.day
     assert release.remaining_days == release.release_day - sim.day
@@ -755,3 +766,35 @@ def test_resource_limited_available_capacity_uses_nominal_cycle_utilization():
     assert snapshot.utilization == pytest.approx(0.5)
     actual = {(loc, rid): amount for loc, rid, amount in snapshot.operational_resource_demand}
     assert actual == pytest.approx({key: amount / 2.0 for key, amount in forward_full.items()})
+
+
+def test_relocation_waits_for_shared_resource_claim_allocation_before_departure():
+    from space_idle.resource_claim import allocate_resource_claims
+
+    sim = _fleet_sim(1)
+    lg = sim.logistics
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
+    sim.inventory.stock[(ids.LEO, ids.PROPELLANT)] = 0.0
+
+    relocation_id = lg.relocate_fleet(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO, ids.LUNAR_ORBIT, day=0
+    )
+    relocation = lg.fleet_relocations[relocation_id]
+    claims = lg.fleet_relocation_resource_claims(0)
+    assert claims
+    empty = allocate_resource_claims(claims, sim.inventory)
+    lg.advance_fleet_relocations(empty, 0)
+    assert relocation.departure_day is None
+
+    required = sum(
+        need.required_t for need in relocation.resource_needs
+        if need.operational_node_id == ids.LEO and need.resource_id == ids.PROPELLANT
+    )
+    sim.inventory.add(ids.LEO, ids.PROPELLANT, required)
+    funded = allocate_resource_claims(lg.fleet_relocation_resource_claims(0), sim.inventory)
+    lg.advance_fleet_relocations(funded, 0)
+
+    assert relocation.departure_day == 0
+    assert relocation.arrival_day == relocation.travel_days
+    assert sim.inventory.amount(ids.LEO, ids.PROPELLANT) == pytest.approx(0.0)

@@ -27,7 +27,6 @@ class ProgressionCommandHandlerMixin:
             elif isinstance(command, SetResearchPrototypeSite):
                 sim.research.set_prototype_site(rid, self._require_location(command.location_id), sim.day)
             elif isinstance(command, FundResearchPrototype):
-                sim.refresh_resource_claims()
                 sim.research.fund_prototype(rid, sim.day)
             else:
                 sim.research.set_demonstration_site(rid, self._require_location(command.location_id), sim.day)

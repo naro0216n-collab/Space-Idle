@@ -10,6 +10,7 @@ from .facilities import FacilityBook, FacilityPlacementScope
 from .inventory import InventoryBook
 from .logistics import LogisticsService
 from .power import PowerService, PowerSnapshot
+from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .resource_demand import ResourceDemand
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .site import SiteRequirements, evaluate_environment_requirements, evaluate_site_requirements
@@ -140,7 +141,7 @@ class FoundingBlocker:
 class FoundingResourceStatus:
     resource_id: DefinitionId
     required_t: float
-    reserved_t: float
+    staged_t: float
     committed_t: float
     shortage_t: float
 
@@ -161,7 +162,8 @@ class LocationFoundingService:
     def _generated_location_id(self, body_id: CelestialBodyId, cell_id: SurfaceCellId) -> SpatialNodeId:
         digest = sha256(f"{body_id}\0{cell_id}".encode("utf-8")).hexdigest()[:24]
         base = f"player.location.{digest}"
-        occupied = set(self.facilities.environment.graph.operational_node_ids())
+        graph = self.facilities.environment.graph
+        occupied = set(graph.nodes) | set(graph.locations) | set(graph.operational_node_ids())
         occupied.update(
             p.new_location_id
             for p in self.projects.values()
@@ -361,15 +363,11 @@ class LocationFoundingService:
         project = self.projects[project_id]
         rows: list[FoundingResourceStatus] = []
         for requirement in self.project_resource_requirements(project_id):
-            reserved = self.inventory.reserved_for(
-                self.demand_id(project.id, requirement.resource_id),
-                project.staging_node_id,
-                requirement.resource_id,
-            )
+            reserved = 0.0
             staged = self.staged_payload_t(project.id, requirement.resource_id)
             if project.status is FoundingStatus.PREPARING:
                 committed = staged
-                shortage = max(0.0, requirement.amount_t - staged - reserved)
+                shortage = max(0.0, requirement.amount_t - staged)
             elif project.status in {FoundingStatus.DEPLOYING, FoundingStatus.COMPLETE}:
                 committed = requirement.amount_t
                 shortage = 0.0
@@ -405,18 +403,40 @@ class LocationFoundingService:
                     remaining,
                     project.priority,
                     project.preferred_source_id,
-                    remaining,
                 ))
         return tuple(rows)
 
-    def _commit_reserved_payload(self, project: LocationFoundingProject) -> bool:
-        """Move presently allocated founding material into project-owned staging.
+    @staticmethod
+    def claim_id(project_id: ProjectId, resource_id: DefinitionId) -> EntityId:
+        return EntityId(f"claim.founding:{project_id}:{resource_id}")
 
-        Founding is a finite procurement project, so material already allocated to
-        it must become a durable resource commitment rather than returning to the
-        shared daily reservation pool.  Staged material keeps occupying the same
-        storage class and is persisted through Inventory external occupancy.
-        """
+    def resource_claims(self) -> tuple[ResourceClaim, ...]:
+        rows: list[ResourceClaim] = []
+        for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
+            if project.status is not FoundingStatus.PREPARING or project.inputs_consumed or project.paused:
+                continue
+            for requirement in self.project_resource_requirements(project.id):
+                staged = self.staged_payload_t(project.id, requirement.resource_id)
+                missing = max(0.0, requirement.amount_t - staged)
+                if missing <= 1e-9:
+                    continue
+                rows.append(ResourceClaim(
+                    self.claim_id(project.id, requirement.resource_id),
+                    project.staging_node_id,
+                    requirement.resource_id,
+                    missing,
+                    project.priority,
+                    "founding",
+                    EntityId(project.id),
+                    "payload_preparation",
+                    demand_id=self.demand_id(project.id, requirement.resource_id),
+                ))
+        return tuple(rows)
+
+    def _commit_allocated_payload(
+        self, project: LocationFoundingProject, allocations: ResourceAllocationPlan
+    ) -> bool:
+        """Move this tick's founding allocation into durable payload staging."""
         payload_owner = self.payload_owner_id(project.id)
         all_committed = True
         for requirement in self.project_resource_requirements(project.id):
@@ -426,18 +446,14 @@ class LocationFoundingService:
             missing = max(0.0, amount - staged)
             if missing <= 1e-9:
                 continue
-            demand_id = self.demand_id(project.id, resource_id)
-            reserved = self.inventory.reserved_for(
-                demand_id, project.staging_node_id, resource_id
-            )
-            commit = min(missing, reserved)
+            try:
+                allocated = allocations.allocated(self.claim_id(project.id, resource_id))
+            except KeyError:
+                allocated = 0.0
+            commit = min(missing, max(0.0, allocated))
             if commit > 1e-12:
-                self.inventory.stage_reserved(
-                    demand_id,
-                    payload_owner,
-                    project.staging_node_id,
-                    resource_id,
-                    commit,
+                self.inventory.stage_allocated(
+                    payload_owner, project.staging_node_id, resource_id, commit
                 )
                 staged += commit
             if staged + 1e-9 < amount:
@@ -488,12 +504,7 @@ class LocationFoundingService:
                     resource_id = requirement.resource_id
                     amount = requirement.amount_t
                     staged = self.staged_payload_t(project.id, resource_id)
-                    reserved = self.inventory.reserved_for(
-                        self.demand_id(project.id, resource_id),
-                        project.staging_node_id,
-                        resource_id,
-                    )
-                    if staged + reserved + 1e-9 < amount:
+                    if staged + 1e-9 < amount:
                         failures.append(FoundingBlocker("resource_shortage", str(resource_id)))
         return tuple(failures)
 
@@ -519,10 +530,6 @@ class LocationFoundingService:
         project = self.projects[project_id]
         if project.status is not FoundingStatus.PREPARING:
             raise ValueError("founding cannot be cancelled after deployment begins")
-        for requirement in self.project_resource_requirements(project.id):
-            self.inventory.release_reservation(
-                self.demand_id(project.id, requirement.resource_id)
-            )
         self._restore_prepared_payload(project)
         project.inputs_consumed = False
         reservation_id = self.fleet_reservation_id(project_id)
@@ -531,17 +538,16 @@ class LocationFoundingService:
         project.status = FoundingStatus.CANCELLED
         project.paused = False
 
-    def advance_day(self, day: int) -> None:
+    def advance_day(self, allocations: ResourceAllocationPlan, day: int) -> None:
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
             if project.status is FoundingStatus.PREPARING:
                 if project.paused:
                     continue
-                if self.blockers(project.id, day):
-                    # Resource shortages are expected until reconciliation can reserve them.
-                    non_resource = [b for b in self.blockers(project.id, day) if b.code != "resource_shortage"]
-                    if non_resource:
-                        continue
-                if not project.inputs_consumed and not self._commit_reserved_payload(project):
+                blockers = self.blockers(project.id, day)
+                non_resource = [b for b in blockers if b.code != "resource_shortage"]
+                if non_resource:
+                    continue
+                if not project.inputs_consumed and not self._commit_allocated_payload(project, allocations):
                     continue
                 package = self.packages[project.founding_package_id]
                 snapshot = self.power.snapshot(project.staging_node_id, self.facilities, day)
@@ -583,7 +589,7 @@ class LocationFoundingService:
                 invested_resources={req.resource_id: req.amount_t for req in deployment.invested_resources},
             )
         if package.initial_inventory:
-            facility_locations = {facility.location_id for facility in self.facilities.facilities.values()}
+            facility_locations = {facility.operational_node_id for facility in self.facilities.facilities.values()}
             power_by_location = {
                 location_id: self.power.snapshot(location_id, self.facilities, day)
                 for location_id in facility_locations

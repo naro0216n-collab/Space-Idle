@@ -7,16 +7,18 @@ import pytest
 from space_idle import GetSurfaceMap, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
-from space_idle.shared import CelestialBodyId, SpatialNodeId, SurfaceCellId
+from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId, SurfaceCellId
 from space_idle.spatial import (
     CelestialBodyDef,
-    LocationState,
     SpatialGraph,
+    SpatialNodeDef,
+    SpatialNodeKind,
     SurfaceCellDef,
     SurfaceField,
     SurfacePoint,
 )
 from space_idle.validation import validate_runtime_state
+from space_idle.facilities import FacilityDef
 
 
 def _cell(cell_id: str, body_id: CelestialBodyId, neighbors: tuple[str, ...]) -> SurfaceCellDef:
@@ -56,7 +58,7 @@ def test_location_territory_owns_cells_once_and_expands_only_to_adjacent_cells()
     graph.add_surface_cell(_cell("c2", body, ("c1", "c3")))
     graph.add_surface_cell(_cell("c3", body, ("c2",)))
     location = SpatialNodeId("location.one")
-    graph.add_location(LocationState(location, "One", body, SurfaceCellId("c1")))
+    graph.found_location(location, "One", body, SurfaceCellId("c1"))
 
     assert graph.surface_cell_development_failures(location, SurfaceCellId("c3"))[0][0] == "not_adjacent"
     graph.develop_surface_cell(location, SurfaceCellId("c2"))
@@ -66,7 +68,7 @@ def test_location_territory_owns_cells_once_and_expands_only_to_adjacent_cells()
     }
 
     with pytest.raises(ValueError, match="already belongs"):
-        graph.add_location(LocationState(SpatialNodeId("location.two"), "Two", body, SurfaceCellId("c2")))
+        graph.found_location(SpatialNodeId("location.two"), "Two", body, SurfaceCellId("c2"))
 
 
 def test_base_surface_map_exposes_affiliation_without_creating_cell_inventory_nodes():
@@ -103,3 +105,100 @@ def test_developed_territory_persists_without_saving_derived_cell_owner(tmp_path
         ids.EARTH_CELL_COASTAL,
     }
     assert loaded._simulation.graph.owner_of_cell(ids.EARTH_CELL_COASTAL) == ids.EARTH
+
+
+def test_non_surface_spatial_context_is_not_operational_until_explicitly_promoted():
+    graph = SpatialGraph()
+    body = CelestialBodyId("body.context")
+    node_id = SpatialNodeId("node.context.only")
+    graph.add_body(CelestialBodyDef(body, "Body", 1000.0))
+    graph.add(
+        SpatialNodeDef(
+            node_id,
+            "Context only",
+            body_id=body,
+            kind=SpatialNodeKind.ORBITAL,
+            inherits_parent_environment=False,
+        )
+    )
+
+    assert node_id in graph.nodes
+    assert not graph.has_operational_node(node_id)
+    assert node_id not in graph.operational_node_ids()
+
+
+def test_non_operational_spatial_context_cannot_own_facility_lane_or_inventory_state():
+    app = build_game_application()
+    sim = app._simulation
+    dormant = SpatialNodeId("test.node.dormant")
+    sim.graph.add(
+        SpatialNodeDef(
+            dormant,
+            "Dormant orbit",
+            body_id=ids.MOON,
+            kind=SpatialNodeKind.ORBITAL,
+            inherits_parent_environment=False,
+        )
+    )
+    assert not sim.graph.has_operational_node(dormant)
+
+    facility_definition_id = next(iter(sim.facilities.definitions))
+    with pytest.raises(KeyError):
+        sim.facilities.install(facility_definition_id, dormant)
+    with pytest.raises(KeyError):
+        sim.logistics.create_lane(ids.EARTH, dormant, 1.0, 50)
+
+    sim.inventory.stock[(dormant, ids.WATER)] = 1.0
+    with pytest.raises(ValueError, match="inventory references unknown location"):
+        validate_runtime_state(sim)
+
+
+def test_save_load_preserves_operational_node_existence_separately_from_surface_territory(tmp_path: Path):
+    app = build_game_application()
+    sim = app._simulation
+    dormant = SpatialNodeId("test.node.context_only")
+    sim.graph.add(
+        SpatialNodeDef(
+            dormant,
+            "Context only",
+            body_id=ids.MOON,
+            kind=SpatialNodeKind.ORBITAL,
+            inherits_parent_environment=False,
+        )
+    )
+    before_operational = set(sim.graph.operational_node_ids())
+    assert dormant not in before_operational
+
+    path = tmp_path / "operational-node-state.json"
+    save_game(app, path)
+    loaded, _ = load_game(path, build_game_application)
+
+    assert set(loaded._simulation.graph.operational_node_ids()) == before_operational
+    assert dormant not in loaded._simulation.graph.nodes  # static Content is rebuilt, not Save state
+    assert set(loaded._simulation.graph.locations) == set(sim.graph.locations)
+
+
+def test_surface_and_non_surface_operational_nodes_share_owner_contracts():
+    app = build_game_application()
+    sim = app._simulation
+    generic_facility = DefinitionId("test.facility.operational_node")
+    generic_resource = DefinitionId("test.resource.unbounded")
+    sim.facilities.definitions[generic_facility] = FacilityDef(generic_facility, "Generic")
+
+    earth_facility = sim.facilities.install(generic_facility, ids.EARTH)
+    orbit_facility = sim.facilities.install(generic_facility, ids.LEO)
+    assert sim.facilities.facilities[earth_facility].operational_node_id == ids.EARTH
+    assert sim.facilities.facilities[orbit_facility].operational_node_id == ids.LEO
+
+    sim.inventory.add(ids.EARTH, generic_resource, 1.0)
+    sim.inventory.add(ids.LEO, generic_resource, 1.0)
+    assert sim.inventory.amount(ids.EARTH, generic_resource) == pytest.approx(1.0)
+    assert sim.inventory.amount(ids.LEO, generic_resource) == pytest.approx(1.0)
+
+    vehicle_definition = next(iter(sim.logistics.vehicle_defs))
+    before_earth = sim.logistics.fleet_pool(vehicle_definition, ids.EARTH).total_units
+    before_orbit = sim.logistics.fleet_pool(vehicle_definition, ids.LEO).total_units
+    sim.logistics.add_fleet_units(vehicle_definition, 1, ids.EARTH, day=sim.day)
+    sim.logistics.add_fleet_units(vehicle_definition, 1, ids.LEO, day=sim.day)
+    assert sim.logistics.fleet_pool(vehicle_definition, ids.EARTH).total_units == before_earth + 1
+    assert sim.logistics.fleet_pool(vehicle_definition, ids.LEO).total_units == before_orbit + 1

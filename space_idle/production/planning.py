@@ -5,79 +5,12 @@ import math
 from ..facilities import FacilityBook, FacilityState
 from ..inventory import InventoryBook
 from ..power import PowerSnapshot
-from ..shared import DefinitionId, EntityId, SpatialNodeId
+from ..resource_claim import ResourceAllocationPlan
+from ..shared import EntityId, SpatialNodeId
 from .models import ProcessSpec, ProcessSnapshot
 
 
 class IndustryPlanningMixin:
-    @staticmethod
-    def _allocate_inputs(
-        rows: list[tuple[FacilityState, ProcessSpec]],
-        location_id: SpatialNodeId,
-        inventory: InventoryBook,
-        upper_limits: dict[EntityId, float],
-    ) -> dict[EntityId, float]:
-        """Allocate simultaneously available input stock without row-order bias.
-
-        Scales use proportional max-min filling relative to each facility's
-        current upper limit. Processes blocked by one input stop claiming other
-        shared inputs, so remaining processes can continue to increase.
-        """
-        scales = {facility.id: 0.0 for facility, _process in rows}
-        process_by_id = {facility.id: process for facility, process in rows}
-        active = {facility.id for facility, _process in rows if upper_limits[facility.id] > 1e-12}
-        remaining = {
-            resource_id: inventory.available(location_id, resource_id)
-            for _facility, process in rows
-            for resource_id, need in process.inputs_per_day.items()
-            if need > 1e-12
-        }
-
-        while active:
-            ordered_active = sorted(active, key=str)
-            upper_step = min(
-                (upper_limits[facility_id] - scales[facility_id]) / upper_limits[facility_id]
-                for facility_id in ordered_active
-            )
-            constraint_steps: list[float] = []
-            for resource_id, available in remaining.items():
-                rate = math.fsum(
-                    process_by_id[facility_id].inputs_per_day.get(resource_id, 0.0) * upper_limits[facility_id]
-                    for facility_id in ordered_active
-                )
-                if rate > 1e-12:
-                    constraint_steps.append(max(0.0, available) / rate)
-            step = max(0.0, min([upper_step, *constraint_steps]) if constraint_steps else upper_step)
-
-            if step > 1e-12:
-                for facility_id in ordered_active:
-                    scales[facility_id] += upper_limits[facility_id] * step
-                for resource_id in remaining:
-                    used = math.fsum(
-                        process_by_id[facility_id].inputs_per_day.get(resource_id, 0.0)
-                        * upper_limits[facility_id] * step
-                        for facility_id in ordered_active
-                    )
-                    remaining[resource_id] = max(0.0, remaining[resource_id] - used)
-
-            reached_upper = {
-                facility_id for facility_id in active
-                if scales[facility_id] + 1e-10 >= upper_limits[facility_id]
-            }
-            blocked = {
-                facility_id
-                for facility_id in active
-                if any(
-                    remaining.get(resource_id, 0.0) <= 1e-10 and need > 1e-12
-                    for resource_id, need in process_by_id[facility_id].inputs_per_day.items()
-                )
-            }
-            removed = reached_upper | blocked
-            if not removed:
-                break
-            active -= removed
-        return scales
-
     @staticmethod
     def _storage_delta_per_scale(process: ProcessSpec, inventory: InventoryBook) -> dict[str, float]:
         deltas: dict[str, float] = {}
@@ -91,6 +24,59 @@ class IndustryPlanningMixin:
                 deltas[storage_class] = deltas.get(storage_class, 0.0) - need
         return deltas
 
+    @staticmethod
+    def _apply_storage_limits(
+        rows: list[tuple[FacilityState, ProcessSpec]],
+        location_id: SpatialNodeId,
+        inventory: InventoryBook,
+        upper_limits: dict[EntityId, float],
+    ) -> dict[EntityId, float]:
+        """Apply stock-capacity constraints without reallocating input inventory.
+
+        Resource scarcity has already been resolved by ResourceAllocation. Storage
+        remains a physical feasibility constraint here; it may lower a process but
+        never give another process additional current-tick resource allocation.
+        """
+        scales = dict(upper_limits)
+        storage_delta = {
+            facility.id: IndustryPlanningMixin._storage_delta_per_scale(process, inventory)
+            for facility, process in rows
+        }
+        classes = sorted({c for deltas in storage_delta.values() for c in deltas})
+        for _ in range(32):
+            previous = dict(scales)
+            for storage_class in classes:
+                free = max(
+                    0.0,
+                    inventory.storage_service_capacity_t.get((location_id, storage_class), 0.0)
+                    - inventory.stored_in_class(location_id, storage_class),
+                )
+                consumed = math.fsum(
+                    -storage_delta[facility.id].get(storage_class, 0.0) * scales[facility.id]
+                    for facility, _process in rows
+                    if storage_delta[facility.id].get(storage_class, 0.0) < -1e-12
+                )
+                producers = [
+                    facility.id
+                    for facility, _process in rows
+                    if storage_delta[facility.id].get(storage_class, 0.0) > 1e-12
+                ]
+                if not producers:
+                    continue
+                allowed = free + consumed
+                produced = math.fsum(
+                    storage_delta[facility_id][storage_class] * scales[facility_id]
+                    for facility_id in producers
+                )
+                if produced <= allowed + 1e-9 or produced <= 1e-12:
+                    continue
+                ratio = max(0.0, allowed / produced)
+                for facility_id in producers:
+                    scales[facility_id] *= ratio
+            if all(abs(scales[key] - previous[key]) <= 1e-9 for key in scales):
+                break
+        return scales
+
     def _plan_site(
         self,
         location_id: SpatialNodeId,
@@ -98,6 +84,7 @@ class IndustryPlanningMixin:
         inventory: InventoryBook,
         power: PowerSnapshot,
         day: int,
+        resource_allocations: ResourceAllocationPlan | None = None,
     ) -> tuple[ProcessSnapshot, ...]:
         rows: list[tuple[FacilityState, ProcessSpec]] = []
         for facility in facilities.active_compatible_at(location_id, day):
@@ -106,11 +93,11 @@ class IndustryPlanningMixin:
                 rows.append((facility, process))
         if not rows:
             return ()
+        if resource_allocations is None:
+            raise ValueError("industry planning requires the shared ResourceAllocationPlan")
 
         power_factors = {
-            facility.id: max(
-                0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0))
-            )
+            facility.id: max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
             for facility, _process in rows
         }
         maintenance_factors = {
@@ -119,134 +106,58 @@ class IndustryPlanningMixin:
             )
             for facility, _process in rows
         }
-        power_limits = {
+        physical_limits = {
             facility.id: power_factors[facility.id] * maintenance_factors[facility.id]
             for facility, _process in rows
         }
-        process_by_id = {facility.id: process for facility, process in rows}
+        resource_limits: dict[EntityId, float] = {}
+        allocation_by_resource: dict[tuple[EntityId, object], float] = {}
+        for facility, process in rows:
+            ratios: list[float] = []
+            for resource_id, need in process.inputs_per_day.items():
+                if need <= 1e-12:
+                    continue
+                claim_id = self._resource_claim_id(facility.id, resource_id)
+                try:
+                    allocated = resource_allocations.allocated(claim_id)
+                except KeyError:
+                    allocated = 0.0
+                allocation_by_resource[(facility.id, resource_id)] = allocated
+                ratios.append(max(0.0, allocated) / need)
+            resource_limits[facility.id] = min(1.0, min(ratios)) if ratios else 1.0
+
+        upper_limits = {
+            facility.id: min(physical_limits[facility.id], resource_limits[facility.id])
+            for facility, _process in rows
+        }
+        scales = self._apply_storage_limits(rows, location_id, inventory, upper_limits)
         storage_delta = {
             facility.id: self._storage_delta_per_scale(process, inventory)
             for facility, process in rows
         }
 
-        # Inputs and shared storage are coupled: storage-limited processes may
-        # release common inputs for other processes, while consumers can free
-        # storage for producers. Iterate the two physical constraint sets to a
-        # stable set of per-facility upper bounds rather than applying storage as
-        # an irreversible post-processing clamp.
-        storage_limits = dict(power_limits)
-        scales = self._allocate_inputs(rows, location_id, inventory, storage_limits)
-        for _ in range(32):
-            next_storage_limits = dict(power_limits)
-            storage_classes = {
-                storage_class
-                for deltas in storage_delta.values()
-                for storage_class, delta in deltas.items()
-                if delta > 1e-12
-            }
-            for storage_class in sorted(storage_classes):
-                capacity = inventory.storage_service_capacity_t.get((location_id, storage_class), 0.0)
-                free = max(0.0, capacity - inventory.stored_in_class(location_id, storage_class))
-                consumers = math.fsum(
-                    -storage_delta[facility.id].get(storage_class, 0.0) * scales[facility.id]
-                    for facility, _process in sorted(rows, key=lambda row: str(row[0].id))
-                    if storage_delta[facility.id].get(storage_class, 0.0) < -1e-12
-                )
-                allowed_positive = free + consumers
-                producers = [
-                    facility.id for facility, _process in rows
-                    if storage_delta[facility.id].get(storage_class, 0.0) > 1e-12
-                ]
-                if not producers:
-                    continue
-
-                # A producer already held below its current storage bound is
-                # constrained elsewhere (typically an input or another storage
-                # class). Reserve only what it can currently use, then share the
-                # remaining class capacity among unconstrained producers.
-                fixed = {
-                    facility_id for facility_id in producers
-                    if scales[facility_id] + 1e-9 < storage_limits[facility_id]
-                }
-                fixed_positive = math.fsum(
-                    storage_delta[facility_id][storage_class] * scales[facility_id]
-                    for facility_id in sorted(fixed, key=str)
-                )
-                flexible = sorted(
-                    (facility_id for facility_id in producers if facility_id not in fixed),
-                    key=str,
-                )
-                remainder = max(0.0, allowed_positive - fixed_positive)
-                denominator = math.fsum(
-                    storage_delta[facility_id][storage_class] * power_limits[facility_id]
-                    for facility_id in flexible
-                )
-                ratio = 1.0 if denominator <= remainder + 1e-9 else max(0.0, remainder / denominator)
-
-                for facility_id in sorted(fixed, key=str):
-                    next_storage_limits[facility_id] = min(next_storage_limits[facility_id], scales[facility_id])
-                for facility_id in flexible:
-                    next_storage_limits[facility_id] = min(
-                        next_storage_limits[facility_id], power_limits[facility_id] * ratio
-                    )
-
-            next_scales = self._allocate_inputs(rows, location_id, inventory, next_storage_limits)
-            if all(
-                abs(next_scales[facility.id] - scales[facility.id]) <= 1e-9
-                and abs(next_storage_limits[facility.id] - storage_limits[facility.id]) <= 1e-9
-                for facility, _process in rows
-            ):
-                scales = next_scales
-                storage_limits = next_storage_limits
-                break
-            scales = next_scales
-            storage_limits = next_storage_limits
-
-        # Derive blocker labels from the final feasible allocation. They explain
-        # the physical limiting constraint without prescribing a solution.
-        ordered_rows = sorted(rows, key=lambda row: str(row[0].id))
-        total_input = {
-            resource_id: math.fsum(
-                process.inputs_per_day.get(resource_id, 0.0) * scales[facility.id]
-                for facility, process in ordered_rows
-            )
-            for _facility, process in rows
-            for resource_id in process.inputs_per_day
-        }
-        class_net = {
-            storage_class: math.fsum(
-                storage_delta[facility.id].get(storage_class, 0.0) * scales[facility.id]
-                for facility, _process in ordered_rows
-            )
-            for storage_class in {c for deltas in storage_delta.values() for c in deltas}
-        }
-
         snapshots: list[ProcessSnapshot] = []
-        for facility, process in rows:
+        for facility, process in sorted(rows, key=lambda row: str(row[0].id)):
             scale = max(0.0, min(1.0, scales[facility.id]))
             reasons: list[str] = []
-            power_limit = power_limits[facility.id]
-            if power_limit < 1.0 - 1e-9 and scale + 1e-9 >= power_limit:
-                if power_factors[facility.id] < 1.0 - 1e-9:
+            if scale < 1.0 - 1e-9:
+                if power_factors[facility.id] < 1.0 - 1e-9 and scale + 1e-9 >= physical_limits[facility.id]:
                     reasons.append("power")
-                if maintenance_factors[facility.id] < 1.0 - 1e-9:
+                if maintenance_factors[facility.id] < 1.0 - 1e-9 and scale + 1e-9 >= physical_limits[facility.id]:
                     reasons.append("maintenance")
-            if scale < power_limit - 1e-9:
-                for resource_id, need in process.inputs_per_day.items():
-                    if need <= 1e-12:
-                        continue
-                    available = inventory.available(location_id, resource_id)
-                    if total_input.get(resource_id, 0.0) + 1e-9 >= available:
-                        reasons.append(f"input:{resource_id}")
-                for storage_class, delta in storage_delta[facility.id].items():
-                    if delta <= 1e-12:
-                        continue
-                    capacity = inventory.storage_service_capacity_t.get((location_id, storage_class), 0.0)
-                    free = max(0.0, capacity - inventory.stored_in_class(location_id, storage_class))
-                    if class_net.get(storage_class, 0.0) + 1e-9 >= free:
-                        reasons.append(f"storage:{storage_class}")
-            if scale < 1.0 - 1e-9 and not reasons:
-                reasons.append("allocation")
+                if scale + 1e-9 >= resource_limits[facility.id]:
+                    for resource_id, need in process.inputs_per_day.items():
+                        if need <= 1e-12:
+                            continue
+                        allocated = allocation_by_resource.get((facility.id, resource_id), 0.0)
+                        if allocated + 1e-9 < need * physical_limits[facility.id]:
+                            reasons.append(f"input:{resource_id}")
+                if scale + 1e-9 < upper_limits[facility.id]:
+                    for storage_class, delta in storage_delta[facility.id].items():
+                        if delta > 1e-12:
+                            reasons.append(f"storage:{storage_class}")
+                if not reasons:
+                    reasons.append("allocation")
 
             snapshots.append(ProcessSnapshot(
                 facility.id,
@@ -266,5 +177,8 @@ class IndustryPlanningMixin:
         inventory: InventoryBook,
         power: PowerSnapshot,
         day: int = 0,
+        resource_allocations: ResourceAllocationPlan | None = None,
     ) -> tuple[ProcessSnapshot, ...]:
-        return self._plan_site(location_id, facilities, inventory, power, day)
+        return self._plan_site(
+            location_id, facilities, inventory, power, day, resource_allocations
+        )

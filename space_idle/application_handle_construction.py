@@ -28,7 +28,7 @@ class ConstructionCommandHandlerMixin:
         if isinstance(command, PlanBuild):
             pid = sim.projects.plan_build(
                 DefinitionId(command.facility_id),
-                self._require_location(command.location_id),
+                self._require_location(command.operational_node_id),
                 command.priority,
                 command.sourcing_policy,
                 day=sim.day,
@@ -63,12 +63,11 @@ class ConstructionCommandHandlerMixin:
                 preferred_source_id=(None if command.preferred_source_id is None else self._require_location(command.preferred_source_id)),
                 day=sim.day,
             )
-            sim.refresh_resource_claims()
             return CommandResult(str(pid))
         if isinstance(command, CancelFounding):
             if sim.founding is None:
                 raise ValueError("founding domain is not configured")
-            sim.founding.cancel(ProjectId(command.project_id), sim.day); sim.refresh_resource_claims(); return CommandResult()
+            sim.founding.cancel(ProjectId(command.project_id), sim.day); return CommandResult()
         if isinstance(command, PauseFounding):
             if sim.founding is None:
                 raise ValueError("founding domain is not configured")
@@ -80,7 +79,7 @@ class ConstructionCommandHandlerMixin:
         if isinstance(command, SetFoundingPriority):
             if sim.founding is None:
                 raise ValueError("founding domain is not configured")
-            sim.founding.set_priority(ProjectId(command.project_id), command.priority); sim.refresh_resource_claims(); return CommandResult()
+            sim.founding.set_priority(ProjectId(command.project_id), command.priority); return CommandResult()
         if isinstance(command, DevelopSurfaceCell):
             pid = sim.projects.plan_surface_cell_development(
                 self._require_location(command.location_id),
@@ -106,6 +105,6 @@ class ConstructionCommandHandlerMixin:
         if isinstance(command, SetProjectImportSource):
             sim.projects.set_import_source(
                 ProjectId(command.project_id),
-                None if command.location_id is None else self._require_location(command.location_id),
+                None if command.operational_node_id is None else self._require_location(command.operational_node_id),
             ); return CommandResult()
         return NotImplemented

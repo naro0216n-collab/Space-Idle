@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .power import PowerSnapshot
+from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .resource_demand import ResourceDemand
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .production import (
@@ -63,11 +64,55 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 resource_id,
                 target_t,
                 50,
-                None,
-                0.0,
-                True,
             ))
         return tuple(demands)
+
+    @staticmethod
+    def _resource_claim_id(facility_id: EntityId, resource_id: DefinitionId) -> EntityId:
+        return EntityId(f"claim.industry:{facility_id}:{resource_id}")
+
+    def resource_claims(
+        self,
+        location_id: SpatialNodeId,
+        facilities: FacilityBook,
+        power: PowerSnapshot,
+        day: int = 0,
+    ) -> tuple[ResourceClaim, ...]:
+        claims: list[ResourceClaim] = []
+        for facility in sorted(
+            facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)
+        ):
+            process = self.process_for(facility)
+            if process is None:
+                continue
+            utilization = max(
+                0.0,
+                min(
+                    1.0,
+                    power.utilization_by_facility.get(facility.id, 1.0)
+                    * power.maintenance_factor_by_facility.get(
+                        facility.id, facilities.maintenance_factor(facility.id)
+                    ),
+                ),
+            )
+            for resource_id, amount_t in sorted(
+                process.inputs_per_day.items(), key=lambda row: str(row[0])
+            ):
+                requested = amount_t * utilization
+                if requested <= 1e-12:
+                    continue
+                claims.append(ResourceClaim(
+                    self._resource_claim_id(facility.id, resource_id),
+                    location_id,
+                    resource_id,
+                    requested,
+                    50,
+                    "industry_process",
+                    facility.id,
+                    f"process:{process.id}",
+                    demand_id=EntityId(f"demand.industry:{location_id}:{resource_id}"),
+                ))
+        return tuple(claims)
 
 
 __all__ = ["ProcessSpec", "ProcessSnapshot", "IndustryService"]

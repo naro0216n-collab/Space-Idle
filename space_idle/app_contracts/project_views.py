@@ -6,7 +6,7 @@ from dataclasses import dataclass
 class ProjectResourceRow:
     resource_id: str
     required_t: float
-    reserved_t: float
+    staged_t: float
     committed_t: float
     shortage_t: float
     import_committed_t: float | None
@@ -42,7 +42,7 @@ class FacilityUpgradeOption:
 
 @dataclass(frozen=True)
 class BuildOptionsView:
-    location_id: str
+    operational_node_id: str
     sourcing_policy_options: tuple[str, ...]
     import_source_options: tuple[str, ...]
     items: tuple[BuildOptionRow, ...]
@@ -52,7 +52,7 @@ class BuildOptionsView:
 class ProjectRow:
     id: str
     target_kind: str
-    location_id: str
+    operational_node_id: str
     facility_definition_id: str | None
     target_facility_id: str | None
     target_level: int | None

@@ -112,7 +112,7 @@ def validate_runtime(sim: Any) -> None:
             if reservation is not None:
                 _require(reservation.kind is FleetReservationKind.SCIENTIFIC_EXPLORATION, f"scientific exploration reservation kind mismatch: {definition_id}")
                 _require(reservation.vehicle_definition_id == state.vehicle_definition_id, f"scientific exploration reservation vehicle mismatch: {definition_id}")
-                _require(reservation.location_id == definition.origin_id, f"scientific exploration reservation location mismatch: {definition_id}")
+                _require(reservation.operational_node_id == definition.origin_id, f"scientific exploration reservation location mismatch: {definition_id}")
                 _require(reservation.units == state.reserved_units, f"scientific exploration reservation unit mismatch: {definition_id}")
         for resource_id, required_t in definition.consumable_resources:
             staged = service._staged_input_t(definition_id, resource_id)

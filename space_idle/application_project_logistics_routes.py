@@ -133,12 +133,12 @@ class LogisticsRouteProjectorMixin:
             try:
                 geometry = sim.logistics.route_geometry(route.id)
                 origin_endpoint = RouteEndpointRow(
-                    str(geometry.origin.location_id), geometry.origin.locator_kind,
+                    str(geometry.origin.node_id), geometry.origin.locator_kind,
                     geometry.origin.locator_id,
                     None if geometry.origin.surface_cell_id is None else str(geometry.origin.surface_cell_id),
                 )
                 destination_endpoint = RouteEndpointRow(
-                    str(geometry.destination.location_id), geometry.destination.locator_kind,
+                    str(geometry.destination.node_id), geometry.destination.locator_kind,
                     geometry.destination.locator_id,
                     None if geometry.destination.surface_cell_id is None else str(geometry.destination.surface_cell_id),
                 )

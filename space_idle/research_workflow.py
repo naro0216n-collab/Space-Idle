@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .power import PowerSnapshot
+from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .resource_demand import ResourceDemand
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .site import SiteRequirementFailure, evaluate_site_requirements
@@ -139,7 +140,15 @@ class ResearchWorkflowMixin:
             resource_id,
         )
 
-    def _stage_prototype_reservations(self, state: ResearchState) -> None:
+    @staticmethod
+    def _prototype_claim_id(
+        research_id: DefinitionId, resource_id: DefinitionId
+    ) -> EntityId:
+        return EntityId(f"claim.research:{research_id}:{resource_id}")
+
+    def _stage_prototype_allocations(
+        self, state: ResearchState, allocations: ResourceAllocationPlan
+    ) -> None:
         if (
             state.status is not ResearchPhase.PROTOTYPE
             or state.paused
@@ -157,12 +166,16 @@ class ResearchWorkflowMixin:
             missing = max(0.0, required_t - staged)
             if missing <= 1e-12:
                 continue
-            demand_id = self._prototype_demand_id(research_id, resource_id)
-            reserved = self.inventory.reserved_for(demand_id, location_id, resource_id)
-            amount = min(missing, reserved)
+            try:
+                allocated = allocations.allocated(
+                    self._prototype_claim_id(research_id, resource_id)
+                )
+            except KeyError:
+                allocated = 0.0
+            amount = min(missing, max(0.0, allocated))
             if amount > 1e-12:
-                self.inventory.stage_reserved(
-                    demand_id, staging_owner, location_id, resource_id, amount
+                self.inventory.stage_allocated(
+                    staging_owner, location_id, resource_id, amount
                 )
 
     def _restore_prototype_staging(
@@ -173,9 +186,6 @@ class ResearchWorkflowMixin:
             return
         staging_owner = self._prototype_staging_owner_id(research_id)
         for resource_id in prototype.resources:
-            self.inventory.release_reservation(
-                self._prototype_demand_id(research_id, resource_id)
-            )
             staged = self._prototype_staged_t(research_id, location_id, resource_id)
             if staged > 1e-12:
                 self.inventory.unstage_to_stock(
@@ -231,15 +241,40 @@ class ResearchWorkflowMixin:
                     resource_id,
                     remaining,
                     60,
-                    None,
-                    remaining,
-                    True,
                 ))
         return tuple(demands)
 
+    def resource_claims(self, day: int = 0) -> tuple[ResourceClaim, ...]:
+        claims: list[ResourceClaim] = []
+        for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
+            if state.paused or state.status is not ResearchPhase.PROTOTYPE:
+                continue
+            location_id = state.prototype_location_id
+            if location_id is None:
+                continue
+            prototype = self.definitions[research_id].prototype
+            if prototype is None:
+                raise RuntimeError(f"prototype state has no prototype definition: {research_id}")
+            for resource_id, required_t in sorted(prototype.resources.items(), key=lambda row: str(row[0])):
+                staged = self._prototype_staged_t(research_id, location_id, resource_id)
+                remaining = max(0.0, required_t - staged)
+                if remaining <= 1e-9:
+                    continue
+                claims.append(ResourceClaim(
+                    self._prototype_claim_id(research_id, resource_id),
+                    location_id,
+                    resource_id,
+                    remaining,
+                    60,
+                    "research",
+                    EntityId(f"research:{research_id}"),
+                    "prototype",
+                    demand_id=self._prototype_demand_id(research_id, resource_id),
+                ))
+        return tuple(claims)
+
     def fund_prototype(self, research_id: DefinitionId, day: int = 0) -> None:
         state = self.active[research_id]
-        self._stage_prototype_reservations(state)
         blockers = self.prototype_blockers(research_id, day)
         if blockers:
             raise ValueError("; ".join(detail for _code, detail in blockers))
@@ -387,9 +422,8 @@ class ResearchWorkflowMixin:
             raise RuntimeError(f"prototype state has no prototype definition: {research_id}")
         for resource_id, required in sorted(prototype.resources.items(), key=lambda row: str(row[0])):
             demand_id = self._prototype_demand_id(research_id, resource_id)
-            allocated = (
-                self.inventory.reserved_for(demand_id, location_id, resource_id)
-                + self._prototype_staged_t(research_id, location_id, resource_id)
+            allocated = self._prototype_staged_t(
+                research_id, location_id, resource_id
             )
             if allocated + 1e-9 < required:
                 blockers.append((

@@ -124,7 +124,7 @@ class LocationProjectorMixin:
 
         facilities = []
         for facility in sorted(
-            (row for row in sim.facilities.facilities.values() if row.location_id == location_id),
+            (row for row in sim.facilities.facilities.values() if row.operational_node_id == location_id),
             key=lambda row: str(row.id),
         ):
             definition = sim.facilities.definitions[facility.definition_id]
@@ -199,10 +199,11 @@ class LocationProjectorMixin:
             )
 
         industry = []
+        resource_allocations = sim.resource_allocation_projection({location_id: power})
         snapshots = {
             snap.facility_id: snap
             for snap in sim.industry.snapshots(
-                location_id, sim.facilities, sim.inventory, power, sim.day
+                location_id, sim.facilities, sim.inventory, power, sim.day, resource_allocations
             )
         }
         for facility in sorted(sim.facilities.all_at(location_id), key=lambda row: str(row.id)):

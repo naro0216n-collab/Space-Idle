@@ -9,7 +9,7 @@ StorageClass = str
 
 @dataclass
 class InventoryBook:
-    """Location-scoped stock with reservations and optional storage limits.
+    """Operational Node-scoped stock with reservations and optional storage limits.
 
     Resources without a registered storage class remain unlimited. This keeps the
     generic core lightweight while allowing gameplay content to opt into storage
@@ -32,10 +32,10 @@ class InventoryBook:
             raise ValueError(f"storage class already defined for {resource_id}: {existing}")
         self.resource_storage_class[resource_id] = storage_class
 
-    def add_capacity(self, location_id: SpatialNodeId, storage_class: StorageClass, amount_t: float) -> None:
+    def add_capacity(self, operational_node_id: SpatialNodeId, storage_class: StorageClass, amount_t: float) -> None:
         if amount_t < -1e-9:
             raise ValueError("negative storage capacity")
-        key = (location_id, storage_class)
+        key = (operational_node_id, storage_class)
         self.base_storage_capacity_t[key] = self.base_storage_capacity_t.get(key, 0.0) + amount_t
         self.storage_capacity_t[key] = self.storage_capacity_t.get(key, 0.0) + amount_t
         self.storage_service_capacity_t[key] = self.storage_service_capacity_t.get(key, 0.0) + amount_t
@@ -53,50 +53,50 @@ class InventoryBook:
         for key, amount in physical_capacity_t.items():
             self.storage_service_capacity_t.setdefault(key, amount)
 
-    def physical_capacity(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
+    def physical_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
         storage_class = self.resource_storage_class.get(resource_id)
         if storage_class is None:
             return None
-        return self.storage_capacity_t.get((location_id, storage_class), 0.0)
+        return self.storage_capacity_t.get((operational_node_id, storage_class), 0.0)
 
-    def service_capacity(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
+    def service_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
         storage_class = self.resource_storage_class.get(resource_id)
         if storage_class is None:
             return None
-        return self.storage_service_capacity_t.get((location_id, storage_class), 0.0)
+        return self.storage_service_capacity_t.get((operational_node_id, storage_class), 0.0)
 
-    def capacity(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
+    def capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
         """Current usable/admission capacity for this resource."""
-        return self.service_capacity(location_id, resource_id)
+        return self.service_capacity(operational_node_id, resource_id)
 
-    def stored_in_class(self, location_id: SpatialNodeId, storage_class: StorageClass) -> float:
+    def stored_in_class(self, operational_node_id: SpatialNodeId, storage_class: StorageClass) -> float:
         stock = sum(
             amount
             for (loc, resource_id), amount in self.stock.items()
-            if loc == location_id and self.resource_storage_class.get(resource_id) == storage_class
+            if loc == operational_node_id and self.resource_storage_class.get(resource_id) == storage_class
         )
         external = sum(
             amount
             for (_owner, loc, resource_id), amount in self.external_occupancy.items()
-            if loc == location_id and self.resource_storage_class.get(resource_id) == storage_class
+            if loc == operational_node_id and self.resource_storage_class.get(resource_id) == storage_class
         )
         return stock + external
 
-    def occupy_storage(self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
+    def occupy_storage(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
         if amount < -1e-9:
             raise ValueError("negative storage occupancy")
-        free = self.free_capacity(location_id, resource_id)
+        free = self.free_capacity(operational_node_id, resource_id)
         accepted = amount if free is None else min(amount, free)
         if accepted <= 1e-12:
             return 0.0
-        key = (owner_id, location_id, resource_id)
+        key = (owner_id, operational_node_id, resource_id)
         self.external_occupancy[key] = self.external_occupancy.get(key, 0.0) + accepted
         return accepted
 
-    def release_storage_occupancy(self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
+    def release_storage_occupancy(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
         if amount < -1e-9:
             raise ValueError("negative storage occupancy release")
-        key = (owner_id, location_id, resource_id)
+        key = (owner_id, operational_node_id, resource_id)
         held = self.external_occupancy.get(key, 0.0)
         if held + 1e-9 < amount:
             raise ValueError("storage occupancy shortfall")
@@ -106,80 +106,89 @@ class InventoryBook:
         else:
             self.external_occupancy[key] = left
 
-    def free_capacity(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
+    def free_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
         storage_class = self.resource_storage_class.get(resource_id)
         if storage_class is None:
             return None
-        capacity = self.storage_service_capacity_t.get((location_id, storage_class), 0.0)
-        return max(0.0, capacity - self.stored_in_class(location_id, storage_class))
+        capacity = self.storage_service_capacity_t.get((operational_node_id, storage_class), 0.0)
+        return max(0.0, capacity - self.stored_in_class(operational_node_id, storage_class))
 
-    def amount(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float:
-        return self.stock.get((location_id, resource_id), 0.0)
+    def amount(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
+        return self.stock.get((operational_node_id, resource_id), 0.0)
 
-    def reserved_total(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float:
+    def reserved_total(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return sum(
             amount
             for (owner, loc, res), amount in self.reserved.items()
-            if loc == location_id and res == resource_id
+            if loc == operational_node_id and res == resource_id
         )
 
-    def available(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float:
-        return max(0.0, self.amount(location_id, resource_id) - self.reserved_total(location_id, resource_id))
+    def available(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
+        return max(0.0, self.amount(operational_node_id, resource_id) - self.reserved_total(operational_node_id, resource_id))
 
-    def add_up_to(self, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
+    def add_up_to(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
         if amount < -1e-9:
             raise ValueError("negative add")
-        free = self.free_capacity(location_id, resource_id)
+        free = self.free_capacity(operational_node_id, resource_id)
         accepted = amount if free is None else min(amount, free)
         if accepted <= 1e-12:
             return 0.0
-        key = (location_id, resource_id)
+        key = (operational_node_id, resource_id)
         self.stock[key] = self.stock.get(key, 0.0) + accepted
         return accepted
 
-    def add(self, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
-        accepted = self.add_up_to(location_id, resource_id, amount)
+    def add(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
+        accepted = self.add_up_to(operational_node_id, resource_id, amount)
         if accepted + 1e-9 < amount:
             raise ValueError(f"storage capacity exceeded: {resource_id}")
 
-    def take_unreserved(self, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> bool:
-        if amount < -1e-9:
-            raise ValueError("negative take")
-        if self.available(location_id, resource_id) + 1e-9 < amount:
-            return False
-        key = (location_id, resource_id)
-        self.stock[key] = max(0.0, self.stock.get(key, 0.0) - amount)
-        return True
+    def consume_allocated(
+        self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float
+    ) -> None:
+        """Consume material already authorized by a Resource Allocation.
 
-    def stage_unreserved(
-        self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float
-    ) -> bool:
-        """Move owned stock into a staging bucket without changing site occupancy.
-
-        This is an internal reclassification, not a new inflow. It therefore remains
-        valid when service capacity has temporarily fallen below already occupied
-        physical capacity (for example, underpowered refrigerated storage).
+        Shared availability must have been resolved before Domain execution. This
+        method therefore validates conservation against physical stock only; it
+        never performs a second allocation decision from current ``available``.
         """
         if amount < -1e-9:
-            raise ValueError("negative staging amount")
-        if self.available(location_id, resource_id) + 1e-9 < amount:
-            return False
-        stock_key = (location_id, resource_id)
-        self.stock[stock_key] = max(0.0, self.stock.get(stock_key, 0.0) - amount)
-        occupancy_key = (owner_id, location_id, resource_id)
-        self.external_occupancy[occupancy_key] = self.external_occupancy.get(occupancy_key, 0.0) + amount
-        return True
+            raise ValueError("negative allocated consumption")
+        if amount <= 1e-12:
+            return
+        key = (operational_node_id, resource_id)
+        stock = self.stock.get(key, 0.0)
+        if stock + 1e-9 < amount:
+            raise RuntimeError("allocated resource stock changed before execution")
+        self.stock[key] = max(0.0, stock - amount)
+
+    def stage_allocated(
+        self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float
+    ) -> None:
+        """Move an allocated amount into durable owner-scoped staging."""
+        if amount < -1e-9:
+            raise ValueError("negative allocated staging amount")
+        if amount <= 1e-12:
+            return
+        key = (operational_node_id, resource_id)
+        stock = self.stock.get(key, 0.0)
+        if stock + 1e-9 < amount:
+            raise RuntimeError("allocated resource stock changed before staging")
+        self.stock[key] = max(0.0, stock - amount)
+        occupancy_key = (owner_id, operational_node_id, resource_id)
+        self.external_occupancy[occupancy_key] = (
+            self.external_occupancy.get(occupancy_key, 0.0) + amount
+        )
 
     def staged_for(
-        self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId
+        self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId
     ) -> float:
-        return self.external_occupancy.get((owner_id, location_id, resource_id), 0.0)
+        return self.external_occupancy.get((owner_id, operational_node_id, resource_id), 0.0)
 
     def stage_reserved(
         self,
         reservation_owner_id: EntityId,
         staging_owner_id: EntityId,
-        location_id: SpatialNodeId,
+        operational_node_id: SpatialNodeId,
         resource_id: DefinitionId,
         amount: float,
     ) -> None:
@@ -194,11 +203,11 @@ class InventoryBook:
             raise ValueError("negative reserved staging amount")
         if amount <= 1e-12:
             return
-        reservation_key = (reservation_owner_id, location_id, resource_id)
+        reservation_key = (reservation_owner_id, operational_node_id, resource_id)
         reserved = self.reserved.get(reservation_key, 0.0)
         if reserved + 1e-9 < amount:
             raise ValueError("reservation shortfall while staging")
-        stock_key = (location_id, resource_id)
+        stock_key = (operational_node_id, resource_id)
         stock = self.stock.get(stock_key, 0.0)
         if stock + 1e-9 < amount:
             raise ValueError("stock shortfall despite reservation")
@@ -209,37 +218,37 @@ class InventoryBook:
         else:
             self.reserved[reservation_key] = reservation_left
         self.stock[stock_key] = max(0.0, stock - amount)
-        occupancy_key = (staging_owner_id, location_id, resource_id)
+        occupancy_key = (staging_owner_id, operational_node_id, resource_id)
         self.external_occupancy[occupancy_key] = (
             self.external_occupancy.get(occupancy_key, 0.0) + amount
         )
 
     def unstage_to_stock(
-        self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float
+        self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float
     ) -> None:
         """Return staged stock to ordinary inventory without changing site occupancy.
 
-        This is the inverse of ``stage_unreserved``. Because no material enters the
-        site, current service/admission capacity is irrelevant; the same physical
-        storage remains occupied throughout the reclassification.
+        Because no material enters the site, current service/admission capacity
+        is irrelevant; the same physical storage remains occupied throughout the
+        reclassification.
         """
         if amount < -1e-9:
             raise ValueError("negative unstaging amount")
-        key = (owner_id, location_id, resource_id)
+        key = (owner_id, operational_node_id, resource_id)
         held = self.external_occupancy.get(key, 0.0)
         if held + 1e-9 < amount:
             raise ValueError("staged stock shortfall")
-        self.release_storage_occupancy(owner_id, location_id, resource_id, amount)
-        stock_key = (location_id, resource_id)
+        self.release_storage_occupancy(owner_id, operational_node_id, resource_id, amount)
+        stock_key = (operational_node_id, resource_id)
         self.stock[stock_key] = self.stock.get(stock_key, 0.0) + amount
 
-    def reserve(self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
+    def reserve(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
         if amount < -1e-9:
             raise ValueError("negative reservation")
         if amount <= 1e-12:
             return 0.0
-        take = min(amount, self.available(location_id, resource_id))
-        key = (owner_id, location_id, resource_id)
+        take = min(amount, self.available(operational_node_id, resource_id))
+        key = (owner_id, operational_node_id, resource_id)
         self.reserved[key] = self.reserved.get(key, 0.0) + take
         return take
 
@@ -253,11 +262,11 @@ class InventoryBook:
             self.reserved.pop(key, None)
 
     def release_reserved_amount(
-        self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float
+        self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float
     ) -> None:
         if amount < -1e-9:
             raise ValueError("negative reservation release")
-        key = (owner_id, location_id, resource_id)
+        key = (owner_id, operational_node_id, resource_id)
         held = self.reserved.get(key, 0.0)
         if held + 1e-9 < amount:
             raise ValueError("reservation release exceeds held amount")
@@ -267,15 +276,15 @@ class InventoryBook:
         else:
             self.reserved[key] = left
 
-    def reserved_for(self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId) -> float:
-        return self.reserved.get((owner_id, location_id, resource_id), 0.0)
+    def reserved_for(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
+        return self.reserved.get((owner_id, operational_node_id, resource_id), 0.0)
 
-    def consume_reserved(self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
-        key = (owner_id, location_id, resource_id)
+    def consume_reserved(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
+        key = (owner_id, operational_node_id, resource_id)
         held = self.reserved.get(key, 0.0)
         if held + 1e-9 < amount:
             raise ValueError(f"reservation shortfall for {owner_id}: {resource_id}")
-        stock_key = (location_id, resource_id)
+        stock_key = (operational_node_id, resource_id)
         if self.stock.get(stock_key, 0.0) + 1e-9 < amount:
             raise ValueError("stock shortfall despite reservation")
         self.stock[stock_key] = max(0.0, self.stock[stock_key] - amount)

@@ -12,7 +12,7 @@ from .domain import validate_extension_registry
 from .simulation import OfflineProgressPolicy, OfflineProgressResult
 
 
-SAVE_SCHEMA_VERSION = 32
+SAVE_SCHEMA_VERSION = 34
 
 
 class SaveFormatError(ValueError):
@@ -56,7 +56,6 @@ def restore_state(sim, data: dict[str, Any]) -> None:
         codec.restore(sim, data[codec.key])
     sim.logistics.synchronize_surface_access_routes()
     sim.refresh_storage()
-    sim.refresh_resource_claims()
 
 
 def _application_state(app: GameApplication) -> dict[str, Any]:

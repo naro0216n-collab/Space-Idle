@@ -9,6 +9,7 @@ from space_idle.content.base_game import (
 )
 
 
+from space_idle.resource_claim import allocate_resource_claims
 from space_idle.resource_demand import ResourceDemand
 from space_idle.shared import EntityId
 
@@ -37,7 +38,7 @@ def test_owned_transport_is_physical_while_commercial_transport_uses_money():
     def demand():
         return ResourceDemand(
             EntityId("demand.economy"), "test", EntityId("owner.economy"),
-            LEO, WATER, 1.0, 100, EARTH, 0.0,
+            LEO, WATER, 1.0, 100, EARTH,
         )
 
     owned = build_game_application()
@@ -49,7 +50,9 @@ def test_owned_transport_is_physical_while_commercial_transport_uses_money():
     owned_sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
     owned_sim.inventory.add(EARTH, WATER, 1.0)
     owned_before = owned.query(GetWorld()).funds_musd
-    owned_sim.logistics.advance_capacity_logistics(owned_sim.day, (demand(),))
+    owned_plan = owned_sim.logistics.plan_capacity_logistics(owned_sim.day, (demand(),))
+    owned_allocations = allocate_resource_claims(owned_plan.claims, owned_sim.inventory)
+    owned_sim.logistics.advance_capacity_logistics(owned_sim.day, owned_plan, owned_allocations)
     assert owned.query(GetWorld()).funds_musd == owned_before
     assert owned_sim.logistics.cargo_flows
 
@@ -59,7 +62,9 @@ def test_owned_transport_is_physical_while_commercial_transport_uses_money():
     commercial_sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
     commercial_sim.inventory.add(EARTH, WATER, 1.0)
     commercial_before = commercial.query(GetWorld()).funds_musd
-    commercial_sim.logistics.advance_capacity_logistics(commercial_sim.day, (demand(),))
+    commercial_plan = commercial_sim.logistics.plan_capacity_logistics(commercial_sim.day, (demand(),))
+    commercial_allocations = allocate_resource_claims(commercial_plan.claims, commercial_sim.inventory)
+    commercial_sim.logistics.advance_capacity_logistics(commercial_sim.day, commercial_plan, commercial_allocations)
     assert commercial.query(GetWorld()).funds_musd < commercial_before
     assert commercial_sim.logistics.cargo_flows
 

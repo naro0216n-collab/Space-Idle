@@ -4,7 +4,7 @@ from typing import Any
 
 from .domain import DomainExtension, StateCodec
 from .shared import CelestialBodyId, DefinitionId, SpatialNodeId, SurfaceCellId
-from .spatial import LocationState
+from .spatial import OperationalNodeState, SurfaceLocationState
 from .validation_support import ValidationContext, require as _require
 
 
@@ -12,7 +12,7 @@ def capture(sim: Any) -> dict[str, Any]:
     return {
         "locations": [
             {
-                "id": str(location.id),
+                "operational_node_id": str(location.operational_node_id),
                 "display_name": location.display_name,
                 "body_id": str(location.body_id),
                 "core_cell_id": str(location.core_cell_id),
@@ -20,7 +20,12 @@ def capture(sim: Any) -> dict[str, Any]:
                     str(cell_id) for cell_id in sorted(location.developed_cell_ids, key=str)
                 ],
             }
-            for location in sorted(sim.graph.locations.values(), key=lambda row: str(row.id))
+            for location in sorted(
+                sim.graph.locations.values(), key=lambda row: str(row.operational_node_id)
+            )
+        ],
+        "operational_nodes": [
+            str(node_id) for node_id in sorted(sim.graph.operational_node_states, key=str)
         ],
         "overlays": sim.environment.capture_overlay_state(),
     }
@@ -28,21 +33,28 @@ def capture(sim: Any) -> dict[str, Any]:
 
 def restore(sim: Any, data: dict[str, Any]) -> None:
     rows = data.get("locations")
+    operational_rows = data.get("operational_nodes")
     if not isinstance(rows, list):
         raise ValueError("spatial state is missing locations")
-    sim.graph.locations.clear()
+    if not isinstance(operational_rows, list):
+        raise ValueError("spatial state is missing operational_nodes")
+    locations: list[SurfaceLocationState] = []
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("spatial location row must be an object")
-        sim.graph.add_location(
-            LocationState(
-                SpatialNodeId(str(row["id"])),
+        locations.append(
+            SurfaceLocationState(
+                SpatialNodeId(str(row["operational_node_id"])),
                 str(row["display_name"]),
                 CelestialBodyId(str(row["body_id"])),
                 SurfaceCellId(str(row["core_cell_id"])),
                 {SurfaceCellId(str(value)) for value in row["developed_cell_ids"]},
             )
         )
+    operational_nodes = tuple(
+        OperationalNodeState(SpatialNodeId(str(value))) for value in operational_rows
+    )
+    sim.graph.replace_dynamic_state(tuple(locations), operational_nodes)
     sim.environment.restore_overlay_state(data.get("overlays", []))
 
 
@@ -99,10 +111,22 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 
 
 def validate_runtime(sim: Any) -> None:
+    for node_id, state in sim.graph.operational_node_states.items():
+        _require(node_id == state.id, f"operational node key mismatch: {node_id}")
+        context_count = int(node_id in sim.graph.nodes) + int(node_id in sim.graph.locations)
+        _require(
+            context_count == 1,
+            f"operational node must reference exactly one spatial context: {node_id}",
+        )
+
     seen_cells: set[SurfaceCellId] = set()
     for location_id, location in sim.graph.locations.items():
-        _require(location_id == location.id, f"location key mismatch: {location_id}")
+        _require(location_id == location.operational_node_id, f"location key mismatch: {location_id}")
         _require(location_id not in sim.graph.nodes, f"location collides with non-surface node: {location_id}")
+        _require(
+            location_id in sim.graph.operational_node_states,
+            f"surface location lacks operational node state: {location_id}",
+        )
         _require(location.body_id in sim.graph.bodies, f"location has unknown body: {location_id}")
         _require(location.core_cell_id in location.developed_cell_ids, f"location core cell is not developed: {location_id}")
         _require(location.core_cell_id in sim.graph.surface_cells, f"location has unknown core cell: {location_id}")

@@ -15,7 +15,7 @@ def capture_facilities(sim: Any) -> dict[str, Any]:
             {
                 "id": str(f.id),
                 "definition_id": str(f.definition_id),
-                "location_id": str(f.location_id),
+                "operational_node_id": str(f.operational_node_id),
                 "site_cell_id": None if f.site_cell_id is None else str(f.site_cell_id),
                 "paused": f.paused,
                 "power_priority": f.power_priority,
@@ -36,7 +36,7 @@ def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
         sim.facilities.facilities[fid] = FacilityState(
             id=fid,
             definition_id=DefinitionId(row["definition_id"]),
-            location_id=SpatialNodeId(row["location_id"]),
+            operational_node_id=SpatialNodeId(row["operational_node_id"]),
             site_cell_id=None if row["site_cell_id"] is None else SurfaceCellId(row["site_cell_id"]),
             paused=bool(row["paused"]),
             power_priority=row["power_priority"],
@@ -79,8 +79,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
                 seen_condition_codes.add(code)
     for facility in sim.facilities.facilities.values():
         _require(facility.definition_id in facility_defs, f"facility references unknown definition: {facility.id}")
-        _require(facility.location_id in nodes, f"facility references unknown location: {facility.id}")
-        _require(not sim.facilities.placement_failures(facility.definition_id, facility.location_id, facility.site_cell_id), f"facility has invalid placement: {facility.id}")
+        _require(facility.operational_node_id in nodes, f"facility references unknown operational node: {facility.id}")
+        _require(not sim.facilities.placement_failures(facility.definition_id, facility.operational_node_id, facility.site_cell_id), f"facility has invalid placement: {facility.id}")
         _require(facility.level >= 1, f"facility has invalid level: {facility.id}")
     for definition_id, spec in sim.power.specs.items():
         _require(definition_id in facility_defs, f"power spec references unknown facility: {definition_id}")
@@ -100,8 +100,8 @@ def validate_runtime(sim: Any) -> None:
     for facility_id, facility in sim.facilities.facilities.items():
         _require(facility_id == facility.id, f"facility state key mismatch: {facility_id}")
         _require(facility.definition_id in sim.facilities.definitions, f"facility state has unknown definition: {facility_id}")
-        _require(sim.graph.has_operational_node(facility.location_id), f"facility state has unknown location: {facility_id}")
-        _require(not sim.facilities.placement_failures(facility.definition_id, facility.location_id, facility.site_cell_id), f"facility state has invalid placement: {facility_id}")
+        _require(sim.graph.has_operational_node(facility.operational_node_id), f"facility state has unknown operational node: {facility_id}")
+        _require(not sim.facilities.placement_failures(facility.definition_id, facility.operational_node_id, facility.site_cell_id), f"facility state has invalid placement: {facility_id}")
         _require(facility.level >= 1, f"facility state has invalid level: {facility_id}")
         _require(isinstance(facility.maintenance_priority, int), f"facility maintenance priority must be an integer: {facility_id}")
         _require(all(amount >= -1e-9 for amount in facility.invested_resources.values()), f"facility has negative invested resource: {facility_id}")

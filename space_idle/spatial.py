@@ -175,10 +175,10 @@ class SurfaceCellDef:
 
 
 @dataclass
-class LocationState:
+class SurfaceLocationState:
     """Player-operated economic/industrial/logistics node on a surface."""
 
-    id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     display_name: str
     body_id: CelestialBodyId
     core_cell_id: SurfaceCellId
@@ -204,7 +204,14 @@ class SpatialNodeDef:
 
     def __post_init__(self) -> None:
         if self.kind is SpatialNodeKind.SURFACE:
-            raise ValueError("surface geography must use SurfaceCellDef and LocationState")
+            raise ValueError("surface geography must use SurfaceCellDef and SurfaceLocationState")
+
+
+@dataclass(frozen=True)
+class OperationalNodeState:
+    """Existence marker for a player-operable economic/logistics node."""
+
+    id: SpatialNodeId
 
 
 @dataclass(frozen=True)
@@ -222,7 +229,8 @@ class SpatialGraph:
     # Non-surface nodes only. Surface economic nodes live in locations.
     nodes: dict[SpatialNodeId, SpatialNodeDef] = field(default_factory=dict)
     surface_cells: dict[SurfaceCellId, SurfaceCellDef] = field(default_factory=dict)
-    locations: dict[SpatialNodeId, LocationState] = field(default_factory=dict)
+    locations: dict[SpatialNodeId, SurfaceLocationState] = field(default_factory=dict)
+    operational_node_states: dict[SpatialNodeId, OperationalNodeState] = field(default_factory=dict)
 
     def add_body(self, body: CelestialBodyDef) -> None:
         if body.id in self.bodies:
@@ -231,7 +239,7 @@ class SpatialGraph:
 
     def add(self, node: SpatialNodeDef) -> None:
         if node.id in self.nodes or node.id in self.locations:
-            raise ValueError(f"duplicate operational node: {node.id}")
+            raise ValueError(f"duplicate spatial context: {node.id}")
         if node.parent_id is not None and node.parent_id not in self.nodes:
             raise ValueError(f"unknown non-surface parent {node.parent_id} for {node.id}")
         if node.body_id is not None and node.body_id not in self.bodies:
@@ -245,9 +253,10 @@ class SpatialGraph:
             raise ValueError(f"unknown celestial body {cell.body_id} for {cell.id}")
         self.surface_cells[cell.id] = cell
 
-    def add_location(self, location: LocationState) -> None:
-        if location.id in self.locations or location.id in self.nodes:
-            raise ValueError(f"duplicate operational node: {location.id}")
+    def _add_location_state(self, location: SurfaceLocationState) -> None:
+        node_id = location.operational_node_id
+        if node_id in self.locations or node_id in self.nodes:
+            raise ValueError(f"duplicate spatial context: {node_id}")
         self._validate_location_shape(location, allow_unknown_neighbors=False)
         overlapping = set(location.developed_cell_ids) & set(self.cell_owners())
         if overlapping:
@@ -255,7 +264,43 @@ class SpatialGraph:
                 "surface cell already belongs to another location: "
                 + ",".join(sorted(map(str, overlapping)))
             )
-        self.locations[location.id] = location
+        self.locations[node_id] = location
+
+    def add_operational_node(self, state: OperationalNodeState) -> None:
+        if state.id in self.operational_node_states:
+            raise ValueError(f"duplicate operational node: {state.id}")
+        context_count = int(state.id in self.nodes) + int(state.id in self.locations)
+        if context_count != 1:
+            raise ValueError(
+                f"operational node must reference exactly one spatial context: {state.id}"
+            )
+        self.operational_node_states[state.id] = state
+
+    def replace_dynamic_state(
+        self,
+        locations: tuple[SurfaceLocationState, ...],
+        operational_nodes: tuple[OperationalNodeState, ...],
+    ) -> None:
+        """Atomically replace persisted surface geography and Operational Node existence."""
+        old_locations = self.locations
+        old_operational_nodes = self.operational_node_states
+        self.locations = {}
+        self.operational_node_states = {}
+        try:
+            for location in locations:
+                self._add_location_state(location)
+            for state in operational_nodes:
+                self.add_operational_node(state)
+            missing = set(self.locations) - set(self.operational_node_states)
+            if missing:
+                raise ValueError(
+                    "surface locations lack operational node state: "
+                    + ",".join(sorted(map(str, missing)))
+                )
+        except Exception:
+            self.locations = old_locations
+            self.operational_node_states = old_operational_nodes
+            raise
 
     def location_foundation_failures(
         self, body_id: CelestialBodyId, core_cell_id: SurfaceCellId
@@ -278,12 +323,21 @@ class SpatialGraph:
         display_name: str,
         body_id: CelestialBodyId,
         core_cell_id: SurfaceCellId,
-    ) -> LocationState:
+    ) -> SurfaceLocationState:
         failures = self.location_foundation_failures(body_id, core_cell_id)
         if failures:
             raise ValueError("; ".join(detail for _code, detail in failures))
-        location = LocationState(location_id, display_name, body_id, core_cell_id, {core_cell_id})
-        self.add_location(location)
+        if location_id in self.nodes or location_id in self.locations or location_id in self.operational_node_states:
+            raise ValueError(f"duplicate spatial or operational node: {location_id}")
+        location = SurfaceLocationState(
+            location_id, display_name, body_id, core_cell_id, {core_cell_id}
+        )
+        self._add_location_state(location)
+        try:
+            self.add_operational_node(OperationalNodeState(location_id))
+        except Exception:
+            self.locations.pop(location_id, None)
+            raise
         return location
 
     def surface_cell_development_failures(
@@ -363,42 +417,40 @@ class SpatialGraph:
         )
 
     def operational_nodes(self) -> tuple[OperationalNodeView, ...]:
-        rows = [
-            OperationalNodeView(node.id, node.display_name, node.parent_id, node.body_id, node.kind)
-            for node in self.nodes.values()
-        ]
-        rows.extend(
-            OperationalNodeView(
-                location.id,
+        return tuple(
+            sorted(
+                (self._operational_node_view(state.id) for state in self.operational_node_states.values()),
+                key=lambda row: str(row.id),
+            )
+        )
+
+    def _operational_node_view(self, node_id: SpatialNodeId) -> OperationalNodeView:
+        node = self.nodes.get(node_id)
+        if node is not None:
+            return OperationalNodeView(
+                node.id, node.display_name, node.parent_id, node.body_id, node.kind
+            )
+        location = self.locations.get(node_id)
+        if location is not None:
+            return OperationalNodeView(
+                location.operational_node_id,
                 location.display_name,
                 None,
                 location.body_id,
                 SpatialNodeKind.SURFACE,
             )
-            for location in self.locations.values()
-        )
-        return tuple(sorted(rows, key=lambda row: str(row.id)))
+        raise ValueError(f"operational node has no spatial context: {node_id}")
 
     def operational_node_map(self) -> dict[SpatialNodeId, OperationalNodeView]:
         return {row.id: row for row in self.operational_nodes()}
 
     def operational_node(self, node_id: SpatialNodeId) -> OperationalNodeView:
-        node = self.nodes.get(node_id)
-        if node is not None:
-            return OperationalNodeView(node.id, node.display_name, node.parent_id, node.body_id, node.kind)
-        location = self.locations.get(node_id)
-        if location is not None:
-            return OperationalNodeView(
-                location.id,
-                location.display_name,
-                None,
-                location.body_id,
-                SpatialNodeKind.SURFACE,
-            )
-        raise KeyError(node_id)
+        if node_id not in self.operational_node_states:
+            raise KeyError(node_id)
+        return self._operational_node_view(node_id)
 
     def has_operational_node(self, node_id: SpatialNodeId) -> bool:
-        return node_id in self.nodes or node_id in self.locations
+        return node_id in self.operational_node_states
 
     def operational_node_ids(self) -> tuple[SpatialNodeId, ...]:
         return tuple(row.id for row in self.operational_nodes())
@@ -462,21 +514,21 @@ class SpatialGraph:
     def is_surface_context(self, context_id: SpatialContextId) -> bool:
         return self.surface_cell_for_context(context_id) is not None
 
-    def _validate_location_shape(self, location: LocationState, *, allow_unknown_neighbors: bool) -> None:
+    def _validate_location_shape(self, location: SurfaceLocationState, *, allow_unknown_neighbors: bool) -> None:
         if location.body_id not in self.bodies:
-            raise ValueError(f"unknown celestial body {location.body_id} for {location.id}")
+            raise ValueError(f"unknown celestial body {location.body_id} for {location.operational_node_id}")
         if location.core_cell_id not in self.surface_cells:
-            raise ValueError(f"unknown core surface cell {location.core_cell_id} for {location.id}")
+            raise ValueError(f"unknown core surface cell {location.core_cell_id} for {location.operational_node_id}")
         if location.core_cell_id not in location.developed_cell_ids:
             raise ValueError("location core cell must be in developed territory")
         for cell_id in location.developed_cell_ids:
             cell = self.surface_cells.get(cell_id)
             if cell is None:
-                raise ValueError(f"unknown developed surface cell {cell_id} for {location.id}")
+                raise ValueError(f"unknown developed surface cell {cell_id} for {location.operational_node_id}")
             if cell.body_id != location.body_id:
-                raise ValueError(f"location developed cell belongs to another body: {location.id}/{cell_id}")
+                raise ValueError(f"location developed cell belongs to another body: {location.operational_node_id}/{cell_id}")
         if not self._cells_connected(location.developed_cell_ids, allow_unknown_neighbors=allow_unknown_neighbors):
-            raise ValueError(f"location developed territory is not connected: {location.id}")
+            raise ValueError(f"location developed territory is not connected: {location.operational_node_id}")
 
     def _cells_connected(
         self,

@@ -35,10 +35,10 @@ class CatalogWorldProjectorMixin:
         sim = self._simulation
         locations = []
         for node in sim.graph.operational_nodes():
-            facility_count = sum(1 for facility in sim.facilities.facilities.values() if facility.location_id == node.id)
+            facility_count = sum(1 for facility in sim.facilities.facilities.values() if facility.operational_node_id == node.id)
             active_projects = sum(
                 1 for project in sim.projects.projects.values()
-                if project.location_id == node.id and project.status not in {"complete", "cancelled"}
+                if project.operational_node_id == node.id and project.status not in {"complete", "cancelled"}
             )
             locations.append(LocationSummary(
                 str(node.id), node.display_name,

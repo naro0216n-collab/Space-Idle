@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 import math
 
+from ..resource_claim import ResourceAllocationPlan, ResourceClaim
+from ..resource_demand import ResourceDemand
 from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .models import (
     DirectionalCapacity,
@@ -10,6 +12,7 @@ from .models import (
     FleetPoolSnapshot,
     FleetRelocation,
     FleetRelocationPlan,
+    FleetRelocationResourceNeed,
     FleetRelocationResourceRequirement,
     FleetRelease,
     FleetReservation,
@@ -101,7 +104,7 @@ class FleetAllocationMixin:
             allocation.active_units
             for allocation in self.transport_allocations.values()
             if allocation.vehicle_definition_id == vehicle_definition_id
-            and allocation.anchor_location_id == location_id
+            and allocation.anchor_node_id == location_id
         )
 
     def _reserved_units_at(
@@ -111,7 +114,7 @@ class FleetAllocationMixin:
             reservation.units
             for reservation in self.fleet_reservations.values()
             if reservation.vehicle_definition_id == vehicle_definition_id
-            and reservation.location_id == location_id
+            and reservation.operational_node_id == location_id
         )
 
     def _relocating_units_from(
@@ -131,7 +134,7 @@ class FleetAllocationMixin:
             release.units
             for release in self.fleet_releases.values()
             if release.vehicle_definition_id == vehicle_definition_id
-            and release.location_id == location_id
+            and release.operational_node_id == location_id
         )
 
     def fleet_free_units(
@@ -164,7 +167,7 @@ class FleetAllocationMixin:
             reservation.owner_id,
             reservation.kind,
             reservation.vehicle_definition_id,
-            reservation.location_id,
+            reservation.operational_node_id,
             reservation.units,
         )
 
@@ -175,7 +178,7 @@ class FleetAllocationMixin:
                 reservation.owner_id,
                 reservation.kind,
                 reservation.vehicle_definition_id,
-                reservation.location_id,
+                reservation.operational_node_id,
                 reservation.units,
             )
             for reservation in sorted(
@@ -193,7 +196,7 @@ class FleetAllocationMixin:
             reservation.units
             for reservation in self.fleet_reservations.values()
             if reservation.vehicle_definition_id == vehicle_definition_id
-            and reservation.location_id == location_id
+            and reservation.operational_node_id == location_id
             and reservation.kind is FleetReservationKind.SCIENTIFIC_EXPLORATION
         )
         reserved_units = self._reserved_units_at(vehicle_definition_id, location_id)
@@ -299,13 +302,13 @@ class FleetAllocationMixin:
         reservation = self.fleet_reservations.get(reservation_id)
         if reservation is None:
             raise KeyError(reservation_id)
-        destination_id = final_location_id or reservation.location_id
+        destination_id = final_location_id or reservation.operational_node_id
         if not self.facilities.environment.graph.has_operational_node(destination_id):
             raise KeyError(destination_id)
 
-        if destination_id != reservation.location_id:
+        if destination_id != reservation.operational_node_id:
             source = self.fleet_pool(
-                reservation.vehicle_definition_id, reservation.location_id
+                reservation.vehicle_definition_id, reservation.operational_node_id
             )
             if source.total_units < reservation.units:
                 raise RuntimeError("fleet reservation exceeds source pool")
@@ -405,7 +408,7 @@ class FleetAllocationMixin:
         routes: tuple,
         *,
         resource_requirements: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = (),
-        servicing_location_id: SpatialNodeId | None = None,
+        servicing_node_id: SpatialNodeId | None = None,
         servicing_rate: float = 0.0,
     ) -> tuple[tuple[SpatialNodeId, str, float, str], ...]:
         """Project the infrastructure contract already used by route execution.
@@ -460,12 +463,12 @@ class FleetAllocationMixin:
                     )
 
         if (
-            servicing_location_id is not None
+            servicing_node_id is not None
             and definition.turnaround_capability_id is not None
             and servicing_rate > 1e-12
         ):
             _require(
-                servicing_location_id,
+                servicing_node_id,
                 definition.turnaround_capability_id,
                 servicing_rate,
                 "available",
@@ -489,7 +492,7 @@ class FleetAllocationMixin:
     def transport_service_plan_for(
         self,
         vehicle_definition_id: DefinitionId,
-        anchor_location_id: SpatialNodeId,
+        anchor_node_id: SpatialNodeId,
         destination_id: SpatialNodeId,
         *,
         day: int = 0,
@@ -499,10 +502,10 @@ class FleetAllocationMixin:
         """Derive a deterministic service plan without creating authoritative state."""
         preview = TransportAllocation(
             EntityId(
-                f"transport.service.preview:{vehicle_definition_id}:{anchor_location_id}:{destination_id}:{path_policy.value}"
+                f"transport.service.preview:{vehicle_definition_id}:{anchor_node_id}:{destination_id}:{path_policy.value}"
             ),
             vehicle_definition_id,
-            anchor_location_id,
+            anchor_node_id,
             destination_id,
             0,
             TransportControlMode.UNITS,
@@ -522,7 +525,7 @@ class FleetAllocationMixin:
         blockers: list[str] = []
         try:
             forward = self._route_path_for_vehicle(
-                allocation.anchor_location_id,
+                allocation.anchor_node_id,
                 allocation.destination_id,
                 allocation.vehicle_definition_id,
                 day,
@@ -533,7 +536,7 @@ class FleetAllocationMixin:
             return TransportServicePlan(
                 allocation.id,
                 allocation.vehicle_definition_id,
-                allocation.anchor_location_id,
+                allocation.anchor_node_id,
                 allocation.destination_id,
                 (), (), (), 0.0, definition.turnaround_days, 0.0, 0.0, 0, None,
                 DirectionalCapacity(), blockers=(f"service_plan:{exc}",),
@@ -578,7 +581,7 @@ class FleetAllocationMixin:
             try:
                 reverse = self._route_path_for_vehicle(
                     allocation.destination_id,
-                    allocation.anchor_location_id,
+                    allocation.anchor_node_id,
                     allocation.vehicle_definition_id,
                     day,
                     allocation.path_policy,
@@ -651,7 +654,7 @@ class FleetAllocationMixin:
         # which direction carries payload. They are therefore part of the empty
         # cycle baseline rather than either directional payload increment.
         for resource_id, amount in definition.turnaround_resources:
-            key = (allocation.anchor_location_id, resource_id)
+            key = (allocation.anchor_node_id, resource_id)
             empty_resource_per_cycle[key] = empty_resource_per_cycle.get(key, 0.0) + amount
 
         nominal = DirectionalCapacity(
@@ -684,13 +687,13 @@ class FleetAllocationMixin:
             definition,
             (*forward_routes, *reverse_routes),
             resource_requirements=resources,
-            servicing_location_id=allocation.anchor_location_id,
+            servicing_node_id=allocation.anchor_node_id,
             servicing_rate=servicing,
         )
         return TransportServicePlan(
             allocation.id,
             allocation.vehicle_definition_id,
-            allocation.anchor_location_id,
+            allocation.anchor_node_id,
             allocation.destination_id,
             forward,
             reverse,
@@ -737,7 +740,7 @@ class FleetAllocationMixin:
     def create_transport_allocation(
         self,
         vehicle_definition_id: DefinitionId,
-        anchor_location_id: SpatialNodeId,
+        anchor_node_id: SpatialNodeId,
         destination_id: SpatialNodeId,
         *,
         priority: int = 50,
@@ -751,8 +754,8 @@ class FleetAllocationMixin:
     ) -> EntityId:
         if vehicle_definition_id not in self.vehicle_defs:
             raise KeyError(vehicle_definition_id)
-        if not self.facilities.environment.graph.has_operational_node(anchor_location_id):
-            raise KeyError(anchor_location_id)
+        if not self.facilities.environment.graph.has_operational_node(anchor_node_id):
+            raise KeyError(anchor_node_id)
         if not self.facilities.environment.graph.has_operational_node(destination_id):
             raise KeyError(destination_id)
         self._transport_allocation_counter += 1
@@ -760,7 +763,7 @@ class FleetAllocationMixin:
         allocation = TransportAllocation(
             allocation_id,
             vehicle_definition_id,
-            anchor_location_id,
+            anchor_node_id,
             destination_id,
             priority,
             control_mode,
@@ -895,7 +898,7 @@ class FleetAllocationMixin:
             release_id,
             allocation.id,
             allocation.vehicle_definition_id,
-            allocation.anchor_location_id,
+            allocation.anchor_node_id,
             units,
             recovery_day,
         )
@@ -911,7 +914,10 @@ class FleetAllocationMixin:
         # Relocations remain committed against the source pool until arrival,
         # then atomically move their quantity into the destination pool.
         for relocation_id in sorted(
-            [rid for rid, row in self.fleet_relocations.items() if row.arrival_day <= day],
+            [
+                rid for rid, row in self.fleet_relocations.items()
+                if row.arrival_day is not None and row.arrival_day <= day
+            ],
             key=str,
         ):
             relocation = self.fleet_relocations.pop(relocation_id)
@@ -1024,7 +1030,7 @@ class FleetAllocationMixin:
             definition,
             routes,
             resource_requirements=tuple(
-                (row.location_id, row.resource_id, row.required_t)
+                (row.operational_node_id, row.resource_id, row.required_t)
                 for row in resource_requirements
             ),
         )
@@ -1062,21 +1068,28 @@ class FleetAllocationMixin:
             path_policy=path_policy,
             day=day,
         )
-        if plan.blockers:
+        # Inventory shortage is resolved by the shared Resource Claim allocator,
+        # not by command ordering. Structural/operational blockers still reject
+        # the relocation intent immediately.
+        blockers = tuple(
+            blocker for blocker in plan.blockers if not blocker.startswith("resource:")
+        )
+        if blockers:
             raise ValueError(
                 "fleet relocation is not operationally feasible: "
-                + "; ".join(plan.blockers)
+                + "; ".join(blockers)
             )
-        assert plan.arrival_day is not None
-        for requirement in plan.resource_requirements:
-            if requirement.required_t > 1e-12 and not self.inventory.take_unreserved(
-                requirement.location_id, requirement.resource_id, requirement.required_t
-            ):
-                raise RuntimeError(
-                    "fleet relocation resources changed after feasibility check"
-                )
+        if not plan.path or plan.travel_days <= 0:
+            raise ValueError("fleet relocation has no executable movement path")
         self._fleet_relocation_counter += 1
         relocation_id = EntityId(f"fleet.relocation.{self._fleet_relocation_counter}")
+        needs = tuple(
+            FleetRelocationResourceNeed(
+                row.operational_node_id, row.resource_id, row.required_t
+            )
+            for row in plan.resource_requirements
+            if row.required_t > 1e-12
+        )
         self.fleet_relocations[relocation_id] = FleetRelocation(
             relocation_id,
             vehicle_definition_id,
@@ -1084,9 +1097,111 @@ class FleetAllocationMixin:
             source_id,
             destination_id,
             day,
-            plan.arrival_day,
+            max(1, plan.travel_days),
+            plan.path,
+            needs,
         )
         return relocation_id
+
+    @staticmethod
+    def _relocation_claim_id(
+        relocation_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId
+    ) -> EntityId:
+        return EntityId(
+            f"claim.fleet_relocation:{relocation_id}:{operational_node_id}:{resource_id}"
+        )
+
+    @staticmethod
+    def _relocation_demand_id(
+        relocation_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId
+    ) -> EntityId:
+        return EntityId(
+            f"demand.fleet_relocation:{relocation_id}:{operational_node_id}:{resource_id}"
+        )
+
+    def fleet_relocation_resource_claims(self, day: int) -> tuple[ResourceClaim, ...]:
+        claims: list[ResourceClaim] = []
+        for relocation in sorted(self.fleet_relocations.values(), key=lambda row: str(row.id)):
+            if relocation.started:
+                continue
+            for need in relocation.resource_needs:
+                staged = self.inventory.staged_for(
+                    relocation.id, need.operational_node_id, need.resource_id
+                )
+                missing = max(0.0, need.required_t - staged)
+                if missing <= 1e-12:
+                    continue
+                claims.append(ResourceClaim(
+                    self._relocation_claim_id(
+                        relocation.id, need.operational_node_id, need.resource_id
+                    ),
+                    need.operational_node_id,
+                    need.resource_id,
+                    missing,
+                    relocation.priority,
+                    "fleet_relocation",
+                    relocation.id,
+                    "operation_resource",
+                ))
+        return tuple(claims)
+
+    def fleet_relocation_resource_demands(self, day: int) -> tuple[ResourceDemand, ...]:
+        demands: list[ResourceDemand] = []
+        for relocation in sorted(self.fleet_relocations.values(), key=lambda row: str(row.id)):
+            if relocation.started:
+                continue
+            for need in relocation.resource_needs:
+                staged = self.inventory.staged_for(
+                    relocation.id, need.operational_node_id, need.resource_id
+                )
+                missing = max(0.0, need.required_t - staged)
+                if missing <= 1e-12:
+                    continue
+                demands.append(ResourceDemand(
+                    self._relocation_demand_id(
+                        relocation.id, need.operational_node_id, need.resource_id
+                    ),
+                    "fleet_relocation",
+                    relocation.id,
+                    need.operational_node_id,
+                    need.resource_id,
+                    missing,
+                    relocation.priority,
+                ))
+        return tuple(demands)
+
+    def advance_fleet_relocations(
+        self, allocations: ResourceAllocationPlan, day: int
+    ) -> None:
+        for relocation in sorted(self.fleet_relocations.values(), key=lambda row: str(row.id)):
+            if relocation.started:
+                continue
+            for need in relocation.resource_needs:
+                claim_id = self._relocation_claim_id(
+                    relocation.id, need.operational_node_id, need.resource_id
+                )
+                try:
+                    amount = allocations.allocated(claim_id)
+                except KeyError:
+                    amount = 0.0
+                if amount > 1e-12:
+                    self.inventory.stage_allocated(
+                        relocation.id, need.operational_node_id, need.resource_id, amount
+                    )
+            ready = all(
+                self.inventory.staged_for(
+                    relocation.id, need.operational_node_id, need.resource_id
+                ) + 1e-9 >= need.required_t
+                for need in relocation.resource_needs
+            )
+            if not ready:
+                continue
+            for need in relocation.resource_needs:
+                self.inventory.release_storage_occupancy(
+                    relocation.id, need.operational_node_id, need.resource_id, need.required_t
+                )
+            relocation.departure_day = day
+            relocation.arrival_day = day + relocation.travel_days
 
 
     @staticmethod
@@ -1100,7 +1215,7 @@ class FleetAllocationMixin:
         return (
             -allocation.priority,
             str(allocation.vehicle_definition_id),
-            str(allocation.anchor_location_id),
+            str(allocation.anchor_node_id),
             str(allocation.destination_id),
             tuple(str(route_id) for route_id in (allocation.path or ())),
             allocation.path_policy.value,
@@ -1115,7 +1230,7 @@ class FleetAllocationMixin:
         groups: dict[tuple[DefinitionId, SpatialNodeId], list[TransportAllocation]] = {}
         for allocation in self.transport_allocations.values():
             groups.setdefault(
-                (allocation.vehicle_definition_id, allocation.anchor_location_id), []
+                (allocation.vehicle_definition_id, allocation.anchor_node_id), []
             ).append(allocation)
 
         for (definition_id, location_id), rows in sorted(
@@ -1227,7 +1342,7 @@ class FleetAllocationMixin:
         if definition.turnaround_capability_id is not None:
             required_service = plan.servicing_units_per_full_utilization_day * active
             available_service = self._available_capability(
-                allocation.anchor_location_id, definition.turnaround_capability_id, day
+                allocation.anchor_node_id, definition.turnaround_capability_id, day
             )
             if required_service > 1e-12:
                 service_ratio = min(1.0, max(0.0, available_service / required_service))
@@ -1235,7 +1350,7 @@ class FleetAllocationMixin:
                 reverse_ratio = min(reverse_ratio, service_ratio)
                 if service_ratio < 1.0 - 1e-12:
                     limiting.append(
-                        f"servicing:{allocation.anchor_location_id}:{definition.turnaround_capability_id}"
+                        f"servicing:{allocation.anchor_node_id}:{definition.turnaround_capability_id}"
                     )
 
         def _resource_map(rows):

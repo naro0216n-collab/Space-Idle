@@ -35,7 +35,7 @@ def _fleet_row(app, definition_id, location_id):
     return next(
         item for item in app.query(GetFleet()).pools
         if item.vehicle_definition_id == str(definition_id)
-        and item.location_id == str(location_id)
+        and item.operational_node_id == str(location_id)
     )
 
 

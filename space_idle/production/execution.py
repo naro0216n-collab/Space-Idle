@@ -5,6 +5,7 @@ import math
 from ..facilities import FacilityBook
 from ..inventory import InventoryBook
 from ..power import PowerSnapshot
+from ..resource_claim import ResourceAllocationPlan
 from ..shared import SpatialNodeId
 
 
@@ -16,8 +17,11 @@ class IndustryExecutionMixin:
         inventory: InventoryBook,
         power: PowerSnapshot,
         day: int = 0,
+        resource_allocations: ResourceAllocationPlan | None = None,
     ) -> None:
-        plan = self._plan_site(location_id, facilities, inventory, power, day)
+        plan = self._plan_site(
+            location_id, facilities, inventory, power, day, resource_allocations
+        )
 
         # Mutate each resource balance once. Planning is simultaneous, so
         # execution must not re-introduce facility registration/order effects
@@ -36,8 +40,8 @@ class IndustryExecutionMixin:
         }
         for resource_id in input_resource_ids:
             amount = input_totals[resource_id]
-            if amount > 1e-12 and not inventory.take_unreserved(location_id, resource_id, amount):
-                raise RuntimeError("industry input accounting race")
+            if amount > 1e-12:
+                inventory.consume_allocated(location_id, resource_id, amount)
 
         # Consume all inputs before adding any outputs. Same-day production does
         # not chain through arbitrary process iteration order.

@@ -213,7 +213,7 @@ class TransportCompatibilityMixin:
             except ValueError as exc:
                 failures.append(f"{prefix}:endpoint:{exc}")
                 continue
-            power = self.power.snapshot(endpoint.location_id, self.facilities, day)
+            power = self.power.snapshot(endpoint.node_id, self.facilities, day)
             if endpoint.surface_interface_id is not None:
                 interface = self.facilities.facilities[endpoint.surface_interface_id]
                 for code, detail in self.facilities.activation_failures(interface, day):
@@ -229,7 +229,7 @@ class TransportCompatibilityMixin:
                         failures.append(f"{prefix}:interface:power:facility unavailable")
             for failure in evaluate_site_requirements(
                 requirements,
-                endpoint.location_id,
+                endpoint.node_id,
                 day,
                 self.facilities.environment,
                 self.facilities,
@@ -261,9 +261,9 @@ class TransportCompatibilityMixin:
                 continue
             factor = max(
                 0.0,
-                min(1.0, provider(endpoint.location_id, endpoint.surface_cell_id, day)),
+                min(1.0, provider(endpoint.node_id, endpoint.surface_cell_id, day)),
             )
-            rows.append((endpoint.location_id, endpoint.surface_cell_id, factor))
+            rows.append((endpoint.node_id, endpoint.surface_cell_id, factor))
         return tuple(rows)
 
     def route_geometry(self, route_id: RouteId):
@@ -401,10 +401,10 @@ class TransportCompatibilityMixin:
             except ValueError as exc:
                 failures.append(f"{prefix}:endpoint:{exc}")
                 continue
-            power = self.power.snapshot(endpoint.location_id, self.facilities, day)
+            power = self.power.snapshot(endpoint.node_id, self.facilities, day)
             for failure in evaluate_site_requirements(
                 requirements,
-                endpoint.location_id,
+                endpoint.node_id,
                 day,
                 self.facilities.environment,
                 self.facilities,

@@ -7,7 +7,7 @@ SourcingPolicyValue = Literal["import_now", "mixed", "local_priority"]
 
 @dataclass(frozen=True)
 class PlanBuild:
-    location_id: str
+    operational_node_id: str
     facility_id: str
     priority: int = 50
     sourcing_policy: SourcingPolicyValue = "mixed"
@@ -101,4 +101,4 @@ class SetConstructionWeight:
 @dataclass(frozen=True)
 class SetProjectImportSource:
     project_id: str
-    location_id: str | None
+    operational_node_id: str | None

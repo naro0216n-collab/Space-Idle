@@ -169,9 +169,10 @@ def test_orbital_survey_player_logistics_and_founding_create_first_surface_locat
         if location.body_id == ids.MOON
     ]
     assert len(lunar_locations) == 1
-    assert lunar_locations[0].id == project.new_location_id
+    assert lunar_locations[0].operational_node_id == project.new_location_id
     assert lunar_locations[0].core_cell_id == cell
     assert sim.graph.owner_of_cell(cell) == project.new_location_id
+    assert sim.graph.has_operational_node(project.new_location_id)
 
 
 def test_surface_cell_development_changes_territory_only_after_project_completion():
@@ -198,7 +199,7 @@ def test_founding_resource_shortage_reports_logistics_lane_blocker():
         if item.id == project_id
     )
     assert any(code == "import_lane" for code, _detail in row.blockers)
-    assert not any(code == "resource_shortage" for code, _detail in row.blockers)
+    assert any(code == "resource_shortage" for code, _detail in row.blockers)
 
 
 def test_founding_requires_orbital_survey_and_does_not_create_target_inventory_before_arrival():
@@ -214,6 +215,7 @@ def test_founding_requires_orbital_survey_and_does_not_create_target_inventory_b
     assert result.created_id is not None
     project = sim.founding.projects[next(iter(sim.founding.projects))]
     assert project.new_location_id not in sim.graph.locations
+    assert not sim.graph.has_operational_node(project.new_location_id)
     assert all(location_id != project.new_location_id for location_id, _resource in sim.inventory.stock)
     assert not any(
         project.new_location_id in {route.origin_id, route.destination_id}
@@ -305,7 +307,7 @@ def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_
     _survey_cell_to_l2(sim, cell)
     available = sim.inventory.available(ids.LUNAR_ORBIT, ids.CONSTRUCTION_EQUIPMENT)
     if available > 1e-12:
-        assert sim.inventory.take_unreserved(ids.LUNAR_ORBIT, ids.CONSTRUCTION_EQUIPMENT, available)
+        sim.inventory.consume_allocated(ids.LUNAR_ORBIT, ids.CONSTRUCTION_EQUIPMENT, available)
     partial = 0.25
     sim.inventory.add(ids.LUNAR_ORBIT, ids.CONSTRUCTION_EQUIPMENT, partial)
 
@@ -382,7 +384,7 @@ def test_surface_map_exposes_founding_package_vehicle_and_blockers():
 
 
 def test_active_founding_save_load_preserves_identity_and_future_transition(tmp_path):
-    assert SAVE_SCHEMA_VERSION == 32
+    assert SAVE_SCHEMA_VERSION == 34
     app = build_game_application()
     sim = app._simulation
     cell = ids.MOON_CELL_FARSIDE_HIGHLANDS

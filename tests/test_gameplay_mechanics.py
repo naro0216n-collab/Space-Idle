@@ -28,7 +28,7 @@ def test_transport_fleet_investment_is_explicit_and_lane_demand_does_not_resize_
     before = next(
         row for row in app.query(GetFleet()).pools
         if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
-        and row.location_id == str(ids.EARTH)
+        and row.operational_node_id == str(ids.EARTH)
     )
     assert before.total_units == 1 and before.free_units == 1
     assert app.query(GetLogistics()).allocations == ()
@@ -37,7 +37,7 @@ def test_transport_fleet_investment_is_explicit_and_lane_demand_does_not_resize_
     after_lane = next(
         row for row in app.query(GetFleet()).pools
         if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
-        and row.location_id == str(ids.EARTH)
+        and row.operational_node_id == str(ids.EARTH)
     )
     assert after_lane.free_units == 1
 
@@ -48,7 +48,7 @@ def test_transport_fleet_investment_is_explicit_and_lane_demand_does_not_resize_
     allocated = next(
         row for row in app.query(GetFleet()).pools
         if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
-        and row.location_id == str(ids.EARTH)
+        and row.operational_node_id == str(ids.EARTH)
     )
     assert allocated.transport_units == 1 and allocated.free_units == 0
 

@@ -106,7 +106,7 @@ def test_gateway_position_changes_route_geometry_without_changing_location_ident
 
     after_id = _route_between(sim, a, b)
     after = sim.logistics.route_geometry(after_id)
-    assert before.origin.location_id == after.origin.location_id == a
+    assert before.origin.node_id == after.origin.node_id == a
     assert after.origin.surface_cell_id == ids.MOON_CELL_EQUATORIAL_HIGHLANDS
     assert after.distance_km is not None and before.distance_km is not None
     assert after.distance_km < before.distance_km
@@ -200,5 +200,5 @@ def test_derived_surface_route_is_rebuilt_after_save_load(tmp_path):
     loaded, _ = load_game(path, build_game_application)
     assert route_id in loaded._simulation.logistics.routes
     geometry = loaded._simulation.logistics.route_geometry(route_id)
-    assert geometry.origin.location_id == a
-    assert geometry.destination.location_id == b
+    assert geometry.origin.node_id == a
+    assert geometry.destination.node_id == b

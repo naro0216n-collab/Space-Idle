@@ -87,8 +87,8 @@ def test_surface_cell_facility_uses_site_environment_while_remaining_location_ow
     ridge_power = base.power.snapshot(location_id, ridge, base.day)
     plain_power = base.power.snapshot(location_id, plain, base.day)
 
-    assert ridge.facilities[ridge_id].location_id == location_id
-    assert plain.facilities[plain_id].location_id == location_id
+    assert ridge.facilities[ridge_id].operational_node_id == location_id
+    assert plain.facilities[plain_id].operational_node_id == location_id
     assert ridge_power.generation_mw > plain_power.generation_mw
 
 

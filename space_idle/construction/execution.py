@@ -17,7 +17,7 @@ class ConstructionExecutionMixin:
         if isinstance(target, NewFacilityTarget):
             project.completed_facility_id = self.facilities.install(
                 target.facility_def_id,
-                project.location_id,
+                project.operational_node_id,
                 site_cell_id=project.site_cell_id,
                 invested_resources=invested,
             )
@@ -30,7 +30,7 @@ class ConstructionExecutionMixin:
             project.completed_facility_id = target.facility_id
         else:
             self.facilities.environment.graph.develop_surface_cell(
-                project.location_id, target.cell_id
+                project.operational_node_id, target.cell_id
             )
         project.status = ProjectStatus.COMPLETE
 
@@ -40,12 +40,12 @@ class ConstructionExecutionMixin:
             facility = self.facilities.facilities.get(target.facility_id)
             return (
                 facility is not None
-                and facility.location_id == project.location_id
+                and facility.operational_node_id == project.operational_node_id
                 and facility.level == target.target_level - 1
             )
         if isinstance(target, SurfaceCellDevelopmentTarget):
             return not self.facilities.environment.graph.surface_cell_development_failures(
-                project.location_id, target.cell_id
+                project.operational_node_id, target.cell_id
             )
         return True
 
@@ -61,8 +61,8 @@ class ConstructionExecutionMixin:
                     project,
                     day,
                     power_by_location.get(
-                        project.location_id,
-                        self.power.snapshot(project.location_id, self.facilities, day),
+                        project.operational_node_id,
+                        self.power.snapshot(project.operational_node_id, self.facilities, day),
                     ),
                 ):
                     continue
@@ -70,7 +70,7 @@ class ConstructionExecutionMixin:
                     self._finish_project(project)
 
         locations = {
-            project.location_id
+            project.operational_node_id
             for project in self.projects.values()
             if not project.paused
             and project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}
@@ -82,7 +82,7 @@ class ConstructionExecutionMixin:
             candidates = [
                 project
                 for project in self.projects.values()
-                if project.location_id == location_id
+                if project.operational_node_id == location_id
                 and not project.paused
                 and project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}
                 and self._target_ready_for_execution(project)

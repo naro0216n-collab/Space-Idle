@@ -83,9 +83,9 @@ def test_research_point_growth_loop_is_reachable_through_application_api():
     before_pool = next(
         row for row in app.query(GetFleet()).pools
         if row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
-        and row.location_id == str(ids.EARTH)
+        and row.operational_node_id == str(ids.EARTH)
     ) if any(
-        row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG) and row.location_id == str(ids.EARTH)
+        row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG) and row.operational_node_id == str(ids.EARTH)
         for row in app.query(GetFleet()).pools
     ) else None
     before_units = 0 if before_pool is None else before_pool.total_units
@@ -102,7 +102,7 @@ def test_research_point_growth_loop_is_reachable_through_application_api():
     produced_pool = next(
         row for row in app.query(GetFleet()).pools
         if row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
-        and row.location_id == str(ids.EARTH)
+        and row.operational_node_id == str(ids.EARTH)
     )
     assert produced_pool.total_units == before_units + 1
 
@@ -137,7 +137,7 @@ def test_research_point_growth_loop_is_reachable_through_application_api():
     # RP enables a higher-generation research method, which must still be physically built.
     _complete_prototype_research(app, ids.TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS)
     if not any(
-        row.anchor_location_id == str(ids.EARTH) and row.destination_id == str(ids.LEO)
+        row.anchor_node_id == str(ids.EARTH) and row.destination_id == str(ids.LEO)
         for row in app.query(GetLogistics()).allocations
     ):
         app.execute(CreateTransportAllocation(

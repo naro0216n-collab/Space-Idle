@@ -8,7 +8,7 @@ from ..spatial import (
     EnvironmentResolver,
     GravityField,
     IlluminationField,
-    LocationState,
+    OperationalNodeState,
     OrbitalField,
     SpatialGraph,
     SpatialNodeDef,
@@ -177,9 +177,13 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
     for cell in earth_cells + moon_cells:
         graph.add_surface_cell(cell)
 
-    # Initial scenario Locations are mutable state over the static surface map.
-    graph.add_location(
-        LocationState(ids.EARTH, "地球産業拠点", ids.EARTH_BODY, ids.EARTH_CELL_INDUSTRIAL)
+    # Operational existence is explicit and separate from spatial context.
+    graph.add_operational_node(OperationalNodeState(ids.LEO))
+    graph.add_operational_node(OperationalNodeState(ids.LUNAR_ORBIT))
+
+    # Initial scenario Surface Location is mutable geography with a corresponding Operational Node.
+    graph.found_location(
+        ids.EARTH, "地球産業拠点", ids.EARTH_BODY, ids.EARTH_CELL_INDUSTRIAL
     )
 
     facets = StaticFacetStore()

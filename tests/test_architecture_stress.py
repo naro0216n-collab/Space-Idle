@@ -11,7 +11,6 @@ from space_idle.spatial import (
     EnvironmentResolver,
     GravityField,
     IlluminationField,
-    LocationState,
     SpatialFacet,
     SpatialGraph,
     SpatialNodeDef,
@@ -74,8 +73,8 @@ def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and
         cell_b, mars_body, 120.0, SurfacePoint(8.0, 12.0), frozenset({cell_a}), SurfaceField(),
         display_name="Stress Cell B",
     ))
-    graph.add_location(LocationState(site_a, "火星A", mars_body, cell_a))
-    graph.add_location(LocationState(site_b, "火星B", mars_body, cell_b))
+    graph.found_location(site_a, "火星A", mars_body, cell_a)
+    graph.found_location(site_b, "火星B", mars_body, cell_b)
     graph.add(SpatialNodeDef(
         orbit, "火星周回軌道", body_id=mars_body, kind=SpatialNodeKind.ORBITAL,
         inherits_parent_environment=False,

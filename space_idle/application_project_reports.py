@@ -53,9 +53,12 @@ class ApplicationReportProjectorMixin:
                     location_id=loc, entity_id=str(facility.id), definition_id=str(definition.id),
                 ))
 
+        resource_allocations = sim.resource_allocation_projection({location_id: power})
         snapshots = {
             snap.facility_id: snap
-            for snap in sim.industry.snapshots(location_id, sim.facilities, sim.inventory, power, sim.day)
+            for snap in sim.industry.snapshots(
+                location_id, sim.facilities, sim.inventory, power, sim.day, resource_allocations
+            )
         }
         for facility in sorted(sim.facilities.all_at(location_id), key=lambda row: str(row.id)):
             compatible = sim.industry.compatible_processes(facility.definition_id)
@@ -91,7 +94,7 @@ class ApplicationReportProjectorMixin:
                     ))
 
         for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id)):
-            if project.location_id != location_id:
+            if project.operational_node_id != location_id:
                 continue
             definition_id = str(sim.projects.target_facility_definition_id(project))
             for code, detail in self._project_blockers(project, power):
@@ -130,26 +133,26 @@ class ApplicationReportProjectorMixin:
 
         for allocation in self._transport_allocation_rows():
             if location_filter is not None and location_filter not in {
-                allocation.anchor_location_id, allocation.destination_id
+                allocation.anchor_node_id, allocation.destination_id
             }:
                 continue
             for blocker in allocation.blockers:
                 issues.append(self._issue(
                     blocker, blocker, category="logistics", source="transport_allocation",
-                    location_id=allocation.anchor_location_id, entity_id=allocation.id,
+                    location_id=allocation.anchor_node_id, entity_id=allocation.id,
                     definition_id=allocation.vehicle_definition_id,
                 ))
             for limiting in allocation.limiting_factors:
                 issues.append(self._issue(
                     limiting, limiting, category="logistics", source="transport_capacity",
-                    location_id=allocation.anchor_location_id, entity_id=allocation.id,
+                    location_id=allocation.anchor_node_id, entity_id=allocation.id,
                     definition_id=allocation.vehicle_definition_id, impact="limited",
                 ))
 
         for state in sorted(
             sim.logistics.vehicle_production_projects.values(), key=lambda row: str(row.id)
         ):
-            state_location = str(state.location_id)
+            state_location = str(state.operational_node_id)
             if location_filter is not None and state_location != location_filter:
                 continue
             for blocker in sim.logistics.vehicle_production_blockers(state.id, day=sim.day):
@@ -293,7 +296,10 @@ class ApplicationReportProjectorMixin:
         inbound_transit: dict[object, float] = defaultdict(float)
         arrival_waiting: dict[object, float] = defaultdict(float)
 
-        for snap in sim.industry.snapshots(location_id, sim.facilities, sim.inventory, power, sim.day):
+        resource_allocations = sim.resource_allocation_projection({location_id: power})
+        for snap in sim.industry.snapshots(
+            location_id, sim.facilities, sim.inventory, power, sim.day, resource_allocations
+        ):
             for resource_id, amount in snap.output_rates_per_day.items():
                 production[resource_id] += amount
             for resource_id, amount in snap.input_rates_per_day.items():

@@ -41,7 +41,7 @@ def capture_projects(sim: Any) -> dict[str, Any]:
             {
                 "id": str(project.id),
                 "target": _capture_target(project.target),
-                "location_id": str(project.location_id),
+                "operational_node_id": str(project.operational_node_id),
                 "site_cell_id": None if project.site_cell_id is None else str(project.site_cell_id),
                 "priority": project.priority,
                 "sourcing_policy": project.sourcing_policy,
@@ -79,7 +79,7 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
         sim.projects.projects[project_id] = ConstructionProject(
             id=project_id,
             target=_restore_target(row["target"]),
-            location_id=SpatialNodeId(row["location_id"]),
+            operational_node_id=SpatialNodeId(row["operational_node_id"]),
             site_cell_id=None if row["site_cell_id"] is None else SurfaceCellId(row["site_cell_id"]),
             priority=int(row["priority"]),
             sourcing_policy=row["sourcing_policy"],
@@ -163,20 +163,20 @@ def validate_runtime(sim: Any) -> None:
     active_upgrade_targets: set[EntityId] = set()
     active_spatial_cells: set[SurfaceCellId] = set()
     for project_id, project in sim.projects.projects.items():
-        _require(sim.graph.has_operational_node(project.location_id), f"project references unknown host location: {project_id}")
+        _require(sim.graph.has_operational_node(project.operational_node_id), f"project references unknown host location: {project_id}")
         if project.import_source_id is not None:
             _require(sim.graph.has_operational_node(project.import_source_id), f"project import source is unknown: {project_id}")
-            _require(project.import_source_id != project.location_id, f"project import source equals destination: {project_id}")
+            _require(project.import_source_id != project.operational_node_id, f"project import source equals destination: {project_id}")
         target = project.target
         if isinstance(target, NewFacilityTarget):
             _require(target.facility_def_id in sim.projects.recipes, f"project references unknown build recipe: {project_id}")
             recipe = sim.projects.recipes[target.facility_def_id]
-            _require(not sim.facilities.placement_failures(target.facility_def_id, project.location_id, project.site_cell_id), f"project has invalid facility placement: {project_id}")
+            _require(not sim.facilities.placement_failures(target.facility_def_id, project.operational_node_id, project.site_cell_id), f"project has invalid facility placement: {project_id}")
         elif isinstance(target, FacilityUpgradeTarget):
             _require(project.site_cell_id is None, f"upgrade project duplicates facility site cell: {project_id}")
             _require(target.facility_id in sim.facilities.facilities, f"upgrade project references unknown facility: {project_id}")
             facility = sim.facilities.facilities[target.facility_id]
-            _require(facility.location_id == project.location_id, f"upgrade project location mismatch: {project_id}")
+            _require(facility.operational_node_id == project.operational_node_id, f"upgrade project location mismatch: {project_id}")
             key = (facility.definition_id, target.target_level)
             _require(key in sim.projects.upgrade_recipes, f"upgrade project references unknown recipe: {project_id}")
             recipe = sim.projects.upgrade_recipes[key]
@@ -190,13 +190,13 @@ def validate_runtime(sim: Any) -> None:
             _require(project.site_cell_id is None, f"surface development duplicates target cell: {project_id}")
             _require(target.recipe_id in sim.projects.spatial_recipes, f"development project references unknown recipe: {project_id}")
             recipe = sim.projects.spatial_recipes[target.recipe_id]
-            _require(project.location_id in sim.graph.locations, f"surface development host is not a surface location: {project_id}")
+            _require(project.operational_node_id in sim.graph.locations, f"surface development host is not a surface location: {project_id}")
             _require(target.cell_id in sim.graph.surface_cells, f"surface development references unknown cell: {project_id}")
             if project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
                 _require(target.cell_id not in active_spatial_cells, f"duplicate active spatial target cell: {target.cell_id}")
                 active_spatial_cells.add(target.cell_id)
             if project.status is ProjectStatus.COMPLETE:
-                _require(target.cell_id in sim.graph.locations[project.location_id].developed_cell_ids, f"completed development project did not attach cell: {project_id}")
+                _require(target.cell_id in sim.graph.locations[project.operational_node_id].developed_cell_ids, f"completed development project did not attach cell: {project_id}")
 
         _require(-1e-9 <= project.construction_done <= recipe.construction_work + 1e-8, f"invalid construction progress: {project_id}")
         _require(project.construction_weight >= 0, f"negative construction allocation: {project_id}")
@@ -205,14 +205,6 @@ def validate_runtime(sim: Any) -> None:
         staging_owner_id = sim.projects._resource_staging_owner_id(project_id)
         if project.materials_committed:
             _require(project.status in {ProjectStatus.BUILDING, ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}, f"materials committed before construction: {project_id}")
-            _require(
-                not any(
-                    owner == sim.projects._resource_demand_id(project_id, resource_id)
-                    for owner, _location, resource_id in sim.inventory.reserved
-                    if resource_id in project.resources
-                ),
-                f"committed project retains inventory reservation: {project_id}",
-            )
             _require(
                 not any(owner == staging_owner_id for owner, _location, _resource in sim.inventory.external_occupancy),
                 f"committed project retains staged materials: {project_id}",
@@ -237,7 +229,7 @@ def validate_runtime(sim: Any) -> None:
             if project.status is ProjectStatus.COMPLETE:
                 _require(project.completed_facility_id in sim.facilities.facilities, f"complete project lacks affected facility: {project_id}")
                 completed = sim.facilities.facilities[project.completed_facility_id]
-                _require(completed.location_id == project.location_id, f"completed facility location mismatch: {project_id}")
+                _require(completed.operational_node_id == project.operational_node_id, f"completed facility location mismatch: {project_id}")
                 _require(completed.definition_id == recipe.facility_def_id, f"completed facility definition mismatch: {project_id}")
                 if isinstance(target, NewFacilityTarget):
                     _require(completed.site_cell_id == project.site_cell_id, f"completed facility site mismatch: {project_id}")

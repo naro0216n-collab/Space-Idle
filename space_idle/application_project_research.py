@@ -42,9 +42,9 @@ class ResearchProgressionProjectorMixin:
             if provider is None:
                 continue
             blockers = list(sim.facilities.activation_failures(facility, sim.day))
-            snapshot = power_by_location.get(facility.location_id)
+            snapshot = power_by_location.get(facility.operational_node_id)
             if snapshot is None:
-                snapshot = sim.power.snapshot(facility.location_id, sim.facilities, sim.day)
+                snapshot = sim.power.snapshot(facility.operational_node_id, sim.facilities, sim.day)
             utilization = max(
                 0.0,
                 min(1.0, snapshot.utilization_by_facility.get(facility.id, 1.0)),
@@ -54,7 +54,7 @@ class ResearchProgressionProjectorMixin:
             rows.append(ResearchProviderRow(
                 str(facility.id),
                 str(facility.definition_id),
-                str(facility.location_id),
+                str(facility.operational_node_id),
                 provider.tier,
                 facility.level,
                 sim.research.provider_generation(facility.id, power_by_location, sim.day),

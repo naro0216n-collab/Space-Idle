@@ -38,7 +38,7 @@ def _research_row(app, research_id):
     return next(row for row in app.query(GetResearch()).items if row.id == str(research_id))
 
 
-def test_prototype_funding_eligibility_uses_owned_reservation_not_unreserved_stock():
+def test_prototype_funding_eligibility_uses_durable_staging_not_unallocated_stock():
     app = build_game_application()
     sim = app._simulation
     research_id = DefinitionId("test.research.reserved_prototype")
@@ -53,11 +53,12 @@ def test_prototype_funding_eligibility_uses_owned_reservation_not_unreserved_sto
 
     app.execute(StartResearch(str(research_id)))
     app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
-    sim.refresh_resource_claims()
+    app.execute(AdvanceTime(1))
 
-    demand_id = EntityId(f"demand.research:{research_id}:{resource_id}")
-    assert sim.inventory.reserved_for(demand_id, EARTH, resource_id) == 1.0
-    assert sim.inventory.available(EARTH, resource_id) == 0.0
+    staging_owner = EntityId(f"research.prototype:{research_id}")
+    assert sim.inventory.reserved == {}
+    assert sim.inventory.staged_for(staging_owner, EARTH, resource_id) == 1.0
+    assert sim.inventory.amount(EARTH, resource_id) == 0.0
 
     row = _research_row(app, research_id)
     assert row.can_fund_prototype

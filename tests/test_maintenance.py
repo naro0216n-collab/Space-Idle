@@ -4,7 +4,7 @@ import pytest
 
 from space_idle import GetFlowReport, GetLocation, GetLogistics, SetMaintenancePriority, build_game_application
 from space_idle.content import base_ids as ids
-from space_idle.resource_demand import reconcile_local_resource_claims
+from space_idle.resource_claim import allocate_resource_claims
 from space_idle.shared import EntityId
 
 
@@ -12,7 +12,7 @@ def _earth_facilities_with_maintenance(sim):
     return [
         facility
         for facility in sorted(sim.facilities.facilities.values(), key=lambda row: str(row.id))
-        if facility.location_id == ids.EARTH
+        if facility.operational_node_id == ids.EARTH
         and sim.facilities.maintenance_requirements_per_day(facility.id)
     ]
 
@@ -53,9 +53,9 @@ def test_maintenance_shortage_can_starve_lower_priority_facility_without_auto_re
         sim.inventory.stock[(ids.EARTH, resource_id)] = 100.0
     sim.inventory.stock[(ids.EARTH, common)] = high_req[common]
 
-    demands = sim.maintenance.resource_demands(sim.day)
-    reconcile_local_resource_claims(demands, sim.inventory)
-    sim.maintenance.advance_day(sim.day)
+    claims = sim.maintenance.resource_claims(sim.day)
+    allocations = allocate_resource_claims(claims, sim.inventory)
+    sim.maintenance.advance_day(allocations, sim.day)
 
     assert high.maintenance_satisfaction == pytest.approx(1.0)
     assert low.maintenance_satisfaction == pytest.approx(0.0)
@@ -69,7 +69,7 @@ def test_maintenance_runway_reports_actual_site_stock_not_one_day_planning_amoun
     sim = app._simulation
     facility = next(
         row for row in sim.facilities.facilities.values()
-        if row.location_id == ids.LEO
+        if row.operational_node_id == ids.LEO
         and sim.facilities.maintenance_requirements_per_day(row.id)
     )
     sim.facilities.facilities = {facility.id: facility}
@@ -93,7 +93,7 @@ def test_power_snapshot_freezes_maintenance_factor_for_the_whole_simulation_day(
     sim = app._simulation
     facility = next(
         row for row in sim.facilities.facilities.values()
-        if row.location_id == ids.EARTH
+        if row.operational_node_id == ids.EARTH
         and sim.facilities.definitions[row.definition_id].capability_supplies
     )
     capability_id = sim.facilities.definitions[facility.definition_id].capability_supplies[0].id
@@ -129,7 +129,7 @@ def test_maintenance_replenishment_plan_is_independent_of_transient_reservations
     resource_id, daily = next(iter(requirements.items()))
 
     for rid, rate in requirements.items():
-        sim.inventory.stock[(facility.location_id, rid)] = rate * 20.0
+        sim.inventory.stock[(facility.operational_node_id, rid)] = rate * 20.0
 
     baseline = {
         demand.resource_id: demand.amount_t
@@ -137,7 +137,7 @@ def test_maintenance_replenishment_plan_is_independent_of_transient_reservations
     }
     sim.inventory.reserve(
         EntityId('test.transient'),
-        facility.location_id,
+        facility.operational_node_id,
         resource_id,
         daily * 10.0,
     )
@@ -156,8 +156,9 @@ def test_flow_report_includes_current_facility_maintenance_consumption():
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
 
     expected = {}
+    allocations = sim.resource_allocation_projection({ids.EARTH: power})
     for snap in sim.industry.snapshots(
-        ids.EARTH, sim.facilities, sim.inventory, power, sim.day
+        ids.EARTH, sim.facilities, sim.inventory, power, sim.day, allocations
     ):
         for resource_id, amount in snap.input_rates_per_day.items():
             expected[resource_id] = expected.get(resource_id, 0.0) + amount

@@ -11,7 +11,7 @@ from .models import RouteDef, RouteEndpoint
 
 @dataclass(frozen=True)
 class ResolvedRouteEndpoint:
-    location_id: SpatialNodeId
+    node_id: SpatialNodeId
     locator_kind: str
     locator_id: str
     environment_context_id: SpatialContextId
@@ -28,25 +28,25 @@ class RouteGeometrySnapshot:
 
 def resolve_route_endpoint(endpoint: RouteEndpoint, facilities: FacilityBook) -> ResolvedRouteEndpoint:
     graph = facilities.environment.graph
-    if not graph.has_operational_node(endpoint.location_id):
-        raise ValueError(f"unknown route endpoint location: {endpoint.location_id}")
+    if not graph.has_operational_node(endpoint.node_id):
+        raise ValueError(f"unknown route endpoint location: {endpoint.node_id}")
 
     if endpoint.surface_interface_id is not None:
         facility = facilities.facilities.get(endpoint.surface_interface_id)
         if facility is None:
             raise ValueError(f"unknown route surface interface: {endpoint.surface_interface_id}")
-        if facility.location_id != endpoint.location_id:
+        if facility.operational_node_id != endpoint.node_id:
             raise ValueError("route surface interface belongs to another Location")
         definition = facilities.definitions[facility.definition_id]
         if definition.placement_scope is not FacilityPlacementScope.SURFACE_CELL:
             raise ValueError("route surface interface must be a SURFACE_CELL facility")
         if facility.site_cell_id is None:
             raise ValueError("route surface interface has no site cell")
-        location = graph.locations.get(endpoint.location_id)
+        location = graph.locations.get(endpoint.node_id)
         if location is None or facility.site_cell_id not in location.developed_cell_ids:
             raise ValueError("route surface interface is outside developed territory")
         return ResolvedRouteEndpoint(
-            endpoint.location_id,
+            endpoint.node_id,
             endpoint.locator_kind,
             endpoint.locator_id,
             facility.site_cell_id,
@@ -54,7 +54,7 @@ def resolve_route_endpoint(endpoint: RouteEndpoint, facilities: FacilityBook) ->
         )
 
     if endpoint.access_cell_id is not None:
-        location = graph.locations.get(endpoint.location_id)
+        location = graph.locations.get(endpoint.node_id)
         if location is None:
             raise ValueError("route access cell requires a surface Location")
         cell = graph.surface_cells.get(endpoint.access_cell_id)
@@ -65,20 +65,20 @@ def resolve_route_endpoint(endpoint: RouteEndpoint, facilities: FacilityBook) ->
         if endpoint.access_cell_id not in location.developed_cell_ids:
             raise ValueError("route access cell is not developed by endpoint Location")
         return ResolvedRouteEndpoint(
-            endpoint.location_id,
+            endpoint.node_id,
             endpoint.locator_kind,
             endpoint.locator_id,
             endpoint.access_cell_id,
             endpoint.access_cell_id,
         )
 
-    if endpoint.location_id not in graph.nodes:
+    if endpoint.node_id not in graph.nodes:
         raise ValueError("non-surface route interface requires a non-surface operational node")
     return ResolvedRouteEndpoint(
-        endpoint.location_id,
+        endpoint.node_id,
         endpoint.locator_kind,
         endpoint.locator_id,
-        endpoint.location_id,
+        endpoint.node_id,
         None,
     )
 

@@ -39,7 +39,7 @@ class ProjectProjectorMixin:
             ),
             None,
         )
-        snapshot = power if power is not None else sim.power.snapshot(facility.location_id, sim.facilities, sim.day)
+        snapshot = power if power is not None else sim.power.snapshot(facility.operational_node_id, sim.facilities, sim.day)
         failures = sim.projects.upgrade_site_failures(facility.id, recipe.target_level, sim.day, snapshot)
         return FacilityUpgradeOption(
             recipe.target_level,
@@ -115,22 +115,22 @@ class ProjectProjectorMixin:
         founding_demands = self._external_demands("founding")
         rows = []
         for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id)):
-            if location_id is not None and project.location_id != location_id:
+            if location_id is not None and project.operational_node_id != location_id:
                 continue
             recipe = sim.projects.recipe_for_project(project)
             facility_definition_id = sim.projects.target_facility_definition_id(project)
-            project_power = sim.power.snapshot(project.location_id, sim.facilities, sim.day)
+            project_power = sim.power.snapshot(project.operational_node_id, sim.facilities, sim.day)
             blockers = self._project_blockers(project, project_power, external_demands)
             resources = []
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
-                reserved_t = sim.projects.reserved_resource_t(project, requirement.resource_id)
-                shortage = max(0.0, requirement.amount_t - reserved_t - state.committed_t)
+                staged_t = sim.projects.staged_resource_t(project, requirement.resource_id)
+                shortage = max(0.0, requirement.amount_t - staged_t - state.committed_t)
                 demand_id = None
                 if state.import_committed_t is not None and shortage > 1e-9:
                     demand_id = f"demand.project:{project.id}:{requirement.resource_id}"
                 resources.append(ProjectResourceRow(
-                    str(requirement.resource_id), requirement.amount_t, reserved_t, state.committed_t,
+                    str(requirement.resource_id), requirement.amount_t, staged_t, state.committed_t,
                     shortage, state.import_committed_t, demand_id,
                 ))
 
@@ -153,7 +153,7 @@ class ProjectProjectorMixin:
             else:
                 target_kind = "surface_cell_development"
                 target_cell_id = str(target.cell_id)
-                target_location_id = str(project.location_id)
+                target_location_id = str(project.operational_node_id)
                 display_name = recipe.display_name
 
             construction_fulfillment = sim.projects.project_construction_fulfillment(
@@ -164,7 +164,7 @@ class ProjectProjectorMixin:
             )
 
             rows.append(ProjectRow(
-                str(project.id), target_kind, str(project.location_id),
+                str(project.id), target_kind, str(project.operational_node_id),
                 None if facility_definition_id is None else str(facility_definition_id),
                 target_facility_id, target_level, display_name, project.status, project.paused,
                 project.priority, project.sourcing_policy,
@@ -189,7 +189,7 @@ class ProjectProjectorMixin:
                     ProjectResourceRow(
                         str(status.resource_id),
                         status.required_t,
-                        status.reserved_t,
+                        status.staged_t,
                         status.committed_t,
                         status.shortage_t,
                         None,
@@ -220,7 +220,7 @@ class ProjectProjectorMixin:
         rows = []
         for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id)):
             definition = sim.facilities.definitions[recipe.facility_def_id]
-            if definition.placement_scope is not FacilityPlacementScope.LOCATION:
+            if definition.placement_scope is not FacilityPlacementScope.OPERATIONAL_NODE:
                 continue
             failures = sim.projects.site_failures(
                 recipe.facility_def_id, location_id, sim.day,

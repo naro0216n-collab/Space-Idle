@@ -7,7 +7,7 @@ from .shared import SpatialNodeId
 class ResearchCapacityMixin:
     def _power_by_location(self, day: int) -> dict[SpatialNodeId, PowerSnapshot]:
         locations = {
-            facility.location_id
+            facility.operational_node_id
             for facility in self.facilities.facilities.values()
             if facility.definition_id in self.providers
         }
@@ -20,9 +20,9 @@ class ResearchCapacityMixin:
         facility = self.facilities.facilities[facility_id]
         if not self.facilities.is_active_and_compatible(facility, day):
             return 0.0
-        snapshot = power_by_location.get(facility.location_id)
+        snapshot = power_by_location.get(facility.operational_node_id)
         if snapshot is None:
-            snapshot = self.power.snapshot(facility.location_id, self.facilities, day)
+            snapshot = self.power.snapshot(facility.operational_node_id, self.facilities, day)
         return max(
             0.0,
             min(

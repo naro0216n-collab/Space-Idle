@@ -153,15 +153,15 @@ class ConstructionRulesMixin:
         graph = self.facilities.environment.graph
         failures: list[SiteRequirementFailure] = [
             SiteRequirementFailure(code, detail)
-            for code, detail in graph.surface_cell_development_failures(project.location_id, target.cell_id)
+            for code, detail in graph.surface_cell_development_failures(project.operational_node_id, target.cell_id)
         ]
         if self.external_surface_cell_claim_provider is not None:
             external = self.external_surface_cell_claim_provider(target.cell_id)
             if external is not None:
                 failures.append(SiteRequirementFailure("active_founding_project", str(external)))
-        snapshot = power if power is not None else self.power.snapshot(project.location_id, self.facilities, day)
+        snapshot = power if power is not None else self.power.snapshot(project.operational_node_id, self.facilities, day)
         failures.extend(self._spatial_recipe_site_failures(
-            target.recipe_id, project.location_id, target.cell_id, day, snapshot
+            target.recipe_id, project.operational_node_id, target.cell_id, day, snapshot
         ))
         return tuple(dict.fromkeys(failures))
 
@@ -188,7 +188,7 @@ class ConstructionRulesMixin:
         facility = self.facilities.facilities[facility_id]
         recipe = self.upgrade_recipes[(facility.definition_id, target_level)]
         return self._facility_site_failures_for_recipe(
-            recipe, facility.location_id, day, power, existing_facility_id=facility_id
+            recipe, facility.operational_node_id, day, power, existing_facility_id=facility_id
         )
 
     def project_site_failures(
@@ -196,12 +196,12 @@ class ConstructionRulesMixin:
     ):
         if isinstance(project.target, FacilityUpgradeTarget):
             return self._facility_site_failures_for_recipe(
-                self._recipe_for_project(project), project.location_id, day, power,
+                self._recipe_for_project(project), project.operational_node_id, day, power,
                 existing_facility_id=project.target.facility_id,
             )
         if isinstance(project.target, NewFacilityTarget):
             return self._facility_site_failures_for_recipe(
-                self._recipe_for_project(project), project.location_id, day, power,
+                self._recipe_for_project(project), project.operational_node_id, day, power,
                 site_cell_id=project.site_cell_id,
             )
         return self.spatial_project_failures(project, day, power)
@@ -228,7 +228,7 @@ class ConstructionRulesMixin:
             return 1.0
         try:
             snapshot = service.prospective_development_snapshot(
-                project.location_id, project.target.cell_id, self.facilities, power, day
+                project.operational_node_id, project.target.cell_id, self.facilities, power, day
             )
         except (KeyError, ValueError):
             return 0.0

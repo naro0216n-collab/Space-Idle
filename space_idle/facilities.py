@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class FacilityPlacementScope(str, Enum):
-    LOCATION = "LOCATION"
+    OPERATIONAL_NODE = "OPERATIONAL_NODE"
     SURFACE_CELL = "SURFACE_CELL"
 
 
@@ -41,7 +41,7 @@ class FacilityDef:
     # Fraction of cumulative construction/upgrade resource investment required
     # per game year. The value is content balance; Core only supplies the rule.
     maintenance_fraction_per_year: float = 0.0
-    placement_scope: FacilityPlacementScope = FacilityPlacementScope.LOCATION
+    placement_scope: FacilityPlacementScope = FacilityPlacementScope.OPERATIONAL_NODE
 
     def __post_init__(self) -> None:
         if self.maintenance_fraction_per_year < 0:
@@ -54,7 +54,7 @@ class FacilityDef:
 class FacilityState:
     id: EntityId
     definition_id: DefinitionId
-    location_id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     paused: bool = False
     power_priority: int | None = None
     maintenance_priority: int = 50
@@ -85,21 +85,21 @@ class FacilityBook:
     def placement_failures(
         self,
         definition_id: DefinitionId,
-        location_id: SpatialNodeId,
+        operational_node_id: SpatialNodeId,
         site_cell_id: SurfaceCellId | None = None,
     ) -> tuple[tuple[str, str], ...]:
         if definition_id not in self.definitions:
             return (("unknown_facility_definition", f"unknown facility definition: {definition_id}"),)
-        if not self.environment.graph.has_operational_node(location_id):
-            return (("unknown_location", f"unknown facility location: {location_id}"),)
+        if not self.environment.graph.has_operational_node(operational_node_id):
+            return (("unknown_location", f"unknown operational node: {operational_node_id}"),)
         definition = self.definitions[definition_id]
-        if definition.placement_scope is FacilityPlacementScope.LOCATION:
+        if definition.placement_scope is FacilityPlacementScope.OPERATIONAL_NODE:
             if site_cell_id is not None:
-                return (("site_cell_not_allowed", "LOCATION facility must not specify a surface cell"),)
+                return (("site_cell_not_allowed", "OPERATIONAL_NODE facility must not specify a surface cell"),)
             return ()
         if site_cell_id is None:
             return (("site_cell_required", "SURFACE_CELL facility requires a surface cell"),)
-        location = self.environment.graph.locations.get(location_id)
+        location = self.environment.graph.locations.get(operational_node_id)
         if location is None:
             return (("surface_location_required", "SURFACE_CELL facility requires a surface Location"),)
         cell = self.environment.graph.surface_cells.get(site_cell_id)
@@ -114,25 +114,25 @@ class FacilityBook:
     def placement_context(
         self,
         definition_id: DefinitionId,
-        location_id: SpatialNodeId,
+        operational_node_id: SpatialNodeId,
         site_cell_id: SurfaceCellId | None = None,
     ) -> SpatialContextId:
-        failures = self.placement_failures(definition_id, location_id, site_cell_id)
+        failures = self.placement_failures(definition_id, operational_node_id, site_cell_id)
         if failures:
             raise ValueError("; ".join(detail for _code, detail in failures))
         definition = self.definitions[definition_id]
-        if definition.placement_scope is FacilityPlacementScope.LOCATION:
-            return location_id
+        if definition.placement_scope is FacilityPlacementScope.OPERATIONAL_NODE:
+            return operational_node_id
         assert site_cell_id is not None
         return site_cell_id
 
     def facility_environment_context(self, facility: FacilityState) -> SpatialContextId:
-        return self.placement_context(facility.definition_id, facility.location_id, facility.site_cell_id)
+        return self.placement_context(facility.definition_id, facility.operational_node_id, facility.site_cell_id)
 
     def install(
         self,
         definition_id: DefinitionId,
-        location_id: SpatialNodeId,
+        operational_node_id: SpatialNodeId,
         *,
         site_cell_id: SurfaceCellId | None = None,
         power_priority: int | None = None,
@@ -142,9 +142,9 @@ class FacilityBook:
     ) -> EntityId:
         if definition_id not in self.definitions:
             raise KeyError(definition_id)
-        if not self.environment.graph.has_operational_node(location_id):
-            raise KeyError(location_id)
-        placement_failures = self.placement_failures(definition_id, location_id, site_cell_id)
+        if not self.environment.graph.has_operational_node(operational_node_id):
+            raise KeyError(operational_node_id)
+        placement_failures = self.placement_failures(definition_id, operational_node_id, site_cell_id)
         if placement_failures:
             if placement_failures[0][0] == "unknown_site_cell":
                 raise KeyError(site_cell_id)
@@ -159,7 +159,7 @@ class FacilityBook:
         self.facilities[entity_id] = FacilityState(
             id=entity_id,
             definition_id=definition_id,
-            location_id=location_id,
+            operational_node_id=operational_node_id,
             paused=False,
             power_priority=power_priority,
             maintenance_priority=maintenance_priority,
@@ -201,11 +201,11 @@ class FacilityBook:
     def set_maintenance_priority(self, facility_id: EntityId, priority: int) -> None:
         self.facilities[facility_id].maintenance_priority = priority
 
-    def all_at(self, location_id: SpatialNodeId) -> list[FacilityState]:
-        return [f for f in self.facilities.values() if f.location_id == location_id]
+    def all_at(self, operational_node_id: SpatialNodeId) -> list[FacilityState]:
+        return [f for f in self.facilities.values() if f.operational_node_id == operational_node_id]
 
-    def active_at(self, location_id: SpatialNodeId) -> list[FacilityState]:
-        return [f for f in self.all_at(location_id) if not f.paused]
+    def active_at(self, operational_node_id: SpatialNodeId) -> list[FacilityState]:
+        return [f for f in self.all_at(operational_node_id) if not f.paused]
 
     def environment_failures(self, facility: FacilityState, day: int) -> tuple[tuple[str, str], ...]:
         definition = self.definitions[facility.definition_id]
@@ -229,8 +229,8 @@ class FacilityBook:
     def is_active_and_compatible(self, facility: FacilityState, day: int) -> bool:
         return not self.activation_failures(facility, day)
 
-    def active_compatible_at(self, location_id: SpatialNodeId, day: int) -> list[FacilityState]:
-        return [f for f in self.all_at(location_id) if self.is_active_and_compatible(f, day)]
+    def active_compatible_at(self, operational_node_id: SpatialNodeId, day: int) -> list[FacilityState]:
+        return [f for f in self.all_at(operational_node_id) if self.is_active_and_compatible(f, day)]
 
     def maintenance_requirements_per_day(self, facility_id: EntityId) -> dict[DefinitionId, float]:
         facility = self.facilities[facility_id]
@@ -258,22 +258,22 @@ class FacilityBook:
             )
         return math.fsum(contributions)
 
-    def infrastructure_capability_capacity_at(self, location_id: SpatialNodeId, capability_id: str, day: int = 0) -> float:
-        facilities = [f for f in self.all_at(location_id) if self.is_environmentally_compatible(f, day)]
+    def infrastructure_capability_capacity_at(self, operational_node_id: SpatialNodeId, capability_id: str, day: int = 0) -> float:
+        facilities = [f for f in self.all_at(operational_node_id) if self.is_environmentally_compatible(f, day)]
         return self._capacity_from_facilities(facilities, capability_id)
 
-    def active_capability_capacity_at(self, location_id: SpatialNodeId, capability_id: str, day: int = 0) -> float:
+    def active_capability_capacity_at(self, operational_node_id: SpatialNodeId, capability_id: str, day: int = 0) -> float:
         # Active is rated capacity before transient power/maintenance allocation.
-        return self._capacity_from_facilities(self.active_compatible_at(location_id, day), capability_id)
+        return self._capacity_from_facilities(self.active_compatible_at(operational_node_id, day), capability_id)
 
-    def available_capability_capacity_at(self, location_id: SpatialNodeId, capability_id: str, power: PowerSnapshot, day: int = 0) -> float:
+    def available_capability_capacity_at(self, operational_node_id: SpatialNodeId, capability_id: str, power: PowerSnapshot, day: int = 0) -> float:
         contributions: list[float] = []
         service_factors = (
             {}
             if self.availability_factor_provider is None
-            else self.availability_factor_provider(location_id, capability_id, power, day)
+            else self.availability_factor_provider(operational_node_id, capability_id, power, day)
         )
-        for facility in sorted(self.active_compatible_at(location_id, day), key=lambda row: str(row.id)):
+        for facility in sorted(self.active_compatible_at(operational_node_id, day), key=lambda row: str(row.id)):
             definition = self.definitions[facility.definition_id]
             utilization = max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
             factor = utilization * power.maintenance_factor_by_facility.get(

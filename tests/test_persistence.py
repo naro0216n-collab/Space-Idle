@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 
+import pytest
+
 from space_idle import (
     AdvanceTime,
     AssignExplorationFleet,
@@ -35,6 +37,7 @@ from space_idle.content.base_game import (
 )
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
+from space_idle.resource_claim import allocate_resource_claims
 from space_idle.resource_demand import ResourceDemand
 from space_idle.shared import EntityId, CelestialBodyId, DefinitionId
 from space_idle.simulation import OfflineProgressPolicy
@@ -158,9 +161,11 @@ def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_pa
     sim.inventory.add(ids.EARTH, ids.MACHINERY, 1.0)
     demand = ResourceDemand(
         EntityId("demand.persistence"), "test", EntityId("owner.persistence"),
-        ids.LEO, ids.MACHINERY, 0.5, 100, ids.EARTH, 0.0,
+        ids.LEO, ids.MACHINERY, 0.5, 100, ids.EARTH,
     )
-    sim.logistics.advance_capacity_logistics(sim.day, (demand,))
+    logistics_plan = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
+    allocations = allocate_resource_claims(logistics_plan.claims, sim.inventory)
+    sim.logistics.advance_capacity_logistics(sim.day, logistics_plan, allocations)
     assert sim.logistics.cargo_flows
 
     # Exploration reservation uses another LEO Fleet pool while cargo remains in flight.
@@ -294,20 +299,41 @@ def test_offline_progress_preserves_vehicle_production_state_machine(tmp_path):
     assert capture_state(loaded._simulation) == capture_state(direct._simulation)
 
 
-def test_resource_demand_reservations_are_derived_and_rebuilt_after_load(tmp_path):
+def test_transient_resource_allocations_are_not_saved_or_rebuilt_after_load(tmp_path):
+    from space_idle.resource_claim import allocate_resource_claims
+
     app = build_game_application()
     app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     sim = app._simulation
-    assert sim.inventory.reserved
-    expected_reservations = dict(sim.inventory.reserved)
-    captured = capture_state(sim)
-    assert "reserved" not in captured["inventory"]
+    before = capture_state(sim)
+    claims = sim._resource_claims({
+        node_id: sim.power.snapshot(node_id, sim.facilities, sim.day)
+        for node_id in sim.graph.operational_node_ids()
+    })
+    allocate_resource_claims(claims, sim.inventory)
+    assert capture_state(sim) == before
 
-    path = tmp_path / "derived-reservations.json"
+    path = tmp_path / "transient-resource-allocation.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
-    assert loaded._simulation.inventory.reserved == expected_reservations
-    assert capture_state(loaded._simulation) == captured
+    assert capture_state(loaded._simulation) == before
+
+
+def test_durable_inventory_reservation_roundtrips(tmp_path):
+    app = build_game_application()
+    sim = app._simulation
+    owner = EntityId("test.durable-reservation")
+    resource_id = ids.STRUCTURAL_COMPONENTS
+    amount = min(1.0, sim.inventory.available(EARTH, resource_id))
+    assert amount > 0.0
+    assert sim.inventory.reserve(owner, EARTH, resource_id, amount) == pytest.approx(amount)
+
+    path = tmp_path / "durable-reservation.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application)
+
+    assert loaded._simulation.inventory.reserved_for(owner, EARTH, resource_id) == pytest.approx(amount)
+    assert capture_state(loaded._simulation) == capture_state(sim)
 
 
 def test_save_load_preserves_active_cell_resource_survey_future_behavior(tmp_path):

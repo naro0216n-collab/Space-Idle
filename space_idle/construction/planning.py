@@ -106,7 +106,7 @@ class ConstructionPlanningMixin:
             raise ValueError("facility already has an active upgrade project")
         return self._create_project(
             FacilityUpgradeTarget(facility_id, target_level),
-            facility.location_id,
+            facility.operational_node_id,
             priority,
             sourcing_policy,
             import_source_id,
@@ -174,7 +174,7 @@ class ConstructionPlanningMixin:
         )
 
     def import_source_options(self, project_id: ProjectId) -> tuple[SpatialNodeId, ...]:
-        return self.import_source_options_for_location(self.projects[project_id].location_id)
+        return self.import_source_options_for_location(self.projects[project_id].operational_node_id)
 
     def _ensure_sourcing_mutable(self, project: ConstructionProject) -> None:
         if not self.sourcing_mutable(project.id):
@@ -182,15 +182,11 @@ class ConstructionPlanningMixin:
                 raise ValueError("sourcing can only change before construction readiness")
             raise ValueError("sourcing cannot change after import commitment")
 
-    def _release_project_reservations(self, project: ConstructionProject) -> None:
-        self._release_project_resource_reservations(project)
-
     def set_sourcing_policy(self, project_id: ProjectId, sourcing_policy: SourcingPolicy) -> None:
         if sourcing_policy not in self.sourcing_wait_days:
             raise ValueError(f"unknown sourcing policy: {sourcing_policy}")
         project = self.projects[project_id]
         self._ensure_sourcing_mutable(project)
-        self._release_project_reservations(project)
         for state in project.resources.values():
             state.import_committed_t = None
         project.sourcing_policy = sourcing_policy
@@ -208,7 +204,7 @@ class ConstructionPlanningMixin:
         project = self.projects[project_id]
         if location_id is not None and not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
-        if location_id == project.location_id:
+        if location_id == project.operational_node_id:
             raise ValueError("import source must differ from project location")
         self._ensure_sourcing_mutable(project)
         project.import_source_id = location_id
@@ -218,8 +214,7 @@ class ConstructionPlanningMixin:
         if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
             raise ValueError("project cannot be cancelled")
         if not project.materials_committed:
-            self._release_project_reservations(project)
-            self._restore_staged_resources(project)
+                self._restore_staged_resources(project)
         project.status = ProjectStatus.CANCELLED
         project.paused = False
         project.pause_started_day = None
@@ -261,7 +256,7 @@ class ConstructionPlanningMixin:
             facility = self.facilities.facilities.get(project.target.facility_id)
             if facility is None:
                 blockers.append(ProjectBlocker("upgrade_target_missing", str(project.target.facility_id)))
-            elif facility.location_id != project.location_id:
+            elif facility.operational_node_id != project.operational_node_id:
                 blockers.append(ProjectBlocker("upgrade_target_location", str(project.target.facility_id)))
             elif facility.level != project.target.target_level - 1:
                 blockers.append(ProjectBlocker(
@@ -271,7 +266,7 @@ class ConstructionPlanningMixin:
         missing_tech = recipe.prerequisite_technologies - self.unlocked_technologies
         if missing_tech:
             blockers.append(ProjectBlocker("technology", ",".join(sorted(map(str, missing_tech)))))
-        site_power = power if power is not None else self.power.snapshot(project.location_id, self.facilities, day)
+        site_power = power if power is not None else self.power.snapshot(project.operational_node_id, self.facilities, day)
         for failure in self.project_site_failures(project, day, site_power):
             blockers.append(ProjectBlocker(failure.code, failure.detail))
         if project.status in {ProjectStatus.PROCURING, ProjectStatus.READY} and not project.materials_committed:
@@ -279,7 +274,7 @@ class ConstructionPlanningMixin:
             wait_limit = self.sourcing_wait_days[project.sourcing_policy]
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
-                if self._reserved_resource_t(project, requirement.resource_id) + 1e-9 >= requirement.amount_t:
+                if self.staged_resource_t(project, requirement.resource_id) + 1e-9 >= requirement.amount_t:
                     continue
                 if state.import_committed_t is None:
                     if waited < wait_limit:
@@ -294,17 +289,17 @@ class ConstructionPlanningMixin:
             if project.construction_weight <= 1e-12:
                 blockers.append(ProjectBlocker("construction_allocation", "construction weight is zero"))
             if power is not None:
-                if self.construction_capacity_at(project.location_id, power, day) <= 1e-12:
+                if self.construction_capacity_at(project.operational_node_id, power, day) <= 1e-12:
                     blockers.append(ProjectBlocker("construction_capacity", "no usable construction flow"))
             else:
                 providers = [
                     facility
-                    for facility in self.facilities.active_compatible_at(project.location_id, day)
+                    for facility in self.facilities.active_compatible_at(project.operational_node_id, day)
                     if facility.definition_id in self.construction_providers
                     and self.facilities.maintenance_factor(facility.id) > 1e-12
                 ]
                 resource_capacity = any(
-                    self.inventory.available(project.location_id, resource_id) > 1e-12
+                    self.inventory.available(project.operational_node_id, resource_id) > 1e-12
                     and spec.work_per_t_per_day > 0
                     for resource_id, spec in self.construction_resource_providers.items()
                 )

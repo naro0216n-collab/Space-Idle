@@ -58,7 +58,7 @@ def test_facility_upgrade_is_a_resource_backed_construction_project():
 
     stock_before = {
         requirement.resource_id: app._simulation.inventory.amount(
-            facility.location_id, requirement.resource_id
+            facility.operational_node_id, requirement.resource_id
         )
         for requirement in recipe.resources
     }
@@ -107,7 +107,7 @@ def test_facility_upgrade_is_a_resource_backed_construction_project():
         assert resource.committed_t >= requirement.amount_t - 1e-9
         assert resource.demand_id is None
         after = app._simulation.inventory.amount(
-            facility.location_id, requirement.resource_id
+            facility.operational_node_id, requirement.resource_id
         )
         assert after < stock_before[requirement.resource_id]
         assert facility.invested_resources[requirement.resource_id] == pytest.approx(
@@ -116,16 +116,16 @@ def test_facility_upgrade_is_a_resource_backed_construction_project():
 
     after_row, _ = _earth_lab(app)
     power = app._simulation.power.snapshot(
-        facility.location_id, app._simulation.facilities, app._simulation.day
+        facility.operational_node_id, app._simulation.facilities, app._simulation.day
     )
     assert after_row.research_generation_points_per_day == pytest.approx(
         app._simulation.research.provider_generation(
-            facility.id, {facility.location_id: power}, app._simulation.day
+            facility.id, {facility.operational_node_id: power}, app._simulation.day
         )
     )
     assert after_row.research_storage_capacity_points == pytest.approx(
         app._simulation.research.provider_storage_capacity(
-            facility.id, {facility.location_id: power}, app._simulation.day
+            facility.id, {facility.operational_node_id: power}, app._simulation.day
         )
     )
     assert (
@@ -154,7 +154,7 @@ def test_active_upgrade_roundtrips_without_applying_level_early(tmp_path):
     assert active.status in {"procuring", "ready"}
     assert facility.level == 1
     assert any(
-        resource.reserved_t > 0 or resource.committed_t > 0
+        resource.staged_t > 0 or resource.committed_t > 0
         for resource in active.resources
     )
 

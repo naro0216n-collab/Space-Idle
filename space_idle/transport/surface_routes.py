@@ -95,30 +95,30 @@ def build_derived_surface_access_routes(
 ) -> dict[RouteId, RouteDef]:
     """Derive normal Routes only from established Locations and real gateways."""
     routes: dict[RouteId, RouteDef] = {}
-    locations = tuple(sorted(graph.locations.values(), key=lambda row: str(row.id)))
+    locations = tuple(sorted(graph.locations.values(), key=lambda row: str(row.operational_node_id)))
 
     for rule in sorted(surface_rules, key=lambda row: str(row.id)):
         for origin in locations:
-            origin_gateways = _gateways(facilities, origin.id, rule.gateway_capability_id)
+            origin_gateways = _gateways(facilities, origin.operational_node_id, rule.gateway_capability_id)
             if not origin_gateways:
                 continue
             for destination in locations:
-                if origin.id == destination.id or origin.body_id != destination.body_id:
+                if origin.operational_node_id == destination.operational_node_id or origin.body_id != destination.body_id:
                     continue
-                destination_gateways = _gateways(facilities, destination.id, rule.gateway_capability_id)
+                destination_gateways = _gateways(facilities, destination.operational_node_id, rule.gateway_capability_id)
                 for origin_gateway in origin_gateways:
                     for destination_gateway in destination_gateways:
                         route_id = derived_surface_access_route_id(
-                            origin.id,
-                            destination.id,
+                            origin.operational_node_id,
+                            destination.operational_node_id,
                             rule.id,
                             origin_gateway,
                             destination_gateway,
                         )
                         routes[route_id] = RouteDef(
                             id=route_id,
-                            origin=RouteEndpoint(origin.id, surface_interface_id=origin_gateway),
-                            destination=RouteEndpoint(destination.id, surface_interface_id=destination_gateway),
+                            origin=RouteEndpoint(origin.operational_node_id, surface_interface_id=origin_gateway),
+                            destination=RouteEndpoint(destination.operational_node_id, surface_interface_id=destination_gateway),
                             transit_days=max(1, rule.transit_days),
                             operations=(rule.operation,),
                             display_name=f"{origin.display_name} → {destination.display_name} {rule.display_name}",
@@ -131,22 +131,22 @@ def build_derived_surface_access_routes(
         for location in locations:
             if orbit.body_id != location.body_id:
                 continue
-            for gateway_id in _gateways(facilities, location.id, rule.gateway_capability_id):
-                down_id = derived_surface_orbit_route_id(rule.id, location.id, gateway_id, "down")
+            for gateway_id in _gateways(facilities, location.operational_node_id, rule.gateway_capability_id):
+                down_id = derived_surface_orbit_route_id(rule.id, location.operational_node_id, gateway_id, "down")
                 routes[down_id] = RouteDef(
                     id=down_id,
                     origin=RouteEndpoint(rule.orbit_node_id, non_surface_interface="operational_node"),
-                    destination=RouteEndpoint(location.id, surface_interface_id=gateway_id),
+                    destination=RouteEndpoint(location.operational_node_id, surface_interface_id=gateway_id),
                     transit_days=rule.transit_days,
                     operations=rule.descent_operations,
                     display_name=f"{rule.display_name} → {location.display_name}",
                     origin_requirements=rule.orbit_requirements,
                     destination_requirements=rule.surface_requirements,
                 )
-                up_id = derived_surface_orbit_route_id(rule.id, location.id, gateway_id, "up")
+                up_id = derived_surface_orbit_route_id(rule.id, location.operational_node_id, gateway_id, "up")
                 routes[up_id] = RouteDef(
                     id=up_id,
-                    origin=RouteEndpoint(location.id, surface_interface_id=gateway_id),
+                    origin=RouteEndpoint(location.operational_node_id, surface_interface_id=gateway_id),
                     destination=RouteEndpoint(rule.orbit_node_id, non_surface_interface="operational_node"),
                     transit_days=rule.transit_days,
                     operations=rule.ascent_operations,

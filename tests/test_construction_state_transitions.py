@@ -32,7 +32,7 @@ def test_ready_project_keeps_materials_reserved_until_construction_starts():
     assert project.construction_done == pytest.approx(0.0)
     assert all(state.committed_t == pytest.approx(0.0) for state in project.resources.values())
     assert all(
-        sim.projects.reserved_resource_t(project, requirement.resource_id)
+        sim.projects.staged_resource_t(project, requirement.resource_id)
         == pytest.approx(requirement.amount_t)
         for requirement in recipe.resources
     )
@@ -53,7 +53,7 @@ def test_ready_project_keeps_materials_reserved_until_construction_starts():
         for state in (project.resources[requirement.resource_id],)
     )
     assert all(
-        sim.projects.reserved_resource_t(project, requirement.resource_id)
+        sim.projects.staged_resource_t(project, requirement.resource_id)
         == pytest.approx(0.0)
         for requirement in recipe.resources
     )
@@ -72,13 +72,13 @@ def test_partial_construction_procurement_is_project_owned_until_cancelled():
     for requirement in recipe.resources:
         available = sim.inventory.available(ids.EARTH, requirement.resource_id)
         if available > 1e-12:
-            assert sim.inventory.take_unreserved(ids.EARTH, requirement.resource_id, available)
+            sim.inventory.consume_allocated(ids.EARTH, requirement.resource_id, available)
     sim.inventory.add(ids.EARTH, ids.STRUCTURAL_COMPONENTS, 0.5)
 
     app.execute(AdvanceTime(2))
     staged = sim.projects._staged_resource_t(project, ids.STRUCTURAL_COMPONENTS)
     assert staged > 0.0
-    assert sim.projects.reserved_resource_t(project, ids.STRUCTURAL_COMPONENTS) >= staged
+    assert sim.projects.staged_resource_t(project, ids.STRUCTURAL_COMPONENTS) >= staged
     assert project.resources[ids.STRUCTURAL_COMPONENTS].committed_t == pytest.approx(0.0)
 
     app.execute(PauseBuild(result.created_id))
@@ -105,7 +105,7 @@ def test_planned_project_with_unmet_technology_does_not_claim_inventory():
     assert project.status is ProjectStatus.PLANNED
     assert "technology" in {blocker.code for blocker in sim.projects.blockers(project.id, sim.day)}
     assert all(
-        sim.projects.reserved_resource_t(project, requirement.resource_id)
+        sim.projects.staged_resource_t(project, requirement.resource_id)
         == pytest.approx(0.0)
         for requirement in recipe.resources
     )

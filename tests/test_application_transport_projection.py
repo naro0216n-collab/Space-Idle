@@ -105,7 +105,7 @@ def test_transport_service_requirements_are_projected_from_the_same_plan_for_opt
         and row.policy == "fastest"
     )
     requirements = {
-        (row.location_id, row.capability_id, row.mode)
+        (row.operational_node_id, row.capability_id, row.mode)
         for row in option.infrastructure_requirements
     }
     assert (str(EARTH), "launch_operations", "available") in requirements
@@ -159,6 +159,12 @@ def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
         str(vehicle_id), 1, str(ids.LEO), str(ids.LUNAR_ORBIT), path_policy="fastest"
     )).created_id
     relocation = next(row for row in app.query(GetFleet()).relocations if row.id == relocation_id)
+    assert relocation.departure_day is None
+    assert relocation.arrival_day is None
+
+    sim.advance_days(1)
+    relocation = next(row for row in app.query(GetFleet()).relocations if row.id == relocation_id)
+    assert relocation.departure_day == 0
     assert relocation.arrival_day == preview.arrival_day
 
 

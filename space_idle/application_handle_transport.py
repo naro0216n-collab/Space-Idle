@@ -28,7 +28,7 @@ class TransportCommandHandlerMixin:
         if isinstance(command, ProduceVehicle):
             production_id = sim.logistics.plan_vehicle_production(
                 DefinitionId(command.vehicle_definition_id),
-                self._require_location(command.location_id),
+                self._require_location(command.operational_node_id),
                 priority=command.priority,
                 allocation_weight=command.allocation_weight,
                 day=sim.day,
@@ -61,7 +61,7 @@ class TransportCommandHandlerMixin:
                 target_units = None
             allocation_id = sim.logistics.create_transport_allocation(
                 DefinitionId(command.vehicle_definition_id),
-                self._require_location(command.anchor_location_id),
+                self._require_location(command.anchor_node_id),
                 self._require_location(command.destination_id),
                 priority=command.priority, control_mode=mode,
                 target_units=target_units, target_capacity=target_capacity,

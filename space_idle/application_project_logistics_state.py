@@ -28,11 +28,11 @@ class LogisticsStateProjectorMixin:
         keys = set(sim.logistics.fleet_pools)
         # Allocations/reservations can make a zero-total pool decision-relevant.
         keys.update(
-            (row.vehicle_definition_id, row.anchor_location_id)
+            (row.vehicle_definition_id, row.anchor_node_id)
             for row in sim.logistics.transport_allocations.values()
         )
         keys.update(
-            (row.vehicle_definition_id, row.location_id)
+            (row.vehicle_definition_id, row.operational_node_id)
             for row in sim.logistics.fleet_reservation_snapshots()
         )
         rows: list[FleetPoolRow] = []
@@ -94,13 +94,13 @@ class LogisticsStateProjectorMixin:
                 str(row.allocation_id),
                 str(row.vehicle_definition_id),
                 sim.logistics.vehicle_defs[row.vehicle_definition_id].display_name,
-                str(row.location_id),
+                str(row.operational_node_id),
                 row.units,
                 row.release_day,
                 max(0, row.release_day - sim.day),
             )
             for row in sorted(sim.logistics.fleet_releases.values(), key=lambda row: str(row.id))
-            if (location_id is None or str(row.location_id) == location_id)
+            if (location_id is None or str(row.operational_node_id) == location_id)
             and (vehicle_definition_id is None or str(row.vehicle_definition_id) == vehicle_definition_id)
         )
 
@@ -115,7 +115,7 @@ class LogisticsStateProjectorMixin:
                     id=str(allocation.id),
                     vehicle_definition_id=str(allocation.vehicle_definition_id),
                     display_name=sim.logistics.vehicle_defs[allocation.vehicle_definition_id].display_name,
-                    anchor_location_id=str(allocation.anchor_location_id),
+                    anchor_node_id=str(allocation.anchor_node_id),
                     destination_id=str(allocation.destination_id),
                     priority=allocation.priority,
                     control_mode=allocation.control_mode.value,
@@ -191,7 +191,7 @@ class LogisticsStateProjectorMixin:
         rows: list[VehicleProductionRow] = []
         for state in sorted(sim.logistics.vehicle_production_projects.values(), key=lambda row: str(row.id)):
             definition = sim.logistics.vehicle_defs[state.vehicle_definition_id]
-            power = sim.power.snapshot(state.location_id, sim.facilities, sim.day)
+            power = sim.power.snapshot(state.operational_node_id, sim.facilities, sim.day)
             blockers = sim.logistics.vehicle_production_blockers(state.id, day=sim.day, power=power)
             remaining_days = max(0.0, definition.production.days - state.progress_days)
             estimated_completion_day = (
@@ -202,7 +202,7 @@ class LogisticsStateProjectorMixin:
             rows.append(
                 VehicleProductionRow(
                     str(state.id), str(state.vehicle_definition_id), definition.display_name,
-                    str(state.location_id), state.phase.value, state.paused, state.progress_days,
+                    str(state.operational_node_id), state.phase.value, state.paused, state.progress_days,
                     definition.production.days, remaining_days, estimated_completion_day,
                     definition.production.capability_id,
                     tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.production.resources),
@@ -256,7 +256,7 @@ class LogisticsStateProjectorMixin:
             arrival_day=plan.arrival_day,
             resource_requirements=tuple(
                 FleetRelocationResourceRequirementRow(
-                    str(row.location_id),
+                    str(row.operational_node_id),
                     str(row.resource_id),
                     row.required_t,
                     row.available_t,

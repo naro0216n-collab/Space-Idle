@@ -17,12 +17,10 @@ class LogisticsLaneProjectorMixin:
         )
         pipeline = dict(lane_snapshot.demand_pipeline_t)
 
-        # Runway is an observable site-level stock horizon, not a promise that
-        # the Core will protect a demand. It uses physical unreserved stock plus
-        # reservations already owned by recurring demands at the same site and
-        # divides that pool by the combined recurring consumption rate.
+        # Runway is an observable site-level stock horizon, not a protected
+        # allocation. Durable reservations/commitments belong to their owners
+        # and are therefore excluded from stock available to recurring demands.
         recurring_rate_by_key: dict[tuple[object, object], float] = {}
-        recurring_owned_reservation_by_key: dict[tuple[object, object], float] = {}
         for resolution in resolutions:
             demand = resolution.demand
             rate = demand.recurring_rate_t_per_day
@@ -30,17 +28,10 @@ class LogisticsLaneProjectorMixin:
                 continue
             key = (demand.destination_id, demand.resource_id)
             recurring_rate_by_key[key] = recurring_rate_by_key.get(key, 0.0) + rate
-            recurring_owned_reservation_by_key[key] = (
-                recurring_owned_reservation_by_key.get(key, 0.0)
-                + sim.inventory.reserved_for(
-                    demand.id, demand.destination_id, demand.resource_id
-                )
-            )
         runway_by_key: dict[tuple[object, object], float] = {}
         for key, rate in recurring_rate_by_key.items():
             available = sim.inventory.available(key[0], key[1])
-            owned = recurring_owned_reservation_by_key.get(key, 0.0)
-            runway_by_key[key] = (available + owned) / rate if rate > 1e-12 else 0.0
+            runway_by_key[key] = available / rate if rate > 1e-12 else 0.0
 
         rows: list[ResourceDemandRow] = []
         for resolution in resolutions:

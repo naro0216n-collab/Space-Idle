@@ -59,7 +59,7 @@ class DirectionalCapacity:
 @dataclass
 class FleetPool:
     vehicle_definition_id: DefinitionId
-    location_id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     total_units: int = 0
 
     def __post_init__(self) -> None:
@@ -70,7 +70,7 @@ class FleetPool:
 @dataclass(frozen=True)
 class FleetPoolSnapshot:
     vehicle_definition_id: DefinitionId
-    location_id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     total_units: int
     free_units: int
     transport_units: int
@@ -86,7 +86,7 @@ class FleetReservation:
     owner_id: EntityId
     kind: FleetReservationKind
     vehicle_definition_id: DefinitionId
-    location_id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     units: int
 
     def __post_init__(self) -> None:
@@ -100,8 +100,19 @@ class FleetReservationSnapshot:
     owner_id: EntityId
     kind: FleetReservationKind
     vehicle_definition_id: DefinitionId
-    location_id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     units: int
+
+
+@dataclass(frozen=True)
+class FleetRelocationResourceNeed:
+    operational_node_id: SpatialNodeId
+    resource_id: DefinitionId
+    required_t: float
+
+    def __post_init__(self) -> None:
+        if self.required_t < -1e-9:
+            raise ValueError("fleet relocation resource need must be non-negative")
 
 
 @dataclass
@@ -111,21 +122,34 @@ class FleetRelocation:
     units: int
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
-    departure_day: int
-    arrival_day: int
+    requested_day: int
+    travel_days: int
+    path: tuple[RouteId, ...]
+    resource_needs: tuple[FleetRelocationResourceNeed, ...] = ()
+    priority: int = 50
+    departure_day: int | None = None
+    arrival_day: int | None = None
 
     def __post_init__(self) -> None:
         if self.units <= 0:
             raise ValueError("fleet relocation units must be positive")
         if self.source_id == self.destination_id:
             raise ValueError("fleet relocation endpoints must differ")
-        if self.arrival_day <= self.departure_day:
+        if self.travel_days <= 0:
+            raise ValueError("fleet relocation travel days must be positive")
+        if (self.departure_day is None) != (self.arrival_day is None):
+            raise ValueError("fleet relocation timing must be both pending or both active")
+        if self.departure_day is not None and self.arrival_day <= self.departure_day:
             raise ValueError("fleet relocation arrival must follow departure")
+
+    @property
+    def started(self) -> bool:
+        return self.departure_day is not None
 
 
 @dataclass(frozen=True)
 class FleetRelocationResourceRequirement:
-    location_id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     resource_id: DefinitionId
     required_t: float
     available_t: float
@@ -155,7 +179,7 @@ class FleetRelease:
     id: EntityId
     allocation_id: EntityId
     vehicle_definition_id: DefinitionId
-    location_id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     units: int
     release_day: int
 
@@ -168,7 +192,7 @@ class FleetRelease:
 class TransportAllocation:
     id: EntityId
     vehicle_definition_id: DefinitionId
-    anchor_location_id: SpatialNodeId
+    anchor_node_id: SpatialNodeId
     destination_id: SpatialNodeId
     priority: int
     control_mode: TransportControlMode
@@ -181,7 +205,7 @@ class TransportAllocation:
     last_operated_day: int | None = None
 
     def __post_init__(self) -> None:
-        if self.anchor_location_id == self.destination_id:
+        if self.anchor_node_id == self.destination_id:
             raise ValueError("transport allocation endpoints must differ")
         if self.active_units < 0:
             raise ValueError("transport allocation active units must be non-negative")
@@ -209,7 +233,7 @@ class TransportServiceLeg:
 class TransportServicePlan:
     allocation_id: EntityId
     vehicle_definition_id: DefinitionId
-    anchor_location_id: SpatialNodeId
+    anchor_node_id: SpatialNodeId
     destination_id: SpatialNodeId
     forward_path: tuple[RouteId, ...]
     reverse_path: tuple[RouteId, ...]
@@ -340,7 +364,7 @@ class RouteEndpoint:
     the physical interface used to derive environment and geometry.
     """
 
-    location_id: SpatialNodeId
+    node_id: SpatialNodeId
     surface_interface_id: EntityId | None = None
     access_cell_id: SurfaceCellId | None = None
     non_surface_interface: str | None = None
@@ -387,11 +411,11 @@ class RouteDef:
 
     @property
     def origin_id(self) -> SpatialNodeId:
-        return self.origin.location_id
+        return self.origin.node_id
 
     @property
     def destination_id(self) -> SpatialNodeId:
-        return self.destination.location_id
+        return self.destination.node_id
 
     @property
     def delta_v_km_s(self) -> float:
