@@ -1,16 +1,18 @@
-# 宇宙開発Idle Simulation / WebUI v0.5
+# 宇宙開発Idle Simulation / WebUI v0.6
 
-`v0.5` は、2026-09-09時点の `develop` 実装をユーザー承認に基づいて正準化したゲーム性評価用スナップショットです。ゲーム性評価段階では旧仕様・旧Saveとの後方互換を要件とせず、妥当なゲームモデル・責務境界への破壊的変更を許容します。仮の価格、所要日数、生産量等をテスト契約として固定することは目的にしません。
+`v0.6` は、2026-09-12時点の Fleet / Transport Capacity 再設計を含むユーザー承認済み実装スナップショットです。開発初期段階では旧仕様・旧Saveとの後方互換を要件とせず、正準仕様に沿ったDomain境界とState所有を優先します。暫定的な価格、所要日数、Facility数、Vehicle数、攻略順をCore契約として固定しません。
 
 ## 正準文書
 
-- `docs/design.md` — ゲームデザイン、中心ループ、プレイヤー判断、評価対象
-- `docs/architecture.md` — Generic Core、Content、Application、Domain、Persistence、Validationの責務境界
+- `docs/README.md` — 正準文書の入口と読み順
+- `docs/development-principles.md` — 開発原則
+- `docs/design.md` — ゲームデザイン、中心ループ、プレイヤー判断
+- `docs/architecture.md` — Domain、Application、Persistence、Simulation、UIの責務境界
 - `DEVELOPMENT.md` — branch、CI、検証、GitHub運用
 
-デザイン文書・アーキテクチャ文書は、0.5実装の説明だけでなく、次期 `develop` で実装することが合意された設計も含みます。文書で合意済みだが0.5コードへ未反映の項目を、実装済みとみなしてはなりません。
+READMEは実装状況の要約です。仕様判断では上記`docs`を優先します。
 
-## v0.5 実装スナップショット
+## v0.6 実装スナップショット
 
 現在のSimulation Coreには、少なくとも以下の基盤があります。
 
@@ -20,45 +22,55 @@
 - 電力の優先配分・部分稼働
 - Process単位の投入・産出とIndustry flow
 - Construction Project、建設能力配分、調達・物流連携
-- Cargo、Route、複数Leg Mission、arrival waiting
-- Powered Ascent / Spaceflight / Landing / Atmospheric Entryによる輸送適合判定
-- 保有Vehicleの位置・推進剤・Production・Transit・Turnaround・Maintenance状態
-- Vehicle製造Commandと製造Resource / Capability / 期間
-- Logistics LaneとDomain Resource Demand
-- Research Point、Research Provider、Tier / Level、Theory / Prototype / Demonstration
-- Resource SurveyとExtraction
-- 自動時間進行、速度変更、一時停止
+- Resource Survey、Extraction、Research Point、Research Provider、Tier / Level
+- Vehicle DefinitionのMass / Propulsion / Mobility / Endurance / Interface / Maintenance / Production性能
+- Vehicle Production完了による地点別Fleet Pool unit増加
+- FleetのTransport / Scientific Exploration / relocation / releasing / その他予約間の排他的配分
+- UNITS / CAPACITY control modeを持つTransport Allocationとpriority / routing policy
+- Allocationから決定論的に導出するTransport Service Plan、cycle、latency、resource / infrastructure requirements
+- Fleet数とService Planから導出するTarget / Nominal / Available / Used / Spare Transport Capacity
+- 往復cycleの方向別capacity、空荷return、resource / servicing制約
+- Logistics Laneによる共有Transport Capacityの需要配分
+- 複数Transport ServiceをhandoffするEnd-to-End pathとCargo Flow
+- Cargo Flowの輸送遅延、到着時Storage admission、arrival waiting
+- Fleet relocation / releasingの有限状態遷移
+- Vehicle性能要件に基づく有限Scientific Exploration CampaignとFleet reservation
+- Fleetを持たず同じCapacity interfaceへ供給するExternal Transport Service
 - Save / Load、Offline Progress、Application Command / Query、Web UI
 
-## 0.5正準化と同時に確定した次期設計
+通常物流は個体Vehicleのdispatch / Mission反復を正本にせず、Fleet Allocationから得られる定常Transport CapacityとCargo Flowで処理します。個体Vehicle ID、`default_disposition`、通常CargoごとのTransport Missionを前提とする旧経路は使用しません。
 
-次の変更は `docs/design.md` と `docs/architecture.md` に正準化されていますが、0.5の既存コードへ遡及して実装したものではありません。以後の通常開発は `develop` でこれらを実装します。
+## Transport / Fleetの主要契約
 
-- FacilityごとのProcess投入物・産出物・稼働率・limiting factorをUIへ明示
-- 建築物を原則2〜3種類の明示Resourceで建造
-- 建造時のLocal Substitution / local fraction / substitute materialレイヤーを廃止
-- 建造・Upgrade投入Resourceの一定割合からFacility維持需要を生成
-- 維持不足をmaintenance fulfillmentとしてFacility能力へ反映
-- 初期地球に低効率の採掘・基礎生産設備を追加
-- Vehicle建造候補、必要資材、建造期間、blockerをUIへ表示
-- Vehicleを割り当てる有限Scientific Exploration CampaignからResearch Pointを獲得
-- Scientific ExplorationとResource Surveyを別状態機械として維持
+- `FleetPool.total_units`を資産数量の正本とし、free unitsは排他的拘束から導出する。
+- Transport Allocationのtargetと実際に拘束できたactive unitsを分離し、Fleet不足でもtargetを保持する。
+- Allocation priorityはFleet配分、Lane priorityは得られたcapacityの物流需要配分にだけ使う。
+- CAPACITY modeの必要Fleet数はNominal capacityから求め、一時的な燃料・整備不足で自動増員しない。
+- Transport Service PlanとNominal / Available / Spare capacityは保存せず、Definitionと可変Stateから再導出する。
+- operational resource需要はAllocation量ではなく実際のService utilizationから生じる。
+- Transport Available Capacityはtick開始時状態で確定し、同tick後段に到着した燃料等を遡及利用しない。
+- 輸送開始時に目的地Storageを予約せず、到着時に収容できないCargoはarrival waitingとして保持する。
+- Offline Progressも通常のSimulation advance経路を使用する。
+
+## UI / Application
+
+Fleet / Logistics UIはApplication Queryから、Fleet総数・free・用途別拘束、Allocation target / active / unfilled、Service feasibility、Target / Nominal / Available / Used / Spare capacity、resource / infrastructure requirements、blocker / limiting factor、Lane requested / actual flow、Cargo Flow、relocation / releasingを取得します。
+
+UIはRoute適合、必要Fleet数、capacity、燃料不足などのDomainルールを再計算しません。操作不能状態でも必要条件とblockerを表示し、定期同期時は編集中の入力を不用意に上書きしません。
 
 ## 中核原則
 
 - Generic CoreへEarth、Moon、特定Vehicle用途等の固有名分岐を持ち込まない。
-- Facility、Route、Research等の可否はEnvironment、Capability、Resource、Vehicle性能、Transport Operation等の一般条件から決める。
-- 輸送中Cargoは目的地Storageを事前予約せず、実到着時に入庫判定する。
-- 打上げヴィークル、宇宙船、着陸船等の名称は表示分類であり、輸送可否の用途allowlistにはしない。
-- 定常物流は品目別の反復設定より拠点間輸送能力、方式、優先度を主要判断とする。
-- Idle自動化は反復処理を担当し、研究・産業・物流・Vehicle配分等の戦略判断を暗黙に代行しない。
+- Facility、Route、Research、Transport、Explorationの可否はEnvironment、Capability、Resource、Vehicle性能、Transport Operation等の一般条件から決める。
+- Idle自動化は反復処理を担当し、研究・産業・物流・Fleet配分等の戦略判断を暗黙に代行しない。
 - UIはSimulation Coreを直接操作せず、Application Command / Query境界を使用する。
 - Saveは可変Stateを保存し、静的Definitionと派生状態は現在Contentから再構築する。
 
 ## 開発branch
 
 - `main`: ユーザー承認済みの正準branch
-- `develop`: 通常開発・統合・プレイテスト用の常設branch
-- `temp`: 独立検証・大規模変更用。利用開始時に最新`develop`へ初期化し、独自の未統合状態を残さない
+- `develop`: 通常開発・統合・プレイテスト用の共有正本
+- `temp`: ユーザー指定時、またはworkflow / publish経路そのものの隔離検証時だけ使用
+- `publish`: Publish Gateway専用transport control branch
 
 `develop` から `main` への統合とゲーム本体version変更は、ユーザーの明示的承認後にのみ行います。

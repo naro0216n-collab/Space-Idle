@@ -301,3 +301,95 @@ def test_multistage_cargo_flow_records_handoffs_and_cumulative_latency():
     sim.logistics._progress_cargo_arrivals(flow.ready_day)
     assert flow.id not in sim.logistics.cargo_flows
     assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == pytest.approx(dispatched_amount)
+
+
+def test_transport_capacity_does_not_use_same_tick_propellant_arrival():
+    sim = build_game_application()._simulation
+    sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
+    sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
+    sim.refresh_storage()
+    sim.logistics.create_transport_allocation(
+        REUSABLE_ORBITAL_CARGO_TUG,
+        LEO,
+        LUNAR_ORBIT,
+        target_units=1,
+        day=0,
+    )
+    sim.inventory.add(LUNAR_ORBIT, PROPELLANT, 10.0)
+    leo_propellant = sim.inventory.available(LEO, PROPELLANT)
+    if leo_propellant > 0:
+        assert sim.inventory.take_unreserved(LEO, PROPELLANT, leo_propellant)
+
+    inbound_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
+    outbound_lane = sim.logistics.create_lane(LEO, LUNAR_ORBIT, 1.0, 100)
+    sim.inventory.add(EARTH, PROPELLANT, 1.0)
+    inbound = ResourceDemand(
+        EntityId("demand.propellant-inbound"),
+        "test",
+        EntityId("owner.propellant-inbound"),
+        LEO,
+        PROPELLANT,
+        1.0,
+        100,
+        EARTH,
+        0.0,
+    )
+    sim.logistics.advance_capacity_logistics(0, (inbound,))
+    arriving = next(
+        flow
+        for flow in sim.logistics.cargo_flows.values()
+        if flow.lane_id == inbound_lane
+    )
+    assert arriving.ready_day == 2
+    sim.logistics.external_services.clear()
+
+    sim.inventory.add(LEO, MACHINERY, 1.0)
+    outbound = _demand(
+        1.0,
+        demand_id="demand.same-tick-propellant",
+        destination=LUNAR_ORBIT,
+        source=LEO,
+    )
+    sim.logistics.advance_capacity_logistics(2, (outbound,))
+    assert sim.inventory.available(LEO, PROPELLANT) > 0
+    assert not any(
+        flow.lane_id == outbound_lane and flow.demand_id == outbound.id
+        for flow in sim.logistics.cargo_flows.values()
+    )
+
+    sim.logistics.advance_capacity_logistics(3, (outbound,))
+    assert any(
+        flow.lane_id == outbound_lane and flow.demand_id == outbound.id
+        for flow in sim.logistics.cargo_flows.values()
+    )
+
+
+def test_cargo_arrival_waits_for_destination_storage_admission():
+    sim = build_game_application()._simulation
+    lane_id = sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
+    free_before = sim.inventory.free_capacity(LEO, MACHINERY)
+    assert free_before is not None and free_before > 0
+    sim.inventory.add(LEO, PRECISION_ELECTRONICS, free_before)
+    assert sim.inventory.free_capacity(LEO, MACHINERY) == pytest.approx(0.0)
+
+    source_before = sim.inventory.amount(EARTH, MACHINERY)
+    destination_before = sim.inventory.amount(LEO, MACHINERY)
+    demand = _demand(1.0, demand_id="demand.arrival-waiting")
+    sim.logistics.advance_capacity_logistics(0, (demand,))
+    flow = next(
+        flow
+        for flow in sim.logistics.cargo_flows.values()
+        if flow.lane_id == lane_id and flow.demand_id == demand.id
+    )
+    assert sim.inventory.amount(EARTH, MACHINERY) == pytest.approx(source_before - 1.0)
+
+    sim.logistics._progress_cargo_arrivals(flow.ready_day)
+    assert flow.id in sim.logistics.cargo_flows
+    assert flow.status.value == "arrival_waiting"
+    assert flow.amount_t == pytest.approx(1.0)
+    assert sim.inventory.amount(LEO, MACHINERY) == pytest.approx(destination_before)
+
+    assert sim.inventory.take_unreserved(LEO, PRECISION_ELECTRONICS, 1.0)
+    sim.logistics._progress_cargo_arrivals(flow.ready_day + 1)
+    assert flow.id not in sim.logistics.cargo_flows
+    assert sim.inventory.amount(LEO, MACHINERY) == pytest.approx(destination_before + 1.0)

@@ -1,6 +1,6 @@
 [project]
 name = "space-idle-core"
-version = "0.5"
+version = "0.6"
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
