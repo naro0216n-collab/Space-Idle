@@ -79,12 +79,6 @@ class ProjectRow:
     target_location_id: str | None = None
     construction_fulfillment: float = 1.0
     limiting_factors: tuple[str, ...] = ()
-    founding_package_id: str | None = None
-    founding_vehicle_definition_id: str | None = None
-    preparation_done: float | None = None
-    preparation_required: float | None = None
-    deployment_progress_days: float | None = None
-    deployment_required_days: float | None = None
 
 
 @dataclass(frozen=True)

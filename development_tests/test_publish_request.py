@@ -174,37 +174,38 @@ def test_connector_plan_revalidates_manifest_and_remote_base(tmp_path: Path) -> 
     assert "sha256 mismatch" in corrupt.stderr or "invalid publish bundle" in corrupt.stderr
 
 
-def test_connector_plan_generates_blob_tree_and_submit_packets_without_sha_handoff(tmp_path: Path) -> None:
+def test_connector_plan_generates_ref_reachable_payload_files_and_submit_packet(tmp_path: Path) -> None:
     repo, base, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("connector\n" * 400, encoding="utf-8")
     commit_all(repo, "connector transport")
     run_request(repo, "prepare")
+    request = prepared(repo)
+    request_id = str(request["request_id"])
     plan = json.loads(run_request(repo, "connector-plan", "--target-remote-head", base).stdout)
     assert plan["stage"] == "packets-ready"
+    assert plan["strategy"] == "publish-files-barrier-then-request"
     assert plan["upload_call_count"] == 1
     assert plan["response_sha_handoff_required"] is False
+    assert "payload_root_packet" not in plan
 
     upload = json.loads(Path(plan["upload_packets"][0]).read_text(encoding="utf-8"))
-    assert upload["action"] == "GitHub.create_blob"
+    assert upload["action"] == "GitHub.create_file"
     assert upload["action_args"]["repository_full_name"] == "naro0216n-collab/Space-Idle"
+    assert upload["action_args"]["branch"] == "publish"
+    assert upload["action_args"]["path"] == f".publish/payloads/{request_id}/0000.b64"
+    assert plan["remote_payload_paths"] == [upload["action_args"]["path"]]
+    assert plan["remote_payload_dir"] == f".publish/payloads/{request_id}"
     assert plan["expected_blob_git_oids"] == [upload["expected_blob_git_oid"]]
 
-    root = json.loads(Path(plan["payload_root_packet"]).read_text(encoding="utf-8"))
-    assert root["action"] == "GitHub.create_tree"
-    assert root["expected_tree_git_oid"] == plan["expected_payload_tree_git_oid"]
-    assert root["action_args"]["tree_elements"] == [{
-        "mode": "100644",
-        "path": "0000.b64",
-        "sha": upload["expected_blob_git_oid"],
-        "type": "blob",
-    }]
+    expected_root = PUBLISH_REQUEST._git_tree_oid(repo, plan["expected_blob_git_oids"])
+    assert plan["expected_payload_tree_git_oid"] == expected_root
 
     packet = json.loads(Path(plan["submit_request_packet"]).read_text(encoding="utf-8"))
     transport = json.loads(packet["action_args"]["content"])
     assert transport["version"] == 6
     assert transport["payload_source"] == {
         "kind": "git-tree",
-        "oid": root["expected_tree_git_oid"],
+        "oid": expected_root,
         "part_count": 1,
     }
 
@@ -213,15 +214,39 @@ def test_connector_plan_generates_blob_tree_and_submit_packets_without_sha_hando
     assert "already initialized" in replan.stderr
 
 
-
-def test_fixed_connector_profile_keeps_fleet_sized_payload_in_one_blob(tmp_path: Path) -> None:
+def test_fixed_connector_profile_keeps_fleet_sized_payload_in_one_file(tmp_path: Path) -> None:
     module = PUBLISH_REQUEST
     repo, _, _ = init_repo(tmp_path)
-    parts = module._split_payload_for_blob_calls(
-        repo, "naro0216n-collab/Space-Idle", "A" * 81_780, module.CONNECTOR_CALL_BUDGET_BYTES
+    parts = module._split_payload_for_file_calls(
+        repo, "naro0216n-collab/Space-Idle", "publish", "a" * 32,
+        "A" * 81_780, module.CONNECTOR_CALL_BUDGET_BYTES
     )
     assert len(parts) == 1
-    assert module._connector_call_bytes(parts[0]["packet"]) < 96 * 1024
+    assert module._connector_call_bytes(parts[0]["packet"]) < 144 * 1024
+
+
+def test_connector_profile_uses_144_kib_as_actual_call_upper_bound(tmp_path: Path) -> None:
+    module = PUBLISH_REQUEST
+    repo, _, _ = init_repo(tmp_path)
+    request_id = "a" * 32
+    empty = module._connector_payload_file_packet(
+        repo, "naro0216n-collab/Space-Idle", "publish", request_id, "", 0
+    )
+    max_chars = module.CONNECTOR_CALL_BUDGET_BYTES - module._connector_call_bytes(empty)
+
+    single = module._split_payload_for_file_calls(
+        repo, "naro0216n-collab/Space-Idle", "publish", request_id,
+        "A" * max_chars, module.CONNECTOR_CALL_BUDGET_BYTES
+    )
+    assert len(single) == 1
+    assert module._connector_call_bytes(single[0]["packet"]) == 144 * 1024
+
+    split = module._split_payload_for_file_calls(
+        repo, "naro0216n-collab/Space-Idle", "publish", request_id,
+        "A" * (max_chars + 1), module.CONNECTOR_CALL_BUDGET_BYTES
+    )
+    assert len(split) == 2
+    assert all(module._connector_call_bytes(part["packet"]) <= 144 * 1024 for part in split)
 
 
 def test_fixed_connector_profile_splits_only_when_actual_call_exceeds_limit(tmp_path: Path) -> None:
@@ -234,11 +259,12 @@ def test_fixed_connector_profile_splits_only_when_actual_call_exceeds_limit(tmp_
     run_request(repo, "prepare")
     plan = json.loads(run_request(repo, "connector-plan", "--target-remote-head", base).stdout)
     assert plan["upload_call_count"] >= 2
-    assert plan["connector_call_budget_bytes"] == 96 * 1024
+    assert plan["connector_call_budget_bytes"] == 144 * 1024
     for packet_name in plan["upload_packets"]:
         packet = json.loads(Path(packet_name).read_text(encoding="utf-8"))
+        assert packet["action"] == "GitHub.create_file"
         size = len(json.dumps(packet["action_args"], separators=(",", ":")).encode("utf-8"))
-        assert size <= 96 * 1024
+        assert size <= 144 * 1024
 
 
 def test_payload_root_oid_matches_git_tree_object_format(tmp_path: Path) -> None:
@@ -258,13 +284,29 @@ def test_payload_root_oid_matches_git_tree_object_format(tmp_path: Path) -> None
     assert module._git_tree_oid(repo, oids) == expected
 
 
-def test_payload_root_with_max_parts_fits_connector_profile(tmp_path: Path) -> None:
+def test_request_scoped_payload_directory_has_precomputed_subtree_oid(tmp_path: Path) -> None:
     repo, _, _ = init_repo(tmp_path)
     module = PUBLISH_REQUEST
-    oids = [f"{index:040x}"[-40:] for index in range(1, module.MAX_BLOB_PARTS + 1)]
-    packet = module._connector_payload_root_packet(repo, module.GITHUB_REPOSITORY, oids)
-    assert len(packet["action_args"]["tree_elements"]) == module.MAX_BLOB_PARTS
-    assert module._connector_call_bytes(packet) < module.CONNECTOR_CALL_BUDGET_BYTES
+    request_id = "f" * 32
+    contents = ["alpha", "beta", "gamma"]
+    oids = []
+    for index, content in enumerate(contents):
+        path = repo / module._payload_file_path(request_id, index)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="ascii")
+        oid = subprocess.run(
+            ["git", "hash-object", "-w", str(path)], cwd=repo, check=True,
+            text=True, stdout=subprocess.PIPE
+        ).stdout.strip()
+        oids.append(oid)
+    subprocess.run(["git", "add", ".publish/payloads"], cwd=repo, check=True)
+    tree = subprocess.run(["git", "write-tree"], cwd=repo, check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+    subtree = subprocess.run(
+        ["git", "rev-parse", f"{tree}:.publish/payloads/{request_id}"], cwd=repo,
+        check=True, text=True, stdout=subprocess.PIPE
+    ).stdout.strip()
+    assert subtree == module._git_tree_oid(repo, oids)
+
 
 
 def test_standard_cli_has_no_alternative_repository_target_or_transaction_selectors() -> None:

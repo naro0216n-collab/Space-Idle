@@ -133,7 +133,7 @@ def test_fleet_free_read_does_not_materialize_an_empty_pool():
     lg = sim.logistics
     before = dict(lg.fleet_pools)
 
-    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT) == 0
+    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, SpatialNodeId("test.location.absent")) == 0
     assert lg.fleet_pools == before
 
 
@@ -143,7 +143,7 @@ def test_fleet_snapshot_read_does_not_materialize_an_empty_pool():
     before = dict(lg.fleet_pools)
 
     snapshot = lg.fleet_pool_snapshot(
-        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
+        ids.REUSABLE_ORBITAL_CARGO_TUG, SpatialNodeId("test.location.absent")
     )
     assert snapshot.total_units == 0
     assert snapshot.free_units == 0
@@ -505,6 +505,15 @@ def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
     sim = _fleet_sim(1)
     lg = sim.logistics
     vehicle_id = ids.REUSABLE_SURFACE_CARGO_LANDER
+    target_id = __import__('space_idle.shared', fromlist=['SpatialNodeId']).SpatialNodeId("test.location.landing_support")
+    sim.graph.found_location(target_id, "Target", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS)
+    sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, target_id)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, target_id, site_cell_id=ids.MOON_CELL_FARSIDE_HIGHLANDS)
+    lg.synchronize_surface_access_routes()
+    landing_route = next(
+        route_id for route_id, route in lg.routes.items()
+        if route.origin_id == ids.LUNAR_ORBIT and route.destination_id == target_id
+    )
     definition = lg.vehicle_defs[vehicle_id]
     lg.vehicle_defs[vehicle_id] = replace(
         definition,
@@ -516,34 +525,20 @@ def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
             resource_support_requirements=(),
             operation_support_requirements=(
                 OperationSupportRequirement(
-                    "landing", OperationSupportLocation.ORIGIN, "cargo_transfer"
+                    "landing", OperationSupportLocation.ORIGIN, "research_lab"
                 ),
             ),
         ),
     )
-    destination_id = SpatialNodeId("test.location.multileg_surface")
-    sim.graph.found_location(
-        destination_id, "Multileg Surface", ids.MOON, ids.MOON_CELL_SOUTH_POLAR_RIDGE
-    )
-    lg.synchronize_surface_access_routes()
-    landing_route_id = next(
-        route.id for route in lg.routes.values()
-        if route.origin_id == ids.LUNAR_ORBIT and route.destination_id == destination_id
-    )
     lg.fleet_pool(vehicle_id, ids.LEO).total_units = 1
-    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    sim.facilities.install(ids.MICROGRAVITY_EXPERIMENT_PLATFORM, ids.LEO)
     allocation_id = lg.create_transport_allocation(
-        vehicle_id,
-        ids.LEO,
-        destination_id,
-        target_units=1,
-        path=(RouteId("base.route.leo_lunar_orbit"), landing_route_id),
-        day=sim.day,
+        vehicle_id, ids.LEO, target_id, target_units=1,
+        path=(RouteId("base.route.leo_lunar_orbit"), landing_route), day=sim.day,
     )
     snapshot = lg.transport_capacity_snapshot(allocation_id, day=sim.day)
-
     assert snapshot.available.forward_t_per_day == 0
-    assert f"infrastructure:{ids.LUNAR_ORBIT}:cargo_transfer" in snapshot.limiting_factors
+    assert f"infrastructure:{ids.LUNAR_ORBIT}:research_lab" in snapshot.limiting_factors
 
 
 def test_relocation_keeps_units_exclusive_until_arrival():
@@ -571,23 +566,22 @@ def test_same_priority_allocation_result_does_not_depend_on_registration_order()
     def active_by_destination(destinations):
         sim = build_base_simulation()
         lg = sim.logistics
-        lg.fleet_pool(ids.REUSABLE_SURFACE_CARGO_LANDER, ids.LEO).total_units = 1
-        for destination in destinations:
+        target_id = __import__('space_idle.shared', fromlist=['SpatialNodeId']).SpatialNodeId("test.location.registration_order")
+        sim.graph.found_location(target_id, "Target", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS)
+        sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, target_id)
+        sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, target_id, site_cell_id=ids.MOON_CELL_FARSIDE_HIGHLANDS)
+        lg.synchronize_surface_access_routes()
+        lg.fleet_pool(ids.REUSABLE_SURFACE_CARGO_LANDER, ids.LUNAR_ORBIT).total_units = 1
+        actual = [ids.LEO if d == "leo" else target_id for d in destinations]
+        for destination in actual:
             lg.create_transport_allocation(
-                ids.REUSABLE_SURFACE_CARGO_LANDER,
-                ids.LEO,
-                destination,
-                priority=50,
-                target_units=1,
-                day=0,
+                ids.REUSABLE_SURFACE_CARGO_LANDER, ids.LUNAR_ORBIT, destination,
+                priority=50, target_units=1, day=0,
             )
-        return {
-            allocation.destination_id: allocation.active_units
-            for allocation in lg.transport_allocations.values()
-        }
+        return {str(a.destination_id): a.active_units for a in lg.transport_allocations.values()}
 
-    first = active_by_destination((ids.LUNAR_ORBIT, ids.EARTH))
-    second = active_by_destination((ids.EARTH, ids.LUNAR_ORBIT))
+    first = active_by_destination(("leo", "surface"))
+    second = active_by_destination(("surface", "leo"))
     assert first == second
 
 

@@ -6,7 +6,6 @@ import json
 from space_idle import AdvanceTime, DevelopSurfaceCell, GetLocation, GetProjects, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
-from space_idle.shared import SpatialNodeId
 from space_idle.surface_infrastructure import SURFACE_DISTRIBUTION_CAPABILITY
 
 
@@ -40,7 +39,7 @@ def test_surface_distribution_facility_supplies_nominal_and_available_capacity()
     assert before.fulfillment == 0.0
     assert before.limiting_factors == ("surface_infrastructure",)
 
-    facility_id = sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    facility_id = sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
     supplied = _snapshot(sim)
     assert supplied.nominal_capacity == pytest.approx(1.0)
     assert supplied.available_capacity == pytest.approx(1.0)
@@ -73,7 +72,7 @@ def test_remote_resource_opportunity_and_limiting_factor_follow_surface_infrastr
     )
     assert "surface_infrastructure" in mine.limiting_factors
 
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
     supplied = sim.extraction.effective_opportunity(
         ids.EARTH, ids.METAL_ORE, sim.facilities, power, sim.day
@@ -99,7 +98,7 @@ def test_location_query_exposes_surface_infrastructure_decision_state_and_improv
 def test_surface_infrastructure_does_not_create_cell_inventory_or_logistics_nodes():
     sim = build_game_application()._simulation
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
     _snapshot(sim)
 
     assert ids.EARTH_CELL_COASTAL not in sim.graph.operational_node_ids()
@@ -123,7 +122,7 @@ def test_remote_surface_facility_available_capability_uses_surface_infrastructur
         ids.EARTH, "surface_survey", power, sim.day
     ) == 0.0
 
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
     assert sim.facilities.available_capability_capacity_at(
         ids.EARTH, "surface_survey", power, sim.day
@@ -146,7 +145,7 @@ def test_surface_cell_development_progress_is_limited_by_surface_infrastructure(
     assert project.limiting_factors == ("surface_infrastructure",)
     assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
 
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
     app.execute(AdvanceTime(12))
     project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
     assert project.construction_done > 0.0
@@ -170,7 +169,7 @@ def test_surface_infrastructure_is_derived_after_save_load(tmp_path):
     app = build_game_application()
     sim = app._simulation
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
     before = _snapshot(sim)
 
     path = tmp_path / "surface-infrastructure.json"
@@ -194,7 +193,7 @@ def test_surface_gateway_handling_capability_uses_location_surface_infrastructur
         ids.EARTH, "cargo_transfer", power, sim.day
     ) == 0.0
 
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
     assert sim.facilities.available_capability_capacity_at(
         ids.EARTH, "cargo_transfer", power, sim.day
@@ -202,43 +201,28 @@ def test_surface_gateway_handling_capability_uses_location_surface_infrastructur
 
 
 def test_remote_surface_route_available_capacity_uses_location_surface_infrastructure():
+    from space_idle.shared import SpatialNodeId
     sim = build_game_application()._simulation
-    origin = SpatialNodeId("test.location.lunar_ridge")
-    destination = SpatialNodeId("test.location.lunar_nearside")
-    sim.graph.found_location(origin, "Ridge", ids.MOON, ids.MOON_CELL_SOUTH_POLAR_RIDGE)
-    sim.graph.found_location(destination, "Nearside", ids.MOON, ids.MOON_CELL_NEARSIDE_MARE)
+    a = SpatialNodeId("test.location.infrastructure.a")
+    b = SpatialNodeId("test.location.infrastructure.b")
+    sim.graph.found_location(a, "A", ids.MOON, ids.MOON_CELL_SOUTH_POLAR_RIDGE)
+    sim.graph.found_location(b, "B", ids.MOON, ids.MOON_CELL_NEARSIDE_MARE)
+    sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, a)
+    sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, b)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, a, site_cell_id=ids.MOON_CELL_SOUTH_POLAR_RIDGE)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, b, site_cell_id=ids.MOON_CELL_NEARSIDE_MARE)
+    sim.logistics.add_fleet_units(ids.SURFACE_CARGO_HAULER, 1, a)
     sim.logistics.synchronize_surface_access_routes()
-    sim.logistics.add_fleet_units(ids.SURFACE_CARGO_HAULER, 1, origin, day=sim.day)
-
     allocation_id = sim.logistics.create_transport_allocation(
-        ids.SURFACE_CARGO_HAULER,
-        origin,
-        destination,
-        target_units=1,
-        day=sim.day,
+        ids.SURFACE_CARGO_HAULER, a, b, target_units=1, day=sim.day
     )
     initial = sim.logistics.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert initial.nominal.forward_t_per_day > 0.0
-    assert initial.available.forward_t_per_day == pytest.approx(
-        initial.nominal.forward_t_per_day
-    )
+    assert initial.available.forward_t_per_day == pytest.approx(initial.nominal.forward_t_per_day)
 
-    sim.graph.develop_surface_cell(origin, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
-    sim.graph.develop_surface_cell(origin, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
+    sim.graph.develop_surface_cell(a, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
+    sim.graph.develop_surface_cell(a, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
     sim.logistics.synchronize_surface_access_routes()
     constrained = sim.logistics.transport_capacity_snapshot(allocation_id, day=sim.day)
-    assert constrained.nominal.forward_t_per_day > 0.0
-    assert constrained.available.forward_t_per_day == 0.0
-    assert any(
-        factor.startswith("surface_infrastructure:forward:")
-        for factor in constrained.limiting_factors
-    )
-
-    sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, origin)
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, origin)
-    supplied = sim.logistics.transport_capacity_snapshot(allocation_id, day=sim.day)
-    assert 0.0 < supplied.available.forward_t_per_day < supplied.nominal.forward_t_per_day
-    assert any(
-        factor.startswith("surface_infrastructure:forward:")
-        for factor in supplied.limiting_factors
-    )
+    assert 0.0 < constrained.available.forward_t_per_day < constrained.nominal.forward_t_per_day
+    assert any(factor.startswith("surface_infrastructure:forward:") for factor in constrained.limiting_factors)

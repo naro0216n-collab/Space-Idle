@@ -169,10 +169,9 @@ def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_pa
         str(ids.CISLUNAR_SCIENCE_EXPLORATION),
         str(ids.REUSABLE_ORBITAL_CARGO_TUG),
     ))
-    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 10.0)
+    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
     relocation_id = sim.logistics.relocate_fleet(
-        ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LEO, ids.LUNAR_ORBIT, day=sim.day
+        ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LUNAR_ORBIT, ids.LEO, day=sim.day
     )
     allocation_entity_id = EntityId(allocation_id)
     lane_entity_id = EntityId(lane_id)
@@ -303,7 +302,7 @@ def test_offline_progress_preserves_surface_cell_development_state_machine(tmp_p
     saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     policy = OfflineProgressPolicy(real_seconds_per_game_day=60.0, max_game_days_per_resume=30)
     app = build_game_application()
-    app._simulation.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    app._simulation.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
     result = app.execute(DevelopSurfaceCell(
         str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"
     ))

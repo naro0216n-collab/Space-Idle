@@ -6,8 +6,8 @@ import math
 from .contracts import ContractService
 from .domain import DomainExtension
 from .facilities import FacilityBook
-from .industry import IndustryService
 from .founding import LocationFoundingService
+from .industry import IndustryService
 from .inventory import InventoryBook
 from .logistics import LogisticsService
 from .maintenance import FacilityMaintenanceService
@@ -82,13 +82,14 @@ class Simulation:
     def _active_locations(self) -> set[SpatialNodeId]:
         locations = {facility.location_id for facility in self.facilities.facilities.values()}
         locations.update(project.location_id for project in self.projects.projects.values())
-        if self.survey is not None:
-            locations.update(campaign.provider_location_id for campaign in self.survey.campaigns.values())
         if self.founding is not None:
             locations.update(
-                project.staging_location_id
+                project.staging_node_id
                 for project in self.founding.projects.values()
+                if project.status.value in {"preparing", "deploying"}
             )
+        if self.survey is not None:
+            locations.update(campaign.provider_location_id for campaign in self.survey.campaigns.values())
         locations.update(
             project.location_id
             for project in self.logistics.vehicle_production_projects.values()
@@ -122,7 +123,7 @@ class Simulation:
         }
         demands: list[ResourceDemand] = list(self.projects.resource_demands(self.day))
         if self.founding is not None:
-            demands.extend(self.founding.resource_demands(self.day))
+            demands.extend(self.founding.resource_demands())
         for location_id in sorted(locations, key=str):
             power = powers.get(location_id)
             if power is None:
@@ -266,14 +267,14 @@ class Simulation:
                 self.survey.advance_day(power_before, self.day)
             if self.maintenance is not None:
                 self.maintenance.advance_day(self.day)
-            if self.founding is not None:
-                self.founding.advance_day(self.day)
 
             self.projects.advance_procurement(self.day)
 
             self.logistics.advance_vehicle_production_day(power_before, self.day)
             self.projects.finalize_procurement(self.day)
             self.projects.advance_construction(power_before, self.day)
+            if self.founding is not None:
+                self.founding.advance_day(self.day)
             self.logistics.synchronize_surface_access_routes()
             self.refresh_storage()
             next_day = self.day + 1

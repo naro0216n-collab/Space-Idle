@@ -77,7 +77,7 @@ def test_effective_opportunity_uses_surface_infrastructure_for_remote_cells():
     )
     assert constrained == pytest.approx(before)
 
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
     supplied_power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
     supplied = sim.extraction.effective_opportunity(
         ids.EARTH, ids.METAL_ORE, sim.facilities, supplied_power, sim.day

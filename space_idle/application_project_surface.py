@@ -118,35 +118,25 @@ class SurfaceProjectorMixin:
                     if sim.facilities.definitions[recipe.facility_def_id].placement_scope is FacilityPlacementScope.SURFACE_CELL
                 )
             foundation_options = ()
-            if sim.founding is not None and owner is None:
+            if sim.founding is not None:
                 foundation_rows = []
                 active_founding = sim.founding.active_project_for_cell(cell.id)
-                for package in sorted(sim.founding.definitions.values(), key=lambda row: str(row.id)):
-                    for staging_id in sorted(sim.graph.operational_node_ids(), key=str):
-                        staging = sim.graph.operational_node(staging_id)
-                        for vehicle_id, failures in sim.founding.compatible_vehicle_options(
-                            package.id, staging_id, cell.id, day=sim.day
-                        ):
-                            vehicle = sim.logistics.vehicle_defs[vehicle_id]
+                for staging_id in sorted(sim.graph.operational_node_ids(), key=str):
+                    for package in sorted(sim.founding.packages.values(), key=lambda row: str(row.id)):
+                        for vehicle in sorted(sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)):
+                            failures = sim.founding.planning_failures(
+                                staging_id, body_id, cell.id, package.id, vehicle.id, sim.day
+                            )
                             foundation_rows.append(SurfaceCellFoundationOption(
-                                str(package.id),
-                                package.display_name,
-                                str(staging_id),
-                                staging.display_name,
-                                str(vehicle_id),
-                                vehicle.display_name,
-                                package.transit_days,
-                                package.payload_t,
-                                tuple(
-                                    (str(resource_id), amount_t)
-                                    for resource_id, amount_t in sim.founding.deployment_resource_requirements(
-                                        package.id, vehicle_id
-                                    )
-                                ),
-                                tuple(failures),
+                                str(staging_id), str(package.id), package.display_name, str(vehicle.id), vehicle.display_name,
+                                package.preparation_work, package.transit_days, package.payload_t, package.payload_t_per_unit,
+                                package.required_units, tuple((str(req.resource_id), req.amount_t) for req in package.resources),
+                                tuple((failure.code, failure.detail) for failure in failures),
                                 None if active_founding is None else str(active_founding.id),
+                                tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(staging_id)),
                             ))
                 foundation_options = tuple(foundation_rows)
+
 
             rows.append(
                 SurfaceCellRow(

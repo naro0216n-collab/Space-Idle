@@ -395,7 +395,7 @@ def run() -> dict[str, object]:
             _assert("Resource Opportunity / Extraction" in overview_text, "location overview must expose aggregate extraction decision state")
             _assert("Current Environment" in overview_text, "location overview must expose current environment state")
 
-            page.locator(f'[data-location-id="{ids.LUNAR_ORBIT}"]').click()
+            page.locator(f'[data-location-id="{ids.SOUTH_POLAR_RIDGE}"]').click()
             page.locator('[data-tab="survey"]').click()
             survey_row = page.locator(f'tr[data-inspect="survey"][data-id="{ids.MOON_CELL_SOUTH_POLAR_RIDGE}::{ids.WATER}"]')
             survey_row.wait_for(timeout=10000)

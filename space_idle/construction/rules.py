@@ -133,6 +133,10 @@ class ConstructionRulesMixin:
         active = self.active_spatial_project_for_cell(cell_id)
         if active is not None:
             failures.append(SiteRequirementFailure("active_spatial_project", str(active.id)))
+        if self.external_surface_cell_claim_provider is not None:
+            external = self.external_surface_cell_claim_provider(cell_id)
+            if external is not None:
+                failures.append(SiteRequirementFailure("active_founding_project", str(external)))
         if graph.has_operational_node(location_id):
             failures.extend(self._spatial_recipe_site_failures(recipe_id, location_id, cell_id, day, power))
         return tuple(dict.fromkeys(failures))
@@ -147,15 +151,15 @@ class ConstructionRulesMixin:
         if not isinstance(target, SurfaceCellDevelopmentTarget):
             raise TypeError("project is not a surface development project")
         graph = self.facilities.environment.graph
-        failures = [
+        failures: list[SiteRequirementFailure] = [
             SiteRequirementFailure(code, detail)
-            for code, detail in graph.surface_cell_development_failures(
-                project.location_id, target.cell_id
-            )
+            for code, detail in graph.surface_cell_development_failures(project.location_id, target.cell_id)
         ]
-        snapshot = power if power is not None else self.power.snapshot(
-            project.location_id, self.facilities, day
-        )
+        if self.external_surface_cell_claim_provider is not None:
+            external = self.external_surface_cell_claim_provider(target.cell_id)
+            if external is not None:
+                failures.append(SiteRequirementFailure("active_founding_project", str(external)))
+        snapshot = power if power is not None else self.power.snapshot(project.location_id, self.facilities, day)
         failures.extend(self._spatial_recipe_site_failures(
             target.recipe_id, project.location_id, target.cell_id, day, snapshot
         ))

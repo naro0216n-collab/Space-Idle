@@ -5,11 +5,11 @@ from .application_commands import (
     Command,
     CommandResult,
     PauseBuild,
-    PauseFounding,
     PlanBuild,
     PlanFacilityUpgrade,
     FoundLocation,
     CancelFounding,
+    PauseFounding,
     ResumeFounding,
     SetFoundingPriority,
     DevelopSurfaceCell,
@@ -19,7 +19,7 @@ from .application_commands import (
     SetProjectPriority,
     SetProjectSourcingPolicy,
 )
-from .shared import DefinitionId, EntityId, ProjectId, SurfaceCellId
+from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SurfaceCellId
 
 
 class ConstructionCommandHandlerMixin:
@@ -51,42 +51,36 @@ class ConstructionCommandHandlerMixin:
             return CommandResult(str(pid))
         if isinstance(command, FoundLocation):
             if sim.founding is None:
-                raise ValueError("location founding is not available")
-            pid = sim.founding.start(
-                DefinitionId(command.package_id),
-                self._require_location(command.staging_location_id),
-                SurfaceCellId(command.core_cell_id),
+                raise ValueError("founding domain is not configured")
+            pid = sim.founding.plan(
+                self._require_location(command.staging_node_id),
                 command.display_name,
+                CelestialBodyId(command.body_id),
+                SurfaceCellId(command.core_cell_id),
+                DefinitionId(command.founding_package_id),
                 DefinitionId(command.vehicle_definition_id),
                 priority=command.priority,
+                preferred_source_id=(None if command.preferred_source_id is None else self._require_location(command.preferred_source_id)),
                 day=sim.day,
             )
             sim.refresh_resource_claims()
             return CommandResult(str(pid))
         if isinstance(command, CancelFounding):
             if sim.founding is None:
-                raise ValueError("location founding is not available")
-            sim.founding.cancel(EntityId(command.project_id), day=sim.day)
-            sim.refresh_resource_claims()
-            return CommandResult()
+                raise ValueError("founding domain is not configured")
+            sim.founding.cancel(ProjectId(command.project_id), sim.day); sim.refresh_resource_claims(); return CommandResult()
         if isinstance(command, PauseFounding):
             if sim.founding is None:
-                raise ValueError("location founding is not available")
-            sim.founding.pause(EntityId(command.project_id))
-            sim.refresh_resource_claims()
-            return CommandResult()
+                raise ValueError("founding domain is not configured")
+            sim.founding.pause(ProjectId(command.project_id)); return CommandResult()
         if isinstance(command, ResumeFounding):
             if sim.founding is None:
-                raise ValueError("location founding is not available")
-            sim.founding.resume(EntityId(command.project_id))
-            sim.refresh_resource_claims()
-            return CommandResult()
+                raise ValueError("founding domain is not configured")
+            sim.founding.resume(ProjectId(command.project_id)); return CommandResult()
         if isinstance(command, SetFoundingPriority):
             if sim.founding is None:
-                raise ValueError("location founding is not available")
-            sim.founding.set_priority(EntityId(command.project_id), command.priority)
-            sim.refresh_resource_claims()
-            return CommandResult()
+                raise ValueError("founding domain is not configured")
+            sim.founding.set_priority(ProjectId(command.project_id), command.priority); sim.refresh_resource_claims(); return CommandResult()
         if isinstance(command, DevelopSurfaceCell):
             pid = sim.projects.plan_surface_cell_development(
                 self._require_location(command.location_id),

@@ -16,7 +16,7 @@ STATE_NAME = "space-idle-publish-state.json"
 WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
 REQUEST_VERSION = 6
 RECEIPT_VERSION = 3
-CONNECTOR_CALL_BUDGET_BYTES = 96 * 1024
+CONNECTOR_CALL_BUDGET_BYTES = 144 * 1024
 MAX_BLOB_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
 CONNECTOR_SUMMARY_NAME = "summary.json"
@@ -470,9 +470,19 @@ def _connector_submit_packet(
     }
 
 
-def _connector_blob_packet(
+def _payload_tree_path(index: int) -> str:
+    return f"{index:04d}.b64"
+
+
+def _payload_file_path(request_id: str, index: int) -> str:
+    return f".publish/payloads/{request_id}/{_payload_tree_path(index)}"
+
+
+def _connector_payload_file_packet(
     repo: Path,
     github_repository: str,
+    publish_branch: str,
+    request_id: str,
     content: str,
     index: int,
 ) -> dict[str, object]:
@@ -481,17 +491,15 @@ def _connector_blob_packet(
         "stage": "upload-payload-part",
         "part_index": index,
         "expected_blob_git_oid": oid,
-        "action": "GitHub.create_blob",
+        "action": "GitHub.create_file",
         "action_args": {
             "repository_full_name": github_repository,
+            "path": _payload_file_path(request_id, index),
             "content": content,
-            "encoding": "utf-8",
+            "message": f"Upload publish payload {request_id} part {index:04d}",
+            "branch": publish_branch,
         },
     }
-
-
-def _payload_tree_path(index: int) -> str:
-    return f"{index:04d}.b64"
 
 
 def _git_tree_oid(repo: Path, blob_oids: list[str]) -> str:
@@ -505,31 +513,6 @@ def _git_tree_oid(repo: Path, blob_oids: list[str]) -> str:
     return _git_object_oid(repo, "tree", bytes(raw))
 
 
-def _connector_payload_root_packet(
-    repo: Path,
-    github_repository: str,
-    blob_oids: list[str],
-) -> dict[str, object]:
-    root_oid = _git_tree_oid(repo, blob_oids)
-    return {
-        "stage": "assemble-payload-root",
-        "expected_tree_git_oid": root_oid,
-        "action": "GitHub.create_tree",
-        "action_args": {
-            "repository_full_name": github_repository,
-            "tree_elements": [
-                {
-                    "path": _payload_tree_path(index),
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": oid,
-                }
-                for index, oid in enumerate(blob_oids)
-            ],
-        },
-    }
-
-
 def _connector_call_bytes(packet: dict[str, object]) -> int:
     action_args = packet.get("action_args")
     if not isinstance(action_args, dict):
@@ -537,24 +520,30 @@ def _connector_call_bytes(packet: dict[str, object]) -> int:
     return len(json.dumps(action_args, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def _split_payload_for_blob_calls(
+def _split_payload_for_file_calls(
     repo: Path,
     github_repository: str,
+    publish_branch: str,
+    request_id: str,
     payload: str,
     call_budget: int,
 ) -> list[dict[str, object]]:
     if call_budget <= 0:
         raise PublishStateError("Connector call budget must be positive")
-    empty = _connector_blob_packet(repo, github_repository, "", 0)
+    empty = _connector_payload_file_packet(
+        repo, github_repository, publish_branch, request_id, "", 0
+    )
     max_chars = call_budget - _connector_call_bytes(empty)
     if max_chars <= 0:
         raise PublishStateError(
-            f"Connector call budget {call_budget} is too small even for an empty blob upload"
+            f"Connector call budget {call_budget} is too small even for an empty payload file upload"
         )
     parts: list[dict[str, object]] = []
     for start in range(0, len(payload), max_chars):
         content = payload[start : start + max_chars]
-        packet = _connector_blob_packet(repo, github_repository, content, len(parts))
+        packet = _connector_payload_file_packet(
+            repo, github_repository, publish_branch, request_id, content, len(parts)
+        )
         size = _connector_call_bytes(packet)
         if size > call_budget:
             raise PublishStateError(
@@ -572,7 +561,7 @@ def _split_payload_for_blob_calls(
         )
     if len(parts) > MAX_BLOB_PARTS:
         raise PublishStateError(
-            f"publish payload needs {len(parts)} blob uploads, exceeding limit {MAX_BLOB_PARTS}; "
+            f"publish payload needs {len(parts)} file uploads, exceeding limit {MAX_BLOB_PARTS}; "
             "publish an earlier coherent target-ref or revise the Connector profile in code with tests"
         )
     return parts
@@ -762,8 +751,9 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     payload = str(prepared["payload_b64"])
-    parts = _split_payload_for_blob_calls(
-        repo, GITHUB_REPOSITORY, payload, CONNECTOR_CALL_BUDGET_BYTES
+    request_id = str(prepared["request_id"])
+    parts = _split_payload_for_file_calls(
+        repo, GITHUB_REPOSITORY, PUBLISH_BRANCH, request_id, payload, CONNECTOR_CALL_BUDGET_BYTES
     )
     upload_packets: list[str] = []
     blob_oids: list[str] = []
@@ -778,18 +768,11 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         blob_oids.append(str(part["oid"]))
         upload_call_bytes.append(int(part["packet_bytes"]))
 
-    root_packet = _connector_payload_root_packet(repo, GITHUB_REPOSITORY, blob_oids)
-    root_call_bytes = _connector_call_bytes(root_packet)
-    if root_call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
-        raise PublishStateError(
-            f"payload root tree needs a {root_call_bytes}-byte Connector call, exceeding "
-            f"the fixed Connector profile {CONNECTOR_CALL_BUDGET_BYTES}-byte budget"
-        )
-    expected_root_oid = str(root_packet["expected_tree_git_oid"])
-    root_path = output_dir / "assemble-payload-root.json"
-    root_path.write_text(
-        json.dumps(root_packet, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    expected_root_oid = _git_tree_oid(repo, blob_oids)
+    remote_payload_paths = [
+        _payload_file_path(request_id, int(part["index"])) for part in parts
+    ]
+    remote_payload_dir = f".publish/payloads/{request_id}"
 
     submit_request = _transport_request(
         prepared,
@@ -814,7 +797,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     )
 
     state = {
-        "version": 3,
+        "version": 4,
         "stage": "packets-ready",
         "manifest": str(manifest),
         "request_id": prepared["request_id"],
@@ -825,13 +808,14 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "expected_blob_git_oids": blob_oids,
         "expected_payload_tree_git_oid": expected_root_oid,
         "upload_packets": upload_packets,
-        "payload_root_packet": str(root_path),
+        "remote_payload_paths": remote_payload_paths,
+        "remote_payload_dir": remote_payload_dir,
         "submit_request_packet": str(submit_path),
     }
     _write_connector_state(output_dir, state)
     summary = {
         "stage": state["stage"],
-        "strategy": "blob-tree-barrier-then-request",
+        "strategy": "publish-files-barrier-then-request",
         "manifest": str(manifest),
         "request_id": prepared["request_id"],
         "github_repository": GITHUB_REPOSITORY,
@@ -845,8 +829,8 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "upload_call_bytes": upload_call_bytes,
         "upload_packets": upload_packets,
         "expected_blob_git_oids": blob_oids,
-        "payload_root_packet": str(root_path),
-        "root_tree_call_bytes": root_call_bytes,
+        "remote_payload_paths": remote_payload_paths,
+        "remote_payload_dir": remote_payload_dir,
         "expected_payload_tree_git_oid": expected_root_oid,
         "submit_request_packet": str(submit_path),
         "submit_call_bytes": submit_call_bytes,
@@ -855,7 +839,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "request_verified": bool(verified["verified"]),
         "remote_request_path": _request_file_path(str(prepared["request_id"])),
         "remote_receipt_path": _receipt_file_path(str(prepared["request_id"])),
-        "next": "execute every upload packet, then the payload root packet, then the submit request packet",
+        "next": "execute every payload-file upload packet in order, then the submit request packet",
         "verified": True,
     }
     _write_connector_summary(output_dir, summary)

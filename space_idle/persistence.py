@@ -54,6 +54,7 @@ def restore_state(sim, data: dict[str, Any]) -> None:
         if codec.key not in data:
             raise SaveFormatError(f"save state is missing domain section: {codec.key}")
         codec.restore(sim, data[codec.key])
+    sim.logistics.synchronize_surface_access_routes()
     sim.refresh_storage()
     sim.refresh_resource_claims()
 

@@ -225,8 +225,6 @@ class SurfaceInfrastructureService:
         location = self.graph.locations[location_id]
         if cell_id not in location.developed_cell_ids:
             return 0.0
-        if cell_id == location.core_cell_id:
-            return 1.0
         return self.snapshot(location_id, facilities, power, day).fulfillment
 
     def prospective_development_snapshot(

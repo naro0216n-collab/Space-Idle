@@ -114,51 +114,34 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
 def test_operation_asset_disposition_prevents_route_continuation_after_recovery():
     from space_idle.content import base_ids as ids
     from space_idle.logistics import (
-        LandingCapability,
-        OperationAssetDisposition,
-        PoweredAscentCapability,
-        SpaceflightCapability,
-        TransportPerformanceProfile,
+        LandingCapability, OperationAssetDisposition, PoweredAscentCapability,
+        RouteDef, RouteEndpoint, SpaceflightCapability, TransportOperationKind,
+        TransportOperationRequirement, TransportPerformanceProfile,
     )
-    from space_idle.shared import RouteId, SpatialNodeId
-    from space_idle.transport import (
-        RouteDef,
-        RouteEndpoint,
-        TransportOperationKind,
-        TransportOperationRequirement,
-    )
+    from space_idle.shared import RouteId
 
     app = build_game_application()
     sim = app._simulation
-    destination = SpatialNodeId("test.location.asset_disposition_surface")
-    sim.graph.found_location(
-        destination, "Disposition Target", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS
-    )
     route = RouteDef(
-        RouteId("test.route.asset_disposition"),
+        RouteId("test.route.multi_operation_recovery"),
         RouteEndpoint(ids.EARTH, access_cell_id=ids.EARTH_CELL_INDUSTRIAL),
-        RouteEndpoint(destination, access_cell_id=ids.MOON_CELL_FARSIDE_HIGHLANDS),
-        10,
-        (
-            TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 10.0),
-            TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 5.0),
-            TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),
+        RouteEndpoint(ids.LEO, non_surface_interface="operational_node"),
+        transit_days=3,
+        operations=(
+            TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 9.4),
+            TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 0.5),
         ),
     )
     profile = TransportPerformanceProfile(
-        dry_mass_t=10.0,
-        payload_t=1.0,
+        dry_mass_t=10.0, payload_t=1.0,
         operation_capabilities=(
             PoweredAscentCapability(10.0, 11.0, 120000.0, OperationAssetDisposition.ORIGIN),
-            SpaceflightCapability(5.0),
-            LandingCapability(2.5, 2.5, 2000.0),
+            SpaceflightCapability(5.0), LandingCapability(2.5, 2.5, 2000.0),
         ),
     )
-
     failures = sim.logistics.performance_route_failures(route, profile, sim.day)
-
-    assert route.origin_id == ids.EARTH and route.destination_id == destination
     assert "operation:powered_ascent:asset_returns_before_route_complete" in failures
+
 
 def test_transport_endurance_is_profile_level_and_validated():
     app = build_game_application()

@@ -6,7 +6,7 @@ from typing import Callable
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .power import PowerService
-from .shared import DefinitionId, ProjectId, SurfaceCellId
+from .shared import DefinitionId, EntityId, ProjectId, SurfaceCellId
 from .technology import TechnologyState
 from .surface_infrastructure import SurfaceInfrastructureService
 from .construction.models import (
@@ -43,6 +43,7 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     sourcing_wait_days: dict[SourcingPolicy, int]
     surface_infrastructure: SurfaceInfrastructureService | None = None
     surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
+    external_surface_cell_claim_provider: Callable[[SurfaceCellId], EntityId | None] | None = None
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     construction_resource_providers: dict[DefinitionId, ConstructionResourceProviderSpec] = field(default_factory=dict)
     spatial_recipes: dict[DefinitionId, SpatialDevelopmentRecipe] = field(default_factory=dict)

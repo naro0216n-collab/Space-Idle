@@ -3,15 +3,15 @@ from __future__ import annotations
 from .domain_extensions import BASE_DOMAIN_EXTENSIONS
 from ..contracts import ContractService
 from ..facilities import FacilityBook
-from ..industry import IndustryService
 from ..founding import LocationFoundingService
+from ..industry import IndustryService
 from ..inventory import InventoryBook
 from ..logistics import LogisticsService
 from ..maintenance import FacilityMaintenanceService
 from ..power import PowerService
 from ..projects import ProjectService
 from ..research import ResearchService
-from ..shared import AccountState
+from ..shared import AccountState, EntityId
 from ..simulation import Simulation
 from ..storage import StorageService
 from ..surface_infrastructure import SurfaceInfrastructureService
@@ -30,8 +30,8 @@ from ..content.base_construction import (
 )
 from ..content.base_contracts import build_contract_templates
 from ..content.base_facilities import build_facility_definitions, initial_facility_placements, initial_facility_investments
-from ..content.base_industry import build_process_specs
 from ..content.base_founding import build_founding_packages
+from ..content.base_industry import build_process_specs
 from ..content.base_initial_state import configure_initial_inventory
 from ..content.base_power import build_power_specs
 from ..content.base_progression import (
@@ -47,8 +47,9 @@ from ..content.base_storage import build_storage_provider_specs
 from ..content.base_transport import (
     build_external_transport_services,
     build_route_definitions,
+    build_surface_orbit_route_rules,
+    build_surface_route_rules,
     build_vehicle_definitions,
-    build_surface_access_route_rules,
     initial_vehicle_deployments,
 )
 
@@ -76,8 +77,13 @@ def build_base_simulation() -> Simulation:
     power = PowerService(build_power_specs(), environment)
 
     logistics = LogisticsService(
-        build_route_definitions(), inventory, account, facilities, power,
-        surface_access_route_rules=build_surface_access_route_rules(),
+        routes=build_route_definitions(),
+        inventory=inventory,
+        account=account,
+        facilities=facilities,
+        power=power,
+        surface_route_rules=build_surface_route_rules(),
+        surface_orbit_route_rules=build_surface_orbit_route_rules(),
         technology_state=technology,
     )
     logistics.external_services.update(build_external_transport_services())
@@ -108,8 +114,6 @@ def build_base_simulation() -> Simulation:
     for cell_id, resource_id in initial_known_surface_resource_knowledge():
         survey.initialize_known(cell_id, resource_id)
 
-    storage = StorageService(build_storage_provider_specs(), inventory, facilities)
-
     projects = ProjectService(
         recipes=build_construction_recipes(),
         upgrade_recipes=build_facility_upgrade_recipes(),
@@ -125,9 +129,19 @@ def build_base_simulation() -> Simulation:
         spatial_recipes=build_spatial_development_recipes(),
         surface_cell_development_recipe_id=ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
     )
+
     founding = LocationFoundingService(
-        build_founding_packages(), graph, facilities, inventory, storage, logistics, survey
+        build_founding_packages(), facilities, inventory, power, logistics,
+        surface_knowledge_level_provider=survey.cell_knowledge_level,
     )
+    projects.external_surface_cell_claim_provider = lambda cell_id: (
+        None if (project := founding.active_project_for_cell(cell_id)) is None else EntityId(project.id)
+    )
+    founding.external_cell_claim_provider = lambda cell_id: (
+        None if (project := projects.active_spatial_project_for_cell(cell_id)) is None else EntityId(project.id)
+    )
+
+    storage = StorageService(build_storage_provider_specs(), inventory, facilities)
     maintenance = FacilityMaintenanceService(facilities, inventory)
 
     research = ResearchService(
@@ -145,9 +159,10 @@ def build_base_simulation() -> Simulation:
     contracts = ContractService(build_contract_templates(), facilities, logistics, power, account)
 
     sim = Simulation(
-        0, account, graph, environment, inventory, facilities, power, storage,
-        industry, logistics, projects, technology, founding=founding,
-        contracts=contracts, research=research, survey=survey, extraction=extraction,
+        day=0, account=account, graph=graph, environment=environment, inventory=inventory,
+        facilities=facilities, power=power, storage=storage, industry=industry, logistics=logistics,
+        projects=projects, technology=technology, founding=founding, contracts=contracts,
+        research=research, survey=survey, extraction=extraction,
         scientific_exploration=scientific_exploration, maintenance=maintenance,
         surface_infrastructure=surface_infrastructure,
     )

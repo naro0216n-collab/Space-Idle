@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable
 
-from ..shared import CelestialBodyId, DefinitionId, EntityId, RouteId, SpatialNodeId, SurfaceCellId
+from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 
 POWERED_ASCENT = "powered_ascent"
@@ -372,31 +372,6 @@ class RouteEndpoint:
             return str(self.access_cell_id)
         assert self.non_surface_interface is not None
         return self.non_surface_interface
-
-
-@dataclass(frozen=True)
-class SurfaceAccessRouteRule:
-    """Content-owned rule for deriving routes to player-created surface Locations.
-
-    The rule names an existing non-surface node and a celestial body, never a
-    future Location id.  Once a Location exists, the Transport Domain derives
-    concrete routes from this rule and the Location's current access cell.
-    """
-
-    id: DefinitionId
-    node_id: SpatialNodeId
-    body_id: CelestialBodyId
-    descent_operations: tuple[TransportOperationRequirement, ...]
-    ascent_operations: tuple[TransportOperationRequirement, ...]
-    transit_days: int
-    node_requirements: SiteRequirements = SiteRequirements()
-    surface_requirements: SiteRequirements = SiteRequirements()
-
-    def __post_init__(self) -> None:
-        if self.transit_days <= 0:
-            raise ValueError("surface access route transit days must be positive")
-        if not self.descent_operations or not self.ascent_operations:
-            raise ValueError("surface access route rule requires both directions")
 
 
 @dataclass(frozen=True)

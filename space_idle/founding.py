@@ -3,16 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from hashlib import sha256
+import math
+from typing import Callable
 
 from .facilities import FacilityBook, FacilityPlacementScope
 from .inventory import InventoryBook
 from .logistics import LogisticsService
+from .power import PowerService, PowerSnapshot
 from .resource_demand import ResourceDemand
-from .shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .site import SiteRequirements, evaluate_site_requirements
-from .spatial import SpatialGraph
-from .storage import StorageService
-from .survey import SurveyService
 from .transport.models import (
     FleetReservationKind,
     OperationAssetDisposition,
@@ -21,80 +21,67 @@ from .transport.models import (
 
 
 @dataclass(frozen=True)
-class FoundingFacilityDeployment:
-    facility_definition_id: DefinitionId
-    invested_resources: tuple[tuple[DefinitionId, float], ...]
-    place_at_core_cell: bool = False
+class FoundingResourceRequirement:
+    resource_id: DefinitionId
+    amount_t: float
 
     def __post_init__(self) -> None:
-        if any(amount <= 0 for _resource_id, amount in self.invested_resources):
-            raise ValueError("founding facility investment must be positive")
-        resource_ids = [resource_id for resource_id, _amount in self.invested_resources]
-        if len(resource_ids) != len(set(resource_ids)):
-            raise ValueError("founding facility investment contains duplicate resource")
+        if self.amount_t <= 0:
+            raise ValueError("founding resource amount must be positive")
 
 
-class FoundingStagingRelation(str, Enum):
-    ANY = "any"
-    SAME_BODY = "same_body"
+@dataclass(frozen=True)
+class FoundingFacilityDeployment:
+    facility_def_id: DefinitionId
+    invested_resources: tuple[FoundingResourceRequirement, ...] = ()
+    place_at_core_cell: bool = False
 
 
 @dataclass(frozen=True)
 class FoundingPackageDefinition:
     id: DefinitionId
     display_name: str
-    facilities: tuple[FoundingFacilityDeployment, ...]
+    resources: tuple[FoundingResourceRequirement, ...]
+    deployed_facilities: tuple[FoundingFacilityDeployment, ...]
+    preparation_work: float
+    preparation_capability_id: str
     operations: tuple[TransportOperationRequirement, ...]
     transit_days: int
-    preparation_work: float = 0.0
-    initial_inventory: tuple[tuple[DefinitionId, float], ...] = ()
+    site_requirements: SiteRequirements = SiteRequirements()
+    minimum_survey_knowledge_level: int = 0
     required_units: int = 1
-    minimum_survey_knowledge_level: int = 1
-    staging_requirements: SiteRequirements = SiteRequirements()
-    target_requirements: SiteRequirements = SiteRequirements()
-    staging_relation: FoundingStagingRelation = FoundingStagingRelation.ANY
 
     def __post_init__(self) -> None:
-        if not self.display_name.strip():
+        if not self.display_name:
             raise ValueError("founding package display name must not be empty")
-        if not self.facilities:
-            raise ValueError("founding package must deploy at least one facility")
-        if not self.operations:
-            raise ValueError("founding package must define deployment operations")
-        if self.transit_days <= 0:
-            raise ValueError("founding package transit days must be positive")
         if self.preparation_work < 0:
-            raise ValueError("founding package preparation work must be non-negative")
-        if self.required_units <= 0:
-            raise ValueError("founding package required units must be positive")
+            raise ValueError("founding preparation work must be non-negative")
+        if not self.preparation_capability_id:
+            raise ValueError("founding preparation capability must not be empty")
+        if self.transit_days <= 0:
+            raise ValueError("founding transit must be positive")
         if not 0 <= self.minimum_survey_knowledge_level <= 4:
-            raise ValueError("founding package survey knowledge level must be within 0..4")
-        if self.target_requirements.capability_requirements:
-            raise ValueError(
-                "pre-founding target requirements cannot require destination capabilities"
-            )
-        if any(amount <= 0 for _resource_id, amount in self.initial_inventory):
-            raise ValueError("founding initial inventory must be positive")
-        inventory_ids = [resource_id for resource_id, _amount in self.initial_inventory]
-        if len(inventory_ids) != len(set(inventory_ids)):
-            raise ValueError("founding initial inventory contains duplicate resource")
-
-    @property
-    def resource_requirements(self) -> tuple[tuple[DefinitionId, float], ...]:
-        totals: dict[DefinitionId, float] = {}
-        for deployment in self.facilities:
-            for resource_id, amount in deployment.invested_resources:
-                totals[resource_id] = totals.get(resource_id, 0.0) + amount
-        for resource_id, amount in self.initial_inventory:
-            totals[resource_id] = totals.get(resource_id, 0.0) + amount
-        return tuple(sorted(totals.items(), key=lambda row: str(row[0])))
+            raise ValueError("founding survey knowledge must be within 0..4")
+        if self.required_units <= 0:
+            raise ValueError("founding required units must be positive")
 
     @property
     def payload_t(self) -> float:
-        return sum(amount for _resource_id, amount in self.resource_requirements)
+        return math.fsum(req.amount_t for req in self.resources)
+
+    @property
+    def payload_t_per_unit(self) -> float:
+        return self.payload_t / self.required_units
+
+    def investment_totals(self) -> dict[DefinitionId, float]:
+        totals: dict[DefinitionId, float] = {}
+        for deployment in self.deployed_facilities:
+            for req in deployment.invested_resources:
+                totals[req.resource_id] = totals.get(req.resource_id, 0.0) + req.amount_t
+        return totals
 
 
-class FoundingProjectStatus(str, Enum):
+class FoundingStatus(str, Enum):
     PREPARING = "preparing"
     DEPLOYING = "deploying"
     COMPLETE = "complete"
@@ -103,50 +90,52 @@ class FoundingProjectStatus(str, Enum):
 
 @dataclass
 class LocationFoundingProject:
-    id: EntityId
-    package_id: DefinitionId
-    staging_location_id: SpatialNodeId
-    target_cell_id: SurfaceCellId
-    new_location_id: SpatialNodeId
+    id: ProjectId
+    staging_node_id: SpatialNodeId
     display_name: str
+    target_body_id: CelestialBodyId
+    target_core_cell_id: SurfaceCellId
+    new_location_id: SpatialNodeId
+    founding_package_id: DefinitionId
     vehicle_definition_id: DefinitionId
     priority: int = 50
-    status: FoundingProjectStatus = FoundingProjectStatus.PREPARING
+    preferred_source_id: SpatialNodeId | None = None
+    status: FoundingStatus = FoundingStatus.PREPARING
     preparation_done: float = 0.0
-    progress_days: float = 0.0
     inputs_consumed: bool = False
     paused: bool = False
-    created_day: int = 0
-    completed_facility_ids: tuple[EntityId, ...] = ()
+    departure_day: int | None = None
+    arrival_day: int | None = None
+    completed_day: int | None = None
+
+
+@dataclass(frozen=True)
+class FoundingBlocker:
+    code: str
+    detail: str
 
 
 @dataclass
 class LocationFoundingService:
-    definitions: dict[DefinitionId, FoundingPackageDefinition]
-    graph: SpatialGraph
+    packages: dict[DefinitionId, FoundingPackageDefinition]
     facilities: FacilityBook
     inventory: InventoryBook
-    storage: StorageService
+    power: PowerService
     logistics: LogisticsService
-    survey: SurveyService | None = None
-    projects: dict[EntityId, LocationFoundingProject] = field(default_factory=dict)
+    surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
+    external_cell_claim_provider: Callable[[SurfaceCellId], EntityId | None] | None = None
+    projects: dict[ProjectId, LocationFoundingProject] = field(default_factory=dict)
     _counter: int = 0
 
-    @staticmethod
-    def _reservation_id(project_id: EntityId) -> EntityId:
-        return EntityId(f"location_founding:{project_id}")
-
-    @staticmethod
-    def _resource_demand_id(project_id: EntityId, resource_id: DefinitionId) -> EntityId:
-        return EntityId(f"demand.location_founding:{project_id}:{resource_id}")
-
-    def _generated_location_id(
-        self, body_id: CelestialBodyId, core_cell_id: SurfaceCellId
-    ) -> SpatialNodeId:
-        digest = sha256(f"{body_id}\0{core_cell_id}".encode("utf-8")).hexdigest()[:24]
+    def _generated_location_id(self, body_id: CelestialBodyId, cell_id: SurfaceCellId) -> SpatialNodeId:
+        digest = sha256(f"{body_id}\0{cell_id}".encode("utf-8")).hexdigest()[:24]
         base = f"player.location.{digest}"
-        occupied = set(self.graph.operational_node_ids())
-        occupied.update(project.new_location_id for project in self.projects.values())
+        occupied = set(self.facilities.environment.graph.operational_node_ids())
+        occupied.update(
+            p.new_location_id
+            for p in self.projects.values()
+            if p.status in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}
+        )
         candidate = SpatialNodeId(base)
         suffix = 2
         while candidate in occupied:
@@ -154,388 +143,297 @@ class LocationFoundingService:
             suffix += 1
         return candidate
 
+    @staticmethod
+    def fleet_reservation_id(project_id: ProjectId) -> EntityId:
+        return EntityId(f"founding.fleet:{project_id}")
+
+    @staticmethod
+    def demand_id(project_id: ProjectId, resource_id: DefinitionId) -> EntityId:
+        return EntityId(f"demand.founding:{project_id}:{resource_id}")
+
     def active_project_for_cell(self, cell_id: SurfaceCellId) -> LocationFoundingProject | None:
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
-            if (
-                project.target_cell_id == cell_id
-                and project.status not in {FoundingProjectStatus.COMPLETE, FoundingProjectStatus.CANCELLED}
-            ):
+            if project.target_core_cell_id == cell_id and project.status in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}:
                 return project
         return None
 
-    def _survey_level(self, cell_id: SurfaceCellId) -> int:
-        if self.survey is None:
-            return 0
-        return self.survey.cell_knowledge_level(cell_id)
-
-    def definition_failures(
+    def planning_failures(
         self,
+        staging_node_id: SpatialNodeId,
+        body_id: CelestialBodyId,
+        cell_id: SurfaceCellId,
         package_id: DefinitionId,
-        staging_location_id: SpatialNodeId,
-        target_cell_id: SurfaceCellId,
         vehicle_definition_id: DefinitionId,
-        *,
         day: int = 0,
-        check_fleet_availability: bool = True,
-        exclude_project_id: EntityId | None = None,
-    ) -> tuple[tuple[str, str], ...]:
-        failures: list[tuple[str, str]] = []
-        package = self.definitions.get(package_id)
+        power: PowerSnapshot | None = None,
+    ) -> tuple[FoundingBlocker, ...]:
+        graph = self.facilities.environment.graph
+        failures: list[FoundingBlocker] = []
+        for code, detail in graph.location_foundation_failures(body_id, cell_id):
+            failures.append(FoundingBlocker(code, detail))
+        active = self.active_project_for_cell(cell_id)
+        if active is not None:
+            failures.append(FoundingBlocker("founding_active", str(active.id)))
+        if self.external_cell_claim_provider is not None:
+            owner = self.external_cell_claim_provider(cell_id)
+            if owner is not None:
+                failures.append(FoundingBlocker("cell_claimed", str(owner)))
+        package = self.packages.get(package_id)
         if package is None:
-            return (("founding_package", f"unknown package: {package_id}"),)
-        if not self.graph.has_operational_node(staging_location_id):
-            failures.append(("staging_node", f"unknown operational node: {staging_location_id}"))
+            failures.append(FoundingBlocker("founding_package", str(package_id)))
             return tuple(failures)
-        target = self.graph.surface_cells.get(target_cell_id)
-        if target is None:
-            failures.append(("target_cell", f"unknown surface cell: {target_cell_id}"))
+        if not graph.has_operational_node(staging_node_id):
+            failures.append(FoundingBlocker("staging_node", str(staging_node_id)))
             return tuple(failures)
-        staging = self.graph.operational_node(staging_location_id)
-        if (
-            package.staging_relation is FoundingStagingRelation.SAME_BODY
-            and staging.body_id != target.body_id
-        ):
-            failures.append((
-                "staging_relation",
-                f"package requires same-body staging: {staging.body_id}!={target.body_id}",
-            ))
-        failures.extend(self.graph.location_foundation_failures(target.body_id, target_cell_id))
-        active = self.active_project_for_cell(target_cell_id)
-        if active is not None and active.id != exclude_project_id:
-            failures.append(("active_founding_project", str(active.id)))
-        actual_level = self._survey_level(target_cell_id)
-        if actual_level < package.minimum_survey_knowledge_level:
-            failures.append((
-                "survey_knowledge",
-                f"level={actual_level}/{package.minimum_survey_knowledge_level}",
-            ))
+        if self.surface_knowledge_level_provider is not None:
+            actual = self.surface_knowledge_level_provider(cell_id)
+            if actual < package.minimum_survey_knowledge_level:
+                failures.append(FoundingBlocker("survey_knowledge", f"{actual}/{package.minimum_survey_knowledge_level}"))
+        snapshot = power if power is not None else self.power.snapshot(staging_node_id, self.facilities, day)
+        if self.facilities.available_capability_capacity_at(staging_node_id, package.preparation_capability_id, snapshot, day) <= 1e-12:
+            failures.append(FoundingBlocker("staging_capability", package.preparation_capability_id))
         for failure in evaluate_site_requirements(
-            package.target_requirements,
-            staging_location_id,
+            package.site_requirements,
+            staging_node_id,
             day,
             self.facilities.environment,
             self.facilities,
-            None,
-            environment_context_id=target_cell_id,
+            snapshot,
+            environment_context_id=cell_id,
         ):
-            failures.append((failure.code, failure.detail))
-        for failure in self.logistics.deployment_failures(
-            vehicle_definition_id,
-            staging_location_id,
-            target_cell_id,
-            package.operations,
-            package.transit_days,
-            package.payload_t,
-            staging_requirements=package.staging_requirements,
-            target_requirements=package.target_requirements,
-            day=day,
-        ):
-            failures.append(("transport", failure))
-        if check_fleet_availability and vehicle_definition_id in self.logistics.vehicle_defs:
-            free = self.logistics.fleet_free_units(vehicle_definition_id, staging_location_id)
-            if free < package.required_units:
-                failures.append(("fleet_units", f"{free}/{package.required_units}"))
-        return tuple(dict.fromkeys(failures))
-
-    def compatible_vehicle_options(
-        self,
-        package_id: DefinitionId,
-        staging_location_id: SpatialNodeId,
-        target_cell_id: SurfaceCellId,
-        *,
-        day: int = 0,
-    ) -> tuple[tuple[DefinitionId, tuple[tuple[str, str], ...]], ...]:
-        return tuple(
-            (
+            failures.append(FoundingBlocker(failure.code, failure.detail))
+        if vehicle_definition_id not in self.logistics.vehicle_defs:
+            failures.append(FoundingBlocker("vehicle_definition", str(vehicle_definition_id)))
+            return tuple(failures)
+        failures.extend(
+            FoundingBlocker("deployment_vehicle", detail)
+            for detail in self.logistics.deployment_vehicle_failures(
                 vehicle_definition_id,
-                self.definition_failures(
-                    package_id,
-                    staging_location_id,
-                    target_cell_id,
-                    vehicle_definition_id,
-                    day=day,
-                ),
+                staging_node_id,
+                cell_id,
+                package.operations,
+                package.payload_t_per_unit,
+                package.transit_days,
+                day=day,
             )
-            for vehicle_definition_id in sorted(self.logistics.vehicle_defs, key=str)
         )
+        free = self.logistics.fleet_free_units(vehicle_definition_id, staging_node_id)
+        if free < package.required_units:
+            failures.append(FoundingBlocker("fleet_units", f"{free}/{package.required_units}"))
+        return tuple(failures)
 
-    def start(
+    def plan(
         self,
-        package_id: DefinitionId,
-        staging_location_id: SpatialNodeId,
-        target_cell_id: SurfaceCellId,
+        staging_node_id: SpatialNodeId,
         display_name: str,
+        body_id: CelestialBodyId,
+        cell_id: SurfaceCellId,
+        package_id: DefinitionId,
         vehicle_definition_id: DefinitionId,
         *,
         priority: int = 50,
+        preferred_source_id: SpatialNodeId | None = None,
         day: int = 0,
-    ) -> EntityId:
-        if not display_name.strip():
+    ) -> ProjectId:
+        if not display_name:
             raise ValueError("location display name must not be empty")
-        if not 0 <= priority <= 100:
-            raise ValueError("founding priority must be within 0..100")
-        failures = self.definition_failures(
-            package_id,
-            staging_location_id,
-            target_cell_id,
-            vehicle_definition_id,
-            day=day,
-        )
+        if preferred_source_id is not None:
+            if not self.facilities.environment.graph.has_operational_node(preferred_source_id):
+                raise KeyError(preferred_source_id)
+            if preferred_source_id == staging_node_id:
+                raise ValueError("preferred source must differ from staging node")
+        failures = self.planning_failures(staging_node_id, body_id, cell_id, package_id, vehicle_definition_id, day)
         if failures:
-            raise ValueError("; ".join(f"{code}: {detail}" for code, detail in failures))
-        package = self.definitions[package_id]
-        body_id = self.graph.surface_cells[target_cell_id].body_id
+            raise ValueError("; ".join(f"{row.code}: {row.detail}" for row in failures))
         self._counter += 1
-        project_id = EntityId(f"founding.{self._counter}")
-        location_id = self._generated_location_id(body_id, target_cell_id)
-        reservation_id = self._reservation_id(project_id)
-        self.logistics.reserve_fleet_units(
-            reservation_id,
+        project_id = ProjectId(f"founding.{self._counter}")
+        project = LocationFoundingProject(
             project_id,
+            staging_node_id,
+            display_name,
+            body_id,
+            cell_id,
+            self._generated_location_id(body_id, cell_id),
+            package_id,
+            vehicle_definition_id,
+            priority,
+            preferred_source_id,
+        )
+        self.projects[project_id] = project
+        package = self.packages[package_id]
+        self.logistics.reserve_fleet_units(
+            self.fleet_reservation_id(project_id),
+            EntityId(project_id),
             FleetReservationKind.SPECIAL_MISSION,
             vehicle_definition_id,
-            staging_location_id,
+            staging_node_id,
             package.required_units,
-        )
-        self.projects[project_id] = LocationFoundingProject(
-            id=project_id,
-            package_id=package_id,
-            staging_location_id=staging_location_id,
-            target_cell_id=target_cell_id,
-            new_location_id=location_id,
-            display_name=display_name.strip(),
-            vehicle_definition_id=vehicle_definition_id,
-            priority=priority,
-            created_day=day,
         )
         return project_id
 
-    def set_priority(self, project_id: EntityId, priority: int) -> None:
-        if not 0 <= priority <= 100:
-            raise ValueError("founding project priority must be within 0..100")
-        project = self.projects[project_id]
-        if project.status is not FoundingProjectStatus.PREPARING:
-            raise ValueError("only preparing founding projects can be reprioritized")
-        project.priority = priority
+    def _required_resources(self, project: LocationFoundingProject) -> dict[DefinitionId, float]:
+        package = self.packages[project.founding_package_id]
+        totals: dict[DefinitionId, float] = {}
+        for req in package.resources:
+            totals[req.resource_id] = totals.get(req.resource_id, 0.0) + req.amount_t
+        propellant = self.logistics.deployment_propellant_t(
+            project.vehicle_definition_id,
+            package.operations,
+            package.payload_t_per_unit,
+        ) * package.required_units
+        perf = self.logistics.vehicle_defs[project.vehicle_definition_id].performance
+        if perf.propellant_resource_id is not None and propellant > 1e-12:
+            totals[perf.propellant_resource_id] = totals.get(perf.propellant_resource_id, 0.0) + propellant
+        return totals
 
-    def pause(self, project_id: EntityId) -> None:
-        project = self.projects[project_id]
-        if project.status in {FoundingProjectStatus.COMPLETE, FoundingProjectStatus.CANCELLED}:
-            raise ValueError("completed/cancelled founding project cannot be paused")
-        project.paused = True
-
-    def resume(self, project_id: EntityId) -> None:
-        project = self.projects[project_id]
-        if project.status in {FoundingProjectStatus.COMPLETE, FoundingProjectStatus.CANCELLED}:
-            raise ValueError("completed/cancelled founding project cannot be resumed")
-        project.paused = False
-
-    def cancel(self, project_id: EntityId, *, day: int = 0) -> None:
-        project = self.projects[project_id]
-        if project.status is FoundingProjectStatus.COMPLETE:
-            raise ValueError("completed founding project cannot be cancelled")
-        if project.status is FoundingProjectStatus.CANCELLED:
-            return
-        if project.inputs_consumed or project.status is FoundingProjectStatus.DEPLOYING:
-            raise ValueError("launched founding deployment cannot be cancelled")
-        self.inventory.release_reservations_by_owner_prefix(f"demand.location_founding:{project_id}:")
-        reservation_id = self._reservation_id(project_id)
-        if self.logistics.fleet_reservation_snapshot(reservation_id) is not None:
-            self.logistics.release_fleet_reservation(reservation_id, day=day)
-        project.status = FoundingProjectStatus.CANCELLED
-
-    def deployment_resource_requirements(
-        self, package_id: DefinitionId, vehicle_definition_id: DefinitionId
-    ) -> tuple[tuple[DefinitionId, float], ...]:
-        package = self.definitions[package_id]
-        totals = dict(package.resource_requirements)
-        propellant_resource_id, propellant_t = self.logistics.deployment_propellant_t(
-            vehicle_definition_id, package.operations, package.payload_t
-        )
-        if propellant_resource_id is not None and propellant_t > 1e-12:
-            totals[propellant_resource_id] = totals.get(propellant_resource_id, 0.0) + propellant_t
-        return tuple(sorted(totals.items(), key=lambda row: str(row[0])))
-
-    def _resource_requirements(
-        self, project: LocationFoundingProject
-    ) -> tuple[tuple[DefinitionId, float], ...]:
-        return self.deployment_resource_requirements(
-            project.package_id, project.vehicle_definition_id
-        )
-
-    def resource_requirements(self, project_id: EntityId) -> tuple[tuple[DefinitionId, float], ...]:
-        return self._resource_requirements(self.projects[project_id])
-
-    def reserved_resource_t(self, project_id: EntityId, resource_id: DefinitionId) -> float:
-        project = self.projects[project_id]
-        return self.inventory.reserved_for(
-            self._resource_demand_id(project.id, resource_id),
-            project.staging_location_id,
-            resource_id,
-        )
-
-    def resource_demands(self, day: int = 0) -> tuple[ResourceDemand, ...]:
-        demands: list[ResourceDemand] = []
+    def resource_demands(self) -> tuple[ResourceDemand, ...]:
+        rows: list[ResourceDemand] = []
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
-            if (
-                project.status is not FoundingProjectStatus.PREPARING
-                or project.paused
-                or project.inputs_consumed
-            ):
+            if project.status is not FoundingStatus.PREPARING or project.inputs_consumed:
                 continue
-            for resource_id, amount_t in self._resource_requirements(project):
-                if amount_t <= 1e-12:
-                    continue
-                demands.append(ResourceDemand(
-                    self._resource_demand_id(project.id, resource_id),
-                    "location_founding",
-                    project.id,
-                    project.staging_location_id,
+            for resource_id, amount in sorted(self._required_resources(project).items(), key=lambda row: str(row[0])):
+                rows.append(ResourceDemand(
+                    self.demand_id(project.id, resource_id),
+                    "founding",
+                    EntityId(project.id),
+                    project.staging_node_id,
                     resource_id,
-                    amount_t,
+                    amount,
                     project.priority,
+                    project.preferred_source_id,
+                    amount,
                 ))
-        return tuple(demands)
+        return tuple(rows)
 
-    def blockers(self, project_id: EntityId, *, day: int = 0) -> tuple[tuple[str, str], ...]:
-        project = self.projects[project_id]
-        if project.status in {FoundingProjectStatus.COMPLETE, FoundingProjectStatus.CANCELLED}:
-            return ()
-        package = self.definitions[project.package_id]
-        blockers: list[tuple[str, str]] = []
-        if project.paused:
-            blockers.append(("manual_pause", "project paused"))
-        if project.status is FoundingProjectStatus.PREPARING:
-            for resource_id, amount_t in self._resource_requirements(project):
-                demand_id = self._resource_demand_id(project.id, resource_id)
-                reserved = self.inventory.reserved_for(
-                    demand_id, project.staging_location_id, resource_id
-                )
-                if reserved + 1e-9 < amount_t:
-                    blockers.append(("resource", f"{resource_id}:{reserved:g}/{amount_t:g}"))
-            blockers.extend(
-                self.definition_failures(
-                    project.package_id,
-                    project.staging_location_id,
-                    project.target_cell_id,
-                    project.vehicle_definition_id,
-                    day=day,
-                    check_fleet_availability=False,
-                    exclude_project_id=project.id,
-                )
-            )
-            reservation = self.logistics.fleet_reservation_snapshot(
-                self._reservation_id(project.id)
-            )
-            if reservation is None:
-                blockers.append(("fleet_reservation", "reserved deployment Fleet is missing"))
-        elif project.status is FoundingProjectStatus.DEPLOYING:
-            if project.progress_days + 1e-9 >= package.transit_days:
-                blockers.append(("completion_pending", "deployment completion is pending"))
-        return tuple(dict.fromkeys(blockers))
-
-    def _consume_inputs(self, project: LocationFoundingProject) -> bool:
-        requirements = self._resource_requirements(project)
-        if not all(
-            self.inventory.reserved_for(
-                self._resource_demand_id(project.id, resource_id),
-                project.staging_location_id,
-                resource_id,
-            ) + 1e-9 >= amount_t
-            for resource_id, amount_t in requirements
-        ):
-            return False
-        for resource_id, amount_t in requirements:
+    def _try_consume_inputs(self, project: LocationFoundingProject) -> bool:
+        required = self._required_resources(project)
+        for resource_id, amount in required.items():
+            demand_id = self.demand_id(project.id, resource_id)
+            if self.inventory.reserved_for(demand_id, project.staging_node_id, resource_id) + 1e-9 < amount:
+                return False
+        for resource_id, amount in required.items():
             self.inventory.consume_reserved(
-                self._resource_demand_id(project.id, resource_id),
-                project.staging_location_id,
-                resource_id,
-                amount_t,
+                self.demand_id(project.id, resource_id), project.staging_node_id, resource_id, amount
             )
         project.inputs_consumed = True
-        project.status = FoundingProjectStatus.DEPLOYING
         return True
+
+    def blockers(self, project_id: ProjectId, day: int = 0, power: PowerSnapshot | None = None) -> tuple[FoundingBlocker, ...]:
+        project = self.projects[project_id]
+        if project.status in {FoundingStatus.COMPLETE, FoundingStatus.CANCELLED}:
+            return ()
+        graph = self.facilities.environment.graph
+        failures: list[FoundingBlocker] = []
+        owner = graph.owner_of_cell(project.target_core_cell_id)
+        if owner is not None:
+            failures.append(FoundingBlocker("cell_owned", str(owner)))
+        if self.external_cell_claim_provider is not None:
+            claimant = self.external_cell_claim_provider(project.target_core_cell_id)
+            if claimant is not None:
+                failures.append(FoundingBlocker("cell_claimed", str(claimant)))
+        if project.status is FoundingStatus.PREPARING:
+            package = self.packages[project.founding_package_id]
+            snapshot = power if power is not None else self.power.snapshot(project.staging_node_id, self.facilities, day)
+            if self.facilities.available_capability_capacity_at(project.staging_node_id, package.preparation_capability_id, snapshot, day) <= 1e-12:
+                failures.append(FoundingBlocker("staging_capability", package.preparation_capability_id))
+            if not project.inputs_consumed:
+                for resource_id, amount in self._required_resources(project).items():
+                    reserved = self.inventory.reserved_for(self.demand_id(project.id, resource_id), project.staging_node_id, resource_id)
+                    if reserved + 1e-9 < amount:
+                        failures.append(FoundingBlocker("resource_shortage", str(resource_id)))
+        return tuple(failures)
+
+    def pause(self, project_id: ProjectId) -> None:
+        project = self.projects[project_id]
+        if project.status is not FoundingStatus.PREPARING:
+            raise ValueError("founding can only pause during preparation")
+        project.paused = True
+
+    def resume(self, project_id: ProjectId) -> None:
+        project = self.projects[project_id]
+        if project.status is not FoundingStatus.PREPARING:
+            raise ValueError("founding can only resume during preparation")
+        project.paused = False
+
+    def set_priority(self, project_id: ProjectId, priority: int) -> None:
+        project = self.projects[project_id]
+        if project.status is not FoundingStatus.PREPARING:
+            raise ValueError("founding priority can only change during preparation")
+        project.priority = priority
+
+    def cancel(self, project_id: ProjectId, day: int = 0) -> None:
+        project = self.projects[project_id]
+        if project.status is not FoundingStatus.PREPARING:
+            raise ValueError("founding cannot be cancelled after deployment begins")
+        reservation_id = self.fleet_reservation_id(project_id)
+        if reservation_id in self.logistics.fleet_reservations:
+            self.logistics.release_fleet_reservation(reservation_id, day=day)
+        project.status = FoundingStatus.CANCELLED
+        project.paused = False
 
     def advance_day(self, day: int) -> None:
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
-            if (
-                project.status in {FoundingProjectStatus.COMPLETE, FoundingProjectStatus.CANCELLED}
-                or project.paused
-            ):
-                continue
-            package = self.definitions[project.package_id]
-            if project.status is FoundingProjectStatus.PREPARING:
-                if self.blockers(project.id, day=day):
+            if project.status is FoundingStatus.PREPARING:
+                if project.paused:
                     continue
-                project.preparation_done = min(
-                    package.preparation_work, project.preparation_done + 1.0
+                if self.blockers(project.id, day):
+                    # Resource shortages are expected until reconciliation can reserve them.
+                    non_resource = [b for b in self.blockers(project.id, day) if b.code != "resource_shortage"]
+                    if non_resource:
+                        continue
+                if not project.inputs_consumed and not self._try_consume_inputs(project):
+                    continue
+                package = self.packages[project.founding_package_id]
+                snapshot = self.power.snapshot(project.staging_node_id, self.facilities, day)
+                capacity = self.facilities.available_capability_capacity_at(
+                    project.staging_node_id, package.preparation_capability_id, snapshot, day
                 )
-                if project.preparation_done + 1e-9 < package.preparation_work:
-                    continue
-                if not self._consume_inputs(project):
-                    continue
-            project.progress_days = min(
-                float(package.transit_days), project.progress_days + 1.0
-            )
-            if project.progress_days + 1e-9 >= package.transit_days:
-                self._complete(project, day)
+                remaining = max(0.0, package.preparation_work - project.preparation_done)
+                project.preparation_done += min(remaining, max(0.0, capacity))
+                if project.preparation_done + 1e-9 >= package.preparation_work:
+                    project.preparation_done = package.preparation_work
+                    project.status = FoundingStatus.DEPLOYING
+                    project.departure_day = day
+                    project.arrival_day = day + package.transit_days
+            elif project.status is FoundingStatus.DEPLOYING:
+                if project.arrival_day is not None and day >= project.arrival_day:
+                    self._complete(project, day)
 
     def _complete(self, project: LocationFoundingProject, day: int) -> None:
-        if project.status is FoundingProjectStatus.COMPLETE:
-            return
-        package = self.definitions[project.package_id]
-        body_id = self.graph.surface_cells[project.target_cell_id].body_id
-        self.graph.found_location(
+        graph = self.facilities.environment.graph
+        if graph.owner_of_cell(project.target_core_cell_id) is not None:
+            raise RuntimeError(f"founding target cell became occupied: {project.target_core_cell_id}")
+        graph.found_location(
             project.new_location_id,
             project.display_name,
-            body_id,
-            project.target_cell_id,
+            project.target_body_id,
+            project.target_core_cell_id,
         )
-        installed: list[EntityId] = []
-        for deployment in package.facilities:
-            definition = self.facilities.definitions[deployment.facility_definition_id]
-            site_cell_id = None
-            if definition.placement_scope is FacilityPlacementScope.SURFACE_CELL:
-                if not deployment.place_at_core_cell:
-                    raise RuntimeError(
-                        f"founding package surface-cell facility lacks placement: {definition.id}"
-                    )
-                site_cell_id = project.target_cell_id
-            elif deployment.place_at_core_cell:
-                raise RuntimeError(
-                    f"founding package location facility unexpectedly requests a cell: {definition.id}"
-                )
-            installed.append(self.facilities.install(
-                deployment.facility_definition_id,
+        package = self.packages[project.founding_package_id]
+        for deployment in package.deployed_facilities:
+            definition = self.facilities.definitions[deployment.facility_def_id]
+            site_cell_id = project.target_core_cell_id if (
+                deployment.place_at_core_cell or definition.placement_scope is FacilityPlacementScope.SURFACE_CELL
+            ) else None
+            self.facilities.install(
+                deployment.facility_def_id,
                 project.new_location_id,
                 site_cell_id=site_cell_id,
-                invested_resources=dict(deployment.invested_resources),
-            ))
-        project.completed_facility_ids = tuple(installed)
-        location_power = self.logistics.power.snapshot(
-            project.new_location_id, self.facilities, day
-        )
-        self.storage.refresh(day, {project.new_location_id: location_power})
-        for resource_id, amount_t in package.initial_inventory:
-            self.inventory.add(project.new_location_id, resource_id, amount_t)
-
-        performance = self.logistics.vehicle_defs[project.vehicle_definition_id].performance
-        disposition = OperationAssetDisposition.DESTINATION
-        for operation in package.operations:
-            current = performance.operation_asset_disposition(operation.operation_type)
-            if current is not None:
-                disposition = current
-                if current is OperationAssetDisposition.ORIGIN:
-                    break
-        final_location = (
-            project.new_location_id
-            if disposition is OperationAssetDisposition.DESTINATION
-            else project.staging_location_id
-        )
-        self.logistics.complete_fleet_reservation(
-            self._reservation_id(project.id),
-            final_location_id=final_location,
-            day=day,
-        )
-        project.status = FoundingProjectStatus.COMPLETE
-        self.logistics.synchronize_surface_access_routes()
+                invested_resources={req.resource_id: req.amount_t for req in deployment.invested_resources},
+            )
+        reservation_id = self.fleet_reservation_id(project.id)
+        if reservation_id in self.logistics.fleet_reservations:
+            disposition = self.logistics.deployment_asset_disposition(
+                project.vehicle_definition_id, package.operations
+            )
+            final_location = (
+                project.new_location_id
+                if disposition is OperationAssetDisposition.DESTINATION
+                else project.staging_node_id
+            )
+            self.logistics.complete_fleet_reservation(
+                reservation_id, final_location_id=final_location, day=day
+            )
+        project.status = FoundingStatus.COMPLETE
+        project.completed_day = day
+        project.paused = False

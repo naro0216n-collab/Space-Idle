@@ -171,33 +171,32 @@ class ProjectProjectorMixin:
             ))
         if sim.founding is not None:
             for project in sorted(sim.founding.projects.values(), key=lambda row: str(row.id)):
-                if location_id is not None and project.staging_location_id != location_id:
+                if location_id is not None and project.staging_node_id != location_id:
                     continue
-                package = sim.founding.definitions[project.package_id]
-                blockers = sim.founding.blockers(project.id, day=sim.day)
+                package = sim.founding.packages[project.founding_package_id]
                 resources = []
-                for resource_id, required_t in sim.founding.resource_requirements(project.id):
-                    reserved_t = sim.founding.reserved_resource_t(project.id, resource_id)
-                    shortage_t = max(0.0, required_t - reserved_t) if not project.inputs_consumed else 0.0
+                required = sim.founding._required_resources(project)
+                for resource_id, amount in sorted(required.items(), key=lambda row: str(row[0])):
+                    reserved = sim.inventory.reserved_for(
+                        sim.founding.demand_id(project.id, resource_id),
+                        project.staging_node_id, resource_id,
+                    ) if not project.inputs_consumed else 0.0
                     resources.append(ProjectResourceRow(
-                        str(resource_id), required_t, reserved_t,
-                        required_t if project.inputs_consumed else 0.0,
-                        shortage_t, None,
-                        None if project.inputs_consumed else f"demand.location_founding:{project.id}:{resource_id}",
+                        str(resource_id), amount, reserved,
+                        amount if project.inputs_consumed else 0.0,
+                        0.0 if project.inputs_consumed else max(0.0, amount - reserved),
+                        None, None,
                     ))
-                target_cell = sim.graph.surface_cells[project.target_cell_id]
-                settings_editable = project.status.value == "preparing"
+                blockers = tuple((b.code, b.detail) for b in sim.founding.blockers(project.id, sim.day))
                 rows.append(ProjectRow(
-                    str(project.id), "location_founding_deployment", str(project.staging_location_id),
-                    None, None, None, project.display_name, project.status, project.paused,
-                    project.priority, "lane_managed", None, settings_editable, False, (), (),
-                    project.progress_days, float(package.transit_days), 0.0, project.inputs_consumed,
-                    None, tuple(resources), blockers, None, str(project.target_cell_id),
-                    str(target_cell.body_id), str(project.new_location_id), 1.0,
-                    tuple(dict.fromkeys(code for code, _detail in blockers)),
-                    str(project.package_id), str(project.vehicle_definition_id),
-                    project.preparation_done, package.preparation_work,
-                    project.progress_days, float(package.transit_days),
+                    str(project.id), "location_founding_deployment", str(project.staging_node_id),
+                    None, None, None, project.display_name, project.status.value, project.paused,
+                    project.priority, "founding",
+                    None if project.preferred_source_id is None else str(project.preferred_source_id),
+                    project.status.value == "preparing", False, (), (),
+                    project.preparation_done, package.preparation_work, 1.0, project.inputs_consumed,
+                    None, tuple(resources), blockers, None, str(project.target_core_cell_id),
+                    str(project.target_body_id), str(project.new_location_id), 1.0, (),
                 ))
         return tuple(rows)
 

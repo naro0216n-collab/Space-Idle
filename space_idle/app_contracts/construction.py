@@ -25,12 +25,14 @@ class PlanFacilityUpgrade:
 
 @dataclass(frozen=True)
 class FoundLocation:
-    package_id: str
-    staging_location_id: str
-    core_cell_id: str
+    staging_node_id: str
     display_name: str
+    body_id: str
+    core_cell_id: str
+    founding_package_id: str
     vehicle_definition_id: str
     priority: int = 50
+    preferred_source_id: str | None = None
 
 
 @dataclass(frozen=True)

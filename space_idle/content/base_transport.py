@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from ..shared import RouteId
-from ..site import SiteRequirements
+from ..shared import DefinitionId, RouteId
 from ..logistics import (
     ExternalTransportServiceDef,
     LandingCapability,
@@ -14,7 +13,6 @@ from ..logistics import (
     RouteEndpoint,
     SpaceflightCapability,
     SurfaceTransportCapability,
-    SurfaceAccessRouteRule,
     TransportOperationKind,
     TransportOperationRequirement,
     TransportPerformanceProfile,
@@ -23,12 +21,11 @@ from ..logistics import (
     VehicleMaintenanceSpec,
     VehicleProductionSpec,
 )
+from ..transport.surface_routes import SurfaceOrbitRouteRule, SurfaceTransportRouteRule
 from . import base_ids as ids
 from . import base_requirements as req
 
-_SURFACE_ACCESS_CELLS = {
-    ids.EARTH: ids.EARTH_CELL_INDUSTRIAL,
-}
+_SURFACE_ACCESS_CELLS = {ids.EARTH: ids.EARTH_CELL_INDUSTRIAL}
 
 
 def _route_endpoint(location_id):
@@ -61,30 +58,30 @@ def build_route_definitions() -> dict:
     return routes
 
 
-def build_surface_access_route_rules() -> tuple[SurfaceAccessRouteRule, ...]:
-    """Rules that connect established surface Locations to existing orbital nodes.
-
-    The rule references the Moon and Lunar Orbit, but never a future Location id.
-    Concrete routes are derived only after the player founds a Location.
-    """
+def build_surface_route_rules() -> tuple[SurfaceTransportRouteRule, ...]:
     return (
-        SurfaceAccessRouteRule(
-            id=ids.LUNAR_ORBIT_SURFACE_ACCESS_RULE,
-            node_id=ids.LUNAR_ORBIT,
-            body_id=ids.MOON,
-            descent_operations=(
-                TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),
-            ),
-            ascent_operations=(
-                TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 1.9),
-            ),
+        SurfaceTransportRouteRule(
+            id=DefinitionId("base.route_rule.surface_transport"),
+            display_name="地表輸送",
+            operation=TransportOperationRequirement(TransportOperationKind.SURFACE_TRANSPORT, 120.0),
+            gateway_capability_id="surface_distribution",
+            transit_days=1,
+        ),
+    )
+
+
+def build_surface_orbit_route_rules() -> tuple[SurfaceOrbitRouteRule, ...]:
+    return (
+        SurfaceOrbitRouteRule(
+            id=DefinitionId("base.route_rule.lunar_surface_orbit"),
+            display_name="月周回軌道",
+            orbit_node_id=ids.LUNAR_ORBIT,
+            descent_operations=(TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),),
+            ascent_operations=(TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 1.9),),
             transit_days=3,
-            node_requirements=SiteRequirements(
-                req.ORBIT_ENV, req._infrastructure_requirements("cargo_transfer")
-            ),
-            surface_requirements=SiteRequirements(
-                req.VACUUM_SURFACE_ENV, req._infrastructure_requirements("surface_distribution")
-            ),
+            gateway_capability_id="surface_distribution",
+            orbit_requirements=req.ORBIT_SITE,
+            surface_requirements=req.SURFACE_SITE,
         ),
     )
 
@@ -201,5 +198,5 @@ def initial_vehicle_deployments() -> tuple[tuple, ...]:
     return (
         (ids.REUSABLE_LAUNCH_VEHICLE, 1, ids.EARTH),
         (ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO),
-        (ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LEO),
+        (ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LUNAR_ORBIT),
     )

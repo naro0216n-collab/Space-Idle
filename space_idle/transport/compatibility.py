@@ -4,12 +4,11 @@ import math
 
 from ..power import PowerSnapshot
 from ..shared import DefinitionId, RouteId, SpatialNodeId, SurfaceCellId
-from ..site import SiteRequirements, evaluate_site_requirements
+from ..site import evaluate_site_requirements
 from ..spatial import AtmosphereField, GravityField, SurfaceField
 from .endpoints import resolve_route_endpoint, route_geometry
 from .models import (
     OperationAssetDisposition,
-    TransportOperationRequirement,
     OperationSupportLocation,
     RouteDef,
     TransportPerformanceProfile,
@@ -19,20 +18,119 @@ from .models import (
 from .operations import OperationEvaluationContext
 from .surface_routes import (
     DERIVED_SURFACE_ACCESS_ROUTE_PREFIX,
+    DERIVED_SURFACE_ORBIT_ROUTE_PREFIX,
     build_derived_surface_access_routes,
 )
 
 
 class TransportCompatibilityMixin:
+    def deployment_propellant_t(
+        self,
+        vehicle_definition_id: DefinitionId,
+        operations,
+        cargo_t: float,
+    ) -> float:
+        performance = self.vehicle_defs[vehicle_definition_id].performance
+        delta_v = sum(operation.delta_v_km_s for operation in operations)
+        return performance.propellant_t_per_total_t_per_km_s * (performance.dry_mass_t + cargo_t) * delta_v
+
+    def deployment_asset_disposition(self, vehicle_definition_id: DefinitionId, operations):
+        performance = self.vehicle_defs[vehicle_definition_id].performance
+        disposition = OperationAssetDisposition.DESTINATION
+        for operation in operations:
+            current = performance.operation_asset_disposition(operation.operation_type)
+            if current is None:
+                continue
+            disposition = current
+            if current is OperationAssetDisposition.ORIGIN:
+                break
+        return disposition
+
+    def deployment_vehicle_failures(
+        self,
+        vehicle_definition_id: DefinitionId,
+        origin_id: SpatialNodeId,
+        target_cell_id: SurfaceCellId,
+        operations,
+        payload_t: float,
+        transit_days: int,
+        *,
+        day: int = 0,
+        provided_destination_capabilities: tuple[str, ...] = (),
+    ) -> tuple[str, ...]:
+        if vehicle_definition_id not in self.vehicle_defs:
+            return (f"vehicle_definition:{vehicle_definition_id}",)
+        performance = self.vehicle_defs[vehicle_definition_id].performance
+        environment = self.facilities.environment
+        graph = environment.graph
+        if not graph.has_operational_node(origin_id):
+            return (f"origin:{origin_id}",)
+        if target_cell_id not in graph.surface_cells:
+            return (f"target_cell:{target_cell_id}",)
+        failures: list[str] = []
+        origin_surface = self._surface_environment(origin_id, day)
+        destination_surface = self._surface_environment(target_cell_id, day)
+        context = OperationEvaluationContext(
+            transit_days=max(1, transit_days),
+            origin_surface=origin_surface,
+            destination_surface=destination_surface,
+            surface_distance_km=None,
+        )
+        present_operations: set[str] = set()
+        for index, operation in enumerate(operations):
+            present_operations.add(operation.operation_type)
+            capability = performance.capability_for(operation.operation_type)
+            failures.extend(self.operation_registry.evaluate(operation, capability, context))
+            if (
+                capability is not None
+                and getattr(capability, "asset_disposition", OperationAssetDisposition.DESTINATION)
+                is OperationAssetDisposition.ORIGIN
+                and index < len(operations) - 1
+            ):
+                failures.append(f"operation:{operation.operation_type}:asset_returns_before_deployment_complete")
+        if payload_t > performance.payload_t + 1e-9:
+            failures.append(f"payload_capacity:{performance.payload_t:g}/{payload_t:g}")
+        failures.extend(performance.endurance_failures(float(transit_days)))
+        for support in performance.operation_support_requirements:
+            if support.operation_type not in present_operations:
+                continue
+            if support.location is OperationSupportLocation.ORIGIN:
+                if not self._has_available_capability(origin_id, support.capability_id, day):
+                    failures.append(
+                        f"operation_support:{support.operation_type}:origin:{support.capability_id}"
+                    )
+            elif support.capability_id not in provided_destination_capabilities:
+                failures.append(
+                    f"operation_support:{support.operation_type}:destination:{support.capability_id}"
+                )
+        if performance.propellant_resource_id is not None:
+            propellant = self.deployment_propellant_t(vehicle_definition_id, operations, payload_t)
+            if propellant > performance.propellant_capacity_t + 1e-9:
+                failures.append(
+                    f"propellant_capacity:{propellant:g}/{performance.propellant_capacity_t:g}"
+                )
+            failures.extend(
+                self.resource_support_failures(
+                    performance, origin_id, performance.propellant_resource_id, day
+                )
+            )
+        return tuple(dict.fromkeys(failures))
+
     def synchronize_surface_access_routes(self) -> None:
         """Refresh derived same-body surface Routes from authoritative Location state."""
         derived = build_derived_surface_access_routes(
-            self.facilities.environment.graph, self.surface_access_route_rules
+            self.facilities.environment.graph,
+            self.facilities,
+            self.surface_route_rules,
+            self.surface_orbit_route_rules,
         )
         stale = tuple(
             route_id
             for route_id in self.routes
-            if str(route_id).startswith(DERIVED_SURFACE_ACCESS_ROUTE_PREFIX)
+            if (
+                str(route_id).startswith(DERIVED_SURFACE_ACCESS_ROUTE_PREFIX)
+                or str(route_id).startswith(DERIVED_SURFACE_ORBIT_ROUTE_PREFIX)
+            )
             and route_id not in derived
         )
         for route_id in stale:
@@ -234,137 +332,6 @@ class TransportCompatibilityMixin:
                     f"propellant_capacity:{minimum_propellant:g}/{performance.propellant_capacity_t:g}"
                 )
         return tuple(failures)
-
-
-    def deployment_propellant_t(
-        self,
-        vehicle_definition_id: DefinitionId,
-        operations: tuple[TransportOperationRequirement, ...],
-        payload_t: float,
-    ) -> tuple[DefinitionId | None, float]:
-        """Return propellant consumed by one pre-Location deployment operation."""
-        performance = self.vehicle_defs[vehicle_definition_id].performance
-        delta_v = sum(operation.delta_v_km_s for operation in operations)
-        amount = (
-            performance.propellant_t_per_total_t_per_km_s
-            * (performance.dry_mass_t + payload_t)
-            * delta_v
-        )
-        return performance.propellant_resource_id, max(0.0, amount)
-
-    def deployment_failures(
-        self,
-        vehicle_definition_id: DefinitionId,
-        staging_location_id: SpatialNodeId,
-        target_cell_id: SurfaceCellId,
-        operations: tuple[TransportOperationRequirement, ...],
-        transit_days: int,
-        payload_t: float,
-        *,
-        staging_requirements: SiteRequirements = SiteRequirements(),
-        target_requirements: SiteRequirements = SiteRequirements(),
-        day: int = 0,
-    ) -> tuple[str, ...]:
-        """Evaluate a one-time deployment to a Surface Cell before a Location exists.
-
-        The target cell is a physical endpoint only: this path deliberately does
-        not invent a destination Inventory, Route node, or Facility container.
-        """
-        failures: list[str] = []
-        graph = self.facilities.environment.graph
-        if vehicle_definition_id not in self.vehicle_defs:
-            return ("unknown_vehicle_definition",)
-        if not graph.has_operational_node(staging_location_id):
-            return (f"unknown_staging_node:{staging_location_id}",)
-        if target_cell_id not in graph.surface_cells:
-            return (f"unknown_target_cell:{target_cell_id}",)
-        if transit_days <= 0:
-            failures.append("deployment_transit_days")
-        if payload_t < -1e-9:
-            failures.append("deployment_payload_negative")
-
-        vehicle = self.vehicle_defs[vehicle_definition_id]
-        performance = vehicle.performance
-        if payload_t > performance.payload_t + 1e-9:
-            failures.append(f"payload:{payload_t:g}/{performance.payload_t:g}")
-
-        effective_days = max(1, round(max(1, transit_days) * performance.transit_time_multiplier))
-        context = OperationEvaluationContext(
-            transit_days=effective_days,
-            origin_surface=self._surface_environment(staging_location_id, day),
-            destination_surface=self._surface_environment(target_cell_id, day),
-        )
-        present_operations: set[str] = set()
-        for index, operation in enumerate(operations):
-            present_operations.add(operation.operation_type)
-            capability = performance.capability_for(operation.operation_type)
-            failures.extend(self.operation_registry.evaluate(operation, capability, context))
-            if (
-                capability is not None
-                and getattr(capability, "asset_disposition", OperationAssetDisposition.DESTINATION)
-                is OperationAssetDisposition.ORIGIN
-                and index < len(operations) - 1
-            ):
-                failures.append(
-                    f"operation:{operation.operation_type}:asset_returns_before_deployment_complete"
-                )
-        failures.extend(performance.endurance_failures(effective_days))
-
-        staging_power = self.power.snapshot(staging_location_id, self.facilities, day)
-        for failure in evaluate_site_requirements(
-            staging_requirements,
-            staging_location_id,
-            day,
-            self.facilities.environment,
-            self.facilities,
-            staging_power,
-        ):
-            failures.append(f"staging:{failure.code}:{failure.detail}")
-        # Founding target capabilities cannot exist yet; target requirements are
-        # therefore restricted to environment and validated as such by Content.
-        for failure in evaluate_site_requirements(
-            target_requirements,
-            staging_location_id,
-            day,
-            self.facilities.environment,
-            self.facilities,
-            staging_power,
-            environment_context_id=target_cell_id,
-        ):
-            failures.append(f"target:{failure.code}:{failure.detail}")
-
-        for support in performance.operation_support_requirements:
-            if support.operation_type not in present_operations:
-                continue
-            if support.location is OperationSupportLocation.DESTINATION:
-                failures.append(
-                    f"operation_support:{support.operation_type}:destination:unavailable_before_founding"
-                )
-                continue
-            if not self._has_available_capability(
-                staging_location_id, support.capability_id, day, power=staging_power
-            ):
-                failures.append(
-                    f"operation_support:{support.operation_type}:origin:{support.capability_id}"
-                )
-
-        propellant_resource_id, propellant_t = self.deployment_propellant_t(
-            vehicle_definition_id, operations, payload_t
-        )
-        if propellant_t > performance.propellant_capacity_t + 1e-9:
-            failures.append(f"propellant_capacity:{propellant_t:g}/{performance.propellant_capacity_t:g}")
-        if propellant_resource_id is not None and propellant_t > 1e-12:
-            failures.extend(
-                f"propellant_support:{failure}"
-                for failure in self.resource_support_failures(
-                    performance,
-                    staging_location_id,
-                    propellant_resource_id,
-                    day,
-                    power=staging_power,
-                )
-            )
-        return tuple(dict.fromkeys(failures))
 
     def vehicle_route_physical_failures(
         self, route_id: RouteId, vehicle_definition_id: DefinitionId, day: int = 0

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, TypeAlias
 
-from ..shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
+from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 
 # Procurement policy controls how long a project waits for inventory already at
@@ -67,7 +67,7 @@ class FacilityUpgradeRecipe:
 
 @dataclass(frozen=True)
 class SpatialDevelopmentRecipe:
-    """Physical inputs and work for founding/expanding a surface Location."""
+    """Physical inputs and work for expanding an established surface Location."""
 
     id: DefinitionId
     display_name: str
@@ -111,9 +111,7 @@ class SurfaceCellDevelopmentTarget:
     cell_id: SurfaceCellId
 
 
-ConstructionTarget: TypeAlias = (
-    NewFacilityTarget | FacilityUpgradeTarget | SurfaceCellDevelopmentTarget
-)
+ConstructionTarget: TypeAlias = NewFacilityTarget | FacilityUpgradeTarget | SurfaceCellDevelopmentTarget
 
 
 @dataclass(frozen=True)
@@ -143,7 +141,8 @@ class ConstructionProject:
     id: ProjectId
     target: ConstructionTarget
     # Existing operational Location/Node that owns procurement and supplies
-    # construction flow. Surface-cell development uses the Location being expanded.
+    # construction flow. For surface-cell development this is the Location being
+    # expanded; for founding it is the explicit staging/provider Location.
     location_id: SpatialNodeId
     priority: int
     sourcing_policy: SourcingPolicy
