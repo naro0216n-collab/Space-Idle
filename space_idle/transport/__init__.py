@@ -1,11 +1,11 @@
 from .models import (
-    POWERED_ASCENT, SPACEFLIGHT, LANDING, ATMOSPHERIC_ENTRY,
+    POWERED_ASCENT, SPACEFLIGHT, LANDING, ATMOSPHERIC_ENTRY, SURFACE_TRANSPORT,
     TransportOperationKind, OperationAssetDisposition, PathPolicy,
     FleetReservationKind, TransportControlMode, CargoFlowStatus,
     OperationSupportLocation, OperationCapability, OperationSupportRequirement,
     ResourceSupportRequirement,
-    TransportOperationRequirement, RouteDef, PoweredAscentCapability,
-    SpaceflightCapability, LandingCapability, AtmosphericEntryCapability,
+    TransportOperationRequirement, RouteEndpoint, RouteDef, PoweredAscentCapability,
+    SpaceflightCapability, LandingCapability, AtmosphericEntryCapability, SurfaceTransportCapability,
     TransportPerformanceProfile, VehicleEconomicsSpec, VehicleProductionSpec,
     VehicleMaintenanceSpec, VehicleDef, ExternalTransportServiceDef,
     FleetPool, FleetReservation, FleetReservationSnapshot, FleetRelocation, FleetRelease,
@@ -18,13 +18,13 @@ from .operations import (
 )
 
 __all__ = [
-    'POWERED_ASCENT', 'SPACEFLIGHT', 'LANDING', 'ATMOSPHERIC_ENTRY',
+    'POWERED_ASCENT', 'SPACEFLIGHT', 'LANDING', 'ATMOSPHERIC_ENTRY', 'SURFACE_TRANSPORT',
     'TransportOperationKind', 'OperationAssetDisposition', 'PathPolicy',
     'FleetReservationKind', 'TransportControlMode', 'CargoFlowStatus',
     'OperationSupportLocation', 'OperationCapability', 'OperationSupportRequirement',
     'ResourceSupportRequirement',
-    'TransportOperationRequirement', 'RouteDef', 'PoweredAscentCapability',
-    'SpaceflightCapability', 'LandingCapability', 'AtmosphericEntryCapability',
+    'TransportOperationRequirement', 'RouteEndpoint', 'RouteDef', 'PoweredAscentCapability',
+    'SpaceflightCapability', 'LandingCapability', 'AtmosphericEntryCapability', 'SurfaceTransportCapability',
     'TransportPerformanceProfile', 'VehicleEconomicsSpec', 'VehicleProductionSpec',
     'VehicleMaintenanceSpec', 'VehicleDef', 'ExternalTransportServiceDef',
     'FleetPool', 'FleetReservation', 'FleetReservationSnapshot', 'FleetRelocation', 'FleetRelease',

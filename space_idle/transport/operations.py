@@ -8,11 +8,13 @@ from .models import (
     LANDING,
     POWERED_ASCENT,
     SPACEFLIGHT,
+    SURFACE_TRANSPORT,
     AtmosphericEntryCapability,
     LandingCapability,
     OperationCapability,
     PoweredAscentCapability,
     SpaceflightCapability,
+    SurfaceTransportCapability,
     TransportOperationRequirement,
 )
 
@@ -22,6 +24,7 @@ class OperationEvaluationContext:
     transit_days: int
     origin_surface: tuple[float, float] | None
     destination_surface: tuple[float, float] | None
+    surface_distance_km: float | None = None
 
 
 OperationEvaluator = Callable[[TransportOperationRequirement, OperationCapability, OperationEvaluationContext], tuple[str, ...]]
@@ -114,10 +117,21 @@ def _atmospheric_entry(req, cap: AtmosphericEntryCapability, ctx: OperationEvalu
     return ()
 
 
+def _surface_transport(req, cap: SurfaceTransportCapability, ctx: OperationEvaluationContext) -> tuple[str, ...]:
+    if ctx.origin_surface is None or ctx.destination_surface is None or ctx.surface_distance_km is None:
+        return (f"operation:{req.operation_type}:same_body_surface_endpoints_required",)
+    if cap.max_distance_km is not None and ctx.surface_distance_km > cap.max_distance_km + 1e-9:
+        return (
+            f"operation:{req.operation_type}:distance:{ctx.surface_distance_km:g}/{cap.max_distance_km:g}",
+        )
+    return ()
+
+
 def build_default_operation_registry() -> OperationEvaluatorRegistry:
     registry = OperationEvaluatorRegistry()
     registry.register(POWERED_ASCENT, PoweredAscentCapability, _powered_ascent)
     registry.register(SPACEFLIGHT, SpaceflightCapability, _spaceflight)
     registry.register(LANDING, LandingCapability, _landing)
     registry.register(ATMOSPHERIC_ENTRY, AtmosphericEntryCapability, _atmospheric_entry)
+    registry.register(SURFACE_TRANSPORT, SurfaceTransportCapability, _surface_transport)
     return registry

@@ -4,13 +4,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable
 
-from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
+from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 
 POWERED_ASCENT = "powered_ascent"
 SPACEFLIGHT = "spaceflight"
 LANDING = "landing"
 ATMOSPHERIC_ENTRY = "atmospheric_entry"
+SURFACE_TRANSPORT = "surface_transport"
 
 
 class TransportOperationKind:
@@ -18,6 +19,7 @@ class TransportOperationKind:
     SPACEFLIGHT = SPACEFLIGHT
     LANDING = LANDING
     ATMOSPHERIC_ENTRY = ATMOSPHERIC_ENTRY
+    SURFACE_TRANSPORT = SURFACE_TRANSPORT
 
 
 class OperationAssetDisposition(str, Enum):
@@ -331,15 +333,65 @@ class TransportOperationRequirement:
 
 
 @dataclass(frozen=True)
+class RouteEndpoint:
+    """Physical locator for one end of a Location-to-Location route.
+
+    The Location remains the economic/logistics node.  The locator only selects
+    the physical interface used to derive environment and geometry.
+    """
+
+    location_id: SpatialNodeId
+    surface_interface_id: EntityId | None = None
+    access_cell_id: SurfaceCellId | None = None
+    non_surface_interface: str | None = None
+
+    def __post_init__(self) -> None:
+        locators = (
+            self.surface_interface_id is not None,
+            self.access_cell_id is not None,
+            self.non_surface_interface is not None,
+        )
+        if sum(locators) != 1:
+            raise ValueError("route endpoint requires exactly one physical locator")
+        if self.non_surface_interface is not None and not self.non_surface_interface:
+            raise ValueError("non-surface route interface must not be empty")
+
+    @property
+    def locator_kind(self) -> str:
+        if self.surface_interface_id is not None:
+            return "surface_interface"
+        if self.access_cell_id is not None:
+            return "access_cell"
+        return "non_surface_interface"
+
+    @property
+    def locator_id(self) -> str:
+        if self.surface_interface_id is not None:
+            return str(self.surface_interface_id)
+        if self.access_cell_id is not None:
+            return str(self.access_cell_id)
+        assert self.non_surface_interface is not None
+        return self.non_surface_interface
+
+
+@dataclass(frozen=True)
 class RouteDef:
     id: RouteId
-    origin_id: SpatialNodeId
-    destination_id: SpatialNodeId
+    origin: RouteEndpoint
+    destination: RouteEndpoint
     transit_days: int
     operations: tuple[TransportOperationRequirement, ...]
     display_name: str | None = None
     origin_requirements: SiteRequirements = SiteRequirements()
     destination_requirements: SiteRequirements = SiteRequirements()
+
+    @property
+    def origin_id(self) -> SpatialNodeId:
+        return self.origin.location_id
+
+    @property
+    def destination_id(self) -> SpatialNodeId:
+        return self.destination.location_id
 
     @property
     def delta_v_km_s(self) -> float:
@@ -376,6 +428,20 @@ class AtmosphericEntryCapability:
     max_surface_pressure_pa: float
     asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=ATMOSPHERIC_ENTRY)
+
+
+@dataclass(frozen=True)
+class SurfaceTransportCapability:
+    speed_km_per_day: float
+    max_distance_km: float | None = None
+    asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
+    operation_type: str = field(init=False, default=SURFACE_TRANSPORT)
+
+    def __post_init__(self) -> None:
+        if self.speed_km_per_day <= 0:
+            raise ValueError("surface transport speed must be positive")
+        if self.max_distance_km is not None and self.max_distance_km <= 0:
+            raise ValueError("surface transport maximum distance must be positive")
 
 
 @dataclass(frozen=True)

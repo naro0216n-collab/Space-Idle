@@ -230,7 +230,7 @@ class FleetAllocationMixin:
             f"vehicle_capability:{capability}"
             for capability in sorted(set(required_vehicle_capabilities) - vehicle_capabilities)
         )
-        travel_days = max(1, round(route.transit_days * definition.transit_time_multiplier))
+        travel_days = self.performance_route_transit_days(route, definition.performance)
         if return_to_origin and definition.route_asset_disposition(route) is OperationAssetDisposition.DESTINATION:
             try:
                 reverse = self._route_path_for_vehicle(
@@ -241,7 +241,7 @@ class FleetAllocationMixin:
                     PathPolicy.FASTEST,
                 )
                 travel_days += sum(
-                    max(1, round(self.routes[route_id].transit_days * definition.transit_time_multiplier))
+                    self.performance_route_transit_days(self.routes[route_id], definition.performance)
                     for route_id in reverse
                 )
             except ValueError as exc:
@@ -385,7 +385,7 @@ class FleetAllocationMixin:
                 ):
                     continue
                 if policy is PathPolicy.FASTEST:
-                    edge = max(1, round(route.transit_days * definition.transit_time_multiplier))
+                    edge = self.performance_route_transit_days(route, definition.performance)
                 elif policy is PathPolicy.LOWEST_PROPELLANT:
                     edge = definition.propellant_t(route, max(definition.max_cargo_for_route(route), 0.0))
                 else:
@@ -558,7 +558,7 @@ class FleetAllocationMixin:
                     f"asset_position:{route.id}:cannot_continue_to_next_route"
                 )
         forward_days = sum(
-            max(1, round(route.transit_days * definition.transit_time_multiplier))
+            self.performance_route_transit_days(route, definition.performance)
             for route in forward_routes
         )
         forward_payload = min(definition.max_cargo_for_route(route) for route in forward_routes)
@@ -599,7 +599,7 @@ class FleetAllocationMixin:
                             f"asset_position:{route.id}:cannot_continue_to_next_route"
                         )
                 reverse_days = sum(
-                    max(1, round(route.transit_days * definition.transit_time_multiplier))
+                    self.performance_route_transit_days(route, definition.performance)
                     for route in reverse_routes
                 )
                 reverse_payload = min(
@@ -633,7 +633,7 @@ class FleetAllocationMixin:
                         direction,
                         True,
                         payload,
-                        max(1, round(route.transit_days * definition.transit_time_multiplier)),
+                        self.performance_route_transit_days(route, definition.performance),
                         loaded_propellant,
                     )
                 )
@@ -1013,7 +1013,7 @@ class FleetAllocationMixin:
                 )
 
         travel_days = sum(
-            max(1, round(route.transit_days * definition.transit_time_multiplier))
+            self.performance_route_transit_days(route, definition.performance)
             for route in routes
         )
         if route_path:

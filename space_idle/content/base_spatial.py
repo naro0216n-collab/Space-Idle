@@ -56,8 +56,8 @@ def _moon_cell(
 
 def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
     graph = SpatialGraph()
-    graph.add_body(CelestialBodyDef(ids.EARTH_BODY, "地球"))
-    graph.add_body(CelestialBodyDef(ids.MOON, "月"))
+    graph.add_body(CelestialBodyDef(ids.EARTH_BODY, "地球", 6371.0))
+    graph.add_body(CelestialBodyDef(ids.MOON, "月", 1737.4))
 
     # Non-surface spatial nodes remain static definitions.
     graph.add(

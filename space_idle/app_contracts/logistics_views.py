@@ -16,6 +16,16 @@ class InfrastructureRequirementRow:
     mode: str
 
 
+
+
+@dataclass(frozen=True)
+class RouteEndpointRow:
+    location_id: str
+    locator_kind: str
+    locator_id: str
+    surface_cell_id: str | None
+
+
 @dataclass(frozen=True)
 class RouteModeRow:
     id: str
@@ -42,6 +52,10 @@ class RouteRow:
     display_name: str
     origin_id: str
     destination_id: str
+    origin_endpoint: RouteEndpointRow
+    destination_endpoint: RouteEndpointRow
+    same_body_surface: bool
+    distance_km: float | None
     available: bool
     service_feasible_now: bool
     transit_days: int

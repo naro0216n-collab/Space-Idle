@@ -17,7 +17,7 @@ from .app_contracts.location_views import (
     EnvironmentFacetRow, ExtractionRow, ExtractionResourceRow, LocationView,
 )
 from .app_contracts.logistics_views import (
-    InfrastructureRequirementRow, RouteModeRow, RouteRow, DirectionalCapacityRow, FleetPoolRow, TransportAllocationRow,
+    InfrastructureRequirementRow, RouteEndpointRow, RouteModeRow, RouteRow, DirectionalCapacityRow, FleetPoolRow, TransportAllocationRow,
     FleetRelocationResourceRequirementRow, FleetRelocationRow, FleetReleaseRow, CargoFlowRow, VehicleProductionOptionRow, VehicleProductionRow,
     ResourceDemandRow, LogisticsLaneRow, LogisticsView, TransportAllocationOptionRow,
     TransportAllocationOptionsView,

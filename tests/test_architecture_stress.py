@@ -65,7 +65,7 @@ def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and
     site_b = SpatialNodeId("test.mars.site_b")
     orbit = SpatialNodeId("test.mars.orbit")
     graph = SpatialGraph()
-    graph.add_body(CelestialBodyDef(mars_body, "火星"))
+    graph.add_body(CelestialBodyDef(mars_body, "火星", 1000.0))
     graph.add_surface_cell(SurfaceCellDef(
         cell_a, mars_body, 100.0, SurfacePoint(5.0, 10.0), frozenset({cell_b}), SurfaceField()
     ))

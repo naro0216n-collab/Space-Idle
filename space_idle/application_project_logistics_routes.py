@@ -3,6 +3,7 @@ from __future__ import annotations
 from .application_transport_support import infrastructure_requirement_rows, vehicle_concept
 from .application_views import (
     DirectionalCapacityRow,
+    RouteEndpointRow,
     RouteModeRow,
     RouteRow,
     RoutesView,
@@ -91,12 +92,10 @@ class LogisticsRouteProjectorMixin:
                         service.capacity_t_per_day, 0.0
                     ),
                     cycle_days=None,
-                    forward_latency_days=max(
-                        1,
-                        round(
-                            route.transit_days
-                            * service.transit_time_multiplier
-                        ),
+                    forward_latency_days=sim.logistics.performance_route_transit_days(
+                        route,
+                        service.performance,
+                        transit_multiplier=service.transit_time_multiplier,
                     ),
                     reverse_latency_days=None,
                     cost_musd_per_t=service.cost_musd_per_t,
@@ -130,12 +129,39 @@ class LogisticsRouteProjectorMixin:
                 continue
             route_blockers = sim.logistics.route_failures(route.id, sim.day)
             mode_rows = self._route_mode_rows(route)
+            try:
+                geometry = sim.logistics.route_geometry(route.id)
+                origin_endpoint = RouteEndpointRow(
+                    str(geometry.origin.location_id), geometry.origin.locator_kind,
+                    geometry.origin.locator_id,
+                    None if geometry.origin.surface_cell_id is None else str(geometry.origin.surface_cell_id),
+                )
+                destination_endpoint = RouteEndpointRow(
+                    str(geometry.destination.location_id), geometry.destination.locator_kind,
+                    geometry.destination.locator_id,
+                    None if geometry.destination.surface_cell_id is None else str(geometry.destination.surface_cell_id),
+                )
+                same_body_surface = geometry.same_body_surface
+                distance_km = geometry.distance_km
+            except ValueError:
+                origin_endpoint = RouteEndpointRow(
+                    str(route.origin_id), route.origin.locator_kind, route.origin.locator_id, None
+                )
+                destination_endpoint = RouteEndpointRow(
+                    str(route.destination_id), route.destination.locator_kind, route.destination.locator_id, None
+                )
+                same_body_surface = False
+                distance_km = None
             rows.append(
                 RouteRow(
                     id=str(route.id),
                     display_name=route.display_name or str(route.id),
                     origin_id=str(route.origin_id),
                     destination_id=str(route.destination_id),
+                    origin_endpoint=origin_endpoint,
+                    destination_endpoint=destination_endpoint,
+                    same_body_surface=same_body_surface,
+                    distance_km=distance_km,
                     available=not route_blockers,
                     service_feasible_now=any(
                         row.service_feasible for row in mode_rows

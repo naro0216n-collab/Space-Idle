@@ -128,6 +128,11 @@ class SpatialNodeKind(str, Enum):
 class CelestialBodyDef:
     id: CelestialBodyId
     display_name: str
+    mean_radius_km: float
+
+    def __post_init__(self) -> None:
+        if self.mean_radius_km <= 0:
+            raise ValueError("celestial body mean radius must be positive")
 
 
 @dataclass(frozen=True)

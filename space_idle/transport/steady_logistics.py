@@ -111,7 +111,11 @@ class SteadyLogisticsMixin:
                         route.origin_id,
                         route.destination_id,
                         service.capacity_t_per_day,
-                        max(1, round(route.transit_days * service.transit_time_multiplier)),
+                        self.performance_route_transit_days(
+                            route,
+                            service.performance,
+                            transit_multiplier=service.transit_time_multiplier,
+                        ),
                         (route.id,),
                         external_service_id=service.id,
                         cost_musd_per_t=service.cost_musd_per_t,

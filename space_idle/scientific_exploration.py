@@ -11,7 +11,7 @@ from .research import ResearchService
 from .resource_demand import ResourceDemand
 from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
-from .transport.models import FleetReservationKind, RouteDef, TransportOperationRequirement
+from .transport.models import FleetReservationKind, RouteDef, RouteEndpoint, TransportOperationRequirement
 
 if TYPE_CHECKING:
     from .logistics import LogisticsService
@@ -21,8 +21,8 @@ if TYPE_CHECKING:
 class ScientificExplorationDefinition:
     id: DefinitionId
     display_name: str
-    origin_id: SpatialNodeId
-    destination_id: SpatialNodeId
+    origin: RouteEndpoint
+    destination: RouteEndpoint
     operations: tuple[TransportOperationRequirement, ...]
     mission_duration_days: int
     duration_days: float
@@ -50,14 +50,22 @@ class ScientificExplorationDefinition:
             raise ValueError("scientific exploration minimum payload must be non-negative")
 
     @property
+    def origin_id(self) -> SpatialNodeId:
+        return self.origin.location_id
+
+    @property
+    def destination_id(self) -> SpatialNodeId:
+        return self.destination.location_id
+
+    @property
     def points_per_day(self) -> float:
         return self.research_points_total / self.duration_days
 
     def compatibility_route(self) -> RouteDef:
         return RouteDef(
             RouteId(f"exploration.route:{self.id}"),
-            self.origin_id,
-            self.destination_id,
+            self.origin,
+            self.destination,
             self.mission_duration_days,
             self.operations,
             display_name=self.display_name,

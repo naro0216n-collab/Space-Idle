@@ -10,6 +10,7 @@ from ..logistics import (
     ResourceSupportRequirement,
     PoweredAscentCapability,
     RouteDef,
+    RouteEndpoint,
     SpaceflightCapability,
     TransportOperationKind,
     TransportOperationRequirement,
@@ -22,22 +23,36 @@ from ..logistics import (
 from . import base_ids as ids
 from . import base_requirements as req
 
+_SURFACE_ACCESS_CELLS = {
+    ids.EARTH: ids.EARTH_CELL_INDUSTRIAL,
+    ids.SOUTH_POLAR_RIDGE: ids.MOON_CELL_SOUTH_POLAR_RIDGE,
+    ids.POLAR_COLD_TRAP: ids.MOON_CELL_POLAR_COLD_TRAP,
+    ids.NEARSIDE_MARE: ids.MOON_CELL_NEARSIDE_MARE,
+}
+
+
+def _route_endpoint(location_id):
+    cell_id = _SURFACE_ACCESS_CELLS.get(location_id)
+    if cell_id is not None:
+        return RouteEndpoint(location_id, access_cell_id=cell_id)
+    return RouteEndpoint(location_id, non_surface_interface="operational_node")
+
 
 def build_route_definitions() -> dict:
     routes = {
         RouteId("base.route.earth_leo"): RouteDef(
-            id=RouteId("base.route.earth_leo"), origin_id=ids.EARTH, destination_id=ids.LEO, transit_days=2,
+            id=RouteId("base.route.earth_leo"), origin=_route_endpoint(ids.EARTH), destination=_route_endpoint(ids.LEO), transit_days=2,
             operations=(TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 9.4),),
             display_name="地球地表→低軌道", origin_requirements=req.SURFACE_SITE, destination_requirements=req.ORBIT_SITE,
         ),
         RouteId("base.route.leo_lunar_orbit"): RouteDef(
-            id=RouteId("base.route.leo_lunar_orbit"), origin_id=ids.LEO, destination_id=ids.LUNAR_ORBIT, transit_days=5,
+            id=RouteId("base.route.leo_lunar_orbit"), origin=_route_endpoint(ids.LEO), destination=_route_endpoint(ids.LUNAR_ORBIT), transit_days=5,
             operations=(TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),),
             display_name="低軌道→月周回軌道",
             origin_requirements=req.ORBIT_SITE, destination_requirements=req.ORBIT_SITE,
         ),
         RouteId("base.route.lunar_orbit_leo"): RouteDef(
-            id=RouteId("base.route.lunar_orbit_leo"), origin_id=ids.LUNAR_ORBIT, destination_id=ids.LEO, transit_days=5,
+            id=RouteId("base.route.lunar_orbit_leo"), origin=_route_endpoint(ids.LUNAR_ORBIT), destination=_route_endpoint(ids.LEO), transit_days=5,
             operations=(TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),),
             display_name="月周回軌道→低軌道",
             origin_requirements=req.ORBIT_SITE, destination_requirements=req.ORBIT_SITE,
@@ -49,19 +64,19 @@ def build_route_definitions() -> dict:
         ("nearside", ids.NEARSIDE_MARE, "表側海地域"),
     ):
         routes[RouteId(f"base.route.lunar_orbit_{suffix}")] = RouteDef(
-            id=RouteId(f"base.route.lunar_orbit_{suffix}"), origin_id=ids.LUNAR_ORBIT, destination_id=surface, transit_days=3,
+            id=RouteId(f"base.route.lunar_orbit_{suffix}"), origin=_route_endpoint(ids.LUNAR_ORBIT), destination=_route_endpoint(surface), transit_days=3,
             operations=(TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),),
             display_name=f"月周回軌道→{label}",
             origin_requirements=req.ORBIT_SITE, destination_requirements=req.SURFACE_SITE,
         )
         routes[RouteId(f"base.route.{suffix}_lunar_orbit")] = RouteDef(
-            id=RouteId(f"base.route.{suffix}_lunar_orbit"), origin_id=surface, destination_id=ids.LUNAR_ORBIT, transit_days=3,
+            id=RouteId(f"base.route.{suffix}_lunar_orbit"), origin=_route_endpoint(surface), destination=_route_endpoint(ids.LUNAR_ORBIT), transit_days=3,
             operations=(TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 1.9),),
             display_name=f"{label}→月周回軌道",
             origin_requirements=req.SURFACE_SITE, destination_requirements=req.ORBIT_SITE,
         )
         routes[RouteId(f"base.route.leo_{suffix}")] = RouteDef(
-            id=RouteId(f"base.route.leo_{suffix}"), origin_id=ids.LEO, destination_id=surface, transit_days=7,
+            id=RouteId(f"base.route.leo_{suffix}"), origin=_route_endpoint(ids.LEO), destination=_route_endpoint(surface), transit_days=7,
             operations=(
                 TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),
                 TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),
@@ -70,7 +85,7 @@ def build_route_definitions() -> dict:
             origin_requirements=req.ORBIT_SITE, destination_requirements=req.SURFACE_SITE,
         )
         routes[RouteId(f"base.route.{suffix}_leo")] = RouteDef(
-            id=RouteId(f"base.route.{suffix}_leo"), origin_id=surface, destination_id=ids.LEO, transit_days=7,
+            id=RouteId(f"base.route.{suffix}_leo"), origin=_route_endpoint(surface), destination=_route_endpoint(ids.LEO), transit_days=7,
             operations=(
                 TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 1.9),
                 TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),
@@ -79,7 +94,7 @@ def build_route_definitions() -> dict:
             origin_requirements=req.SURFACE_SITE, destination_requirements=req.ORBIT_SITE,
         )
         routes[RouteId(f"base.route.earth_{suffix}_direct")] = RouteDef(
-            id=RouteId(f"base.route.earth_{suffix}_direct"), origin_id=ids.EARTH, destination_id=surface, transit_days=8,
+            id=RouteId(f"base.route.earth_{suffix}_direct"), origin=_route_endpoint(ids.EARTH), destination=_route_endpoint(surface), transit_days=8,
             operations=(
                 TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 9.4),
                 TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 3.2),

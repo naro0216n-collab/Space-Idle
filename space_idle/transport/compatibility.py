@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import math
+
 from ..power import PowerSnapshot
 from ..shared import DefinitionId, RouteId, SpatialNodeId
 from ..site import evaluate_site_requirements
 from ..spatial import AtmosphereField, GravityField, SurfaceField
+from .endpoints import resolve_route_endpoint, route_geometry
 from .models import (
     OperationAssetDisposition,
     OperationSupportLocation,
     RouteDef,
     TransportPerformanceProfile,
+    SurfaceTransportCapability,
+    SURFACE_TRANSPORT,
 )
 from .operations import OperationEvaluationContext
 
@@ -52,13 +57,24 @@ class TransportCompatibilityMixin:
         """
         route = self.routes[route_id]
         failures: list[str] = []
-        for prefix, location_id, requirements in (
-            ("origin", route.origin_id, route.origin_requirements),
-            ("destination", route.destination_id, route.destination_requirements),
+        for prefix, endpoint, requirements in (
+            ("origin", route.origin, route.origin_requirements),
+            ("destination", route.destination, route.destination_requirements),
         ):
-            power = self.power.snapshot(location_id, self.facilities, day)
+            try:
+                resolved = resolve_route_endpoint(endpoint, self.facilities)
+            except ValueError as exc:
+                failures.append(f"{prefix}:endpoint:{exc}")
+                continue
+            power = self.power.snapshot(endpoint.location_id, self.facilities, day)
             for failure in evaluate_site_requirements(
-                requirements, location_id, day, self.facilities.environment, self.facilities, power
+                requirements,
+                endpoint.location_id,
+                day,
+                self.facilities.environment,
+                self.facilities,
+                power,
+                environment_context_id=resolved.environment_context_id,
             ):
                 failures.append(f"{prefix}:{failure.code}:{failure.detail}")
         return tuple(failures)
@@ -66,12 +82,30 @@ class TransportCompatibilityMixin:
     def route_available(self, route_id: RouteId, day: int = 0) -> bool:
         return not self.route_failures(route_id, day)
 
-    def _surface_environment(self, location_id: SpatialNodeId, day: int) -> tuple[float, float] | None:
+    def route_geometry(self, route_id: RouteId):
+        return route_geometry(self.routes[route_id], self.facilities)
+
+    def performance_route_transit_days(
+        self,
+        route: RouteDef,
+        performance: TransportPerformanceProfile,
+        *,
+        transit_multiplier: float | None = None,
+    ) -> int:
+        multiplier = performance.transit_time_multiplier if transit_multiplier is None else transit_multiplier
+        if any(operation.operation_type == SURFACE_TRANSPORT for operation in route.operations):
+            capability = performance.capability_for(SURFACE_TRANSPORT)
+            geometry = route_geometry(route, self.facilities)
+            if isinstance(capability, SurfaceTransportCapability) and geometry.distance_km is not None:
+                return max(1, math.ceil(geometry.distance_km * multiplier / capability.speed_km_per_day))
+        return max(1, round(route.transit_days * multiplier))
+
+    def _surface_environment(self, context_id, day: int) -> tuple[float, float] | None:
         environment = self.facilities.environment
-        if environment.get(location_id, SurfaceField, day) is None:
+        if environment.get(context_id, SurfaceField, day) is None:
             return None
-        gravity = environment.get(location_id, GravityField, day)
-        atmosphere = environment.get(location_id, AtmosphereField, day)
+        gravity = environment.get(context_id, GravityField, day)
+        atmosphere = environment.get(context_id, AtmosphereField, day)
         return (
             0.0 if gravity is None else gravity.local_acceleration_m_s2,
             0.0 if atmosphere is None else atmosphere.pressure_pa,
@@ -88,11 +122,19 @@ class TransportCompatibilityMixin:
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[str, ...]:
         failures: list[str] = []
-        multiplier = performance.transit_time_multiplier if transit_multiplier is None else transit_multiplier
+        try:
+            origin_endpoint = resolve_route_endpoint(route.origin, self.facilities)
+            destination_endpoint = resolve_route_endpoint(route.destination, self.facilities)
+            geometry = route_geometry(route, self.facilities)
+        except ValueError as exc:
+            return (f"route_endpoint:{exc}",)
         context = OperationEvaluationContext(
-            transit_days=max(1, round(route.transit_days * multiplier)),
-            origin_surface=self._surface_environment(route.origin_id, day),
-            destination_surface=self._surface_environment(route.destination_id, day),
+            transit_days=self.performance_route_transit_days(
+                route, performance, transit_multiplier=transit_multiplier
+            ),
+            origin_surface=self._surface_environment(origin_endpoint.environment_context_id, day),
+            destination_surface=self._surface_environment(destination_endpoint.environment_context_id, day),
+            surface_distance_km=geometry.distance_km if geometry.same_body_surface else None,
         )
         present_operations: set[str] = set()
         for index, operation in enumerate(route.operations):
@@ -166,13 +208,24 @@ class TransportCompatibilityMixin:
                 transit_multiplier=service.transit_time_multiplier,
             )
         )
-        for prefix, location_id, requirements in (
-            ("origin", route.origin_id, service.origin_requirements),
-            ("destination", route.destination_id, service.destination_requirements),
+        for prefix, endpoint, requirements in (
+            ("origin", route.origin, service.origin_requirements),
+            ("destination", route.destination, service.destination_requirements),
         ):
-            power = self.power.snapshot(location_id, self.facilities, day)
+            try:
+                resolved = resolve_route_endpoint(endpoint, self.facilities)
+            except ValueError as exc:
+                failures.append(f"{prefix}:endpoint:{exc}")
+                continue
+            power = self.power.snapshot(endpoint.location_id, self.facilities, day)
             for failure in evaluate_site_requirements(
-                requirements, location_id, day, self.facilities.environment, self.facilities, power
+                requirements,
+                endpoint.location_id,
+                day,
+                self.facilities.environment,
+                self.facilities,
+                power,
+                environment_context_id=resolved.environment_context_id,
             ):
                 failures.append(f"{prefix}:{failure.code}:{failure.detail}")
         return tuple(failures)
