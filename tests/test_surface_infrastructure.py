@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import json
 
-from space_idle import GetLocation, build_game_application
+from space_idle import AdvanceTime, DevelopSurfaceCell, GetLocation, GetProjects, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
 from space_idle.surface_infrastructure import SURFACE_DISTRIBUTION_CAPABILITY
@@ -128,6 +128,29 @@ def test_remote_surface_facility_available_capability_uses_surface_infrastructur
         ids.EARTH, "surface_survey", power, sim.day
     ) > 0.0
     assert station_id in sim.facilities.facilities
+
+
+def test_surface_cell_development_progress_is_limited_by_surface_infrastructure():
+    app = build_game_application()
+    sim = app._simulation
+    project_id = app.execute(DevelopSurfaceCell(
+        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"
+    )).created_id
+    assert project_id is not None
+
+    app.execute(AdvanceTime(12))
+    project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
+    assert project.construction_done == 0.0
+    assert project.construction_fulfillment == 0.0
+    assert project.limiting_factors == ("surface_infrastructure",)
+    assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
+
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    app.execute(AdvanceTime(12))
+    project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
+    assert project.construction_done > 0.0
+    assert project.construction_fulfillment == 1.0
+    assert project.limiting_factors == ()
 
 
 def test_surface_map_exposes_projected_infrastructure_limit_for_cell_development():

@@ -22,6 +22,7 @@ from space_idle.shared import SpatialNodeId
 def test_surface_cell_development_changes_territory_only_after_project_completion():
     app = build_game_application()
     sim = app._simulation
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
     before = {
         resource_id: sim.inventory.amount(ids.EARTH, resource_id)
         for resource_id in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY, ids.CONSTRUCTION_EQUIPMENT)
@@ -118,6 +119,7 @@ def test_surface_map_exposes_project_costs_blockers_and_active_project():
 def test_mid_project_save_load_preserves_geographic_target_and_future_transition(tmp_path):
     assert SAVE_SCHEMA_VERSION == 31
     app = build_game_application()
+    app._simulation.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
     project_id = app.execute(DevelopSurfaceCell(
         str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"
     )).created_id

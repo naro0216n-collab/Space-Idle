@@ -10,6 +10,7 @@ from .models import (
     LocationFoundingTarget,
     NewFacilityTarget,
     ProjectRecipe,
+    ProjectStatus,
     SurfaceCellDevelopmentTarget,
 )
 
@@ -234,6 +235,44 @@ class ConstructionRulesMixin:
                 site_cell_id=project.site_cell_id,
             )
         return self.spatial_project_failures(project, day, power)
+
+    def project_construction_fulfillment(
+        self,
+        project: ConstructionProject,
+        power: PowerSnapshot,
+        day: int = 0,
+    ) -> float:
+        """Return the spatial service factor applied to construction work.
+
+        Ordinary facility construction and Location founding use the host's
+        construction capacity directly. Expanding an existing surface Location
+        additionally depends on the aggregate Surface Infrastructure needed by
+        the prospective territory. The factor is derived, never persisted.
+        """
+        if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
+            return 1.0
+        if not isinstance(project.target, SurfaceCellDevelopmentTarget):
+            return 1.0
+        service = self.surface_infrastructure
+        if service is None:
+            return 1.0
+        try:
+            snapshot = service.prospective_development_snapshot(
+                project.location_id, project.target.cell_id, self.facilities, power, day
+            )
+        except (KeyError, ValueError):
+            return 0.0
+        return max(0.0, min(1.0, snapshot.fulfillment))
+
+    def project_limiting_factors(
+        self,
+        project: ConstructionProject,
+        power: PowerSnapshot,
+        day: int = 0,
+    ) -> tuple[str, ...]:
+        if self.project_construction_fulfillment(project, power, day) < 1.0 - 1e-9:
+            return ("surface_infrastructure",)
+        return ()
 
     def construction_capacity_at(self, location_id: SpatialNodeId, power: PowerSnapshot, day: int) -> float:
         capacity = 0.0

@@ -7,6 +7,7 @@ from .inventory import InventoryBook
 from .power import PowerService
 from .shared import DefinitionId, ProjectId
 from .technology import TechnologyState
+from .surface_infrastructure import SurfaceInfrastructureService
 from .construction.models import (
     ProjectStatus,
     BuildResourceRequirement,
@@ -40,6 +41,7 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     facilities: FacilityBook
     power: PowerService
     sourcing_wait_days: dict[SourcingPolicy, int]
+    surface_infrastructure: SurfaceInfrastructureService | None = None
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     construction_resource_providers: dict[DefinitionId, ConstructionResourceProviderSpec] = field(default_factory=dict)
     spatial_recipes: dict[DefinitionId, SpatialDevelopmentRecipe] = field(default_factory=dict)

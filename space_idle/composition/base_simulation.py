@@ -83,6 +83,13 @@ def build_base_simulation() -> Simulation:
 
     industry = IndustryService(build_process_specs())
 
+    surface_infrastructure = SurfaceInfrastructureService(graph)
+    facilities.availability_factor_provider = (
+        lambda location_id, capability_id, power_snapshot, day: surface_infrastructure.facility_availability_factors(
+            location_id, capability_id, facilities, power_snapshot, day
+        )
+    )
+
     projects = ProjectService(
         recipes=build_construction_recipes(),
         upgrade_recipes=build_facility_upgrade_recipes(),
@@ -91,6 +98,7 @@ def build_base_simulation() -> Simulation:
         facilities=facilities,
         power=power,
         sourcing_wait_days=sourcing_wait_days(),
+        surface_infrastructure=surface_infrastructure,
         technology_state=technology,
         construction_resource_providers=build_construction_resource_providers(),
         spatial_recipes=build_spatial_development_recipes(),
@@ -112,12 +120,6 @@ def build_base_simulation() -> Simulation:
     survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph)
     for cell_id, resource_id in initial_known_surface_resource_knowledge():
         survey.initialize_known(cell_id, resource_id)
-    surface_infrastructure = SurfaceInfrastructureService(graph)
-    facilities.availability_factor_provider = (
-        lambda location_id, capability_id, power_snapshot, day: surface_infrastructure.facility_availability_factors(
-            location_id, capability_id, facilities, power_snapshot, day
-        )
-    )
     extraction = ExtractionService(build_extraction_specs(), graph, surface_infrastructure)
 
     # Keep the Contract Domain composed and available for future events,

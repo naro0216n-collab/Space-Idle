@@ -77,6 +77,8 @@ class ProjectRow:
     target_cell_id: str | None = None
     target_body_id: str | None = None
     target_location_id: str | None = None
+    construction_fulfillment: float = 1.0
+    limiting_factors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -151,6 +151,13 @@ class ProjectProjectorMixin:
                 target_location_id = str(project.location_id)
                 display_name = recipe.display_name
 
+            construction_fulfillment = sim.projects.project_construction_fulfillment(
+                project, project_power, sim.day
+            )
+            limiting_factors = sim.projects.project_limiting_factors(
+                project, project_power, sim.day
+            )
+
             rows.append(ProjectRow(
                 str(project.id), target_kind, str(project.location_id),
                 None if facility_definition_id is None else str(facility_definition_id),
@@ -166,6 +173,7 @@ class ProjectProjectorMixin:
                 tuple(resources), blockers,
                 None if project.site_cell_id is None else str(project.site_cell_id),
                 target_cell_id, target_body_id, target_location_id,
+                construction_fulfillment, limiting_factors,
             ))
         return tuple(rows)
 

@@ -116,19 +116,33 @@ class ConstructionExecutionMixin:
                     project.id: remaining_capacity * project.construction_weight / total_weight
                     for project in active
                 }
-                used = 0.0
+                spent_capacity = 0.0
                 completed: list[ConstructionProject] = []
                 for project in sorted(active, key=lambda row: (-row.priority, str(row.id))):
                     recipe = self._recipe_for_project(project)
                     remaining_work = max(0.0, recipe.construction_work - project.construction_done)
-                    work = min(allocations[project.id], remaining_work)
-                    if work <= 1e-12:
+                    if remaining_work <= 1e-12:
                         completed.append(project)
+                        continue
+                    allocation = allocations[project.id]
+                    fulfillment = self.project_construction_fulfillment(project, power, day)
+                    if fulfillment <= 1e-12:
+                        # The assigned construction flow cannot reach the target
+                        # territory. Keep the assignment consumed so another
+                        # project does not silently steal the player's explicit
+                        # construction weight.
+                        spent_capacity += allocation
+                        continue
+                    capacity_needed = remaining_work / fulfillment
+                    spent = min(allocation, capacity_needed)
+                    work = spent * fulfillment
+                    if work <= 1e-12:
+                        spent_capacity += spent
                         continue
                     self._commit_materials(project)
                     project.status = ProjectStatus.BUILDING
                     project.construction_done += work
-                    used += work
+                    spent_capacity += spent
                     if project.construction_done + 1e-9 >= recipe.construction_work:
                         completed.append(project)
                 for project in completed:
@@ -136,8 +150,8 @@ class ConstructionExecutionMixin:
                         active.remove(project)
                     if project.status != ProjectStatus.COMPLETE:
                         self._finish_project(project)
-                if used <= 1e-12:
+                if spent_capacity <= 1e-12:
                     break
-                remaining_capacity -= used
+                remaining_capacity -= spent_capacity
                 if not completed:
                     break
