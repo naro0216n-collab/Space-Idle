@@ -144,7 +144,7 @@ def test_content_composition_and_architecture_stress_modules_have_unambiguous_ow
     content = PACKAGE / "content"
     composition = PACKAGE / "composition"
     assert not (PACKAGE / "missions.py").exists()
-    assert (PACKAGE / "mission_stress.py").exists()
+    assert not (PACKAGE / "mission_stress.py").exists()
     for filename in (
         "base_ids.py", "base_requirements.py", "base_spatial.py", "base_catalog.py",
         "base_facilities.py", "base_transport.py", "base_construction.py",

@@ -114,7 +114,6 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
                 "service_destinations": [str(value) for value in row.service_destinations],
                 "departure_day": row.departure_day,
                 "ready_day": row.ready_day,
-                "leg_index": row.leg_index,
                 "status": row.status.value,
             }
             for row in sorted(lg.cargo_flows.values(), key=lambda row: str(row.id))
@@ -199,7 +198,7 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             None if row.get("demand_id") is None else EntityId(row["demand_id"]),
             row["owner_kind"], EntityId(row["owner_id"]), int(row["priority"]), tuple(row["service_ids"]),
             tuple(SpatialNodeId(value) for value in row["service_destinations"]), int(row["departure_day"]), int(row["ready_day"]),
-            int(row.get("leg_index", 0)), CargoFlowStatus(row.get("status", "in_transit")),
+            CargoFlowStatus(row.get("status", "in_transit")),
         )
         for row in data.get("cargo_flows", [])
     }

@@ -271,3 +271,33 @@ def test_multistage_lane_requires_capacity_on_every_handoff_leg():
     available = sim.logistics.lane_snapshot((demand,), sim.day)
     metric = next(row for row in available.lanes if row.lane_id == lane_id)
     assert metric.effective_capacity_t_per_day > 0
+
+def test_multistage_cargo_flow_records_handoffs_and_cumulative_latency():
+    sim = build_game_application()._simulation
+    sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
+    sim.refresh_storage()
+    lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 1.0, 100)
+    sim.inventory.add(EARTH, MACHINERY, 1.0)
+    demand = _demand(
+        1.0,
+        demand_id="demand.multistage-flow",
+        destination=LUNAR_ORBIT,
+        source=EARTH,
+    )
+
+    sim.logistics.advance_capacity_logistics(sim.day, (demand,))
+
+    flow = next(flow for flow in sim.logistics.cargo_flows.values() if flow.lane_id == lane_id)
+    assert flow.service_destinations == (LEO, LUNAR_ORBIT)
+    assert len(flow.service_ids) == 2
+    assert flow.ready_day - flow.departure_day == 7
+    dispatched_amount = flow.amount_t
+    assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == 0
+
+    sim.logistics._progress_cargo_arrivals(flow.ready_day - 1)
+    assert flow.id in sim.logistics.cargo_flows
+    assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == 0
+
+    sim.logistics._progress_cargo_arrivals(flow.ready_day)
+    assert flow.id not in sim.logistics.cargo_flows
+    assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == pytest.approx(dispatched_amount)

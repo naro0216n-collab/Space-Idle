@@ -251,7 +251,6 @@ class TransportCapacitySnapshot:
 
 class CargoFlowStatus(str, Enum):
     IN_TRANSIT = "in_transit"
-    HANDOFF_WAITING = "handoff_waiting"
     ARRIVAL_WAITING = "arrival_waiting"
 
 
@@ -271,7 +270,6 @@ class CargoFlowBatch:
     service_destinations: tuple[SpatialNodeId, ...]
     departure_day: int
     ready_day: int
-    leg_index: int = 0
     status: CargoFlowStatus = CargoFlowStatus.IN_TRANSIT
 
     def __post_init__(self) -> None:
@@ -279,8 +277,6 @@ class CargoFlowBatch:
             raise ValueError("cargo flow amount must be positive")
         if not self.service_ids or len(self.service_ids) != len(self.service_destinations):
             raise ValueError("cargo flow requires aligned service path")
-        if self.leg_index < 0 or self.leg_index >= len(self.service_ids):
-            raise ValueError("cargo flow leg index out of range")
 
 
 class OperationSupportLocation(str, Enum):

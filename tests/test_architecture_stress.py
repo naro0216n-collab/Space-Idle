@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import inspect
 
 from space_idle import build_game_application
 from space_idle.market import MarketState
-from space_idle.mission_stress import MissionPlanner, TransferOption, VehicleCapability
 from space_idle.shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId
 from space_idle.spatial import (
     AtmosphereField,
@@ -21,18 +19,6 @@ from space_idle.spatial import (
     ThermalField,
 )
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
-
-
-def test_mars_first_mission_requires_no_lunar_progression():
-    earth = SpatialNodeId("test.earth")
-    mars = SpatialNodeId("test.mars")
-    vehicle = VehicleCapability(DefinitionId("test.vehicle"), 5.0, 12.0, 400)
-    option = TransferOption(earth, mars, 100, 210, 10.0)
-    plan = MissionPlanner().plan(vehicle, option, 2.0)
-    assert plan.destination_id == mars
-    assert plan.arrival_day == 310
-    source = inspect.getsource(MissionPlanner).lower()
-    assert "moon" not in source and "lunar" not in source
 
 
 def test_artificial_gravity_can_be_added_as_peer_facet_without_spatial_core_change():
