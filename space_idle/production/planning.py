@@ -6,6 +6,7 @@ from ..facilities import FacilityBook, FacilityState
 from ..inventory import InventoryBook
 from ..power import PowerSnapshot
 from ..resource_claim import ResourceAllocationPlan
+from ..service_capacity import ServiceCapacityAllocationPlan
 from ..shared import EntityId, SpatialNodeId
 from .models import ProcessSpec, ProcessSnapshot
 
@@ -48,7 +49,7 @@ class IndustryPlanningMixin:
             for storage_class in classes:
                 free = max(
                     0.0,
-                    inventory.storage_service_capacity_t.get((location_id, storage_class), 0.0)
+                    inventory.usable_storage_capacity_t.get((location_id, storage_class), 0.0)
                     - inventory.stored_in_class(location_id, storage_class),
                 )
                 consumed = math.fsum(
@@ -85,6 +86,7 @@ class IndustryPlanningMixin:
         power: PowerSnapshot,
         day: int,
         resource_allocations: ResourceAllocationPlan | None = None,
+        service_allocations: ServiceCapacityAllocationPlan | None = None,
     ) -> tuple[ProcessSnapshot, ...]:
         rows: list[tuple[FacilityState, ProcessSpec]] = []
         for facility in facilities.active_compatible_at(location_id, day):
@@ -95,6 +97,10 @@ class IndustryPlanningMixin:
             return ()
         if resource_allocations is None:
             raise ValueError("industry planning requires the shared ResourceAllocationPlan")
+        if service_allocations is None:
+            service_allocations = self.standalone_service_plan(
+                location_id, facilities, power, day
+            )
 
         power_factors = {
             facility.id: max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
@@ -110,6 +116,19 @@ class IndustryPlanningMixin:
             facility.id: power_factors[facility.id] * maintenance_factors[facility.id]
             for facility, _process in rows
         }
+        service_limits: dict[EntityId, float] = {}
+        for facility, _process in rows:
+            request_id = self._service_request_id(facility.id)
+            try:
+                allocation = service_allocations.allocation(request_id)
+            except KeyError:
+                service_limits[facility.id] = 0.0
+            else:
+                service_limits[facility.id] = (
+                    1.0
+                    if allocation.requested_rate <= 1e-12
+                    else max(0.0, min(1.0, allocation.allocated_rate / allocation.requested_rate))
+                )
         resource_limits: dict[EntityId, float] = {}
         allocation_by_resource: dict[tuple[EntityId, object], float] = {}
         for facility, process in rows:
@@ -127,7 +146,11 @@ class IndustryPlanningMixin:
             resource_limits[facility.id] = min(1.0, min(ratios)) if ratios else 1.0
 
         upper_limits = {
-            facility.id: min(physical_limits[facility.id], resource_limits[facility.id])
+            facility.id: min(
+                physical_limits[facility.id],
+                resource_limits[facility.id],
+                service_limits[facility.id],
+            )
             for facility, _process in rows
         }
         scales = self._apply_storage_limits(rows, location_id, inventory, upper_limits)
@@ -145,6 +168,8 @@ class IndustryPlanningMixin:
                     reasons.append("power")
                 if maintenance_factors[facility.id] < 1.0 - 1e-9 and scale + 1e-9 >= physical_limits[facility.id]:
                     reasons.append("maintenance")
+                if service_limits[facility.id] < 1.0 - 1e-9 and scale + 1e-9 >= service_limits[facility.id]:
+                    reasons.append("service_capacity")
                 if scale + 1e-9 >= resource_limits[facility.id]:
                     for resource_id, need in process.inputs_per_day.items():
                         if need <= 1e-12:
@@ -178,7 +203,9 @@ class IndustryPlanningMixin:
         power: PowerSnapshot,
         day: int = 0,
         resource_allocations: ResourceAllocationPlan | None = None,
+        service_allocations: ServiceCapacityAllocationPlan | None = None,
     ) -> tuple[ProcessSnapshot, ...]:
         return self._plan_site(
-            location_id, facilities, inventory, power, day, resource_allocations
+            location_id, facilities, inventory, power, day, resource_allocations,
+            service_allocations,
         )

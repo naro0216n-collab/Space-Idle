@@ -71,7 +71,7 @@ def test_vehicle_resource_support_requires_declared_vehicle_interface():
 def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
     from space_idle import AdvanceTime, PauseFacility, ProduceVehicle
     from space_idle.content.base_game import EARTH, ROBOTIC_SURVEY_PACKAGE
-    from space_idle.site import CapabilityRequirement, SiteRequirements
+    from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
 
     app = build_game_application()
     sim = app._simulation
@@ -83,7 +83,7 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
             definition.production,
             site_requirements=SiteRequirements(
                 capability_requirements=(
-                    CapabilityRequirement("spacecraft_servicing", 0.01, "available"),
+                    CapabilityRequirement("spacecraft_servicing", CapabilityRequirementState.ACTIVE),
                 ),
             ),
         ),

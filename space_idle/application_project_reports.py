@@ -54,10 +54,12 @@ class ApplicationReportProjectorMixin:
                 ))
 
         resource_allocations = sim.resource_allocation_projection({location_id: power})
+        service_allocations = sim.service_capacity_allocation_projection({location_id: power})
         snapshots = {
             snap.facility_id: snap
             for snap in sim.industry.snapshots(
-                location_id, sim.facilities, sim.inventory, power, sim.day, resource_allocations
+                location_id, sim.facilities, sim.inventory, power, sim.day,
+                resource_allocations, service_allocations,
             )
         }
         for facility in sorted(sim.facilities.all_at(location_id), key=lambda row: str(row.id)):
@@ -82,7 +84,10 @@ class ApplicationReportProjectorMixin:
                     ))
 
         if sim.extraction is not None:
-            for snap in sim.extraction.snapshots(location_id, sim.facilities, sim.inventory, power, sim.day):
+            for snap in sim.extraction.snapshots(
+                location_id, sim.facilities, sim.inventory, power, sim.day,
+                service_allocations,
+            ):
                 if snap.scale >= 1.0 - 1e-9:
                     continue
                 for factor in snap.limiting_factors:
@@ -104,10 +109,10 @@ class ApplicationReportProjectorMixin:
                 ))
 
         for row in self._storage_rows(location_id):
-            if row.unserviced_occupied_t > 1e-9:
+            if row.unusable_occupied_t > 1e-9:
                 issues.append(self._issue(
-                    "storage_service_shortage",
-                    f"{row.storage_class} の未サービス占有 {row.unserviced_occupied_t:g} t",
+                    "storage_usable_capacity_shortage",
+                    f"{row.storage_class} のUsable Capacity超過占有 {row.unusable_occupied_t:g} t",
                     category="storage", source="storage", location_id=loc, impact="limited",
                 ))
 
@@ -297,8 +302,10 @@ class ApplicationReportProjectorMixin:
         arrival_waiting: dict[object, float] = defaultdict(float)
 
         resource_allocations = sim.resource_allocation_projection({location_id: power})
+        service_allocations = sim.service_capacity_allocation_projection({location_id: power})
         for snap in sim.industry.snapshots(
-            location_id, sim.facilities, sim.inventory, power, sim.day, resource_allocations
+            location_id, sim.facilities, sim.inventory, power, sim.day,
+            resource_allocations, service_allocations,
         ):
             for resource_id, amount in snap.output_rates_per_day.items():
                 production[resource_id] += amount
@@ -316,7 +323,10 @@ class ApplicationReportProjectorMixin:
                 consumption[resource_id] += amount * factor
 
         if sim.extraction is not None:
-            for snap in sim.extraction.snapshots(location_id, sim.facilities, sim.inventory, power, sim.day):
+            for snap in sim.extraction.snapshots(
+                location_id, sim.facilities, sim.inventory, power, sim.day,
+                service_allocations,
+            ):
                 production[snap.output_resource_id] += snap.output_t_per_day
 
         for flow in sim.logistics.cargo_flows.values():

@@ -124,7 +124,7 @@ class TransportCompatibilityMixin:
             if support.operation_type not in present_operations:
                 continue
             if support.location is OperationSupportLocation.ORIGIN:
-                if not self._has_available_capability(origin_id, support.capability_id, day):
+                if not self._has_active_capability(origin_id, support.capability_id, day):
                     failures.append(
                         f"operation_support:{support.operation_type}:origin:{support.capability_id}"
                     )
@@ -184,7 +184,7 @@ class TransportCompatibilityMixin:
                 and requirement.vehicle_capability_id not in vehicle_capabilities
             ):
                 failures.append(f"vehicle_capability:{requirement.vehicle_capability_id}")
-            if not self._has_available_capability(
+            if not self._has_active_capability(
                 location_id,
                 requirement.infrastructure_capability_id,
                 day,
@@ -347,7 +347,7 @@ class TransportCompatibilityMixin:
                     else route.destination_id
                 )
                 snapshot = None if power_by_location is None else power_by_location.get(location_id)
-                if not self._has_available_capability(
+                if not self._has_active_capability(
                     location_id, support.capability_id, day, power=snapshot
                 ):
                     failures.append(
@@ -414,20 +414,7 @@ class TransportCompatibilityMixin:
                 failures.append(f"{prefix}:{failure.code}:{failure.detail}")
         return tuple(failures)
 
-    def _available_capability(
-        self,
-        location_id: SpatialNodeId,
-        capability_id: str,
-        day: int,
-        *,
-        power: PowerSnapshot | None = None,
-    ) -> float:
-        snapshot = power if power is not None else self.power.snapshot(location_id, self.facilities, day)
-        return self.facilities.available_capability_capacity_at(
-            location_id, capability_id, snapshot, day
-        )
-
-    def _has_available_capability(
+    def _has_active_capability(
         self,
         location_id: SpatialNodeId,
         capability_id: str,
@@ -435,6 +422,6 @@ class TransportCompatibilityMixin:
         *,
         power: PowerSnapshot | None = None,
     ) -> bool:
-        return self._available_capability(
-            location_id, capability_id, day, power=power
-        ) > 1e-12
+        # Capability is categorical. Finite throughput is represented by a
+        # separate Service Capacity request/allocation contract.
+        return self.facilities.active_capability_at(location_id, capability_id, day)

@@ -94,26 +94,26 @@ def test_power_snapshot_freezes_maintenance_factor_for_the_whole_simulation_day(
     facility = next(
         row for row in sim.facilities.facilities.values()
         if row.operational_node_id == ids.EARTH
-        and sim.facilities.definitions[row.definition_id].capability_supplies
+        and sim.facilities.definitions[row.definition_id].service_capacity_supplies
     )
-    capability_id = sim.facilities.definitions[facility.definition_id].capability_supplies[0].id
+    service_type = sim.facilities.definitions[facility.definition_id].service_capacity_supplies[0].service_type
 
     facility.maintenance_satisfaction = 1.0
     snapshot = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
-    before = sim.facilities.available_capability_capacity_at(
-        ids.EARTH, capability_id, snapshot, sim.day
+    before = sim.facilities.enabled_service_capacity_at(
+        ids.EARTH, service_type, snapshot, sim.day
     )
     assert before > 0.0
 
     # A maintenance result produced later in the same tick must not change the
-    # capability allocation already represented by the day's snapshot.
+    # enabled Service Capacity already represented by the day's snapshot.
     facility.maintenance_satisfaction = 0.0
-    same_day = sim.facilities.available_capability_capacity_at(
-        ids.EARTH, capability_id, snapshot, sim.day
+    same_day = sim.facilities.enabled_service_capacity_at(
+        ids.EARTH, service_type, snapshot, sim.day
     )
     next_snapshot = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
-    after = sim.facilities.available_capability_capacity_at(
-        ids.EARTH, capability_id, next_snapshot, sim.day
+    after = sim.facilities.enabled_service_capacity_at(
+        ids.EARTH, service_type, next_snapshot, sim.day
     )
 
     assert same_day == pytest.approx(before)

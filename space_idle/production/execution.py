@@ -6,6 +6,7 @@ from ..facilities import FacilityBook
 from ..inventory import InventoryBook
 from ..power import PowerSnapshot
 from ..resource_claim import ResourceAllocationPlan
+from ..service_capacity import ServiceCapacityAllocationPlan
 from ..shared import SpatialNodeId
 
 
@@ -18,9 +19,11 @@ class IndustryExecutionMixin:
         power: PowerSnapshot,
         day: int = 0,
         resource_allocations: ResourceAllocationPlan | None = None,
+        service_allocations: ServiceCapacityAllocationPlan | None = None,
     ) -> None:
         plan = self._plan_site(
-            location_id, facilities, inventory, power, day, resource_allocations
+            location_id, facilities, inventory, power, day, resource_allocations,
+            service_allocations,
         )
 
         # Mutate each resource balance once. Planning is simultaneous, so

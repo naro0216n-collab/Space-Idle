@@ -68,7 +68,6 @@ class ProjectRow:
     import_source_options: tuple[str, ...]
     construction_done: float
     construction_required: float
-    construction_weight: float
     materials_committed: bool
     completed_facility_id: str | None
     resources: tuple[ProjectResourceRow, ...]

@@ -166,7 +166,7 @@ class FleetRelocationPlan:
     departure_day: int
     arrival_day: int | None
     resource_requirements: tuple[FleetRelocationResourceRequirement, ...] = ()
-    infrastructure_requirements: tuple[tuple[SpatialNodeId, str, float, str], ...] = ()
+    infrastructure_requirements: tuple[tuple[SpatialNodeId, str, str], ...] = ()
     blockers: tuple[str, ...] = ()
 
     @property
@@ -247,7 +247,7 @@ class TransportServicePlan:
     nominal_per_unit: DirectionalCapacity
     resource_t_per_full_utilization_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
     servicing_units_per_full_utilization_day: float = 0.0
-    infrastructure_requirements: tuple[tuple[SpatialNodeId, str, float, str], ...] = ()
+    infrastructure_requirements: tuple[tuple[SpatialNodeId, str, str], ...] = ()
     blockers: tuple[str, ...] = ()
     resource_t_per_empty_cycle_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
     resource_t_per_forward_payload_increment_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
@@ -539,7 +539,7 @@ class VehicleEconomicsSpec:
 
 @dataclass(frozen=True)
 class VehicleProductionSpec:
-    capability_id: str | None = None
+    service_type: str | None = None
     days: float = 0.0
     cost_musd: float = 0.0
     resources: tuple[tuple[DefinitionId, float], ...] = ()
@@ -548,7 +548,7 @@ class VehicleProductionSpec:
 
 @dataclass(frozen=True)
 class VehicleMaintenanceSpec:
-    capability_id: str | None = None
+    service_type: str | None = None
     turnaround_days: float = 0.0
     cost_musd: float = 0.0
     resources: tuple[tuple[DefinitionId, float], ...] = ()
@@ -588,7 +588,7 @@ class VehicleDef:
     @property
     def operating_cost_musd_per_cargo_t(self) -> float: return self.economics.operating_cost_musd_per_cargo_t
     @property
-    def production_capability_id(self) -> str | None: return self.production.capability_id
+    def production_service_type(self) -> str | None: return self.production.service_type
     @property
     def production_days(self) -> float: return self.production.days
     @property
@@ -596,7 +596,7 @@ class VehicleDef:
     @property
     def production_resources(self) -> tuple[tuple[DefinitionId, float], ...]: return self.production.resources
     @property
-    def turnaround_capability_id(self) -> str | None: return self.maintenance.capability_id
+    def turnaround_service_type(self) -> str | None: return self.maintenance.service_type
     @property
     def turnaround_days(self) -> float: return self.maintenance.turnaround_days
     @property

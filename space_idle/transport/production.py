@@ -6,6 +6,7 @@ from enum import Enum
 from ..power import PowerSnapshot
 from ..resource_claim import ResourceAllocationPlan, ResourceClaim
 from ..resource_demand import ResourceDemand
+from ..service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from ..shared import DefinitionId, EntityId, SpatialNodeId
 from ..site import SiteRequirementFailure, evaluate_site_requirements
 
@@ -22,7 +23,6 @@ class VehicleProductionState:
     vehicle_definition_id: DefinitionId
     operational_node_id: SpatialNodeId
     priority: int = 50
-    allocation_weight: float = 1.0
     progress_days: float = 0.0
     phase: VehicleProductionPhase = VehicleProductionPhase.AWAITING_INPUTS
     paused: bool = False
@@ -30,8 +30,6 @@ class VehicleProductionState:
     created_day: int = 0
 
     def __post_init__(self) -> None:
-        if self.allocation_weight <= 0:
-            raise ValueError("vehicle production allocation weight must be positive")
         if self.progress_days < -1e-9:
             raise ValueError("vehicle production progress must be non-negative")
 
@@ -45,7 +43,6 @@ class VehicleProductionMixin:
         location_id: SpatialNodeId,
         *,
         priority: int = 50,
-        allocation_weight: float = 1.0,
         day: int = 0,
     ) -> EntityId:
         if vehicle_definition_id not in self.vehicle_defs:
@@ -54,12 +51,10 @@ class VehicleProductionMixin:
             raise KeyError(location_id)
         definition = self.vehicle_defs[vehicle_definition_id]
         production = definition.production
-        if production.capability_id is None or production.days <= 1e-12:
+        if production.service_type is None or production.days <= 1e-12:
             raise ValueError("vehicle has no time-based production definition")
         if not production.resources:
             raise ValueError("vehicle production requires physical resource inputs")
-        if allocation_weight <= 0:
-            raise ValueError("vehicle production allocation weight must be positive")
 
         failures = self.vehicle_production_site_failures(
             vehicle_definition_id, location_id, day=day
@@ -67,7 +62,7 @@ class VehicleProductionMixin:
         structural = tuple(
             failure
             for failure in failures
-            if not failure.code.startswith("capability:available")
+            if not failure.code.startswith("service:enabled")
         )
         if structural:
             raise ValueError(
@@ -82,7 +77,6 @@ class VehicleProductionMixin:
             vehicle_definition_id,
             location_id,
             priority,
-            allocation_weight,
             created_day=day,
         )
         return project_id
@@ -105,18 +99,11 @@ class VehicleProductionMixin:
             is VehicleProductionPhase.AWAITING_INPUTS
         )
 
-    def vehicle_production_allocation_editable(self, project_id: EntityId) -> bool:
-        return (
-            self.vehicle_production_projects[project_id].phase
-            is not VehicleProductionPhase.COMPLETE
-        )
-
     def set_vehicle_production_settings(
         self,
         project_id: EntityId,
         *,
         priority: int | None = None,
-        allocation_weight: float | None = None,
     ) -> None:
         state = self.vehicle_production_projects[project_id]
         if priority is not None:
@@ -125,12 +112,6 @@ class VehicleProductionMixin:
                     "vehicle production priority can only change before inputs are consumed"
                 )
             state.priority = priority
-        if allocation_weight is not None:
-            if allocation_weight <= 0:
-                raise ValueError("vehicle production allocation weight must be positive")
-            if not self.vehicle_production_allocation_editable(project_id):
-                raise ValueError("completed vehicle production allocation cannot change")
-            state.allocation_weight = allocation_weight
 
     def vehicle_production_site_failures(
         self,
@@ -157,15 +138,15 @@ class VehicleProductionMixin:
                 snapshot,
             )
         )
-        if production.capability_id is not None:
-            available = self.facilities.available_capability_capacity_at(
-                location_id, production.capability_id, snapshot, day
+        if production.service_type is not None:
+            enabled = self.facilities.enabled_service_capacity_at(
+                location_id, production.service_type, snapshot, day
             )
-            if available <= 1e-12:
+            if enabled <= 1e-12:
                 failures.append(
                     SiteRequirementFailure(
-                        "capability:available",
-                        f"{production.capability_id}:{available:g}/positive",
+                        "service:enabled",
+                        f"{production.service_type}:{enabled:g}/positive",
                     )
                 )
         return tuple(failures)
@@ -332,66 +313,80 @@ class VehicleProductionMixin:
             self._consume_staged_vehicle_production_inputs(state)
             state.phase = VehicleProductionPhase.BUILDING
 
+    @staticmethod
+    def vehicle_production_service_request_id(project_id: EntityId) -> EntityId:
+        return EntityId(f"service.vehicle_production:{project_id}")
+
+    def vehicle_production_service_requests(
+        self, day: int = 0
+    ) -> tuple[ServiceCapacityRequest, ...]:
+        requests: list[ServiceCapacityRequest] = []
+        for state in sorted(
+            self.vehicle_production_projects.values(), key=lambda row: str(row.id)
+        ):
+            if state.phase is VehicleProductionPhase.COMPLETE or state.paused:
+                continue
+            definition = self.vehicle_defs[state.vehicle_definition_id]
+            service_type = definition.production.service_type
+            if service_type is None or definition.production.days <= 1e-12:
+                continue
+            remaining = max(0.0, definition.production.days - state.progress_days)
+            if remaining <= 1e-12:
+                continue
+            requests.append(
+                ServiceCapacityRequest(
+                    self.vehicle_production_service_request_id(state.id),
+                    state.operational_node_id,
+                    service_type,
+                    min(1.0, remaining),
+                    state.priority,
+                    "vehicle_production",
+                    state.id,
+                    "production_work",
+                )
+            )
+        return tuple(requests)
+
     def advance_vehicle_production_day(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
         resource_allocations: ResourceAllocationPlan,
+        service_allocations: ServiceCapacityAllocationPlan,
         day: int,
     ) -> None:
         self._consume_ready_vehicle_production_inputs(
             power_by_location, resource_allocations, day
         )
 
-        pools: dict[tuple[SpatialNodeId, str], list[VehicleProductionState]] = {}
-        for state in self.vehicle_production_projects.values():
+        for state in sorted(
+            self.vehicle_production_projects.values(), key=lambda row: str(row.id)
+        ):
             if state.phase is not VehicleProductionPhase.BUILDING or state.paused:
                 continue
             power = power_by_location.get(state.operational_node_id)
             if power is None:
                 power = self.power.snapshot(state.operational_node_id, self.facilities, day)
-            if self.vehicle_production_blockers(state.id, day=day, power=power):
-                continue
-            definition = self.vehicle_defs[state.vehicle_definition_id]
-            capability_id = definition.production.capability_id
-            if capability_id is None:
-                continue
-            pools.setdefault((state.operational_node_id, capability_id), []).append(state)
-
-        for (location_id, capability_id), states in sorted(
-            pools.items(), key=lambda row: (str(row[0][0]), row[0][1])
-        ):
-            power = power_by_location.get(location_id)
-            if power is None:
-                power = self.power.snapshot(location_id, self.facilities, day)
-            available = self.facilities.available_capability_capacity_at(
-                location_id, capability_id, power, day
+            blockers = tuple(
+                blocker
+                for blocker in self.vehicle_production_blockers(
+                    state.id, day=day, power=power
+                )
+                if not blocker.startswith("service:enabled")
             )
-            if available <= 1e-12:
+            if blockers:
                 continue
-
-            active = sorted(states, key=lambda row: str(row.id))
-            remaining = available
-            allocations = {state.id: 0.0 for state in active}
-            while active and remaining > 1e-12:
-                total_weight = sum(state.allocation_weight for state in active)
-                if total_weight <= 1e-12:
-                    break
-                saturated: list[VehicleProductionState] = []
-                used = 0.0
-                for state in active:
-                    room = max(0.0, 1.0 - allocations[state.id])
-                    proposed = remaining * state.allocation_weight / total_weight
-                    grant = min(room, proposed)
-                    allocations[state.id] += grant
-                    used += grant
-                    if allocations[state.id] >= 1.0 - 1e-12:
-                        saturated.append(state)
-                remaining = max(0.0, remaining - used)
-                if not saturated or used <= 1e-12:
-                    break
-                active = [state for state in active if state not in saturated]
-            for state in states:
-                state.progress_days += allocations[state.id]
+            try:
+                allocated = service_allocations.allocated(
+                    self.vehicle_production_service_request_id(state.id)
+                )
+            except KeyError:
+                allocated = 0.0
+            remaining = max(
+                0.0,
+                self.vehicle_defs[state.vehicle_definition_id].production.days
+                - state.progress_days,
+            )
+            state.progress_days += min(remaining, max(0.0, allocated))
 
         completed = sorted(
             (

@@ -3,12 +3,41 @@ from __future__ import annotations
 from .power import PowerSnapshot
 from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .resource_demand import ResourceDemand
+from .service_capacity import ServiceCapacityRequest
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .site import SiteRequirementFailure, evaluate_site_requirements
 from .research_models import ResearchPhase, ResearchState
 
 
 class ResearchWorkflowMixin:
+    RESEARCH_EXECUTION_SERVICE = "research_execution"
+
+    @staticmethod
+    def _demonstration_service_request_id(research_id: DefinitionId) -> EntityId:
+        return EntityId(f"service.research.demonstration:{research_id}")
+
+    def service_requests(self, day: int = 0) -> tuple[ServiceCapacityRequest, ...]:
+        requests: list[ServiceCapacityRequest] = []
+        for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
+            if (
+                state.paused
+                or state.status is not ResearchPhase.DEMONSTRATION
+                or state.demonstration_location_id is None
+            ):
+                continue
+            requests.append(ServiceCapacityRequest(
+                self._demonstration_service_request_id(research_id),
+                state.demonstration_location_id,
+                self.RESEARCH_EXECUTION_SERVICE,
+                1.0,
+                50,
+                "research_project",
+                EntityId(f"research:{research_id}"),
+                "demonstration",
+                minimum_rate=1.0,
+                atomic=True,
+            ))
+        return tuple(requests)
     def start_blockers(
         self,
         research_id: DefinitionId,
@@ -309,7 +338,7 @@ class ResearchWorkflowMixin:
     ) -> None:
         blockers = self.demonstration_site_blockers(research_id, location_id, day)
         structural_blockers = tuple(
-            blocker for blocker in blockers if blocker[0] != "capability:available"
+            blocker for blocker in blockers if blocker[0] != "capability:active"
         )
         if structural_blockers:
             raise ValueError(
@@ -394,7 +423,7 @@ class ResearchWorkflowMixin:
         day: int = 0,
     ) -> bool:
         return not any(
-            code != "capability:available"
+            code != "capability:active"
             for code, _detail in self.demonstration_site_blockers(research_id, location_id, day)
         )
 

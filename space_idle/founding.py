@@ -12,6 +12,7 @@ from .logistics import LogisticsService
 from .power import PowerService, PowerSnapshot
 from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .resource_demand import ResourceDemand
+from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .site import SiteRequirements, evaluate_environment_requirements, evaluate_site_requirements
 from .storage import StorageService
@@ -45,7 +46,7 @@ class FoundingPackageDefinition:
     display_name: str
     deployed_facilities: tuple[FoundingFacilityDeployment, ...]
     preparation_work: float
-    preparation_capability_id: str
+    preparation_service_type: str
     operations: tuple[TransportOperationRequirement, ...]
     transit_days: int
     initial_inventory: tuple[FoundingResourceRequirement, ...] = ()
@@ -59,7 +60,7 @@ class FoundingPackageDefinition:
             raise ValueError("founding package display name must not be empty")
         if self.preparation_work < 0:
             raise ValueError("founding preparation work must be non-negative")
-        if not self.preparation_capability_id:
+        if not self.preparation_service_type:
             raise ValueError("founding preparation capability must not be empty")
         if self.transit_days <= 0:
             raise ValueError("founding transit must be positive")
@@ -227,8 +228,10 @@ class LocationFoundingService:
             if actual < package.minimum_survey_knowledge_level:
                 failures.append(FoundingBlocker("survey_knowledge", f"{actual}/{package.minimum_survey_knowledge_level}"))
         snapshot = power if power is not None else self.power.snapshot(staging_node_id, self.facilities, day)
-        if self.facilities.available_capability_capacity_at(staging_node_id, package.preparation_capability_id, snapshot, day) <= 1e-12:
-            failures.append(FoundingBlocker("staging_capability", package.preparation_capability_id))
+        if self.facilities.enabled_service_capacity_at(
+            staging_node_id, package.preparation_service_type, snapshot, day
+        ) <= 1e-12:
+            failures.append(FoundingBlocker("staging_service", package.preparation_service_type))
         for failure in evaluate_site_requirements(
             package.staging_requirements,
             staging_node_id,
@@ -497,8 +500,10 @@ class LocationFoundingService:
         if project.status is FoundingStatus.PREPARING:
             package = self.packages[project.founding_package_id]
             snapshot = power if power is not None else self.power.snapshot(project.staging_node_id, self.facilities, day)
-            if self.facilities.available_capability_capacity_at(project.staging_node_id, package.preparation_capability_id, snapshot, day) <= 1e-12:
-                failures.append(FoundingBlocker("staging_capability", package.preparation_capability_id))
+            if self.facilities.enabled_service_capacity_at(
+                project.staging_node_id, package.preparation_service_type, snapshot, day
+            ) <= 1e-12:
+                failures.append(FoundingBlocker("staging_service", package.preparation_service_type))
             if not project.inputs_consumed:
                 for requirement in self.project_resource_requirements(project.id):
                     resource_id = requirement.resource_id
@@ -538,7 +543,39 @@ class LocationFoundingService:
         project.status = FoundingStatus.CANCELLED
         project.paused = False
 
-    def advance_day(self, allocations: ResourceAllocationPlan, day: int) -> None:
+    @staticmethod
+    def service_request_id(project_id: ProjectId) -> EntityId:
+        return EntityId(f"service.founding_preparation:{project_id}")
+
+    def service_requests(self, day: int = 0) -> tuple[ServiceCapacityRequest, ...]:
+        requests: list[ServiceCapacityRequest] = []
+        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
+            if project.status is not FoundingStatus.PREPARING or project.paused:
+                continue
+            package = self.packages[project.founding_package_id]
+            remaining = max(0.0, package.preparation_work - project.preparation_done)
+            if remaining <= 1e-12:
+                continue
+            requests.append(
+                ServiceCapacityRequest(
+                    self.service_request_id(project.id),
+                    project.staging_node_id,
+                    package.preparation_service_type,
+                    remaining,
+                    project.priority,
+                    "founding",
+                    EntityId(str(project.id)),
+                    "preparation_work",
+                )
+            )
+        return tuple(requests)
+
+    def advance_day(
+        self,
+        allocations: ResourceAllocationPlan,
+        service_allocations: ServiceCapacityAllocationPlan,
+        day: int,
+    ) -> None:
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
             if project.status is FoundingStatus.PREPARING:
                 if project.paused:
@@ -550,12 +587,16 @@ class LocationFoundingService:
                 if not project.inputs_consumed and not self._commit_allocated_payload(project, allocations):
                     continue
                 package = self.packages[project.founding_package_id]
-                snapshot = self.power.snapshot(project.staging_node_id, self.facilities, day)
-                capacity = self.facilities.available_capability_capacity_at(
-                    project.staging_node_id, package.preparation_capability_id, snapshot, day
-                )
+                try:
+                    allocated_service = service_allocations.allocated(
+                        self.service_request_id(project.id)
+                    )
+                except KeyError:
+                    allocated_service = 0.0
                 remaining = max(0.0, package.preparation_work - project.preparation_done)
-                project.preparation_done += min(remaining, max(0.0, capacity))
+                project.preparation_done += min(
+                    remaining, max(0.0, allocated_service)
+                )
                 if project.preparation_done + 1e-9 >= package.preparation_work:
                     project.preparation_done = package.preparation_work
                     self._release_prepared_payload(project)

@@ -14,9 +14,9 @@ def project_vehicles(projector):
             None if definition.propellant_resource_id is None else str(definition.propellant_resource_id),
             tuple(sorted(definition.generic_capabilities)),
             tuple((req.operation_type, req.location.value, req.capability_id) for req in definition.operation_support_requirements),
-            definition.production_capability_id, definition.production_days, definition.production_cost_musd,
+            definition.production_service_type, definition.production_days, definition.production_cost_musd,
             tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.production_resources),
-            definition.turnaround_capability_id, definition.turnaround_days, definition.turnaround_cost_musd,
+            definition.turnaround_service_type, definition.turnaround_days, definition.turnaround_cost_musd,
             tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.turnaround_resources),
             tuple(operation_capability_definition(capability) for capability in definition.performance.operation_capabilities),
         )

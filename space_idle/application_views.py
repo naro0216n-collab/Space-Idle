@@ -1,7 +1,8 @@
 from __future__ import annotations
 from typing import TypeAlias
 from .app_contracts.catalog_views import (
-    RequirementConditionRow, CapabilityRequirementRow, SiteRequirementsDefinitionRow,
+    RequirementConditionRow, CapabilityRequirementRow, ServiceCapacityRequirementRow,
+    SiteRequirementsDefinitionRow,
     OperationCapabilityDefinitionRow, ResourceDefinitionRow, FacilityDefinitionRow,
     ProcessDefinitionRow, ResearchDefinitionRow, VehicleDefinitionRow, RouteDefinitionRow,
     TransportServiceDefinitionRow, CelestialBodyDefinitionRow, LocationDefinitionRow,
@@ -12,7 +13,7 @@ from .app_contracts.project_views import (
     BuildOptionsView, ProjectRow, ProjectsView,
 )
 from .app_contracts.location_views import (
-    InventoryRow, StorageRow, FacilityRow, CapabilityRow, IndustryRow,
+    InventoryRow, StorageRow, FacilityRow, CapabilityRow, ServiceCapacityRow, IndustryRow,
     SurfaceInfrastructureLoadRow, SurfaceInfrastructureRow,
     EnvironmentFacetRow, ExtractionRow, ExtractionResourceRow, LocationView,
 )

@@ -60,7 +60,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(template.duration_days >= 0, f"negative contract duration: {template_id}")
         _require(template.reward_musd >= 0, f"negative contract reward: {template_id}")
         _validate_site_requirements(
-            template.site_requirements, ctx.known_capabilities, f"contract:{template_id}"
+            template.site_requirements, ctx.known_capabilities, f"contract:{template_id}",
+            ctx.known_service_types
         )
         if template.target_location_id is not None:
             _require(

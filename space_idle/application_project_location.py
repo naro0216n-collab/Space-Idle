@@ -4,6 +4,7 @@ from dataclasses import fields, is_dataclass
 
 from .application_views import (
     CapabilityRow,
+    ServiceCapacityRow,
     EnvironmentFacetRow,
     ExtractionRow,
     ExtractionResourceRow,
@@ -30,7 +31,7 @@ class LocationProjectorMixin:
             reserved = sim.inventory.reserved_total(location_id, resource_id)
             storage_class = sim.inventory.resource_storage_class.get(resource_id)
             physical_capacity = sim.inventory.physical_capacity(location_id, resource_id)
-            service_capacity = sim.inventory.service_capacity(location_id, resource_id)
+            usable_capacity = sim.inventory.usable_capacity(location_id, resource_id)
             free = sim.inventory.free_capacity(location_id, resource_id)
             if amount <= 1e-12 and reserved <= 1e-12 and physical_capacity in (None, 0.0):
                 continue
@@ -45,7 +46,7 @@ class LocationProjectorMixin:
                     sim.inventory.available(location_id, resource_id),
                     storage_class,
                     physical_capacity,
-                    service_capacity,
+                    usable_capacity,
                     free,
                 )
             )
@@ -55,13 +56,13 @@ class LocationProjectorMixin:
         sim = self._simulation
         rows = []
         keys = {
-            key for key in sim.inventory.storage_capacity_t if key[0] == location_id
+            key for key in sim.inventory.physical_storage_capacity_t if key[0] == location_id
         } | {
-            key for key in sim.inventory.storage_service_capacity_t if key[0] == location_id
+            key for key in sim.inventory.usable_storage_capacity_t if key[0] == location_id
         }
         for loc, storage_class in sorted(keys, key=lambda row: (str(row[0]), row[1])):
-            physical = sim.inventory.storage_capacity_t.get((loc, storage_class), 0.0)
-            service = sim.inventory.storage_service_capacity_t.get((loc, storage_class), 0.0)
+            physical = sim.inventory.physical_storage_capacity_t.get((loc, storage_class), 0.0)
+            usable = sim.inventory.usable_storage_capacity_t.get((loc, storage_class), 0.0)
             stock = sum(
                 amount
                 for (stock_loc, resource_id), amount in sim.inventory.stock.items()
@@ -81,9 +82,9 @@ class LocationProjectorMixin:
                     stock,
                     staging,
                     physical,
-                    service,
-                    max(0.0, service - occupied),
-                    max(0.0, occupied - service),
+                    usable,
+                    max(0.0, usable - occupied),
+                    max(0.0, occupied - usable),
                 )
             )
         return tuple(rows)
@@ -121,6 +122,9 @@ class LocationProjectorMixin:
         node = sim.graph.operational_node(location_id)
         power = sim.power.snapshot(location_id, sim.facilities, sim.day)
         research_power = {location_id: power}
+        service_allocations = sim.service_capacity_allocation_projection(
+            {location_id: power}
+        )
 
         facilities = []
         for facility in sorted(
@@ -171,12 +175,7 @@ class LocationProjectorMixin:
                     tuple(activation_failures),
                     facility.power_priority,
                     facility.maintenance_priority,
-                    tuple(
-                        sorted(
-                            (supply.id, supply.rated_capacity)
-                            for supply in definition.capability_supplies
-                        )
-                    ),
+                    tuple(sorted(supply.id for supply in definition.capability_supplies)),
                     power_utilization,
                     research_tier,
                     research_generation,
@@ -195,6 +194,12 @@ class LocationProjectorMixin:
                     tuple(operating_blockers),
                     definition.placement_scope.value,
                     None if facility.site_cell_id is None else str(facility.site_cell_id),
+                    tuple(
+                        sorted(
+                            (supply.service_type, supply.nominal_rate)
+                            for supply in definition.service_capacity_supplies
+                        )
+                    ),
                 )
             )
 
@@ -203,7 +208,8 @@ class LocationProjectorMixin:
         snapshots = {
             snap.facility_id: snap
             for snap in sim.industry.snapshots(
-                location_id, sim.facilities, sim.inventory, power, sim.day, resource_allocations
+                location_id, sim.facilities, sim.inventory, power, sim.day,
+                resource_allocations, service_allocations,
             )
         }
         for facility in sorted(sim.facilities.all_at(location_id), key=lambda row: str(row.id)):
@@ -263,7 +269,8 @@ class LocationProjectorMixin:
         extraction_resources: list[ExtractionResourceRow] = []
         if sim.extraction is not None:
             for snap in sim.extraction.snapshots(
-                location_id, sim.facilities, sim.inventory, power, sim.day
+                location_id, sim.facilities, sim.inventory, power, sim.day,
+                service_allocations,
             ):
                 definition = sim.facilities.definitions[snap.facility_def_id]
                 extraction.append(
@@ -295,34 +302,54 @@ class LocationProjectorMixin:
                     row.output_t_per_day,
                 )
                 for row in sim.extraction.resource_snapshots(
-                    location_id, sim.facilities, power, sim.day
+                    location_id, sim.facilities, power, sim.day, service_allocations
                 )
             )
 
         capability_rows = tuple(
             CapabilityRow(
                 capability_id,
-                sim.facilities.infrastructure_capability_capacity_at(
-                    location_id, capability_id, sim.day
-                ),
-                sim.facilities.active_capability_capacity_at(
-                    location_id, capability_id, sim.day
-                ),
-                sim.facilities.available_capability_capacity_at(
-                    location_id, capability_id, power, sim.day
-                ),
+                sim.facilities.installed_capability_at(location_id, capability_id),
+                sim.facilities.active_capability_at(location_id, capability_id, sim.day),
             )
             for capability_id in sorted(sim.facilities.capability_ids())
-            if sim.facilities.infrastructure_capability_capacity_at(
-                location_id, capability_id, sim.day
+            if sim.facilities.installed_capability_at(location_id, capability_id)
+        )
+
+        service_types = {
+            service_type
+            for (node_id, service_type) in service_allocations.supply_nominal
+            if node_id == location_id
+        } | {
+            request.service_type
+            for request in service_allocations.requests
+            if request.operational_node_id == location_id
+        }
+        service_capacity_rows = tuple(
+            ServiceCapacityRow(
+                summary.service_type,
+                summary.nominal_rate,
+                summary.enabled_rate,
+                summary.requested_rate,
+                summary.allocated_rate,
+                summary.spare_rate,
+                summary.limiting_factors,
             )
-            > 1e-9
+            for summary in (
+                service_allocations.summary(location_id, service_type)
+                for service_type in sorted(service_types)
+            )
+            if summary.nominal_rate > 1e-9 or summary.requested_rate > 1e-9
         )
 
         surface_infrastructure = None
         if sim.surface_infrastructure is not None and location_id in sim.graph.locations:
             snapshot = sim.surface_infrastructure.snapshot(
-                location_id, sim.facilities, power, sim.day
+                location_id,
+                sim.facilities,
+                power,
+                sim.day,
+                allocation_plan=service_allocations,
             )
             improvement_ids = tuple(
                 sorted(
@@ -330,8 +357,8 @@ class LocationProjectorMixin:
                     for definition in sim.facilities.definitions.values()
                     if definition.id in sim.projects.recipes
                     and any(
-                        supply.id == sim.surface_infrastructure.capability_id
-                        for supply in definition.capability_supplies
+                        supply.service_type == sim.surface_infrastructure.service_type
+                        for supply in definition.service_capacity_supplies
                     )
                 )
             )
@@ -339,6 +366,8 @@ class LocationProjectorMixin:
                 snapshot.nominal_capacity,
                 snapshot.available_capacity,
                 snapshot.demand,
+                snapshot.allocated_capacity,
+                snapshot.spare_capacity,
                 snapshot.fulfillment,
                 tuple(
                     SurfaceInfrastructureLoadRow(load.code, load.demand)
@@ -358,6 +387,7 @@ class LocationProjectorMixin:
             power.allocated_mw,
             sim.projects.construction_capacity_at(location_id, power, sim.day),
             capability_rows,
+            service_capacity_rows,
             surface_infrastructure,
             self._inventory_rows(location_id),
             self._storage_rows(location_id),

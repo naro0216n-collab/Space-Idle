@@ -6,10 +6,15 @@ import math
 
 from .facilities import FacilityBook
 from .power import PowerSnapshot
-from .shared import SpatialNodeId, SurfaceCellId
+from .service_capacity import (
+    ServiceCapacityAllocationPlan,
+    ServiceCapacityRequest,
+    allocate_service_capacity,
+)
+from .shared import EntityId, SpatialNodeId, SurfaceCellId
 from .spatial import SpatialGraph
 
-SURFACE_DISTRIBUTION_CAPABILITY = "surface_distribution"
+SURFACE_DISTRIBUTION_SERVICE = "surface_distribution"
 
 
 @dataclass(frozen=True)
@@ -27,6 +32,8 @@ class SurfaceInfrastructureSnapshot:
     fulfillment: float
     load_sources: tuple[SurfaceInfrastructureLoad, ...]
     limiting_factors: tuple[str, ...]
+    allocated_capacity: float = 0.0
+    spare_capacity: float = 0.0
 
 
 @dataclass
@@ -36,13 +43,13 @@ class SurfaceInfrastructureService:
     Surface Cells remain physical geography only.  This service turns the
     extent and spread of one Location's developed territory into a Location-
     scoped service load and compares that load with Facility-supplied surface
-    distribution capability.  No Cell Inventory or Cell-to-Cell cargo routes
+    distribution service capacity.  No Cell Inventory or Cell-to-Cell cargo routes
     are created.
     """
 
     graph: SpatialGraph
-    capability_id: str = SURFACE_DISTRIBUTION_CAPABILITY
-    network_dependent_capability_ids: frozenset[str] = frozenset({"cargo_transfer"})
+    service_type: str = SURFACE_DISTRIBUTION_SERVICE
+    network_dependent_service_types: frozenset[str] = frozenset({"cargo_transfer"})
 
     def _characteristic_width(self, cell_id: SurfaceCellId) -> float:
         return math.sqrt(self.graph.surface_cells[cell_id].area_km2)
@@ -115,6 +122,25 @@ class SurfaceInfrastructureService:
     def demand(self, location_id: SpatialNodeId) -> float:
         return math.fsum(row.demand for row in self.load_sources(location_id))
 
+    def service_request(
+        self,
+        location_id: SpatialNodeId,
+        *,
+        requested_rate: float | None = None,
+        priority: int = 50,
+    ) -> ServiceCapacityRequest:
+        demand = self.demand(location_id) if requested_rate is None else requested_rate
+        return ServiceCapacityRequest(
+            EntityId(f"service.surface_distribution:{location_id}"),
+            location_id,
+            self.service_type,
+            max(0.0, demand),
+            priority,
+            "surface_infrastructure",
+            EntityId(f"surface_infrastructure:{location_id}"),
+            "territory_distribution",
+        )
+
     def snapshot(
         self,
         location_id: SpatialNodeId,
@@ -124,6 +150,7 @@ class SurfaceInfrastructureService:
         *,
         cell_ids: set[SurfaceCellId] | frozenset[SurfaceCellId] | None = None,
         additional_loads: tuple[SurfaceInfrastructureLoad, ...] = (),
+        allocation_plan: ServiceCapacityAllocationPlan | None = None,
     ) -> SurfaceInfrastructureSnapshot:
         if location_id not in self.graph.locations:
             raise KeyError(location_id)
@@ -136,13 +163,27 @@ class SurfaceInfrastructureService:
         if any(load.demand < 0 for load in loads):
             raise ValueError("surface infrastructure load must be non-negative")
         demand = math.fsum(load.demand for load in loads)
-        nominal = facilities.infrastructure_capability_capacity_at(
-            location_id, self.capability_id, day
+        nominal = facilities.nominal_service_capacity_at(
+            location_id, self.service_type, day
         )
         available = self._available_distribution_capacity(
             location_id, facilities, power, day
         )
-        fulfillment = 1.0 if demand <= 1e-12 else min(1.0, available / demand)
+        request = self.service_request(
+            location_id, requested_rate=demand
+        )
+        if allocation_plan is None:
+            allocation_plan = allocate_service_capacity(
+                (request,),
+                nominal_supply={(location_id, self.service_type): nominal},
+                enabled_supply={(location_id, self.service_type): available},
+                limiting_factors={
+                    (location_id, self.service_type):
+                        (() if available + 1e-9 >= nominal else ("provider_dependency",))
+                },
+            )
+        summary = allocation_plan.summary(location_id, self.service_type)
+        fulfillment = 1.0 if demand <= 1e-12 else min(1.0, summary.allocated_rate / demand)
         limiting = () if fulfillment >= 1.0 - 1e-9 else ("surface_infrastructure",)
         return SurfaceInfrastructureSnapshot(
             location_id,
@@ -152,6 +193,8 @@ class SurfaceInfrastructureService:
             fulfillment,
             tuple(loads),
             limiting,
+            summary.allocated_rate,
+            summary.spare_rate,
         )
 
     def _available_distribution_capacity(
@@ -163,7 +206,7 @@ class SurfaceInfrastructureService:
     ) -> float:
         """Available network supply before applying the network to consumers.
 
-        This deliberately does not call FacilityBook.available_capability_capacity_at,
+        This deliberately does not call FacilityBook.enabled_service_capacity_at,
         because remote Facility availability itself may depend on this service.
         """
         contributions: list[float] = []
@@ -183,17 +226,17 @@ class SurfaceInfrastructureService:
                     ),
                 ),
             )
-            for supply in definition.capability_supplies:
-                if supply.id == self.capability_id:
+            for supply in definition.service_capacity_supplies:
+                if supply.service_type == self.service_type:
                     contributions.append(
-                        supply.rated_capacity * utilization * maintenance
+                        supply.nominal_rate * utilization * maintenance
                     )
         return math.fsum(contributions)
 
     def facility_availability_factors(
         self,
         location_id: SpatialNodeId,
-        capability_id: str,
+        service_type: str,
         facilities: FacilityBook,
         power: PowerSnapshot,
         day: int = 0,
@@ -204,7 +247,7 @@ class SurfaceInfrastructureService:
         snapshot = self.snapshot(location_id, facilities, power, day)
         factors: dict[object, float] = {}
         for facility in facilities.all_at(location_id):
-            if capability_id in self.network_dependent_capability_ids:
+            if service_type in self.network_dependent_service_types:
                 factors[facility.id] = snapshot.fulfillment
             elif facility.site_cell_id is None or facility.site_cell_id == location.core_cell_id:
                 factors[facility.id] = 1.0

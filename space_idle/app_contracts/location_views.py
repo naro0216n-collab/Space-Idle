@@ -13,7 +13,7 @@ class InventoryRow:
     available: float
     storage_class: str | None
     physical_capacity: float | None
-    service_capacity: float | None
+    usable_capacity: float | None
     free_capacity: float | None
 
 
@@ -23,9 +23,9 @@ class StorageRow:
     stock_t: float
     staging_t: float
     physical_capacity_t: float
-    service_capacity_t: float
-    free_service_t: float
-    unserviced_occupied_t: float
+    usable_capacity_t: float
+    free_usable_t: float
+    unusable_occupied_t: float
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,7 @@ class FacilityRow:
     activation_blockers: tuple[tuple[str, str], ...]
     power_priority: int | None
     maintenance_priority: int
-    capabilities: tuple[tuple[str, float], ...]
+    capabilities: tuple[str, ...]
     power_utilization: float
     research_tier: int | None
     research_generation_points_per_day: float
@@ -52,14 +52,25 @@ class FacilityRow:
     operating_blockers: tuple[tuple[str, str], ...] = ()
     placement_scope: str = "OPERATIONAL_NODE"
     site_cell_id: str | None = None
+    service_capacity_supplies: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)
 class CapabilityRow:
     id: str
-    infrastructure_capacity: float
-    active_capacity: float
-    available_capacity: float
+    installed: bool
+    active: bool
+
+
+@dataclass(frozen=True)
+class ServiceCapacityRow:
+    service_type: str
+    nominal: float
+    enabled: float
+    requested: float
+    allocated: float
+    spare: float
+    limiting_factors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -72,7 +83,9 @@ class SurfaceInfrastructureLoadRow:
 class SurfaceInfrastructureRow:
     nominal_capacity: float
     available_capacity: float
-    demand: float
+    requested_capacity: float
+    allocated_capacity: float
+    spare_capacity: float
     fulfillment: float
     load_sources: tuple[SurfaceInfrastructureLoadRow, ...]
     limiting_factors: tuple[str, ...]
@@ -139,6 +152,7 @@ class LocationView:
     power_allocated_mw: float
     construction_capacity_per_day: float
     capabilities: tuple[CapabilityRow, ...]
+    service_capacities: tuple[ServiceCapacityRow, ...]
     surface_infrastructure: SurfaceInfrastructureRow | None
     inventory: tuple[InventoryRow, ...]
     storage: tuple[StorageRow, ...]

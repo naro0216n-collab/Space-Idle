@@ -5,14 +5,16 @@ import math
 
 from .facilities import FacilityBook
 from .power import PowerSnapshot
-from .shared import DefinitionId, SpatialNodeId, SurfaceCellId
+from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .spatial import SpatialGraph
+from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .exploration_models import KnowledgeLevel, SurveyCoverage, SurveyTarget, SurveyProviderSpec, SurveyCampaign
 
 
 @dataclass
 class SurveyService:
-    DEFAULT_ALLOCATION_WEIGHT = 1.0
+    SERVICE_TYPE = "survey_observation"
+    DEFAULT_PRIORITY = 50
 
     targets: dict[tuple[SurfaceCellId, DefinitionId], SurveyTarget]
     providers: dict[DefinitionId, SurveyProviderSpec]
@@ -132,14 +134,14 @@ class SurveyService:
     def can_resume(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
         return not self.resume_blockers(cell_id, resource_id)
 
-    def allocation_blockers(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> tuple[str, ...]:
+    def priority_blockers(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> tuple[str, ...]:
         key = (cell_id, resource_id)
         if key not in self.campaigns or self.is_complete(cell_id, resource_id):
             return ("not_active",)
         return ()
 
-    def can_set_allocation(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
-        return not self.allocation_blockers(cell_id, resource_id)
+    def can_set_priority(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
+        return not self.priority_blockers(cell_id, resource_id)
 
     def blockers(
         self,
@@ -147,6 +149,7 @@ class SurveyService:
         resource_id: DefinitionId,
         power: PowerSnapshot | None = None,
         day: int = 0,
+        service_allocations: ServiceCapacityAllocationPlan | None = None,
     ) -> tuple[str, ...]:
         key = (cell_id, resource_id)
         campaign = self.campaigns.get(key)
@@ -155,12 +158,19 @@ class SurveyService:
         blockers: list[str] = []
         if campaign.paused:
             blockers.append("manual_pause")
-        if campaign.allocation_weight <= 1e-12:
-            blockers.append("allocation")
         if self.capacity_for_target(
             campaign.provider_location_id, cell_id, resource_id, power, day
         ) <= 1e-12:
             blockers.append("survey_capacity")
+        elif service_allocations is not None and not campaign.paused:
+            try:
+                allocated = service_allocations.allocated(
+                    self.service_request_id(cell_id, resource_id)
+                )
+            except KeyError:
+                allocated = 0.0
+            if allocated <= 1e-12:
+                blockers.append("service_capacity")
         return tuple(blockers)
 
     def start(
@@ -169,21 +179,19 @@ class SurveyService:
         cell_id: SurfaceCellId,
         resource_id: DefinitionId,
         *,
-        allocation_weight: float = DEFAULT_ALLOCATION_WEIGHT,
+        priority: int = DEFAULT_PRIORITY,
         day: int = 0,
     ) -> None:
         blockers = self.start_blockers(provider_location_id, cell_id, resource_id, day)
         if blockers:
             raise ValueError("; ".join(blockers))
-        if allocation_weight < 0:
-            raise ValueError("allocation weight must be non-negative")
         target_level = self.reachable_knowledge_level(provider_location_id, cell_id, day=day)
         self.campaigns[(cell_id, resource_id)] = SurveyCampaign(
             provider_location_id,
             cell_id,
             resource_id,
             target_knowledge_level=target_level,
-            allocation_weight=allocation_weight,
+            priority=priority,
         )
 
     def initialize_known(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> None:
@@ -197,13 +205,11 @@ class SurveyService:
         )
         self.campaigns.pop(key, None)
 
-    def set_allocation_weight(self, cell_id: SurfaceCellId, resource_id: DefinitionId, weight: float) -> None:
-        blockers = self.allocation_blockers(cell_id, resource_id)
+    def set_priority(self, cell_id: SurfaceCellId, resource_id: DefinitionId, priority: int) -> None:
+        blockers = self.priority_blockers(cell_id, resource_id)
         if blockers:
             raise ValueError("; ".join(blockers))
-        if weight < 0:
-            raise ValueError("allocation weight must be non-negative")
-        self.campaigns[(cell_id, resource_id)].allocation_weight = weight
+        self.campaigns[(cell_id, resource_id)].priority = int(priority)
 
     def pause(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> None:
         blockers = self.pause_blockers(cell_id, resource_id)
@@ -332,62 +338,139 @@ class SurveyService:
             points += self._facility_survey_capacity(facility, spec, power)
         return points
 
-    def advance_day(self, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int = 0) -> None:
+    @staticmethod
+    def service_request_id(cell_id: SurfaceCellId, resource_id: DefinitionId) -> EntityId:
+        return EntityId(f"service.survey:{cell_id}:{resource_id}")
+
+    def service_requests(self, day: int = 0) -> tuple[ServiceCapacityRequest, ...]:
+        requests: list[ServiceCapacityRequest] = []
+        for key, campaign in sorted(
+            self.campaigns.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
+        ):
+            if campaign.paused:
+                continue
+            progress = self.knowledge_progress.get(key, 0.0)
+            threshold = self.targets[key].thresholds[campaign.target_knowledge_level - 1]
+            remaining = max(0.0, threshold - progress)
+            if remaining <= 1e-12:
+                continue
+            if self.capacity_for_target(
+                campaign.provider_location_id, campaign.cell_id, campaign.resource_id, None, day
+            ) <= 1e-12:
+                continue
+            requests.append(
+                ServiceCapacityRequest(
+                    self.service_request_id(campaign.cell_id, campaign.resource_id),
+                    campaign.provider_location_id,
+                    self.SERVICE_TYPE,
+                    remaining,
+                    campaign.priority,
+                    "survey",
+                    EntityId(f"{campaign.cell_id}:{campaign.resource_id}"),
+                    "survey_observation",
+                )
+            )
+        return tuple(requests)
+
+    def nominal_service_capacity_at(self, provider_location_id: SpatialNodeId, day: int = 0) -> float:
+        return sum(
+            spec.points_per_day
+            for facility in self.facilities.all_at(provider_location_id)
+            for spec in (self.providers.get(facility.definition_id),)
+            if spec is not None
+        )
+
+    def enabled_service_capacity_at(
+        self,
+        provider_location_id: SpatialNodeId,
+        power: PowerSnapshot | None = None,
+        day: int = 0,
+    ) -> float:
+        return sum(
+            self._facility_survey_capacity(facility, spec, power)
+            for facility in self.facilities.active_compatible_at(provider_location_id, day)
+            for spec in (self.providers.get(facility.definition_id),)
+            if spec is not None
+        )
+
+    def advance_day(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        service_allocations: ServiceCapacityAllocationPlan,
+        day: int = 0,
+    ) -> None:
         by_provider: dict[SpatialNodeId, list[SurveyCampaign]] = {}
         for campaign in self.campaigns.values():
             if (
                 not campaign.paused
-                and campaign.allocation_weight > 0
-                and self.knowledge_level(campaign.cell_id, campaign.resource_id) < campaign.target_knowledge_level
+                and self.knowledge_level(campaign.cell_id, campaign.resource_id)
+                < campaign.target_knowledge_level
             ):
                 by_provider.setdefault(campaign.provider_location_id, []).append(campaign)
 
         for provider_location_id, campaigns in by_provider.items():
             power = power_by_location.get(provider_location_id)
-            providers = sorted(
+            provider_rows = sorted(
                 self._provider_facilities_for_target_for_any_campaign(
                     provider_location_id, campaigns, day
                 ),
-                key=lambda row: str(row[0].id),
+                key=lambda row: (
+                    row[1].max_knowledge_level,
+                    0 if row[1].coverage is SurveyCoverage.LOCATION_TERRITORY else 1,
+                    str(row[0].id),
+                ),
             )
-            for facility, spec in providers:
-                remaining_points = self._facility_survey_capacity(facility, spec, power)
-                active = [
-                    campaign
-                    for campaign in campaigns
-                    if self._provider_covers_target(provider_location_id, spec, campaign.cell_id)
-                    and self.knowledge_level(campaign.cell_id, campaign.resource_id)
-                    < min(campaign.target_knowledge_level, spec.max_knowledge_level)
-                ]
-                while active and remaining_points > 1e-12:
-                    weight_total = sum(c.allocation_weight for c in active)
-                    if weight_total <= 1e-12:
+            provider_remaining = {
+                facility.id: self._facility_survey_capacity(facility, spec, power)
+                for facility, spec in provider_rows
+            }
+            ordered_campaigns = sorted(
+                campaigns,
+                key=lambda campaign: (
+                    -campaign.priority, str(campaign.cell_id), str(campaign.resource_id)
+                ),
+            )
+            for campaign in ordered_campaigns:
+                request_id = self.service_request_id(campaign.cell_id, campaign.resource_id)
+                try:
+                    remaining_allocation = service_allocations.allocated(request_id)
+                except KeyError:
+                    remaining_allocation = 0.0
+                if remaining_allocation <= 1e-12:
+                    continue
+                key = (campaign.cell_id, campaign.resource_id)
+                for facility, spec in provider_rows:
+                    if remaining_allocation <= 1e-12:
                         break
-                    proposed = {
-                        id(c): remaining_points * c.allocation_weight / weight_total
-                        for c in active
-                    }
-                    capped: list[SurveyCampaign] = []
-                    consumed = 0.0
-                    for campaign in active:
-                        key = (campaign.cell_id, campaign.resource_id)
-                        cap_level = min(campaign.target_knowledge_level, spec.max_knowledge_level)
-                        cap_threshold = self.targets[key].thresholds[cap_level - 1]
-                        progress = self.knowledge_progress.get(key, 0.0)
-                        need = max(0.0, cap_threshold - progress)
-                        gain = min(proposed[id(campaign)], need)
-                        if gain > 0:
-                            self.knowledge_progress[key] = min(progress + gain, cap_threshold)
-                        consumed += gain
-                        if self.knowledge_progress.get(key, progress) + 1e-9 >= cap_threshold:
-                            capped.append(campaign)
-                    remaining_points = max(0.0, remaining_points - consumed)
-                    if not capped or consumed <= 1e-12:
-                        break
-                    active = [campaign for campaign in active if campaign not in capped]
+                    available = provider_remaining.get(facility.id, 0.0)
+                    if available <= 1e-12:
+                        continue
+                    if not self._provider_covers_target(
+                        provider_location_id, spec, campaign.cell_id
+                    ):
+                        continue
+                    current_level = self.knowledge_level(
+                        campaign.cell_id, campaign.resource_id
+                    )
+                    if spec.max_knowledge_level <= current_level:
+                        continue
+                    cap_level = min(
+                        campaign.target_knowledge_level, spec.max_knowledge_level
+                    )
+                    cap_threshold = self.targets[key].thresholds[cap_level - 1]
+                    progress = self.knowledge_progress.get(key, 0.0)
+                    need = max(0.0, cap_threshold - progress)
+                    gain = min(remaining_allocation, available, need)
+                    if gain <= 1e-12:
+                        continue
+                    self.knowledge_progress[key] = min(progress + gain, cap_threshold)
+                    provider_remaining[facility.id] = max(0.0, available - gain)
+                    remaining_allocation -= gain
 
-            for campaign in campaigns:
-                if self.knowledge_level(campaign.cell_id, campaign.resource_id) >= campaign.target_knowledge_level:
+            for campaign in tuple(campaigns):
+                if self.knowledge_level(
+                    campaign.cell_id, campaign.resource_id
+                ) >= campaign.target_knowledge_level:
                     self.campaigns.pop((campaign.cell_id, campaign.resource_id), None)
 
     def _provider_facilities_for_target_for_any_campaign(

@@ -166,7 +166,7 @@ class LogisticsStateProjectorMixin:
         sim = self._simulation
         rows: list[VehicleProductionOptionRow] = []
         for definition in sorted(sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)):
-            if definition.production.capability_id is None or definition.production.days <= 1e-12:
+            if definition.production.service_type is None or definition.production.days <= 1e-12:
                 continue
             for node in sim.graph.operational_nodes():
                 power = sim.power.snapshot(node.id, sim.facilities, sim.day)
@@ -179,7 +179,7 @@ class LogisticsStateProjectorMixin:
                 rows.append(
                     VehicleProductionOptionRow(
                         str(definition.id), definition.display_name, str(node.id),
-                        definition.production.capability_id, definition.production.days,
+                        definition.production.service_type, definition.production.days,
                         tuple((str(resource_id), amount) for resource_id, amount in definition.production.resources),
                         blockers,
                     )
@@ -204,11 +204,10 @@ class LogisticsStateProjectorMixin:
                     str(state.id), str(state.vehicle_definition_id), definition.display_name,
                     str(state.operational_node_id), state.phase.value, state.paused, state.progress_days,
                     definition.production.days, remaining_days, estimated_completion_day,
-                    definition.production.capability_id,
+                    definition.production.service_type,
                     tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.production.resources),
-                    state.priority, state.allocation_weight,
+                    state.priority,
                     sim.logistics.vehicle_production_priority_editable(state.id),
-                    sim.logistics.vehicle_production_allocation_editable(state.id),
                     blockers, state.completed_units,
                 )
             )

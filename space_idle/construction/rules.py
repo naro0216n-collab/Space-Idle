@@ -244,7 +244,25 @@ class ConstructionRulesMixin:
             return ("surface_infrastructure",)
         return ()
 
-    def construction_capacity_at(self, location_id: SpatialNodeId, power: PowerSnapshot, day: int) -> float:
+    def construction_nominal_capacity_at(
+        self, location_id: SpatialNodeId, day: int = 0
+    ) -> float:
+        capacity = 0.0
+        for facility in self.facilities.active_compatible_at(location_id, day):
+            spec = self.construction_providers.get(facility.definition_id)
+            if spec is not None:
+                capacity += spec.work_per_day
+        for resource_id, spec in self.construction_resource_providers.items():
+            capacity += (
+                self.inventory.available(location_id, resource_id)
+                * spec.work_per_t_per_day
+            )
+        return capacity
+
+    def construction_capacity_at(
+        self, location_id: SpatialNodeId, power: PowerSnapshot, day: int = 0
+    ) -> float:
+        """Enabled Construction Service Capacity before consumer allocation."""
         capacity = 0.0
         for facility in self.facilities.active_compatible_at(location_id, day):
             spec = self.construction_providers.get(facility.definition_id)
@@ -256,5 +274,8 @@ class ConstructionRulesMixin:
             )
             capacity += spec.work_per_day * utilization * maintenance
         for resource_id, spec in self.construction_resource_providers.items():
-            capacity += self.inventory.available(location_id, resource_id) * spec.work_per_t_per_day
+            capacity += (
+                self.inventory.available(location_id, resource_id)
+                * spec.work_per_t_per_day
+            )
         return capacity

@@ -108,7 +108,7 @@ def test_save_load_preserves_survey_knowledge_separately_from_active_campaign(tm
     known_key = (ids.EARTH_CELL_INDUSTRIAL, ids.WATER)
     target = sim.survey.targets[active_key]
 
-    app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(active_key[0]), str(active_key[1]), allocation_weight=0.75))
+    app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(active_key[0]), str(active_key[1]), priority=75))
     sim.survey.knowledge_progress[active_key] = target.thresholds[0] / 2.0
     assert known_key not in sim.survey.campaigns
 
@@ -340,7 +340,7 @@ def test_save_load_preserves_active_cell_resource_survey_future_behavior(tmp_pat
     app = build_game_application()
     sim = app._simulation
     key = (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.WATER)
-    app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(key[0]), str(key[1]), allocation_weight=1.0))
+    app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(key[0]), str(key[1]), priority=50))
 
     path = tmp_path / "active-surface-survey.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))

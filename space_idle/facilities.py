@@ -20,15 +20,25 @@ class FacilityPlacementScope(str, Enum):
 
 @dataclass(frozen=True)
 class CapabilitySupply:
-    """A facility-provided qualitative service with a rated capacity."""
+    """Categorical function/interface supplied by a facility."""
     id: str
-    rated_capacity: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("capability id must not be empty")
-        if self.rated_capacity <= 0:
-            raise ValueError("capability rated capacity must be positive")
+
+
+@dataclass(frozen=True)
+class ServiceCapacitySupply:
+    """Finite per-tick flow supplied by a facility before allocation."""
+    service_type: str
+    nominal_rate: float
+
+    def __post_init__(self) -> None:
+        if not self.service_type:
+            raise ValueError("service type must not be empty")
+        if self.nominal_rate <= 0:
+            raise ValueError("service capacity nominal rate must be positive")
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,7 @@ class FacilityDef:
     # per game year. The value is content balance; Core only supplies the rule.
     maintenance_fraction_per_year: float = 0.0
     placement_scope: FacilityPlacementScope = FacilityPlacementScope.OPERATIONAL_NODE
+    service_capacity_supplies: tuple[ServiceCapacitySupply, ...] = ()
 
     def __post_init__(self) -> None:
         if self.maintenance_fraction_per_year < 0:
@@ -78,7 +89,7 @@ class FacilityBook:
     environment: EnvironmentResolver
     facilities: dict[EntityId, FacilityState] = field(default_factory=dict)
     _counter: int = 0
-    availability_factor_provider: Callable[[SpatialNodeId, str, "PowerSnapshot", int], Mapping[EntityId, float]] | None = field(
+    service_availability_factor_provider: Callable[[SpatialNodeId, str, "PowerSnapshot", int], Mapping[EntityId, float]] | None = field(
         default=None, repr=False, compare=False
     )
 
@@ -246,44 +257,99 @@ class FacilityBook:
     def maintenance_factor(self, facility_id: EntityId) -> float:
         return max(0.0, min(1.0, self.facilities[facility_id].maintenance_satisfaction))
 
-    def _capacity_from_facilities(self, facilities: list[FacilityState], capability_id: str, *, maintenance: bool = False) -> float:
+    @staticmethod
+    def _definition_has_capability(definition: FacilityDef, capability_id: str) -> bool:
+        return any(supply.id == capability_id for supply in definition.capability_supplies)
+
+    def installed_capability_at(self, operational_node_id: SpatialNodeId, capability_id: str) -> bool:
+        """Whether the physical function/interface exists at the node.
+
+        Installed capability is categorical and does not disappear because a
+        facility is paused, unpowered, or temporarily environment-incompatible.
+        """
+        return any(
+            self._definition_has_capability(self.definitions[facility.definition_id], capability_id)
+            for facility in self.all_at(operational_node_id)
+        )
+
+    def active_capability_at(self, operational_node_id: SpatialNodeId, capability_id: str, day: int = 0) -> bool:
+        """Whether an installed function is currently active as a category."""
+        return any(
+            self._definition_has_capability(self.definitions[facility.definition_id], capability_id)
+            for facility in self.active_compatible_at(operational_node_id, day)
+        )
+
+    def nominal_service_capacity_at(
+        self, operational_node_id: SpatialNodeId, service_type: str, day: int = 0
+    ) -> float:
         contributions: list[float] = []
-        for facility in sorted(facilities, key=lambda row: str(row.id)):
+        for facility in sorted(
+            self.active_compatible_at(operational_node_id, day), key=lambda row: str(row.id)
+        ):
             definition = self.definitions[facility.definition_id]
-            factor = self.maintenance_factor(facility.id) if maintenance else 1.0
             contributions.extend(
-                supply.rated_capacity * factor
-                for supply in definition.capability_supplies
-                if supply.id == capability_id
+                supply.nominal_rate
+                for supply in definition.service_capacity_supplies
+                if supply.service_type == service_type
             )
         return math.fsum(contributions)
 
-    def infrastructure_capability_capacity_at(self, operational_node_id: SpatialNodeId, capability_id: str, day: int = 0) -> float:
-        facilities = [f for f in self.all_at(operational_node_id) if self.is_environmentally_compatible(f, day)]
-        return self._capacity_from_facilities(facilities, capability_id)
+    def enabled_service_capacity_at(
+        self,
+        operational_node_id: SpatialNodeId,
+        service_type: str,
+        power: "PowerSnapshot",
+        day: int = 0,
+    ) -> float:
+        """Provider flow enabled by already-resolved upstream dependencies.
 
-    def active_capability_capacity_at(self, operational_node_id: SpatialNodeId, capability_id: str, day: int = 0) -> float:
-        # Active is rated capacity before transient power/maintenance allocation.
-        return self._capacity_from_facilities(self.active_compatible_at(operational_node_id, day), capability_id)
-
-    def available_capability_capacity_at(self, operational_node_id: SpatialNodeId, capability_id: str, power: PowerSnapshot, day: int = 0) -> float:
+        This adapter currently exposes power, maintenance and upstream surface
+        infrastructure factors.  It is an allocation input; consumers must
+        still submit ServiceCapacityRequest and cannot independently consume
+        this value.
+        """
         contributions: list[float] = []
         service_factors = (
             {}
-            if self.availability_factor_provider is None
-            else self.availability_factor_provider(operational_node_id, capability_id, power, day)
-        )
-        for facility in sorted(self.active_compatible_at(operational_node_id, day), key=lambda row: str(row.id)):
-            definition = self.definitions[facility.definition_id]
-            utilization = max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
-            factor = utilization * power.maintenance_factor_by_facility.get(
-                facility.id, self.maintenance_factor(facility.id)
+            if self.service_availability_factor_provider is None
+            else self.service_availability_factor_provider(
+                operational_node_id, service_type, power, day
             )
-            factor *= max(0.0, min(1.0, service_factors.get(facility.id, 1.0)))
-            for supply in definition.capability_supplies:
-                if supply.id == capability_id:
-                    contributions.append(supply.rated_capacity * factor)
+        )
+        for facility in sorted(
+            self.active_compatible_at(operational_node_id, day), key=lambda row: str(row.id)
+        ):
+            definition = self.definitions[facility.definition_id]
+            utilization = max(
+                0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0))
+            )
+            maintenance = max(
+                0.0,
+                min(
+                    1.0,
+                    power.maintenance_factor_by_facility.get(
+                        facility.id, self.maintenance_factor(facility.id)
+                    ),
+                ),
+            )
+            upstream = max(0.0, min(1.0, service_factors.get(facility.id, 1.0)))
+            for supply in definition.service_capacity_supplies:
+                if supply.service_type == service_type:
+                    contributions.append(
+                        supply.nominal_rate * utilization * maintenance * upstream
+                    )
         return math.fsum(contributions)
 
     def capability_ids(self) -> set[str]:
-        return {supply.id for definition in self.definitions.values() for supply in definition.capability_supplies}
+        return {
+            supply.id
+            for definition in self.definitions.values()
+            for supply in definition.capability_supplies
+        }
+
+    def service_types(self) -> set[str]:
+        return {
+            supply.service_type
+            for definition in self.definitions.values()
+            for supply in definition.service_capacity_supplies
+        }

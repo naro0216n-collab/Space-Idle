@@ -93,12 +93,6 @@ class SetProjectSourcingPolicy:
 
 
 @dataclass(frozen=True)
-class SetConstructionWeight:
-    project_id: str
-    weight: float
-
-
-@dataclass(frozen=True)
 class SetProjectImportSource:
     project_id: str
     operational_node_id: str | None

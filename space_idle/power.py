@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import TypeAlias
 
 from .facilities import FacilityBook, FacilityState
+from .service_capacity import ServiceCapacityRequest, allocate_service_capacity
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .spatial import EnvironmentResolver, IlluminationField
 
@@ -50,6 +51,12 @@ class PowerSnapshot:
 
 @dataclass
 class PowerService:
+    SERVICE_TYPE = "power"
+
+    @staticmethod
+    def _request_id(facility_id: EntityId) -> EntityId:
+        return EntityId(f"service.power:{facility_id}")
+
     specs: dict[DefinitionId, PowerSpec]
     environment: EnvironmentResolver
 
@@ -71,7 +78,7 @@ class PowerService:
         )
 
     def snapshot(self, operational_node_id: SpatialNodeId, facilities: FacilityBook, day: int) -> PowerSnapshot:
-        rows: list[tuple[int, EntityId, float]] = []
+        requests: list[ServiceCapacityRequest] = []
         generation = 0.0
         demand = 0.0
         maintenance_factors: dict[EntityId, float] = {}
@@ -88,25 +95,28 @@ class PowerService:
             load = spec.standby_load_mw if facility.paused else spec.load_mw
             if load > 0:
                 priority = facility.power_priority if facility.power_priority is not None else spec.default_priority
-                rows.append((priority, facility.id, load))
+                requests.append(ServiceCapacityRequest(
+                    self._request_id(facility.id),
+                    operational_node_id,
+                    self.SERVICE_TYPE,
+                    load,
+                    priority,
+                    "facility",
+                    facility.id,
+                    "power_load",
+                ))
                 demand += load
-
-        remaining = generation
         utilization: dict[EntityId, float] = {}
+        plan = allocate_service_capacity(
+            requests,
+            nominal_supply={(operational_node_id, self.SERVICE_TYPE): generation},
+        )
         allocated = 0.0
-        # Priority is a player decision; entity installation order is not. All
-        # loads in the same priority band therefore share any shortfall
-        # proportionally.
-        priorities = sorted({priority for priority, _facility_id, _load in rows}, reverse=True)
-        for priority in priorities:
-            group = [(facility_id, load) for p, facility_id, load in rows if p == priority]
-            group_demand = sum(load for _facility_id, load in group)
-            if group_demand <= 1e-12:
-                continue
-            factor = min(1.0, max(0.0, remaining) / group_demand)
-            for facility_id, load in sorted(group, key=lambda x: str(x[0])):
-                use = load * factor
-                allocated += use
-                utilization[facility_id] = factor
-            remaining = max(0.0, remaining - group_demand * factor)
+        for request in requests:
+            amount = plan.allocated(request.id)
+            allocated += amount
+            utilization[request.owner_id] = (
+                1.0 if request.requested_rate <= 1e-12
+                else max(0.0, min(1.0, amount / request.requested_rate))
+            )
         return PowerSnapshot(generation, demand, allocated, utilization, maintenance_factors)

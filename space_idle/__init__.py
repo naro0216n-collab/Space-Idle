@@ -15,10 +15,10 @@ from .application import (
     PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, FoundLocation, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet,
     ResumeBuild, ResumeFacility, ResumeLogisticsLane, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
-    ResumeVehicleProduction, SetConstructionWeight, SetFacilityProcess,
+    ResumeVehicleProduction, SetFacilityProcess,
     SetMaintenancePriority, SetPowerPriority, SetProjectImportSource, SetProjectPriority,
     SetProjectSourcingPolicy, SetResearchDemonstrationSite, SetResearchPrototypeSite,
-    SetSurveyAllocation, SetTimeControl, SetVehicleProductionSettings, StartResearch,
+    SetSurveyPriority, SetTimeControl, SetVehicleProductionSettings, StartResearch,
     StartScientificExploration, StartSurvey, UnassignExplorationFleet,
     UpdateLogisticsLane, UpdateTransportAllocation,
 )

@@ -86,8 +86,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         )
         for operation in definition.operations:
             _require(sim.logistics.operation_registry.supports(operation.operation_type), f"scientific exploration references unknown operation: {definition_id}/{operation.operation_type}")
-        validate_site_requirements(definition.origin_requirements, capabilities, f"scientific_exploration:{definition_id}:origin")
-        validate_site_requirements(definition.destination_requirements, capabilities, f"scientific_exploration:{definition_id}:destination")
+        validate_site_requirements(definition.origin_requirements, capabilities, f"scientific_exploration:{definition_id}:origin", ctx.known_service_types)
+        validate_site_requirements(definition.destination_requirements, capabilities, f"scientific_exploration:{definition_id}:destination", ctx.known_service_types)
 
 
 def validate_runtime(sim: Any) -> None:

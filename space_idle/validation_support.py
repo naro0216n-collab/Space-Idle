@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .simulation import Simulation
+from .construction.models import CONSTRUCTION_SERVICE_TYPE
 from .site import FacetValueRange, RequiresFacet, SiteRequirements
 
 class ConfigurationError(ValueError):
@@ -22,7 +23,12 @@ def validate_environment_condition(condition: object, owner: str) -> None:
         dataclass_fields = getattr(condition.facet_type, "__dataclass_fields__", {})
         require(condition.attribute in dataclass_fields, f"site requirement references unknown facet attribute: {owner}/{code}/{condition.attribute}")
 
-def validate_site_requirements(requirements: SiteRequirements, known_capabilities: set[str], owner: str) -> None:
+def validate_site_requirements(
+    requirements: SiteRequirements,
+    known_capabilities: set[str],
+    owner: str,
+    known_service_types: set[str] | None = None,
+) -> None:
     seen_codes: set[str] = set()
     for condition in requirements.environment:
         validate_environment_condition(condition, owner)
@@ -32,15 +38,24 @@ def validate_site_requirements(requirements: SiteRequirements, known_capabilitie
     seen_capabilities: set[tuple[str, str]] = set()
     for requirement in requirements.capability_requirements:
         require(requirement.capability_id in known_capabilities, f"site requirement references unknown capability: {owner}/{requirement.capability_id}")
-        key = (requirement.capability_id, requirement.mode)
-        require(key not in seen_capabilities, f"duplicate capability requirement: {owner}/{requirement.capability_id}/{requirement.mode}")
+        key = (requirement.capability_id, requirement.required_state.value)
+        require(key not in seen_capabilities, f"duplicate capability requirement: {owner}/{requirement.capability_id}/{requirement.required_state.value}")
         seen_capabilities.add(key)
+    seen_services: set[str] = set()
+    for requirement in requirements.service_capacity_requirements:
+        if known_service_types is None:
+            require(False, f"service capacity requirement cannot be validated without known service types: {owner}/{requirement.service_type}")
+        else:
+            require(requirement.service_type in known_service_types, f"site requirement references unknown service type: {owner}/{requirement.service_type}")
+        require(requirement.service_type not in seen_services, f"duplicate service capacity requirement: {owner}/{requirement.service_type}")
+        seen_services.add(requirement.service_type)
 
 @dataclass(frozen=True)
 class ValidationContext:
     nodes: dict
     facility_defs: dict
     known_capabilities: set[str]
+    known_service_types: set[str]
     known_technologies: set
 
     @classmethod
@@ -48,4 +63,24 @@ class ValidationContext:
         technologies = set(sim.technology.completed)
         if sim.research is not None:
             technologies.update(sim.research.definitions)
-        return cls(sim.graph.operational_node_map(), sim.facilities.definitions, sim.facilities.capability_ids(), technologies)
+        service_types = set(sim.facilities.service_types())
+        service_types.add(CONSTRUCTION_SERVICE_TYPE)
+        service_types.add(sim.power.SERVICE_TYPE)
+        service_types.update(
+            sim.industry.process_service_type(process.id)
+            for process in sim.industry.processes.values()
+        )
+        if sim.extraction is not None:
+            service_types.update(
+                sim.extraction.service_type(spec.resource_id)
+                for spec in sim.extraction.specs.values()
+            )
+        if sim.survey is not None:
+            service_types.add(sim.survey.SERVICE_TYPE)
+        return cls(
+            sim.graph.operational_node_map(),
+            sim.facilities.definitions,
+            sim.facilities.capability_ids(),
+            service_types,
+            technologies,
+        )

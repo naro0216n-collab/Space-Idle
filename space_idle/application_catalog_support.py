@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Mapping
 
 from .application_views import (
-    CapabilityRequirementRow, OperationCapabilityDefinitionRow,
+    CapabilityRequirementRow, ServiceCapacityRequirementRow, OperationCapabilityDefinitionRow,
     RequirementConditionRow, SiteRequirementsDefinitionRow,
 )
 from .site import SiteRequirements
@@ -47,7 +47,8 @@ def condition_definition_row(condition: object) -> RequirementConditionRow:
 def site_requirements_definition(requirements: SiteRequirements) -> SiteRequirementsDefinitionRow:
     return SiteRequirementsDefinitionRow(
         tuple(condition_definition_row(condition) for condition in requirements.environment),
-        tuple(CapabilityRequirementRow(req.capability_id, req.minimum_capacity, req.mode) for req in requirements.capability_requirements),
+        tuple(CapabilityRequirementRow(req.capability_id, req.required_state.value) for req in requirements.capability_requirements),
+        tuple(ServiceCapacityRequirementRow(req.service_type, req.minimum_rate) for req in requirements.service_capacity_requirements),
     )
 
 

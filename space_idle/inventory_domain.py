@@ -52,14 +52,14 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(operational_node_id in nodes, f"base storage capacity references unknown location: {operational_node_id}")
         _require(bool(storage_class), f"empty storage class at {operational_node_id}")
         _require(amount >= 0, "negative base storage capacity")
-    for (operational_node_id, storage_class), amount in sim.inventory.storage_capacity_t.items():
+    for (operational_node_id, storage_class), amount in sim.inventory.physical_storage_capacity_t.items():
         _require(operational_node_id in nodes, f"storage capacity references unknown location: {operational_node_id}")
         _require(bool(storage_class), f"empty storage class at {operational_node_id}")
         _require(amount >= 0, "negative storage capacity")
-    for key, service in sim.inventory.storage_service_capacity_t.items():
-        _require(key in sim.inventory.storage_capacity_t, f"storage service capacity has no physical capacity: {key}")
-        _require(service >= 0, f"negative storage service capacity: {key}")
-        _require(service <= sim.inventory.storage_capacity_t[key] + 1e-9, f"storage service exceeds physical capacity: {key}")
+    for key, usable in sim.inventory.usable_storage_capacity_t.items():
+        _require(key in sim.inventory.physical_storage_capacity_t, f"usable storage capacity has no physical capacity: {key}")
+        _require(usable >= 0, f"negative usable storage capacity: {key}")
+        _require(usable <= sim.inventory.physical_storage_capacity_t[key] + 1e-9, f"usable storage capacity exceeds physical capacity: {key}")
     for resource_id, storage_class in sim.inventory.resource_storage_class.items():
         _require(bool(storage_class), f"empty storage class for resource: {resource_id}")
     for (operational_node_id, _resource_id), amount in sim.inventory.stock.items():
@@ -83,15 +83,15 @@ def validate_runtime(sim: Any) -> None:
             f"external storage occupancy references unknown operational node: {operational_node_id}/{resource_id}",
         )
         _require(amount >= -1e-9, f"negative external storage occupancy: {operational_node_id}/{resource_id}")
-    for (operational_node_id, storage_class), capacity in sim.inventory.storage_capacity_t.items():
+    for (operational_node_id, storage_class), capacity in sim.inventory.physical_storage_capacity_t.items():
         _require(
             sim.graph.has_operational_node(operational_node_id),
             f"storage capacity references unknown operational node: {operational_node_id}/{storage_class}",
         )
         stored = sim.inventory.stored_in_class(operational_node_id, storage_class)
         _require(stored <= capacity + 1e-8, f"physical storage capacity exceeded: {operational_node_id}/{storage_class}")
-        service = sim.inventory.storage_service_capacity_t.get((operational_node_id, storage_class), 0.0)
-        _require(0 <= service <= capacity + 1e-8, f"invalid storage service capacity: {operational_node_id}/{storage_class}")
+        usable = sim.inventory.usable_storage_capacity_t.get((operational_node_id, storage_class), 0.0)
+        _require(0 <= usable <= capacity + 1e-8, f"invalid usable storage capacity: {operational_node_id}/{storage_class}")
 
 
 DOMAIN_EXTENSION = DomainExtension(

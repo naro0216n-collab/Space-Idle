@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, TYPE_CHECKING
+from enum import Enum
+from typing import Mapping, Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .facilities import FacilityBook
@@ -52,28 +53,40 @@ class FacetValueRange:
         return True
 
 
-CapabilityMode = Literal["infrastructure", "available"]
+class CapabilityRequirementState(str, Enum):
+    INSTALLED = "INSTALLED"
+    ACTIVE = "ACTIVE"
 
 
 @dataclass(frozen=True)
 class CapabilityRequirement:
     capability_id: str
-    minimum_capacity: float = 1.0
-    mode: CapabilityMode = "infrastructure"
+    required_state: CapabilityRequirementState = CapabilityRequirementState.INSTALLED
 
     def __post_init__(self) -> None:
         if not self.capability_id:
             raise ValueError("capability id must not be empty")
-        if self.minimum_capacity <= 0:
-            raise ValueError("minimum capability capacity must be positive")
-        if self.mode not in {"infrastructure", "available"}:
-            raise ValueError(f"unknown capability requirement mode: {self.mode}")
+        if not isinstance(self.required_state, CapabilityRequirementState):
+            raise ValueError("capability required state must be INSTALLED or ACTIVE")
+
+
+@dataclass(frozen=True)
+class ServiceCapacityRequirement:
+    service_type: str
+    minimum_rate: float
+
+    def __post_init__(self) -> None:
+        if not self.service_type:
+            raise ValueError("service capacity requirement type must not be empty")
+        if self.minimum_rate < 0:
+            raise ValueError("service capacity requirement minimum must be non-negative")
 
 
 @dataclass(frozen=True)
 class SiteRequirements:
     environment: tuple[EnvironmentCondition, ...] = ()
     capability_requirements: tuple[CapabilityRequirement, ...] = ()
+    service_capacity_requirements: tuple[ServiceCapacityRequirement, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -104,20 +117,35 @@ def evaluate_site_requirements(
     power: "PowerSnapshot | None" = None,
     *,
     environment_context_id: SpatialContextId | None = None,
+    service_capacity_available: Mapping[str, float] | None = None,
 ) -> tuple[SiteRequirementFailure, ...]:
     context_id = location_id if environment_context_id is None else environment_context_id
     failures = list(evaluate_environment_requirements(requirements, context_id, day, environment))
 
     for requirement in requirements.capability_requirements:
-        if requirement.mode == "infrastructure":
-            actual = facilities.infrastructure_capability_capacity_at(location_id, requirement.capability_id, day)
+        if requirement.required_state is CapabilityRequirementState.INSTALLED:
+            satisfied = facilities.installed_capability_at(location_id, requirement.capability_id)
         else:
-            actual = 0.0 if power is None else facilities.available_capability_capacity_at(
-                location_id, requirement.capability_id, power, day
-            )
-        if actual + 1e-9 < requirement.minimum_capacity:
+            satisfied = facilities.active_capability_at(location_id, requirement.capability_id, day)
+        if not satisfied:
             failures.append(SiteRequirementFailure(
-                f"capability:{requirement.mode}",
-                f"{requirement.capability_id}:{actual:g}/{requirement.minimum_capacity:g}",
+                f"capability:{requirement.required_state.value.lower()}",
+                requirement.capability_id,
+            ))
+    for requirement in requirements.service_capacity_requirements:
+        if service_capacity_available is not None:
+            available = service_capacity_available.get(requirement.service_type, 0.0)
+        elif power is not None:
+            available = facilities.enabled_service_capacity_at(
+                location_id, requirement.service_type, power, day
+            )
+        else:
+            available = facilities.nominal_service_capacity_at(
+                location_id, requirement.service_type, day
+            )
+        if available + 1e-9 < requirement.minimum_rate:
+            failures.append(SiteRequirementFailure(
+                "service_capacity:available",
+                f"{requirement.service_type}:{available:g}/{requirement.minimum_rate:g}",
             ))
     return tuple(failures)

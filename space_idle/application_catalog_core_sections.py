@@ -22,12 +22,20 @@ def project_resources(projector):
 def project_facilities(projector):
     return tuple(
         FacilityDefinitionRow(
-            str(definition.id), definition.display_name,
-            tuple(sorted((supply.id, supply.rated_capacity) for supply in definition.capability_supplies)),
-            tuple(condition_definition_row(condition) for condition in definition.installation_environment),
-            tuple(condition_definition_row(condition) for condition in definition.operating_environment),
-            definition.maintenance_fraction_per_year,
-            definition.placement_scope.value,
+            id=str(definition.id),
+            display_name=definition.display_name,
+            capabilities=tuple(sorted(supply.id for supply in definition.capability_supplies)),
+            service_capacity_supplies=tuple(
+                sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
+            ),
+            installation_environment=tuple(
+                condition_definition_row(condition) for condition in definition.installation_environment
+            ),
+            operating_environment=tuple(
+                condition_definition_row(condition) for condition in definition.operating_environment
+            ),
+            maintenance_fraction_per_year=definition.maintenance_fraction_per_year,
+            placement_scope=definition.placement_scope.value,
         )
         for definition in sorted(projector._simulation.facilities.definitions.values(), key=lambda d: str(d.id))
     )

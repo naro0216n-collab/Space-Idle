@@ -136,10 +136,10 @@ def build_vehicle_definitions() -> dict:
                 generic_capabilities=("refueling_interface",),
             ),
             production=VehicleProductionSpec(
-                capability_id="vehicle_assembly", days=10.0,
+                service_type="vehicle_assembly", days=10.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 20.0), (ids.MACHINERY, 8.0), (ids.PRECISION_ELECTRONICS, 2.0)),
             ),
-            maintenance=VehicleMaintenanceSpec(capability_id="launch_vehicle_servicing", turnaround_days=5.0),
+            maintenance=VehicleMaintenanceSpec(service_type="launch_vehicle_servicing", turnaround_days=5.0),
         ),
         ids.REUSABLE_ORBITAL_CARGO_TUG: VehicleDef(
             id=ids.REUSABLE_ORBITAL_CARGO_TUG,
@@ -154,10 +154,10 @@ def build_vehicle_definitions() -> dict:
                 generic_capabilities=("refueling_interface", "docking_interface"),
             ),
             production=VehicleProductionSpec(
-                capability_id="vehicle_assembly", days=4.0,
+                service_type="vehicle_assembly", days=4.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 4.0), (ids.MACHINERY, 2.0), (ids.PRECISION_ELECTRONICS, 1.0)),
             ),
-            maintenance=VehicleMaintenanceSpec(capability_id="spacecraft_servicing", turnaround_days=1.0),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
         ),
         ids.SURFACE_CARGO_HAULER: VehicleDef(
             id=ids.SURFACE_CARGO_HAULER,
@@ -168,7 +168,7 @@ def build_vehicle_definitions() -> dict:
                 endurance_days=120.0,
             ),
             production=VehicleProductionSpec(
-                capability_id="vehicle_assembly", days=2.0,
+                service_type="vehicle_assembly", days=2.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 1.5), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.25)),
             ),
             maintenance=VehicleMaintenanceSpec(turnaround_days=0.25),
@@ -186,10 +186,10 @@ def build_vehicle_definitions() -> dict:
                 generic_capabilities=("refueling_interface", "docking_interface"),
             ),
             production=VehicleProductionSpec(
-                capability_id="vehicle_assembly", days=3.0,
+                service_type="vehicle_assembly", days=3.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 2.5), (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 0.8)),
             ),
-            maintenance=VehicleMaintenanceSpec(capability_id="spacecraft_servicing", turnaround_days=1.0),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
         ),
     }
 

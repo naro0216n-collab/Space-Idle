@@ -76,6 +76,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
                 research.prototype.site_requirements,
                 known_capabilities,
                 f"research:{research_id}:prototype",
+                ctx.known_service_types,
             )
         if research.demonstration is not None:
             _require(research.demonstration.days > 0, f"invalid research demonstration duration: {research_id}")
@@ -83,6 +84,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
                 research.demonstration.site_requirements,
                 known_capabilities,
                 f"research:{research_id}:demonstration",
+                ctx.known_service_types,
             )
     visiting: set[object] = set()
     visited: set[object] = set()

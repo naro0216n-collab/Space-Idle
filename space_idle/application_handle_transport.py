@@ -30,7 +30,6 @@ class TransportCommandHandlerMixin:
                 DefinitionId(command.vehicle_definition_id),
                 self._require_location(command.operational_node_id),
                 priority=command.priority,
-                allocation_weight=command.allocation_weight,
                 day=sim.day,
             )
             return CommandResult(str(production_id))
@@ -40,8 +39,7 @@ class TransportCommandHandlerMixin:
             sim.logistics.resume_vehicle_production(EntityId(command.production_id)); return CommandResult()
         if isinstance(command, SetVehicleProductionSettings):
             sim.logistics.set_vehicle_production_settings(
-                EntityId(command.production_id), priority=command.priority,
-                allocation_weight=command.allocation_weight,
+                EntityId(command.production_id), priority=command.priority
             )
             return CommandResult()
         if isinstance(command, CreateTransportAllocation):

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from ..power import PowerSnapshot
+from ..service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
+from ..shared import EntityId
 from ..shared import SpatialNodeId
 from .models import (
-    ConstructionProject, FacilityUpgradeTarget, NewFacilityTarget,
+    CONSTRUCTION_SERVICE_TYPE, ConstructionProject, FacilityUpgradeTarget, NewFacilityTarget,
     ProjectStatus, SurfaceCellDevelopmentTarget,
 )
 
@@ -49,98 +51,113 @@ class ConstructionExecutionMixin:
             )
         return True
 
+    @staticmethod
+    def construction_service_request_id(project_id) -> EntityId:
+        return EntityId(f"service.construction:{project_id}")
+
+    def construction_service_requests(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        day: int = 0,
+    ) -> tuple[ServiceCapacityRequest, ...]:
+        requests: list[ServiceCapacityRequest] = []
+        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
+            if (
+                project.paused
+                or project.status not in {ProjectStatus.READY, ProjectStatus.BUILDING}
+                or not self._target_ready_for_execution(project)
+            ):
+                continue
+            recipe = self._recipe_for_project(project)
+            if recipe.self_deploying or recipe.construction_work <= 1e-12:
+                continue
+            power = power_by_location.get(project.operational_node_id)
+            if power is None:
+                power = self.power.snapshot(
+                    project.operational_node_id, self.facilities, day
+                )
+            if self.project_site_failures(project, day, power):
+                continue
+            fulfillment = self.project_construction_fulfillment(project, power, day)
+            if fulfillment <= 1e-12:
+                continue
+            remaining_work = max(
+                0.0, recipe.construction_work - project.construction_done
+            )
+            if remaining_work <= 1e-12:
+                continue
+            requests.append(
+                ServiceCapacityRequest(
+                    self.construction_service_request_id(project.id),
+                    project.operational_node_id,
+                    CONSTRUCTION_SERVICE_TYPE,
+                    remaining_work / fulfillment,
+                    project.priority,
+                    "construction",
+                    EntityId(str(project.id)),
+                    "construction_work",
+                )
+            )
+        return tuple(requests)
+
     def advance_construction(
-        self, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int = 0
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        service_allocations: ServiceCapacityAllocationPlan,
+        day: int = 0,
     ) -> None:
         for project in self.projects.values():
             if not project.paused and project.status == ProjectStatus.READY:
                 recipe = self._recipe_for_project(project)
                 if not self._target_ready_for_execution(project):
                     continue
-                if self.project_site_failures(
-                    project,
-                    day,
-                    power_by_location.get(
-                        project.operational_node_id,
-                        self.power.snapshot(project.operational_node_id, self.facilities, day),
+                power = power_by_location.get(
+                    project.operational_node_id,
+                    self.power.snapshot(
+                        project.operational_node_id, self.facilities, day
                     ),
-                ):
+                )
+                if self.project_site_failures(project, day, power):
                     continue
                 if recipe.self_deploying or recipe.construction_work <= 1e-12:
                     self._finish_project(project)
 
-        locations = {
-            project.operational_node_id
-            for project in self.projects.values()
-            if not project.paused
-            and project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}
-        }
-        for location_id in sorted(locations, key=str):
+        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
+            if (
+                project.paused
+                or project.status not in {ProjectStatus.READY, ProjectStatus.BUILDING}
+                or not self._target_ready_for_execution(project)
+            ):
+                continue
+            recipe = self._recipe_for_project(project)
+            if recipe.self_deploying or recipe.construction_work <= 1e-12:
+                continue
             power = power_by_location.get(
-                location_id, self.power.snapshot(location_id, self.facilities, day)
+                project.operational_node_id,
+                self.power.snapshot(project.operational_node_id, self.facilities, day),
             )
-            candidates = [
-                project
-                for project in self.projects.values()
-                if project.operational_node_id == location_id
-                and not project.paused
-                and project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}
-                and self._target_ready_for_execution(project)
-                and not self._recipe_for_project(project).self_deploying
-                and self._recipe_for_project(project).construction_work > 1e-12
-                and not self.project_site_failures(project, day, power)
-            ]
-            if not candidates:
+            if self.project_site_failures(project, day, power):
                 continue
-            capacity = self.construction_capacity_at(location_id, power, day)
-            if capacity <= 1e-12:
+            fulfillment = self.project_construction_fulfillment(project, power, day)
+            if fulfillment <= 1e-12:
                 continue
-            active = [project for project in candidates if project.construction_weight > 1e-12]
-            remaining_capacity = capacity
-            while active and remaining_capacity > 1e-12:
-                total_weight = sum(project.construction_weight for project in active)
-                if total_weight <= 1e-12:
-                    break
-                allocations = {
-                    project.id: remaining_capacity * project.construction_weight / total_weight
-                    for project in active
-                }
-                spent_capacity = 0.0
-                completed: list[ConstructionProject] = []
-                for project in sorted(active, key=lambda row: (-row.priority, str(row.id))):
-                    recipe = self._recipe_for_project(project)
-                    remaining_work = max(0.0, recipe.construction_work - project.construction_done)
-                    if remaining_work <= 1e-12:
-                        completed.append(project)
-                        continue
-                    allocation = allocations[project.id]
-                    fulfillment = self.project_construction_fulfillment(project, power, day)
-                    if fulfillment <= 1e-12:
-                        # The assigned construction flow cannot reach the target
-                        # territory. Keep the assignment consumed so another
-                        # project does not silently steal the player's explicit
-                        # construction weight.
-                        spent_capacity += allocation
-                        continue
-                    capacity_needed = remaining_work / fulfillment
-                    spent = min(allocation, capacity_needed)
-                    work = spent * fulfillment
-                    if work <= 1e-12:
-                        spent_capacity += spent
-                        continue
-                    self._commit_materials(project)
-                    project.status = ProjectStatus.BUILDING
-                    project.construction_done += work
-                    spent_capacity += spent
-                    if project.construction_done + 1e-9 >= recipe.construction_work:
-                        completed.append(project)
-                for project in completed:
-                    if project in active:
-                        active.remove(project)
-                    if project.status != ProjectStatus.COMPLETE:
-                        self._finish_project(project)
-                if spent_capacity <= 1e-12:
-                    break
-                remaining_capacity -= spent_capacity
-                if not completed:
-                    break
+            try:
+                allocated_capacity = service_allocations.allocated(
+                    self.construction_service_request_id(project.id)
+                )
+            except KeyError:
+                allocated_capacity = 0.0
+            if allocated_capacity <= 1e-12:
+                continue
+            remaining_work = max(
+                0.0, recipe.construction_work - project.construction_done
+            )
+            work = min(remaining_work, allocated_capacity * fulfillment)
+            if work <= 1e-12:
+                continue
+            self._commit_materials(project)
+            project.status = ProjectStatus.BUILDING
+            project.construction_done += work
+            if project.construction_done + 1e-9 >= recipe.construction_work:
+                project.construction_done = recipe.construction_work
+                self._finish_project(project)

@@ -19,11 +19,11 @@ class InventoryBook:
     stock: dict[tuple[SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
     reserved: dict[tuple[EntityId, SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
     resource_storage_class: dict[DefinitionId, StorageClass] = field(default_factory=dict)
-    # Static site capacity comes from content. Current physical/service
-    # capacities are derived from it plus installed storage facilities.
+    # Static site capacity comes from content. Current physical/usable Stock
+    # Capacities are derived from it plus installed storage facilities.
     base_storage_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float] = field(default_factory=dict)
-    storage_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float] = field(default_factory=dict)
-    storage_service_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float] = field(default_factory=dict)
+    physical_storage_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float] = field(default_factory=dict)
+    usable_storage_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float] = field(default_factory=dict)
     external_occupancy: dict[tuple[EntityId, SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
 
     def register_storage_class(self, resource_id: DefinitionId, storage_class: StorageClass) -> None:
@@ -37,37 +37,37 @@ class InventoryBook:
             raise ValueError("negative storage capacity")
         key = (operational_node_id, storage_class)
         self.base_storage_capacity_t[key] = self.base_storage_capacity_t.get(key, 0.0) + amount_t
-        self.storage_capacity_t[key] = self.storage_capacity_t.get(key, 0.0) + amount_t
-        self.storage_service_capacity_t[key] = self.storage_service_capacity_t.get(key, 0.0) + amount_t
+        self.physical_storage_capacity_t[key] = self.physical_storage_capacity_t.get(key, 0.0) + amount_t
+        self.usable_storage_capacity_t[key] = self.usable_storage_capacity_t.get(key, 0.0) + amount_t
 
     def set_capacity_snapshot(
         self,
         physical_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float],
-        service_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float],
+        usable_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float],
     ) -> None:
-        self.storage_capacity_t = dict(physical_capacity_t)
-        self.storage_service_capacity_t = {
+        self.physical_storage_capacity_t = dict(physical_capacity_t)
+        self.usable_storage_capacity_t = {
             key: min(physical_capacity_t.get(key, 0.0), max(0.0, amount))
-            for key, amount in service_capacity_t.items()
+            for key, amount in usable_capacity_t.items()
         }
         for key, amount in physical_capacity_t.items():
-            self.storage_service_capacity_t.setdefault(key, amount)
+            self.usable_storage_capacity_t.setdefault(key, amount)
 
     def physical_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
         storage_class = self.resource_storage_class.get(resource_id)
         if storage_class is None:
             return None
-        return self.storage_capacity_t.get((operational_node_id, storage_class), 0.0)
+        return self.physical_storage_capacity_t.get((operational_node_id, storage_class), 0.0)
 
-    def service_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
+    def usable_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
         storage_class = self.resource_storage_class.get(resource_id)
         if storage_class is None:
             return None
-        return self.storage_service_capacity_t.get((operational_node_id, storage_class), 0.0)
+        return self.usable_storage_capacity_t.get((operational_node_id, storage_class), 0.0)
 
     def capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
         """Current usable/admission capacity for this resource."""
-        return self.service_capacity(operational_node_id, resource_id)
+        return self.usable_capacity(operational_node_id, resource_id)
 
     def stored_in_class(self, operational_node_id: SpatialNodeId, storage_class: StorageClass) -> float:
         stock = sum(
@@ -110,7 +110,7 @@ class InventoryBook:
         storage_class = self.resource_storage_class.get(resource_id)
         if storage_class is None:
             return None
-        capacity = self.storage_service_capacity_t.get((operational_node_id, storage_class), 0.0)
+        capacity = self.usable_storage_capacity_t.get((operational_node_id, storage_class), 0.0)
         return max(0.0, capacity - self.stored_in_class(operational_node_id, storage_class))
 
     def amount(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:

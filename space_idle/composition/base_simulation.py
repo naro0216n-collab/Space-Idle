@@ -95,9 +95,9 @@ def build_base_simulation() -> Simulation:
     industry = IndustryService(build_process_specs())
 
     surface_infrastructure = SurfaceInfrastructureService(graph)
-    facilities.availability_factor_provider = (
-        lambda location_id, capability_id, power_snapshot, day: surface_infrastructure.facility_availability_factors(
-            location_id, capability_id, facilities, power_snapshot, day
+    facilities.service_availability_factor_provider = (
+        lambda location_id, service_type, power_snapshot, day: surface_infrastructure.facility_availability_factors(
+            location_id, service_type, facilities, power_snapshot, day
         )
     )
     logistics.surface_access_factor_provider = (

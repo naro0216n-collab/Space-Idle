@@ -119,7 +119,7 @@ def test_initial_surface_resource_knowledge_has_no_active_survey_campaigns():
     assert row.can_start is False
     assert row.can_pause is False
     assert row.can_resume is False
-    assert row.can_set_allocation is False
+    assert row.can_set_priority is False
 
 
 def test_orbital_survey_stops_at_provider_knowledge_limit_and_reveals_comparison_value():
@@ -133,7 +133,7 @@ def test_orbital_survey_stops_at_provider_knowledge_limit_and_reveals_comparison
         ids.LUNAR_ORBIT, key[0], day=sim.day
     ) == 2
 
-    sim.survey.start(ids.LUNAR_ORBIT, *key, allocation_weight=2.0, day=sim.day)
+    sim.survey.start(ids.LUNAR_ORBIT, *key, priority=80, day=sim.day)
     assert key in sim.survey.campaigns
     assert sim.survey.campaigns[key].target_knowledge_level == 2
 

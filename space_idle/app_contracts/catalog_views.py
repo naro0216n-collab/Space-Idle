@@ -13,14 +13,20 @@ class RequirementConditionRow:
 @dataclass(frozen=True)
 class CapabilityRequirementRow:
     capability_id: str
-    minimum_capacity: float
-    mode: str
+    required_state: str
+
+
+@dataclass(frozen=True)
+class ServiceCapacityRequirementRow:
+    service_type: str
+    minimum_rate: float
 
 
 @dataclass(frozen=True)
 class SiteRequirementsDefinitionRow:
     environment: tuple[RequirementConditionRow, ...] = ()
     capabilities: tuple[CapabilityRequirementRow, ...] = ()
+    service_capacities: tuple[ServiceCapacityRequirementRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -42,7 +48,8 @@ class ResourceDefinitionRow:
 class FacilityDefinitionRow:
     id: str
     display_name: str
-    capabilities: tuple[tuple[str, float], ...]
+    capabilities: tuple[str, ...]
+    service_capacity_supplies: tuple[tuple[str, float], ...] = ()
     installation_environment: tuple[RequirementConditionRow, ...] = ()
     operating_environment: tuple[RequirementConditionRow, ...] = ()
     maintenance_fraction_per_year: float = 0.0
@@ -82,11 +89,11 @@ class VehicleDefinitionRow:
     propellant_resource_id: str | None
     capabilities: tuple[str, ...]
     operation_support_requirements: tuple[tuple[str, str, str], ...]
-    production_capability_id: str | None
+    production_service_type: str | None
     production_days: float
     production_cost_musd: float
     production_resources: tuple[tuple[str, float], ...]
-    turnaround_capability_id: str | None
+    turnaround_service_type: str | None
     turnaround_days: float
     turnaround_cost_musd: float
     turnaround_resources: tuple[tuple[str, float], ...]

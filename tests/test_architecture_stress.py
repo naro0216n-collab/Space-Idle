@@ -153,5 +153,5 @@ def test_catalog_exposes_vehicle_definitions_even_when_no_instance_is_owned():
     }
     catalog = app.query(GetCatalog())
     row = next(vehicle for vehicle in catalog.vehicles if vehicle.id == str(REUSABLE_ORBITAL_CARGO_TUG))
-    assert row.production_capability_id == "vehicle_assembly"
+    assert row.production_service_type == "vehicle_assembly"
     assert row.production_days > 0

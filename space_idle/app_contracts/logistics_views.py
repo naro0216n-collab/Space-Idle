@@ -12,8 +12,7 @@ class DirectionalCapacityRow:
 class InfrastructureRequirementRow:
     operational_node_id: str
     capability_id: str
-    minimum_capacity: float
-    mode: str
+    required_state: str
 
 
 
@@ -166,7 +165,7 @@ class VehicleProductionOptionRow:
     vehicle_definition_id: str
     display_name: str
     operational_node_id: str
-    production_capability_id: str | None
+    production_service_type: str | None
     production_days: float
     resources: tuple[tuple[str, float], ...]
     blockers: tuple[str, ...]
@@ -184,12 +183,10 @@ class VehicleProductionRow:
     required_days: float
     remaining_days: float
     estimated_completion_day: float | None
-    production_capability_id: str | None
+    production_service_type: str | None
     resources: tuple[tuple[str, float], ...]
     priority: int
-    allocation_weight: float
     priority_editable: bool
-    allocation_editable: bool
     blockers: tuple[str, ...]
     completed_units: int
 

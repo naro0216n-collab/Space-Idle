@@ -23,7 +23,7 @@ class StartSurvey:
     provider_location_id: str
     cell_id: str
     resource_id: str
-    allocation_weight: float = 1.0
+    priority: int = 50
 @dataclass(frozen=True)
 class PauseSurvey:
     cell_id: str
@@ -33,10 +33,10 @@ class ResumeSurvey:
     cell_id: str
     resource_id: str
 @dataclass(frozen=True)
-class SetSurveyAllocation:
+class SetSurveyPriority:
     cell_id: str
     resource_id: str
-    weight: float
+    priority: int
 
 @dataclass(frozen=True)
 class StartScientificExploration:

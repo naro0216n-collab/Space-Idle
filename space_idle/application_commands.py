@@ -3,7 +3,7 @@ from typing import TypeAlias
 from .app_contracts.common import ApplicationError, CommandResult
 from .app_contracts.construction import (
     PlanBuild, PlanFacilityUpgrade, FoundLocation, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, CancelBuild, PauseBuild, ResumeBuild, SetProjectPriority,
-    SetProjectSourcingPolicy, SetConstructionWeight, SetProjectImportSource,
+    SetProjectSourcingPolicy, SetProjectImportSource,
 )
 from .app_contracts.operations import (
     PauseFacility, ResumeFacility, SetFacilityProcess, SetPowerPriority,
@@ -12,7 +12,7 @@ from .app_contracts.operations import (
 from .app_contracts.progression import (
     StartResearch, PauseResearch, ResumeResearch, SetResearchPrototypeSite,
     FundResearchPrototype, SetResearchDemonstrationSite, StartSurvey,
-    PauseSurvey, ResumeSurvey, SetSurveyAllocation, StartScientificExploration,
+    PauseSurvey, ResumeSurvey, SetSurveyPriority, StartScientificExploration,
     PauseScientificExploration, ResumeScientificExploration,
     AssignExplorationFleet, UnassignExplorationFleet,
 )
@@ -33,11 +33,11 @@ from .app_contracts.queries import (
 
 Command: TypeAlias = (
     PlanBuild | PlanFacilityUpgrade | FoundLocation | CancelFounding | PauseFounding | ResumeFounding | SetFoundingPriority | DevelopSurfaceCell | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
-    SetProjectSourcingPolicy | SetConstructionWeight | SetProjectImportSource |
+    SetProjectSourcingPolicy | SetProjectImportSource |
     PauseFacility | ResumeFacility | SetFacilityProcess | SetPowerPriority | SetMaintenancePriority |
     SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
     FundResearchPrototype | SetResearchDemonstrationSite | StartSurvey | PauseSurvey |
-    ResumeSurvey | SetSurveyAllocation | StartScientificExploration | PauseScientificExploration |
+    ResumeSurvey | SetSurveyPriority | StartScientificExploration | PauseScientificExploration |
     ResumeScientificExploration | AssignExplorationFleet | UnassignExplorationFleet |
     ProduceVehicle | PauseVehicleProduction | ResumeVehicleProduction | SetVehicleProductionSettings |
     CreateTransportAllocation | UpdateTransportAllocation | ChangeTransportAllocationMode |

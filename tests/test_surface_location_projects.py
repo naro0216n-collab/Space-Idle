@@ -384,7 +384,7 @@ def test_surface_map_exposes_founding_package_vehicle_and_blockers():
 
 
 def test_active_founding_save_load_preserves_identity_and_future_transition(tmp_path):
-    assert SAVE_SCHEMA_VERSION == 34
+    assert SAVE_SCHEMA_VERSION == 35
     app = build_game_application()
     sim = app._simulation
     cell = ids.MOON_CELL_FARSIDE_HIGHLANDS

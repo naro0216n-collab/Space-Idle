@@ -49,7 +49,6 @@ def capture_projects(sim: Any) -> dict[str, Any]:
                 "status": project.status.value,
                 "procurement_started_day": project.procurement_started_day,
                 "construction_done": project.construction_done,
-                "construction_weight": project.construction_weight,
                 "paused": project.paused,
                 "pause_started_day": project.pause_started_day,
                 "completed_facility_id": None if project.completed_facility_id is None else str(project.completed_facility_id),
@@ -87,7 +86,6 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
             status=ProjectStatus(row["status"]),
             procurement_started_day=row["procurement_started_day"],
             construction_done=float(row["construction_done"]),
-            construction_weight=float(row["construction_weight"]),
             paused=bool(row["paused"]),
             pause_started_day=None if row["pause_started_day"] is None else int(row["pause_started_day"]),
             resources=resources,
@@ -110,7 +108,7 @@ STATE_CODEC = StateCodec("projects", capture_projects, restore_projects)
 def _validate_physical_recipe(recipe, owner: str, ctx: ValidationContext) -> None:
     _require(recipe.construction_work >= 0, f"negative construction work: {owner}")
     _require(recipe.prerequisite_technologies.issubset(ctx.known_technologies), f"construction references unknown technology: {owner}")
-    _validate_site_requirements(recipe.site_requirements, ctx.known_capabilities, owner)
+    _validate_site_requirements(recipe.site_requirements, ctx.known_capabilities, owner, ctx.known_service_types)
     resource_ids: set[DefinitionId] = set()
     for requirement in recipe.resources:
         _require(requirement.resource_id not in resource_ids, f"duplicate construction resource: {owner}/{requirement.resource_id}")
@@ -199,7 +197,6 @@ def validate_runtime(sim: Any) -> None:
                 _require(target.cell_id in sim.graph.locations[project.operational_node_id].developed_cell_ids, f"completed development project did not attach cell: {project_id}")
 
         _require(-1e-9 <= project.construction_done <= recipe.construction_work + 1e-8, f"invalid construction progress: {project_id}")
-        _require(project.construction_weight >= 0, f"negative construction allocation: {project_id}")
         _require(not project.paused or project.pause_started_day is not None, f"paused project missing pause day: {project_id}")
         _require(project.paused or project.pause_started_day is None, f"active project retains pause day: {project_id}")
         staging_owner_id = sim.projects._resource_staging_owner_id(project_id)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .power import PowerSnapshot
 from .resource_claim import ResourceAllocationPlan
+from .service_capacity import ServiceCapacityAllocationPlan
 from .shared import SpatialNodeId
 from .research_models import ResearchPhase
 
@@ -11,6 +12,7 @@ class ResearchExecutionMixin:
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
         resource_allocations: ResourceAllocationPlan,
+        service_allocations: ServiceCapacityAllocationPlan,
         day: int = 0,
     ) -> None:
         for state in list(self.active.values()):
@@ -30,6 +32,14 @@ class ResearchExecutionMixin:
             demonstration = self.definitions[state.definition_id].demonstration
             if demonstration is None:
                 raise RuntimeError(f"demonstration state has no demonstration definition: {state.definition_id}")
+            try:
+                allocated = service_allocations.allocated(
+                    self._demonstration_service_request_id(state.definition_id)
+                )
+            except KeyError:
+                allocated = 0.0
+            if allocated + 1e-9 < 1.0:
+                continue
             state.demonstration_done_days += 1
             if state.demonstration_done_days >= demonstration.days:
                 self._complete(state.definition_id)

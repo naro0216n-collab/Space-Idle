@@ -7,6 +7,8 @@ from typing import Literal, TypeAlias
 from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 
+CONSTRUCTION_SERVICE_TYPE = "construction_work"
+
 # Procurement policy controls how long a project waits for inventory already at
 # the destination before declaring an import demand. It does not change the
 # recipe or substitute one material for another.
@@ -150,7 +152,6 @@ class ConstructionProject:
     status: ProjectStatus = ProjectStatus.PLANNED
     procurement_started_day: int | None = None
     construction_done: float = 0.0
-    construction_weight: float = 1.0
     paused: bool = False
     pause_started_day: int | None = None
     resources: dict[DefinitionId, ProjectResourceState] = field(default_factory=dict)

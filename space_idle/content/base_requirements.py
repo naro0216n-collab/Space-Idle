@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from ..facilities import CapabilitySupply
+from ..facilities import CapabilitySupply, ServiceCapacitySupply
 from ..projects import BuildResourceRequirement, ConstructionRecipe
 from ..shared import DefinitionId
-from ..site import CapabilityRequirement, FacetValueRange, RequiresFacet, SiteRequirements
+from ..site import CapabilityRequirement, CapabilityRequirementState, FacetValueRange, RequiresFacet, SiteRequirements
 from ..spatial import AtmosphereField, OrbitalField, SurfaceField, ThermalField
 from .base_ids import STRUCTURAL_COMPONENTS, MACHINERY, PRECISION_ELECTRONICS, BULK_STRUCTURE, FABRICATED_STRUCTURE, BASIC_MACHINE_PARTS
 
@@ -31,14 +31,19 @@ def _capabilities(*ids: str) -> tuple[CapabilitySupply, ...]:
     return tuple(CapabilitySupply(capability_id) for capability_id in ids)
 
 
+def _services(**rates: float) -> tuple[ServiceCapacitySupply, ...]:
+    return tuple(
+        ServiceCapacitySupply(service_type, rate)
+        for service_type, rate in sorted(rates.items())
+    )
+
+
 def _infrastructure_requirements(*ids: str) -> tuple[CapabilityRequirement, ...]:
-    return tuple(CapabilityRequirement(capability_id, 1.0, "infrastructure") for capability_id in ids)
+    return tuple(CapabilityRequirement(capability_id, CapabilityRequirementState.INSTALLED) for capability_id in ids)
 
 
 def _available_requirements(*ids: str) -> tuple[CapabilityRequirement, ...]:
-    # Any non-trivial powered service is enough for qualitative demonstrations;
-    # physical throughput remains governed by the owning domain service.
-    return tuple(CapabilityRequirement(capability_id, 0.01, "available") for capability_id in ids)
+    return tuple(CapabilityRequirement(capability_id, CapabilityRequirementState.ACTIVE) for capability_id in ids)
 
 
 def _structure_resource(amount: float) -> BuildResourceRequirement:

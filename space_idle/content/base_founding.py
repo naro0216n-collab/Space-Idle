@@ -34,7 +34,7 @@ def build_founding_packages() -> dict:
             ),
         ),
         preparation_work=3.0,
-        preparation_capability_id="cargo_transfer",
+        preparation_service_type="cargo_transfer",
         operations=(TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),),
         transit_days=3,
         staging_requirements=req.ORBIT_SITE,

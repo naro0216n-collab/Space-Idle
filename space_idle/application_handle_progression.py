@@ -3,7 +3,7 @@ from __future__ import annotations
 from .application_commands import (
     Command, CommandResult, FundResearchPrototype, PauseResearch, PauseSurvey,
     ResumeResearch, ResumeSurvey, SetResearchDemonstrationSite,
-    SetResearchPrototypeSite, SetSurveyAllocation, StartResearch, StartSurvey, StartScientificExploration, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
+    SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, StartScientificExploration, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
 )
 from .shared import DefinitionId, SurfaceCellId
 
@@ -49,7 +49,7 @@ class ProgressionCommandHandlerMixin:
             else:
                 sim.scientific_exploration.unassign_fleet(exploration_id, day=sim.day)
             return CommandResult()
-        if isinstance(command, (StartSurvey, PauseSurvey, ResumeSurvey, SetSurveyAllocation)):
+        if isinstance(command, (StartSurvey, PauseSurvey, ResumeSurvey, SetSurveyPriority)):
             if sim.survey is None:
                 raise RuntimeError("survey is not configured")
             cell_id = SurfaceCellId(command.cell_id)
@@ -60,7 +60,7 @@ class ProgressionCommandHandlerMixin:
                 provider_location_id = self._require_location(command.provider_location_id)
                 sim.survey.start(
                     provider_location_id, cell_id, resource_id,
-                    allocation_weight=command.allocation_weight,
+                    priority=command.priority,
                     day=sim.day,
                 )
             elif isinstance(command, PauseSurvey):
@@ -68,6 +68,6 @@ class ProgressionCommandHandlerMixin:
             elif isinstance(command, ResumeSurvey):
                 sim.survey.resume(cell_id, resource_id)
             else:
-                sim.survey.set_allocation_weight(cell_id, resource_id, command.weight)
+                sim.survey.set_priority(cell_id, resource_id, command.priority)
             return CommandResult()
         return NotImplemented

@@ -46,7 +46,7 @@ class StorageService:
         """
 
         physical = dict(self.inventory.base_storage_capacity_t)
-        service = dict(self.inventory.base_storage_capacity_t)
+        usable = dict(self.inventory.base_storage_capacity_t)
 
         for facility in self.facilities.facilities.values():
             provider = self.providers.get(facility.definition_id)
@@ -74,6 +74,6 @@ class StorageService:
                     factor = utilization * maintenance
                 else:
                     factor = maintenance
-                service[key] = service.get(key, 0.0) + capacity * factor
+                usable[key] = usable.get(key, 0.0) + capacity * factor
 
-        self.inventory.set_capacity_snapshot(physical, service)
+        self.inventory.set_capacity_snapshot(physical, usable)

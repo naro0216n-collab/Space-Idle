@@ -19,7 +19,7 @@ from space_idle import (
 )
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
-from space_idle.site import CapabilityRequirement, SiteRequirements
+from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
 from space_idle.validation import validate_simulation_configuration
 from space_idle.validation_support import ConfigurationError
 
@@ -203,7 +203,7 @@ def test_runtime_blocker_prevents_input_consumption_and_keeps_fleet_reserved():
         definition,
         origin_requirements=SiteRequirements(
             definition.origin_requirements.environment,
-            (CapabilityRequirement("spacecraft_servicing", 0.01, "available"),),
+            (CapabilityRequirement("spacecraft_servicing", CapabilityRequirementState.ACTIVE),),
         ),
     )
     servicing_id = sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
@@ -216,7 +216,7 @@ def test_runtime_blocker_prevents_input_consumption_and_keeps_fleet_reserved():
     state = sim.scientific_exploration.campaigns[exploration_id]
     app.execute(PauseFacility(str(servicing_id)))
     assert any(
-        blocker.startswith("origin:capability:available:spacecraft_servicing:")
+        blocker == "origin:capability:active:spacecraft_servicing"
         for blocker in sim.scientific_exploration.blockers(exploration_id, day=sim.day)
     )
 

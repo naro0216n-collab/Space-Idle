@@ -50,7 +50,7 @@ class SurveyCampaign:
     cell_id: SurfaceCellId
     resource_id: DefinitionId
     target_knowledge_level: KnowledgeLevel = 4
-    allocation_weight: float = 1.0
+    priority: int = 50
     paused: bool = False
 
 

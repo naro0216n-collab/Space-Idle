@@ -193,12 +193,6 @@ class ConstructionPlanningMixin:
         project.procurement_started_day = None
         project.status = ProjectStatus.PLANNED
 
-    def set_construction_weight(self, project_id: ProjectId, weight: float) -> None:
-        if weight < 0:
-            raise ValueError("construction weight must be non-negative")
-        if not self.settings_mutable(project_id):
-            raise ValueError("completed or cancelled project settings cannot change")
-        self.projects[project_id].construction_weight = weight
 
     def set_import_source(self, project_id: ProjectId, location_id: SpatialNodeId | None) -> None:
         project = self.projects[project_id]
@@ -286,8 +280,6 @@ class ConstructionPlanningMixin:
             and not recipe.self_deploying
             and recipe.construction_work > 0
         ):
-            if project.construction_weight <= 1e-12:
-                blockers.append(ProjectBlocker("construction_allocation", "construction weight is zero"))
             if power is not None:
                 if self.construction_capacity_at(project.operational_node_id, power, day) <= 1e-12:
                     blockers.append(ProjectBlocker("construction_capacity", "no usable construction flow"))

@@ -11,7 +11,6 @@ from space_idle import (
     PauseBuild,
     PlanFacilityUpgrade,
     ResumeBuild,
-    SetConstructionWeight,
     build_game_application,
 )
 from space_idle.application_commands import ApplicationError
@@ -147,16 +146,13 @@ def test_active_upgrade_roundtrips_without_applying_level_early(tmp_path):
     )
     assert result.created_id is not None
     project_id = result.created_id
-    app.execute(SetConstructionWeight(project_id, 0.0))
+    app.execute(PauseBuild(project_id))
     app.execute(AdvanceTime(1))
 
     active = _project(app, project_id)
-    assert active.status in {"procuring", "ready"}
+    assert active.paused
+    assert active.status != "complete"
     assert facility.level == 1
-    assert any(
-        resource.staged_t > 0 or resource.committed_t > 0
-        for resource in active.resources
-    )
 
     path = tmp_path / "active-upgrade.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))

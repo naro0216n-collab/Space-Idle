@@ -150,7 +150,7 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
                 {
                     "id": str(state.id), "vehicle_definition_id": str(state.vehicle_definition_id),
                     "operational_node_id": str(state.operational_node_id), "priority": state.priority,
-                    "allocation_weight": state.allocation_weight, "progress_days": state.progress_days,
+                    "progress_days": state.progress_days,
                     "phase": state.phase.value, "paused": state.paused,
                     "completed_units": state.completed_units, "created_day": state.created_day,
                 }
@@ -250,7 +250,7 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
         EntityId(row["id"]): VehicleProductionState(
             id=EntityId(row["id"]), vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
             operational_node_id=SpatialNodeId(row["operational_node_id"]), priority=int(row.get("priority", 50)),
-            allocation_weight=float(row.get("allocation_weight", 1.0)), progress_days=float(row.get("progress_days", 0.0)),
+            progress_days=float(row.get("progress_days", 0.0)),
             phase=VehicleProductionPhase(row.get("phase", "awaiting_inputs")), paused=bool(row.get("paused", False)),
             completed_units=int(row.get("completed_units", 0)), created_day=int(row.get("created_day", 0)),
         )
@@ -363,6 +363,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     sim.logistics.synchronize_surface_access_routes()
     nodes = ctx.nodes
     known_capabilities = ctx.known_capabilities
+    known_service_types = ctx.known_service_types
     for route_id, route in sim.logistics.routes.items():
         _require(route_id == route.id, f"route definition key mismatch: {route_id}")
         _require(route.origin_id in nodes and route.destination_id in nodes, f"route references unknown location: {route_id}")
@@ -374,16 +375,16 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
                 sim.logistics.operation_registry.supports(operation.operation_type),
                 f"route references unregistered transport operation: {route_id}/{operation.operation_type}",
             )
-        _validate_site_requirements(route.origin_requirements, known_capabilities, f"route:{route_id}:origin")
-        _validate_site_requirements(route.destination_requirements, known_capabilities, f"route:{route_id}:destination")
+        _validate_site_requirements(route.origin_requirements, known_capabilities, f"route:{route_id}:origin", known_service_types)
+        _validate_site_requirements(route.destination_requirements, known_capabilities, f"route:{route_id}:destination", known_service_types)
     for service_id, service in sim.logistics.external_services.items():
         _require(service_id == service.id, f"transport service key mismatch: {service_id}")
         _require(service.capacity_t_per_day >= 0, f"negative transport service capacity: {service_id}")
         _require(service.cost_musd_per_t >= 0, f"negative transport service cost: {service_id}")
         _require(service.transit_time_multiplier > 0, f"non-positive transport service time multiplier: {service_id}")
         _validate_transport_profile(sim, service.performance, known_capabilities, f"transport_service:{service_id}")
-        _validate_site_requirements(service.origin_requirements, known_capabilities, f"transport_service:{service_id}:origin")
-        _validate_site_requirements(service.destination_requirements, known_capabilities, f"transport_service:{service_id}:destination")
+        _validate_site_requirements(service.origin_requirements, known_capabilities, f"transport_service:{service_id}:origin", known_service_types)
+        _validate_site_requirements(service.destination_requirements, known_capabilities, f"transport_service:{service_id}:destination", known_service_types)
     for vehicle_id, vehicle in sim.logistics.vehicle_defs.items():
         _require(vehicle_id == vehicle.id, f"vehicle definition key mismatch: {vehicle_id}")
         _validate_transport_profile(sim, vehicle.performance, known_capabilities, f"vehicle:{vehicle_id}")
@@ -397,14 +398,20 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _validate_unique_resources(vehicle.production.resources, f"production:{vehicle_id}")
         _require(vehicle.economics.operating_cost_musd_per_cycle >= 0, f"negative vehicle cycle cost: {vehicle_id}")
         _require(vehicle.economics.operating_cost_musd_per_cargo_t >= 0, f"negative vehicle cargo cost: {vehicle_id}")
-        if vehicle.maintenance.capability_id is not None:
-            _require(vehicle.maintenance.capability_id in known_capabilities, f"vehicle turnaround references unknown capability: {vehicle_id}/{vehicle.maintenance.capability_id}")
-        if vehicle.production.capability_id is not None:
-            _require(vehicle.production.capability_id in known_capabilities, f"vehicle production references unknown capability: {vehicle_id}/{vehicle.production.capability_id}")
+        if vehicle.maintenance.service_type is not None:
+            _require(
+                vehicle.maintenance.service_type in known_service_types,
+                f"vehicle turnaround references unknown service type: {vehicle_id}/{vehicle.maintenance.service_type}",
+            )
+        if vehicle.production.service_type is not None:
+            _require(
+                vehicle.production.service_type in known_service_types,
+                f"vehicle production references unknown service type: {vehicle_id}/{vehicle.production.service_type}",
+            )
             _require(vehicle.production.days > 0, f"vehicle production duration must be positive: {vehicle_id}")
             _require(2 <= len(vehicle.production.resources) <= 3, f"vehicle production should use 2-3 physical resources: {vehicle_id}")
             _require(all(amount > 0 for _resource, amount in vehicle.production.resources), f"vehicle production has non-positive resource input: {vehicle_id}")
-            _validate_site_requirements(vehicle.production.site_requirements, known_capabilities, f"vehicle_production:{vehicle_id}")
+            _validate_site_requirements(vehicle.production.site_requirements, known_capabilities, f"vehicle_production:{vehicle_id}", known_service_types)
     for route_id in sim.logistics.routes:
         external_service_exists = any(
             service.capacity_t_per_day > 1e-12 and not sim.logistics.service_route_failures(route_id, service.id, 0)

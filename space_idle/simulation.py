@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import math
 
 from .contracts import ContractService
+from .construction.models import CONSTRUCTION_SERVICE_TYPE
 from .domain import DomainExtension
 from .facilities import FacilityBook
 from .founding import LocationFoundingService
@@ -15,6 +16,11 @@ from .power import PowerService, PowerSnapshot
 from .projects import ProjectService
 from .research import ResearchService
 from .resource_claim import ResourceAllocationPlan, ResourceClaim, allocate_resource_claims
+from .service_capacity import (
+    ServiceCapacityAllocationPlan,
+    ServiceCapacityRequest,
+    allocate_service_capacity,
+)
 from .resource_demand import (
     ResourceDemand,
     resolve_local_resource_supply,
@@ -211,6 +217,155 @@ class Simulation:
         claims = self._resource_claims(power_by_location) + tuple(logistics_claims)
         return allocate_resource_claims(claims, self.inventory)
 
+    def _service_capacity_requests(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+    ) -> tuple[ServiceCapacityRequest, ...]:
+        requests: list[ServiceCapacityRequest] = list(
+            self.logistics.vehicle_production_service_requests(self.day)
+        )
+        requests.extend(self.logistics.transport_service_capacity_requests(self.day))
+        requests.extend(
+            self.projects.construction_service_requests(power_by_location, self.day)
+        )
+        if self.founding is not None:
+            requests.extend(self.founding.service_requests(self.day))
+        if self.survey is not None:
+            requests.extend(self.survey.service_requests(self.day))
+        if self.research is not None:
+            requests.extend(self.research.service_requests(self.day))
+        for location_id in sorted(self._active_locations(), key=str):
+            requests.extend(
+                self.industry.service_requests(location_id, self.facilities, self.day)
+            )
+            if self.extraction is not None:
+                requests.extend(
+                    self.extraction.service_requests(
+                        location_id, self.facilities, self.day
+                    )
+                )
+        if self.surface_infrastructure is not None:
+            for location_id in sorted(self.graph.locations, key=str):
+                requests.append(
+                    self.surface_infrastructure.service_request(location_id)
+                )
+        seen: set[object] = set()
+        for request in requests:
+            if request.id in seen:
+                raise RuntimeError(f"duplicate service capacity request id: {request.id}")
+            seen.add(request.id)
+        return tuple(requests)
+
+    def _allocate_tick_services(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+    ) -> ServiceCapacityAllocationPlan:
+        requests = self._service_capacity_requests(power_by_location)
+        dynamic_nominal: dict[tuple[SpatialNodeId, str], float] = {}
+        dynamic_enabled: dict[tuple[SpatialNodeId, str], float] = {}
+        for location_id in sorted(self._active_locations(), key=str):
+            power = power_by_location.get(location_id)
+            if power is None:
+                power = self.power.snapshot(location_id, self.facilities, self.day)
+            industry_nominal, industry_enabled = self.industry.service_supply(
+                location_id, self.facilities, power, self.day
+            )
+            extraction_nominal: dict[tuple[SpatialNodeId, str], float] = {}
+            extraction_enabled: dict[tuple[SpatialNodeId, str], float] = {}
+            if self.extraction is not None:
+                extraction_nominal, extraction_enabled = self.extraction.service_supply(
+                    location_id, self.facilities, power, self.day
+                )
+            for source, target in (
+                (industry_nominal, dynamic_nominal),
+                (industry_enabled, dynamic_enabled),
+                (extraction_nominal, dynamic_nominal),
+                (extraction_enabled, dynamic_enabled),
+            ):
+                for key, amount in source.items():
+                    target[key] = target.get(key, 0.0) + amount
+        keys = {
+            (request.operational_node_id, request.service_type)
+            for request in requests
+        }
+        keys.update(dynamic_nominal)
+        for location_id in self._active_locations() | set(self.graph.operational_node_ids()):
+            for service_type in self.facilities.service_types():
+                if self.facilities.nominal_service_capacity_at(
+                    location_id, service_type, self.day
+                ) > 1e-12:
+                    keys.add((location_id, service_type))
+            if (
+                self.survey is not None
+                and self.survey.nominal_service_capacity_at(location_id, self.day) > 1e-12
+            ):
+                keys.add((location_id, self.survey.SERVICE_TYPE))
+        nominal: dict[tuple[SpatialNodeId, str], float] = {}
+        enabled: dict[tuple[SpatialNodeId, str], float] = {}
+        limiting: dict[tuple[SpatialNodeId, str], tuple[str, ...]] = {}
+        for location_id, service_type in sorted(
+            keys, key=lambda row: (str(row[0]), row[1])
+        ):
+            power = power_by_location.get(location_id)
+            if power is None:
+                power = self.power.snapshot(location_id, self.facilities, self.day)
+            if service_type == CONSTRUCTION_SERVICE_TYPE:
+                nominal_rate = self.projects.construction_nominal_capacity_at(
+                    location_id, self.day
+                )
+                enabled_rate = self.projects.construction_capacity_at(
+                    location_id, power, self.day
+                )
+            elif self.survey is not None and service_type == self.survey.SERVICE_TYPE:
+                nominal_rate = self.survey.nominal_service_capacity_at(
+                    location_id, self.day
+                )
+                enabled_rate = self.survey.enabled_service_capacity_at(
+                    location_id, power, self.day
+                )
+            elif (location_id, service_type) in dynamic_nominal:
+                nominal_rate = dynamic_nominal[(location_id, service_type)]
+                enabled_rate = dynamic_enabled.get((location_id, service_type), 0.0)
+            else:
+                nominal_rate = self.facilities.nominal_service_capacity_at(
+                    location_id, service_type, self.day
+                )
+                enabled_rate = self.facilities.enabled_service_capacity_at(
+                    location_id, service_type, power, self.day
+                )
+            key = (location_id, service_type)
+            nominal[key] = nominal_rate
+            enabled[key] = enabled_rate
+            factors: list[str] = []
+            if nominal_rate <= 1e-12:
+                if any(
+                    request.operational_node_id == location_id
+                    and request.service_type == service_type
+                    and request.requested_rate > 1e-12
+                    for request in requests
+                ):
+                    factors.append("provider_absent")
+            elif enabled_rate + 1e-9 < nominal_rate:
+                factors.append("provider_dependency")
+            limiting[key] = tuple(factors)
+        return allocate_service_capacity(
+            requests,
+            nominal_supply=nominal,
+            enabled_supply=enabled,
+            limiting_factors=limiting,
+        )
+
+    def service_capacity_allocation_projection(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+    ) -> ServiceCapacityAllocationPlan:
+        locations = self._active_locations() | set(self.graph.operational_node_ids())
+        powers = power_by_location or {
+            loc: self.power.snapshot(loc, self.facilities, self.day)
+            for loc in sorted(locations, key=str)
+        }
+        return self._allocate_tick_services(powers)
+
     def resource_allocation_projection(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
@@ -295,6 +450,7 @@ class Simulation:
             resource_allocations = self._allocate_tick_resources(
                 power_before, logistics_plan.claims
             )
+            service_allocations = self._allocate_tick_services(power_before)
 
             # Every Domain below may use only its allocation. Execution order no
             # longer decides who owns scarce start-of-tick inventory.
@@ -311,30 +467,38 @@ class Simulation:
                     power_before[loc],
                     self.day,
                     resource_allocations,
+                    service_allocations,
                 )
                 if self.extraction is not None:
                     self.extraction.advance_day(
-                        loc, self.facilities, self.inventory, power_before[loc], self.day
+                        loc, self.facilities, self.inventory, power_before[loc], self.day,
+                        service_allocations,
                     )
 
             if self.research is not None:
-                self.research.advance_day(power_before, resource_allocations, self.day)
+                self.research.advance_day(
+                    power_before, resource_allocations, service_allocations, self.day
+                )
             if self.scientific_exploration is not None:
                 self.scientific_exploration.advance_day(
                     power_before, resource_allocations, self.day
                 )
             if self.survey is not None:
-                self.survey.advance_day(power_before, self.day)
+                self.survey.advance_day(power_before, service_allocations, self.day)
             if self.maintenance is not None:
                 self.maintenance.advance_day(resource_allocations, self.day)
 
             self.logistics.advance_vehicle_production_day(
-                power_before, resource_allocations, self.day
+                power_before, resource_allocations, service_allocations, self.day
             )
             self.projects.finalize_procurement(resource_allocations, self.day)
-            self.projects.advance_construction(power_before, self.day)
+            self.projects.advance_construction(
+                power_before, service_allocations, self.day
+            )
             if self.founding is not None:
-                self.founding.advance_day(resource_allocations, self.day)
+                self.founding.advance_day(
+                    resource_allocations, service_allocations, self.day
+                )
             self.logistics.synchronize_surface_access_routes()
             self.refresh_storage()
             next_day = self.day + 1

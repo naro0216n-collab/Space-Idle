@@ -11,7 +11,6 @@ class ProduceVehicle:
     vehicle_definition_id: str
     operational_node_id: str
     priority: int = 50
-    allocation_weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -28,7 +27,6 @@ class ResumeVehicleProduction:
 class SetVehicleProductionSettings:
     production_id: str
     priority: int | None = None
-    allocation_weight: float | None = None
 
 
 @dataclass(frozen=True)

@@ -5,6 +5,11 @@ import math
 
 from ..resource_claim import ResourceAllocationPlan, ResourceClaim
 from ..resource_demand import ResourceDemand
+from ..service_capacity import (
+    ServiceCapacityAllocationPlan,
+    ServiceCapacityRequest,
+    allocate_service_capacity,
+)
 from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .models import (
     DirectionalCapacity,
@@ -410,22 +415,12 @@ class FleetAllocationMixin:
         resource_requirements: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = (),
         servicing_node_id: SpatialNodeId | None = None,
         servicing_rate: float = 0.0,
-    ) -> tuple[tuple[SpatialNodeId, str, float, str], ...]:
-        """Project the infrastructure contract already used by route execution.
+    ) -> tuple[tuple[SpatialNodeId, str, str], ...]:
+        """Project categorical infrastructure requirements for decision surfaces."""
+        infrastructure: set[tuple[SpatialNodeId, str, str]] = set()
 
-        This is derived state for decision surfaces.  Callers supply resource
-        requirements in whatever rate/quantity applies to their operation; only
-        the presence of a positive demand matters for support-interface needs.
-        """
-        infrastructure: dict[tuple[SpatialNodeId, str, str], float] = {}
-
-        def _require(
-            location_id: SpatialNodeId, capability_id: str, minimum: float, mode: str
-        ) -> None:
-            key = (location_id, capability_id, mode)
-            infrastructure[key] = max(
-                infrastructure.get(key, 0.0), max(0.0, minimum)
-            )
+        def _require(location_id: SpatialNodeId, capability_id: str, required_state: str) -> None:
+            infrastructure.add((location_id, capability_id, required_state))
 
         for route in routes:
             for location_id, site_requirements in (
@@ -436,8 +431,7 @@ class FleetAllocationMixin:
                     _require(
                         location_id,
                         requirement.capability_id,
-                        requirement.minimum_capacity,
-                        requirement.mode,
+                        requirement.required_state.value,
                     )
             present_operations = {operation.operation_type for operation in route.operations}
             for support in definition.operation_support_requirements:
@@ -448,39 +442,16 @@ class FleetAllocationMixin:
                     if support.location is OperationSupportLocation.ORIGIN
                     else route.destination_id
                 )
-                _require(location_id, support.capability_id, 0.0, "available")
+                _require(location_id, support.capability_id, "ACTIVE")
 
         for location_id, resource_id, amount in resource_requirements:
             if amount <= 1e-12:
                 continue
             for support in definition.resource_support_requirements:
                 if support.resource_id == resource_id:
-                    _require(
-                        location_id,
-                        support.infrastructure_capability_id,
-                        0.0,
-                        "available",
-                    )
+                    _require(location_id, support.infrastructure_capability_id, "ACTIVE")
 
-        if (
-            servicing_node_id is not None
-            and definition.turnaround_capability_id is not None
-            and servicing_rate > 1e-12
-        ):
-            _require(
-                servicing_node_id,
-                definition.turnaround_capability_id,
-                servicing_rate,
-                "available",
-            )
-
-        return tuple(
-            (location_id, capability_id, minimum, mode)
-            for (location_id, capability_id, mode), minimum in sorted(
-                infrastructure.items(),
-                key=lambda row: (str(row[0][0]), row[0][1], row[0][2]),
-            )
-        )
+        return tuple(sorted(infrastructure, key=lambda row: (str(row[0]), row[1], row[2])))
 
     def derive_transport_service_plan(
         self, allocation_id: EntityId, day: int = 0
@@ -1273,12 +1244,86 @@ class FleetAllocationMixin:
                 allocation.active_units += delta
                 free -= delta
 
+    @staticmethod
+    def transport_service_request_id(allocation_id: EntityId) -> EntityId:
+        return EntityId(f"service.transport_turnaround:{allocation_id}")
+
+    def transport_service_capacity_requests(
+        self, day: int = 0
+    ) -> tuple[ServiceCapacityRequest, ...]:
+        requests: list[ServiceCapacityRequest] = []
+        for allocation in sorted(
+            self.transport_allocations.values(), key=lambda row: str(row.id)
+        ):
+            if allocation.paused or allocation.active_units <= 0:
+                continue
+            definition = self.vehicle_defs[allocation.vehicle_definition_id]
+            service_type = definition.turnaround_service_type
+            if service_type is None:
+                continue
+            plan = self.derive_transport_service_plan(allocation.id, day)
+            requested = (
+                plan.servicing_units_per_full_utilization_day * allocation.active_units
+            )
+            if requested <= 1e-12:
+                continue
+            requests.append(
+                ServiceCapacityRequest(
+                    self.transport_service_request_id(allocation.id),
+                    allocation.anchor_node_id,
+                    service_type,
+                    requested,
+                    allocation.priority,
+                    "transport",
+                    allocation.id,
+                    "turnaround_servicing",
+                )
+            )
+        return tuple(requests)
+
+    def transport_service_capacity_plan(
+        self, day: int = 0
+    ) -> ServiceCapacityAllocationPlan:
+        requests = self.transport_service_capacity_requests(day)
+        keys = {
+            (request.operational_node_id, request.service_type)
+            for request in requests
+        }
+        nominal = {}
+        enabled = {}
+        limiting = {}
+        for location_id, service_type in sorted(
+            keys, key=lambda row: (str(row[0]), row[1])
+        ):
+            power = self.power.snapshot(location_id, self.facilities, day)
+            nominal_rate = self.facilities.nominal_service_capacity_at(
+                location_id, service_type, day
+            )
+            enabled_rate = self.facilities.enabled_service_capacity_at(
+                location_id, service_type, power, day
+            )
+            key = (location_id, service_type)
+            nominal[key] = nominal_rate
+            enabled[key] = enabled_rate
+            limiting[key] = (
+                ()
+                if enabled_rate + 1e-9 >= nominal_rate
+                else ("provider_dependency",)
+            )
+        return allocate_service_capacity(
+            requests,
+            nominal_supply=nominal,
+            enabled_supply=enabled,
+            limiting_factors=limiting,
+        )
+
     def transport_capacity_snapshot(
         self,
         allocation_id: EntityId,
         *,
         day: int = 0,
         used: DirectionalCapacity = DirectionalCapacity(),
+        service_allocations: ServiceCapacityAllocationPlan | None = None,
     ) -> TransportCapacitySnapshot:
         allocation = self.transport_allocations[allocation_id]
         plan = self.derive_transport_service_plan(allocation_id, day)
@@ -1331,7 +1376,7 @@ class FleetAllocationMixin:
                     if support.location.value == "origin"
                     else route.destination_id
                 )
-                if not self._has_available_capability(location_id, support.capability_id, day):
+                if not self._has_active_capability(location_id, support.capability_id, day):
                     forward_ratio = 0.0
                     reverse_ratio = 0.0
                     limiting.append(f"infrastructure:{location_id}:{support.capability_id}")
@@ -1339,18 +1384,25 @@ class FleetAllocationMixin:
         # Turnaround servicing is a cycle-rate capacity, not merely a boolean
         # facility prerequisite. A partially provisioned service therefore
         # lowers Available Capacity without changing the Fleet target.
-        if definition.turnaround_capability_id is not None:
+        if definition.turnaround_service_type is not None:
             required_service = plan.servicing_units_per_full_utilization_day * active
-            available_service = self._available_capability(
-                allocation.anchor_node_id, definition.turnaround_capability_id, day
-            )
             if required_service > 1e-12:
-                service_ratio = min(1.0, max(0.0, available_service / required_service))
+                if service_allocations is None:
+                    service_allocations = self.transport_service_capacity_plan(day)
+                try:
+                    allocated_service = service_allocations.allocated(
+                        self.transport_service_request_id(allocation.id)
+                    )
+                except KeyError:
+                    allocated_service = 0.0
+                service_ratio = min(
+                    1.0, max(0.0, allocated_service / required_service)
+                )
                 forward_ratio = min(forward_ratio, service_ratio)
                 reverse_ratio = min(reverse_ratio, service_ratio)
                 if service_ratio < 1.0 - 1e-12:
                     limiting.append(
-                        f"servicing:{allocation.anchor_node_id}:{definition.turnaround_capability_id}"
+                        f"servicing:{allocation.anchor_node_id}:{definition.turnaround_service_type}"
                     )
 
         def _resource_map(rows):

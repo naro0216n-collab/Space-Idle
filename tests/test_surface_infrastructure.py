@@ -6,7 +6,7 @@ import json
 from space_idle import AdvanceTime, DevelopSurfaceCell, GetLocation, GetProjects, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
-from space_idle.surface_infrastructure import SURFACE_DISTRIBUTION_CAPABILITY
+from space_idle.surface_infrastructure import SURFACE_DISTRIBUTION_SERVICE
 
 
 def _snapshot(sim):
@@ -89,7 +89,7 @@ def test_location_query_exposes_surface_infrastructure_decision_state_and_improv
     view = app.query(GetLocation(str(ids.EARTH)))
     row = view.surface_infrastructure
     assert row is not None
-    assert row.demand > 0.0
+    assert row.requested_capacity > 0.0
     assert row.fulfillment == 0.0
     assert row.limiting_factors == ("surface_infrastructure",)
     assert str(ids.SURFACE_DISTRIBUTION_HUB) in row.improvement_facility_definition_ids
@@ -103,10 +103,10 @@ def test_surface_infrastructure_does_not_create_cell_inventory_or_logistics_node
 
     assert ids.EARTH_CELL_COASTAL not in sim.graph.operational_node_ids()
     assert all(location_id != ids.EARTH_CELL_COASTAL for location_id, _ in sim.inventory.stock)
-    assert SURFACE_DISTRIBUTION_CAPABILITY in sim.facilities.capability_ids()
+    assert SURFACE_DISTRIBUTION_SERVICE in sim.facilities.service_types()
 
 
-def test_remote_surface_facility_available_capability_uses_surface_infrastructure():
+def test_remote_surface_facility_capability_remains_categorical_under_surface_service_shortage():
     sim = build_game_application()._simulation
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
     station_id = sim.facilities.install(
@@ -114,19 +114,23 @@ def test_remote_surface_facility_available_capability_uses_surface_infrastructur
         ids.EARTH,
         site_cell_id=ids.EARTH_CELL_COASTAL,
     )
+    assert sim.facilities.installed_capability_at(ids.EARTH, "surface_survey")
+    assert sim.facilities.active_capability_at(ids.EARTH, "surface_survey", sim.day)
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
-    assert sim.facilities.active_capability_capacity_at(
-        ids.EARTH, "surface_survey", sim.day
-    ) > 0.0
-    assert sim.facilities.available_capability_capacity_at(
-        ids.EARTH, "surface_survey", power, sim.day
-    ) == 0.0
+    assert sim.surface_infrastructure.snapshot(
+        ids.EARTH, sim.facilities, power, sim.day
+    ).fulfillment == 0.0
 
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
+    sim.facilities.install(
+        ids.SURFACE_DISTRIBUTION_HUB,
+        ids.EARTH,
+        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+    )
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
-    assert sim.facilities.available_capability_capacity_at(
-        ids.EARTH, "surface_survey", power, sim.day
-    ) > 0.0
+    assert sim.surface_infrastructure.snapshot(
+        ids.EARTH, sim.facilities, power, sim.day
+    ).fulfillment > 0.0
+    assert sim.facilities.active_capability_at(ids.EARTH, "surface_survey", sim.day)
     assert station_id in sim.facilities.facilities
 
 
@@ -182,20 +186,22 @@ def test_surface_infrastructure_is_derived_after_save_load(tmp_path):
     assert after == before
 
 
-def test_surface_gateway_handling_capability_uses_location_surface_infrastructure():
+def test_surface_gateway_handling_service_uses_location_surface_infrastructure():
     sim = build_game_application()._simulation
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
-    assert sim.facilities.active_capability_capacity_at(
-        ids.EARTH, "cargo_transfer", sim.day
-    ) > 0.0
-    assert sim.facilities.available_capability_capacity_at(
+    assert sim.facilities.active_capability_at(ids.EARTH, "cargo_transfer", sim.day)
+    assert sim.facilities.enabled_service_capacity_at(
         ids.EARTH, "cargo_transfer", power, sim.day
     ) == 0.0
 
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
+    sim.facilities.install(
+        ids.SURFACE_DISTRIBUTION_HUB,
+        ids.EARTH,
+        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+    )
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
-    assert sim.facilities.available_capability_capacity_at(
+    assert sim.facilities.enabled_service_capacity_at(
         ids.EARTH, "cargo_transfer", power, sim.day
     ) > 0.0
 

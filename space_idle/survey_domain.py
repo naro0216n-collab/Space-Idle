@@ -25,7 +25,7 @@ def capture_survey(sim: Any) -> dict[str, Any]:
                 "cell_id": str(c.cell_id),
                 "resource_id": str(c.resource_id),
                 "target_knowledge_level": c.target_knowledge_level,
-                "allocation_weight": c.allocation_weight,
+                "priority": c.priority,
                 "paused": c.paused,
             }
             for _, c in sorted(
@@ -53,7 +53,7 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
             cell_id,
             resource_id,
             target_knowledge_level=int(r.get("target_knowledge_level", 4)),
-            allocation_weight=float(r["allocation_weight"]),
+            priority=int(r["priority"]),
             paused=bool(r["paused"]),
         )
 
@@ -148,7 +148,7 @@ def validate_survey_runtime(sim: Any) -> None:
             sim.survey.knowledge_level(*key) < campaign.target_knowledge_level,
             f"survey campaign already reached its provider knowledge target: {key}",
         )
-        _require(campaign.allocation_weight >= 0, f"negative survey allocation: {key}")
+        _require(isinstance(campaign.priority, int), f"invalid survey priority: {key}")
 
 
 def validate_extraction_runtime(sim: Any) -> None:

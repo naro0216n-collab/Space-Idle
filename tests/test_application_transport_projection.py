@@ -30,7 +30,6 @@ from space_idle import (
     PauseLogisticsLane,
     PlanBuild,
     ProduceVehicle,
-    SetConstructionWeight,
     SetProjectImportSource,
     SetProjectPriority,
     SetProjectSourcingPolicy,
@@ -105,12 +104,11 @@ def test_transport_service_requirements_are_projected_from_the_same_plan_for_opt
         and row.policy == "fastest"
     )
     requirements = {
-        (row.operational_node_id, row.capability_id, row.mode)
+        (row.operational_node_id, row.capability_id, row.required_state)
         for row in option.infrastructure_requirements
     }
-    assert (str(EARTH), "launch_operations", "available") in requirements
-    assert (str(EARTH), "launch_vehicle_servicing", "available") in requirements
-    assert (str(EARTH), "vehicle_refueling", "available") in requirements
+    assert (str(EARTH), "launch_operations", "ACTIVE") in requirements
+    assert (str(EARTH), "vehicle_refueling", "ACTIVE") in requirements
     assert any(
         location_id == str(EARTH)
         and resource_id == str(ids.PROPELLANT)
@@ -206,25 +204,23 @@ def test_lane_capacity_and_priority_can_be_updated_without_replacing_lane():
     assert after.priority == 80
 
 
-def test_vehicle_production_exposes_resource_priority_and_capability_allocation_controls():
+def test_vehicle_production_exposes_resource_and_service_priority_control():
     app = build_game_application()
     production_id = app.execute(ProduceVehicle(
-        str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(EARTH), priority=37, allocation_weight=2.5,
+        str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(EARTH), priority=37,
     )).created_id
     assert production_id is not None
 
     row = next(item for item in app.query(GetLogistics()).vehicle_production if item.id == production_id)
     assert row.priority == 37
-    assert row.allocation_weight == pytest.approx(2.5)
     assert row.priority_editable is True
-    assert row.allocation_editable is True
+    assert row.production_service_type == "vehicle_assembly"
     demands = tuple(d for d in app.query(GetLogistics()).demands if d.owner_kind == "vehicle_production" and d.owner_id == production_id)
     assert demands and {d.priority for d in demands} == {37}
 
-    app.execute(SetVehicleProductionSettings(production_id, priority=81, allocation_weight=3.0))
+    app.execute(SetVehicleProductionSettings(production_id, priority=81))
     updated = next(item for item in app.query(GetLogistics()).vehicle_production if item.id == production_id)
     assert updated.priority == 81
-    assert updated.allocation_weight == pytest.approx(3.0)
 
     app.execute(AdvanceTime(1))
     building = next(item for item in app.query(GetLogistics()).vehicle_production if item.id == production_id)
@@ -232,7 +228,6 @@ def test_vehicle_production_exposes_resource_priority_and_capability_allocation_
     assert building.priority_editable is False
     with pytest.raises(ApplicationError, match="priority can only change before inputs are consumed"):
         app.execute(SetVehicleProductionSettings(production_id, priority=10))
-    app.execute(SetVehicleProductionSettings(production_id, allocation_weight=1.25))
 
 
 def test_ui_snapshot_is_json_safe_at_application_boundary(tmp_path):
@@ -269,10 +264,10 @@ def test_construction_queries_expose_authoritative_project_controls():
     assert project_id is not None
     row = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
     assert row.settings_editable and row.sourcing_editable
-    app.execute(SetProjectPriority(project_id, 81)); app.execute(SetConstructionWeight(project_id, 2.5))
+    app.execute(SetProjectPriority(project_id, 81))
     app.execute(SetProjectSourcingPolicy(project_id, "import_now")); app.execute(SetProjectImportSource(project_id, None))
     updated = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
-    assert (updated.priority, updated.construction_weight, updated.sourcing_policy, updated.import_source_id) == (81, 2.5, "import_now", None)
+    assert (updated.priority, updated.sourcing_policy, updated.import_source_id) == (81, "import_now", None)
 
 
 def test_vehicle_catalog_exposes_endurance_and_operation_asset_recovery_semantics():

@@ -5,7 +5,7 @@ from space_idle import GetFleet, build_game_application
 from space_idle.composition.base_simulation import build_base_simulation
 from space_idle.content import base_ids as ids
 from space_idle.shared import EntityId, RouteId, SpatialNodeId
-from space_idle.site import CapabilityRequirement, SiteRequirements
+from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
 from space_idle.transport.models import (
     DirectionalCapacity,
     FleetReservationKind,
@@ -486,7 +486,7 @@ def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execut
         route,
         origin_requirements=SiteRequirements(
             route.origin_requirements.environment,
-            (CapabilityRequirement("research_lab", 0.01, "available"),),
+            (CapabilityRequirement("research_lab", CapabilityRequirementState.ACTIVE),),
         ),
     )
     allocation_id = lg.create_transport_allocation(

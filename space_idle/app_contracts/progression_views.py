@@ -122,13 +122,14 @@ class SurveyRow:
     can_start: bool
     can_pause: bool
     can_resume: bool
-    can_set_allocation: bool
+    can_set_priority: bool
     progress: float
     progress_fraction: float
     target_knowledge_level: int
     target_threshold: float
-    default_allocation_weight: float
-    allocation_weight: float
+    priority: int
+    requested_service_points_per_day: float
+    allocated_service_points_per_day: float
     knowledge_level: int
     presence_probability: float | None
     visible_potential: float | None

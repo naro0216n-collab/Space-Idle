@@ -84,8 +84,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(bool(package.operations), f"founding package has no deployment operation: {package_id}")
         _require(package.transit_days > 0, f"founding package has invalid transit: {package_id}")
         _require(package.required_units > 0, f"founding package has invalid fleet units: {package_id}")
-        validate_site_requirements(package.staging_requirements, ctx.known_capabilities, f"founding:{package_id}:staging")
-        validate_site_requirements(package.target_requirements, ctx.known_capabilities, f"founding:{package_id}:target")
+        validate_site_requirements(package.staging_requirements, ctx.known_capabilities, f"founding:{package_id}:staging", ctx.known_service_types)
+        validate_site_requirements(package.target_requirements, ctx.known_capabilities, f"founding:{package_id}:target", ctx.known_service_types)
         _require(
             not package.target_requirements.capability_requirements,
             f"founding target requirements cannot depend on pre-location capabilities: {package_id}",

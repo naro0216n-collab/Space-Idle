@@ -7,6 +7,11 @@ from .inventory import InventoryBook
 from .power import PowerSnapshot
 from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .resource_demand import ResourceDemand
+from .service_capacity import (
+    ServiceCapacityAllocationPlan,
+    ServiceCapacityRequest,
+    allocate_service_capacity,
+)
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .production import (
     ProcessSpec, ProcessSnapshot, ProcessSelectionMixin,
@@ -18,6 +23,93 @@ from .production import (
 class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExecutionMixin):
     processes: dict[DefinitionId, ProcessSpec]
     selected_process_by_facility: dict[EntityId, DefinitionId] = field(default_factory=dict)
+
+    SERVICE_TYPE_PREFIX = "process:"
+
+    @classmethod
+    def process_service_type(cls, process_id: DefinitionId) -> str:
+        return f"{cls.SERVICE_TYPE_PREFIX}{process_id}"
+
+    @staticmethod
+    def _service_request_id(facility_id: EntityId) -> EntityId:
+        return EntityId(f"service.industry:{facility_id}")
+
+    def service_requests(
+        self,
+        location_id: SpatialNodeId,
+        facilities: FacilityBook,
+        day: int = 0,
+    ) -> tuple[ServiceCapacityRequest, ...]:
+        """Request one unit of selected Process Capacity per active facility.
+
+        Process input/output rates are defined at full-scale operation.  A
+        facility therefore requests one unit of its selected process service;
+        the shared allocation determines the executable fraction for the tick.
+        """
+        requests: list[ServiceCapacityRequest] = []
+        for facility in sorted(
+            facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)
+        ):
+            process = self.process_for(facility)
+            if process is None:
+                continue
+            requests.append(ServiceCapacityRequest(
+                self._service_request_id(facility.id),
+                location_id,
+                self.process_service_type(process.id),
+                1.0,
+                50,
+                "industry_process",
+                facility.id,
+                f"process:{process.id}",
+            ))
+        return tuple(requests)
+
+    def service_supply(
+        self,
+        location_id: SpatialNodeId,
+        facilities: FacilityBook,
+        power: PowerSnapshot,
+        day: int = 0,
+    ) -> tuple[dict[tuple[SpatialNodeId, str], float], dict[tuple[SpatialNodeId, str], float]]:
+        """Return nominal and dependency-enabled Process Capacity supply."""
+        nominal: dict[tuple[SpatialNodeId, str], float] = {}
+        enabled: dict[tuple[SpatialNodeId, str], float] = {}
+        for facility in sorted(
+            facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)
+        ):
+            process = self.process_for(facility)
+            if process is None:
+                continue
+            key = (location_id, self.process_service_type(process.id))
+            nominal[key] = nominal.get(key, 0.0) + 1.0
+            factor = max(
+                0.0,
+                min(
+                    1.0,
+                    power.utilization_by_facility.get(facility.id, 1.0)
+                    * power.maintenance_factor_by_facility.get(
+                        facility.id, facilities.maintenance_factor(facility.id)
+                    ),
+                ),
+            )
+            enabled[key] = enabled.get(key, 0.0) + factor
+        return nominal, enabled
+
+    def standalone_service_plan(
+        self,
+        location_id: SpatialNodeId,
+        facilities: FacilityBook,
+        power: PowerSnapshot,
+        day: int = 0,
+    ) -> ServiceCapacityAllocationPlan:
+        requests = self.service_requests(location_id, facilities, day)
+        nominal, enabled = self.service_supply(location_id, facilities, power, day)
+        return allocate_service_capacity(
+            requests,
+            nominal_supply=nominal,
+            enabled_supply=enabled,
+        )
 
     def resource_demands(
         self,

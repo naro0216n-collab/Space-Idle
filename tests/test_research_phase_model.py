@@ -8,7 +8,7 @@ from space_idle.research import (
     ResearchDefinition, ResearchDemonstrationSpec, ResearchPhase, ResearchPrototypeSpec,
 )
 from space_idle.shared import DefinitionId, EntityId
-from space_idle.site import CapabilityRequirement, SiteRequirements
+from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
 from space_idle.content import base_ids as ids
 from space_idle.content.base_game import EARTH, LEO
 
@@ -68,18 +68,18 @@ def test_prototype_funding_eligibility_uses_durable_staging_not_unallocated_stoc
     assert _research_row(app, research_id).status == "complete"
 
 
-def test_demonstration_site_can_be_selected_despite_transient_available_capability_blocker():
+def test_demonstration_site_can_be_selected_despite_transient_active_capability_blocker():
     app = build_game_application()
     sim = app._simulation
-    research_id = DefinitionId("test.research.available_capability_demo")
+    research_id = DefinitionId("test.research.active_capability_demo")
     sim.research.definitions[research_id] = ResearchDefinition(
         research_id,
-        "Available Capability Demonstration",
+        "Active Capability Demonstration",
         research_point_cost=0.0,
         demonstration=ResearchDemonstrationSpec(
             2,
             SiteRequirements(capability_requirements=(
-                CapabilityRequirement("research_lab", 0.01, "available"),
+                CapabilityRequirement("research_lab", CapabilityRequirementState.ACTIVE),
             )),
         ),
     )
@@ -92,13 +92,13 @@ def test_demonstration_site_can_be_selected_despite_transient_available_capabili
 
     row = _research_row(app, research_id)
     earth = next(site for site in row.demonstration_sites if site.location_id == str(EARTH))
-    assert any(code == "capability:available" for code, _detail in earth.blockers)
+    assert any(code == "capability:active" for code, _detail in earth.blockers)
     assert earth.can_select
 
     app.execute(SetResearchDemonstrationSite(str(research_id), str(EARTH)))
     selected = _research_row(app, research_id)
     assert selected.demonstration_location_id == str(EARTH)
-    assert any(code == "capability:available" for code, _detail in selected.current_blockers)
+    assert any(code == "capability:active" for code, _detail in selected.current_blockers)
     assert selected.can_pause
     assert not selected.can_resume
 
@@ -131,3 +131,40 @@ def test_partial_prototype_procurement_is_staged_and_site_change_returns_materia
     assert sim.inventory.staged_for(owner_id, EARTH, resource_id) == 0.0
     assert sim.inventory.amount(EARTH, resource_id) == 0.25
     assert sim.inventory.staged_for(owner_id, LEO, resource_id) == 0.0
+
+
+def test_demonstration_progress_requires_allocated_research_execution_service():
+    from dataclasses import replace
+
+    app = build_game_application()
+    sim = app._simulation
+    research_id = DefinitionId("test.research.execution_capacity")
+    sim.research.definitions[research_id] = ResearchDefinition(
+        research_id,
+        "Research Execution Capacity",
+        research_point_cost=0.0,
+        demonstration=ResearchDemonstrationSpec(
+            2,
+            SiteRequirements(capability_requirements=(
+                CapabilityRequirement("research_lab", CapabilityRequirementState.ACTIVE),
+            )),
+        ),
+    )
+    app.execute(StartResearch(str(research_id)))
+    app.execute(SetResearchDemonstrationSite(str(research_id), str(EARTH)))
+
+    lab = next(
+        facility for facility in sim.facilities.facilities.values()
+        if facility.definition_id == ids.EARTH_RESEARCH_LAB
+    )
+    definition = sim.facilities.definitions[lab.definition_id]
+    sim.facilities.definitions[lab.definition_id] = replace(
+        definition,
+        service_capacity_supplies=tuple(
+            supply for supply in definition.service_capacity_supplies
+            if supply.service_type != "research_execution"
+        ),
+    )
+
+    app.execute(AdvanceTime(1))
+    assert sim.research.active[research_id].demonstration_done_days == 0

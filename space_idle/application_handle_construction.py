@@ -14,7 +14,6 @@ from .application_commands import (
     SetFoundingPriority,
     DevelopSurfaceCell,
     ResumeBuild,
-    SetConstructionWeight,
     SetProjectImportSource,
     SetProjectPriority,
     SetProjectSourcingPolicy,
@@ -100,8 +99,6 @@ class ConstructionCommandHandlerMixin:
             sim.projects.set_priority(ProjectId(command.project_id), command.priority); return CommandResult()
         if isinstance(command, SetProjectSourcingPolicy):
             sim.projects.set_sourcing_policy(ProjectId(command.project_id), command.sourcing_policy); return CommandResult()
-        if isinstance(command, SetConstructionWeight):
-            sim.projects.set_construction_weight(ProjectId(command.project_id), command.weight); return CommandResult()
         if isinstance(command, SetProjectImportSource):
             sim.projects.set_import_source(
                 ProjectId(command.project_id),
