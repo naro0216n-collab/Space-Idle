@@ -117,9 +117,9 @@ Simulation OrchestratorはDomainを固定順に逐次呼び出して競合を解
 1. Boundary settlement
    前tickまでに到着・完了時刻へ達したCargo、Fleet relocation、Project等を確定
 
-2. Start-of-tick snapshot
-   Inventory available、active Capability、Nominal / Available Service Capacity、
-   Fleet availability、Environment等の配分基準を固定
+2. Physical snapshot
+   on-hand Inventory、既存Reservation、Funds、Environment、Facility / Fleet状態、
+   Installed / Active Capability、Nominal Service Capacity等の配分前の物理状態を固定
 
 3. Intent generation
    各DomainがResource Claim、Resource Demand、Service Capacity Request、
@@ -127,12 +127,14 @@ Simulation OrchestratorはDomainを固定順に逐次呼び出して競合を解
 
 4. Planning
    Resource Demandをsourcing / route Policyへ接続し、利用可能source、pathを選択する。
-   発送候補はsource側Resource ClaimとLane / Transport Capacity requestへ解決
+   発送候補はsource側Resource ClaimとLane / Transport Capacity requestへ解決する。
+   Service supplyがResource、Funds、Fleet、Power、Maintenance、上流Service等を必要とする場合は、
+   provider dependencyとして明示する
 
 5. Allocation
-   現地実行用Claimと物流発送用Claimを同じsource Inventory上で競合させ、
-   Resource、Power、Service Capacity、Fleet、Transport Capacityを
-   priority / Policyに従って競合解決
+   現地実行用Claimと物流発送用Claimを同じsource Inventory上で競合させる。
+   Resource、Funds、Fleet、Service / Transport等の依存関係を一つの決定論的allocation graphとして解決し、
+   上流Allocationでenableされた範囲からAvailable Service Capacityを確定した後、consumerへAllocated / Spareを求める
 
 6. Domain execution
    Production、Extraction、Maintenance、Construction、Research、
@@ -147,7 +149,9 @@ Simulation OrchestratorはDomainを固定順に逐次呼び出して競合を解
    派生Query状態を再導出してtickを進める
 ```
 
-Boundary settlement後のsnapshotを当tick配分の正本とする。前tickまでに到着時刻へ達したCargoはBoundary settlementで入庫判定された後にsnapshotへ反映する。当tickのexecutionやmovementで新たに生成・到着・解放されたResource / Capacityは、同じtickの過去phaseを遡及更新しない。Planningで選ばれた発送元Resourceもsource側Resource ClaimとしてAllocationへ参加させ、同じInventoryを現地実行と輸送が二重消費しない。これにより「どのDomainを先に呼んだか」で資源や能力の利用結果が変化することを防ぐ。
+Boundary settlement後のPhysical snapshotを当tick配分の物理的な正本とする。前tickまでに到着時刻へ達したCargoはBoundary settlementで入庫判定された後にsnapshotへ反映する。snapshotで固定するのは配分前状態であり、最終Available Service Capacityではない。AvailableはPlanningで明示されたprovider dependencyと当tickAllocationの結果から確定する。Planningで選ばれた発送元Resourceもsource側Resource ClaimとしてAllocationへ参加させ、同じInventoryを現地実行と輸送が二重消費しない。これにより「どのDomainを先に呼んだか」で資源や能力の利用結果が変化することを防ぐ。
+
+当tickのexecutionやmovementで新たに生産・到着したResource、完了によって新たに発生したCapacityはallocation graphのrootへ戻さず、次tickのBoundary settlement後snapshotまで利用しない。同tickallocation dependency graphに循環があるContent / DefinitionはConfiguration Validationでfail-closedとする。Domain固有の呼出順、自己供給、反復収束等の例外で循環を隠さず、循環自体をゲームルールとして必要とする場合は共通allocation契約を改訂する。
 
 同priorityの連続量は比例配分を基本とし、Project成立等で最小成立量が必要な要求だけ明示的なatomic / minimum contractを持てる。phase間の例外的shortcutをDomainごとに追加せず、必要なら共通phase契約そのものを改訂する。
 
@@ -268,7 +272,7 @@ Facility設置・運転、Research Prototype / Demonstration、Route端点、Loc
 
 量として競合するものを `Available Capability` と呼ばない。電力、建設work、Cargo Handling、Survey rate、Research execution等の有限flowは `Service Capacity` として別契約にする。
 
-`ServiceCapacity` はservice type、Nominal、Available、Allocated、Spareを持てる。AvailableはPower、Maintenance、Resource、Environment、上流Infrastructure等からsnapshot時に導出する。複数Domainが同じService Capacityを利用する場合はAllocationを通し、各Domainが同じAvailable値を独立に全量使用しない。
+`ServiceCapacity` はservice type、Nominal、Available、Allocated、Spareを持てる。NominalはPhysical snapshotに固定する配分前supplyである。Power、Maintenance、Resource、Funds、Fleet、Environment、上流Infrastructure / Service等への依存はPlanningでprovider dependencyとして公開し、共通allocation graphで上流Allocationを解いた結果からAvailableを確定する。複数Domainが同じService Capacityを利用する場合はその後のAllocationを通し、各Domainが同じAvailable値を独立に全量使用しない。
 
 ### 5.4 Location development / Surface Infrastructure
 
@@ -322,7 +326,7 @@ maintenance_demand(resource, period)
 
 InventoryはOperational Nodeごとの所有Resourceを表し、on-hand、Reservation、利用可能量、輸送待ち、輸送中、到着待機を区別する。
 
-StorageはPhysical CapacityとStorage Service Capacityを分けられる。輸送中Cargoは目的地Storageを事前予約せず、実到着時にだけ入庫判定する。入らない分はarrival waitingとしてLogistics Domain側へ残す。
+Storageはある時点で保持できるstock上限として `Physical Storage Capacity` と `Usable Storage Capacity` を区別できる。Usableは電力・温調等の成立条件を反映して現在安全に保持できる量の上限であり、一定時間あたりのService Capacityではない。荷役・温調処理量等を有限flowとして競合させる場合はCargo Handling / Conditioning等の別Service Capacityとして定義する。輸送中Cargoは目的地Storageを事前予約せず、実到着時にだけ入庫判定する。入らない分はarrival waitingとしてLogistics Domain側へ残す。
 
 PowerはOperational NodeごとのService Capacityとし、他の有限capacityと同様にpriority allocationを行う。部分稼働可能な需要は割当率に応じて縮退できる。
 
@@ -564,9 +568,9 @@ Service Planから方向別Transport Capacityを導出し、少なくとも次�
 
 往復Serviceは同一cycleが両方向を担当するため、方向別capacityを加算してFleet負荷を二重計上しない。帰り荷がない場合は空荷回送を含め、帰り荷がある場合は同じ復路capacityを利用する。
 
-推進剤・servicing等の可変運用需要はAllocation最大値ではなく実際のService利用率から発生させる。Available Capacityはそのtick開始時点のResource / Infrastructure snapshotから決め、同tick中に到着したResourceで遡及的に増加させない。
+推進剤・servicing等の可変運用需要はAllocation最大値ではなく実際のService利用率から発生させる。Available CapacityはPhysical snapshotのFleet / Infrastructure等と、Planningで明示した推進剤・servicing・上流Service等へのdependency allocationから当tickAllocation内で決める。同tick中に生産・到着したResourceで遡及的に増加させない。
 
-External Transport ServiceはFleet Allocationを持たず、同じTransport Capacity interfaceへ直接能力を供給できる。ただしPlayerのExternal Service Policyが当該service / laneで利用を許可している場合だけallocation候補へ入れる。
+External Transport ServiceはFleet Allocationを持たず、同じTransport Capacity interfaceへ直接能力を供給できる。ただしPlayerのExternal Service Policyが当該service / laneで明示的に利用を許可している場合だけallocation候補へ入れる。Policy未設定はdefault-denyとし、Content側に候補Serviceが存在することをPlayer authorizationとみなさない。
 
 ### 10.5 Logistics Lane / Resource Demand / Cargo Flow
 
@@ -780,6 +784,7 @@ Configuration Validation：
 - SURFACE_CELL FacilityのOperational Node / site cell参照不整合
 - Research stage / Technology / Experience category参照不整合
 - External Service Policyの未定義service参照
+- Allocation dependency graphの循環
 
 Runtime Validation：
 

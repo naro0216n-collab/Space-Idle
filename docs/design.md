@@ -117,7 +117,7 @@ Idleだからといって、プレイヤーの判断まで自動化しない。�
 
 Research Pointは組織全体で利用する知識資源として扱い、通常の貨物Inventoryや所在地別在庫とは分離する。Survey Knowledgeは地域・対象ごとの知識、Operational Experienceは実運用から得られる技術・運用系統ごとの経験として、それぞれ別のKnowledge Stateを持つ。
 
-資金を扱う場合も、外部調達や外部輸送等の補助的な摩擦を表現する組織レベルの二次状態とし、契約報酬を稼いで次の研究・設備を購入する中心成長通貨にはしない。外部サービスへの支出はプレイヤーが許可したPolicyの範囲内だけ自動化する。
+資金を扱う場合も、外部調達や外部輸送等の補助的な摩擦を表現する組織レベルの二次状態とし、契約報酬を稼いで次の研究・設備を購入する中心成長通貨にはしない。外部サービスへの支出はプレイヤーが明示的に許可したPolicyの範囲内だけ自動化する。Policy未設定時はexternal serviceの候補が存在していても利用・支出を許可しない。
 
 物理資源は所在地を持つ。地球の水1000t、月面の水1000t、LEOの水1000tは同価値ではない。
 
@@ -125,13 +125,13 @@ Research Pointは組織全体で利用する知識資源として扱い、通常
 
 各Operational Nodeでは最低限、現在在庫、予約済み在庫、入庫フロー、出庫フロー、輸送待ち、輸送中、到着待機、保管容量を区別する。
 
-保管設備は一般貨物、バルク、液体、極低温、精密部品等のStorage Classへ分けられる。物理容量と、温調・保冷等を含む現在利用可能な保管サービス能力は必要に応じて分離する。
+保管設備は一般貨物、バルク、液体、極低温、精密部品等のStorage Classへ分けられる。ある時点で保持できる量は `Physical Storage Capacity` と、電力・温調等の成立条件を反映して現在安全に利用できる `Usable Storage Capacity` というStock Capacityとして扱う。荷役や温調処理量のように一定時間あたりの有限処理能力がゲーム上の競合になる場合だけ、Cargo Handling / Conditioning等の別Service Capacityとして表現する。
 
 輸送中貨物は到着先倉庫容量を事前予約しない。実到着時に入庫判定し、容量不足分は物流側の到着待機として残す。
 
 ### 5.3 CapabilityとService Capacity
 
-設備・Vehicle・Infrastructureが「何を実行可能にするか」と、複数用途が競合する有限の処理能力を分離する。
+設備・Vehicle・Infrastructureが「何を実行可能にするか」と、ある時点で保持できる量の上限と、複数用途が競合する時間あたり有限処理能力を分離する。数量概念は `Capability`、`Stock / Pool Capacity`、`Service Capacity` の三種類を混同しない。
 
 `Capability` は、建設、観測、有人運用、Docking、特定Process等を実行できるという資格・機能の存在を表す。SiteRequirementやOperation適合判定は原則としてCapabilityを参照する。
 
@@ -143,14 +143,16 @@ Research Pointは組織全体で利用する知識資源として扱い、通常
 - 建設
 - 輸送・軌道投入
 - Cargo Handling / Surface Infrastructure / Local Distribution
-- 保管サービス
+- Conditioning等の時間あたり保管関連処理
 - 保守
 - Research execution
 - Survey / Observation
 
-Service CapacityはOperational Node等へ固定値として付与するのではなく、Facility、Fleet、Infrastructure等から発生させる。Nominalな能力と、電力・保守・Resource・Infrastructure等を反映した現在利用可能な能力を区別する。複数用途が同じService Capacityを要求する場合は共通の配分規則で競合させ、同じ能力を各Domainが独立に100%利用できる構造にしない。
+Service CapacityはOperational Node等へ固定値として付与するのではなく、Facility、Fleet、Infrastructure等から発生させる。Facility/Fleet状態等から得るNominal supplyと、Resource、Power、Maintenance、上流Service等の依存Allocationによって当tickにenableされるAvailable capacityを区別する。依存関係はPlanningで明示し、Resource / Funds / Fleet / Service等を一つの決定論的allocation graphとして解決する。複数用途が同じService Capacityを要求する場合は共通の配分規則で競合させ、同じ能力を各Domainが独立に100%利用できる構造にしない。
 
-Research Point生成量・貯蔵上限のように有限flowまたは容量として扱うものも、単なる「設備が存在する」というCapabilityとは分ける。輸送能力もVehicle自体へ固定の`t/day`を持たせず、Vehicle性能、Fleet配分、Route、補給・整備InfrastructureからService Capacityとして導出する。
+このallocation graphへ当tickのDomain executionやmovementで新たに生産・到着したResourceを戻さない。それらはBoundary settlement後の次tick snapshotから利用可能になる。同tick依存関係に循環を持つContent / DefinitionはValidationでfail-closedとし、Domain固有の実行順や自己供給例外で解決しない。
+
+Research Point生成率のような有限flowと、Research Point貯蔵上限のようなPool Capacityも区別する。前者をService Capacityとして扱う場合でも、後者はある時点で保持できる量の上限でありService Capacityではない。輸送能力もVehicle自体へ固定の`t/day`を持たせず、Vehicle性能、Fleet配分、Route、補給・整備InfrastructureからService Capacityとして導出する。
 
 ---
 
@@ -874,7 +876,7 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 - Fleet AllocationからのTransport Capacity自動生成
 - Nominal / Available / Used / Spare Capacityとlimiting factor
 - 発電・配電・部分稼働
-- 在庫・倉庫・保管サービス
+- 在庫・倉庫・Usable Storage Capacity・荷役 / Conditioning Service
 - Celestial Bodyごとに可変数のSurface Cellを持つ天体マップ
 - Surface拠点なしの軌道Surveyから任意地点へ最初のLocationを設立し、隣接Cellを開発する一連の進行
 - Resource Potential / soft saturation採掘
