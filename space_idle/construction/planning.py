@@ -16,6 +16,47 @@ from .models import (
 
 
 class ConstructionPlanningMixin:
+    def build_plan_failures(
+        self,
+        facility_def_id: DefinitionId,
+        location_id: SpatialNodeId,
+        *,
+        site_cell_id: SurfaceCellId | None = None,
+    ) -> tuple[ProjectBlocker, ...]:
+        """Return blockers that prevent creating a new-facility project.
+
+        Runtime technology and site requirements intentionally do not belong
+        here: a valid project may be queued in PLANNED until those conditions
+        become true.
+        """
+        if facility_def_id not in self.recipes:
+            return (ProjectBlocker("construction_recipe", f"no construction recipe: {facility_def_id}"),)
+        return tuple(
+            ProjectBlocker(code, detail)
+            for code, detail in self.facilities.placement_failures(
+                facility_def_id, location_id, site_cell_id
+            )
+        )
+
+    def upgrade_plan_failures(self, facility_id: EntityId) -> tuple[ProjectBlocker, ...]:
+        """Return blockers that prevent creating the next upgrade project."""
+        facility = self.facilities.facilities.get(facility_id)
+        if facility is None:
+            return (ProjectBlocker("unknown_facility", f"unknown facility: {facility_id}"),)
+        target_level = facility.level + 1
+        if (facility.definition_id, target_level) not in self.upgrade_recipes:
+            return (ProjectBlocker("upgrade_recipe", "facility has no next upgrade recipe"),)
+        active = next((
+            project
+            for project in self.projects.values()
+            if isinstance(project.target, FacilityUpgradeTarget)
+            and project.target.facility_id == facility_id
+            and project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
+        ), None)
+        if active is not None:
+            return (ProjectBlocker("active_upgrade_project", str(active.id)),)
+        return ()
+
     def _create_project(
         self,
         target: ConstructionTarget,
@@ -79,8 +120,13 @@ class ConstructionPlanningMixin:
         import_source_id: SpatialNodeId | None = None,
         site_cell_id: SurfaceCellId | None = None,
     ) -> ProjectId:
-        if facility_def_id not in self.recipes:
-            raise KeyError(facility_def_id)
+        failures = self.build_plan_failures(
+            facility_def_id, location_id, site_cell_id=site_cell_id
+        )
+        if failures:
+            if failures[0].code == "construction_recipe":
+                raise KeyError(facility_def_id)
+            raise ValueError("; ".join(failure.detail for failure in failures))
         return self._create_project(
             NewFacilityTarget(facility_def_id), location_id, priority, sourcing_policy, import_source_id, site_cell_id
         )
@@ -93,17 +139,15 @@ class ConstructionPlanningMixin:
         day: int = 0,
         import_source_id: SpatialNodeId | None = None,
     ) -> ProjectId:
+        failures = self.upgrade_plan_failures(facility_id)
+        if failures:
+            if failures[0].code == "unknown_facility":
+                raise KeyError(facility_id)
+            if failures[0].code == "upgrade_recipe":
+                raise ValueError("facility has no next upgrade recipe")
+            raise ValueError("facility already has an active upgrade project")
         facility = self.facilities.facilities[facility_id]
         target_level = facility.level + 1
-        if (facility.definition_id, target_level) not in self.upgrade_recipes:
-            raise ValueError("facility has no next upgrade recipe")
-        if any(
-            isinstance(project.target, FacilityUpgradeTarget)
-            and project.target.facility_id == facility_id
-            and project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
-            for project in self.projects.values()
-        ):
-            raise ValueError("facility already has an active upgrade project")
         return self._create_project(
             FacilityUpgradeTarget(facility_id, target_level),
             facility.operational_node_id,

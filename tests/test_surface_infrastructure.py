@@ -220,6 +220,7 @@ def test_surface_map_exposes_projected_infrastructure_limit_for_cell_development
     coastal = next(cell for cell in surface.cells if cell.id == str(ids.EARTH_CELL_COASTAL))
     option = next(row for row in coastal.development_options if row.location_id == str(ids.EARTH))
     assert option.blockers == ()
+    assert option.can_plan
     assert option.projected_surface_infrastructure_demand is not None
     assert option.projected_surface_infrastructure_demand > 0.0
     assert option.projected_surface_infrastructure_fulfillment == 0.0

@@ -26,8 +26,8 @@ class BuildOptionRow:
     construction_required: float
     self_deploying: bool
     resources: tuple[BuildResourceOption, ...]
-    missing_technologies: tuple[str, ...]
-    site_blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[tuple[str, str], ...]
+    can_plan: bool
 
 
 @dataclass(frozen=True)
@@ -35,8 +35,8 @@ class FacilityUpgradeOption:
     target_level: int
     construction_required: float
     resources: tuple[BuildResourceOption, ...]
-    missing_technologies: tuple[str, ...]
-    site_blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[tuple[str, str], ...]
+    can_plan: bool
     active_project_id: str | None
 
 

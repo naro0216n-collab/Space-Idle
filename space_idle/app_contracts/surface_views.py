@@ -25,8 +25,8 @@ class SurfaceFacilityPlacementOption:
     construction_required: float
     self_deploying: bool
     resources: tuple[tuple[str, float], ...]
-    missing_technologies: tuple[str, ...]
-    site_blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[tuple[str, str], ...]
+    can_plan: bool
     sourcing_policy_options: tuple[str, ...] = ()
     import_source_options: tuple[str, ...] = ()
 
@@ -45,6 +45,7 @@ class SurfaceCellFoundationOption:
     required_units: int
     resources: tuple[tuple[str, float], ...]
     blockers: tuple[tuple[str, str], ...]
+    can_plan: bool
     active_project_id: str | None = None
     preferred_source_options: tuple[str, ...] = ()
 
@@ -53,12 +54,12 @@ class SurfaceCellFoundationOption:
 class SurfaceCellDevelopmentOption:
     location_id: str
     blockers: tuple[tuple[str, str], ...]
+    can_plan: bool
     projected_surface_infrastructure_demand: float | None = None
     projected_surface_infrastructure_fulfillment: float | None = None
     limiting_factors: tuple[str, ...] = ()
     construction_required: float | None = None
     resources: tuple[tuple[str, float], ...] = ()
-    missing_technologies: tuple[str, ...] = ()
     active_project_id: str | None = None
     sourcing_policy_options: tuple[str, ...] = ()
     import_source_options: tuple[str, ...] = ()

@@ -29,14 +29,9 @@ class ProjectProjectorMixin:
         recipe = sim.projects.next_upgrade_recipe(facility.id)
         if recipe is None:
             return None
+        plan_failures = sim.projects.upgrade_plan_failures(facility.id)
         active_project_id = next(
-            (
-                str(project.id)
-                for project in sim.projects.projects.values()
-                if isinstance(project.target, FacilityUpgradeTarget)
-                and project.target.facility_id == facility.id
-                and project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
-            ),
+            (failure.detail for failure in plan_failures if failure.code == "active_upgrade_project"),
             None,
         )
         snapshot = (
@@ -44,14 +39,27 @@ class ProjectProjectorMixin:
             if power is not None
             else sim.tick_decision_projection().allocations.power_by_location[facility.operational_node_id]
         )
-        failures = sim.projects.upgrade_site_failures(facility.id, recipe.target_level, sim.day, snapshot)
+        site_failures = sim.projects.upgrade_site_failures(
+            facility.id, recipe.target_level, sim.day, snapshot
+        )
+        blockers = tuple(
+            ("technology", str(technology))
+            for technology in sorted(
+                recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
+                key=str,
+            )
+        ) + tuple((failure.code, failure.detail) for failure in site_failures)
+        for failure in plan_failures:
+            row = (failure.code, failure.detail)
+            if row not in blockers:
+                blockers += (row,)
         return FacilityUpgradeOption(
-            recipe.target_level,
-            recipe.construction_work,
-            self._construction_resource_options(recipe),
-            tuple(sorted(str(technology) for technology in recipe.prerequisite_technologies - sim.projects.unlocked_technologies)),
-            tuple((failure.code, failure.detail) for failure in failures),
-            active_project_id,
+            target_level=recipe.target_level,
+            construction_required=recipe.construction_work,
+            resources=self._construction_resource_options(recipe),
+            blockers=blockers,
+            can_plan=not plan_failures,
+            active_project_id=active_project_id,
         )
 
     def _external_supply_blocker(
@@ -284,15 +292,27 @@ class ProjectProjectorMixin:
             definition = sim.facilities.definitions[recipe.facility_def_id]
             if definition.placement_scope is not FacilityPlacementScope.OPERATIONAL_NODE:
                 continue
-            failures = sim.projects.site_failures(
-                recipe.facility_def_id, location_id, sim.day,
-                powers[location_id],
+            plan_failures = sim.projects.build_plan_failures(
+                recipe.facility_def_id, location_id
             )
+            site_failures = sim.projects.site_failures(
+                recipe.facility_def_id, location_id, sim.day, powers[location_id]
+            )
+            blockers = tuple(
+                ("technology", str(technology))
+                for technology in sorted(
+                    recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
+                    key=str,
+                )
+            ) + tuple((failure.code, failure.detail) for failure in site_failures)
             rows.append(BuildOptionRow(
-                str(recipe.facility_def_id), definition.display_name, recipe.construction_work,
-                recipe.self_deploying, self._construction_resource_options(recipe),
-                tuple(sorted(str(technology) for technology in recipe.prerequisite_technologies - sim.projects.unlocked_technologies)),
-                tuple((failure.code, failure.detail) for failure in failures),
+                facility_definition_id=str(recipe.facility_def_id),
+                display_name=definition.display_name,
+                construction_required=recipe.construction_work,
+                self_deploying=recipe.self_deploying,
+                resources=self._construction_resource_options(recipe),
+                blockers=blockers,
+                can_plan=not plan_failures,
             ))
         return BuildOptionsView(
             str(location_id),

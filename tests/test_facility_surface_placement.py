@@ -108,7 +108,8 @@ def test_surface_map_owns_surface_buildability_and_location_build_options_do_not
         if row.facility_definition_id == str(ids.ROBOTIC_GEOLOGY_STATION)
     )
     assert option.location_id == str(ids.EARTH)
-    assert option.site_blockers == ()
+    assert option.can_plan
+    assert ("technology", str(ids.TECH_ROBOTIC_FIELD_GEOLOGY)) in option.blockers
     assert "mixed" in option.sourcing_policy_options
     assert option.import_source_options == build_options.import_source_options
 

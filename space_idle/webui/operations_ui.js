@@ -109,10 +109,19 @@
     return `<div class="card-grid"><section class="card"><div class="card-heading"><h3>在庫・ローカルフロー・物流状態</h3></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>在庫</th><th>利用可</th><th>Local net/日</th><th>入荷中</th><th>出荷中</th><th>到着待機</th><th>空容量</th></tr></thead><tbody>${rows||'<tr><td colspan="8">表示対象なし</td></tr>'}</tbody></table></div></section>${claimCard}${dependencyCard}</div>`;
   }
 
+  function planningOptionState(option, readyLabel='計画可'){
+    const blockers=option?.blockers||[];
+    const canPlan=Boolean(option?.can_plan);
+    const label=canPlan
+      ? (blockers.length?`計画可 · ${blockers.length} blocker`:readyLabel)
+      : (blockers.length?`計画不可 · ${blockers.length} blocker`:'計画不可');
+    return {blockers,canPlan,disabled:!canPlan,label};
+  }
+
   function renderConstructionTab(){
     const projects=state.projects?.items||[],options=state.buildOptions?.items||[];
     const pRows=projects.map((p)=>{const target=projectTargetLabel(p);return `<tr class="selectable" data-inspect="project" data-id="${esc(p.id)}"><td><div class="cell-main">${esc(p.display_name||p.facility_display_name||p.id)}</div><div class="cell-sub">${esc(target)} · ${esc(p.id)}</div></td><td>${esc(stateLabels[p.status]||p.status||(p.paused?'paused':'active'))}</td><td>${fmt(p.progress??p.construction_done??0)}/${fmt(p.construction_required??0)}</td><td>${p.priority??'—'}</td><td>${esc(sourcingPolicyName(p.sourcing_policy))}</td><td>${(p.blockers||[]).length}</td></tr>`;}).join('');
-    const optionCards=options.map((o)=>{const blocked=(o.missing_technologies?.length||0)+(o.site_blockers?.length||0);return `<div class="route-mode-card"><div class="mode-title"><span>${esc(o.display_name)}</span><span class="badge ${blocked?'warn':'ok'}">${blocked?`${blocked} blocker`:'建設可'}</span></div><div class="cell-sub">工数 ${fmt(o.construction_required,0)} · 資源 ${o.resources?.length||0}種</div><div class="action-row" style="margin-top:8px"><button type="button" data-inspect="build-option" data-id="${esc(o.facility_definition_id)}">条件・詳細</button></div></div>`;}).join('');
+    const optionCards=options.map((o)=>{const plan=planningOptionState(o,'建設可');return `<div class="route-mode-card"><div class="mode-title"><span>${esc(o.display_name)}</span><span class="badge ${plan.blockers.length?'warn':plan.canPlan?'ok':''}">${esc(plan.label)}</span></div><div class="cell-sub">工数 ${fmt(o.construction_required,0)} · 資源 ${o.resources?.length||0}種</div><div class="action-row" style="margin-top:8px"><button type="button" data-inspect="build-option" data-id="${esc(o.facility_definition_id)}">条件・詳細</button></div></div>`;}).join('');
     return `<div class="card-grid"><section class="card"><div class="card-heading"><h3>建設案件</h3><span class="badge">${projects.length}</span></div><div class="table-wrap"><table><thead><tr><th>案件</th><th>状態</th><th>進捗</th><th>優先</th><th>配分</th><th>調達</th><th>blocker</th></tr></thead><tbody>${pRows||'<tr><td colspan="7">進行中案件なし</td></tr>'}</tbody></table></div></section><section class="card"><div class="card-heading"><h3>新規建設</h3><span class="badge">${options.length}</span></div><div class="card-body">${optionCards||'<div class="empty-state">建設候補なし</div>'}</div></section></div>`;
   }
 
@@ -205,12 +214,10 @@
     if(!productionSection)productionSection=section('生産・採掘','<div class="empty-state">この設備には現在の生産・採掘工程がありません。</div>');
     let upgradeSection='';
     if(u){
-      const upgradeBlockers=[...(u.missing_technologies||[]).map((x)=>['technology',x]),...(u.site_blockers||[])];
-      const active=u.active_project_id?`<div class="issue"><div class="issue-title">Upgrade案件 ${esc(u.active_project_id)} が進行中</div></div>`:'';
-      const blocked=upgradeBlockers.length||Boolean(u.active_project_id);
+      const plan=planningOptionState(u,'Upgrade計画可');
       const planOptions=state.buildOptions||{};
-      const planControls=constructionPlanControls('upgradePlan',{draftScope:`facility-upgrade:${f.id}`,policyOptions:planOptions.sourcing_policy_options||[],sourceOptions:planOptions.import_source_options||[],disabled:Boolean(blocked)});
-      upgradeSection=section(`次のUpgrade · Lv ${fmt(u.target_level,0)}`,kv([['必要工数',fmt(u.construction_required,0)],['既存案件',u.active_project_id?esc(u.active_project_id):'なし']])+`<h4>必要資源</h4>${resourceCards(u.resources)}<div class="issue-stack">${active}${upgradeBlockers.map(issueHtml).join('')}</div>${planControls}<button type="button" class="primary" data-upgrade="${esc(f.id)}" data-plan-prefix="upgradePlan" ${blocked?'disabled':''}>Lv ${fmt(u.target_level,0)} Upgrade案件を作成</button>`);
+      const planControls=constructionPlanControls('upgradePlan',{draftScope:`facility-upgrade:${f.id}`,policyOptions:planOptions.sourcing_policy_options||[],sourceOptions:planOptions.import_source_options||[],disabled:plan.disabled});
+      upgradeSection=section(`次のUpgrade · Lv ${fmt(u.target_level,0)}`,kv([['必要工数',fmt(u.construction_required,0)],['既存案件',u.active_project_id?esc(u.active_project_id):'なし'],['計画可否',esc(plan.label)]])+`<h4>必要資源</h4>${resourceCards(u.resources)}${plan.blockers.length?`<div class="issue-stack">${plan.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">blockerなし</span>'}${planControls}<button type="button" class="primary" data-upgrade="${esc(f.id)}" data-plan-prefix="upgradePlan" ${plan.disabled?'disabled':''}>Lv ${fmt(u.target_level,0)} Upgrade案件を作成</button>`);
     }else upgradeSection=section('次のUpgrade','<div class="empty-state">現在定義されている次LevelのUpgradeはありません。</div>');
     const investment=(f.invested_resources||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a)} t</div>`).join('')||'<div class="empty-state">投入履歴なし</div>';
     const maintenance=(f.maintenance_demand_per_day||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a,4)} t/日</div>`).join('')||'<div class="empty-state">維持資源要求なし</div>';
@@ -254,10 +261,10 @@
   }
   function renderBuildOptionInspector(id){
     const o=state.buildOptions?.items?.find((x)=>x.facility_definition_id===id);if(!o)return false;
-    const blockers=[...(o.missing_technologies||[]).map((x)=>['technology',x]),...(o.site_blockers||[])];
+    const plan=planningOptionState(o,'建設計画可');
     const planOptions=state.buildOptions||{};
-    const planControls=constructionPlanControls('buildPlan',{draftScope:`facility-build:${o.facility_definition_id}`,policyOptions:planOptions.sourcing_policy_options||[],sourceOptions:planOptions.import_source_options||[],disabled:Boolean(blockers.length)});
-    setInspector(o.display_name,section('建設',kv([['必要工数',fmt(o.construction_required,0)],['自己展開',o.self_deploying?'はい':'いいえ']]))+section('必要資源',resourceCards(o.resources))+section('Blocker',blockers.length?blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+section('操作',`${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${blockers.length?'disabled':''}>この条件で建設計画を作成</button>`));
+    const planControls=constructionPlanControls('buildPlan',{draftScope:`facility-build:${o.facility_definition_id}`,policyOptions:planOptions.sourcing_policy_options||[],sourceOptions:planOptions.import_source_options||[],disabled:plan.disabled});
+    setInspector(o.display_name,section('建設',kv([['必要工数',fmt(o.construction_required,0)],['自己展開',o.self_deploying?'はい':'いいえ'],['計画可否',esc(plan.label)]]))+section('必要資源',resourceCards(o.resources))+section('Blocker',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+section('操作',`${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button>`));
     return true;
   }
 
@@ -346,24 +353,23 @@
     const neighbors=(cell.neighbor_ids||[]).map((neighbor)=>`<span class="badge">${esc(surfaceCellLabel(neighbor))}</span>`).join(' ')||'<span class="badge">なし</span>';
 
     const foundation=(cell.foundation_options||[]).map((option)=>{
-      const blockers=option.blockers||[],active=option.active_project_id;
-      const disabled=Boolean(blockers.length||active);
+      const plan=planningOptionState(option,'設立可'),blockers=plan.blockers,active=option.active_project_id;
+      const disabled=plan.disabled;
       const scope=`foundation:${cell.id}:${option.staging_node_id}:${option.founding_package_id}:${option.vehicle_definition_id}`;
-      return `<div class="route-mode-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.staging_node_id))} · ${esc(option.package_display_name)} · ${esc(option.vehicle_display_name)}</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':blockers.length?`${blockers.length} blocker`:'設立可'}</span></div><div class="cell-sub">準備工数 ${fmt(option.preparation_work,0)} · 輸送 ${fmt(option.transit_days,0)}日 · Payload ${fmt(option.payload_t,2)} t (${fmt(option.payload_t_per_unit,2)} t/機 × ${fmt(option.required_units,0)}機)</div><div class="cell-sub">Staging必要Resource</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">Active Project: ${esc(active)}</div>`:''}<div class="form-row"><label>Location名<input type="text" data-new-location-name data-draft-key="${esc(scope)}:name" placeholder="新規地表拠点"></label></div>${foundingPlanControls(scope,option,disabled)}<button type="button" class="primary" data-surface-found data-staging-node-id="${esc(option.staging_node_id)}" data-package-id="${esc(option.founding_package_id)}" data-vehicle-id="${esc(option.vehicle_definition_id)}" data-cell-id="${esc(cell.id)}" data-body-id="${esc(cell.body_id)}" ${disabled?'disabled':''}>Founding Deploymentを開始</button></div>`;
+      return `<div class="route-mode-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.staging_node_id))} · ${esc(option.package_display_name)} · ${esc(option.vehicle_display_name)}</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':esc(plan.label)}</span></div><div class="cell-sub">準備工数 ${fmt(option.preparation_work,0)} · 輸送 ${fmt(option.transit_days,0)}日 · Payload ${fmt(option.payload_t,2)} t (${fmt(option.payload_t_per_unit,2)} t/機 × ${fmt(option.required_units,0)}機)</div><div class="cell-sub">Staging必要Resource</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">Active Project: ${esc(active)}</div>`:''}<div class="form-row"><label>Location名<input type="text" data-new-location-name data-draft-key="${esc(scope)}:name" placeholder="新規地表拠点"></label></div>${foundingPlanControls(scope,option,disabled)}<button type="button" class="primary" data-surface-found data-staging-node-id="${esc(option.staging_node_id)}" data-package-id="${esc(option.founding_package_id)}" data-vehicle-id="${esc(option.vehicle_definition_id)}" data-cell-id="${esc(cell.id)}" data-body-id="${esc(cell.body_id)}" ${disabled?'disabled':''}>Founding Deploymentを開始</button></div>`;
     }).join('')||'<div class="empty-state">このCellへ利用可能なFounding Deployment候補がありません。</div>';
 
     const development=(cell.development_options||[]).map((option)=>{
-      const blockers=option.blockers||[],active=option.active_project_id;
-      const disabled=Boolean(blockers.length||active);
+      const plan=planningOptionState(option,'開発可'),blockers=plan.blockers,active=option.active_project_id;
+      const disabled=plan.disabled;
       const infra=option.projected_surface_infrastructure_fulfillment==null?'—':pct(option.projected_surface_infrastructure_fulfillment);
       const limiting=(option.limiting_factors||[]).map((factor)=>`<span class="badge warn">${esc(A.userFacingText(factor))}</span>`).join(' ');
-      return `<div class="route-mode-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.location_id))} へ編入</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':blockers.length?`${blockers.length} blocker`:'開発可'}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · Projected Surface Infrastructure ${infra}</div>${option.projected_surface_infrastructure_demand==null?'':`<div class="cell-sub">Projected Demand ${fmt(option.projected_surface_infrastructure_demand,2)}</div>`}<div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${limiting?`<div class="cell-sub">Limiting: ${limiting}</div>`:''}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">Active Project: ${esc(active)}</div>`:''}${surfacePlanControls(`development:${cell.id}:${option.location_id}`,option,disabled)}<button type="button" class="primary" data-surface-develop="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>Surface Cell開発Projectを作成</button></div>`;
+      return `<div class="route-mode-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.location_id))} へ編入</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':esc(plan.label)}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · Projected Surface Infrastructure ${infra}</div>${option.projected_surface_infrastructure_demand==null?'':`<div class="cell-sub">Projected Demand ${fmt(option.projected_surface_infrastructure_demand,2)}</div>`}<div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${limiting?`<div class="cell-sub">Limiting: ${limiting}</div>`:''}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">Active Project: ${esc(active)}</div>`:''}${surfacePlanControls(`development:${cell.id}:${option.location_id}`,option,disabled)}<button type="button" class="primary" data-surface-develop="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>Surface Cell開発Projectを作成</button></div>`;
     }).join('')||'<div class="empty-state">既存Locationへの開発候補なし</div>';
 
     const facilities=(cell.facility_placement_options||[]).map((option)=>{
-      const blockers=[...(option.missing_technologies||[]).map((tech)=>['technology',tech]),...(option.site_blockers||[])];
-      const disabled=Boolean(blockers.length);
-      return `<div class="route-mode-card surface-action-card"><div class="mode-title"><span>${esc(option.display_name)}</span><span class="badge ${disabled?'warn':'ok'}">${disabled?`${blockers.length} blocker`:'建設可'}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · ${option.self_deploying?'自己展開':'通常施工'}</div><div class="cell-sub">Staging必要Resource</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${surfacePlanControls(`surface-build:${cell.id}:${option.facility_definition_id}`,option,disabled)}<button type="button" class="primary" data-surface-build="${esc(option.facility_definition_id)}" data-location-id="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>このCellへ建設Projectを作成</button></div>`;
+      const plan=planningOptionState(option,'建設可'),blockers=plan.blockers,disabled=plan.disabled;
+      return `<div class="route-mode-card surface-action-card"><div class="mode-title"><span>${esc(option.display_name)}</span><span class="badge ${blockers.length?'warn':plan.canPlan?'ok':''}">${esc(plan.label)}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · ${option.self_deploying?'自己展開':'通常施工'}</div><div class="cell-sub">Staging必要Resource</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${surfacePlanControls(`surface-build:${cell.id}:${option.facility_definition_id}`,option,disabled)}<button type="button" class="primary" data-surface-build="${esc(option.facility_definition_id)}" data-location-id="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>このCellへ建設Projectを作成</button></div>`;
     }).join('')||'<div class="empty-state">このCellへ配置可能な位置依存Facilityはありません。</div>';
 
     const foundationSection=cell.developed?'':section('Location設立',foundation);

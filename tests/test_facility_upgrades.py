@@ -40,6 +40,29 @@ def _project(app, project_id):
     return next(row for row in app.query(GetProjects()).items if row.id == project_id)
 
 
+
+
+def test_upgrade_query_separates_plan_eligibility_from_runtime_blockers():
+    app = build_game_application()
+    before_row, facility = _earth_lab(app)
+    option = before_row.next_upgrade
+    assert option is not None
+    assert option.can_plan
+    assert option.active_project_id is None
+    assert any(code == "technology" for code, _detail in option.blockers)
+
+    result = app.execute(PlanFacilityUpgrade(
+        before_row.id, priority=50, sourcing_policy="mixed"
+    ))
+    assert result.created_id is not None
+
+    after_row, _ = _earth_lab(app)
+    active = after_row.next_upgrade
+    assert active is not None
+    assert not active.can_plan
+    assert active.active_project_id == result.created_id
+    assert ("active_upgrade_project", result.created_id) in active.blockers
+
 def test_facility_upgrade_is_a_resource_backed_construction_project():
     app = build_game_application()
     before_row, facility = _earth_lab(app)

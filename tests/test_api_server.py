@@ -224,6 +224,13 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
         assert any(row["key"] == "thermal" for row in coastal["environment"])
         development = next(row for row in coastal["development_options"] if row["location_id"] == str(ids.EARTH))
         assert "mixed" in development["sourcing_policy_options"]
+        assert "can_plan" in development
+        industrial = next(row for row in surface_map["cells"] if row["id"] == str(ids.EARTH_CELL_INDUSTRIAL))
+        placement = next(row for row in industrial["facility_placement_options"] if row["facility_definition_id"] == str(ids.ROBOTIC_GEOLOGY_STATION))
+        assert placement["can_plan"] is True
+        assert ["technology", str(ids.TECH_ROBOTIC_FIELD_GEOLOGY)] in placement["blockers"]
+        assert "missing_technologies" not in placement
+        assert "site_blockers" not in placement
         assert data["operational_node"]["extraction_resources"]
         assert "resource_claims" in data["operational_node"]
         if data["operational_node"]["resource_claims"]:

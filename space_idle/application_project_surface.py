@@ -48,6 +48,14 @@ class SurfaceProjectorMixin:
                     location.operational_node_id, cell.id, sim.day, location_power
                 )
                 blockers = tuple((failure.code, failure.detail) for failure in failures)
+                if development_recipe is not None:
+                    blockers += tuple(
+                        ("technology", str(technology))
+                        for technology in sorted(
+                            development_recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
+                            key=str,
+                        )
+                    )
                 projected_demand = None
                 projected_fulfillment = None
                 limiting_factors: tuple[str, ...] = ()
@@ -68,17 +76,19 @@ class SurfaceProjectorMixin:
                     limiting_factors = projected.limiting_factors
                 development_options_list.append(
                     SurfaceCellDevelopmentOption(
-                        str(location.operational_node_id), blockers, projected_demand, projected_fulfillment, limiting_factors,
-                        None if development_recipe is None else development_recipe.construction_work,
-                        () if development_recipe is None else tuple(
+                        location_id=str(location.operational_node_id),
+                        blockers=blockers,
+                        can_plan=not failures,
+                        projected_surface_infrastructure_demand=projected_demand,
+                        projected_surface_infrastructure_fulfillment=projected_fulfillment,
+                        limiting_factors=limiting_factors,
+                        construction_required=None if development_recipe is None else development_recipe.construction_work,
+                        resources=() if development_recipe is None else tuple(
                             (str(req.resource_id), req.amount_t) for req in development_recipe.resources
                         ),
-                        () if development_recipe is None else tuple(sorted(
-                            str(technology) for technology in development_recipe.prerequisite_technologies - sim.projects.unlocked_technologies
-                        )),
-                        None if active_spatial_project is None else str(active_spatial_project.id),
-                        tuple(sim.projects.sourcing_policy_options()),
-                        tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(location.operational_node_id)),
+                        active_project_id=None if active_spatial_project is None else str(active_spatial_project.id),
+                        sourcing_policy_options=tuple(sim.projects.sourcing_policy_options()),
+                        import_source_options=tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(location.operational_node_id)),
                     )
                 )
             development_options = tuple(development_options_list)
@@ -107,21 +117,32 @@ class SurfaceProjectorMixin:
                 power = powers[owner]
                 facility_placement_options = tuple(
                     SurfaceFacilityPlacementOption(
-                        str(recipe.facility_def_id),
-                        sim.facilities.definitions[recipe.facility_def_id].display_name,
-                        str(owner),
-                        recipe.construction_work,
-                        recipe.self_deploying,
-                        tuple((str(req.resource_id), req.amount_t) for req in recipe.resources),
-                        tuple(sorted(str(technology) for technology in recipe.prerequisite_technologies - sim.projects.unlocked_technologies)),
-                        tuple(
-                            (failure.code, failure.detail)
-                            for failure in sim.projects.site_failures(
-                                recipe.facility_def_id, owner, sim.day, power, site_cell_id=cell.id
+                        facility_definition_id=str(recipe.facility_def_id),
+                        display_name=sim.facilities.definitions[recipe.facility_def_id].display_name,
+                        location_id=str(owner),
+                        construction_required=recipe.construction_work,
+                        self_deploying=recipe.self_deploying,
+                        resources=tuple((str(req.resource_id), req.amount_t) for req in recipe.resources),
+                        blockers=(
+                            tuple(
+                                ("technology", str(technology))
+                                for technology in sorted(
+                                    recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
+                                    key=str,
+                                )
+                            )
+                            + tuple(
+                                (failure.code, failure.detail)
+                                for failure in sim.projects.site_failures(
+                                    recipe.facility_def_id, owner, sim.day, power, site_cell_id=cell.id
+                                )
                             )
                         ),
-                        tuple(sim.projects.sourcing_policy_options()),
-                        tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(owner)),
+                        can_plan=not sim.projects.build_plan_failures(
+                            recipe.facility_def_id, owner, site_cell_id=cell.id
+                        ),
+                        sourcing_policy_options=tuple(sim.projects.sourcing_policy_options()),
+                        import_source_options=tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(owner)),
                     )
                     for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id))
                     if sim.facilities.definitions[recipe.facility_def_id].placement_scope is FacilityPlacementScope.SURFACE_CELL
@@ -137,15 +158,24 @@ class SurfaceProjectorMixin:
                                 staging_id, body_id, cell.id, package.id, vehicle.id, sim.day
                             )
                             foundation_rows.append(SurfaceCellFoundationOption(
-                                str(staging_id), str(package.id), package.display_name, str(vehicle.id), vehicle.display_name,
-                                package.preparation_work, package.transit_days, package.payload_t, package.payload_t_per_unit,
-                                package.required_units, tuple(
+                                staging_node_id=str(staging_id),
+                                founding_package_id=str(package.id),
+                                package_display_name=package.display_name,
+                                vehicle_definition_id=str(vehicle.id),
+                                vehicle_display_name=vehicle.display_name,
+                                preparation_work=package.preparation_work,
+                                transit_days=package.transit_days,
+                                payload_t=package.payload_t,
+                                payload_t_per_unit=package.payload_t_per_unit,
+                                required_units=package.required_units,
+                                resources=tuple(
                                     (str(req.resource_id), req.amount_t)
                                     for req in sim.founding.resource_requirements_for(package.id, vehicle.id)
                                 ),
-                                tuple((failure.code, failure.detail) for failure in failures),
-                                None if active_founding is None else str(active_founding.id),
-                                tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(staging_id)),
+                                blockers=tuple((failure.code, failure.detail) for failure in failures),
+                                can_plan=not failures,
+                                active_project_id=None if active_founding is None else str(active_founding.id),
+                                preferred_source_options=tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(staging_id)),
                             ))
                 foundation_options = tuple(foundation_rows)
 
