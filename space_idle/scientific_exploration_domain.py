@@ -106,7 +106,7 @@ def validate_runtime(sim: Any) -> None:
             _require(state.reserved_units > 0, f"completed scientific exploration lost Fleet usage record: {definition_id}")
             _require(reservation is None, f"completed scientific exploration retains Fleet reservation: {definition_id}")
         else:
-            _require(state.vehicle_definition_id in sim.transport.vehicle_defs, f"scientific exploration references unknown vehicle definition: {definition_id}")
+            _require(sim.transport.vehicle_definition(state.vehicle_definition_id) is not None, f"scientific exploration references unknown vehicle definition: {definition_id}")
             _require(state.reserved_units == definition.required_units, f"scientific exploration Fleet unit mismatch: {definition_id}")
             _require(reservation is not None, f"scientific exploration lacks Fleet reservation: {definition_id}")
             if reservation is not None:

@@ -438,7 +438,7 @@ class Simulation:
             service_types.add(self.surface_infrastructure.service_type)
         service_types.update(
             definition.turnaround_service_type
-            for definition in self.transport.vehicle_defs.values()
+            for definition in self.transport.vehicle_definitions()
             if definition.turnaround_service_type is not None
         )
         return tuple(sorted(service_types))

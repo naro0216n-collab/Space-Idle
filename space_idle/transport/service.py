@@ -62,3 +62,11 @@ class TransportService(
     @property
     def unlocked_technologies(self) -> set[DefinitionId]:
         return self.technology_state.completed
+
+    def vehicle_definition(self, vehicle_definition_id: DefinitionId) -> VehicleDef | None:
+        """Return the immutable Vehicle definition through the Transport facade."""
+        return self.vehicle_defs.get(vehicle_definition_id)
+
+    def vehicle_definitions(self) -> tuple[VehicleDef, ...]:
+        """Return immutable Vehicle definitions in deterministic order."""
+        return tuple(sorted(self.vehicle_defs.values(), key=lambda row: str(row.id)))

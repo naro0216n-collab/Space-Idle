@@ -255,7 +255,7 @@ class LocationFoundingService:
             self.facilities.environment,
         ):
             failures.append(FoundingBlocker(f"target:{failure.code}", failure.detail))
-        if vehicle_definition_id not in self.transport.vehicle_defs:
+        if self.transport.vehicle_definition(vehicle_definition_id) is None:
             failures.append(FoundingBlocker("vehicle_definition", str(vehicle_definition_id)))
             return tuple(failures)
         failures.extend(
@@ -342,10 +342,12 @@ class LocationFoundingService:
             package.operations,
             package.payload_t_per_unit,
         ) * package.required_units
-        perf = self.transport.vehicle_defs[vehicle_definition_id].performance
-        if perf.propellant_resource_id is not None and propellant > 1e-12:
-            totals[perf.propellant_resource_id] = (
-                totals.get(perf.propellant_resource_id, 0.0) + propellant
+        vehicle = self.transport.vehicle_definition(vehicle_definition_id)
+        if vehicle is None:
+            raise KeyError(vehicle_definition_id)
+        if vehicle.propellant_resource_id is not None and propellant > 1e-12:
+            totals[vehicle.propellant_resource_id] = (
+                totals.get(vehicle.propellant_resource_id, 0.0) + propellant
             )
         return tuple(
             FoundingResourceRequirement(resource_id, amount_t)
@@ -552,7 +554,7 @@ class LocationFoundingService:
         self._restore_prepared_payload(project)
         project.inputs_consumed = False
         reservation_id = self.fleet_reservation_id(project_id)
-        if reservation_id in self.transport.fleet_reservations:
+        if self.transport.fleet_reservation_snapshot(reservation_id) is not None:
             self.transport.release_fleet_reservation(reservation_id, day=day)
         project.status = FoundingStatus.CANCELLED
         project.paused = False
@@ -663,7 +665,7 @@ class LocationFoundingService:
             for req in package.initial_inventory:
                 self.inventory.add(project.new_location_id, req.resource_id, req.amount_t)
         reservation_id = self.fleet_reservation_id(project.id)
-        if reservation_id in self.transport.fleet_reservations:
+        if self.transport.fleet_reservation_snapshot(reservation_id) is not None:
             disposition = self.transport.deployment_asset_disposition(
                 project.vehicle_definition_id, package.operations
             )

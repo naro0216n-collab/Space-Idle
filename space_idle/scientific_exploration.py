@@ -133,7 +133,6 @@ class ScientificExplorationService:
         day: int,
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[str, ...]:
-        vehicle_def = self.transport.vehicle_defs[vehicle_definition_id]
         route = definition.compatibility_route()
         failures = list(
             self.transport.fleet_campaign_failures(
@@ -173,7 +172,7 @@ class ScientificExplorationService:
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[str, ...]:
         definition = self.definitions[definition_id]
-        if vehicle_definition_id not in self.transport.vehicle_defs:
+        if self.transport.vehicle_definition(vehicle_definition_id) is None:
             return ("unknown_vehicle_definition",)
         failures = list(
             self._route_failures_for_fleet(

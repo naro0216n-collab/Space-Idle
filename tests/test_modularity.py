@@ -152,6 +152,31 @@ def test_logistics_consumes_transport_projection_instead_of_transport_state_cont
     assert direct_state_reads == []
 
 
+def test_founding_and_exploration_use_transport_fleet_facade():
+    forbidden_state = {"vehicle_defs", "fleet_reservations"}
+    violations: list[tuple[str, str]] = []
+    for filename in (
+        "founding.py",
+        "founding_domain.py",
+        "scientific_exploration.py",
+        "scientific_exploration_domain.py",
+    ):
+        tree = ast.parse(
+            (PACKAGE / filename).read_text(encoding="utf-8"),
+            filename=filename,
+        )
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute) or node.attr not in forbidden_state:
+                continue
+            owner = node.value
+            if not (isinstance(owner, ast.Attribute) and owner.attr == "transport"):
+                continue
+            root = owner.value
+            if isinstance(root, ast.Name) and root.id in {"self", "sim"}:
+                violations.append((filename, node.attr))
+    assert violations == []
+
+
 def test_public_domain_facades_compose_focused_implementations():
     from space_idle.application_query_projectors import ApplicationQueryMixin
     from space_idle.application_command_handlers import ApplicationCommandMixin
