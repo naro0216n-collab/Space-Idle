@@ -12,6 +12,7 @@ from ..logistics import (
     RouteDef,
     RouteEndpoint,
     SpaceflightCapability,
+    SurfaceTransportCapability,
     TransportOperationKind,
     TransportOperationRequirement,
     TransportPerformanceProfile,
@@ -179,6 +180,20 @@ def build_vehicle_definitions() -> dict:
             ),
             maintenance=VehicleMaintenanceSpec(capability_id="spacecraft_servicing", turnaround_days=1.0),
         ),
+        ids.SURFACE_CARGO_HAULER: VehicleDef(
+            id=ids.SURFACE_CARGO_HAULER,
+            display_name="地表貨物輸送車",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=4.0, payload_t=12.0,
+                operation_capabilities=(SurfaceTransportCapability(180.0),),
+                endurance_days=120.0,
+            ),
+            production=VehicleProductionSpec(
+                capability_id="vehicle_assembly", days=2.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 1.5), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.25)),
+            ),
+            maintenance=VehicleMaintenanceSpec(turnaround_days=0.25),
+        ),
         ids.REUSABLE_SURFACE_CARGO_LANDER: VehicleDef(
             id=ids.REUSABLE_SURFACE_CARGO_LANDER,
             display_name="再使用型地表貨物宇宙船",
@@ -205,4 +220,5 @@ def initial_vehicle_deployments() -> tuple[tuple, ...]:
         (ids.REUSABLE_LAUNCH_VEHICLE, 1, ids.EARTH),
         (ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO),
         (ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LEO),
+        (ids.SURFACE_CARGO_HAULER, 1, ids.SOUTH_POLAR_RIDGE),
     )

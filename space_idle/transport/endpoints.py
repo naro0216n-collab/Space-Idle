@@ -83,7 +83,7 @@ def resolve_route_endpoint(endpoint: RouteEndpoint, facilities: FacilityBook) ->
     )
 
 
-def _great_circle_distance_km(a: SurfacePoint, b: SurfacePoint, radius_km: float) -> float:
+def great_circle_distance_km(a: SurfacePoint, b: SurfacePoint, radius_km: float) -> float:
     lat1, lon1 = radians(a.latitude_deg), radians(a.longitude_deg)
     lat2, lon2 = radians(b.latitude_deg), radians(b.longitude_deg)
     dlat = lat2 - lat1
@@ -107,5 +107,5 @@ def route_geometry(route: RouteDef, facilities: FacilityBook) -> RouteGeometrySn
         origin,
         destination,
         True,
-        _great_circle_distance_km(origin_cell.centroid, destination_cell.centroid, body.mean_radius_km),
+        great_circle_distance_km(origin_cell.centroid, destination_cell.centroid, body.mean_radius_km),
     )

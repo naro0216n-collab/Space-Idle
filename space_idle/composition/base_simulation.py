@@ -78,6 +78,7 @@ def build_base_simulation() -> Simulation:
     )
     logistics.external_services.update(build_external_transport_services())
     logistics.vehicle_defs.update(build_vehicle_definitions())
+    logistics.synchronize_surface_access_routes()
     for vehicle_definition_id, count, location_id in initial_vehicle_deployments():
         logistics.add_fleet_units(vehicle_definition_id, count, location_id)
 
@@ -87,6 +88,15 @@ def build_base_simulation() -> Simulation:
     facilities.availability_factor_provider = (
         lambda location_id, capability_id, power_snapshot, day: surface_infrastructure.facility_availability_factors(
             location_id, capability_id, facilities, power_snapshot, day
+        )
+    )
+    logistics.surface_access_factor_provider = (
+        lambda location_id, cell_id, day: surface_infrastructure.cell_access_factor(
+            location_id,
+            cell_id,
+            facilities,
+            power.snapshot(location_id, facilities, day),
+            day,
         )
     )
 

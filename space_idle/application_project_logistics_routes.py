@@ -119,6 +119,7 @@ class LogisticsRouteProjectorMixin:
         include_modes: bool = True,
     ) -> tuple[RouteRow, ...]:
         sim = self._simulation
+        sim.logistics.synchronize_surface_access_routes()
         rows: list[RouteRow] = []
         for route in sorted(sim.logistics.routes.values(), key=lambda row: str(row.id)):
             if origin_id is not None and str(route.origin_id) != origin_id:
@@ -193,6 +194,7 @@ class LogisticsRouteProjectorMixin:
         self, source_id, destination_id
     ) -> TransportAllocationOptionsView:
         sim = self._simulation
+        sim.logistics.synchronize_surface_access_routes()
         options: list[TransportAllocationOptionRow] = []
         for definition in sorted(
             sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 from ..power import PowerSnapshot
-from ..shared import DefinitionId, RouteId, SpatialNodeId
+from ..shared import DefinitionId, RouteId, SpatialNodeId, SurfaceCellId
 from ..site import evaluate_site_requirements
 from ..spatial import AtmosphereField, GravityField, SurfaceField
 from .endpoints import resolve_route_endpoint, route_geometry
@@ -16,9 +16,26 @@ from .models import (
     SURFACE_TRANSPORT,
 )
 from .operations import OperationEvaluationContext
+from .surface_routes import (
+    DERIVED_SURFACE_ACCESS_ROUTE_PREFIX,
+    build_derived_surface_access_routes,
+)
 
 
 class TransportCompatibilityMixin:
+    def synchronize_surface_access_routes(self) -> None:
+        """Refresh derived same-body surface Routes from authoritative Location state."""
+        derived = build_derived_surface_access_routes(self.facilities.environment.graph)
+        stale = tuple(
+            route_id
+            for route_id in self.routes
+            if str(route_id).startswith(DERIVED_SURFACE_ACCESS_ROUTE_PREFIX)
+            and route_id not in derived
+        )
+        for route_id in stale:
+            del self.routes[route_id]
+        self.routes.update(derived)
+
     def resource_support_failures(
         self,
         performance: TransportPerformanceProfile,
@@ -81,6 +98,30 @@ class TransportCompatibilityMixin:
 
     def route_available(self, route_id: RouteId, day: int = 0) -> bool:
         return not self.route_failures(route_id, day)
+
+    def route_surface_access_factors(
+        self, route_id: RouteId, day: int = 0
+    ) -> tuple[tuple[SpatialNodeId, SurfaceCellId, float], ...]:
+        """Return aggregate intra-Location access fulfillment for surface endpoints.
+
+        The Route remains Location-to-Location.  Surface Infrastructure only
+        constrains handoff between that economic node and the physical access
+        cell/interface used by the Route; it never creates Cell cargo nodes.
+        """
+        provider = self.surface_access_factor_provider
+        if provider is None:
+            return ()
+        geometry = route_geometry(self.routes[route_id], self.facilities)
+        rows: list[tuple[SpatialNodeId, SurfaceCellId, float]] = []
+        for endpoint in (geometry.origin, geometry.destination):
+            if endpoint.surface_cell_id is None:
+                continue
+            factor = max(
+                0.0,
+                min(1.0, provider(endpoint.location_id, endpoint.surface_cell_id, day)),
+            )
+            rows.append((endpoint.location_id, endpoint.surface_cell_id, factor))
+        return tuple(rows)
 
     def route_geometry(self, route_id: RouteId):
         return route_geometry(self.routes[route_id], self.facilities)

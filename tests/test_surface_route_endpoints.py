@@ -15,7 +15,8 @@ from space_idle.logistics import (
     TransportPerformanceProfile,
     VehicleDef,
 )
-from space_idle.shared import DefinitionId, RouteId
+from space_idle.shared import DefinitionId, RouteId, SpatialNodeId
+from space_idle.transport.surface_routes import derived_surface_access_route_id
 
 
 def _surface_route(route_id: str, origin, origin_cell, destination, destination_cell) -> RouteDef:
@@ -127,41 +128,77 @@ def test_surface_transport_latency_and_service_plan_derive_from_endpoint_distanc
 
 
 
-def test_fastest_path_uses_endpoint_geometry_when_locations_have_multiple_access_cells():
+def test_derived_surface_route_tracks_closest_access_cells_without_changing_route_identity():
     app = build_game_application()
     sim = app._simulation
+    route_id = derived_surface_access_route_id(ids.SOUTH_POLAR_RIDGE, ids.NEARSIDE_MARE)
+
+    sim.logistics.synchronize_surface_access_routes()
+    before_count = len(sim.logistics.routes)
+    before = sim.logistics.route_geometry(route_id)
+    assert before.origin.surface_cell_id == ids.MOON_CELL_SOUTH_POLAR_RIDGE
+    assert before.distance_km is not None
+
     sim.graph.develop_surface_cell(ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
     sim.graph.develop_surface_cell(ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
+    sim.logistics.synchronize_surface_access_routes()
 
-    vehicle = _surface_vehicle("test.vehicle.pathing", speed_km_per_day=200.0)
-    sim.logistics.vehicle_defs[vehicle.id] = vehicle
-    routes = (
-        _surface_route(
-            "test.route.path.core.forward", ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_SOUTH_POLAR_RIDGE,
-            ids.NEARSIDE_MARE, ids.MOON_CELL_NEARSIDE_MARE,
-        ),
-        _surface_route(
-            "test.route.path.access.forward", ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_EQUATORIAL_HIGHLANDS,
-            ids.NEARSIDE_MARE, ids.MOON_CELL_NEARSIDE_MARE,
-        ),
-        _surface_route(
-            "test.route.path.core.reverse", ids.NEARSIDE_MARE, ids.MOON_CELL_NEARSIDE_MARE,
-            ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_SOUTH_POLAR_RIDGE,
-        ),
-        _surface_route(
-            "test.route.path.access.reverse", ids.NEARSIDE_MARE, ids.MOON_CELL_NEARSIDE_MARE,
-            ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_EQUATORIAL_HIGHLANDS,
-        ),
-    )
-    for route in routes:
-        sim.logistics.routes[route.id] = route
+    after = sim.logistics.route_geometry(route_id)
+    assert len(sim.logistics.routes) == before_count
+    assert after.origin.surface_cell_id == ids.MOON_CELL_EQUATORIAL_HIGHLANDS
+    assert after.destination.surface_cell_id == ids.MOON_CELL_NEARSIDE_MARE
+    assert after.distance_km is not None
+    assert after.distance_km < before.distance_km
 
     plan = sim.logistics.transport_service_plan_for(
-        vehicle.id, ids.SOUTH_POLAR_RIDGE, ids.NEARSIDE_MARE
+        ids.SURFACE_CARGO_HAULER, ids.SOUTH_POLAR_RIDGE, ids.NEARSIDE_MARE
+    )
+    assert plan.forward_path == (route_id,)
+    assert plan.reverse_path == (
+        derived_surface_access_route_id(ids.NEARSIDE_MARE, ids.SOUTH_POLAR_RIDGE),
     )
 
-    assert plan.forward_path == (RouteId("test.route.path.access.forward"),)
-    assert plan.reverse_path == (RouteId("test.route.path.access.reverse"),)
+
+def test_player_founded_surface_location_receives_location_to_location_routes_without_cell_nodes():
+    app = build_game_application()
+    sim = app._simulation
+    new_location_id = SpatialNodeId("player.location.farside")
+    node_count_before = len(sim.graph.operational_node_ids())
+    surface_cell_count = len(sim.graph.surface_cells)
+
+    sim.graph.found_location(
+        new_location_id,
+        "Farside Test Location",
+        ids.MOON,
+        ids.MOON_CELL_FARSIDE_HIGHLANDS,
+    )
+    sim.logistics.synchronize_surface_access_routes()
+
+    route_id = derived_surface_access_route_id(new_location_id, ids.NEARSIDE_MARE)
+    route = sim.logistics.routes[route_id]
+    geometry = sim.logistics.route_geometry(route_id)
+    assert route.origin_id == new_location_id
+    assert route.destination_id == ids.NEARSIDE_MARE
+    assert geometry.origin.surface_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
+    assert geometry.destination.surface_cell_id == ids.MOON_CELL_NEARSIDE_MARE
+    assert geometry.same_body_surface
+    assert len(sim.graph.operational_node_ids()) == node_count_before + 1
+    assert len(sim.graph.surface_cells) == surface_cell_count
+
+    rows = app.query(
+        GetRoutes(
+            origin_id=str(new_location_id),
+            destination_id=str(ids.NEARSIDE_MARE),
+            include_modes=True,
+        )
+    ).items
+    assert [row.id for row in rows] == [str(route_id)]
+    surface_mode = next(
+        mode for mode in rows[0].modes
+        if mode.vehicle_definition_id == str(ids.SURFACE_CARGO_HAULER)
+    )
+    assert surface_mode.service_feasible
+
 
 def test_external_surface_service_latency_uses_endpoint_geometry():
     app = build_game_application()
@@ -243,3 +280,41 @@ def test_route_query_exposes_resolved_physical_endpoints_and_surface_distance():
     assert row.destination_endpoint.surface_cell_id == str(ids.MOON_CELL_POLAR_COLD_TRAP)
     assert row.same_body_surface
     assert row.distance_km is not None and row.distance_km > 0.0
+
+
+def test_derived_surface_route_is_rebuilt_after_save_load_for_persisted_allocation(tmp_path):
+    from space_idle.persistence import load_game, save_game
+
+    app = build_game_application()
+    sim = app._simulation
+    new_location_id = SpatialNodeId("player.location.persisted_surface_route")
+    sim.graph.found_location(
+        new_location_id,
+        "Persisted Surface Route Test",
+        ids.MOON,
+        ids.MOON_CELL_FARSIDE_HIGHLANDS,
+    )
+    sim.logistics.synchronize_surface_access_routes()
+    route_id = derived_surface_access_route_id(ids.SOUTH_POLAR_RIDGE, new_location_id)
+    allocation_id = sim.logistics.create_transport_allocation(
+        ids.SURFACE_CARGO_HAULER,
+        ids.SOUTH_POLAR_RIDGE,
+        new_location_id,
+        target_units=1,
+        path=(route_id,),
+        day=sim.day,
+    )
+
+    path = tmp_path / "derived-surface-route.json"
+    save_game(app, path)
+    loaded, _ = load_game(path, build_game_application)
+    loaded_sim = loaded._simulation
+    loaded_sim.logistics.synchronize_surface_access_routes()
+
+    assert route_id in loaded_sim.logistics.routes
+    allocation = loaded_sim.logistics.transport_allocations[allocation_id]
+    assert allocation.path == (route_id,)
+    geometry = loaded_sim.logistics.route_geometry(route_id)
+    assert geometry.origin.location_id == ids.SOUTH_POLAR_RIDGE
+    assert geometry.destination.location_id == new_location_id
+    assert geometry.same_body_surface

@@ -327,6 +327,7 @@ def _validate_unique_resources(resources, label: str) -> None:
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
+    sim.logistics.synchronize_surface_access_routes()
     nodes = ctx.nodes
     known_capabilities = ctx.known_capabilities
     for route_id, route in sim.logistics.routes.items():
@@ -385,6 +386,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 
 def validate_runtime(sim: Any) -> None:
     lg = sim.logistics
+    lg.synchronize_surface_access_routes()
     for (vehicle_definition_id, location_id), pool in lg.fleet_pools.items():
         _require(pool.vehicle_definition_id == vehicle_definition_id and pool.location_id == location_id, f"fleet pool key mismatch: {vehicle_definition_id}/{location_id}")
         _require(vehicle_definition_id in lg.vehicle_defs, f"fleet pool references unknown vehicle definition: {vehicle_definition_id}")

@@ -216,6 +216,7 @@ class Simulation:
         if days < 0:
             raise ValueError("days must be non-negative")
         for _ in range(days):
+            self.logistics.synchronize_surface_access_routes()
             locations = self._active_locations()
             ordered_locations = sorted(locations, key=str)
             power_before = {
@@ -262,6 +263,7 @@ class Simulation:
             self.logistics.advance_vehicle_production_day(power_before, self.day)
             self.projects.finalize_procurement(self.day)
             self.projects.advance_construction(power_before, self.day)
+            self.logistics.synchronize_surface_access_routes()
             self.refresh_storage()
             next_day = self.day + 1
             if self.contracts is not None:

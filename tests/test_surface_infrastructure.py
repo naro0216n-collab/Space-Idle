@@ -198,3 +198,43 @@ def test_surface_gateway_handling_capability_uses_location_surface_infrastructur
     assert sim.facilities.available_capability_capacity_at(
         ids.EARTH, "cargo_transfer", power, sim.day
     ) > 0.0
+
+
+def test_remote_surface_route_available_capacity_uses_location_surface_infrastructure():
+    sim = build_game_application()._simulation
+    allocation_id = sim.logistics.create_transport_allocation(
+        ids.SURFACE_CARGO_HAULER,
+        ids.SOUTH_POLAR_RIDGE,
+        ids.NEARSIDE_MARE,
+        target_units=1,
+        day=sim.day,
+    )
+    initial = sim.logistics.transport_capacity_snapshot(allocation_id, day=sim.day)
+    assert initial.nominal.forward_t_per_day > 0.0
+    assert initial.available.forward_t_per_day == pytest.approx(
+        initial.nominal.forward_t_per_day
+    )
+
+    sim.graph.develop_surface_cell(
+        ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_SOUTH_POLAR_PLAIN
+    )
+    sim.graph.develop_surface_cell(
+        ids.SOUTH_POLAR_RIDGE, ids.MOON_CELL_EQUATORIAL_HIGHLANDS
+    )
+    sim.logistics.synchronize_surface_access_routes()
+    constrained = sim.logistics.transport_capacity_snapshot(allocation_id, day=sim.day)
+    assert constrained.nominal.forward_t_per_day > 0.0
+    assert constrained.available.forward_t_per_day == 0.0
+    assert any(
+        factor.startswith("surface_infrastructure:forward:")
+        for factor in constrained.limiting_factors
+    )
+
+    sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, ids.SOUTH_POLAR_RIDGE)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.SOUTH_POLAR_RIDGE)
+    supplied = sim.logistics.transport_capacity_snapshot(allocation_id, day=sim.day)
+    assert 0.0 < supplied.available.forward_t_per_day < supplied.nominal.forward_t_per_day
+    assert any(
+        factor.startswith("surface_infrastructure:forward:")
+        for factor in supplied.limiting_factors
+    )

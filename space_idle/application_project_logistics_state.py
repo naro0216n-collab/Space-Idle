@@ -232,6 +232,7 @@ class LogisticsStateProjectorMixin:
 
     def _fleet_relocation_preview_view(self, query) -> FleetRelocationPreviewView:
         sim = self._simulation
+        sim.logistics.synchronize_surface_access_routes()
         policy = PathPolicy(query.path_policy)
         plan = sim.logistics.fleet_relocation_plan(
             DefinitionId(query.vehicle_definition_id),

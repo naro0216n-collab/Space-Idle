@@ -328,6 +328,7 @@ class FleetAllocationMixin:
         *,
         require_destination_disposition: bool = False,
     ) -> tuple[RouteId, ...]:
+        self.synchronize_surface_access_routes()
         if explicit_path is not None:
             self.validate_path_structure(source_id, destination_id, explicit_path)
             failures = [
@@ -1181,6 +1182,25 @@ class FleetAllocationMixin:
         # service edge for the same plan.
         forward_ratio = 0.0 if plan.blockers else 1.0
         reverse_ratio = 0.0 if plan.blockers else 1.0
+
+        def _surface_access_ratio(route_ids: tuple[RouteId, ...], direction: str) -> float:
+            ratio = 1.0
+            for route_id in route_ids:
+                for location_id, cell_id, factor in self.route_surface_access_factors(route_id, day):
+                    ratio = min(ratio, factor)
+                    if factor < 1.0 - 1e-12:
+                        limiting.append(
+                            f"surface_infrastructure:{direction}:{location_id}:{cell_id}"
+                        )
+            return ratio
+
+        forward_ratio = min(
+            forward_ratio, _surface_access_ratio(plan.forward_path, "forward")
+        )
+        reverse_ratio = min(
+            reverse_ratio, _surface_access_ratio(plan.reverse_path, "reverse")
+        )
+
         definition = self.vehicle_defs[allocation.vehicle_definition_id]
         # Operation support is attached to the actual leg endpoint where the
         # operation occurs.  Allocation endpoints are not sufficient for a

@@ -24,6 +24,7 @@ class TransportCommandHandlerMixin:
 
     def _handle_transport_command(self, command: Command):
         sim = self._simulation
+        sim.logistics.synchronize_surface_access_routes()
         if isinstance(command, ProduceVehicle):
             production_id = sim.logistics.plan_vehicle_production(
                 DefinitionId(command.vehicle_definition_id),

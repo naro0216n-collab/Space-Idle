@@ -11,6 +11,7 @@
   const resourceCards=(resources)=>(resources||[]).map((r)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div></div>`).join('')||'<div class="empty-state">追加資源なし</div>';
   const sourcingPolicyLabels={import_now:'即時外部調達',mixed:'現地待機後に外部調達',local_priority:'現地調達を優先'};
   const sourcingPolicyName=(value)=>sourcingPolicyLabels[value]||value||'—';
+  const limitingHtml=(rows)=>(rows||[]).length?`<div class="issue-stack">${rows.map((factor)=>`<div class="issue"><div class="issue-title">${esc(A.userFacingText(factor))}</div></div>`).join('')}</div>`:'<span class="badge ok">なし</span>';
   const siteRequirementsHtml=(requirements)=>{
     const env=(requirements?.environment||[]).map((row)=>`<div class="cell-sub">環境: ${esc(row.description||row.code)}</div>`).join('');
     const caps=(requirements?.capabilities||[]).map((row)=>`<div class="cell-sub">${row.mode==='available'?'利用可能':'インフラ'}能力: ${esc(capabilityName(row.capability_id))} ${fmt(row.minimum_capacity)}</div>`).join('');
@@ -176,7 +177,6 @@
     const industry=state.location?.industry?.find((row)=>row.facility_id===id);
     const extraction=state.location?.extraction?.find((row)=>row.facility_id===id);
     const rateCards=(rows)=>(rows||[]).map(([resourceId,rate])=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(resourceId))}</span><span>${fmt(rate,3)} t/日</span></div></div>`).join('')||'<div class="empty-state">なし</div>';
-    const limitingHtml=(rows)=>(rows||[]).length?`<div class="issue-stack">${rows.map((factor)=>`<div class="issue"><div class="issue-title">${esc(A.userFacingText(factor))}</div></div>`).join('')}</div>`:'<span class="badge ok">なし</span>';
     let productionSection='';
     if(industry){
       const processOptions=(industry.process_options||[]).map(([processId,name])=>`<option value="${esc(processId)}" ${processId===industry.process_id?'selected':''}>${esc(name||definitionName(processId))}</option>`).join('');

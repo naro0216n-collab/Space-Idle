@@ -131,6 +131,7 @@ TECH_PROPELLANT_HANDLING = DefinitionId("base.tech.propellant_handling")
 REUSABLE_LAUNCH_VEHICLE = DefinitionId("base.vehicle.reusable_launch_vehicle")
 REUSABLE_ORBITAL_CARGO_TUG = DefinitionId("base.vehicle.reusable_orbital_cargo_tug")
 REUSABLE_SURFACE_CARGO_LANDER = DefinitionId("base.vehicle.reusable_surface_cargo_lander")
+SURFACE_CARGO_HAULER = DefinitionId("base.vehicle.surface_cargo_hauler")
 
 EARTH_LEO_LAUNCH_SERVICE = DefinitionId("base.transport_service.commercial_earth_launch")
 LEO_LUNAR_SERVICE = DefinitionId("base.transport_service.commercial_orbital_transfer")
