@@ -14,7 +14,7 @@ from pathlib import Path
 
 STATE_NAME = "space-idle-publish-state.json"
 WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
-REQUEST_VERSION = 6
+REQUEST_VERSION = 7
 RECEIPT_VERSION = 3
 CONNECTOR_CALL_BUDGET_BYTES = 96 * 1024
 MAX_BLOB_PARTS = 256
@@ -490,46 +490,6 @@ def _connector_blob_packet(
     }
 
 
-def _payload_tree_path(index: int) -> str:
-    return f"{index:04d}.b64"
-
-
-def _git_tree_oid(repo: Path, blob_oids: list[str]) -> str:
-    raw = bytearray()
-    for index, oid in enumerate(blob_oids):
-        _require_hex_sha(oid, name=f"payload blob oid {index}")
-        raw.extend(b"100644 ")
-        raw.extend(_payload_tree_path(index).encode("ascii"))
-        raw.append(0)
-        raw.extend(bytes.fromhex(oid))
-    return _git_object_oid(repo, "tree", bytes(raw))
-
-
-def _connector_payload_root_packet(
-    repo: Path,
-    github_repository: str,
-    blob_oids: list[str],
-) -> dict[str, object]:
-    root_oid = _git_tree_oid(repo, blob_oids)
-    return {
-        "stage": "assemble-payload-root",
-        "expected_tree_git_oid": root_oid,
-        "action": "GitHub.create_tree",
-        "action_args": {
-            "repository_full_name": github_repository,
-            "tree_elements": [
-                {
-                    "path": _payload_tree_path(index),
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": oid,
-                }
-                for index, oid in enumerate(blob_oids)
-            ],
-        },
-    }
-
-
 def _connector_call_bytes(packet: dict[str, object]) -> int:
     action_args = packet.get("action_args")
     if not isinstance(action_args, dict):
@@ -734,56 +694,11 @@ def _write_connector_state(output_dir: Path, state: dict[str, object]) -> None:
     )
 
 
-def _read_connector_state(output_dir: Path) -> dict[str, object]:
-    path = _connector_state_path(output_dir)
-    try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise PublishStateError(f"invalid Connector state: {exc}") from exc
-    required = {
-        "version",
-        "stage",
-        "manifest",
-        "request_id",
-        "github_repository",
-        "publish_branch",
-        "target_branch",
-        "target_remote_head",
-        "expected_blob_git_oids",
-        "expected_payload_tree_git_oid",
-        "upload_packets",
-    }
-    missing = required - state.keys()
-    if missing:
-        raise PublishStateError(f"invalid Connector state: missing fields {sorted(missing)}")
-    if state["version"] != 1:
-        raise PublishStateError(f"unsupported Connector state version: {state['version']}")
-    if state["stage"] not in {"uploads-planned", "root-packet-ready", "submit-ready"}:
-        raise PublishStateError(f"invalid Connector stage: {state['stage']}")
-    if not isinstance(state["expected_blob_git_oids"], list) or not state["expected_blob_git_oids"]:
-        raise PublishStateError("invalid Connector state: no payload blob OIDs")
-    return state
-
-
 def _write_connector_summary(output_dir: Path, summary: dict[str, object]) -> None:
     _connector_summary_path(output_dir).write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
-
-def _validate_connector_state_manifest(
-    repo: Path, state: dict[str, object]
-) -> dict[str, object]:
-    manifest = Path(str(state["manifest"])).resolve()
-    _verify_prepared_request(repo, manifest)
-    prepared = _read_prepared_request(manifest)
-    if prepared["request_id"] != state["request_id"]:
-        raise PublishStateError("Connector state request id no longer matches its manifest")
-    if prepared["target_branch"] != state["target_branch"]:
-        raise PublishStateError("Connector state target branch no longer matches its manifest")
-    if prepared["base_sha"] != state["target_remote_head"]:
-        raise PublishStateError("Connector state remote base no longer matches its manifest")
-    return prepared
 
 
 def cmd_connector_plan(args: argparse.Namespace) -> int:
@@ -802,7 +717,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise PublishStateError(
             f"Connector plan directory is already initialized: {output_dir}; "
-            "continue its recorded stage instead of replanning transport"
+            "continue its generated packets instead of replanning transport"
         )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -823,18 +738,30 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         blob_oids.append(str(part["oid"]))
         upload_call_bytes.append(int(part["packet_bytes"]))
 
-    root_packet = _connector_payload_root_packet(repo, GITHUB_REPOSITORY, blob_oids)
-    root_call_bytes = _connector_call_bytes(root_packet)
-    if root_call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
+    submit_request = _transport_request(
+        prepared,
+        {
+            "kind": "git-blobs",
+            "oids": blob_oids,
+        },
+    )
+    submit_packet = _connector_submit_packet(
+        GITHUB_REPOSITORY, PUBLISH_BRANCH, submit_request
+    )
+    submit_call_bytes = _connector_call_bytes(submit_packet)
+    if submit_call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
         raise PublishStateError(
-            f"payload root tree needs a {root_call_bytes}-byte Connector call, exceeding "
+            f"publish request metadata needs a {submit_call_bytes}-byte Connector call, exceeding "
             f"the fixed Connector profile {CONNECTOR_CALL_BUDGET_BYTES}-byte budget"
         )
-    expected_root_oid = str(root_packet["expected_tree_git_oid"])
+    submit_path = output_dir / "submit-request.json"
+    submit_path.write_text(
+        json.dumps(submit_packet, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
     state = {
-        "version": 1,
-        "stage": "uploads-planned",
+        "version": 2,
+        "stage": "packets-ready",
         "manifest": str(manifest),
         "request_id": prepared["request_id"],
         "github_repository": GITHUB_REPOSITORY,
@@ -842,13 +769,13 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "target_branch": prepared["target_branch"],
         "target_remote_head": args.target_remote_head,
         "expected_blob_git_oids": blob_oids,
-        "expected_payload_tree_git_oid": expected_root_oid,
         "upload_packets": upload_packets,
+        "submit_request_packet": str(submit_path),
     }
     _write_connector_state(output_dir, state)
     summary = {
         "stage": state["stage"],
-        "strategy": "staged-blobs-root-then-request",
+        "strategy": "ordered-git-blobs-then-request",
         "manifest": str(manifest),
         "request_id": prepared["request_id"],
         "github_repository": GITHUB_REPOSITORY,
@@ -861,120 +788,20 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "upload_call_count": len(upload_packets),
         "upload_call_bytes": upload_call_bytes,
         "upload_packets": upload_packets,
-        "payload_root_packet": None,
-        "submit_request_packet": None,
-        "expected_payload_tree_git_oid": expected_root_oid,
-        "submit_deferred_until_root_verified": True,
-        "normal_remote_target_probe_calls": 1,
-        "root_tree_sha_verification_handoff_required": True,
-        "request_verified": bool(verified["verified"]),
-        "next": "execute every upload packet successfully, then run connector-root for this plan directory",
-        "verified": True,
-    }
-    _write_connector_summary(output_dir, summary)
-    print(json.dumps(summary, indent=2))
-    return 0
-
-
-def cmd_connector_root(args: argparse.Namespace) -> int:
-    repo = _repo_from_cwd()
-    output_dir = _connector_dir(repo)
-    state = _read_connector_state(output_dir)
-    if state["stage"] != "uploads-planned":
-        raise PublishStateError(
-            f"connector-root requires stage uploads-planned, found {state['stage']}"
-        )
-    _validate_connector_state_manifest(repo, state)
-    blob_oids = [str(value) for value in state["expected_blob_git_oids"]]
-    root_packet = _connector_payload_root_packet(
-        repo, str(state["github_repository"]), blob_oids
-    )
-    if root_packet["expected_tree_git_oid"] != state["expected_payload_tree_git_oid"]:
-        raise PublishStateError("Connector payload root OID changed from the recorded plan")
-    root_call_bytes = _connector_call_bytes(root_packet)
-    if root_call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
-        raise PublishStateError(
-            f"payload root tree needs a {root_call_bytes}-byte Connector call, exceeding "
-            f"the fixed Connector profile {CONNECTOR_CALL_BUDGET_BYTES}-byte budget"
-        )
-    root_path = output_dir / "assemble-payload-root.json"
-    root_path.write_text(
-        json.dumps(root_packet, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    state["stage"] = "root-packet-ready"
-    state["payload_root_packet"] = str(root_path)
-    _write_connector_state(output_dir, state)
-    summary = {
-        "stage": state["stage"],
-        "request_id": state["request_id"],
-        "payload_root_packet": str(root_path),
-        "expected_payload_tree_git_oid": state["expected_payload_tree_git_oid"],
-        "root_tree_call_bytes": root_call_bytes,
-        "submit_request_packet": None,
-        "next": "execute the payload root packet; after success pass its returned tree SHA to connector-submit",
-        "verified": True,
-    }
-    _write_connector_summary(output_dir, summary)
-    print(json.dumps(summary, indent=2))
-    return 0
-
-
-def cmd_connector_submit(args: argparse.Namespace) -> int:
-    repo = _repo_from_cwd()
-    output_dir = _connector_dir(repo)
-    state = _read_connector_state(output_dir)
-    if state["stage"] != "root-packet-ready":
-        raise PublishStateError(
-            f"connector-submit requires stage root-packet-ready, found {state['stage']}"
-        )
-    prepared = _validate_connector_state_manifest(repo, state)
-    _require_hex_sha(args.root_tree_sha, name="created payload root tree SHA")
-    expected_root_oid = str(state["expected_payload_tree_git_oid"])
-    if args.root_tree_sha != expected_root_oid:
-        raise PublishStateError(
-            "created payload root tree SHA does not match the precomputed root: "
-            f"expected={expected_root_oid} actual={args.root_tree_sha}"
-        )
-    submit_request = _transport_request(
-        prepared,
-        {
-            "kind": "git-tree",
-            "oid": expected_root_oid,
-            "part_count": len(state["expected_blob_git_oids"]),
-        },
-    )
-    submit_packet = _connector_submit_packet(
-        str(state["github_repository"]), str(state["publish_branch"]), submit_request
-    )
-    submit_call_bytes = _connector_call_bytes(submit_packet)
-    if submit_call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
-        raise PublishStateError(
-            f"publish request metadata needs a {submit_call_bytes}-byte Connector call, exceeding "
-            f"the fixed Connector profile {CONNECTOR_CALL_BUDGET_BYTES}-byte budget"
-        )
-    submit_path = output_dir / "submit-request.json"
-    submit_path.write_text(
-        json.dumps(submit_packet, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    state["stage"] = "submit-ready"
-    state["submit_request_packet"] = str(submit_path)
-    _write_connector_state(output_dir, state)
-    summary = {
-        "stage": state["stage"],
-        "request_id": state["request_id"],
-        "expected_payload_tree_git_oid": expected_root_oid,
-        "root_tree_sha_verified": True,
+        "expected_blob_git_oids": blob_oids,
         "submit_request_packet": str(submit_path),
         "submit_call_bytes": submit_call_bytes,
-        "remote_request_path": _request_file_path(str(state["request_id"])),
-        "remote_receipt_path": _receipt_file_path(str(state["request_id"])),
-        "next": "execute the submit request packet once; Gateway owns all subsequent verification and publication",
+        "normal_remote_target_probe_calls": 1,
+        "response_sha_handoff_required": False,
+        "request_verified": bool(verified["verified"]),
+        "remote_request_path": _request_file_path(str(prepared["request_id"])),
+        "remote_receipt_path": _receipt_file_path(str(prepared["request_id"])),
+        "next": "execute every upload packet successfully, then execute the submit request packet once",
         "verified": True,
     }
     _write_connector_summary(output_dir, summary)
     print(json.dumps(summary, indent=2))
     return 0
-
 
 def _read_publish_receipt(path: Path) -> dict[str, object]:
     try:
@@ -1119,19 +946,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     connector_plan.add_argument("--target-remote-head", required=True)
     connector_plan.set_defaults(func=cmd_connector_plan)
-
-    connector_root = sub.add_parser(
-        "connector-root",
-        help="generate the payload root packet after all planned blob uploads succeeded",
-    )
-    connector_root.set_defaults(func=cmd_connector_root)
-
-    connector_submit = sub.add_parser(
-        "connector-submit",
-        help="generate the final request packet only after the payload root was created",
-    )
-    connector_submit.add_argument("--root-tree-sha", required=True)
-    connector_submit.set_defaults(func=cmd_connector_submit)
 
     record = sub.add_parser("record", help="verify a Gateway receipt and close the active transaction")
     record.add_argument("--receipt", required=True)

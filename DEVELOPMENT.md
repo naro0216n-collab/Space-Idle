@@ -80,41 +80,28 @@ GitHub反映の入口は差分種別で一意に決める。作業者がtranspor
 通常publishは次の順序に固定する。
 
 1. ローカル変更を責務としてまとまったcommitにする。publish対象は `prepare` 実行時の現在 `HEAD` に固定され、working treeの未commit差分は対象にしない。別requestを並行開始せず、active transactionをreceipt記録まで完了させる。
-2. `scripts/publish_request.py prepare` で、記録済みremote commitを親、local target treeをtreeに持つ決定論的publish commitを作り、Git bundleへ格納する。生成物はv6 JSON requestで、bundle Base64、payload SHA-256、base commit、target tree、publish commit、local target commitを保持し、生成時にbundle/parent/treeを自己検証する。`.github/workflows/**` の差分を含むtargetはここでworkflow maintenance対象として分離し、通常Gateway requestを生成しない。
+2. `scripts/publish_request.py prepare` で、記録済みremote commitを親、local target treeをtreeに持つ決定論的publish commitを作り、Git bundleへ格納する。生成物はv7 JSON requestで、bundle Base64、payload SHA-256、base commit、target tree、publish commit、local target commitを保持し、生成時にbundle/parent/treeを自己検証する。`.github/workflows/**` の差分を含むtargetはここでworkflow maintenance対象として分離し、通常Gateway requestを生成しない。
 3. publish直前に対象branch HEADを一度だけ取得する。`connector-plan`へ渡し、manifestの `base_sha` と一致しない場合は送信せず原因を調査する。
-4. `connector-plan` は固定Connector profileを使い、bundle Base64を独立Git blobへmaterializeするための `upload-part-*.json` だけを生成する。call budgetはhelper内部のtransport設定であり、CLIやmanifestから変更しない。必要な場合だけ実action引数bytesから最少数へ自動分割する。各uploadは独立しており並列実行できる。
-5. 全uploadが成功した後に `connector-root` を実行し、事前計算blob OIDを順序付きで参照する `assemble-payload-root.json` を初めて生成する。`GitHub.create_tree` が成功することで、期待blob群がGitHub object storeにmaterializeされていることを確認する。
-6. root作成結果のtree SHAを `connector-submit --root-tree-sha` へ渡す。helperは事前計算root OIDとの一致を機械検証し、一致した場合だけ `submit-request.json` を生成する。返却SHAをpayload sourceへ採用するのではなく、事前計算OIDの成立確認にだけ使用する。request packetはこのstage以前には存在しない。
-7. `submit-request.json` の `GitHub.create_file` を1回実行する。Publish Gatewayはrequest作成commitを契機に自動実行し、payload root tree、各blob OID、payload長、payload SHA-256、Git bundle、publish commit、parent/base、target tree、直前remote HEADを検証する。すべて一致した場合だけexact publish commitを対象branchへnon-force pushし、remote ref/treeを再確認する。
-8. Gatewayは成功receiptを `.publish/receipts/<request-id>.json` へ自動記録し、Fast CIをdispatchする。ローカルではreceiptを取得して `publish_request.py record` に渡す。`record` はmanifest内の `local_target_commit` を自動的に使用し、現在のlocal HEADが次作業へ進んでいてもrequest、receipt、当該local target tree、published commit objectの関係を機械検証した場合だけ次回publish stateを更新する。
+4. `connector-plan` は固定Connector profileを使い、bundle Base64を独立Git blobへmaterializeする `upload-part-*.json` と、順序付きexpected blob OIDを直接参照する `submit-request.json` を一度に生成する。必要な場合だけ実action引数bytesから最少数へ自動分割する。各uploadは独立しており並列実行できる。返却blob SHAを後続入力へ転記しない。
+5. 全uploadが成功した後に `submit-request.json` の `GitHub.create_file` を1回実行する。Publish Gatewayはrequest内のordered blob OIDを順に取得し、各blobのGit OID、payload長、payload SHA-256、Git bundle、publish commit、parent/base、target tree、直前remote HEADを機械検証する。すべて一致した場合だけexact publish commitを対象branchへnon-force pushし、remote ref/treeを再確認する。期待blobが欠落・変質している場合はGatewayで停止し、対象branchを更新しない。
+6. Gatewayは成功receiptを `.publish/receipts/<request-id>.json` へ自動記録し、Fast CIをdispatchする。ローカルではreceiptを取得して `publish_request.py record` に渡す。`record` はmanifest内の `local_target_commit` を自動的に使用し、現在のlocal HEADが次作業へ進んでいてもrequest、receipt、当該local target tree、published commit objectの関係を機械検証した場合だけ次回publish stateを更新する。
 
-Connector transportはstageを `uploads-planned -> root-packet-ready -> submit-ready` としてrepo-local active transactionへ記録する。manifestやplan directoryはhelperが `.git` 配下へ固定生成し、CLIから指定しない。既にactive transactionがある場合は再計画せず、そのstageで生成済みpacketを使って続行する。payload uploadの失敗は該当packetを再送する。root作成が失敗した場合は、期待blobがmaterializeされていないtransport integrity failureとしてrequest生成前に停止し、upload packetの忠実な再送またはconnector実装自体の修正を行う。任意budgetへの縮小、payloadの手動分割、Base64再構成、inline requestへの切替は標準経路に含めない。
+Connector transportはrepo-local active transactionにupload packet群と最終request packetを固定生成する。manifestやplan directoryはhelperが `.git` 配下へ一意に生成し、CLIから指定しない。既にactive transactionがある場合は再計画せず、生成済みpacketを使って続行する。payload uploadの失敗は該当packetを忠実に再送する。任意budgetへの縮小、payloadの手動分割、Base64再構成、inline requestへの切替は標準経路に含めない。Gatewayがordered blob OIDからpayloadを再構築して完全性を検証するため、payload root tree作成、返却tree SHAの中継、root SHAを受け取る追加helper stageは置かない。
 
-標準実行例。`prepare` は現在 `HEAD` を自動検証してrepo-local active transactionを作成する。
+標準実行例。
 
 ```bash
 python scripts/publish_request.py prepare
 ```
 
-対象branch `develop` HEADを一度だけ取得した後、そのSHAをupload stageへ渡す。
+対象branch `develop` HEADを一度だけ取得した後、そのSHAをtransport planへ渡す。
 
 ```bash
 python scripts/publish_request.py connector-plan \
   --target-remote-head <current-develop-head>
 ```
 
-出力された全 `upload-part-*.json` の `GitHub.create_blob` が成功したらroot stageへ進む。packet pathはhelper出力だけを使用し、別manifestやplan directoryを指定しない。
-
-```bash
-python scripts/publish_request.py connector-root
-```
-
-`assemble-payload-root.json` の `GitHub.create_tree` 成功後、その返却tree SHAを機械検証して最終request packetを生成する。
-
-```bash
-python scripts/publish_request.py connector-submit \
-  --root-tree-sha <create-tree-result-sha>
-```
+helperが出力した全 `upload-part-*.json` の `GitHub.create_blob` を成功させ、その後 `submit-request.json` の `GitHub.create_file` を1回実行する。Connector返却SHAを別コマンドへ転記しない。
 
 Gateway成功後はrequest IDに対応するreceiptを取得し、次回基点を更新する。
 
@@ -123,7 +110,7 @@ python scripts/publish_request.py record \
   --receipt /tmp/publish-receipt.json
 ```
 
-標準Connector経路はGit bundle request v6だけを扱う。旧patch transport、段階的旧helper、manual record fallback、任意call-budget調整は維持しない。
+標準Connector経路はGit bundle request v7だけを扱う。旧patch transport、payload root tree transport、段階的旧helper、manual record fallback、任意call-budget調整は維持しない。
 
 
 ### Workflow maintenance procedure
@@ -183,8 +170,6 @@ workflow maintenanceは通常publish stateへ動的に生成されたGitHub comm
 
 - target HEAD不一致: requestを作成しない。remote変更を調査し、必要なら最新source-snapshotから再同期する。
 - blob upload失敗: 失敗した生成済みupload packetだけを再送する。
-- root tree作成失敗: request packetはまだ存在しない。upload transportの忠実性またはconnector実装を修正し、期待blob群をmaterializeしてから同じroot packetを再実行する。
-- root tree SHA不一致: `connector-submit` が停止する。返却SHAをrequestへ流用せず、root作成経路を調査する。
 - blob OID、payload長、payload SHA-256、bundle、parent、target tree不一致: Gatewayが失敗し、対象branchは更新されない。
 - target branch push競合: forceしない。Gatewayの直前base再確認またはnon-force pushで停止する。
 - `.github/workflows/**` の変更: 通常Gatewayではrequestを生成しない。workflow更新権限を持つ分離されたmaintenance経路を使用し、必要なら `temp` でworkflow自体を隔離検証する。
