@@ -5,48 +5,51 @@ import pytest
 from space_idle import GetResearch, GetRoutes, GetSurveys, GetWorld, StartSurvey, build_game_application
 from space_idle.api import GameRuntime
 from space_idle.content import base_ids as ids
-from space_idle.research import ResearchPhase
+from space_idle.research import ResearchStage
 from space_idle.resource_demand import ResourceDemand
 from space_idle.shared import EntityId, RouteId
 from space_idle.simulation import OfflineProgressPolicy
 
 
-def test_full_research_point_payment_transitions_directly_to_visible_prototype_and_can_complete():
+def test_research_theory_progresses_into_visible_prototype_and_completes_automatically():
     app = build_game_application()
     sim = app._simulation
     assert sim.research is not None
 
-    for _ in range(2000):
-        if sim.research.can_start(ids.TECH_ORBITAL_OPERATIONS, day=sim.day):
+    points_before = sim.research.stored_points
+    sim.research.start(ids.TECH_ORBITAL_OPERATIONS, day=sim.day)
+    state = sim.research.active[ids.TECH_ORBITAL_OPERATIONS]
+    assert state.stage is ResearchStage.THEORY
+    assert sim.research.stored_points == points_before
+
+    for _ in range(500):
+        if sim.research.active[ids.TECH_ORBITAL_OPERATIONS].stage is ResearchStage.PROTOTYPE:
             break
         sim.advance_days(1)
     else:
-        raise AssertionError("research never became startable")
+        raise AssertionError("research never reached prototype stage")
 
-    definition = sim.research.definitions[ids.TECH_ORBITAL_OPERATIONS]
-    points_before = sim.research.stored_points
-    sim.research.start(ids.TECH_ORBITAL_OPERATIONS, day=sim.day)
-
-    state = sim.research.active[ids.TECH_ORBITAL_OPERATIONS]
-    assert state.status is ResearchPhase.PROTOTYPE
-    assert sim.research.stored_points == points_before - definition.research_point_cost
-    assert ids.TECH_ORBITAL_OPERATIONS not in sim.research.completed
-
-    view = app.query(GetResearch())
-    row = next(item for item in view.items if item.id == str(ids.TECH_ORBITAL_OPERATIONS))
+    row = next(
+        item for item in app.query(GetResearch()).items
+        if item.id == str(ids.TECH_ORBITAL_OPERATIONS)
+    )
     assert row.status == "prototype"
     earth = next(site for site in row.prototype_sites if site.location_id == str(ids.EARTH))
-    assert not earth.blockers
+    assert earth.can_select
 
     sim.research.set_prototype_site(ids.TECH_ORBITAL_OPERATIONS, ids.EARTH, sim.day)
-    sim.advance_days(1)
-    sim.research.fund_prototype(ids.TECH_ORBITAL_OPERATIONS, sim.day)
+    for _ in range(10):
+        sim.advance_days(1)
+        if ids.TECH_ORBITAL_OPERATIONS in sim.research.completed:
+            break
     assert ids.TECH_ORBITAL_OPERATIONS in sim.research.completed
     assert ids.TECH_ORBITAL_OPERATIONS not in sim.research.active
 
-    completed_row = next(item for item in app.query(GetResearch()).items if item.id == str(ids.TECH_ORBITAL_OPERATIONS))
+    completed_row = next(
+        item for item in app.query(GetResearch()).items
+        if item.id == str(ids.TECH_ORBITAL_OPERATIONS)
+    )
     assert completed_row.status == "complete"
-
 
 def test_research_definitions_have_granular_engineering_outcomes():
     app = build_game_application()

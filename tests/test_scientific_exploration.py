@@ -254,10 +254,13 @@ def test_scientific_exploration_rejects_invalid_vehicle_capability_requirements(
         validate_simulation_configuration(sim)
 
 
-def test_rp_storage_blocker_prevents_input_consumption_and_keeps_fleet_reserved():
+def test_full_rp_storage_constrains_reward_retention_but_does_not_freeze_campaign():
     app = build_game_application()
     sim = app._simulation
     exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
+    definition = sim.scientific_exploration.definitions[exploration_id]
+    for resource_id, amount_t in definition.consumable_resources:
+        sim.inventory.add(definition.origin_id, resource_id, amount_t)
     app.execute(StartScientificExploration(str(exploration_id)))
     app.execute(AssignExplorationFleet(
         str(exploration_id), str(ids.REUSABLE_ORBITAL_CARGO_TUG)
@@ -266,12 +269,16 @@ def test_rp_storage_blocker_prevents_input_consumption_and_keeps_fleet_reserved(
 
     capacity = sim.research.storage_capacity(day=sim.day)
     sim.research.store_generated_points(capacity, day=sim.day)
-    assert "rp_storage_full" in sim.scientific_exploration.blockers(
+    assert "rp_storage_full" not in sim.scientific_exploration.blockers(
         exploration_id, day=sim.day
     )
+    before_points = sim.research.stored_points
     app.execute(AdvanceTime(1))
-    assert state.inputs_consumed is False
-    assert state.progress_days == pytest.approx(0.0)
+
+    assert state.inputs_consumed is True
+    assert state.progress_days > 0.0
+    assert state.research_points_awarded > 0.0
+    assert sim.research.stored_points == pytest.approx(before_points)
     assert _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == 1
 
 

@@ -104,13 +104,13 @@ def test_cross_cutting_state_and_validation_are_owned_by_registered_domains():
 def test_major_mutable_domain_states_are_owned_enums_not_distributed_string_sets():
     from space_idle.contracts import ContractStatus
     from space_idle.projects import ProjectStatus
-    from space_idle.research import ResearchPhase
+    from space_idle.research import ResearchStage
     from space_idle.logistics import FleetReservationKind, TransportControlMode
     from space_idle.transport import CargoFlowStatus
     from space_idle.transport.production import VehicleProductionPhase
 
     for state_type in (
-        ContractStatus, ProjectStatus, ResearchPhase, FleetReservationKind,
+        ContractStatus, ProjectStatus, ResearchStage, FleetReservationKind,
         TransportControlMode, CargoFlowStatus, VehicleProductionPhase,
     ):
         assert issubclass(state_type, Enum)

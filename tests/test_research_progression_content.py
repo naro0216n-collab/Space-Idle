@@ -22,47 +22,20 @@ def test_initial_research_base_has_ground_and_orbital_assets():
     assert view.storage_capacity_points > 0
 
 
-def test_research_capacity_progression_requires_new_experimental_infrastructure():
-    app = build_game_application()
-    initial_capacity = app.query(GetResearch()).storage_capacity_points
-    research = build_research_definitions()
+def test_research_provider_progression_expands_generation_and_storage_without_gating_total_cost():
     providers = build_research_providers()
+    research = build_research_definitions()
 
-    microgravity = providers[ids.MICROGRAVITY_EXPERIMENT_PLATFORM].level_spec(1)
-    crewed = providers[ids.CREWED_ORBITAL_LABORATORY].level_spec(1)
-    robotic = providers[ids.ROBOTIC_GEOLOGY_STATION].level_spec(1)
-    sample = providers[ids.SAMPLE_ANALYSIS_LABORATORY].level_spec(1)
-    vacuum = providers[ids.VACUUM_REGOLITH_PROCESS_LABORATORY].level_spec(1)
-
-    assert research[ids.TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS].research_point_cost <= initial_capacity
-    assert research[ids.TECH_CREWED_ORBITAL_RESEARCH].research_point_cost > initial_capacity
-    assert (
-        initial_capacity + microgravity.storage_capacity_points
-        >= research[ids.TECH_CREWED_ORBITAL_RESEARCH].research_point_cost
+    assert all(
+        spec.generation_points_per_day >= 0 and spec.storage_capacity_points >= 0
+        for provider in providers.values()
+        for spec in provider.levels
     )
-
-    pre_surface_analysis_capacity = (
-        initial_capacity
-        + microgravity.storage_capacity_points
-        + crewed.storage_capacity_points
-        + robotic.storage_capacity_points
+    assert all(not hasattr(provider, "research_ids") for provider in providers.values())
+    assert any(
+        definition.research_point_cost > 0
+        for definition in research.values()
     )
-    assert research[ids.TECH_VACUUM_REGOLITH_PROCESS_RESEARCH].research_point_cost > pre_surface_analysis_capacity
-    assert (
-        pre_surface_analysis_capacity + sample.storage_capacity_points
-        >= research[ids.TECH_VACUUM_REGOLITH_PROCESS_RESEARCH].research_point_cost
-    )
-    assert vacuum.storage_capacity_points > sample.storage_capacity_points
-    assert (
-        initial_capacity
-        + microgravity.storage_capacity_points
-        + crewed.storage_capacity_points
-        + robotic.storage_capacity_points
-        + sample.storage_capacity_points
-        + vacuum.storage_capacity_points
-        >= research[ids.TECH_HEAVY_EQUIPMENT_ASSEMBLY].research_point_cost
-    )
-
 
 def test_research_assets_get_more_productive_with_higher_technical_tiers():
     providers = build_research_providers()

@@ -4,6 +4,7 @@ import math
 
 from ..facilities import FacilityBook
 from ..inventory import InventoryBook
+from ..knowledge import DomainActivity
 from ..power import PowerSnapshot
 from ..resource_claim import ResourceAllocationPlan
 from ..service_capacity import ServiceCapacityAllocationPlan
@@ -20,7 +21,7 @@ class IndustryExecutionMixin:
         day: int = 0,
         resource_allocations: ResourceAllocationPlan | None = None,
         service_allocations: ServiceCapacityAllocationPlan | None = None,
-    ) -> None:
+    ) -> tuple[DomainActivity, ...]:
         plan = self._plan_site(
             location_id, facilities, inventory, power, day, resource_allocations,
             service_allocations,
@@ -64,3 +65,12 @@ class IndustryExecutionMixin:
             amount = output_totals[resource_id]
             if amount > 1e-12:
                 inventory.add(location_id, resource_id, amount)
+
+        activities: list[DomainActivity] = []
+        for snapshot in plan:
+            output = math.fsum(snapshot.output_rates_per_day.values())
+            if output > 1e-12:
+                activities.append(DomainActivity(
+                    "manufacturing", output, "industry_process", snapshot.facility_id, location_id
+                ))
+        return tuple(activities)

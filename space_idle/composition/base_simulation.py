@@ -41,7 +41,9 @@ from ..content.base_progression import (
     build_survey_targets,
     initial_known_surface_resource_knowledge,
 )
-from ..content.base_research import build_research_definitions, build_research_providers
+from ..content.base_research import (
+    build_experience_contribution_rules, build_research_definitions, build_research_providers,
+)
 from ..content.base_scientific_exploration import build_scientific_exploration_definitions
 from ..content.base_spatial import build_spatial_model
 from ..content.base_storage import build_storage_provider_specs
@@ -152,6 +154,7 @@ def build_base_simulation() -> Simulation:
     research = ResearchService(
         build_research_definitions(), build_research_providers(),
         facilities, inventory, power, technology_state=technology,
+        experience_rules=build_experience_contribution_rules(),
     )
     scientific_exploration = ScientificExplorationService(
         build_scientific_exploration_definitions(),

@@ -310,7 +310,8 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert status == 200
         assert headers["Content-Type"].startswith("text/javascript")
         assert "SpaceIdleResearchTree.render" in operations_js
-        assert "FundResearchPrototype" in operations_js
+        assert "SetResearchPriority" in operations_js
+        assert "FundResearchPrototype" not in operations_js
         assert "StartScientificExploration" in operations_js
         assert "AssignExplorationFleet" in operations_js
         assert "FoundLocation" in operations_js

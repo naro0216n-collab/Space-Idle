@@ -454,10 +454,6 @@ class ScientificExplorationService:
                 power_by_location,
             )
         )
-        snapshots = power_by_location or {}
-        capacity = self.research.storage_capacity(snapshots if snapshots else None, day)
-        if self.research.stored_points >= capacity - 1e-9:
-            blockers.append("rp_storage_full")
         return tuple(blockers)
 
     def advance_day(
@@ -487,16 +483,16 @@ class ScientificExplorationService:
                 continue
             intended_day_fraction = min(1.0, remaining_days)
             requested_points = min(remaining_points, definition.points_per_day * intended_day_fraction)
-            stored = self.research.store_generated_points(
+            self.research.store_generated_points(
                 requested_points,
                 power_by_location=power_by_location,
                 day=day,
             )
-            if stored <= 1e-12:
-                continue
-            fraction = stored / definition.points_per_day
-            state.progress_days += fraction
-            state.research_points_awarded += stored
+            # Campaign work is physical/scientific activity, not RP storage.
+            # A full RP pool constrains how much reward can be retained, but it
+            # must not freeze a finite campaign or hold its Fleet indefinitely.
+            state.progress_days += intended_day_fraction
+            state.research_points_awarded += requested_points
             if (
                 state.progress_days + 1e-9 >= definition.duration_days
                 and state.research_points_awarded + 1e-9 >= definition.research_points_total

@@ -85,39 +85,57 @@ def test_capacity_drop_preserves_stored_points_and_overcap_blocks_generation():
     assert resumed.stored_points == paused.stored_points
 
 
-def test_research_start_consumes_full_cost_atomically_and_skips_theory_phase():
+def test_research_start_creates_theory_project_without_upfront_rp_payment():
     app = build_game_application()
-    row = _advance_until_startable(app, TECH_ORBITAL_OPERATIONS)
+    sim = app._simulation
+    sim.research.stored_points = 10.0
     before = app.query(GetResearch()).stored_points
 
-    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS)))
+    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS), priority=80))
 
-    after = app.query(GetResearch())
     started = _research_row(app, TECH_ORBITAL_OPERATIONS)
-    assert isclose(after.stored_points, before - row.research_point_cost, abs_tol=1e-9)
-    assert started.status in {"prototype", "demonstration", "complete"}
-    assert started.status != "theory"
+    assert app.query(GetResearch()).stored_points == before
+    assert started.status == "theory"
+    assert started.priority == 80
+    assert started.rp_remaining == started.research_point_cost
+    assert started.execution_requested > 0
+    assert started.execution_allocated > 0
 
-
-def test_insufficient_points_and_insufficient_capacity_are_distinct_start_blockers():
-    app = build_game_application()
-    initial = _research_row(app, TECH_ORBITAL_OPERATIONS)
-    assert any(code == "research_points" for code, _detail in initial.start_blockers)
-
-    sim = app._simulation
-    definition = sim.research.definitions[TECH_ORBITAL_OPERATIONS]
-    current_capacity = app.query(GetResearch()).storage_capacity_points
-    unreachable_cost = max(definition.research_point_cost, current_capacity) + max(1.0, current_capacity)
-    sim.research.definitions[TECH_ORBITAL_OPERATIONS] = replace(
-        definition,
-        research_point_cost=unreachable_cost,
+    expected_consumption = started.rp_allocated
+    expected_generation = app.query(GetResearch()).generation_points_per_day
+    app.execute(AdvanceTime(1))
+    after = app.query(GetResearch())
+    progressed = _research_row(app, TECH_ORBITAL_OPERATIONS)
+    assert progressed.stage_progress == expected_consumption
+    assert isclose(
+        after.stored_points,
+        min(after.storage_capacity_points, before - expected_consumption + expected_generation),
+        abs_tol=1e-9,
     )
-    sim.research.stored_points = unreachable_cost
 
-    blocked = _research_row(app, TECH_ORBITAL_OPERATIONS)
-    assert not blocked.can_start
-    assert not any(code == "research_points" for code, _detail in blocked.start_blockers)
-    assert any(code == "rp_storage_capacity" for code, _detail in blocked.start_blockers)
+
+def test_research_total_cost_may_exceed_rp_storage_capacity():
+    app = build_game_application()
+    sim = app._simulation
+    research_id = DefinitionId("test.research.more_than_storage")
+    capacity = app.query(GetResearch()).storage_capacity_points
+    sim.research.definitions[research_id] = ResearchDefinition(
+        research_id,
+        "Long Theory",
+        research_point_cost=capacity + 10.0,
+    )
+
+    row = _research_row(app, research_id)
+    assert row.can_start
+    assert not any(code in {"research_points", "rp_storage_capacity"} for code, _ in row.start_blockers)
+    app.execute(StartResearch(str(research_id)))
+    assert _research_row(app, research_id).status == "theory"
+
+    for _ in range(20):
+        app.execute(AdvanceTime(1))
+    progressed = _research_row(app, research_id)
+    assert progressed.stage_progress > 0
+    assert progressed.rp_remaining < progressed.research_point_cost
 
 
 def test_global_research_points_do_not_use_provider_research_allowlists():
@@ -132,11 +150,13 @@ def test_global_research_points_do_not_use_provider_research_allowlists():
     sim.research.stored_points = 1.0
 
     sim.research.start(research_id, day=sim.day)
+    assert research_id in sim.research.active
+    assert sim.research.active[research_id].stage.value == "theory"
+    assert sim.research.stored_points == 1.0
 
+    sim.advance_days(1)
     assert research_id in sim.research.completed
-    assert sim.research.stored_points == 0.0
     assert all(not hasattr(provider, "research_ids") for provider in sim.research.providers.values())
-
 
 def test_research_provider_level_behavior_comes_from_provider_content():
     app = build_game_application()

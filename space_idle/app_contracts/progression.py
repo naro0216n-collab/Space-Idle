@@ -4,6 +4,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class StartResearch:
     research_id: str
+    priority: int = 50
 @dataclass(frozen=True)
 class PauseResearch: research_id: str
 @dataclass(frozen=True)
@@ -12,8 +13,9 @@ class ResumeResearch: research_id: str
 class SetResearchPrototypeSite:
     research_id: str; location_id: str
 @dataclass(frozen=True)
-class FundResearchPrototype:
+class SetResearchPriority:
     research_id: str
+    priority: int
 @dataclass(frozen=True)
 class SetResearchDemonstrationSite:
     research_id: str; location_id: str

@@ -264,23 +264,32 @@
     if(!options.length)return '<div class="empty-state">候補地点なし</div>';
     return options.map((site)=>{const blockers=site.blockers||[],blocked=blockers.length,isSelected=site.location_id===selected,canSelect=Boolean(site.can_select),attr=kind==='prototype'?'data-research-prototype-site':'data-research-demo-site';const badge=isSelected?'選択中':canSelect?(blocked?`選択可 · ${blocked} 稼働blocker`:'選択可'):`${blocked||1} blocker`;return `<div class="route-mode-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(locationName(site.location_id))}</span><span class="badge ${blocked?'warn':canSelect||isSelected?'ok':''}">${badge}</span></div>${blocked?`<div class="issue-stack">${blockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:''}<button type="button" ${attr}="${esc(site.location_id)}" data-id="${esc(r.id)}" ${!canSelect||isSelected?'disabled':''}>${kind==='prototype'?'試作地点に設定':'実証地点に設定'}</button></div>`;}).join('');
   }
-  function prototypeDemandHtml(r){
-    const owner=`research:${r.id}`;
-    const rows=(state.demands||[]).filter((d)=>d.owner_kind==='research'&&d.owner_id===owner);
-    if(!rows.length)return '<div class="empty-state">現在の試作資材Demandなし</div>';
-    return rows.map((d)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(d.resource_id))}</span><span>${fmt(d.remaining_t)} t 未充足</span></div><div class="cell-sub">要求 ${fmt(d.requested_t)} t · 輸送系内 ${fmt(d.pipeline_t)} t · ${d.source_id?esc(locationName(d.source_id)):'供給元はLaneが選択'}</div></div>`).join('');
+  function prototypeResourceHtml(r){
+    const rows=r.prototype_resources||[];
+    if(!rows.length)return '<div class="empty-state">追加試作資材なし</div>';
+    return rows.map((x)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(x.resource_id))}</span><span>${fmt(x.staged_t)} / ${fmt(x.required_t)} t staged</span></div><div class="cell-sub">current claim ${fmt(x.requested_t)} t · allocated ${fmt(x.allocated_t)} t · unmet ${fmt(x.unmet_t)} t · pipeline ${fmt(x.pipeline_t)} t</div></div>`).join('');
+  }
+  function experienceHtml(r){
+    const rows=r.operational_experience||[];
+    if(!rows.length)return '<div class="empty-state">Operational Experience要件なし</div>';
+    return rows.map((x)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(x.category_id)}</span><span>${fmt(x.current,1)} / ${fmt(x.required,1)}</span></div><div class="cell-sub">未充足 ${fmt(x.unmet,1)}</div></div>`).join('');
   }
   function renderResearchInspector(id){
     const r=state.research?.items?.find((x)=>x.id===id);if(!r)return false;
-    const action=lifecycleButton({domain:'research',id:r.id,canStart:r.can_start,canPause:r.can_pause,canResume:r.can_resume,complete:r.status==='complete',startLabel:`RP ${fmt(r.research_point_cost,1)} を支払い研究開始`,pauseLabel:'研究停止',resumeLabel:'研究再開',completeLabel:'研究完了'});
+    const action=lifecycleButton({domain:'research',id:r.id,canStart:r.can_start,canPause:r.can_pause,canResume:r.can_resume,complete:r.status==='complete',startLabel:'研究Project開始',pauseLabel:'研究停止',resumeLabel:'研究再開',completeLabel:'研究完了'});
     const phaseBlockers=researchBlockers(r);let phase='';
-    if(r.status==='prototype'){
-      const resources=(r.prototype_resources||[]).map(([resource,amount])=>`${esc(resourceName(resource))} ${fmt(amount)}t`).join(' / ')||'追加資材なし';
-      const funding=`<button type="button" class="primary" data-research-prototype-fund="${esc(r.id)}" ${r.can_fund_prototype?'':'disabled'}>試作資材を投入して完了</button>`;
-      phase=section('試作',`<div class="cell-sub">必要資材: ${resources}</div><div class="cell-sub">試作地点: ${r.prototype_location_id?esc(locationName(r.prototype_location_id)):'未選択'}</div>${siteOptionsHtml(r,'prototype')}<h3>資材Demand</h3>${prototypeDemandHtml(r)}${funding}`);
-    }else if(r.status==='demonstration')phase=section('実証',`<div class="cell-sub">進捗 ${r.demonstration_done_days}/${r.demonstration_required_days}日 · 地点 ${r.demonstration_location_id?esc(locationName(r.demonstration_location_id)):'未選択'}</div>${siteOptionsHtml(r,'demonstration')}`);
-    const startState=['available','locked'].includes(r.status)?section('開始条件',kv([['必要RP',fmt(r.research_point_cost,1)],['保有RP',fmt(state.research?.stored_points,1)],['RP容量',fmt(state.research?.storage_capacity_points,1)]])):'';
-    setInspector(r.display_name,section('状態',kv([['段階',esc(stateLabels[r.status]||r.status)],['必要RP',fmt(r.research_point_cost,1)],['実証日数',`${r.demonstration_done_days}/${r.demonstration_required_days}`]]))+section('前提',(r.prerequisites||[]).length?(r.prerequisites||[]).map((x)=>`<span class="badge">${esc(definitionName(x))}</span>`).join(' '):'<span class="badge ok">なし</span>')+startState+section('現在のblocker',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:'<span class="badge ok">なし</span>')+phase+section('研究操作',`<div class="action-stack">${action}</div>`));
+    if(r.status==='theory'){
+      phase=section('Theory',kv([['進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)} RP`],['RP requested',`${fmt(r.rp_requested,2)} /日`],['RP allocated',`${fmt(r.rp_allocated,2)} /日`],['Theory残り',`${fmt(r.rp_remaining,1)} RP`],['Research execution requested',`${fmt(r.execution_requested,2)} /日`],['Research execution allocated',`${fmt(r.execution_allocated,2)} /日`]]));
+    }else if(r.status==='prototype'){
+      phase=section('Prototype',`<div class="cell-sub">地点 ${r.prototype_location_id?esc(locationName(r.prototype_location_id)):'未選択'} · Research execution ${fmt(r.execution_allocated,2)}/${fmt(r.execution_requested,2)} /日</div>${siteOptionsHtml(r,'prototype')}<h3>Resource Claim / staging / pipeline</h3>${prototypeResourceHtml(r)}`);
+    }else if(r.status==='demonstration'){
+      phase=section('Demonstration',`<div class="cell-sub">進捗 ${fmt(r.stage_progress,1)}/${fmt(r.stage_required,1)}日 · 地点 ${r.demonstration_location_id?esc(locationName(r.demonstration_location_id)):'未選択'} · Research execution ${fmt(r.execution_allocated,2)}/${fmt(r.execution_requested,2)} /日</div>${siteOptionsHtml(r,'demonstration')}`);
+    }else if(r.status==='operational_experience'){
+      phase=section('Operational Experience',experienceHtml(r));
+    }
+    const startState=['available','locked'].includes(r.status)?section('開始条件',kv([['Theory総必要RP',fmt(r.research_point_cost,1)],['保有RP',fmt(state.research?.stored_points,1)],['RP Pool容量',fmt(state.research?.storage_capacity_points,1)],['開始時一括消費','なし']])):'';
+    const priorityControl=`<div class="form-row"><label>研究優先度<input id="researchPriorityInput" type="number" step="1" value="${esc(r.priority??50)}" data-draft-key="research:${esc(r.id)}:priority"></label>${r.can_set_priority?`<button type="button" data-set-research-priority="${esc(r.id)}">優先度を適用</button>`:''}</div>`;
+    setInspector(r.display_name,section('状態',kv([['段階',esc(stateLabels[r.status]||r.status)],['優先度',fmt(r.priority,0)],['Stage進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)}`],['RP requested / allocated',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)}`],['Execution requested / allocated',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)}`]]))+section('前提',(r.prerequisites||[]).length?(r.prerequisites||[]).map((x)=>`<span class="badge">${esc(definitionName(x))}</span>`).join(' '):'<span class="badge ok">なし</span>')+startState+section('現在のblocker',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:'<span class="badge ok">なし</span>')+phase+section('研究操作',`<div class="action-stack">${priorityControl}${action}</div>`));
     return true;
   }
   function renderScientificExplorationInspector(id){
@@ -412,9 +421,9 @@
     const foundingPriority=event.target.closest('[data-set-founding-priority]');if(foundingPriority){try{await command('SetFoundingPriority',{project_id:foundingPriority.dataset.setFoundingPriority,priority:Number($('#projectPriorityInput').value)});}catch{}return;}
     const projectSourcing=event.target.closest('[data-set-project-sourcing]');if(projectSourcing){try{await command('SetProjectSourcingPolicy',{project_id:projectSourcing.dataset.setProjectSourcing,sourcing_policy:$('#projectSourcingPolicy').value});}catch{}return;}
     const projectSource=event.target.closest('[data-set-project-source]');if(projectSource){const source=$('#projectImportSource').value||null;try{await command('SetProjectImportSource',{project_id:projectSource.dataset.setProjectSource,operational_node_id:source});}catch{}return;}
-    const ra=event.target.closest('[data-research-action]');if(ra){const map={start:'StartResearch',pause:'PauseResearch',resume:'ResumeResearch'};try{await command(map[ra.dataset.researchAction],{research_id:ra.dataset.id});}catch{}return;}
+    const ra=event.target.closest('[data-research-action]');if(ra){const map={start:'StartResearch',pause:'PauseResearch',resume:'ResumeResearch'},payload={research_id:ra.dataset.id};if(ra.dataset.researchAction==='start')payload.priority=Number($('#researchPriorityInput')?.value??50);try{await command(map[ra.dataset.researchAction],payload);}catch{}return;}
     const protoSite=event.target.closest('[data-research-prototype-site]');if(protoSite){try{await command('SetResearchPrototypeSite',{research_id:protoSite.dataset.id,location_id:protoSite.dataset.researchPrototypeSite});}catch{}return;}
-    const protoFund=event.target.closest('[data-research-prototype-fund]');if(protoFund){try{await command('FundResearchPrototype',{research_id:protoFund.dataset.researchPrototypeFund});}catch{}return;}
+    const researchPriority=event.target.closest('[data-set-research-priority]');if(researchPriority){try{await command('SetResearchPriority',{research_id:researchPriority.dataset.setResearchPriority,priority:Number($('#researchPriorityInput').value)});}catch{}return;}
     const demo=event.target.closest('[data-research-demo-site]');if(demo){try{await command('SetResearchDemonstrationSite',{research_id:demo.dataset.id,location_id:demo.dataset.researchDemoSite});}catch{}return;}
     const ea=event.target.closest('[data-exploration-action]');if(ea){const map={start:'StartScientificExploration',pause:'PauseScientificExploration',resume:'ResumeScientificExploration'};try{await command(map[ea.dataset.explorationAction],{exploration_id:ea.dataset.id});}catch{}return;}
     const assign=event.target.closest('[data-exploration-assign]');if(assign){try{await command('AssignExplorationFleet',{exploration_id:assign.dataset.explorationAssign,vehicle_definition_id:assign.dataset.vehicleDefinitionId});}catch{}return;}

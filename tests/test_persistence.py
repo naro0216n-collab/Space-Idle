@@ -56,7 +56,7 @@ def _advance_until_research_startable(app, research_id, max_days=2000):
 def _make_nontrivial_state():
     app = build_game_application()
     _advance_until_research_startable(app, TECH_ORBITAL_OPERATIONS)
-    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS)))
+    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS), priority=77))
     project_id = app.execute(PlanBuild(
         str(LEO), str(ORBITAL_LOGISTICS_NODE),
         sourcing_policy="import_now", import_source_id=str(EARTH),
@@ -83,6 +83,7 @@ def _make_nontrivial_state():
     app.execute(PauseBuild(project_id))
     app.execute(PauseLogisticsLane(lane_id))
     app.execute(PauseTransportAllocation(allocation_id))
+    app._simulation.research.knowledge_state.add(ids.EXPERIENCE_TRANSPORT_OPERATIONS, 2.5)
     return app
 
 
@@ -134,6 +135,24 @@ def test_offline_progress_is_the_normal_simulation_path(tmp_path):
     assert result == expected
     assert capture_state(loaded._simulation) == capture_state(direct._simulation)
     assert loaded.query(GetWorld()).day == direct.query(GetWorld()).day
+
+
+def test_offline_progress_matches_normal_ticks_for_active_research(tmp_path):
+    app = build_game_application()
+    _advance_until_research_startable(app, TECH_ORBITAL_OPERATIONS)
+    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS), priority=73))
+    path = tmp_path / "active-research.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    direct, _ = load_game(path, build_game_application)
+    offline, _ = load_game(path, build_game_application)
+    direct._simulation.advance_days(7)
+    result = offline._simulation.advance_offline(
+        7.0, OfflineProgressPolicy(real_seconds_per_game_day=1.0)
+    )
+
+    assert result.advanced_days == 7
+    assert capture_state(offline._simulation) == capture_state(direct._simulation)
 
 
 def test_fractional_offline_time_is_composable():

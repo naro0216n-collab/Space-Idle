@@ -13,25 +13,24 @@
     : '—';
   const statusLabels = {
     available:'利用可能', locked:'未解禁', complete:'完了',
-    prototype:'試作', demonstration:'実証',
+    theory:'理論', prototype:'試作', demonstration:'実証', operational_experience:'運用経験',
   };
 
   function blockers(item) {
-    if (item.status === 'prototype') return item.prototype_blockers || [];
-    if (item.status === 'demonstration') return item.demonstration_blockers || [];
-    return item.start_blockers || [];
+    return item.current_blockers || [];
   }
 
   function progress(item) {
     if (item.status === 'complete') return {ratio:1, text:'完了'};
-    if (item.status === 'prototype') return {ratio:0, text:'RP支払済み · 試作待ち'};
-    if (item.status === 'demonstration') {
-      const required = Number(item.demonstration_required_days || 0);
-      const done = Number(item.demonstration_done_days || 0);
-      return {ratio:required > 0 ? done / required : 0, text:`実証 ${fmt(done,0)}/${fmt(required,0)}日`};
+    const required = Number(item.stage_required || 0);
+    const done = Number(item.stage_progress || 0);
+    if (['theory','prototype','demonstration','operational_experience'].includes(item.status)) {
+      const label = statusLabels[item.status] || item.status;
+      return {ratio:required > 0 ? done / required : 0, text:`${label} ${fmt(done,1)}/${fmt(required,1)}`};
     }
-    return {ratio:0, text:`必要RP ${fmt(item.research_point_cost,1)}`};
+    return {ratio:0, text:`Theory必要RP ${fmt(item.research_point_cost,1)}`};
   }
+
 
   function layout(items) {
     const byId = new Map(items.map((item) => [item.id, item]));
@@ -142,11 +141,10 @@
       const blockerCount = blockers(item).length;
       const prerequisiteCount = (item.prerequisites || []).length;
       const selected = selectedId === item.id;
-      const affordable = stored + 1e-9 >= Number(item.research_point_cost || 0);
       return `<button type="button" class="research-node status-${esc(item.status)}${selected ? ' is-selected' : ''}" data-inspect="research" data-id="${esc(item.id)}" style="left:${pos.x}px;top:${pos.y}px" aria-label="${esc(item.display_name)} ${esc(state)}">
         <span class="research-node-head"><span class="research-node-title">${esc(item.display_name)}</span><span class="badge ${item.status === 'complete' ? 'ok' : blockerCount ? 'warn' : ''}">${esc(state)}</span></span>
-        <span class="research-node-meta">前提 ${prerequisiteCount} · blocker ${blockerCount} · RP ${fmt(item.research_point_cost,1)}</span>
-        <span class="research-node-progress"><span>${esc(phase.text)}</span>${['available','locked'].includes(item.status) ? `<span>${affordable ? 'RP充足' : 'RP不足'}</span>` : ''}</span>
+        <span class="research-node-meta">前提 ${prerequisiteCount} · blocker ${blockerCount} · 優先度 ${fmt(item.priority,0)}</span>
+        <span class="research-node-progress"><span>${esc(phase.text)}</span>${item.status==='theory'?`<span>RP ${fmt(item.rp_allocated,1)}/${fmt(item.rp_requested,1)} /日</span>`:''}</span>
         <span class="progress-track"><span class="progress-bar" style="width:${Math.max(0, Math.min(100, phase.ratio * 100))}%"></span></span>
       </button>`;
     }).join('');

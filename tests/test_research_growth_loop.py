@@ -5,7 +5,6 @@ from space_idle import (
     AssignExplorationFleet,
     CreateLogisticsLane,
     CreateTransportAllocation,
-    FundResearchPrototype,
     GetLocation,
     GetLogistics,
     GetProjects,
@@ -37,13 +36,19 @@ def _advance_until(app, predicate, *, max_days: int = 240) -> None:
 def _complete_prototype_research(app, research_id) -> None:
     _advance_until(app, lambda: _research_row(app, research_id).can_start)
     app.execute(StartResearch(str(research_id)))
+    _advance_until(
+        app,
+        lambda: _research_row(app, research_id).status in {"prototype", "complete"},
+        max_days=2000,
+    )
     row = _research_row(app, research_id)
     if row.status == "prototype":
-        site = next((candidate for candidate in row.prototype_sites if not candidate.blockers), None)
+        site = next((candidate for candidate in row.prototype_sites if candidate.can_select), None)
         assert site is not None
         app.execute(SetResearchPrototypeSite(str(research_id), site.location_id))
-        _advance_until(app, lambda: not _research_row(app, research_id).prototype_blockers)
-        app.execute(FundResearchPrototype(str(research_id)))
+        _advance_until(
+            app, lambda: _research_row(app, research_id).status == "complete", max_days=240
+        )
     assert _research_row(app, research_id).status == "complete"
 
 
@@ -132,7 +137,9 @@ def test_research_point_growth_loop_is_reachable_through_application_api():
         if row.id == str(exploration_id)
     )
     assert exploration.research_points_awarded > 0
-    assert app.query(GetResearch()).stored_points > research_points_before
+    research_after_exploration = app.query(GetResearch())
+    assert research_after_exploration.stored_points <= research_after_exploration.storage_capacity_points + 1e-9
+    assert research_after_exploration.stored_points >= research_points_before - 1e-9
 
     # RP enables a higher-generation research method, which must still be physically built.
     _complete_prototype_research(app, ids.TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS)

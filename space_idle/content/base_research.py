@@ -3,11 +3,14 @@ from __future__ import annotations
 from ..research import (
     ResearchDefinition,
     ResearchDemonstrationSpec,
+    ResearchOperationalExperienceSpec,
     ResearchPrototypeSpec,
+    ResearchStage,
     ResearchProviderLevelSpec,
     ResearchProviderSpec,
 )
-from ..site import SiteRequirements
+from ..knowledge import ExperienceContributionRule
+from ..site import ServiceCapacityRequirement, SiteRequirements
 from . import base_ids as ids
 from . import base_requirements as req
 
@@ -24,12 +27,33 @@ def _surface_research_site() -> SiteRequirements:
     return SiteRequirements(req.SURFACE_ENV, req._available_requirements("research_lab"))
 
 
+def _with_research_execution(site: SiteRequirements) -> SiteRequirements:
+    requirements = tuple(
+        requirement
+        for requirement in site.service_capacity_requirements
+        if requirement.service_type != "research_execution"
+    ) + (ServiceCapacityRequirement("research_execution", 1.0),)
+    return SiteRequirements(site.environment, site.capability_requirements, requirements)
+
+
 def _prototype(site: SiteRequirements, resources: dict) -> ResearchPrototypeSpec:
-    return ResearchPrototypeSpec(resources, site)
+    return ResearchPrototypeSpec(resources, _with_research_execution(site))
 
 
 def _demonstration(days: int, site: SiteRequirements) -> ResearchDemonstrationSpec:
-    return ResearchDemonstrationSpec(days, site)
+    return ResearchDemonstrationSpec(days, _with_research_execution(site))
+
+
+def _experience(category: str, amount: float) -> ResearchOperationalExperienceSpec:
+    return ResearchOperationalExperienceSpec({category: amount})
+
+
+def build_experience_contribution_rules() -> tuple[ExperienceContributionRule, ...]:
+    return (
+        ExperienceContributionRule("transport", ids.EXPERIENCE_TRANSPORT_OPERATIONS, 1.0),
+        ExperienceContributionRule("extraction", ids.EXPERIENCE_EXTRACTION_OPERATIONS, 1.0),
+        ExperienceContributionRule("manufacturing", ids.EXPERIENCE_MANUFACTURING_OPERATIONS, 1.0),
+    )
 
 
 def build_research_definitions() -> dict:
@@ -124,6 +148,13 @@ def build_research_definitions() -> dict:
             frozenset({ids.TECH_SAMPLE_ANALYSIS_SYSTEMS, ids.TECH_REGOLITH_EXCAVATION}),
             _prototype(surface_lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.8}),
             _demonstration(10, regolith_demo),
+            _experience(ids.EXPERIENCE_EXTRACTION_OPERATIONS, 20.0),
+            (
+                ResearchStage.THEORY,
+                ResearchStage.PROTOTYPE,
+                ResearchStage.DEMONSTRATION,
+                ResearchStage.OPERATIONAL_EXPERIENCE,
+            ),
         ),
         ids.TECH_VACUUM_REGOLITH_PROCESS_RESEARCH: ResearchDefinition(
             ids.TECH_VACUUM_REGOLITH_PROCESS_RESEARCH,
@@ -156,6 +187,13 @@ def build_research_definitions() -> dict:
             _demonstration(
                 8,
                 SiteRequirements(req.SURFACE_ENV, req._available_requirements("metallurgy")),
+            ),
+            _experience(ids.EXPERIENCE_MANUFACTURING_OPERATIONS, 20.0),
+            (
+                ResearchStage.THEORY,
+                ResearchStage.PROTOTYPE,
+                ResearchStage.DEMONSTRATION,
+                ResearchStage.OPERATIONAL_EXPERIENCE,
             ),
         ),
         ids.TECH_PRECISION_MACHINING: ResearchDefinition(
@@ -206,6 +244,13 @@ def build_research_definitions() -> dict:
                     req.SURFACE_ENV,
                     req._available_requirements("industrial_electrolysis", "cryogenic_storage"),
                 ),
+            ),
+            _experience(ids.EXPERIENCE_TRANSPORT_OPERATIONS, 20.0),
+            (
+                ResearchStage.THEORY,
+                ResearchStage.PROTOTYPE,
+                ResearchStage.DEMONSTRATION,
+                ResearchStage.OPERATIONAL_EXPERIENCE,
             ),
         ),
     }

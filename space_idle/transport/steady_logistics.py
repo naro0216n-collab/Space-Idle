@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import heapq
 
 from ..external_economy import FundsAllocationPlan, FundsRequest
+from ..knowledge import DomainActivity
 from ..resource_claim import ResourceAllocationPlan, ResourceClaim
 from ..resource_demand import ResourceDemand
 from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
@@ -708,7 +709,7 @@ class SteadyLogisticsMixin:
         plan: LogisticsResourcePlan,
         allocations: ResourceAllocationPlan,
         funds: FundsAllocationPlan,
-    ) -> None:
+    ) -> tuple[DomainActivity, ...]:
         """Execute only transport work authorized by ResourceAllocation."""
         operation_factor: dict[EntityId, float] = {}
         for allocation_id, _directional in plan.planned_usage:
@@ -734,6 +735,7 @@ class SteadyLogisticsMixin:
                 cargo_budget[claim.id] = 0.0
 
         used: dict[EntityId, DirectionalCapacity] = {}
+        activities: list[DomainActivity] = []
         requests_by_id = {request.id: request for request in plan.spending_requests}
         for row in plan.dispatches:
             path_factor = min(
@@ -768,6 +770,9 @@ class SteadyLogisticsMixin:
 
             self._cargo_flow_counter += 1
             flow_id = EntityId(f"cargo.flow.{self._cargo_flow_counter}")
+            activities.append(DomainActivity(
+                "transport", amount, "logistics_lane", row.lane_id, lane.source_id
+            ))
             self.cargo_flows[flow_id] = CargoFlowBatch(
                 flow_id,
                 demand.resource_id,
@@ -803,6 +808,7 @@ class SteadyLogisticsMixin:
         for allocation_id, directional in used.items():
             if directional.forward_t_per_day > 1e-12 or directional.reverse_t_per_day > 1e-12:
                 self.transport_allocations[allocation_id].last_operated_day = day
+        return tuple(activities)
 
     def _external_policy_blockers_for_lane(
         self, lane: LogisticsLane, day: int, edges: tuple[_ServiceEdge, ...]

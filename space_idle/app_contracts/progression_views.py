@@ -24,27 +24,59 @@ class ResearchProviderRow:
 
 
 @dataclass(frozen=True)
+class ResearchPrototypeResourceRow:
+    resource_id: str
+    required_t: float
+    staged_t: float
+    requested_t: float
+    allocated_t: float
+    pipeline_t: float
+    unmet_t: float
+
+
+@dataclass(frozen=True)
+class ResearchExperienceRow:
+    category_id: str
+    required: float
+    current: float
+    unmet: float
+
+
+@dataclass(frozen=True)
+class ResearchKnowledgeRow:
+    category_id: str
+    value: float
+
+
+@dataclass(frozen=True)
 class ResearchRow:
     id: str
     display_name: str
     status: str
     paused: bool
+    priority: int
     can_start: bool
     can_pause: bool
     can_resume: bool
-    can_fund_prototype: bool
+    can_set_priority: bool
     research_point_cost: float
+    stage_progress: float
+    stage_required: float
+    rp_requested: float
+    rp_allocated: float
+    rp_remaining: float
+    execution_requested: float
+    execution_allocated: float
     current_blockers: tuple[tuple[str, str], ...]
     start_blockers: tuple[tuple[str, str], ...]
-    prototype_resources: tuple[tuple[str, float], ...]
+    prototype_resources: tuple[ResearchPrototypeResourceRow, ...]
     prototype_location_id: str | None
     prototype_sites: tuple[ResearchSiteOptionRow, ...]
-    demonstration_done_days: int
-    demonstration_required_days: int
     demonstration_location_id: str | None
     demonstration_sites: tuple[ResearchSiteOptionRow, ...]
     demonstration_blockers: tuple[tuple[str, str], ...]
     prototype_blockers: tuple[tuple[str, str], ...]
+    operational_experience: tuple[ResearchExperienceRow, ...]
     prerequisites: tuple[str, ...]
 
 
@@ -55,6 +87,7 @@ class ResearchView:
     generation_points_per_day: float
     over_capacity: bool
     providers: tuple[ResearchProviderRow, ...]
+    knowledge: tuple[ResearchKnowledgeRow, ...]
     items: tuple[ResearchRow, ...]
 
 

@@ -5,6 +5,7 @@ import math
 
 from .facilities import FacilityBook
 from .inventory import InventoryBook
+from .knowledge import DomainActivity
 from .power import PowerSnapshot
 from .service_capacity import (
     ServiceCapacityAllocationPlan, ServiceCapacityRequest, allocate_service_capacity,
@@ -382,7 +383,7 @@ class ExtractionService:
         power: PowerSnapshot,
         day: int = 0,
         service_allocations: ServiceCapacityAllocationPlan | None = None,
-    ) -> None:
+    ) -> tuple[DomainActivity, ...]:
         snapshots = self.snapshots(
             location_id, facilities, inventory, power, day, service_allocations
         )
@@ -398,3 +399,11 @@ class ExtractionService:
             )
             if output > 1e-12:
                 inventory.add(location_id, resource_id, output)
+        return tuple(
+            DomainActivity(
+                "extraction", snapshot.output_t_per_day, "extraction_facility",
+                snapshot.facility_id, location_id
+            )
+            for snapshot in snapshots
+            if snapshot.output_t_per_day > 1e-12
+        )

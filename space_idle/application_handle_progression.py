@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .application_commands import (
-    Command, CommandResult, FundResearchPrototype, PauseResearch, PauseSurvey,
+    Command, CommandResult, SetResearchPriority, PauseResearch, PauseSurvey,
     ResumeResearch, ResumeSurvey, SetResearchDemonstrationSite,
     SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, StartScientificExploration, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
 )
@@ -13,21 +13,21 @@ class ProgressionCommandHandlerMixin:
         sim = self._simulation
         if isinstance(command, (
             StartResearch, PauseResearch, ResumeResearch, SetResearchPrototypeSite,
-            FundResearchPrototype, SetResearchDemonstrationSite,
+            SetResearchPriority, SetResearchDemonstrationSite,
         )):
             if sim.research is None:
                 raise RuntimeError("research is not configured")
             rid = DefinitionId(command.research_id)
             if isinstance(command, StartResearch):
-                sim.research.start(rid, day=sim.day)
+                sim.research.start(rid, day=sim.day, priority=command.priority)
             elif isinstance(command, PauseResearch):
                 sim.research.pause(rid)
             elif isinstance(command, ResumeResearch):
                 sim.research.resume(rid)
             elif isinstance(command, SetResearchPrototypeSite):
                 sim.research.set_prototype_site(rid, self._require_location(command.location_id), sim.day)
-            elif isinstance(command, FundResearchPrototype):
-                sim.research.fund_prototype(rid, sim.day)
+            elif isinstance(command, SetResearchPriority):
+                sim.research.set_priority(rid, command.priority)
             else:
                 sim.research.set_demonstration_site(rid, self._require_location(command.location_id), sim.day)
             return CommandResult()

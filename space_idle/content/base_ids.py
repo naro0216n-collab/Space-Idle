@@ -124,6 +124,11 @@ TECH_HEAVY_EQUIPMENT_ASSEMBLY = DefinitionId("base.tech.modular_heavy_equipment_
 TECH_INDUSTRIAL_ELECTROLYSIS = DefinitionId("base.tech.industrial_water_electrolysis")
 TECH_PROPELLANT_HANDLING = DefinitionId("base.tech.propellant_handling")
 
+# Operational Experience categories are Content-defined Knowledge dimensions.
+EXPERIENCE_TRANSPORT_OPERATIONS = "base.experience.transport_operations"
+EXPERIENCE_EXTRACTION_OPERATIONS = "base.experience.extraction_operations"
+EXPERIENCE_MANUFACTURING_OPERATIONS = "base.experience.manufacturing_operations"
+
 # Transport assets are reusable physical assets. Route eligibility is derived
 # from performance and endpoint environment, not purpose/category labels.
 REUSABLE_LAUNCH_VEHICLE = DefinitionId("base.vehicle.reusable_launch_vehicle")

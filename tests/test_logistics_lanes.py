@@ -240,6 +240,12 @@ def test_selected_research_prototype_site_declares_material_demand_until_stock_a
     definition = sim.research.definitions[TECH_ORBITAL_OPERATIONS]
     sim.research.stored_points = definition.research_point_cost
     sim.research.start(TECH_ORBITAL_OPERATIONS, day=sim.day)
+    for _ in range(2000):
+        state = sim.research.active[TECH_ORBITAL_OPERATIONS]
+        if state.stage.value == "prototype":
+            break
+        sim.advance_days(1)
+    assert sim.research.active[TECH_ORBITAL_OPERATIONS].stage.value == "prototype"
     sim.research.set_prototype_site(TECH_ORBITAL_OPERATIONS, EARTH, sim.day)
     available = sim.inventory.available(EARTH, PRECISION_ELECTRONICS)
     if available > 0:
@@ -250,8 +256,12 @@ def test_selected_research_prototype_site_declares_material_demand_until_stock_a
     )
     assert demand.owner_kind == "research"
     assert demand.destination_id == EARTH
-    with pytest.raises(ValueError, match="prototype resource shortfall"):
-        sim.research.fund_prototype(TECH_ORBITAL_OPERATIONS, sim.day)
+    claim = next(
+        item for item in sim.research.resource_claims(sim.day)
+        if item.resource_id == PRECISION_ELECTRONICS
+    )
+    assert claim.requested_amount > 0
+    assert not hasattr(sim.research, "fund_prototype")
 
 
 def test_available_capacity_tracks_tick_start_propellant_without_changing_required_units():

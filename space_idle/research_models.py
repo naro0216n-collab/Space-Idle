@@ -7,6 +7,13 @@ from .shared import DefinitionId, SpatialNodeId
 from .site import SiteRequirements
 
 
+class ResearchStage(str, Enum):
+    THEORY = "theory"
+    PROTOTYPE = "prototype"
+    DEMONSTRATION = "demonstration"
+    OPERATIONAL_EXPERIENCE = "operational_experience"
+
+
 @dataclass(frozen=True)
 class ResearchPrototypeSpec:
     resources: dict[DefinitionId, float]
@@ -28,6 +35,19 @@ class ResearchDemonstrationSpec:
 
 
 @dataclass(frozen=True)
+class ResearchOperationalExperienceSpec:
+    requirements: dict[str, float]
+
+    def __post_init__(self) -> None:
+        if not self.requirements:
+            raise ValueError("operational experience stage must define requirements")
+        if any(not category for category in self.requirements):
+            raise ValueError("operational experience category must not be empty")
+        if any(amount < 0 for amount in self.requirements.values()):
+            raise ValueError("operational experience requirements must be non-negative")
+
+
+@dataclass(frozen=True)
 class ResearchDefinition:
     id: DefinitionId
     display_name: str
@@ -35,10 +55,40 @@ class ResearchDefinition:
     prerequisites: frozenset[DefinitionId] = frozenset()
     prototype: ResearchPrototypeSpec | None = None
     demonstration: ResearchDemonstrationSpec | None = None
+    operational_experience: ResearchOperationalExperienceSpec | None = None
+    stages: tuple[ResearchStage, ...] = ()
 
     def __post_init__(self) -> None:
         if self.research_point_cost < 0:
             raise ValueError("research point cost must be non-negative")
+        if not self.stages:
+            inferred = tuple(
+                stage
+                for stage, enabled in (
+                    (ResearchStage.THEORY, self.research_point_cost > 0),
+                    (ResearchStage.PROTOTYPE, self.prototype is not None),
+                    (ResearchStage.DEMONSTRATION, self.demonstration is not None),
+                    (ResearchStage.OPERATIONAL_EXPERIENCE, self.operational_experience is not None),
+                )
+                if enabled
+            )
+            if not inferred:
+                raise ValueError("research definition must define at least one stage")
+            object.__setattr__(self, "stages", inferred)
+        if len(set(self.stages)) != len(self.stages):
+            raise ValueError("research definition cannot repeat a stage")
+        if ResearchStage.THEORY in self.stages and self.research_point_cost <= 0:
+            raise ValueError("theory stage requires positive research point cost")
+        if ResearchStage.THEORY not in self.stages and self.research_point_cost > 0:
+            raise ValueError("research point cost requires a theory stage")
+        if (ResearchStage.PROTOTYPE in self.stages) != (self.prototype is not None):
+            raise ValueError("prototype stage and prototype definition must agree")
+        if (ResearchStage.DEMONSTRATION in self.stages) != (self.demonstration is not None):
+            raise ValueError("demonstration stage and demonstration definition must agree")
+        if (ResearchStage.OPERATIONAL_EXPERIENCE in self.stages) != (
+            self.operational_experience is not None
+        ):
+            raise ValueError("operational experience stage and definition must agree")
 
 
 @dataclass(frozen=True)
@@ -80,17 +130,12 @@ class ResearchProviderSpec:
         raise ValueError(f"research provider does not define level {level}")
 
 
-class ResearchPhase(str, Enum):
-    PROTOTYPE = "prototype"
-    DEMONSTRATION = "demonstration"
-    COMPLETE = "complete"
-
-
 @dataclass
 class ResearchState:
     definition_id: DefinitionId
-    status: ResearchPhase
-    demonstration_done_days: int = 0
+    stage: ResearchStage
+    stage_progress: float = 0.0
+    priority: int = 50
     paused: bool = False
     prototype_location_id: SpatialNodeId | None = None
     demonstration_location_id: SpatialNodeId | None = None

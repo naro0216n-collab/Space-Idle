@@ -11,6 +11,7 @@ from .facilities import FacilityBook
 from .founding import LocationFoundingService
 from .industry import IndustryService
 from .inventory import InventoryBook
+from .knowledge import DomainActivity
 from .logistics import LogisticsService
 from .maintenance import FacilityMaintenanceService
 from .power import PowerService, PowerSnapshot
@@ -269,7 +270,9 @@ class Simulation:
         if self.survey is not None:
             requests.extend(self.survey.service_requests(self.day))
         if self.research is not None:
-            requests.extend(self.research.service_requests(self.day))
+            requests.extend(
+                self.research.service_requests(self.day, power_by_location)
+            )
         for location_id in sorted(self._active_locations(), key=str):
             requests.extend(
                 self.industry.service_requests(location_id, self.facilities, self.day)
@@ -562,12 +565,13 @@ class Simulation:
         self,
         snapshot: TickPhysicalSnapshot,
         allocations: TickAllocations,
-    ) -> None:
+    ) -> tuple[DomainActivity, ...]:
+        activities: list[DomainActivity] = []
         active_locations = set(self._active_locations())
         for location_id in snapshot.ordered_locations:
             if location_id not in active_locations:
                 continue
-            self.industry.advance_day(
+            activities.extend(self.industry.advance_day(
                 location_id,
                 self.facilities,
                 self.inventory,
@@ -575,16 +579,16 @@ class Simulation:
                 self.day,
                 allocations.resources,
                 allocations.services,
-            )
+            ))
             if self.extraction is not None:
-                self.extraction.advance_day(
+                activities.extend(self.extraction.advance_day(
                     location_id,
                     self.facilities,
                     self.inventory,
                     snapshot.power_by_location[location_id],
                     self.day,
                     allocations.services,
-                )
+                ))
 
         if self.research is not None:
             self.research.advance_day(
@@ -621,17 +625,18 @@ class Simulation:
                 self.day,
                 snapshot.power_by_location,
             )
+        return tuple(activities)
 
     def _progress_tick_movement(
         self,
         plan: TickPlan,
         allocations: TickAllocations,
-    ) -> None:
+    ) -> tuple[DomainActivity, ...]:
         # Movement is deliberately after every Domain execution.  It may spend
         # only amounts authorized from the start-of-tick allocation and cannot
         # admit arriving Cargo to Inventory until the next boundary.
         self.logistics.advance_fleet_relocations(allocations.resources, self.day)
-        self.logistics.advance_capacity_logistics(
+        return self.logistics.advance_capacity_logistics(
             self.day,
             allocations.logistics,
             allocations.resources,
@@ -660,6 +665,10 @@ class Simulation:
             intents = self._generate_tick_intents(snapshot)
             plan = self._plan_tick(intents)
             allocations = self._allocate_tick(snapshot, intents, plan)
-            self._execute_tick_domains(snapshot, allocations)
-            self._progress_tick_movement(plan, allocations)
+            activities = self._execute_tick_domains(snapshot, allocations)
+            movement_activities = self._progress_tick_movement(plan, allocations)
+            if self.research is not None:
+                self.research.knowledge_state.record(
+                    activities + movement_activities, self.research.experience_rules
+                )
             self._settle_tick_state_transitions(snapshot)

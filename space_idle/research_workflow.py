@@ -6,38 +6,116 @@ from .resource_demand import ResourceDemand
 from .service_capacity import ServiceCapacityRequest
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .site import SiteRequirementFailure, evaluate_site_requirements
-from .research_models import ResearchPhase, ResearchState
+from .research_models import ResearchStage, ResearchState
 
 
 class ResearchWorkflowMixin:
     RESEARCH_EXECUTION_SERVICE = "research_execution"
 
     @staticmethod
-    def _demonstration_service_request_id(research_id: DefinitionId) -> EntityId:
-        return EntityId(f"service.research.demonstration:{research_id}")
+    def _project_owner_id(research_id: DefinitionId) -> EntityId:
+        return EntityId(f"research:{research_id}")
 
-    def service_requests(self, day: int = 0) -> tuple[ServiceCapacityRequest, ...]:
-        requests: list[ServiceCapacityRequest] = []
-        for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
-            if (
-                state.paused
-                or state.status is not ResearchPhase.DEMONSTRATION
-                or state.demonstration_location_id is None
-            ):
+    @staticmethod
+    def _stage_service_request_id(
+        research_id: DefinitionId,
+        stage: ResearchStage,
+        service_type: str,
+        location_id: SpatialNodeId,
+    ) -> EntityId:
+        return EntityId(
+            f"service.research:{stage.value}:{research_id}:{location_id}:{service_type}"
+        )
+
+    def _research_execution_supply_weights(
+        self,
+        day: int,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None,
+    ) -> tuple[tuple[SpatialNodeId, float], ...]:
+        locations = sorted(
+            self.facilities.environment.graph.operational_node_ids(), key=str
+        )
+        nominal: list[tuple[SpatialNodeId, float]] = []
+        enabled: list[tuple[SpatialNodeId, float]] = []
+        for location_id in locations:
+            nominal_rate = self.facilities.nominal_service_capacity_at(
+                location_id, self.RESEARCH_EXECUTION_SERVICE, day
+            )
+            if nominal_rate <= 1e-12:
                 continue
-            requests.append(ServiceCapacityRequest(
-                self._demonstration_service_request_id(research_id),
-                state.demonstration_location_id,
-                self.RESEARCH_EXECUTION_SERVICE,
-                1.0,
-                50,
-                "research_project",
-                EntityId(f"research:{research_id}"),
-                "demonstration",
-                minimum_rate=1.0,
-                atomic=True,
-            ))
+            nominal.append((location_id, nominal_rate))
+            snapshot = None if power_by_location is None else power_by_location.get(location_id)
+            if snapshot is None:
+                snapshot = self.power.snapshot(location_id, self.facilities, day)
+            enabled_rate = self.facilities.enabled_service_capacity_at(
+                location_id, self.RESEARCH_EXECUTION_SERVICE, snapshot, day
+            )
+            if enabled_rate > 1e-12:
+                enabled.append((location_id, enabled_rate))
+        return tuple(enabled or nominal)
+
+    def service_requests(
+        self,
+        day: int = 0,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+    ) -> tuple[ServiceCapacityRequest, ...]:
+        requests: list[ServiceCapacityRequest] = []
+        theory_supply = self._research_execution_supply_weights(day, power_by_location)
+        theory_supply_total = sum(rate for _location_id, rate in theory_supply)
+        for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
+            if state.paused:
+                continue
+            definition = self.definitions[research_id]
+            if state.stage is ResearchStage.THEORY:
+                remaining = max(0.0, definition.research_point_cost - state.stage_progress)
+                if remaining <= 1e-12 or theory_supply_total <= 1e-12:
+                    continue
+                for location_id, weight in theory_supply:
+                    requested = remaining * weight / theory_supply_total
+                    requests.append(ServiceCapacityRequest(
+                        self._stage_service_request_id(
+                            research_id,
+                            ResearchStage.THEORY,
+                            self.RESEARCH_EXECUTION_SERVICE,
+                            location_id,
+                        ),
+                        location_id,
+                        self.RESEARCH_EXECUTION_SERVICE,
+                        requested,
+                        state.priority,
+                        "research_project",
+                        self._project_owner_id(research_id),
+                        ResearchStage.THEORY.value,
+                    ))
+                continue
+
+            if state.stage is ResearchStage.PROTOTYPE:
+                location_id = state.prototype_location_id
+                spec = definition.prototype
+            elif state.stage is ResearchStage.DEMONSTRATION:
+                location_id = state.demonstration_location_id
+                spec = definition.demonstration
+            else:
+                continue
+            if location_id is None or spec is None:
+                continue
+            for requirement in spec.site_requirements.service_capacity_requirements:
+                requests.append(ServiceCapacityRequest(
+                    self._stage_service_request_id(
+                        research_id, state.stage, requirement.service_type, location_id
+                    ),
+                    location_id,
+                    requirement.service_type,
+                    requirement.minimum_rate,
+                    state.priority,
+                    "research_project",
+                    self._project_owner_id(research_id),
+                    state.stage.value,
+                    minimum_rate=requirement.minimum_rate,
+                    atomic=True,
+                ))
         return tuple(requests)
+
     def start_blockers(
         self,
         research_id: DefinitionId,
@@ -54,18 +132,6 @@ class ResearchWorkflowMixin:
         missing = sorted(definition.prerequisites - self.completed, key=str)
         if missing:
             blockers.append(("prerequisite", ",".join(str(item) for item in missing)))
-
-        capacity = self.storage_capacity(power_by_location, day)
-        if capacity + 1e-9 < definition.research_point_cost:
-            blockers.append((
-                "rp_storage_capacity",
-                f"Research Point貯蔵容量不足: {capacity:g}/{definition.research_point_cost:g}",
-            ))
-        if self.stored_points + 1e-9 < definition.research_point_cost:
-            blockers.append((
-                "research_points",
-                f"Research Point不足: {self.stored_points:g}/{definition.research_point_cost:g}",
-            ))
         return tuple(blockers)
 
     def can_start(
@@ -75,20 +141,25 @@ class ResearchWorkflowMixin:
         day: int = 0,
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> bool:
-        return not self.start_blockers(research_id, day=day, power_by_location=power_by_location)
+        return not self.start_blockers(
+            research_id, day=day, power_by_location=power_by_location
+        )
 
-    def start(self, research_id: DefinitionId, *, day: int = 0) -> None:
+    def start(
+        self, research_id: DefinitionId, *, day: int = 0, priority: int = 50
+    ) -> None:
         blockers = self.start_blockers(research_id, day=day)
         if blockers:
             raise ValueError("; ".join(detail for _code, detail in blockers))
         definition = self.definitions[research_id]
-        self.stored_points = max(0.0, self.stored_points - definition.research_point_cost)
-        if definition.prototype is not None:
-            self.active[research_id] = ResearchState(research_id, ResearchPhase.PROTOTYPE)
-        elif definition.demonstration is not None:
-            self.active[research_id] = ResearchState(research_id, ResearchPhase.DEMONSTRATION)
-        else:
-            self.completed.add(research_id)
+        self.active[research_id] = ResearchState(
+            research_id, definition.stages[0], priority=priority
+        )
+
+    def set_priority(self, research_id: DefinitionId, priority: int) -> None:
+        if research_id not in self.active:
+            raise ValueError("研究は進行中ではありません")
+        self.active[research_id].priority = int(priority)
 
     def pause_blockers(self, research_id: DefinitionId) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
@@ -133,11 +204,10 @@ class ResearchWorkflowMixin:
     ) -> tuple[SiteRequirementFailure, ...]:
         if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
-        definition = self.definitions[research_id]
-        prototype = definition.prototype
+        prototype = self.definitions[research_id].prototype
         if prototype is None:
-            raise ValueError("research has no prototype phase")
-        snapshot = power if power is not None else self.power.snapshot(location_id, self.facilities, day)
+            raise ValueError("research has no prototype stage")
+        snapshot = power or self.power.snapshot(location_id, self.facilities, day)
         return evaluate_site_requirements(
             prototype.site_requirements,
             location_id,
@@ -148,7 +218,7 @@ class ResearchWorkflowMixin:
         )
 
     @staticmethod
-    def _prototype_demand_id(
+    def prototype_demand_id(
         research_id: DefinitionId, resource_id: DefinitionId
     ) -> EntityId:
         return EntityId(f"demand.research:{research_id}:{resource_id}")
@@ -157,20 +227,18 @@ class ResearchWorkflowMixin:
     def _prototype_staging_owner_id(research_id: DefinitionId) -> EntityId:
         return EntityId(f"research.prototype:{research_id}")
 
-    def _prototype_staged_t(
+    def prototype_staged_t(
         self,
         research_id: DefinitionId,
         location_id: SpatialNodeId,
         resource_id: DefinitionId,
     ) -> float:
         return self.inventory.staged_for(
-            self._prototype_staging_owner_id(research_id),
-            location_id,
-            resource_id,
+            self._prototype_staging_owner_id(research_id), location_id, resource_id
         )
 
     @staticmethod
-    def _prototype_claim_id(
+    def prototype_claim_id(
         research_id: DefinitionId, resource_id: DefinitionId
     ) -> EntityId:
         return EntityId(f"claim.research:{research_id}:{resource_id}")
@@ -179,7 +247,7 @@ class ResearchWorkflowMixin:
         self, state: ResearchState, allocations: ResourceAllocationPlan
     ) -> None:
         if (
-            state.status is not ResearchPhase.PROTOTYPE
+            state.stage is not ResearchStage.PROTOTYPE
             or state.paused
             or state.prototype_location_id is None
         ):
@@ -191,13 +259,13 @@ class ResearchWorkflowMixin:
         location_id = state.prototype_location_id
         staging_owner = self._prototype_staging_owner_id(research_id)
         for resource_id, required_t in prototype.resources.items():
-            staged = self._prototype_staged_t(research_id, location_id, resource_id)
+            staged = self.prototype_staged_t(research_id, location_id, resource_id)
             missing = max(0.0, required_t - staged)
             if missing <= 1e-12:
                 continue
             try:
                 allocated = allocations.allocated(
-                    self._prototype_claim_id(research_id, resource_id)
+                    self.prototype_claim_id(research_id, resource_id)
                 )
             except KeyError:
                 allocated = 0.0
@@ -215,9 +283,23 @@ class ResearchWorkflowMixin:
             return
         staging_owner = self._prototype_staging_owner_id(research_id)
         for resource_id in prototype.resources:
-            staged = self._prototype_staged_t(research_id, location_id, resource_id)
+            staged = self.prototype_staged_t(research_id, location_id, resource_id)
             if staged > 1e-12:
                 self.inventory.unstage_to_stock(
+                    staging_owner, location_id, resource_id, staged
+                )
+
+    def _consume_prototype_staging(self, research_id: DefinitionId) -> None:
+        state = self.active[research_id]
+        location_id = state.prototype_location_id
+        prototype = self.definitions[research_id].prototype
+        if location_id is None or prototype is None:
+            return
+        staging_owner = self._prototype_staging_owner_id(research_id)
+        for resource_id in prototype.resources:
+            staged = self.prototype_staged_t(research_id, location_id, resource_id)
+            if staged > 1e-12:
+                self.inventory.release_storage_occupancy(
                     staging_owner, location_id, resource_id, staged
                 )
 
@@ -234,15 +316,15 @@ class ResearchWorkflowMixin:
                 + "; ".join(detail for _code, detail in blockers)
             )
         state = self.active[research_id]
-        previous_location_id = state.prototype_location_id
-        if previous_location_id is not None and previous_location_id != location_id:
-            self._restore_prototype_staging(research_id, previous_location_id)
+        previous = state.prototype_location_id
+        if previous is not None and previous != location_id:
+            self._restore_prototype_staging(research_id, previous)
         state.prototype_location_id = location_id
 
     def resource_demands(self, day: int = 0) -> tuple[ResourceDemand, ...]:
         demands: list[ResourceDemand] = []
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
-            if state.paused or state.status != ResearchPhase.PROTOTYPE:
+            if state.paused or state.stage is not ResearchStage.PROTOTYPE:
                 continue
             location_id = state.prototype_location_id
             if location_id is None:
@@ -256,27 +338,25 @@ class ResearchWorkflowMixin:
                 remaining = max(
                     0.0,
                     required_t
-                    - self._prototype_staged_t(
-                        research_id, location_id, resource_id
-                    ),
+                    - self.prototype_staged_t(research_id, location_id, resource_id),
                 )
                 if remaining <= 1e-9:
                     continue
                 demands.append(ResourceDemand(
-                    self._prototype_demand_id(research_id, resource_id),
+                    self.prototype_demand_id(research_id, resource_id),
                     "research",
-                    EntityId(f"research:{research_id}"),
+                    self._project_owner_id(research_id),
                     location_id,
                     resource_id,
                     remaining,
-                    60,
+                    state.priority,
                 ))
         return tuple(demands)
 
     def resource_claims(self, day: int = 0) -> tuple[ResourceClaim, ...]:
         claims: list[ResourceClaim] = []
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
-            if state.paused or state.status is not ResearchPhase.PROTOTYPE:
+            if state.paused or state.stage is not ResearchStage.PROTOTYPE:
                 continue
             location_id = state.prototype_location_id
             if location_id is None:
@@ -284,51 +364,25 @@ class ResearchWorkflowMixin:
             prototype = self.definitions[research_id].prototype
             if prototype is None:
                 raise RuntimeError(f"prototype state has no prototype definition: {research_id}")
-            for resource_id, required_t in sorted(prototype.resources.items(), key=lambda row: str(row[0])):
-                staged = self._prototype_staged_t(research_id, location_id, resource_id)
+            for resource_id, required_t in sorted(
+                prototype.resources.items(), key=lambda row: str(row[0])
+            ):
+                staged = self.prototype_staged_t(research_id, location_id, resource_id)
                 remaining = max(0.0, required_t - staged)
                 if remaining <= 1e-9:
                     continue
                 claims.append(ResourceClaim(
-                    self._prototype_claim_id(research_id, resource_id),
+                    self.prototype_claim_id(research_id, resource_id),
                     location_id,
                     resource_id,
                     remaining,
-                    60,
+                    state.priority,
                     "research",
-                    EntityId(f"research:{research_id}"),
+                    self._project_owner_id(research_id),
                     "prototype",
-                    demand_id=self._prototype_demand_id(research_id, resource_id),
+                    demand_id=self.prototype_demand_id(research_id, resource_id),
                 ))
         return tuple(claims)
-
-    def fund_prototype(self, research_id: DefinitionId, day: int = 0) -> None:
-        state = self.active[research_id]
-        blockers = self.prototype_blockers(research_id, day)
-        if blockers:
-            raise ValueError("; ".join(detail for _code, detail in blockers))
-        definition = self.definitions[research_id]
-        prototype = definition.prototype
-        if prototype is None or state.prototype_location_id is None:
-            raise RuntimeError(f"invalid prototype state: {research_id}")
-        location_id = state.prototype_location_id
-        staging_owner = self._prototype_staging_owner_id(research_id)
-        for resource_id, amount in prototype.resources.items():
-            staged = self._prototype_staged_t(research_id, location_id, resource_id)
-            if staged + 1e-9 < amount:
-                raise RuntimeError(
-                    f"prototype resources are not fully staged: {research_id}/{resource_id}"
-                )
-            if staged > 1e-12:
-                self.inventory.release_storage_occupancy(
-                    staging_owner, location_id, resource_id, staged
-                )
-        if definition.demonstration is not None:
-            state.status = ResearchPhase.DEMONSTRATION
-            if not self.demonstration_failures(research_id, location_id, day):
-                state.demonstration_location_id = location_id
-        else:
-            self._complete(research_id)
 
     def set_demonstration_site(
         self,
@@ -337,17 +391,15 @@ class ResearchWorkflowMixin:
         day: int = 0,
     ) -> None:
         blockers = self.demonstration_site_blockers(research_id, location_id, day)
-        structural_blockers = tuple(
-            blocker for blocker in blockers if blocker[0] != "capability:active"
-        )
-        if structural_blockers:
+        structural = tuple(blocker for blocker in blockers if blocker[0] != "capability:active")
+        if structural:
             raise ValueError(
                 "demonstration site requirements not met: "
-                + "; ".join(detail for _code, detail in structural_blockers)
+                + "; ".join(detail for _code, detail in structural)
             )
         state = self.active[research_id]
         state.demonstration_location_id = location_id
-        state.demonstration_done_days = 0
+        state.stage_progress = 0.0
 
     def demonstration_failures(
         self,
@@ -356,11 +408,10 @@ class ResearchWorkflowMixin:
         day: int = 0,
         power: PowerSnapshot | None = None,
     ) -> tuple[SiteRequirementFailure, ...]:
-        definition = self.definitions[research_id]
-        demonstration = definition.demonstration
+        demonstration = self.definitions[research_id].demonstration
         if demonstration is None:
-            raise ValueError("research has no demonstration phase")
-        snapshot = power if power is not None else self.power.snapshot(location_id, self.facilities, day)
+            raise ValueError("research has no demonstration stage")
+        snapshot = power or self.power.snapshot(location_id, self.facilities, day)
         return evaluate_site_requirements(
             demonstration.site_requirements,
             location_id,
@@ -371,16 +422,12 @@ class ResearchWorkflowMixin:
         )
 
     def prototype_site_blockers(
-        self,
-        research_id: DefinitionId,
-        location_id: SpatialNodeId,
-        day: int = 0,
+        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0
     ) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
+        if state is None or state.stage is not ResearchStage.PROTOTYPE:
+            return (("prototype_stage", "研究は試作段階ではありません"),)
         blockers: list[tuple[str, str]] = []
-        if state is None or state.status != ResearchPhase.PROTOTYPE:
-            blockers.append(("prototype_phase", "研究は試作段階ではありません"))
-            return tuple(blockers)
         if state.paused:
             blockers.append(("manual_pause", "研究が手動停止中"))
         blockers.extend(
@@ -390,24 +437,17 @@ class ResearchWorkflowMixin:
         return tuple(blockers)
 
     def can_select_prototype_site(
-        self,
-        research_id: DefinitionId,
-        location_id: SpatialNodeId,
-        day: int = 0,
+        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0
     ) -> bool:
         return not self.prototype_site_blockers(research_id, location_id, day)
 
     def demonstration_site_blockers(
-        self,
-        research_id: DefinitionId,
-        location_id: SpatialNodeId,
-        day: int = 0,
+        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0
     ) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
+        if state is None or state.stage is not ResearchStage.DEMONSTRATION:
+            return (("demonstration_stage", "研究は実証段階ではありません"),)
         blockers: list[tuple[str, str]] = []
-        if state is None or state.status != ResearchPhase.DEMONSTRATION:
-            blockers.append(("demonstration_phase", "研究は実証段階ではありません"))
-            return tuple(blockers)
         if state.paused:
             blockers.append(("manual_pause", "研究が手動停止中"))
         blockers.extend(
@@ -417,25 +457,22 @@ class ResearchWorkflowMixin:
         return tuple(blockers)
 
     def can_select_demonstration_site(
-        self,
-        research_id: DefinitionId,
-        location_id: SpatialNodeId,
-        day: int = 0,
+        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0
     ) -> bool:
         return not any(
             code != "capability:active"
-            for code, _detail in self.demonstration_site_blockers(research_id, location_id, day)
+            for code, _detail in self.demonstration_site_blockers(
+                research_id, location_id, day
+            )
         )
 
     def prototype_blockers(
-        self,
-        research_id: DefinitionId,
-        day: int = 0,
+        self, research_id: DefinitionId, day: int = 0
     ) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
+        if state is None or state.stage is not ResearchStage.PROTOTYPE:
+            return (("prototype_stage", "研究は試作段階ではありません"),)
         blockers: list[tuple[str, str]] = []
-        if state is None or state.status != ResearchPhase.PROTOTYPE:
-            return (("prototype_phase", "研究は試作段階ではありません"),)
         if state.paused:
             blockers.append(("manual_pause", "研究が手動停止中"))
         location_id = state.prototype_location_id
@@ -449,30 +486,24 @@ class ResearchWorkflowMixin:
         prototype = self.definitions[research_id].prototype
         if prototype is None:
             raise RuntimeError(f"prototype state has no prototype definition: {research_id}")
-        for resource_id, required in sorted(prototype.resources.items(), key=lambda row: str(row[0])):
-            demand_id = self._prototype_demand_id(research_id, resource_id)
-            allocated = self._prototype_staged_t(
-                research_id, location_id, resource_id
-            )
-            if allocated + 1e-9 < required:
+        for resource_id, required in sorted(
+            prototype.resources.items(), key=lambda row: str(row[0])
+        ):
+            staged = self.prototype_staged_t(research_id, location_id, resource_id)
+            if staged + 1e-9 < required:
                 blockers.append((
                     "prototype_resource",
-                    f"prototype resource shortfall: {resource_id}: {allocated:g}/{required:g} t",
+                    f"prototype resource shortfall: {resource_id}: {staged:g}/{required:g} t",
                 ))
         return tuple(blockers)
 
-    def can_fund_prototype(self, research_id: DefinitionId, day: int = 0) -> bool:
-        return not self.prototype_blockers(research_id, day)
-
     def demonstration_blockers(
-        self,
-        research_id: DefinitionId,
-        day: int = 0,
+        self, research_id: DefinitionId, day: int = 0
     ) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
+        if state is None or state.stage is not ResearchStage.DEMONSTRATION:
+            return (("demonstration_stage", "研究は実証段階ではありません"),)
         blockers: list[tuple[str, str]] = []
-        if state is None or state.status != ResearchPhase.DEMONSTRATION:
-            return (("demonstration_phase", "研究は実証段階ではありません"),)
         if state.paused:
             blockers.append(("manual_pause", "研究が手動停止中"))
         location_id = state.demonstration_location_id
@@ -484,6 +515,46 @@ class ResearchWorkflowMixin:
             for failure in self.demonstration_failures(research_id, location_id, day)
         )
         return tuple(blockers)
+
+    def operational_experience_blockers(
+        self, research_id: DefinitionId
+    ) -> tuple[tuple[str, str], ...]:
+        state = self.active.get(research_id)
+        if state is None or state.stage is not ResearchStage.OPERATIONAL_EXPERIENCE:
+            return (("operational_experience_stage", "研究は運用経験段階ではありません"),)
+        blockers: list[tuple[str, str]] = []
+        if state.paused:
+            blockers.append(("manual_pause", "研究が手動停止中"))
+        spec = self.definitions[research_id].operational_experience
+        if spec is None:
+            raise RuntimeError(f"operational experience state has no definition: {research_id}")
+        for category, required in sorted(spec.requirements.items()):
+            current = self.knowledge_state.value(category)
+            if current + 1e-9 < required:
+                blockers.append((
+                    "operational_experience",
+                    f"{category}: {current:g}/{required:g}",
+                ))
+        return tuple(blockers)
+
+    def theory_remaining(self, research_id: DefinitionId) -> float:
+        state = self.active.get(research_id)
+        definition = self.definitions[research_id]
+        if state is None:
+            return 0.0 if research_id in self.completed else definition.research_point_cost
+        stage_index = definition.stages.index(state.stage)
+        theory_index = (
+            definition.stages.index(ResearchStage.THEORY)
+            if ResearchStage.THEORY in definition.stages
+            else None
+        )
+        if theory_index is None:
+            return 0.0
+        if stage_index > theory_index:
+            return 0.0
+        if state.stage is ResearchStage.THEORY:
+            return max(0.0, definition.research_point_cost - state.stage_progress)
+        return definition.research_point_cost
 
     def current_blockers(
         self,
@@ -499,14 +570,75 @@ class ResearchWorkflowMixin:
             return self.start_blockers(
                 research_id, day=day, power_by_location=power_by_location
             )
-        if state.status == ResearchPhase.PROTOTYPE:
+        if state.paused:
+            return (("manual_pause", "研究が手動停止中"),)
+        if state.stage is ResearchStage.THEORY:
+            blockers: list[tuple[str, str]] = []
+            if self.stored_points <= 1e-12:
+                blockers.append(("research_points", "Research Point不足"))
+            if not self._research_execution_supply_weights(day, power_by_location):
+                blockers.append(("research_execution", "Research execution能力なし"))
+            return tuple(blockers)
+        if state.stage is ResearchStage.PROTOTYPE:
             return self.prototype_blockers(research_id, day)
-        if state.status == ResearchPhase.DEMONSTRATION:
+        if state.stage is ResearchStage.DEMONSTRATION:
             return self.demonstration_blockers(research_id, day)
+        if state.stage is ResearchStage.OPERATIONAL_EXPERIENCE:
+            return self.operational_experience_blockers(research_id)
         return ()
+
+
+    def allocation_blockers(
+        self,
+        research_id: DefinitionId,
+        service_allocations,
+        point_requests: dict[DefinitionId, float] | None = None,
+        point_allocations: dict[DefinitionId, float] | None = None,
+    ) -> tuple[tuple[str, str], ...]:
+        state = self.active.get(research_id)
+        if state is None or state.paused:
+            return ()
+        blockers: list[tuple[str, str]] = []
+        owner_id = self._project_owner_id(research_id)
+        stage_requests = tuple(
+            request
+            for request in service_allocations.requests
+            if request.owner_kind == "research_project"
+            and request.owner_id == owner_id
+            and request.purpose == state.stage.value
+        )
+        allocations_by_id = {row.request_id: row.allocated_rate for row in service_allocations.allocations}
+        for request in stage_requests:
+            allocated = allocations_by_id.get(request.id, 0.0)
+            if allocated + 1e-9 < request.requested_rate:
+                blockers.append((
+                    "service_capacity:allocation",
+                    f"{request.service_type}: {allocated:g}/{request.requested_rate:g}",
+                ))
+        if state.stage is ResearchStage.THEORY:
+            requested = (point_requests or {}).get(research_id, 0.0)
+            allocated = (point_allocations or {}).get(research_id, 0.0)
+            if requested > 1e-12 and allocated + 1e-9 < requested:
+                blockers.append((
+                    "research_points:allocation",
+                    f"Research Point: {allocated:g}/{requested:g}",
+                ))
+        return tuple(blockers)
 
     def _complete(self, research_id: DefinitionId) -> None:
         self.completed.add(research_id)
-        state = self.active[research_id]
-        state.status = ResearchPhase.COMPLETE
         self.active.pop(research_id, None)
+
+    def _advance_stage(self, research_id: DefinitionId) -> None:
+        state = self.active[research_id]
+        definition = self.definitions[research_id]
+        index = definition.stages.index(state.stage)
+        if state.stage is ResearchStage.PROTOTYPE:
+            self._consume_prototype_staging(research_id)
+        if index + 1 >= len(definition.stages):
+            self._complete(research_id)
+            return
+        state.stage = definition.stages[index + 1]
+        state.stage_progress = 0.0
+        if state.stage is ResearchStage.DEMONSTRATION:
+            state.demonstration_location_id = None

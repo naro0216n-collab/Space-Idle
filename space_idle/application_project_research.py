@@ -1,7 +1,15 @@
 from __future__ import annotations
 
-from .application_views import ResearchProviderRow, ResearchRow, ResearchView
+from .application_views import (
+    ResearchExperienceRow,
+    ResearchKnowledgeRow,
+    ResearchPrototypeResourceRow,
+    ResearchProviderRow,
+    ResearchRow,
+    ResearchView,
+)
 from .app_contracts.progression_views import ResearchSiteOptionRow
+from .research_models import ResearchStage
 
 
 class ResearchProgressionProjectorMixin:
@@ -66,7 +74,7 @@ class ResearchProgressionProjectorMixin:
     def _research_view(self) -> ResearchView:
         sim = self._simulation
         if sim.research is None:
-            return ResearchView(0.0, 0.0, 0.0, False, (), ())
+            return ResearchView(0.0, 0.0, 0.0, False, (), (), ())
         power_by_location = {
             node.id: sim.power.snapshot(node.id, sim.facilities, sim.day)
             for node in sim.graph.operational_nodes()
@@ -75,6 +83,18 @@ class ResearchProgressionProjectorMixin:
         generation = sim.research.generation_rate(power_by_location, sim.day)
         capacity = sim.research.storage_capacity(power_by_location, sim.day)
         providers = self._research_provider_rows(power_by_location)
+        service_allocations = sim.service_capacity_allocation_projection(power_by_location)
+        resource_allocations = sim.resource_allocation_projection(power_by_location)
+        point_requests, point_allocations = sim.research.point_allocation_projection(
+            service_allocations
+        )
+        knowledge = tuple(
+            ResearchKnowledgeRow(category, value)
+            for category, value in sorted(
+                sim.research.knowledge_state.experience_by_category.items()
+            )
+        )
+
         rows: list[ResearchRow] = []
         for definition in sorted(sim.research.definitions.values(), key=lambda row: str(row.id)):
             state = sim.research.active.get(definition.id)
@@ -87,74 +107,152 @@ class ResearchProgressionProjectorMixin:
             if complete:
                 status = "complete"
             elif state is None:
-                status = "available" if definition.prerequisites.issubset(sim.research.completed) else "locked"
+                status = (
+                    "available"
+                    if definition.prerequisites.issubset(sim.research.completed)
+                    else "locked"
+                )
             else:
-                status = state.status.value
+                status = state.stage.value
 
-            prototype = definition.prototype
-            demonstration = definition.demonstration
-            demonstration_location_id = (
-                None if state is None or state.demonstration_location_id is None
-                else str(state.demonstration_location_id)
-            )
-            demonstration_blockers = (
-                sim.research.demonstration_blockers(definition.id, sim.day)
-                if state is not None and state.status.value == "demonstration"
-                else ()
-            )
-            prototype_blockers = (
-                sim.research.prototype_blockers(definition.id, sim.day)
-                if state is not None and state.status.value == "prototype"
-                else ()
-            )
             current_blockers = sim.research.current_blockers(
                 definition.id, day=sim.day, power_by_location=power_by_location
             )
+            current_blockers = current_blockers + sim.research.allocation_blockers(
+                definition.id, service_allocations, point_requests, point_allocations
+            )
+            priority = 50 if state is None else state.priority
+            stage_progress = 0.0
+            stage_required = 0.0
+            execution_requested = 0.0
+            execution_allocated = 0.0
+            if state is not None:
+                execution_requested, execution_allocated = (
+                    sim.research.service_allocation_totals(
+                        definition.id, state.stage, service_allocations
+                    )
+                )
+                if state.stage is ResearchStage.THEORY:
+                    stage_progress = state.stage_progress
+                    stage_required = definition.research_point_cost
+                elif state.stage is ResearchStage.PROTOTYPE:
+                    stage_progress = state.stage_progress
+                    stage_required = 1.0
+                elif state.stage is ResearchStage.DEMONSTRATION:
+                    stage_progress = state.stage_progress
+                    stage_required = (
+                        0.0 if definition.demonstration is None
+                        else float(definition.demonstration.days)
+                    )
+                elif state.stage is ResearchStage.OPERATIONAL_EXPERIENCE:
+                    spec = definition.operational_experience
+                    if spec is not None:
+                        stage_required = sum(spec.requirements.values())
+                        stage_progress = sum(
+                            min(sim.research.knowledge_state.value(category), required)
+                            for category, required in spec.requirements.items()
+                        )
 
-            demonstration_required = 0 if demonstration is None else demonstration.days
-            demonstration_done = (
-                demonstration_required
-                if complete
-                else (0 if state is None else state.demonstration_done_days)
+            prototype_location_id = (
+                None
+                if state is None or state.prototype_location_id is None
+                else str(state.prototype_location_id)
+            )
+            demonstration_location_id = (
+                None
+                if state is None or state.demonstration_location_id is None
+                else str(state.demonstration_location_id)
             )
             prototype_sites = (
                 self._research_site_options(definition, demonstration=False)
-                if status == "prototype" else ()
+                if status == ResearchStage.PROTOTYPE.value else ()
             )
             demonstration_sites = (
                 self._research_site_options(definition, demonstration=True)
-                if status == "demonstration" else ()
+                if status == ResearchStage.DEMONSTRATION.value else ()
             )
-            prototype_resources = () if prototype is None else tuple(
-                (str(resource_id), amount)
-                for resource_id, amount in sorted(prototype.resources.items(), key=lambda row: str(row[0]))
+            prototype_blockers = (
+                sim.research.prototype_blockers(definition.id, sim.day)
+                if status == ResearchStage.PROTOTYPE.value else ()
             )
+            demonstration_blockers = (
+                sim.research.demonstration_blockers(definition.id, sim.day)
+                if status == ResearchStage.DEMONSTRATION.value else ()
+            )
+
+            prototype_resources: list[ResearchPrototypeResourceRow] = []
+            if definition.prototype is not None:
+                location_id = None if state is None else state.prototype_location_id
+                for resource_id, required in sorted(
+                    definition.prototype.resources.items(), key=lambda row: str(row[0])
+                ):
+                    staged = 0.0
+                    requested = 0.0
+                    allocated = 0.0
+                    pipeline = 0.0
+                    if location_id is not None:
+                        staged = sim.research.prototype_staged_t(
+                            definition.id, location_id, resource_id
+                        )
+                        if state is not None and state.stage is ResearchStage.PROTOTYPE:
+                            requested = max(0.0, required - staged)
+                            try:
+                                allocated = resource_allocations.allocated(
+                                    sim.research.prototype_claim_id(definition.id, resource_id)
+                                )
+                            except KeyError:
+                                allocated = 0.0
+                            pipeline = sim.logistics.cargo_flow_pipeline_t(
+                                sim.research.prototype_demand_id(definition.id, resource_id)
+                            )
+                    prototype_resources.append(ResearchPrototypeResourceRow(
+                        str(resource_id),
+                        required,
+                        staged,
+                        requested,
+                        allocated,
+                        pipeline,
+                        max(0.0, requested - allocated),
+                    ))
+
+            experience_rows: list[ResearchExperienceRow] = []
+            if definition.operational_experience is not None:
+                for category, required in sorted(
+                    definition.operational_experience.requirements.items()
+                ):
+                    current = sim.research.knowledge_state.value(category)
+                    experience_rows.append(ResearchExperienceRow(
+                        category, required, current, max(0.0, required - current)
+                    ))
+
             rows.append(ResearchRow(
                 str(definition.id),
                 definition.display_name,
                 status,
                 False if state is None else state.paused,
+                priority,
                 not start_blockers,
                 sim.research.can_pause(definition.id),
                 sim.research.can_resume(definition.id),
-                (
-                    sim.research.can_fund_prototype(definition.id, sim.day)
-                    if state is not None and state.status.value == "prototype"
-                    else False
-                ),
+                state is not None,
                 definition.research_point_cost,
+                stage_progress,
+                stage_required,
+                point_requests.get(definition.id, 0.0),
+                point_allocations.get(definition.id, 0.0),
+                sim.research.theory_remaining(definition.id),
+                execution_requested,
+                execution_allocated,
                 current_blockers,
                 start_blockers,
-                prototype_resources,
-                None if state is None or state.prototype_location_id is None
-                else str(state.prototype_location_id),
+                tuple(prototype_resources),
+                prototype_location_id,
                 prototype_sites,
-                demonstration_done,
-                demonstration_required,
                 demonstration_location_id,
                 demonstration_sites,
                 demonstration_blockers,
                 prototype_blockers,
+                tuple(experience_rows),
                 tuple(sorted(str(item) for item in definition.prerequisites)),
             ))
         return ResearchView(
@@ -163,5 +261,6 @@ class ResearchProgressionProjectorMixin:
             generation,
             sim.research.stored_points > capacity + 1e-9,
             providers,
+            knowledge,
             tuple(rows),
         )
