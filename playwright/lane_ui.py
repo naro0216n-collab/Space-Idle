@@ -147,7 +147,7 @@ def run() -> None:
                 timeout=10000,
             )
             relocation_text = page.locator("#relocationPreview").inner_text()
-            for required in ("Route", "所要", "Infrastructure", "必要Resource"):
+            for required in ("経路", "所要", "Infrastructure", "必要Resource"):
                 assert required in relocation_text, f"relocation decision surface lacks {required}"
             assert page.locator("#relocationSubmitButton").is_enabled()
             page.locator("#relocationCancelButton").click()
