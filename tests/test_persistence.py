@@ -101,11 +101,11 @@ def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
 def test_save_load_preserves_survey_knowledge_separately_from_active_campaign(tmp_path):
     app = build_game_application()
     sim = app._simulation
-    active_key = (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.WATER)
+    active_key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.WATER)
     known_key = (ids.EARTH_CELL_INDUSTRIAL, ids.WATER)
     target = sim.survey.targets[active_key]
 
-    app.execute(StartSurvey(str(ids.SOUTH_POLAR_RIDGE), str(active_key[0]), str(active_key[1]), allocation_weight=0.75))
+    app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(active_key[0]), str(active_key[1]), allocation_weight=0.75))
     sim.survey.knowledge_progress[active_key] = target.thresholds[0] / 2.0
     assert known_key not in sim.survey.campaigns
 
@@ -113,6 +113,7 @@ def test_save_load_preserves_survey_knowledge_separately_from_active_campaign(tm
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
     assert loaded._simulation.survey.knowledge_progress == sim.survey.knowledge_progress
+    assert loaded._simulation.survey.campaigns[active_key].target_knowledge_level == 2
     assert capture_state(loaded._simulation) == capture_state(sim)
 
 

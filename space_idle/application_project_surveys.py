@@ -29,14 +29,33 @@ class SurveyProgressionProjectorMixin:
             capacity = 0.0
             if capacity_provider is not None:
                 power = sim.power.snapshot(capacity_provider, sim.facilities, sim.day)
-                capacity = sim.survey.capacity_at(capacity_provider, power, sim.day)
+                capacity = sim.survey.capacity_for_target(
+                    capacity_provider, cell_id, resource_id, power, sim.day
+                )
             complete = sim.survey.is_complete(cell_id, resource_id)
             progress = sim.survey.progress(cell_id, resource_id)
-            final_threshold = target.thresholds[-1]
+            reachable_level = (
+                campaign.target_knowledge_level
+                if campaign is not None
+                else (
+                    0
+                    if provider_location_id is None
+                    else sim.survey.reachable_knowledge_level(
+                        provider_location_id, cell_id, day=sim.day
+                    )
+                )
+            )
+            progress_threshold = (
+                target.thresholds[-1]
+                if reachable_level <= 0
+                else target.thresholds[reachable_level - 1]
+            )
             if campaign is not None:
                 blockers = sim.survey.blockers(cell_id, resource_id, power, sim.day)
             elif provider_location_id is not None and not complete:
-                blockers = sim.survey.start_blockers(provider_location_id, cell_id, resource_id)
+                blockers = sim.survey.start_blockers(
+                    provider_location_id, cell_id, resource_id, sim.day
+                )
             else:
                 blockers = ()
             owner = sim.graph.owner_of_cell(cell_id)
@@ -53,13 +72,16 @@ class SurveyProgressionProjectorMixin:
                     complete,
                     False if campaign is None else campaign.paused,
                     provider_location_id is not None
-                    and sim.survey.can_start(provider_location_id, cell_id, resource_id),
+                    and sim.survey.can_start(
+                        provider_location_id, cell_id, resource_id, sim.day
+                    ),
                     sim.survey.can_pause(cell_id, resource_id),
                     sim.survey.can_resume(cell_id, resource_id),
                     sim.survey.can_set_allocation(cell_id, resource_id),
                     progress,
-                    1.0 if final_threshold <= 1e-12 else min(1.0, progress / final_threshold),
-                    final_threshold,
+                    1.0 if progress_threshold <= 1e-12 else min(1.0, progress / progress_threshold),
+                    reachable_level,
+                    progress_threshold,
                     sim.survey.DEFAULT_ALLOCATION_WEIGHT,
                     0.0 if campaign is None else campaign.allocation_weight,
                     sim.survey.knowledge_level(cell_id, resource_id),

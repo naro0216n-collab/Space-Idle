@@ -277,6 +277,7 @@ def test_multistage_cargo_flow_records_handoffs_and_cumulative_latency():
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
     sim.refresh_storage()
     lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 1.0, 100)
+    initial_destination_machinery = sim.inventory.amount(LUNAR_ORBIT, MACHINERY)
     sim.inventory.add(EARTH, MACHINERY, 1.0)
     demand = _demand(
         1.0,
@@ -292,15 +293,21 @@ def test_multistage_cargo_flow_records_handoffs_and_cumulative_latency():
     assert len(flow.service_ids) == 2
     assert flow.ready_day - flow.departure_day == 7
     dispatched_amount = flow.amount_t
-    assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == 0
+    assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == pytest.approx(
+        initial_destination_machinery
+    )
 
     sim.logistics._progress_cargo_arrivals(flow.ready_day - 1)
     assert flow.id in sim.logistics.cargo_flows
-    assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == 0
+    assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == pytest.approx(
+        initial_destination_machinery
+    )
 
     sim.logistics._progress_cargo_arrivals(flow.ready_day)
     assert flow.id not in sim.logistics.cargo_flows
-    assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == pytest.approx(dispatched_amount)
+    assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == pytest.approx(
+        initial_destination_machinery + dispatched_amount
+    )
 
 
 def test_transport_capacity_does_not_use_same_tick_propellant_arrival():

@@ -40,3 +40,6 @@ def configure_initial_inventory(inventory) -> None:
     inventory.add(ids.LEO, ids.STRUCTURAL_COMPONENTS, 1.0)
     inventory.add(ids.LEO, ids.MACHINERY, 1.0)
     inventory.add(ids.LEO, ids.PRECISION_ELECTRONICS, 1.0)
+    inventory.add(ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS, 1.0)
+    inventory.add(ids.LUNAR_ORBIT, ids.MACHINERY, 1.0)
+    inventory.add(ids.LUNAR_ORBIT, ids.PRECISION_ELECTRONICS, 1.0)

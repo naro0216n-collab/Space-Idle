@@ -11,6 +11,7 @@ def build_facility_definitions() -> dict:
     definitions = {
         ids.EARTH_RESEARCH_LAB: FacilityDef(ids.EARTH_RESEARCH_LAB, "総合研究所", req._capabilities("research_lab"), surface, surface),
         ids.EARTH_OBSERVATION_SATELLITE: FacilityDef(ids.EARTH_OBSERVATION_SATELLITE, "地球観測衛星", (), orbit, orbit),
+        ids.LUNAR_RESOURCE_SURVEY_ORBITER: FacilityDef(ids.LUNAR_RESOURCE_SURVEY_ORBITER, "月資源広域探査衛星", (), orbit, orbit),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: FacilityDef(ids.MICROGRAVITY_EXPERIMENT_PLATFORM, "微小重力実験プラットフォーム", req._capabilities("research_lab"), orbit, orbit),
         ids.CREWED_ORBITAL_LABORATORY: FacilityDef(ids.CREWED_ORBITAL_LABORATORY, "有人軌道研究所", req._capabilities("research_lab"), orbit, orbit),
         ids.ROBOTIC_GEOLOGY_STATION: FacilityDef(ids.ROBOTIC_GEOLOGY_STATION, "ロボット地質調査ステーション", req._capabilities("research_lab", "surface_survey", "robotic_operations"), surface, surface, placement_scope=FacilityPlacementScope.SURFACE_CELL),
@@ -68,6 +69,7 @@ def initial_facility_placements() -> tuple[tuple, ...]:
     return (
         (ids.EARTH_RESEARCH_LAB, ids.EARTH),
         (ids.EARTH_OBSERVATION_SATELLITE, ids.LEO),
+        (ids.LUNAR_RESOURCE_SURVEY_ORBITER, ids.LUNAR_ORBIT),
         (ids.GRID_POWER_SUPPLY, ids.EARTH),
         (ids.EARTH_LAUNCH_SUPPORT, ids.EARTH),
         (ids.VEHICLE_ASSEMBLY_FACILITY, ids.EARTH),
@@ -85,6 +87,7 @@ def initial_facility_investments() -> dict:
     return {
         ids.EARTH_RESEARCH_LAB: {S: 12.0, M: 10.0, E: 8.0},
         ids.EARTH_OBSERVATION_SATELLITE: {S: 1.5, M: 1.0, E: 1.0},
+        ids.LUNAR_RESOURCE_SURVEY_ORBITER: {S: 1.5, M: 1.0, E: 1.5},
         ids.GRID_POWER_SUPPLY: {S: 8.0, M: 6.0},
         ids.EARTH_LAUNCH_SUPPORT: {S: 10.0, M: 8.0, E: 2.0},
         ids.VEHICLE_ASSEMBLY_FACILITY: {S: 10.0, M: 10.0, E: 3.0},

@@ -161,32 +161,40 @@ def test_initial_surface_resource_knowledge_has_no_active_survey_campaigns():
     assert row.can_set_allocation is False
 
 
-def test_survey_campaign_updates_knowledge_and_is_removed_when_complete():
+def test_orbital_survey_stops_at_provider_knowledge_limit_and_reveals_comparison_value():
     app = build_game_application()
     sim = app._simulation
-    key = (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.WATER)
+    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.WATER)
     target = sim.survey.targets[key]
 
-    sim.survey.start(ids.SOUTH_POLAR_RIDGE, *key, allocation_weight=2.0)
+    assert sim.survey.start_blockers(ids.LUNAR_ORBIT, *key, sim.day) == ()
+    assert sim.survey.reachable_knowledge_level(
+        ids.LUNAR_ORBIT, key[0], day=sim.day
+    ) == 2
+
+    sim.survey.start(ids.LUNAR_ORBIT, *key, allocation_weight=2.0, day=sim.day)
     assert key in sim.survey.campaigns
-    assert sim.survey.progress(*key) == 0.0
+    assert sim.survey.campaigns[key].target_knowledge_level == 2
 
-    sim.survey.knowledge_progress[key] = target.thresholds[-1] - 0.5
-    original_capacity = sim.survey.capacity_at
-    sim.survey.capacity_at = lambda *_args, **_kwargs: 1.0
-    try:
-        sim.survey.advance_day({}, sim.day)
-    finally:
-        sim.survey.capacity_at = original_capacity
+    sim.advance_days(8)
 
-    assert sim.survey.progress(*key) == target.thresholds[-1]
-    assert sim.survey.is_complete(*key)
+    assert sim.survey.progress(*key) == target.thresholds[1]
+    assert sim.survey.knowledge_level(*key) == 2
+    assert not sim.survey.is_complete(*key)
+    assert sim.survey.visible_potential(*key) is not None
     assert key not in sim.survey.campaigns
+    assert sim.survey.start_blockers(ids.LUNAR_ORBIT, *key, sim.day) == (
+        "survey_provider_limit",
+    )
 
     row = next(
-        item for item in app.query(GetSurveys(str(ids.SOUTH_POLAR_RIDGE))).items
-        if item.cell_id == str(ids.MOON_CELL_SOUTH_POLAR_RIDGE) and item.resource_id == str(ids.WATER)
+        item for item in app.query(GetSurveys(str(ids.LUNAR_ORBIT))).items
+        if item.cell_id == str(ids.MOON_CELL_FARSIDE_HIGHLANDS) and item.resource_id == str(ids.WATER)
     )
-    assert row.complete is True
+    assert row.complete is False
     assert row.active is False
-    assert row.blockers == ()
+    assert row.can_start is False
+    assert row.target_knowledge_level == 2
+    assert row.target_threshold == target.thresholds[1]
+    assert row.progress_fraction == 1.0
+    assert row.blockers == ("survey_provider_limit",)

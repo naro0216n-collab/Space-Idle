@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..survey import ExtractionSpec, SurveyProviderSpec, SurveyTarget
+from ..survey import ExtractionSpec, SurveyCoverage, SurveyProviderSpec, SurveyTarget
 from . import base_ids as ids
 
 
@@ -35,8 +35,15 @@ def build_survey_targets() -> dict:
 
 def build_survey_providers() -> dict:
     return {
-        ids.ROBOTIC_SURVEY_PACKAGE: SurveyProviderSpec(ids.ROBOTIC_SURVEY_PACKAGE, 5.0),
-        ids.ROBOTIC_GEOLOGY_STATION: SurveyProviderSpec(ids.ROBOTIC_GEOLOGY_STATION, 9.0),
+        ids.LUNAR_RESOURCE_SURVEY_ORBITER: SurveyProviderSpec(
+            ids.LUNAR_RESOURCE_SURVEY_ORBITER, 8.0, SurveyCoverage.BODY_REMOTE, 2
+        ),
+        ids.ROBOTIC_SURVEY_PACKAGE: SurveyProviderSpec(
+            ids.ROBOTIC_SURVEY_PACKAGE, 5.0, SurveyCoverage.LOCATION_TERRITORY, 3
+        ),
+        ids.ROBOTIC_GEOLOGY_STATION: SurveyProviderSpec(
+            ids.ROBOTIC_GEOLOGY_STATION, 9.0, SurveyCoverage.LOCATION_TERRITORY, 4
+        ),
     }
 
 

@@ -62,6 +62,7 @@ class ProgressionCommandHandlerMixin:
                 sim.survey.start(
                     provider_location_id, cell_id, resource_id,
                     allocation_weight=command.allocation_weight,
+                    day=sim.day,
                 )
             elif isinstance(command, PauseSurvey):
                 sim.survey.pause(cell_id, resource_id)

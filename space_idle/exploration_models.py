@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Literal
 
 from .shared import DefinitionId, SpatialNodeId, SurfaceCellId
 
 KnowledgeLevel = Literal[0, 1, 2, 3, 4]
+
+
+class SurveyCoverage(str, Enum):
+    BODY_REMOTE = "body_remote"
+    LOCATION_TERRITORY = "location_territory"
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,14 @@ class SurveyTarget:
 class SurveyProviderSpec:
     facility_def_id: DefinitionId
     points_per_day: float
+    coverage: SurveyCoverage
+    max_knowledge_level: KnowledgeLevel
+
+    def __post_init__(self) -> None:
+        if self.points_per_day < 0:
+            raise ValueError("survey provider points per day must be non-negative")
+        if not 1 <= self.max_knowledge_level <= 4:
+            raise ValueError("survey provider max knowledge level must be within 1..4")
 
 
 @dataclass
@@ -35,6 +49,7 @@ class SurveyCampaign:
     provider_location_id: SpatialNodeId
     cell_id: SurfaceCellId
     resource_id: DefinitionId
+    target_knowledge_level: KnowledgeLevel = 4
     allocation_weight: float = 1.0
     paused: bool = False
 

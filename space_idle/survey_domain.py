@@ -24,6 +24,7 @@ def capture_survey(sim: Any) -> dict[str, Any]:
                 "provider_location_id": str(c.provider_location_id),
                 "cell_id": str(c.cell_id),
                 "resource_id": str(c.resource_id),
+                "target_knowledge_level": c.target_knowledge_level,
                 "allocation_weight": c.allocation_weight,
                 "paused": c.paused,
             }
@@ -51,6 +52,7 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
             provider_location_id,
             cell_id,
             resource_id,
+            target_knowledge_level=int(r.get("target_knowledge_level", 4)),
             allocation_weight=float(r["allocation_weight"]),
             paused=bool(r["paused"]),
         )
@@ -95,6 +97,7 @@ def validate_survey_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(definition_id == provider.facility_def_id, f"survey provider key mismatch: {definition_id}")
         _require(definition_id in ctx.facility_defs, f"survey provider references unknown facility: {definition_id}")
         _require(provider.points_per_day >= 0, f"negative survey capacity: {definition_id}")
+        _require(1 <= provider.max_knowledge_level <= 4, f"invalid survey provider knowledge cap: {definition_id}")
 
 
 def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
@@ -125,7 +128,26 @@ def validate_survey_runtime(sim: Any) -> None:
             provider_body = sim.graph.operational_node(campaign.provider_location_id).body_id
             target_body = sim.graph.surface_cells[campaign.cell_id].body_id
             _require(provider_body == target_body, f"survey campaign crosses celestial bodies: {key}")
-        _require(not sim.survey.is_complete(*key), f"completed survey retains active campaign: {key}")
+            provider_specs = [
+                sim.survey.providers.get(f.definition_id)
+                for f in sim.facilities.all_at(campaign.provider_location_id)
+            ]
+            _require(
+                any(
+                    spec is not None
+                    and sim.survey._provider_covers_target(
+                        campaign.provider_location_id, spec, campaign.cell_id
+                    )
+                    and spec.max_knowledge_level >= campaign.target_knowledge_level
+                    for spec in provider_specs
+                ),
+                f"survey campaign has no provider matching its coverage and knowledge target: {key}",
+            )
+        _require(1 <= campaign.target_knowledge_level <= 4, f"invalid survey campaign knowledge target: {key}")
+        _require(
+            sim.survey.knowledge_level(*key) < campaign.target_knowledge_level,
+            f"survey campaign already reached its provider knowledge target: {key}",
+        )
         _require(campaign.allocation_weight >= 0, f"negative survey allocation: {key}")
 
 

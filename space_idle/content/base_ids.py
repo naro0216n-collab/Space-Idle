@@ -58,6 +58,7 @@ SURFACE_CELL_DEVELOPMENT_PROJECT = DefinitionId("base.construction.surface_cell_
 # ---------------------------------------------------------------------------
 EARTH_RESEARCH_LAB = DefinitionId("base.facility.research_laboratory")
 EARTH_OBSERVATION_SATELLITE = DefinitionId("base.facility.earth_observation_satellite")
+LUNAR_RESOURCE_SURVEY_ORBITER = DefinitionId("base.facility.lunar_resource_survey_orbiter")
 MICROGRAVITY_EXPERIMENT_PLATFORM = DefinitionId("base.facility.microgravity_experiment_platform")
 CREWED_ORBITAL_LABORATORY = DefinitionId("base.facility.crewed_orbital_laboratory")
 ROBOTIC_GEOLOGY_STATION = DefinitionId("base.facility.robotic_geology_station")

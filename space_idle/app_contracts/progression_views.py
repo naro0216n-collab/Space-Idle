@@ -125,7 +125,8 @@ class SurveyRow:
     can_set_allocation: bool
     progress: float
     progress_fraction: float
-    final_threshold: float
+    target_knowledge_level: int
+    target_threshold: float
     default_allocation_weight: float
     allocation_weight: float
     knowledge_level: int
