@@ -234,12 +234,12 @@ def test_connector_plan_always_materializes_payload_as_blob_root_tree(tmp_path: 
     assert plan["normal_publish_transport_probe_calls"] == 0
     assert plan["normal_github_mutation_calls"] == 3
     assert plan["normal_github_calls_before_gateway"] == 4
-    assert plan["normal_sha_handoffs"] == 1
+    assert plan["normal_sha_handoffs"] == 0
     assert plan["normal_per_upload_verification_calls"] == 0
     assert plan["returned_upload_blob_shas_are_not_required"] is True
-    assert plan["returned_root_tree_sha_is_required"] is True
-    assert plan["submit_deferred_until_root_verified"] is True
-    assert plan["submit_request_packet"] is None
+    assert plan["returned_root_tree_sha_is_required"] is False
+    assert plan["submit_deferred_until_root_verified"] is False
+    assert plan["submit_request_packet"] is not None
     assert plan["gateway_completes_target_publish"] is True
 
     upload = json.loads(Path(plan["upload_packets"][0]).read_text(encoding="utf-8"))
@@ -255,21 +255,7 @@ def test_connector_plan_always_materializes_payload_as_blob_root_tree(tmp_path: 
         }
     ]
 
-    finalized = json.loads(
-        run_request(
-            repo,
-            "connector-finalize",
-            "--manifest",
-            str(manifest),
-            "--github-repository",
-            "owner/repo",
-            "--payload-tree-sha",
-            root["expected_tree_git_oid"],
-            "--output-dir",
-            str(plan_dir),
-        )
-    )
-    packet = json.loads(Path(finalized["submit_request_packet"]).read_text(encoding="utf-8"))
+    packet = json.loads(Path(plan["submit_request_packet"]).read_text(encoding="utf-8"))
     transport_request = json.loads(packet["action_args"]["content"])
     assert transport_request["version"] == 6
     assert transport_request["payload_source"] == {
@@ -334,12 +320,12 @@ def test_connector_plan_splits_overflow_into_blobs_then_precomputed_root_tree(tm
     assert plan["upload_call_count"] >= 2
     assert plan["connector_uploads_may_run_in_parallel"] is True
     assert plan["returned_upload_blob_shas_are_not_required"] is True
-    assert plan["returned_root_tree_sha_is_required"] is True
-    assert plan["submit_deferred_until_root_verified"] is True
-    assert plan["submit_request_packet"] is None
+    assert plan["returned_root_tree_sha_is_required"] is False
+    assert plan["submit_deferred_until_root_verified"] is False
+    assert plan["submit_request_packet"] is not None
     assert plan["normal_github_mutation_calls"] == plan["upload_call_count"] + 2
     assert plan["normal_github_calls_before_gateway"] == plan["upload_call_count"] + 3
-    assert plan["normal_sha_handoffs"] == 1
+    assert plan["normal_sha_handoffs"] == 0
 
     oids = []
     for packet_name in plan["upload_packets"]:
@@ -374,23 +360,7 @@ def test_connector_plan_splits_overflow_into_blobs_then_precomputed_root_tree(tm
     spec.loader.exec_module(module)
     assert root["expected_tree_git_oid"] == module._git_tree_oid(repo, oids)
 
-    finalized = json.loads(
-        run_request(
-            repo,
-            "connector-finalize",
-            "--manifest",
-            str(manifest),
-            "--github-repository",
-            "owner/repo",
-            "--payload-tree-sha",
-            root["expected_tree_git_oid"],
-            "--output-dir",
-            str(plan_dir),
-        )
-    )
-    assert finalized["verified"] is True
-    assert finalized["payload_tree_sha"] == root["expected_tree_git_oid"]
-    submit = json.loads(Path(finalized["submit_request_packet"]).read_text(encoding="utf-8"))
+    submit = json.loads(Path(plan["submit_request_packet"]).read_text(encoding="utf-8"))
     assert submit["action"] == "GitHub.create_file"
     assert len(json.dumps(submit["action_args"], separators=(",", ":")).encode("utf-8")) <= 20_000
     transport = json.loads(submit["action_args"]["content"])
@@ -399,67 +369,6 @@ def test_connector_plan_splits_overflow_into_blobs_then_precomputed_root_tree(tm
         "oid": root["expected_tree_git_oid"],
         "part_count": len(oids),
     }
-
-
-def test_connector_finalize_rejects_wrong_payload_root_sha(tmp_path: Path) -> None:
-    repo, base_commit, _ = init_repo(tmp_path)
-    content = "\n".join(
-        f"{index:06d}:{hashlib.sha256(f'wrong-root-{index}'.encode()).hexdigest()}"
-        for index in range(3000)
-    )
-    (repo / "payload.txt").write_text(content + "\n", encoding="utf-8")
-    commit_all(repo, "large connector transport")
-    manifest = tmp_path / "request.json"
-    run_request(
-        repo,
-        "prepare",
-        "--output",
-        str(manifest),
-        "--connector-call-budget-bytes",
-        "12000",
-    )
-    plan_dir = tmp_path / "connector"
-    plan = json.loads(
-        run_request(
-            repo,
-            "connector-plan",
-            "--manifest",
-            str(manifest),
-            "--github-repository",
-            "owner/repo",
-            "--target-remote-head",
-            base_commit,
-            "--output-dir",
-            str(plan_dir),
-        )
-    )
-    assert plan["payload_root_packet"] is not None
-    wrong = "f" * 40
-    if wrong == plan["expected_payload_tree_git_oid"]:
-        wrong = "e" * 40
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            "--repo",
-            str(repo),
-            "connector-finalize",
-            "--manifest",
-            str(manifest),
-            "--github-repository",
-            "owner/repo",
-            "--payload-tree-sha",
-            wrong,
-            "--output-dir",
-            str(plan_dir),
-        ],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert result.returncode != 0
-    assert "payload root tree SHA mismatch" in result.stderr
-    assert not (plan_dir / "submit-request.json").exists()
 
 
 def test_payload_tree_oid_matches_git_tree_object_format(tmp_path: Path) -> None:
@@ -531,6 +440,7 @@ def test_standard_cli_has_no_patch_or_manual_connector_fallbacks() -> None:
         stdout=subprocess.PIPE,
     ).stdout
     assert "connector-publish-step" not in top_help
+    assert "connector-finalize" not in top_help
     assert "verify-transport" not in top_help
     assert "patch" not in top_help.lower()
 

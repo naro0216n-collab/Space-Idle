@@ -744,8 +744,29 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         encoding="utf-8",
     )
     root_packet_path = str(root_path)
-    submit_call_bytes = 0
-    submit_packet_path: str | None = None
+
+    submit_request = _transport_request(
+        prepared,
+        {
+            "kind": "git-tree",
+            "oid": expected_root_oid,
+            "part_count": len(blob_oids),
+        },
+    )
+    submit_packet = _connector_submit_packet(
+        args.github_repository, args.publish_branch, submit_request
+    )
+    submit_call_bytes = _connector_call_bytes(submit_packet)
+    if submit_call_bytes > call_budget:
+        raise PublishStateError(
+            f"publish request metadata needs a {submit_call_bytes}-byte Connector call, exceeding "
+            f"the configured {call_budget}-byte budget"
+        )
+    submit_path.write_text(
+        json.dumps(submit_packet, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    submit_packet_path = str(submit_path)
     upload_call_count = len(upload_packets)
     summary = {
         "strategy": strategy,
@@ -766,19 +787,19 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "payload_root_packet": root_packet_path,
         "expected_payload_tree_git_oid": expected_root_oid,
         "root_tree_call_bytes": root_call_bytes,
-        "returned_root_tree_sha_is_required": True,
+        "returned_root_tree_sha_is_required": False,
         "submit_request_packet": submit_packet_path,
-        "submit_deferred_until_root_verified": True,
+        "submit_deferred_until_root_verified": False,
         "remote_request_path": _request_file_path(str(prepared["request_id"])),
         "remote_receipt_path": _receipt_file_path(str(prepared["request_id"])),
         "normal_remote_target_probe_calls": 1,
         "normal_publish_transport_probe_calls": 0,
         "normal_github_mutation_calls": upload_call_count + 2,
         "normal_github_calls_before_gateway": upload_call_count + 3,
-        "normal_sha_handoffs": 1,
+        "normal_sha_handoffs": 0,
         "normal_per_upload_verification_calls": 0,
         "gateway_completes_target_publish": True,
-        "next_after_transport": "execute all upload-part packets in parallel, then assemble-payload-root.json; pass only its returned root tree SHA to connector-finalize, which verifies it before generating submit-request.json",
+        "next_after_transport": "execute all upload-part packets in parallel, then assemble-payload-root.json, then submit-request.json; no returned SHA is a later input",
         "request_verified": bool(verified["verified"]),
         "verified": True,
     }
@@ -787,75 +808,6 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         encoding="utf-8",
     )
     print(json.dumps(summary, indent=2))
-    return 0
-
-
-def cmd_connector_finalize(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    manifest = Path(args.manifest).resolve()
-    verified = _verify_prepared_request(repo, manifest)
-    prepared = _read_prepared_request(manifest)
-    _require_hex_sha(args.payload_tree_sha, name="payload tree SHA")
-    call_budget = (
-        args.connector_call_budget_bytes
-        if args.connector_call_budget_bytes is not None
-        else int(prepared["connector_call_budget_bytes"])
-    )
-    if call_budget <= 0:
-        raise PublishStateError("Connector call budget must be positive")
-
-    payload = str(prepared["payload_b64"])
-    parts = _split_payload_for_blob_calls(repo, args.github_repository, payload, call_budget)
-    blob_oids = [str(part["oid"]) for part in parts]
-    expected_root_oid = _git_tree_oid(repo, blob_oids)
-    if args.payload_tree_sha != expected_root_oid:
-        raise PublishStateError(
-            "payload root tree SHA mismatch: "
-            f"expected={expected_root_oid} actual={args.payload_tree_sha}"
-        )
-
-    submit_request = _transport_request(
-        prepared,
-        {
-            "kind": "git-tree",
-            "oid": expected_root_oid,
-            "part_count": len(blob_oids),
-        },
-    )
-    submit_packet = _connector_submit_packet(
-        args.github_repository, args.publish_branch, submit_request
-    )
-    submit_bytes = _connector_call_bytes(submit_packet)
-    if submit_bytes > call_budget:
-        raise PublishStateError(
-            f"publish request metadata needs a {submit_bytes}-byte Connector call, exceeding "
-            f"the configured {call_budget}-byte budget"
-        )
-
-    output_dir = Path(args.output_dir).resolve() if args.output_dir else Path(f"{manifest}.connector")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    submit_path = output_dir / "submit-request.json"
-    submit_path.write_text(
-        json.dumps(submit_packet, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    print(
-        json.dumps(
-            {
-                "manifest": str(manifest),
-                "request_id": prepared["request_id"],
-                "payload_tree_sha": args.payload_tree_sha,
-                "expected_payload_tree_git_oid": expected_root_oid,
-                "payload_part_count": len(blob_oids),
-                "submit_request_packet": str(submit_path),
-                "submit_call_bytes": submit_bytes,
-                "request_verified": bool(verified["verified"]),
-                "verified": True,
-                "next_after_finalize": "execute submit-request.json exactly once",
-            },
-            indent=2,
-        )
-    )
     return 0
 
 
@@ -1176,18 +1128,6 @@ def build_parser() -> argparse.ArgumentParser:
     connector_plan.add_argument("--output-dir")
     connector_plan.add_argument("--connector-call-budget-bytes", type=int)
     connector_plan.set_defaults(func=cmd_connector_plan)
-
-    connector_finalize = sub.add_parser(
-        "connector-finalize",
-        help="verify the aggregate payload tree SHA and generate the final request packet",
-    )
-    connector_finalize.add_argument("--manifest", required=True)
-    connector_finalize.add_argument("--github-repository", required=True)
-    connector_finalize.add_argument("--payload-tree-sha", required=True)
-    connector_finalize.add_argument("--publish-branch", default="publish")
-    connector_finalize.add_argument("--output-dir")
-    connector_finalize.add_argument("--connector-call-budget-bytes", type=int)
-    connector_finalize.set_defaults(func=cmd_connector_finalize)
 
     verify = sub.add_parser("verify", help="re-run local verification of a prepared request")
     verify.add_argument("--manifest", required=True)
