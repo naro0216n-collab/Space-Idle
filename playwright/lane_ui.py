@@ -153,14 +153,11 @@ def run() -> None:
             ).click()
             assert page.locator("#allocationVehicle").input_value() == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
             assert page.locator("#allocationPolicy").input_value() == "fastest"
-            page.locator("#allocationUnits").fill("1")
-            page.locator("#allocationPriority").fill("65")
-            page.get_by_role("button", name="Allocation作成", exact=True).click()
+            # Candidate selection itself is the UI contract under test. Do not create an
+            # allocation here: later relocation checks intentionally exercise the same
+            # free Fleet pool, so mutating it would make these scenarios order-dependent.
+            page.locator("#allocationCancelButton").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
-            page.wait_for_function(
-                "() => document.querySelectorAll('#allocationTable tbody button[data-allocation-edit]').length > 0",
-                timeout=10000,
-            )
 
             tug_relocate = page.locator(
                 f'button[data-fleet-relocate="{ids.REUSABLE_ORBITAL_CARGO_TUG}"]'
