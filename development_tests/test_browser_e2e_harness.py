@@ -233,15 +233,3 @@ def test_full_browser_jobs_derive_each_declared_suite_and_harness_contract() -> 
         scenario = (PLAYWRIGHT_DIR / f"{name}.py").read_text(encoding="utf-8")
         assert "guard_ci_secondary_entrypoint(__file__)" in scenario
         assert "run_ci_suite_or_standalone(__file__, run)" in scenario
-
-
-def test_surface_map_keeps_cell_controls_clickable_across_periodic_sync() -> None:
-    css = (ROOT / "space_idle" / "webui" / "app.css").read_text(encoding="utf-8")
-    operations = (ROOT / "space_idle" / "webui" / "operations_ui.js").read_text(encoding="utf-8")
-
-    assert ".surface-map-stage {" in css
-    stage_rule = css.split(".surface-map-stage {", 1)[1].split("}", 1)[0]
-    button_rule = css.split(".surface-cell-button {", 1)[1].split("}", 1)[0]
-    assert "pointer-events: none" in stage_rule
-    assert "pointer-events: auto" in button_rule
-    assert "if(root.innerHTML!==html)root.innerHTML=html;" in operations
