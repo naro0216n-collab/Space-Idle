@@ -77,6 +77,7 @@ def test_base_surface_map_exposes_affiliation_without_creating_cell_inventory_no
     assert len(view.cells) == 6
     assert len(view.locations) == 3
     assert any(not cell.developed for cell in view.cells)
+    assert all(cell.environment for cell in view.cells)
     assert all(cell.id not in {str(value) for value in sim.graph.operational_node_ids()} for cell in sim.graph.surface_cells.values())
     assert {location_id for location_id, _resource_id in sim.inventory.stock} == before_inventory_locations
 

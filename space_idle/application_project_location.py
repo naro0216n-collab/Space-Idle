@@ -16,6 +16,7 @@ from .application_views import (
     StorageRow,
 )
 from .shared import SpatialNodeId
+from .spatial import SpatialContextId
 
 
 class LocationProjectorMixin:
@@ -87,7 +88,7 @@ class LocationProjectorMixin:
             )
         return tuple(rows)
 
-    def _environment_rows(self, location_id: SpatialNodeId) -> tuple[EnvironmentFacetRow, ...]:
+    def _environment_rows(self, location_id: SpatialContextId) -> tuple[EnvironmentFacetRow, ...]:
         sim = self._simulation
         facet_types = {facet_type for (_node_id, facet_type) in sim.environment.static.facets}
         rows: list[EnvironmentFacetRow] = []

@@ -160,6 +160,7 @@ class SurfaceProjectorMixin:
                         ("dust_factor", cell.terrain.dust_factor),
                         ("slope_factor", cell.terrain.slope_factor),
                     ),
+                    self._environment_rows(cell.id),
                     resources,
                     owner is not None,
                     None if owner is None else str(owner),

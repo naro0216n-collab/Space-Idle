@@ -164,8 +164,11 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
         surface_map = data["surface_map"]
         assert surface_map["body_id"] == str(ids.EARTH_BODY)
         coastal = next(row for row in surface_map["cells"] if row["id"] == str(ids.EARTH_CELL_COASTAL))
+        assert coastal["environment"]
+        assert any(row["key"] == "thermal" for row in coastal["environment"])
         development = next(row for row in coastal["development_options"] if row["location_id"] == str(ids.EARTH))
         assert "mixed" in development["sourcing_policy_options"]
+        assert data["location"]["extraction_resources"]
     finally:
         server.shutdown()
         server.server_close()

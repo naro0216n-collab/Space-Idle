@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .location_views import EnvironmentFacetRow
+
 
 @dataclass(frozen=True)
 class SurfaceResourceKnowledgeRow:
@@ -65,6 +67,7 @@ class SurfaceCellRow:
     longitude_deg: float
     neighbor_ids: tuple[str, ...]
     terrain: tuple[tuple[str, float], ...]
+    environment: tuple[EnvironmentFacetRow, ...]
     resources: tuple[SurfaceResourceKnowledgeRow, ...]
     developed: bool
     location_id: str | None

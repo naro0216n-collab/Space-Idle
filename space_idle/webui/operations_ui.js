@@ -37,7 +37,20 @@
     const tail=String(id).split('.').pop().replaceAll('_',' ');
     return cell.location_id?`${locationName(cell.location_id)} · ${tail}`:tail;
   };
-  const surfaceResourcesHtml=(rows)=>(rows||[]).map((row)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(row.resource_name||resourceName(row.resource_id))}</span><span>Knowledge Lv ${row.knowledge_level}</span></div><div class="cell-sub">存在確率 ${row.presence_probability==null?'—':pct(row.presence_probability)} · Potential ${row.visible_potential==null?'未確定':fmt(row.visible_potential,3)}${row.visible_potential_precision_fraction==null?'':row.visible_potential_precision_fraction<=0?' · 測定済み':` · ±${pct(row.visible_potential_precision_fraction)}`}</div></div>`).join('')||'<div class="empty-state">公開済み資源情報なし</div>';
+  const environmentValue=(value)=>{
+    if(value==null)return '—';
+    if(typeof value==='number')return fmt(value,3);
+    if(Array.isArray(value))return value.map((item)=>Array.isArray(item)?`${item[0]} ${fmt(item[1],3)}`:String(item)).join(', ');
+    if(typeof value==='object')return Object.entries(value).map(([key,item])=>`${key} ${typeof item==='number'?fmt(item,3):String(item)}`).join(', ');
+    return String(value);
+  };
+  const environmentHtml=(rows)=>(rows||[]).map((row)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(row.key)}</span></div>${(row.values||[]).map(([key,value])=>`<div class="cell-sub">${esc(key)}: ${esc(environmentValue(value))}</div>`).join('')}</div>`).join('')||'<div class="empty-state">Environment情報なし</div>';
+  const surfaceResourcesHtml=(rows,cellId=null)=>(rows||[]).map((row)=>{
+    const surveyId=cellId==null?null:`${cellId}::${row.resource_id}`;
+    const survey=(state.surveys?.items||[]).find((item)=>`${item.cell_id}::${item.resource_id}`===surveyId);
+    const action=survey?`<div class="action-row" style="margin-top:8px"><button type="button" data-inspect="survey" data-id="${esc(surveyId)}">Survey詳細・操作</button></div>`:'';
+    return `<div class="route-mode-card"><div class="mode-title"><span>${esc(row.resource_name||resourceName(row.resource_id))}</span><span>Knowledge Lv ${row.knowledge_level}</span></div><div class="cell-sub">存在確率 ${row.presence_probability==null?'—':pct(row.presence_probability)} · Potential ${row.visible_potential==null?'未確定':fmt(row.visible_potential,3)}${row.visible_potential_precision_fraction==null?'':row.visible_potential_precision_fraction<=0?' · 測定済み':` · ±${pct(row.visible_potential_precision_fraction)}`}</div>${action}</div>`;
+  }).join('')||'<div class="empty-state">公開済み資源情報なし</div>';
   const tupleResourcesHtml=(rows)=>(rows||[]).map(([resourceId,amount])=>`<div class="cell-sub">${esc(resourceName(resourceId))}: ${fmt(amount,2)} t</div>`).join('')||'<div class="cell-sub">追加資源なし</div>';
   function surfacePlanControls(scope,option,disabled=false){
     const policy=(option.sourcing_policy_options||[]).map((value)=>`<option value="${esc(value)}" ${value==='mixed'?'selected':''}>${esc(sourcingPolicyName(value))}</option>`).join('');
@@ -58,7 +71,14 @@
     const loc=state.location,flow=state.flow,issues=state.bottlenecks?.items||[];
     const storageRows=(loc.storage||[]).map((s)=>`<tr><td>${esc(storageClassLabels[s.storage_class]||s.storage_class)}</td><td>${fmt(s.stock_t)}</td><td>${fmt(s.service_capacity_t)}</td><td>${fmt(s.free_service_t)}</td><td>${fmt(s.unserviced_occupied_t)}</td></tr>`).join('');
     const capabilityRows=(loc.capabilities||[]).filter((c)=>c.infrastructure_capacity||c.active_capacity||c.available_capacity).map((c)=>`<tr><td>${esc(capabilityName(c.id))}</td><td>${fmt(c.infrastructure_capacity)}</td><td>${fmt(c.active_capacity)}</td><td>${fmt(c.available_capacity)}</td></tr>`).join('');
-    return `<div class="card-grid"><section class="card"><div class="card-heading"><h3>運用状態</h3></div><div class="card-body"><div class="stat-grid">${statHtml('電力利用率',pct(flow?.power_utilization))}${statHtml('利用可能電力',`${fmt(loc.power_allocated_mw)} MW`)}${statHtml('建設能力',`${fmt(loc.construction_capacity_per_day)} /日`)}${statHtml('進行中建設',`${loc.projects?.length||0}`)}</div></div></section><section class="card"><div class="card-heading"><h3>地点blocker</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length} 件</span></div><div class="card-body issue-stack">${issues.length?issues.slice(0,8).map(issueHtml).join(''):'<div class="empty-state">現在のblockerはありません。</div>'}</div></section><section class="card"><div class="card-heading"><h3>保管サービス</h3></div><div class="table-wrap"><table><thead><tr><th>Class</th><th>在庫t</th><th>Service</th><th>空き</th><th>未service</th></tr></thead><tbody>${storageRows||'<tr><td colspan="5">保管設備なし</td></tr>'}</tbody></table></div></section><section class="card"><div class="card-heading"><h3>能力</h3></div><div class="table-wrap"><table><thead><tr><th>能力</th><th>インフラ</th><th>稼働</th><th>利用可能</th></tr></thead><tbody>${capabilityRows||'<tr><td colspan="4">Capabilityなし</td></tr>'}</tbody></table></div></section></div>`;
+    const infra=loc.surface_infrastructure;
+    const infraLoads=(infra?.load_sources||[]).map((row)=>`<div class="cell-sub">${esc(A.userFacingText(row.code))}: ${fmt(row.demand,2)}</div>`).join('')||'<div class="empty-state">追加負荷なし</div>';
+    const infraLimits=(infra?.limiting_factors||[]).map((factor)=>`<span class="badge warn">${esc(A.userFacingText(factor))}</span>`).join(' ')||'<span class="badge ok">なし</span>';
+    const infraImprovements=(infra?.improvement_facility_definition_ids||[]).map((id)=>`<span class="badge">${esc(definitionName(id))}</span>`).join(' ')||'<span class="badge">候補なし</span>';
+    const infrastructureCard=infra?`<section class="card"><div class="card-heading"><h3>Surface Infrastructure</h3><span class="badge ${infra.fulfillment<0.999999?'warn':'ok'}">${pct(infra.fulfillment)}</span></div><div class="card-body">${kv([['Nominal',fmt(infra.nominal_capacity,2)],['Available',fmt(infra.available_capacity,2)],['Demand',fmt(infra.demand,2)],['Fulfillment',pct(infra.fulfillment)]])}<h4>主な負荷源</h4>${infraLoads}<h4>Limiting factor</h4>${infraLimits}<h4>改善可能Facility</h4>${infraImprovements}</div></section>`:'';
+    const extractionRows=(loc.extraction_resources||[]).map((row)=>`<tr class="selectable" data-inspect="extraction-resource" data-id="${esc(row.resource_id)}"><td>${esc(row.resource_name)}</td><td>${fmt(row.effective_opportunity,3)}</td><td>${fmt(row.installed_nominal_capacity_t_per_day,3)}</td><td>${fmt(row.output_t_per_day,3)}</td><td>${pct(row.diminishing_efficiency)}</td><td>${pct(row.marginal_efficiency)}</td><td>${pct(row.operational_fulfillment)}</td></tr>`).join('');
+    const extractionCard=extractionRows?`<section class="card"><div class="card-heading"><h3>Resource Opportunity / Extraction</h3></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>Opportunity</th><th>Installed</th><th>Actual/日</th><th>効率</th><th>限界効率</th><th>運用充足</th></tr></thead><tbody>${extractionRows}</tbody></table></div></section>`:'';
+    return `<div class="card-grid"><section class="card"><div class="card-heading"><h3>運用状態</h3></div><div class="card-body"><div class="stat-grid">${statHtml('電力利用率',pct(flow?.power_utilization))}${statHtml('利用可能電力',`${fmt(loc.power_allocated_mw)} MW`)}${statHtml('建設能力',`${fmt(loc.construction_capacity_per_day)} /日`)}${statHtml('進行中建設',`${loc.projects?.length||0}`)}</div></div></section><section class="card"><div class="card-heading"><h3>地点blocker</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length} 件</span></div><div class="card-body issue-stack">${issues.length?issues.slice(0,8).map(issueHtml).join(''):'<div class="empty-state">現在のblockerはありません。</div>'}</div></section>${infrastructureCard}${extractionCard}<section class="card"><div class="card-heading"><h3>Current Environment</h3></div><div class="card-body">${environmentHtml(loc.environment)}</div></section><section class="card"><div class="card-heading"><h3>保管サービス</h3></div><div class="table-wrap"><table><thead><tr><th>Class</th><th>在庫t</th><th>Service</th><th>空き</th><th>未service</th></tr></thead><tbody>${storageRows||'<tr><td colspan="5">保管設備なし</td></tr>'}</tbody></table></div></section><section class="card"><div class="card-heading"><h3>能力</h3></div><div class="table-wrap"><table><thead><tr><th>能力</th><th>インフラ</th><th>稼働</th><th>利用可能</th></tr></thead><tbody>${capabilityRows||'<tr><td colspan="4">Capabilityなし</td></tr>'}</tbody></table></div></section></div>`;
   }
 
   function renderFacilitiesTab(){
@@ -179,6 +199,13 @@
     const investment=(f.invested_resources||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a)} t</div>`).join('')||'<div class="empty-state">投入履歴なし</div>';
     const maintenance=(f.maintenance_demand_per_day||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a,4)} t/日</div>`).join('')||'<div class="empty-state">維持資源要求なし</div>';
     setInspector(f.display_name,section('状態',kv([['ID',esc(f.id)],['定義',esc(f.definition_id)],['Level',fmt(f.level,0)],['運転',f.paused?'手動停止':'稼働'],['電力利用率',pct(f.power_utilization)],['維持充足率',pct(f.maintenance_satisfaction)],['実効稼働率',pct(f.operational_utilization)],['電力優先度',esc(f.power_priority??'—')],['維持優先度',esc(f.maintenance_priority??50)],...researchRows]))+productionSection+section('建造・Upgrade投入資源',investment)+section('維持資源需要',maintenance)+section('Blocker',blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'<div class="badge ok">なし</div>')+upgradeSection+section('運用操作',`<div class="action-stack"><button type="button" data-command="${f.paused?'ResumeFacility':'PauseFacility'}" data-facility-id="${esc(f.id)}">${f.paused?'設備を再開':'設備を停止'}</button><div class="form-row"><label>電力優先度<input id="facilityPriorityInput" type="number" step="1" value="${f.power_priority??50}" data-draft-key="facility:${esc(f.id)}:power-priority"></label><button type="button" data-set-power-priority="${esc(f.id)}">電力優先を適用</button></div><div class="form-row"><label>維持優先度<input id="maintenancePriorityInput" type="number" step="1" value="${f.maintenance_priority??50}" data-draft-key="facility:${esc(f.id)}:maintenance-priority"></label><button type="button" data-set-maintenance-priority="${esc(f.id)}">維持優先を適用</button></div></div>`));
+    return true;
+  }
+  function renderExtractionResourceInspector(id){
+    const row=state.location?.extraction_resources?.find((item)=>item.resource_id===id);if(!row)return false;
+    const infra=state.location?.surface_infrastructure;
+    const infraLimit=infra?.limiting_factors?.includes('surface_infrastructure');
+    setInspector(row.resource_name,section('Resource Opportunity / Extraction',kv([['Effective Opportunity',fmt(row.effective_opportunity,3)],['Installed Nominal Capacity',`${fmt(row.installed_nominal_capacity_t_per_day,3)} t/日`],['Actual Extraction',`${fmt(row.output_t_per_day,3)} t/日`],['Diminishing efficiency',pct(row.diminishing_efficiency)],['Marginal efficiency',pct(row.marginal_efficiency)],['Operational fulfillment',pct(row.operational_fulfillment)]]))+section('Surface Infrastructure',infra?kv([['Fulfillment',pct(infra.fulfillment)],['Limiting factor',infraLimit?'<span class="badge warn">Surface Infrastructure</span>':'<span class="badge ok">なし</span>']]):'<div class="empty-state">非地表Location</div>'));
     return true;
   }
   function renderResourceInspector(id){
@@ -325,7 +352,8 @@
         ['Slope',fmt(terrain.slope_factor,2)],
       ]))+
       section('隣接Cell',neighbors)+
-      section('Resource Knowledge',surfaceResourcesHtml(cell.resources))+
+      section('Current Environment',environmentHtml(cell.environment))+
+      section('Resource Knowledge',surfaceResourcesHtml(cell.resources,cell.id))+
       foundationSection+developmentSection+facilitySection
     );
     return true;
@@ -334,7 +362,7 @@
   function renderInspector(){
     if(!state.inspector){setInspector('選択項目','<div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div>');return;}
     const {type,id}=state.inspector;
-    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'surface-cell':renderSurfaceCellInspector};
+    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,'extraction-resource':renderExtractionResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'surface-cell':renderSurfaceCellInspector};
     if(!handlers[type]?.(id)){state.inspector=null;setInspector('選択項目','<div class="empty-state">項目の状態が変化しました。再選択してください。</div>');}
   }
 
