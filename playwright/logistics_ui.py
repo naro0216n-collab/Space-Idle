@@ -139,7 +139,9 @@ def run() -> None:
             page.locator("#lanePriority").fill("100")
             page.get_by_role("button", name="Lane作成").click()
             page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
-            lane_row = page.locator("#laneTable tbody tr", has_text="地球地表").first
+            lane_row = page.locator(
+                f'#laneTable tbody tr[data-lane-source="{EARTH}"][data-lane-destination="{LEO}"]'
+            ).first
             lane_row.wait_for(timeout=10000)
             assert "20 t/日" in lane_row.inner_text()
             assert "稼働" in lane_row.inner_text()
@@ -182,13 +184,14 @@ def run() -> None:
                 timeout=10000,
             )
             page.wait_for_function(
-                """() => {
-                  const row=[...document.querySelectorAll('#laneTable tbody tr')]
-                    .find(row=>row.innerText.includes('地球地表'));
+                """ids => {
+                  const row=[...document.querySelectorAll('#laneTable tbody tr[data-lane-row]')]
+                    .find(row => row.dataset.laneSource === ids.source && row.dataset.laneDestination === ids.destination);
                   if(!row)return false;
                   const cells=row.querySelectorAll('td');
                   return cells.length >= 5 && parseFloat(cells[4].innerText) > 0;
                 }""",
+                arg={"source": EARTH, "destination": LEO},
                 timeout=10000,
             )
 
