@@ -17,7 +17,8 @@ ACTIVE_SESSION_DIR_NAME = "space-idle-publish-active"
 REQUEST_VERSION = 5
 RECEIPT_VERSION = 3
 DEFAULT_CONNECTOR_CALL_BUDGET_BYTES = 96 * 1024
-MAX_BLOB_PARTS = 256
+DEFAULT_PAYLOAD_CHUNK_CHARS = 8 * 1024
+MAX_PAYLOAD_CHUNKS = 256
 PUBLISH_BUNDLE_REF = "refs/space-idle/publish-request"
 GITHUB_REPOSITORY = "naro0216n-collab/Space-Idle"
 PUBLISH_BRANCH = "publish"
@@ -451,22 +452,42 @@ def _connector_submit_packet(
     }
 
 
-def _connector_blob_packet(
+def _named_blob_tree_oid(repo: Path, entries: list[tuple[str, str]]) -> str:
+    raw = bytearray()
+    for name, blob_oid in sorted(entries):
+        raw.extend(b"100644 ")
+        raw.extend(name.encode("ascii"))
+        raw.append(0)
+        raw.extend(bytes.fromhex(blob_oid))
+    return _git_object_oid(repo, "tree", bytes(raw))
+
+
+def _connector_payload_chunk_packet(
     repo: Path,
     github_repository: str,
     content: str,
     index: int,
 ) -> dict[str, object]:
-    oid = _git_object_oid(repo, "blob", content.encode("ascii"))
+    path = f"{index:04d}.txt"
+    blob_oid = _git_object_oid(repo, "blob", content.encode("ascii"))
+    tree_oid = _named_blob_tree_oid(repo, [(path, blob_oid)])
     return {
-        "stage": "upload-payload-part",
-        "part_index": index,
-        "expected_blob_git_oid": oid,
-        "action": "GitHub.create_blob",
+        "stage": "materialize-payload-chunk",
+        "chunk_index": index,
+        "expected_blob_git_oid": blob_oid,
+        "expected_tree_git_oid": tree_oid,
+        "action": "GitHub.create_tree",
         "action_args": {
             "repository_full_name": github_repository,
-            "content": content,
-            "encoding": "utf-8",
+            "base_tree_sha": None,
+            "tree_elements": [
+                {
+                    "path": path,
+                    "mode": "100644",
+                    "type": "blob",
+                    "content": content,
+                }
+            ],
         },
     }
 
@@ -478,46 +499,87 @@ def _connector_call_bytes(packet: dict[str, object]) -> int:
     return len(json.dumps(action_args, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def _split_payload_for_blob_calls(
+def _split_payload_chunks(payload: str) -> list[str]:
+    chunks = [
+        payload[start : start + DEFAULT_PAYLOAD_CHUNK_CHARS]
+        for start in range(0, len(payload), DEFAULT_PAYLOAD_CHUNK_CHARS)
+    ]
+    if not chunks:
+        raise PublishStateError("publish payload is empty")
+    if len(chunks) > MAX_PAYLOAD_CHUNKS:
+        raise PublishStateError(
+            f"publish payload needs {len(chunks)} transport chunks, exceeding limit {MAX_PAYLOAD_CHUNKS}; "
+            "publish an earlier coherent target-ref"
+        )
+    return chunks
+
+
+def _connector_payload_root_packet(
     repo: Path,
+    github_repository: str,
+    chunks: list[str],
+) -> dict[str, object]:
+    entries: list[tuple[str, str]] = []
+    elements: list[dict[str, object]] = []
+    for index, content in enumerate(chunks):
+        path = f"{index:04d}.txt"
+        blob_oid = _git_object_oid(repo, "blob", content.encode("ascii"))
+        entries.append((path, blob_oid))
+        elements.append(
+            {
+                "path": path,
+                "mode": "100644",
+                "type": "blob",
+                "sha": blob_oid,
+            }
+        )
+    expected_tree_oid = _named_blob_tree_oid(repo, entries)
+    return {
+        "stage": "assemble-payload-tree",
+        "expected_tree_git_oid": expected_tree_oid,
+        "action": "GitHub.create_tree",
+        "action_args": {
+            "repository_full_name": github_repository,
+            "base_tree_sha": None,
+            "tree_elements": elements,
+        },
+    }
+
+
+def _build_payload_tree_packets(
+    repo: Path,
+    *,
     github_repository: str,
     payload: str,
     call_budget: int,
-) -> list[dict[str, object]]:
+    output_dir: Path,
+) -> tuple[list[str], str, str, list[str]]:
     if call_budget <= 0:
         raise PublishStateError("Connector call budget must be positive")
-    empty = _connector_blob_packet(repo, github_repository, "", 0)
-    max_chars = call_budget - _connector_call_bytes(empty)
-    if max_chars <= 0:
-        raise PublishStateError(
-            f"Connector call budget {call_budget} is too small even for an empty blob upload"
-        )
-    parts: list[dict[str, object]] = []
-    for start in range(0, len(payload), max_chars):
-        content = payload[start : start + max_chars]
-        packet = _connector_blob_packet(repo, github_repository, content, len(parts))
+    chunks = _split_payload_chunks(payload)
+    upload_paths: list[str] = []
+    for index, content in enumerate(chunks):
+        packet = _connector_payload_chunk_packet(repo, github_repository, content, index)
         size = _connector_call_bytes(packet)
         if size > call_budget:
             raise PublishStateError(
-                f"payload part {len(parts)} needs a {size}-byte Connector call, exceeding "
+                f"payload chunk {index} needs a {size}-byte Connector call, exceeding "
                 f"the configured {call_budget}-byte budget"
             )
-        parts.append(
-            {
-                "index": len(parts),
-                "chars": len(content),
-                "oid": packet["expected_blob_git_oid"],
-                "packet_bytes": size,
-                "packet": packet,
-            }
-        )
-    if len(parts) > MAX_BLOB_PARTS:
-        raise PublishStateError(
-            f"publish payload needs {len(parts)} blob uploads, exceeding limit {MAX_BLOB_PARTS}; "
-            "publish an earlier coherent target-ref or increase the verified Connector call budget"
-        )
-    return parts
+        path = output_dir / f"upload-chunk-{index:03d}.json"
+        path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        upload_paths.append(str(path))
 
+    root_packet = _connector_payload_root_packet(repo, github_repository, chunks)
+    root_size = _connector_call_bytes(root_packet)
+    if root_size > call_budget:
+        raise PublishStateError(
+            f"payload root tree needs a {root_size}-byte Connector call, exceeding "
+            f"the configured {call_budget}-byte budget"
+        )
+    root_path = output_dir / "assemble-payload-tree.json"
+    root_path.write_text(json.dumps(root_packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return upload_paths, str(root_path), str(root_packet["expected_tree_git_oid"]), chunks
 
 def cmd_init(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
@@ -662,8 +724,6 @@ def _build_connector_plan(
     publish_branch: str,
     output_dir: Path,
     connector_call_budget_bytes: int | None = None,
-    defer_submit_for_split: bool = False,
-    always_blob: bool = False,
 ) -> dict[str, object]:
     verified = _verify_prepared_request(repo, manifest)
     prepared = _read_prepared_request(manifest)
@@ -682,72 +742,25 @@ def _build_connector_plan(
         raise PublishStateError("Connector call budget must be positive")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    for stale in output_dir.glob("upload-part-*.json"):
-        stale.unlink()
-    submit_path = output_dir / "submit-request.json"
-    if submit_path.exists():
-        submit_path.unlink()
+    for pattern in ("upload-part-*.json", "upload-chunk-*.json"):
+        for stale in output_dir.glob(pattern):
+            stale.unlink()
+    for fixed in ("assemble-payload-tree.json", "submit-request.json"):
+        path = output_dir / fixed
+        if path.exists():
+            path.unlink()
 
     payload = str(prepared["payload_b64"])
-    inline_request = _transport_request(prepared, {"kind": "inline", "data": payload})
-    inline_packet = _connector_submit_packet(
-        github_repository, publish_branch, inline_request
+    upload_packets, root_packet, expected_tree_oid, chunks = _build_payload_tree_packets(
+        repo,
+        github_repository=github_repository,
+        payload=payload,
+        call_budget=call_budget,
+        output_dir=output_dir,
     )
-    inline_call_bytes = _connector_call_bytes(inline_packet)
-    upload_packets: list[str] = []
-    blob_parts: list[dict[str, object]] = []
 
-    if not always_blob and inline_call_bytes <= call_budget:
-        strategy = "single-request-file"
-        submit_packet = inline_packet
-    else:
-        strategy = (
-            "verified-blobs-then-request-file"
-            if always_blob
-            else "parallel-blobs-then-request-file"
-        )
-        parts = _split_payload_for_blob_calls(
-            repo, github_repository, payload, call_budget
-        )
-        for part in parts:
-            packet_path = output_dir / f"upload-part-{int(part['index']):03d}.json"
-            packet_path.write_text(
-                json.dumps(part["packet"], indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            upload_packets.append(str(packet_path))
-            blob_parts.append({"oid": part["oid"], "chars": part["chars"]})
-        if defer_submit_for_split:
-            submit_packet = None
-        else:
-            submit_request = _transport_request(
-                prepared, {"kind": "git-blobs", "parts": blob_parts}
-            )
-            submit_packet = _connector_submit_packet(
-                github_repository, publish_branch, submit_request
-            )
-            submit_bytes = _connector_call_bytes(submit_packet)
-            if submit_bytes > call_budget:
-                raise PublishStateError(
-                    f"publish request metadata needs a {submit_bytes}-byte Connector call, exceeding "
-                    f"the configured {call_budget}-byte budget"
-                )
-
-    if submit_packet is not None:
-        submit_path.write_text(
-            json.dumps(submit_packet, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        submit_call_bytes = _connector_call_bytes(submit_packet)
-        submit_packet_path: str | None = str(submit_path)
-    else:
-        if submit_path.exists():
-            submit_path.unlink()
-        submit_call_bytes = 0
-        submit_packet_path = None
-    upload_call_count = len(upload_packets)
     summary = {
-        "strategy": strategy,
+        "strategy": "create-trees-then-request-file",
         "manifest": str(manifest),
         "request_id": prepared["request_id"],
         "github_repository": github_repository,
@@ -755,36 +768,30 @@ def _build_connector_plan(
         "target_branch": prepared["target_branch"],
         "target_remote_head": target_remote_head,
         "connector_call_budget_bytes": call_budget,
-        "inline_submit_call_bytes": inline_call_bytes,
-        "submit_call_bytes": submit_call_bytes,
-        "call_size_basis": "compact-json-action-args",
-        "upload_call_count": upload_call_count,
+        "transport_chunk_chars": DEFAULT_PAYLOAD_CHUNK_CHARS,
+        "payload_chunk_count": len(chunks),
+        "upload_call_count": len(upload_packets),
         "upload_packets": upload_packets,
-        "uploads_are_independent": bool(upload_packets),
-        "connector_uploads_may_run_in_parallel": bool(upload_packets),
-        "returned_upload_blob_shas_are_required": bool(always_blob and upload_packets),
-        "returned_upload_blob_shas_are_not_required": bool(upload_packets and not always_blob),
-        "submit_request_packet": submit_packet_path,
-        "submit_deferred_until_upload_phase_complete": bool(
-            defer_submit_for_split and upload_packets
-        ),
+        "uploads_are_independent": True,
+        "connector_uploads_may_run_in_parallel": True,
+        "upload_result_shas_are_not_inputs": True,
+        "payload_root_packet": root_packet,
+        "expected_payload_tree_git_oid": expected_tree_oid,
+        "submit_request_packet": None,
         "remote_request_path": _request_file_path(str(prepared["request_id"])),
         "remote_receipt_path": _receipt_file_path(str(prepared["request_id"])),
         "normal_remote_target_probe_calls": 1,
         "normal_publish_transport_probe_calls": 0,
-        "normal_github_mutation_calls": upload_call_count + 1,
-        "normal_github_calls_before_gateway": upload_call_count + 2,
-        "normal_sha_handoffs": 0,
+        "normal_github_mutation_calls": len(upload_packets) + 2,
+        "normal_github_calls_before_gateway": len(upload_packets) + 3,
+        "normal_sha_handoffs": 1,
         "normal_per_upload_verification_calls": 0,
         "gateway_completes_target_publish": True,
         "next_after_transport": (
-            "execute submit-request.json; the Gateway validates the request and publishes the exact target commit automatically"
-            if not upload_packets
-            else (
-                "execute all upload-part packets, then pass their returned blob SHAs to gateway-submit; the helper verifies exact upload identity before generating the final request action"
-                if defer_submit_for_split
-                else "execute all upload-part packets in parallel, then submit-request.json; returned blob SHAs are not inputs to later steps and the Gateway validates OIDs before publishing"
-            )
+            "execute all helper-specified GitHub.create_tree chunk uploads; then execute the small "
+            "assemble-payload-tree action. The root action references helper-precomputed blob OIDs, "
+            "so corrupted chunk uploads cannot satisfy it. Pass only the returned root tree SHA to "
+            "gateway-submit, which emits the final small request action."
         ),
         "request_verified": bool(verified["verified"]),
         "verified": True,
@@ -794,7 +801,6 @@ def _build_connector_plan(
         encoding="utf-8",
     )
     return summary
-
 
 def _read_active_session(repo: Path) -> dict[str, object]:
     path = _active_session_path(repo)
@@ -819,20 +825,21 @@ def _read_active_session(repo: Path) -> dict[str, object]:
         "remote_request_path",
         "remote_receipt_path",
         "upload_packets",
-        "payload_parts",
-        "next_packet_index",
+        "payload_root_packet",
+        "expected_payload_tree_git_oid",
+        "payload_chunk_count",
+        "submit_request_packet",
     }
     missing = required - data.keys()
     if missing:
         raise PublishStateError(
             f"invalid active Gateway publish session: missing fields {sorted(missing)}"
         )
-    if data["version"] != 2:
+    if data["version"] != 3:
         raise PublishStateError(
             f"unsupported active Gateway publish session version: {data['version']}"
         )
     return data
-
 
 def _write_active_session(repo: Path, session: dict[str, object]) -> None:
     path = _active_session_path(repo)
@@ -858,7 +865,7 @@ def _packet_action_summary(path: str) -> dict[str, object]:
         "connector_function": action.split(".", 1)[1] if "." in action else action,
         "packet": str(packet_path),
         "stage": packet.get("stage"),
-        "part_index": packet.get("part_index"),
+        "chunk_index": packet.get("chunk_index"),
     }
 
 
@@ -870,7 +877,7 @@ def cmd_gateway_begin(args: argparse.Namespace) -> int:
         raise PublishStateError(
             "an active Gateway publish session already exists: "
             f"request_id={active['request_id']} phase={active['phase']}; "
-            "continue it through gateway-refine/gateway-submit/gateway-complete or inspect it with gateway-status"
+            "continue it through gateway-submit/gateway-complete or inspect it with gateway-status"
         )
     if active_dir.exists():
         shutil.rmtree(active_dir)
@@ -910,25 +917,15 @@ def cmd_gateway_begin(args: argparse.Namespace) -> int:
         publish_branch=PUBLISH_BRANCH,
         output_dir=connector_dir,
         connector_call_budget_bytes=DEFAULT_CONNECTOR_CALL_BUDGET_BYTES,
-        defer_submit_for_split=True,
-        always_blob=True,
     )
     prepared = _read_prepared_request(manifest)
-    phase = "upload-payload-parts"
-    connector_actions = [
-        _packet_action_summary(path) for path in list(plan["upload_packets"])
-    ]
-    next_helper_command = (
-        "python scripts/publish_request.py gateway-submit "
-        "--uploaded-blob-sha <SHA returned by each create_blob action>"
-    )
     session = {
-        "version": 2,
+        "version": 3,
         "request_id": prepared["request_id"],
         "manifest": str(manifest),
         "connector_dir": str(connector_dir),
         "strategy": plan["strategy"],
-        "phase": phase,
+        "phase": "materialize-payload-tree",
         "target_branch": prepared["target_branch"],
         "base_sha": prepared["base_sha"],
         "target_tree": prepared["target_tree"],
@@ -937,17 +934,10 @@ def cmd_gateway_begin(args: argparse.Namespace) -> int:
         "remote_request_path": plan["remote_request_path"],
         "remote_receipt_path": plan["remote_receipt_path"],
         "upload_packets": list(plan["upload_packets"]),
-        "payload_parts": [
-            {
-                "packet": path,
-                "oid": json.loads(Path(path).read_text(encoding="utf-8"))["expected_blob_git_oid"],
-                "chars": len(json.loads(Path(path).read_text(encoding="utf-8"))["action_args"]["content"]),
-                "confirmed_sha": None,
-            }
-            for path in list(plan["upload_packets"])
-        ],
-        "next_packet_index": len(list(plan["upload_packets"])),
-        "submit_request_packet": plan["submit_request_packet"],
+        "payload_root_packet": plan["payload_root_packet"],
+        "expected_payload_tree_git_oid": plan["expected_payload_tree_git_oid"],
+        "payload_chunk_count": plan["payload_chunk_count"],
+        "submit_request_packet": None,
     }
     _write_active_session(repo, session)
     print(
@@ -957,23 +947,24 @@ def cmd_gateway_begin(args: argparse.Namespace) -> int:
                 "session": str(_active_session_path(repo)),
                 "request_id": prepared["request_id"],
                 "strategy": plan["strategy"],
-                "phase": phase,
+                "phase": session["phase"],
                 "target_branch": prepared["target_branch"],
                 "target_remote_head": target_remote_head,
                 "target_tree": prepared["target_tree"],
                 "local_target_commit": prepared["local_target_commit"],
-                "initial_connector_action_budget_bytes": DEFAULT_CONNECTOR_CALL_BUDGET_BYTES,
-                "adaptive_split_on_blob_sha_mismatch": True,
-                "metadata_call_budget_bytes": DEFAULT_CONNECTOR_CALL_BUDGET_BYTES,
-                "connector_actions": connector_actions,
+                "transport_chunk_chars": DEFAULT_PAYLOAD_CHUNK_CHARS,
+                "payload_chunk_count": plan["payload_chunk_count"],
+                "connector_actions": [
+                    _packet_action_summary(path) for path in plan["upload_packets"]
+                ],
+                "then_connector_action": _packet_action_summary(str(plan["payload_root_packet"])),
                 "connector_action_selection_is_not_a_decision": True,
-                "execute_packet_action_exactly": True,
-                "bridge_refinement_command": "python scripts/publish_request.py gateway-refine",
-                "bridge_refinement_condition": (
-                    "use only when the current helper packet cannot be faithfully forwarded "
-                    "before any Connector write"
+                "execute_packet_actions_exactly": True,
+                "upload_result_shas_are_not_inputs": True,
+                "next_helper_command": (
+                    "after all chunk create_tree actions succeed, execute then_connector_action; "
+                    "then run gateway-submit --payload-tree-sha <SHA returned by that root create_tree>"
                 ),
-                "next_helper_command": next_helper_command,
                 "remote_receipt_path": plan["remote_receipt_path"],
                 "after_gateway_success": (
                     "observe the target branch HEAD once and run gateway-complete; "
@@ -988,247 +979,36 @@ def cmd_gateway_begin(args: argparse.Namespace) -> int:
     return 0
 
 
-def _split_payload_part(
-    repo: Path,
-    *,
-    github_repository: str,
-    part: dict[str, object],
-    next_packet_index: int,
-    connector_dir: Path,
-) -> tuple[list[dict[str, object]], int]:
-    packet_path = Path(str(part["packet"]))
-    packet = json.loads(packet_path.read_text(encoding="utf-8"))
-    args_data = packet.get("action_args")
-    content = args_data.get("content") if isinstance(args_data, dict) else None
-    if not isinstance(content, str) or len(content) <= 1:
-        raise PublishStateError(
-            "payload part cannot be split further; stop and inspect the Connector transport"
-        )
-    midpoint = len(content) // 2
-    children: list[dict[str, object]] = []
-    for child_content in (content[:midpoint], content[midpoint:]):
-        index = next_packet_index
-        next_packet_index += 1
-        child_packet = _connector_blob_packet(repo, github_repository, child_content, index)
-        child_path = connector_dir / f"upload-part-{index:03d}.json"
-        child_path.write_text(
-            json.dumps(child_packet, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        children.append(
-            {
-                "packet": str(child_path),
-                "oid": child_packet["expected_blob_git_oid"],
-                "chars": len(child_content),
-                "confirmed_sha": None,
-            }
-        )
-    return children, next_packet_index
-
-
-def cmd_gateway_refine(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    session = _read_active_session(repo)
-    if session["strategy"] not in {
-        "verified-blobs-then-request-file",
-        "parallel-blobs-then-request-file",
-    }:
-        raise PublishStateError("gateway-refine requires a blob-upload Gateway session")
-    if session["phase"] != "upload-payload-parts":
-        raise PublishStateError(
-            "gateway-refine is only valid before the final request action is generated"
-        )
-
-    payload_parts = session.get("payload_parts")
-    if not isinstance(payload_parts, list) or not payload_parts:
-        raise PublishStateError("active Gateway session is missing ordered payload parts")
-    pending_parts = [
-        part
-        for part in payload_parts
-        if isinstance(part, dict) and part.get("confirmed_sha") is None
-    ]
-    if not pending_parts:
-        raise PublishStateError("no unconfirmed payload part remains to refine")
-
-    # Keep bridge-capability handling deterministic. The operator neither chooses
-    # a boundary nor supplies a size threshold: refine only the largest pending
-    # helper-owned part, preserving every already-confirmed part unchanged.
-    selected = max(
-        pending_parts,
-        key=lambda part: (int(part.get("chars", 0)), str(part.get("packet", ""))),
-    )
-    connector_dir = Path(str(session["connector_dir"]))
-    next_packet_index = int(session.get("next_packet_index", len(payload_parts)))
-    children, next_packet_index = _split_payload_part(
-        repo,
-        github_repository=GITHUB_REPOSITORY,
-        part=selected,
-        next_packet_index=next_packet_index,
-        connector_dir=connector_dir,
-    )
-
-    rebuilt: list[dict[str, object]] = []
-    selected_packet = str(selected["packet"])
-    for part in payload_parts:
-        if not isinstance(part, dict):
-            raise PublishStateError("invalid ordered payload part in active Gateway session")
-        if str(part.get("packet")) == selected_packet:
-            rebuilt.extend(children)
-        else:
-            rebuilt.append(part)
-    pending_paths = [
-        str(part["packet"])
-        for part in rebuilt
-        if part.get("confirmed_sha") is None
-    ]
-    session["payload_parts"] = rebuilt
-    session["upload_packets"] = pending_paths
-    session["next_packet_index"] = next_packet_index
-    _write_active_session(repo, session)
-    print(
-        json.dumps(
-            {
-                "entrypoint": "gateway-refine",
-                "request_id": session["request_id"],
-                "phase": "upload-payload-parts",
-                "refined_pending_parts": 1,
-                "verified_upload_parts": sum(
-                    1 for part in rebuilt if part.get("confirmed_sha") is not None
-                ),
-                "connector_actions": [
-                    _packet_action_summary(path) for path in pending_paths
-                ],
-                "connector_action_selection_is_not_a_decision": True,
-                "execute_packet_action_exactly": True,
-                "request_action_generated": False,
-                "remote_mutation_performed": False,
-                "note": (
-                    "Use this only when the execution bridge cannot faithfully forward the current "
-                    "helper packet. The helper chooses the part and split boundary; no fixed bridge "
-                    "size or intentionally corrupted upload is required."
-                ),
-                "next_helper_command": (
-                    "execute the emitted GitHub.create_blob actions exactly, then run "
-                    "gateway-submit with their returned blob SHAs"
-                ),
-                "verified": True,
-            },
-            indent=2,
-        )
-    )
-    return 0
-
-
 def cmd_gateway_submit(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     session = _read_active_session(repo)
-    if session["strategy"] not in {
-        "verified-blobs-then-request-file",
-        "parallel-blobs-then-request-file",
-    }:
-        raise PublishStateError("gateway-submit requires a blob-upload Gateway session")
-    if session["phase"] not in {"upload-payload-parts", "submit-request"}:
-        raise PublishStateError(f"invalid Gateway publish phase: {session['phase']}")
-
-    if session["phase"] == "submit-request":
+    if session["strategy"] != "create-trees-then-request-file":
+        raise PublishStateError("gateway-submit requires a create-tree Gateway session")
+    if session["phase"] != "materialize-payload-tree":
         raise PublishStateError(
-            "payload uploads are already verified and the final request action has been generated"
+            "gateway-submit is only valid after payload chunk materialization and root tree creation"
         )
 
-    payload_parts = session.get("payload_parts")
-    if not isinstance(payload_parts, list) or not payload_parts:
-        raise PublishStateError("active Gateway session is missing ordered payload parts")
-    pending_parts = [
-        part for part in payload_parts
-        if isinstance(part, dict) and part.get("confirmed_sha") is None
-    ]
-    provided_upload_oids = [str(value).lower() for value in args.uploaded_blob_sha]
-    if len(provided_upload_oids) != len(pending_parts):
+    actual_tree = str(args.payload_tree_sha).lower()
+    _require_hex_sha(actual_tree, name="payload tree SHA")
+    expected_tree = str(session["expected_payload_tree_git_oid"]).lower()
+    _require_hex_sha(expected_tree, name="expected payload tree SHA")
+    if actual_tree != expected_tree:
         raise PublishStateError(
-            "uploaded blob SHA count does not match the current helper-generated upload actions; "
-            f"expected={len(pending_parts)} actual={len(provided_upload_oids)}"
+            "payload root tree mismatch: "
+            f"expected={expected_tree} actual={actual_tree}; "
+            "do not submit a request. Re-run the helper-specified chunk create_tree actions and root tree action exactly."
         )
-    for oid in provided_upload_oids:
-        _require_hex_sha(oid, name="uploaded blob SHA")
-
-    connector_dir = Path(str(session["connector_dir"]))
-    next_packet_index = int(session.get("next_packet_index", len(payload_parts)))
-    replacement_by_packet: dict[str, list[dict[str, object]]] = {}
-    mismatches = 0
-    for part, actual_oid in zip(pending_parts, provided_upload_oids, strict=True):
-        expected_oid = str(part.get("oid", "")).lower()
-        _require_hex_sha(expected_oid, name="expected upload blob SHA")
-        if actual_oid == expected_oid:
-            part["confirmed_sha"] = actual_oid
-            continue
-        mismatches += 1
-        children, next_packet_index = _split_payload_part(
-            repo,
-            github_repository=GITHUB_REPOSITORY,
-            part=part,
-            next_packet_index=next_packet_index,
-            connector_dir=connector_dir,
-        )
-        replacement_by_packet[str(part["packet"])] = children
-
-    if mismatches:
-        rebuilt: list[dict[str, object]] = []
-        for part in payload_parts:
-            if not isinstance(part, dict):
-                raise PublishStateError("invalid ordered payload part in active Gateway session")
-            replacement = replacement_by_packet.get(str(part.get("packet")))
-            if replacement is not None:
-                rebuilt.extend(replacement)
-            else:
-                rebuilt.append(part)
-        payload_parts = rebuilt
-        pending_paths = [
-            str(part["packet"])
-            for part in payload_parts
-            if part.get("confirmed_sha") is None
-        ]
-        session["payload_parts"] = payload_parts
-        session["upload_packets"] = pending_paths
-        session["next_packet_index"] = next_packet_index
-        _write_active_session(repo, session)
-        print(
-            json.dumps(
-                {
-                    "entrypoint": "gateway-submit",
-                    "request_id": session["request_id"],
-                    "phase": "upload-payload-parts",
-                    "verified_upload_parts": sum(
-                        1 for part in payload_parts if part.get("confirmed_sha") is not None
-                    ),
-                    "resplit_mismatched_parts": mismatches,
-                    "connector_actions": [
-                        _packet_action_summary(path) for path in pending_paths
-                    ],
-                    "connector_action_selection_is_not_a_decision": True,
-                    "execute_packet_action_exactly": True,
-                    "next_helper_command": (
-                        "python scripts/publish_request.py gateway-submit "
-                        "--uploaded-blob-sha <SHA returned by each newly emitted create_blob action>"
-                    ),
-                    "request_action_generated": False,
-                    "verified": True,
-                },
-                indent=2,
-            )
-        )
-        return 0
-
-    if any(part.get("confirmed_sha") is None for part in payload_parts):
-        raise PublishStateError("not all payload parts are verified")
 
     manifest = Path(str(session["manifest"]))
     prepared = _read_prepared_request(manifest)
-    blob_parts = [
-        {"oid": str(part["oid"]), "chars": int(part["chars"])}
-        for part in payload_parts
-    ]
     submit_request = _transport_request(
-        prepared, {"kind": "git-blobs", "parts": blob_parts}
+        prepared,
+        {
+            "kind": "git-tree",
+            "oid": expected_tree,
+            "chunk_count": int(session["payload_chunk_count"]),
+        },
     )
     submit_packet = _connector_submit_packet(
         GITHUB_REPOSITORY, PUBLISH_BRANCH, submit_request
@@ -1239,6 +1019,7 @@ def cmd_gateway_submit(args: argparse.Namespace) -> int:
             f"publish request metadata needs a {size}-byte Connector call, exceeding "
             f"the fixed {DEFAULT_CONNECTOR_CALL_BUDGET_BYTES}-byte normal budget"
         )
+    connector_dir = Path(str(session["connector_dir"]))
     submit_path = connector_dir / "submit-request.json"
     submit_path.write_text(
         json.dumps(submit_packet, indent=2, sort_keys=True) + "\n",
@@ -1246,8 +1027,6 @@ def cmd_gateway_submit(args: argparse.Namespace) -> int:
     )
     session["phase"] = "submit-request"
     session["submit_request_packet"] = str(submit_path)
-    session["upload_packets"] = []
-    session["payload_parts"] = payload_parts
     _write_active_session(repo, session)
     print(
         json.dumps(
@@ -1255,7 +1034,7 @@ def cmd_gateway_submit(args: argparse.Namespace) -> int:
                 "entrypoint": "gateway-submit",
                 "request_id": session["request_id"],
                 "phase": "submit-request",
-                "verified_payload_part_count": len(payload_parts),
+                "verified_payload_tree": expected_tree,
                 "connector_action": _packet_action_summary(str(submit_path)),
                 "connector_action_selection_is_not_a_decision": True,
                 "execute_packet_action_exactly": True,
@@ -1271,13 +1050,12 @@ def cmd_gateway_submit(args: argparse.Namespace) -> int:
     )
     return 0
 
-
 def cmd_gateway_complete(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     session = _read_active_session(repo)
     if session["phase"] != "submit-request":
         raise PublishStateError(
-            "Gateway request has not reached submit-request phase; verify payload uploads "
+            "Gateway request has not reached submit-request phase; verify the payload root tree "
             "with gateway-submit first"
         )
     observed = str(args.target_remote_head).lower()
@@ -1660,7 +1438,7 @@ def cmd_gateway_record(args: argparse.Namespace) -> int:
     if session["phase"] != "submit-request":
         raise PublishStateError(
             "Gateway request has not reached submit-request phase; "
-            "finish payload uploads with gateway-submit first"
+            "finish payload tree verification with gateway-submit first"
         )
     recorded = _record_publish(
         repo,
@@ -1764,26 +1542,15 @@ def build_parser() -> argparse.ArgumentParser:
     gateway_submit = sub.add_parser(
         "gateway-submit",
         help=(
-            "verify Connector-returned blob SHAs; re-split only mismatched payload parts, "
-            "and emit the final small request action only after every part is confirmed"
+            "verify the returned payload root tree SHA and emit the final small Gateway request action"
         ),
     )
     gateway_submit.add_argument(
-        "--uploaded-blob-sha",
-        action="append",
+        "--payload-tree-sha",
         required=True,
-        help="blob SHA returned by each helper-specified GitHub.create_blob action; repeat once per upload",
+        help="SHA returned by the helper-specified assemble-payload-tree GitHub.create_tree action",
     )
     gateway_submit.set_defaults(func=cmd_gateway_submit)
-
-    gateway_refine = sub.add_parser(
-        "gateway-refine",
-        help=(
-            "split the largest unconfirmed upload part when the execution bridge cannot faithfully "
-            "forward the current helper packet; performs no Connector write"
-        ),
-    )
-    gateway_refine.set_defaults(func=cmd_gateway_refine)
 
     gateway_complete = sub.add_parser(
         "gateway-complete",

@@ -83,8 +83,8 @@ Connector経路の正常入口は `gateway-begin` に一本化する。`prepare`
 1. ローカル変更を責務としてまとまったcommitにする。publish対象は明示したcommitted `target-ref` のtreeであり、その後にworking treeへ別の未commit作業があっても対象へ混入させない。
 2. publish直前に対象branch HEADを一度だけ取得する。これはChatGPT側が正常系で取得する唯一のpublish整合性入力である。
 3. 取得したHEADとpublish対象commitを `gateway-begin` へ渡す。`develop`では取得HEADが記録済みpublish基点と一致することをhelperが検証する。隔離検証用`temp`では取得した`temp` HEADそのものをそのsessionのbaseとし、developのpublish stateとは独立に扱う。その上でhelperは決定論的publish commit、Git bundle、v5 request、payload SHA-256、Connector packet、active sessionを一括生成する。GitHub repository、固定 `publish` branch、Connector call容量、manifest/packet出力先はhelper所有であり、publishごとに指定しない。
-4. `gateway-begin` はConnector本来のcall容量を上限として、payloadを最小数の `GitHub.create_blob` actionへ分ける。ChatGPT側bridgeの経験的な固定上限は設けない。helperが出力する`connector_namespace` / `connector_function`を実行入口とし、別のConnector write actionへ読み替えない。action名・part境界・初回分割数は判断対象ではない。現在のhelper packet自体をexecution bridgeが忠実に引き渡せない場合は、欠損した内容を送信したり固定サイズを推測したりせず、remote write前に`gateway-refine`を実行する。helperが最大の未確認partを一段だけ二分して新packetを生成し、part選択・境界はhelper所有のままとする。
-5. 各 `GitHub.create_blob` が返したSHAを、helperが事前計算したGit blob OIDと照合する。全文再取得・全文比較は正常系で行わない。`gateway-submit --uploaded-blob-sha ...` へ現在のupload action順で返却SHAを渡し、一致したpartは確定する。不一致partがあればhelperはそのpartだけを二分し、新しい `create_blob` actionを返す。成功済みpartは再送しない。この照合・再分割を必要なpartだけ反復するため、より小さい固定上限を事前推測したりChatGPTがBase64境界を作り直したりしない。全partのOIDが一致した場合に限って小さい最終 `GitHub.create_file` request actionを生成する。
+4. `gateway-begin` はGit bundleのBase64を8 KiBのtransport chunkへ決定論的に分け、各chunkを `GitHub.create_tree(content=...)` で匿名Git objectとしてmaterializeするactionを生成する。8 KiBはConnector call上限ではなく、再送・検証のtransport粒度であり、Connector本来のcall容量96 KiBとは別概念である。ChatGPTはchunk境界、Base64、blob OIDを作らず、helperが生成したactionをそのまま実行する。各upload actionが返すtree SHAは後続入力に使わない。
+5. helperは各chunk内容からGit blob OIDを事前計算し、全upload後にそれらの期待blob OIDだけを参照する小さい `GitHub.create_tree` root actionを生成している。chunk転記が壊れて期待blobがmaterializeされなければ、このroot tree作成が失敗するためrequestは生成しない。root tree作成が成功した場合だけ、その返却SHAを `gateway-submit --payload-tree-sha <sha>` へ渡す。helperは返却SHAと事前計算root tree OIDを照合し、一致時だけ小さい最終 `GitHub.create_file` request actionを生成する。全文再取得・全文比較、個別upload SHAの中継、adaptive blob分割は正常系に置かない。
 6. `gateway-submit` が生成した最終actionをそのまま実行する。長いBase64 payloadを `create_file` 引数へ直接転記する正常経路は持たない。
 7. Gatewayはpayload、Git object、bundle、publish commit、parent/base、target tree、対象branch HEADを検証し、すべて一致した場合だけexact commitを対象branchへnon-force publishする。成功時はreceiptを記録しFast CIを起動する。
 8. Gateway処理後に対象branch HEADを一度取得し、`gateway-complete --target-remote-head <head>`へ渡す。helperはそのHEADが事前計算したpublish commitと完全一致する場合だけsessionを閉じる。`develop` requestだけが通常publish stateを更新する。隔離検証用`temp` requestは観測したtemp HEADを独立baseとして使用し、成功してもdevelop基点を変更しない。receiptはGateway側監査記録であり、通常完了入力にはしない。
@@ -101,19 +101,13 @@ python scripts/publish_request.py gateway-begin \
   --target-remote-head <current-develop-head>
 ```
 
-`gateway-begin` は常に `phase: upload-payload-parts` を返す。現在表示されているupload actionを実行し、その返却SHAをaction順で次へ渡す。
-
-helper packetそのものを現在のexecution bridgeが忠実に転送できない場合は、送信前に次を実行する。これはGitHubへ何も書き込まず、最大の未確認partをhelper内部で一段だけ二分する。必要なら繰り返すが、固定のbridge上限を設けるためには使わない。
+`gateway-begin` は `phase: materialize-payload-tree` を返し、chunkごとの `GitHub.create_tree` actionと、その後に実行するSHA-onlyのroot `GitHub.create_tree` actionを提示する。chunk actionは独立しているため並列実行でき、返却tree SHAは後続へ渡さない。全chunk action成功後にroot actionを実行し、その返却SHAだけをhelperへ渡す。
 
 ```bash
-python scripts/publish_request.py gateway-refine
+python scripts/publish_request.py gateway-submit --payload-tree-sha <root-tree-sha>
 ```
 
-```bash
-python scripts/publish_request.py gateway-submit --uploaded-blob-sha <sha> [--uploaded-blob-sha <sha> ...]
-```
-
-SHA不一致partがあれば `gateway-submit` は `phase: upload-payload-parts` のまま再分割したupload actionだけを返す。そのactionを実行して再度 `gateway-submit` する。全part一致時だけ単一request actionが返る。request actionをupload検証より先に生成・送信する手順は存在しない。
+root tree SHAがhelper事前計算値と一致した場合だけ、単一のrequest actionが返る。root tree作成が失敗した場合は期待blobのmaterializeが成立していないのでrequestを送信せず、helper指定chunk actionを再実行してからroot actionを再試行する。
 
 Gateway処理後に対象branch HEADを一度取得して完了する。
 
@@ -136,13 +130,14 @@ python scripts/publish_request.py gateway-status
 python scripts/publish_request.py plan --target-ref HEAD
 ```
 
-正常系でChatGPTが手作業するのは、責務checkpointの選択、開始時の対象branch HEAD取得、helperが指定した`connector_namespace` / `connector_function`へのaction args転送、Connectorが返した短いblob SHAのhelperへの受け渡し、Gateway後の対象branch HEAD確認だけである。Connector function自体を推測・代替しない。Base64、Git blob OID、part境界、call予算、manifest path、packet順序、publish branch、receipt JSONを人手で再構成しない。
+正常系でChatGPTが手作業するのは、責務checkpointの選択、開始時の対象branch HEAD取得、helperが指定した`connector_namespace` / `connector_function`へのaction args転送、root `create_tree` が返した短いtree SHAのhelperへの受け渡し、Gateway後の対象branch HEAD確認だけである。Connector function自体を推測・代替しない。Base64、Git blob OID、chunk境界、root tree内容、call予算、manifest path、packet順序、publish branch、receipt JSONを人手で再構成しない。
 
 ### Publish failure handling
 
 - `gateway-begin`でtarget HEAD不一致: Connector actionは生成しない。remote変更を調査し、必要なら最新source-snapshotから再同期する。
-- `GitHub.create_blob`失敗: requestはまだ生成されない。該当actionだけ再実行する。返却SHA不一致: helperが不一致partだけを二分して再発行する。全文照合や手動part編集は行わず、全partがhelper計算OIDと一致した後だけ最終requestを生成する。
-- blob OID、payload長、payload SHA-256、bundle、parent、target tree不一致: Gatewayが失敗し、対象branchは更新されない。
+- chunk `GitHub.create_tree`失敗: requestはまだ生成されない。該当chunk actionを再実行する。chunk転記が壊れて期待blobが作られなかった場合はSHA-only root `create_tree`が失敗するためrequestを送信しない。
+- root tree SHA不一致: `gateway-submit`はrequestを生成しない。helper生成action以外へ読み替えず、chunk materializationとroot assemblyを再確認する。
+- payload tree OID、blob OID、payload長、payload SHA-256、bundle、parent、target tree不一致: Gatewayが失敗し、対象branchは更新されない。
 - target branch push競合: forceしない。Gatewayの直前base再確認またはnon-force pushで停止する。
 - helper/Connector/Gateway経路そのものを変更した場合: ローカル契約テスト後、必要に応じて `temp` をtargetとする隔離検証を行う。`temp` の成果物を `develop` publish入力として再利用しない。
 
