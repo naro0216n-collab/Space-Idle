@@ -42,8 +42,7 @@ def test_industry_and_extraction_publish_requests_into_shared_service_plan():
     from space_idle.content import base_ids as ids
 
     sim = build_game_application()._simulation
-    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
-    plan = sim.service_capacity_allocation_projection({ids.EARTH: power})
+    plan = sim.service_capacity_allocation_projection()
 
     industry = tuple(
         request for request in plan.requests

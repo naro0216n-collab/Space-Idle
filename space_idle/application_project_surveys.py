@@ -14,7 +14,9 @@ class SurveyProgressionProjectorMixin:
             if provider_operational_node_id is None
             else sim.graph.operational_node(provider_operational_node_id).body_id
         )
-        service_plan = sim.service_capacity_allocation_projection()
+        decision = sim.tick_decision_projection()
+        service_plan = decision.allocations.services
+        powers = decision.allocations.power_by_location
         rows = []
         for (cell_id, resource_id), target in sorted(
             sim.survey.targets.items(),
@@ -29,7 +31,7 @@ class SurveyProgressionProjectorMixin:
             power = None
             capacity = 0.0
             if capacity_provider is not None:
-                power = sim.power.snapshot(capacity_provider, sim.facilities, sim.day)
+                power = powers[capacity_provider]
                 capacity = sim.survey.capacity_for_target(
                     capacity_provider, cell_id, resource_id, power, sim.day
                 )

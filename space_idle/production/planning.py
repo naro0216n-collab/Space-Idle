@@ -107,9 +107,7 @@ class IndustryPlanningMixin:
             for facility, _process in rows
         }
         maintenance_factors = {
-            facility.id: power.maintenance_factor_by_facility.get(
-                facility.id, facilities.maintenance_factor(facility.id)
-            )
+            facility.id: power.maintenance_factor_by_facility.get(facility.id, 1.0)
             for facility, _process in rows
         }
         physical_limits = {

@@ -58,11 +58,9 @@ class StorageService:
             if snapshot is not None:
                 utilization = max(0.0, min(1.0, snapshot.utilization_by_facility.get(facility.id, 1.0)))
             maintenance = (
-                self.facilities.maintenance_factor(facility.id)
+                1.0
                 if snapshot is None
-                else snapshot.maintenance_factor_by_facility.get(
-                    facility.id, self.facilities.maintenance_factor(facility.id)
-                )
+                else snapshot.maintenance_factor_by_facility.get(facility.id, 1.0)
             )
 
             for storage_class, capacity in provider.capacity_t_by_class.items():

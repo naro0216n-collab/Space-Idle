@@ -35,37 +35,25 @@ class ResearchWorkflowMixin:
     def _research_execution_supply_weights(
         self,
         day: int,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None,
     ) -> tuple[tuple[SpatialNodeId, float], ...]:
         locations = sorted(
             self.facilities.environment.graph.operational_node_ids(), key=str
         )
         nominal: list[tuple[SpatialNodeId, float]] = []
-        enabled: list[tuple[SpatialNodeId, float]] = []
         for location_id in locations:
             nominal_rate = self.facilities.nominal_service_capacity_at(
                 location_id, self.RESEARCH_EXECUTION_SERVICE, day
             )
-            if nominal_rate <= 1e-12:
-                continue
-            nominal.append((location_id, nominal_rate))
-            snapshot = None if power_by_location is None else power_by_location.get(location_id)
-            if snapshot is None:
-                snapshot = self.power.snapshot(location_id, self.facilities, day)
-            enabled_rate = self.facilities.enabled_service_capacity_at(
-                location_id, self.RESEARCH_EXECUTION_SERVICE, snapshot, day
-            )
-            if enabled_rate > 1e-12:
-                enabled.append((location_id, enabled_rate))
-        return tuple(enabled or nominal)
+            if nominal_rate > 1e-12:
+                nominal.append((location_id, nominal_rate))
+        return tuple(nominal)
 
     def service_requests(
         self,
         day: int = 0,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[ServiceCapacityRequest, ...]:
         requests: list[ServiceCapacityRequest] = []
-        theory_supply = self._research_execution_supply_weights(day, power_by_location)
+        theory_supply = self._research_execution_supply_weights(day)
         theory_supply_total = sum(rate for _location_id, rate in theory_supply)
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
             if state.paused:
@@ -605,7 +593,7 @@ class ResearchWorkflowMixin:
             blockers: list[tuple[str, str]] = []
             if self.stored_points <= 1e-12:
                 blockers.append(("research_points", "Research Point不足"))
-            if not self._research_execution_supply_weights(day, power_by_location):
+            if not self._research_execution_supply_weights(day):
                 blockers.append(("research_execution", "Research execution能力なし"))
             return tuple(blockers)
         if state.stage is ResearchStage.PROTOTYPE:

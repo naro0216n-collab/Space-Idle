@@ -9,8 +9,9 @@ from space_idle.persistence import load_game, save_game
 from space_idle.surface_infrastructure import SURFACE_DISTRIBUTION_SERVICE
 
 
-def _snapshot(sim):
-    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+def _snapshot(sim, maintenance_factors=None):
+    physical = sim.power.physical_snapshot(ids.EARTH, sim.facilities, sim.day)
+    power = sim.power.resolve_snapshot(physical, maintenance_factors)
     return sim.surface_infrastructure.snapshot(ids.EARTH, sim.facilities, power, sim.day)
 
 
@@ -45,8 +46,7 @@ def test_surface_distribution_facility_supplies_nominal_and_available_capacity()
     assert supplied.available_capacity == pytest.approx(1.0)
     assert supplied.fulfillment == pytest.approx(1.0)
 
-    sim.facilities.facilities[facility_id].maintenance_satisfaction = 0.5
-    degraded = _snapshot(sim)
+    degraded = _snapshot(sim, {facility_id: 0.5})
     assert degraded.nominal_capacity == pytest.approx(1.0)
     assert degraded.available_capacity == pytest.approx(0.5)
     assert degraded.fulfillment == pytest.approx(0.5)

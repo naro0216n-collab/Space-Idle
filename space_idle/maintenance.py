@@ -173,11 +173,5 @@ class FacilityMaintenanceService:
     def advance_day(
         self, allocations: ResourceAllocationPlan, day: int = 0
     ) -> None:
-        satisfaction = self.satisfaction_projection(allocations)
         for node_id, resource_id, amount in self.resource_consumption_projection(allocations):
             self.inventory.consume_allocated(node_id, resource_id, amount)
-
-        for facility in self.facilities.facilities.values():
-            facility.maintenance_satisfaction = max(
-                0.0, min(1.0, satisfaction[facility.id])
-            )

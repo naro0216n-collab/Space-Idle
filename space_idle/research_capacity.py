@@ -28,9 +28,7 @@ class ResearchCapacityMixin:
             min(
                 1.0,
                 snapshot.utilization_by_facility.get(facility.id, 1.0)
-                * snapshot.maintenance_factor_by_facility.get(
-                    facility.id, self.facilities.maintenance_factor(facility.id)
-                ),
+                * snapshot.maintenance_factor_by_facility.get(facility.id, 1.0),
             ),
         )
 

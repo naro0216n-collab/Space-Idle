@@ -221,9 +221,7 @@ class SurfaceInfrastructureService:
                 0.0,
                 min(
                     1.0,
-                    power.maintenance_factor_by_facility.get(
-                        facility.id, facilities.maintenance_factor(facility.id)
-                    ),
+                    power.maintenance_factor_by_facility.get(facility.id, 1.0),
                 ),
             )
             for supply in definition.service_capacity_supplies:

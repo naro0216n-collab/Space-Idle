@@ -172,10 +172,20 @@ def test_research_point_growth_loop_is_reachable_through_application_api():
             row for row in app.query(GetProjects()).items if row.id == provider_project
         ).status == "complete",
     )
-    provider = next(
-        row for row in app.query(GetOperationalNode(str(ids.LEO))).facilities
-        if row.definition_id == str(ids.MICROGRAVITY_EXPERIMENT_PLATFORM)
-    )
+    def research_provider():
+        return next(
+            row for row in app.query(GetOperationalNode(str(ids.LEO))).facilities
+            if row.definition_id == str(ids.MICROGRAVITY_EXPERIMENT_PLATFORM)
+        )
+
+    provider = research_provider()
     assert provider.research_tier is not None and provider.research_tier > 1
+    # The newly completed facility is not exempt from current-tick maintenance.
+    # Existing logistics must physically deliver its recurring maintenance inputs
+    # before the higher research method becomes operational.
+    _advance_until(
+        app, lambda: research_provider().research_generation_points_per_day > 0
+    )
+    provider = research_provider()
     assert provider.research_generation_points_per_day > 0
     assert provider.research_storage_capacity_points > 0

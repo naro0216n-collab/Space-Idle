@@ -88,9 +88,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 min(
                     1.0,
                     power.utilization_by_facility.get(facility.id, 1.0)
-                    * power.maintenance_factor_by_facility.get(
-                        facility.id, facilities.maintenance_factor(facility.id)
-                    ),
+                    * power.maintenance_factor_by_facility.get(facility.id, 1.0),
                 ),
             )
             enabled[key] = enabled.get(key, 0.0) + factor
@@ -116,7 +114,6 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         location_id: SpatialNodeId,
         facilities: FacilityBook,
         inventory: InventoryBook,
-        power: PowerSnapshot,
         day: int = 0,
     ) -> tuple[ResourceDemand, ...]:
         """Declare one-day input replenishment needs for active processes.
@@ -129,19 +126,9 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             process = self.process_for(facility)
             if process is None:
                 continue
-            utilization = max(
-                0.0,
-                min(
-                    1.0,
-                    power.utilization_by_facility.get(facility.id, 1.0)
-                    * power.maintenance_factor_by_facility.get(
-                        facility.id, facilities.maintenance_factor(facility.id)
-                    ),
-                ),
-            )
             for resource_id, amount_t in process.inputs_per_day.items():
                 if amount_t > 1e-12:
-                    required[resource_id] = required.get(resource_id, 0.0) + amount_t * utilization
+                    required[resource_id] = required.get(resource_id, 0.0) + amount_t
 
         owner_id = EntityId(f"industry.site:{location_id}")
         demands: list[ResourceDemand] = []
@@ -169,7 +156,6 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         self,
         location_id: SpatialNodeId,
         facilities: FacilityBook,
-        power: PowerSnapshot,
         day: int = 0,
     ) -> tuple[ResourceClaim, ...]:
         claims: list[ResourceClaim] = []
@@ -179,20 +165,9 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             process = self.process_for(facility)
             if process is None:
                 continue
-            utilization = max(
-                0.0,
-                min(
-                    1.0,
-                    power.utilization_by_facility.get(facility.id, 1.0)
-                    * power.maintenance_factor_by_facility.get(
-                        facility.id, facilities.maintenance_factor(facility.id)
-                    ),
-                ),
-            )
-            for resource_id, amount_t in sorted(
+            for resource_id, requested in sorted(
                 process.inputs_per_day.items(), key=lambda row: str(row[0])
             ):
-                requested = amount_t * utilization
                 if requested <= 1e-12:
                     continue
                 claims.append(ResourceClaim(
@@ -206,6 +181,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                     f"process:{process.id}",
                     demand_id=EntityId(f"demand.industry:{location_id}:{resource_id}"),
                 ))
+
         return tuple(claims)
 
 

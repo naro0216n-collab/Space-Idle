@@ -57,7 +57,6 @@ class ConstructionExecutionMixin:
 
     def construction_service_requests(
         self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot],
         day: int = 0,
     ) -> tuple[ServiceCapacityRequest, ...]:
         requests: list[ServiceCapacityRequest] = []
@@ -71,15 +70,7 @@ class ConstructionExecutionMixin:
             recipe = self._recipe_for_project(project)
             if recipe.self_deploying or recipe.construction_work <= 1e-12:
                 continue
-            power = power_by_location.get(project.operational_node_id)
-            if power is None:
-                power = self.power.snapshot(
-                    project.operational_node_id, self.facilities, day
-                )
-            if self.project_site_failures(project, day, power):
-                continue
-            fulfillment = self.project_construction_fulfillment(project, power, day)
-            if fulfillment <= 1e-12:
+            if self.project_site_failures(project, day, None):
                 continue
             remaining_work = max(
                 0.0, recipe.construction_work - project.construction_done
@@ -91,13 +82,14 @@ class ConstructionExecutionMixin:
                     self.construction_service_request_id(project.id),
                     project.operational_node_id,
                     CONSTRUCTION_SERVICE_TYPE,
-                    remaining_work / fulfillment,
+                    remaining_work,
                     project.priority,
                     "construction",
                     EntityId(str(project.id)),
                     "construction_work",
                 )
             )
+
         return tuple(requests)
 
     def advance_construction(

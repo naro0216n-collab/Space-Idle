@@ -50,9 +50,7 @@ class ResearchProgressionProjectorMixin:
             if provider is None:
                 continue
             blockers = list(sim.facilities.activation_failures(facility, sim.day))
-            snapshot = power_by_location.get(facility.operational_node_id)
-            if snapshot is None:
-                snapshot = sim.power.snapshot(facility.operational_node_id, sim.facilities, sim.day)
+            snapshot = power_by_location[facility.operational_node_id]
             utilization = max(
                 0.0,
                 min(1.0, snapshot.utilization_by_facility.get(facility.id, 1.0)),
@@ -75,16 +73,13 @@ class ResearchProgressionProjectorMixin:
         sim = self._simulation
         if sim.research is None:
             return ResearchView(0.0, 0.0, 0.0, False, (), (), ())
-        power_by_location = {
-            node.id: sim.power.snapshot(node.id, sim.facilities, sim.day)
-            for node in sim.graph.operational_nodes()
-            if sim.facilities.all_at(node.id)
-        }
+        decision = sim.tick_decision_projection()
+        power_by_location = decision.allocations.power_by_location
         generation = sim.research.generation_rate(power_by_location, sim.day)
         capacity = sim.research.storage_capacity(power_by_location, sim.day)
         providers = self._research_provider_rows(power_by_location)
-        service_allocations = sim.service_capacity_allocation_projection(power_by_location)
-        resource_allocations = sim.resource_allocation_projection(power_by_location)
+        service_allocations = decision.allocations.services
+        resource_allocations = decision.allocations.resources
         point_requests, point_allocations = sim.research.point_allocation_projection(
             service_allocations
         )

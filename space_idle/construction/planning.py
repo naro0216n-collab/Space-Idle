@@ -288,7 +288,6 @@ class ConstructionPlanningMixin:
                     facility
                     for facility in self.facilities.active_compatible_at(project.operational_node_id, day)
                     if facility.definition_id in self.construction_providers
-                    and self.facilities.maintenance_factor(facility.id) > 1e-12
                 ]
                 resource_capacity = any(
                     self.inventory.available(project.operational_node_id, resource_id) > 1e-12

@@ -331,10 +331,7 @@ def test_transient_resource_allocations_are_not_saved_or_rebuilt_after_load(tmp_
     app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     sim = app._simulation
     before = capture_state(sim)
-    claims = sim._resource_claims({
-        node_id: sim.power.snapshot(node_id, sim.facilities, sim.day)
-        for node_id in sim.graph.operational_node_ids()
-    })
+    claims = sim._resource_claims()
     allocate_resource_claims(claims, sim.inventory)
     assert capture_state(sim) == before
 

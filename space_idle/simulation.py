@@ -14,7 +14,7 @@ from .inventory import InventoryBook
 from .knowledge import DomainActivity
 from .logistics import LogisticsService
 from .maintenance import FacilityMaintenanceService
-from .power import PowerService, PowerSnapshot
+from .power import PowerPhysicalSnapshot, PowerService, PowerSnapshot
 from .projects import ProjectService
 from .research import ResearchService
 from .resource_claim import ResourceAllocationPlan, ResourceClaim, allocate_resource_claims
@@ -65,7 +65,7 @@ class OfflineProgressResult:
 class TickPhysicalSnapshot:
     day: int
     ordered_locations: tuple[SpatialNodeId, ...]
-    power_by_location: dict[SpatialNodeId, PowerSnapshot]
+    power_inputs_by_location: dict[SpatialNodeId, PowerPhysicalSnapshot]
 
 
 @dataclass(frozen=True)
@@ -86,6 +86,7 @@ class TickAllocations:
     funds: FundsAllocationPlan
     logistics: LogisticsResourcePlan
     resources: ResourceAllocationPlan
+    power_by_location: dict[SpatialNodeId, PowerSnapshot]
     services: ServiceCapacityAllocationPlan
 
 
@@ -155,26 +156,16 @@ class Simulation:
         }
         self.storage.refresh(self.day, power_by_location)
 
-    def _gross_resource_demands(
-        self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
-    ) -> tuple[ResourceDemand, ...]:
-        """Collect domain need before local supply and transport are resolved."""
+    def _gross_resource_demands(self) -> tuple[ResourceDemand, ...]:
+        """Collect pre-allocation physical need from every active Domain."""
         locations = self._active_locations()
-        powers = power_by_location or {
-            loc: self.power.snapshot(loc, self.facilities, self.day)
-            for loc in sorted(locations, key=str)
-        }
         demands: list[ResourceDemand] = list(self.projects.resource_demands(self.day))
         if self.founding is not None:
             demands.extend(self.founding.resource_demands())
         for location_id in sorted(locations, key=str):
-            power = powers.get(location_id)
-            if power is None:
-                power = self.power.snapshot(location_id, self.facilities, self.day)
             demands.extend(
                 self.industry.resource_demands(
-                    location_id, self.facilities, self.inventory, power, self.day
+                    location_id, self.facilities, self.inventory, self.day
                 )
             )
         if self.research is not None:
@@ -192,46 +183,26 @@ class Simulation:
             seen.add(demand.id)
         return tuple(demands)
 
-    def resource_demand_resolutions(
-        self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
-    ) -> tuple[ResourceDemandResolution, ...]:
-        """Expose gross need and deterministic on-site allocation for queries.
+    def resource_demand_resolutions(self) -> tuple[ResourceDemandResolution, ...]:
+        """Expose gross need and deterministic on-site allocation for queries."""
+        return resolve_local_resource_supply(self._gross_resource_demands(), self.inventory)
 
-        This is observational. It does not reserve resources or alter priorities,
-        and therefore does not remove a supply bottleneck on the player's behalf.
-        """
-        return resolve_local_resource_supply(
-            self._gross_resource_demands(power_by_location), self.inventory
-        )
-
-    def resource_demands(
-        self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
-    ) -> tuple[ResourceDemand, ...]:
+    def resource_demands(self) -> tuple[ResourceDemand, ...]:
         """Return only the true off-site shortage after shared local netting."""
         rows: list[ResourceDemand] = []
-        for resolution in self.resource_demand_resolutions(power_by_location):
+        for resolution in self.resource_demand_resolutions():
             demand = resolution.external_demand()
             if demand is not None:
                 rows.append(demand)
         return tuple(rows)
 
-    def _resource_claims(
-        self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot],
-    ) -> tuple[ResourceClaim, ...]:
+    def _resource_claims(self) -> tuple[ResourceClaim, ...]:
         claims: list[ResourceClaim] = list(self.projects.resource_claims(self.day))
         if self.founding is not None:
             claims.extend(self.founding.resource_claims())
         for location_id in sorted(self._active_locations(), key=str):
-            power = power_by_location.get(location_id)
-            if power is None:
-                power = self.power.snapshot(location_id, self.facilities, self.day)
             claims.extend(
-                self.industry.resource_claims(
-                    location_id, self.facilities, power, self.day
-                )
+                self.industry.resource_claims(location_id, self.facilities, self.day)
             )
         if self.research is not None:
             claims.extend(self.research.resource_claims(self.day))
@@ -250,37 +221,27 @@ class Simulation:
 
     def _allocate_tick_resources(
         self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot],
         logistics_claims: tuple[ResourceClaim, ...] = (),
         *,
         domain_claims: tuple[ResourceClaim, ...] | None = None,
     ) -> ResourceAllocationPlan:
         claims = (
-            self._resource_claims(power_by_location)
-            if domain_claims is None
-            else domain_claims
+            self._resource_claims() if domain_claims is None else domain_claims
         ) + tuple(logistics_claims)
         return allocate_resource_claims(claims, self.inventory)
 
-    def _service_capacity_requests(
-        self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot],
-    ) -> tuple[ServiceCapacityRequest, ...]:
+    def _service_capacity_requests(self) -> tuple[ServiceCapacityRequest, ...]:
         requests: list[ServiceCapacityRequest] = list(
             self.logistics.vehicle_production_service_requests(self.day)
         )
         requests.extend(self.logistics.transport_service_capacity_requests(self.day))
-        requests.extend(
-            self.projects.construction_service_requests(power_by_location, self.day)
-        )
+        requests.extend(self.projects.construction_service_requests(self.day))
         if self.founding is not None:
             requests.extend(self.founding.service_requests(self.day))
         if self.survey is not None:
             requests.extend(self.survey.service_requests(self.day))
         if self.research is not None:
-            requests.extend(
-                self.research.service_requests(self.day, power_by_location)
-            )
+            requests.extend(self.research.service_requests(self.day))
         for location_id in sorted(self._active_locations(), key=str):
             requests.extend(
                 self.industry.service_requests(location_id, self.facilities, self.day)
@@ -293,9 +254,7 @@ class Simulation:
                 )
         if self.surface_infrastructure is not None:
             for location_id in sorted(self.graph.locations, key=str):
-                requests.append(
-                    self.surface_infrastructure.service_request(location_id)
-                )
+                requests.append(self.surface_infrastructure.service_request(location_id))
         seen: set[object] = set()
         for request in requests:
             if request.id in seen:
@@ -308,17 +267,11 @@ class Simulation:
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
         requests: tuple[ServiceCapacityRequest, ...] | None = None,
     ) -> ServiceCapacityAllocationPlan:
-        requests = (
-            self._service_capacity_requests(power_by_location)
-            if requests is None
-            else requests
-        )
+        requests = self._service_capacity_requests() if requests is None else requests
         dynamic_nominal: dict[tuple[SpatialNodeId, str], float] = {}
         dynamic_enabled: dict[tuple[SpatialNodeId, str], float] = {}
         for location_id in sorted(self._active_locations(), key=str):
-            power = power_by_location.get(location_id)
-            if power is None:
-                power = self.power.snapshot(location_id, self.facilities, self.day)
+            power = power_by_location[location_id]
             industry_nominal, industry_enabled = self.industry.service_supply(
                 location_id, self.facilities, power, self.day
             )
@@ -358,9 +311,7 @@ class Simulation:
         for location_id, service_type in sorted(
             keys, key=lambda row: (str(row[0]), row[1])
         ):
-            power = power_by_location.get(location_id)
-            if power is None:
-                power = self.power.snapshot(location_id, self.facilities, self.day)
+            power = power_by_location[location_id]
             if service_type == CONSTRUCTION_SERVICE_TYPE:
                 nominal_rate = self.projects.construction_nominal_capacity_at(
                     location_id, self.day
@@ -407,82 +358,33 @@ class Simulation:
             limiting_factors=limiting,
         )
 
-    def service_capacity_allocation_projection(
-        self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
-    ) -> ServiceCapacityAllocationPlan:
-        locations = self._active_locations() | set(self.graph.operational_node_ids())
-        powers = power_by_location or {
-            loc: self.power.snapshot(loc, self.facilities, self.day)
-            for loc in sorted(locations, key=str)
-        }
-        return self._allocate_tick_services(powers)
+    def service_capacity_allocation_projection(self) -> ServiceCapacityAllocationPlan:
+        return self.tick_decision_projection().allocations.services
 
     def tick_decision_projection(self) -> TickDecisionProjection:
-        """Project the current tick's intent, planning and allocation without mutation.
-
-        This deliberately excludes boundary settlement and Domain execution. It is
-        suitable for Application queries that must explain the same decisions the
-        next tick execution would use from the current authoritative state.
-        """
-        locations = self._active_locations() | set(self.graph.operational_node_ids())
-        ordered_locations = tuple(sorted(locations, key=str))
-        powers = {
-            location_id: self.power.snapshot(location_id, self.facilities, self.day)
-            for location_id in ordered_locations
-        }
-        snapshot = TickPhysicalSnapshot(self.day, ordered_locations, powers)
+        """Project current intent, planning and allocation without mutation."""
+        snapshot = self._physical_tick_snapshot()
         intents = self._generate_tick_intents(snapshot)
         plan = self._plan_tick(intents)
         allocations = self._allocate_tick(snapshot, intents, plan)
         return TickDecisionProjection(snapshot, intents, plan, allocations)
 
     def external_funds_projection(self) -> tuple[tuple[FundsRequest, ...], FundsAllocationPlan]:
-        """Project current External Service spending requests and authorization.
-
-        This is observational: it rebuilds planning from current authoritative
-        state but does not spend Funds or mutate policy budgets.
-        """
-        locations = self._active_locations()
-        powers = {
-            loc: self.power.snapshot(loc, self.facilities, self.day)
-            for loc in sorted(locations, key=str)
-        }
-        gross_demands = self._gross_resource_demands(powers)
+        """Project current External Service spending requests and authorization."""
         external_demands = tuple(
             demand
-            for resolution in resolve_local_resource_supply(gross_demands, self.inventory)
+            for resolution in resolve_local_resource_supply(
+                self._gross_resource_demands(), self.inventory
+            )
             if (demand := resolution.external_demand()) is not None
         )
-        logistics_plan = self.logistics.plan_capacity_logistics(
-            self.day, external_demands
-        )
+        logistics_plan = self.logistics.plan_capacity_logistics(self.day, external_demands)
         requests = logistics_plan.spending_requests
         return requests, self.external_economy.allocate(requests, self.day)
 
-    def resource_allocation_projection(
-        self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
-    ) -> ResourceAllocationPlan:
+    def resource_allocation_projection(self) -> ResourceAllocationPlan:
         """Derive the current shared Resource allocation without mutating state."""
-        if power_by_location is None:
-            return self.tick_decision_projection().allocations.resources
-        gross_demands = self._gross_resource_demands(power_by_location)
-        external_demands = tuple(
-            demand
-            for resolution in resolve_local_resource_supply(gross_demands, self.inventory)
-            if (demand := resolution.external_demand()) is not None
-        )
-        logistics_plan = self.logistics.plan_capacity_logistics(
-            self.day, external_demands
-        )
-        funds = self.external_economy.allocate(
-            logistics_plan.spending_requests, self.day
-        )
-        authorized_logistics = self.logistics.authorize_capacity_logistics(
-            logistics_plan, funds, self.day
-        )
-        return self._allocate_tick_resources(power_by_location, authorized_logistics.claims)
+        return self.tick_decision_projection().allocations.resources
 
     def advance_to_day(self, target_day: int) -> None:
         if target_day < self.day:
@@ -531,22 +433,19 @@ class Simulation:
     def _physical_tick_snapshot(self) -> TickPhysicalSnapshot:
         locations = self._active_locations() | set(self.graph.operational_node_ids())
         ordered_locations = tuple(sorted(locations, key=str))
-        power_by_location = {
-            location_id: self.power.snapshot(
+        power_inputs = {
+            location_id: self.power.physical_snapshot(
                 location_id, self.facilities, self.day
             )
             for location_id in ordered_locations
         }
-        self.storage.refresh(self.day, power_by_location)
-        return TickPhysicalSnapshot(
-            self.day, ordered_locations, power_by_location
-        )
+        return TickPhysicalSnapshot(self.day, ordered_locations, power_inputs)
 
     def _generate_tick_intents(self, snapshot: TickPhysicalSnapshot) -> TickIntents:
         return TickIntents(
-            resource_demands=self._gross_resource_demands(snapshot.power_by_location),
-            resource_claims=self._resource_claims(snapshot.power_by_location),
-            service_requests=self._service_capacity_requests(snapshot.power_by_location),
+            resource_demands=self._gross_resource_demands(),
+            resource_claims=self._resource_claims(),
+            service_requests=self._service_capacity_requests(),
         )
 
     def _plan_tick(self, intents: TickIntents) -> TickPlan:
@@ -568,22 +467,29 @@ class Simulation:
         intents: TickIntents,
         plan: TickPlan,
     ) -> TickAllocations:
-        funds = self.external_economy.allocate(
-            plan.logistics.spending_requests, self.day
-        )
+        funds = self.external_economy.allocate(plan.logistics.spending_requests, self.day)
         authorized_logistics = self.logistics.authorize_capacity_logistics(
             plan.logistics, funds, self.day
         )
         resources = self._allocate_tick_resources(
-            snapshot.power_by_location,
             authorized_logistics.claims,
             domain_claims=intents.resource_claims,
         )
-        services = self._allocate_tick_services(
-            snapshot.power_by_location,
-            intents.service_requests,
+        maintenance_factors = (
+            self.maintenance.satisfaction_projection(resources)
+            if self.maintenance is not None
+            else {facility.id: 1.0 for facility in self.facilities.facilities.values()}
         )
-        return TickAllocations(funds, authorized_logistics, resources, services)
+        power_by_location = {
+            location_id: self.power.resolve_snapshot(
+                snapshot.power_inputs_by_location[location_id], maintenance_factors
+            )
+            for location_id in snapshot.ordered_locations
+        }
+        services = self._allocate_tick_services(power_by_location, intents.service_requests)
+        return TickAllocations(
+            funds, authorized_logistics, resources, power_by_location, services
+        )
 
     def _execute_tick_domains(
         self,
@@ -591,6 +497,11 @@ class Simulation:
         allocations: TickAllocations,
     ) -> tuple[DomainActivity, ...]:
         activities: list[DomainActivity] = []
+        powers = allocations.power_by_location
+        self.storage.refresh(self.day, powers)
+        if self.maintenance is not None:
+            self.maintenance.advance_day(allocations.resources, self.day)
+
         active_locations = set(self._active_locations())
         for location_id in snapshot.ordered_locations:
             if location_id not in active_locations:
@@ -599,7 +510,7 @@ class Simulation:
                 location_id,
                 self.facilities,
                 self.inventory,
-                snapshot.power_by_location[location_id],
+                powers[location_id],
                 self.day,
                 allocations.resources,
                 allocations.services,
@@ -609,45 +520,33 @@ class Simulation:
                     location_id,
                     self.facilities,
                     self.inventory,
-                    snapshot.power_by_location[location_id],
+                    powers[location_id],
                     self.day,
                     allocations.services,
                 ))
 
         if self.research is not None:
             self.research.advance_day(
-                snapshot.power_by_location,
-                allocations.resources,
-                allocations.services,
-                self.day,
+                powers, allocations.resources, allocations.services, self.day
             )
         if self.scientific_exploration is not None:
             self.scientific_exploration.advance_day(
-                snapshot.power_by_location, allocations.resources, self.day
+                powers, allocations.resources, self.day
             )
         if self.survey is not None:
-            self.survey.advance_day(
-                snapshot.power_by_location, allocations.services, self.day
-            )
-        if self.maintenance is not None:
-            self.maintenance.advance_day(allocations.resources, self.day)
+            self.survey.advance_day(powers, allocations.services, self.day)
 
         self.logistics.advance_vehicle_production_day(
-            snapshot.power_by_location,
-            allocations.resources,
-            allocations.services,
-            self.day,
+            powers, allocations.resources, allocations.services, self.day
         )
         self.projects.finalize_procurement(allocations.resources, self.day)
-        self.projects.advance_construction(
-            snapshot.power_by_location, allocations.services, self.day
-        )
+        self.projects.advance_construction(powers, allocations.services, self.day)
         if self.founding is not None:
             self.founding.advance_day(
                 allocations.resources,
                 allocations.services,
                 self.day,
-                snapshot.power_by_location,
+                powers,
             )
         return tuple(activities)
 
@@ -667,18 +566,16 @@ class Simulation:
             allocations.funds,
         )
 
-    def _settle_tick_state_transitions(
-        self, snapshot: TickPhysicalSnapshot
-    ) -> None:
+    def _settle_tick_state_transitions(self, allocations: TickAllocations) -> None:
         if self.research is not None:
             self.research.settle_completions()
-        self.projects.settle_completions(snapshot.power_by_location, self.day)
+        self.projects.settle_completions(allocations.power_by_location, self.day)
         self.logistics.synchronize_surface_access_routes()
-        self.refresh_storage()
         next_day = self.day + 1
         if self.contracts is not None:
             self.contracts.advance_day(next_day)
         self.day = next_day
+        self.refresh_storage()
 
     def advance_days(self, days: int) -> None:
         if days < 0:
@@ -695,4 +592,4 @@ class Simulation:
                 self.research.knowledge_state.record(
                     activities + movement_activities, self.research.experience_rules
                 )
-            self._settle_tick_state_transitions(snapshot)
+            self._settle_tick_state_transitions(allocations)

@@ -39,7 +39,11 @@ class ProjectProjectorMixin:
             ),
             None,
         )
-        snapshot = power if power is not None else sim.power.snapshot(facility.operational_node_id, sim.facilities, sim.day)
+        snapshot = (
+            power
+            if power is not None
+            else sim.tick_decision_projection().allocations.power_by_location[facility.operational_node_id]
+        )
         failures = sim.projects.upgrade_site_failures(facility.id, recipe.target_level, sim.day, snapshot)
         return FacilityUpgradeOption(
             recipe.target_level,
@@ -113,13 +117,15 @@ class ProjectProjectorMixin:
         sim = self._simulation
         external_demands = self._external_demands("project")
         founding_demands = self._external_demands("founding")
+        decision = sim.tick_decision_projection()
+        powers = decision.allocations.power_by_location
         rows = []
         for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id)):
             if location_id is not None and project.operational_node_id != location_id:
                 continue
             recipe = sim.projects.recipe_for_project(project)
             facility_definition_id = sim.projects.target_facility_definition_id(project)
-            project_power = sim.power.snapshot(project.operational_node_id, sim.facilities, sim.day)
+            project_power = powers[project.operational_node_id]
             blockers = self._project_blockers(project, project_power, external_demands)
             resources = []
             for requirement in recipe.resources:
@@ -240,6 +246,7 @@ class ProjectProjectorMixin:
 
     def _build_options_view(self, location_id: SpatialNodeId) -> BuildOptionsView:
         sim = self._simulation
+        powers = sim.tick_decision_projection().allocations.power_by_location
         rows = []
         for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id)):
             definition = sim.facilities.definitions[recipe.facility_def_id]
@@ -247,7 +254,7 @@ class ProjectProjectorMixin:
                 continue
             failures = sim.projects.site_failures(
                 recipe.facility_def_id, location_id, sim.day,
-                sim.power.snapshot(location_id, sim.facilities, sim.day),
+                powers[location_id],
             )
             rows.append(BuildOptionRow(
                 str(recipe.facility_def_id), definition.display_name, recipe.construction_work,

@@ -71,7 +71,6 @@ class FacilityState:
     maintenance_priority: int = 50
     level: int = 1
     invested_resources: dict[DefinitionId, float] = field(default_factory=dict)
-    maintenance_satisfaction: float = 1.0
     site_cell_id: SurfaceCellId | None = None
 
     def __post_init__(self) -> None:
@@ -79,8 +78,6 @@ class FacilityState:
             raise ValueError("facility level must be positive")
         if any(amount < 0 for amount in self.invested_resources.values()):
             raise ValueError("facility invested resources must be non-negative")
-        if not 0.0 <= self.maintenance_satisfaction <= 1.0:
-            raise ValueError("facility maintenance satisfaction must be in 0..1")
 
 
 @dataclass
@@ -176,7 +173,6 @@ class FacilityBook:
             maintenance_priority=maintenance_priority,
             level=level,
             invested_resources=investment,
-            maintenance_satisfaction=1.0,
             site_cell_id=site_cell_id,
         )
         return entity_id
@@ -254,9 +250,6 @@ class FacilityBook:
             if amount > 1e-12
         }
 
-    def maintenance_factor(self, facility_id: EntityId) -> float:
-        return max(0.0, min(1.0, self.facilities[facility_id].maintenance_satisfaction))
-
     @staticmethod
     def _definition_has_capability(definition: FacilityDef, capability_id: str) -> bool:
         return any(supply.id == capability_id for supply in definition.capability_supplies)
@@ -327,9 +320,7 @@ class FacilityBook:
                 0.0,
                 min(
                     1.0,
-                    power.maintenance_factor_by_facility.get(
-                        facility.id, self.maintenance_factor(facility.id)
-                    ),
+                    power.maintenance_factor_by_facility.get(facility.id, 1.0),
                 ),
             )
             upstream = max(0.0, min(1.0, service_factors.get(facility.id, 1.0)))

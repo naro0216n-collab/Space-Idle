@@ -178,9 +178,7 @@ class ExtractionService:
                 0.0,
                 min(
                     1.0,
-                    power.maintenance_factor_by_facility.get(
-                        facility.id, facilities.maintenance_factor(facility.id)
-                    ),
+                    power.maintenance_factor_by_facility.get(facility.id, 1.0),
                 ),
             )
             fulfillment_by[facility.id] = power_factor * maintenance_factor

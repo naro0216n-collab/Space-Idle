@@ -13,6 +13,8 @@ from .shared import CelestialBodyId
 class SurfaceProjectorMixin:
     def _surface_map_view(self, body_id: CelestialBodyId) -> SurfaceMapView:
         sim = self._simulation
+        decision = sim.tick_decision_projection()
+        powers = decision.allocations.power_by_location
         body = sim.graph.bodies[body_id]
         locations = tuple(
             SurfaceLocationTerritoryRow(
@@ -41,7 +43,7 @@ class SurfaceProjectorMixin:
                 (row for row in sim.graph.locations.values() if row.body_id == body_id),
                 key=lambda row: str(row.operational_node_id),
             ):
-                location_power = sim.power.snapshot(location.operational_node_id, sim.facilities, sim.day)
+                location_power = powers[location.operational_node_id]
                 failures = sim.projects.surface_cell_development_failures(
                     location.operational_node_id, cell.id, sim.day, location_power
                 )
@@ -95,7 +97,7 @@ class SurfaceProjectorMixin:
                 )
             facility_placement_options = ()
             if owner is not None:
-                power = sim.power.snapshot(owner, sim.facilities, sim.day)
+                power = powers[owner]
                 facility_placement_options = tuple(
                     SurfaceFacilityPlacementOption(
                         str(recipe.facility_def_id),

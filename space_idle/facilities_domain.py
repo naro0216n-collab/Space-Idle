@@ -22,7 +22,6 @@ def capture_facilities(sim: Any) -> dict[str, Any]:
                 "maintenance_priority": f.maintenance_priority,
                 "level": f.level,
                 "invested_resources": {str(resource_id): amount for resource_id, amount in sorted(f.invested_resources.items(), key=lambda row: str(row[0]))},
-                "maintenance_satisfaction": f.maintenance_satisfaction,
             }
             for f in sorted(sim.facilities.facilities.values(), key=lambda row: str(row.id))
         ],
@@ -43,7 +42,6 @@ def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
             maintenance_priority=int(row["maintenance_priority"]),
             level=int(row["level"]),
             invested_resources={DefinitionId(key): float(value) for key, value in row["invested_resources"].items()},
-            maintenance_satisfaction=float(row["maintenance_satisfaction"]),
         )
     sim.facilities._counter = int(data["counter"])
 
@@ -105,7 +103,6 @@ def validate_runtime(sim: Any) -> None:
         _require(facility.level >= 1, f"facility state has invalid level: {facility_id}")
         _require(isinstance(facility.maintenance_priority, int), f"facility maintenance priority must be an integer: {facility_id}")
         _require(all(amount >= -1e-9 for amount in facility.invested_resources.values()), f"facility has negative invested resource: {facility_id}")
-        _require(-1e-9 <= facility.maintenance_satisfaction <= 1.0 + 1e-9, f"facility maintenance satisfaction out of range: {facility_id}")
         if sim.research is not None and facility.definition_id in sim.research.providers:
             provider = sim.research.providers[facility.definition_id]
             _require(any(level.level == facility.level for level in provider.levels), f"research provider does not define facility level: {facility_id}/{facility.level}")

@@ -121,11 +121,11 @@ class LocationProjectorMixin:
     def _operational_node_view(self, location_id: SpatialNodeId) -> OperationalNodeView:
         sim = self._simulation
         node = sim.graph.operational_node(location_id)
-        power = sim.power.snapshot(location_id, sim.facilities, sim.day)
-        research_power = {location_id: power}
-        service_allocations = sim.service_capacity_allocation_projection(
-            {location_id: power}
-        )
+        decision = sim.tick_decision_projection()
+        power = decision.allocations.power_by_location[location_id]
+        research_power = decision.allocations.power_by_location
+        service_allocations = decision.allocations.services
+        resource_allocations = decision.allocations.resources
 
         facilities = []
         for facility in sorted(
@@ -159,10 +159,13 @@ class LocationProjectorMixin:
             operating_blockers = list(activation_failures)
             if active_and_compatible and power_utilization < 1.0 - 1e-9:
                 operating_blockers.append(("power", "電力配分不足"))
-            if facility.maintenance_satisfaction < 1.0 - 1e-9:
+            maintenance_satisfaction = power.maintenance_factor_by_facility.get(
+                facility.id, 1.0
+            )
+            if maintenance_satisfaction < 1.0 - 1e-9:
                 operating_blockers.append(("maintenance", "維持資源充足率不足"))
             operational_utilization = (
-                power_utilization * facility.maintenance_satisfaction
+                power_utilization * maintenance_satisfaction
                 if active_and_compatible else 0.0
             )
             facilities.append(
@@ -190,7 +193,7 @@ class LocationProjectorMixin:
                         (str(resource_id), amount)
                         for resource_id, amount in sorted(maintenance_requirements.items(), key=lambda row: str(row[0]))
                     ),
-                    facility.maintenance_satisfaction,
+                    maintenance_satisfaction,
                     operational_utilization,
                     tuple(operating_blockers),
                     definition.placement_scope.value,
@@ -205,7 +208,6 @@ class LocationProjectorMixin:
             )
 
         industry = []
-        resource_allocations = sim.resource_allocation_projection({location_id: power})
         resource_claim_rows = []
         for claim in resource_allocations.claims:
             if claim.operational_node_id != location_id:

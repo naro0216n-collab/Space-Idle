@@ -43,7 +43,7 @@ class ApplicationReportProjectorMixin:
         nodes = self._dependency_scope_nodes(query)
         scope = set(nodes)
         decision = sim.tick_decision_projection()
-        powers = decision.snapshot.power_by_location
+        powers = decision.allocations.power_by_location
         resource_allocations = decision.allocations.resources
         service_allocations = decision.allocations.services
         logistics_execution = sim.logistics.capacity_logistics_execution_projection(
@@ -277,7 +277,8 @@ class ApplicationReportProjectorMixin:
         sim = self._simulation
         loc = str(location_id)
         issues: list[IssueRow] = []
-        power = sim.power.snapshot(location_id, sim.facilities, sim.day)
+        decision = sim.tick_decision_projection()
+        power = decision.allocations.power_by_location[location_id]
 
         if power.demand_mw > power.allocated_mw + 1e-9:
             issues.append(self._issue(
@@ -294,8 +295,8 @@ class ApplicationReportProjectorMixin:
                     operational_node_id=loc, entity_id=str(facility.id), definition_id=str(definition.id),
                 ))
 
-        resource_allocations = sim.resource_allocation_projection({location_id: power})
-        service_allocations = sim.service_capacity_allocation_projection({location_id: power})
+        resource_allocations = decision.allocations.resources
+        service_allocations = decision.allocations.services
         snapshots = {
             snap.facility_id: snap
             for snap in sim.industry.snapshots(
@@ -534,7 +535,8 @@ class ApplicationReportProjectorMixin:
 
     def _flow_report_view(self, location_id: SpatialNodeId) -> FlowReportView:
         sim = self._simulation
-        power = sim.power.snapshot(location_id, sim.facilities, sim.day)
+        decision = sim.tick_decision_projection()
+        power = decision.allocations.power_by_location[location_id]
         production: dict[object, float] = defaultdict(float)
         consumption: dict[object, float] = defaultdict(float)
         outbound_waiting: dict[object, float] = defaultdict(float)
@@ -542,8 +544,8 @@ class ApplicationReportProjectorMixin:
         inbound_transit: dict[object, float] = defaultdict(float)
         arrival_waiting: dict[object, float] = defaultdict(float)
 
-        resource_allocations = sim.resource_allocation_projection({location_id: power})
-        service_allocations = sim.service_capacity_allocation_projection({location_id: power})
+        resource_allocations = decision.allocations.resources
+        service_allocations = decision.allocations.services
         for snap in sim.industry.snapshots(
             location_id, sim.facilities, sim.inventory, power, sim.day,
             resource_allocations, service_allocations,
@@ -556,12 +558,12 @@ class ApplicationReportProjectorMixin:
         # Facility maintenance is an ordinary recurring physical resource flow.
         # Report the currently fulfilled consumption rate, while the full
         # requirement remains visible through Facility maintenance demand/query.
-        for facility in sim.facilities.all_at(location_id):
-            factor = max(0.0, min(1.0, facility.maintenance_satisfaction))
-            for resource_id, amount in sim.facilities.maintenance_requirements_per_day(
-                facility.id
-            ).items():
-                consumption[resource_id] += amount * factor
+        if sim.maintenance is not None:
+            for node_id, resource_id, amount in sim.maintenance.resource_consumption_projection(
+                resource_allocations
+            ):
+                if node_id == location_id:
+                    consumption[resource_id] += amount
 
         if sim.extraction is not None:
             for snap in sim.extraction.snapshots(

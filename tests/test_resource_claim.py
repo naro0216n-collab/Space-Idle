@@ -75,9 +75,8 @@ def test_real_maintenance_and_industry_claims_compete_in_the_same_allocator():
     from space_idle.content import base_ids as ids
 
     sim = build_game_application()._simulation
-    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
     industry_claims = tuple(
-        claim for claim in sim.industry.resource_claims(ids.EARTH, sim.facilities, power, sim.day)
+        claim for claim in sim.industry.resource_claims(ids.EARTH, sim.facilities, sim.day)
         if claim.resource_id == ids.STRUCTURAL_COMPONENTS
     )
     assert industry_claims
@@ -115,7 +114,6 @@ def test_operational_node_query_exposes_shared_resource_claim_allocation_decisio
 
     app = build_game_application()
     sim = app._simulation
-    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
     maintenance_claims = tuple(
         claim for claim in sim.maintenance.resource_claims(sim.day)
         if claim.operational_node_id == ids.EARTH
@@ -123,7 +121,7 @@ def test_operational_node_query_exposes_shared_resource_claim_allocation_decisio
     )
     industry_claims = tuple(
         claim for claim in sim.industry.resource_claims(
-            ids.EARTH, sim.facilities, power, sim.day
+            ids.EARTH, sim.facilities, sim.day
         )
         if claim.resource_id == ids.STRUCTURAL_COMPONENTS
     )

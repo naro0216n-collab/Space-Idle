@@ -219,9 +219,7 @@ class TransportCompatibilityMixin:
                 for code, detail in self.facilities.activation_failures(interface, day):
                     failures.append(f"{prefix}:interface:{code}:{detail}")
                 if not interface.paused and not self.facilities.environment_failures(interface, day):
-                    maintenance = power.maintenance_factor_by_facility.get(
-                        interface.id, self.facilities.maintenance_factor(interface.id)
-                    )
+                    maintenance = power.maintenance_factor_by_facility.get(interface.id, 1.0)
                     if maintenance <= 1e-12:
                         failures.append(f"{prefix}:interface:maintenance:facility unavailable")
                     utilization = power.utilization_by_facility.get(interface.id, 1.0)

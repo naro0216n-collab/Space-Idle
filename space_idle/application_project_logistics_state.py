@@ -164,12 +164,13 @@ class LogisticsStateProjectorMixin:
 
     def _vehicle_production_option_rows(self) -> tuple[VehicleProductionOptionRow, ...]:
         sim = self._simulation
+        powers = sim.tick_decision_projection().allocations.power_by_location
         rows: list[VehicleProductionOptionRow] = []
         for definition in sorted(sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)):
             if definition.production.service_type is None or definition.production.days <= 1e-12:
                 continue
             for node in sim.graph.operational_nodes():
-                power = sim.power.snapshot(node.id, sim.facilities, sim.day)
+                power = powers[node.id]
                 blockers = tuple(
                     f"{failure.code}:{failure.detail}"
                     for failure in sim.logistics.vehicle_production_site_failures(
@@ -188,10 +189,11 @@ class LogisticsStateProjectorMixin:
 
     def _vehicle_production_rows(self) -> tuple[VehicleProductionRow, ...]:
         sim = self._simulation
+        powers = sim.tick_decision_projection().allocations.power_by_location
         rows: list[VehicleProductionRow] = []
         for state in sorted(sim.logistics.vehicle_production_projects.values(), key=lambda row: str(row.id)):
             definition = sim.logistics.vehicle_defs[state.vehicle_definition_id]
-            power = sim.power.snapshot(state.operational_node_id, sim.facilities, sim.day)
+            power = powers[state.operational_node_id]
             blockers = sim.logistics.vehicle_production_blockers(state.id, day=sim.day, power=power)
             remaining_days = max(0.0, definition.production.days - state.progress_days)
             estimated_completion_day = (
