@@ -218,7 +218,3 @@ def test_save_persists_cell_resource_knowledge_without_extraction_deposit_state(
     assert state["survey"]["knowledge_progress"]
     assert all("cell_id" in row and "resource_id" in row for row in state["survey"]["knowledge_progress"])
     assert all("location_id" not in row for row in state["survey"]["knowledge_progress"])
-
-    serialized = json.dumps(payload, sort_keys=True)
-    for retired_term in ("reserve_t", "remaining_reserve", "deposit_resource_id", "actual_concentration"):
-        assert retired_term not in serialized

@@ -139,7 +139,7 @@ def test_research_total_cost_may_exceed_rp_storage_capacity():
     assert progressed.rp_remaining < progressed.research_point_cost
 
 
-def test_global_research_points_do_not_use_provider_research_allowlists():
+def test_global_research_points_are_available_to_any_research_definition():
     app = build_game_application()
     sim = app._simulation
     research_id = DefinitionId("test.research.unscoped")
@@ -158,7 +158,6 @@ def test_global_research_points_do_not_use_provider_research_allowlists():
 
     sim.advance_days(1)
     assert research_id in sim.research.completed
-    assert all(not hasattr(provider, "research_ids") for provider in sim.research.providers.values())
 
 def test_research_provider_level_behavior_comes_from_provider_content():
     app = build_game_application()

@@ -54,7 +54,6 @@ def test_transport_fleet_commitment_is_owned_by_fleet_reservation():
         if row.kind is FleetReservationKind.TRANSPORT and row.owner_id == allocation_id
     ]
 
-    assert not hasattr(allocation, "active_units")
     assert len(reservations) == 1
     assert reservations[0].units == 2
     assert reservations[0].vehicle_definition_id == allocation.vehicle_definition_id

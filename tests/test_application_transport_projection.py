@@ -40,6 +40,7 @@ from space_idle import (
     build_game_application,
 )
 from space_idle.shared import EntityId
+from space_idle.simulation import OfflineProgressPolicy
 from space_idle.api import GameRuntime
 from space_idle.api.codec import to_jsonable
 from space_idle.content.base_game import EARTH, LEO
@@ -248,9 +249,16 @@ def test_vehicle_production_exposes_resource_and_service_priority_control():
         app.execute(SetVehicleProductionSettings(production_id, priority=10))
 
 
-def test_ui_snapshot_is_json_safe_at_application_boundary(tmp_path):
-    runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
+def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(tmp_path):
+    now = [0.0]
+    runtime = GameRuntime(
+        factory=build_game_application,
+        save_dir=tmp_path,
+        offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0),
+        clock=lambda: now[0],
+    )
     location_id = runtime.query(GetWorld()).data.operational_nodes[0].id
+    now[0] = 3.2
     queries = {
         "world": GetWorld(), "global_issues": GetBottlenecks(), "research": GetResearch(),
         "scientific_explorations": GetScientificExplorations(), "contracts": GetContracts(),
@@ -264,7 +272,7 @@ def test_ui_snapshot_is_json_safe_at_application_boundary(tmp_path):
     }
     result = runtime.snapshot(queries)
     payload = to_jsonable(result.data)
-    assert payload["session"]["day"] == payload["world"]["day"]
+    assert payload["session"]["day"] == payload["world"]["day"] == 3
     assert payload["operational_node"]["id"] == location_id
     assert "pools" in payload["fleet"]
     assert "items" in payload["transport_allocations"]

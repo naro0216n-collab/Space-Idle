@@ -23,10 +23,6 @@ CONTROL_PATHS = (
     ".github/workflows/publish-gateway.yml",
     "scripts/publish_gateway_validate.py",
 )
-REMOVED_CONTROL_PATHS = (
-    "scripts/publish_gateway_payload.py",
-)
-
 
 class ControlMaintenanceError(RuntimeError):
     pass
@@ -178,11 +174,6 @@ def _expected_control_tree(repo: Path, base_tree: str, files: list[dict[str, obj
                 "update-index", "--add", "--cacheinfo", str(file["mode"]), str(file["blob_oid"]), str(file["path"]),
                 cwd=repo, env=env,
             )
-        for path in REMOVED_CONTROL_PATHS:
-            subprocess.run(
-                ["git", "update-index", "--force-remove", "--", path], cwd=repo, env=env,
-                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
         return _git("write-tree", cwd=repo, env=env)
 
 
@@ -203,7 +194,6 @@ def cmd_prepare(_: argparse.Namespace) -> int:
         "local_head": _git("rev-parse", "HEAD^{commit}", cwd=repo),
         "message": "Update publish gateway control plane",
         "files": files,
-        "removed_paths": list(REMOVED_CONTROL_PATHS),
     }
     transaction.mkdir(parents=True, exist_ok=False)
     _write_json(_manifest_path(repo), manifest)
@@ -212,7 +202,6 @@ def cmd_prepare(_: argparse.Namespace) -> int:
         "target_branch": TARGET_BRANCH,
         "local_head": manifest["local_head"],
         "control_paths": list(CONTROL_PATHS),
-        "removed_control_paths": list(REMOVED_CONTROL_PATHS),
         "next": "observe publish HEAD once, then run connector-plan",
     }, indent=2))
     return 0
@@ -309,10 +298,6 @@ def cmd_connector_tree(args: argparse.Namespace) -> int:
         {"path": file["path"], "mode": file["mode"], "type": "blob", "sha": file["blob_oid"]}
         for file in manifest["files"]
     ]
-    elements.extend(
-        {"path": path, "mode": "100644", "type": "blob", "sha": None}
-        for path in manifest["removed_paths"]
-    )
     packet = {
         "action": "GitHub.create_tree",
         "action_args": {

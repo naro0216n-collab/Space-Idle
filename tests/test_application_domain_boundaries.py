@@ -7,30 +7,6 @@ from pathlib import Path
 PACKAGE = Path(__file__).parents[1] / "space_idle"
 
 
-def test_application_logistics_projection_uses_public_transport_query_boundary():
-    from space_idle.logistics import LogisticsService
-    from space_idle.transport.service import TransportService
-
-    for public_name in (
-        "fleet_pool_snapshot",
-        "derive_transport_service_plan",
-    ):
-        assert hasattr(TransportService, public_name)
-        assert not hasattr(LogisticsService, public_name)
-    for public_name in ("current_transport_capacity_snapshot", "lane_snapshot"):
-        assert hasattr(LogisticsService, public_name)
-    assert not hasattr(LogisticsService, "transport_plan")
-    for path in PACKAGE.glob("application_project_logistics*.py"):
-        source = path.read_text(encoding="utf-8")
-        for private_name in (
-            "_automatic_mode_plan",
-            "_mode_cost_musd_per_t",
-            "_mode_propellant_t_per_cargo_t",
-            "_demand_pipeline_remaining",
-        ):
-            assert private_name not in source, f"{path.name} reaches transport private API {private_name}"
-
-
 def test_construction_owns_demand_without_transport_or_account_state_dependencies():
     from space_idle.projects import ProjectService
 

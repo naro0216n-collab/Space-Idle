@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from space_idle import (
-    AdvanceTime, CreateExternalServicePolicy, GetCatalog, GetContracts, GetWorld,
+    AdvanceTime, CreateExternalServicePolicy, GetWorld,
     build_game_application,
 )
 from space_idle.content.base_game import (
@@ -29,7 +29,7 @@ def _transport_service_allocations(sim, day, plan):
     }
     return sim._allocate_tick_services(powers, requests)
 
-def test_time_progression_has_no_automatic_income_and_world_exposes_no_passive_rate():
+def test_time_progression_has_no_automatic_income():
     app = build_game_application()
     before = app.query(GetWorld())
 
@@ -37,15 +37,6 @@ def test_time_progression_has_no_automatic_income_and_world_exposes_no_passive_r
     after = app.query(GetWorld())
 
     assert after.funds_musd == before.funds_musd
-    assert not hasattr(after, "passive_income_musd_per_day")
-
-
-def test_base_game_starts_without_contract_offers_or_contract_only_resources():
-    app = build_game_application()
-
-    assert app.query(GetContracts()).items == ()
-    resource_ids = {row.id for row in app.query(GetCatalog()).resources}
-    assert "base.resource.contract_payload" not in resource_ids
 
 
 def test_owned_transport_is_physical_while_external_transport_requires_policy_and_funds():

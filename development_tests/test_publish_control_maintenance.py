@@ -13,7 +13,6 @@ CONTROL_PATHS = (
     ".github/workflows/publish-gateway.yml",
     "scripts/publish_gateway_validate.py",
 )
-REMOVED_PATH = "scripts/publish_gateway_payload.py"
 
 
 def git(repo: Path, *args: str) -> str:
@@ -37,7 +36,7 @@ def init_repo(tmp_path: Path) -> tuple[Path, str, str]:
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init")
-    for path in (*CONTROL_PATHS, REMOVED_PATH):
+    for path in CONTROL_PATHS:
         file = repo / path
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(f"base {path}\n", encoding="utf-8")
@@ -51,7 +50,6 @@ def init_repo(tmp_path: Path) -> tuple[Path, str, str]:
     (repo / ".git" / "space-idle-publish-state.json").write_text(json.dumps(state), encoding="utf-8")
     for path in CONTROL_PATHS:
         (repo / path).write_text(f"updated {path}\n", encoding="utf-8")
-    (repo / REMOVED_PATH).unlink()
     commit_all(repo, "updated control plane")
     return repo, base, base_tree
 
@@ -60,11 +58,10 @@ def expected_oids(repo: Path) -> dict[str, str]:
     return {path: git(repo, "rev-parse", f"HEAD:{path}") for path in CONTROL_PATHS}
 
 
-def test_control_maintenance_uses_recorded_publish_base_and_no_remote_tree_read(tmp_path: Path) -> None:
+def test_control_maintenance_uses_recorded_publish_base_and_exact_current_paths(tmp_path: Path) -> None:
     repo, base, base_tree = init_repo(tmp_path)
     prepared = json.loads(run(repo, "prepare").stdout)
     assert prepared["control_paths"] == list(CONTROL_PATHS)
-    assert prepared["removed_control_paths"] == [REMOVED_PATH]
     plan = json.loads(run(repo, "connector-plan", "--target-remote-head", base).stdout)
     assert plan["base_tree"] == base_tree
     assert len(plan["upload_packets"]) == 2
@@ -79,7 +76,7 @@ def test_control_maintenance_uses_recorded_publish_base_and_no_remote_tree_read(
     assert packet["action"] == "GitHub.create_tree"
     assert packet["action_args"]["base_tree_sha"] == base_tree
     elements = packet["action_args"]["tree_elements"]
-    assert any(e["path"] == REMOVED_PATH and e["sha"] is None for e in elements)
+    assert {e["path"] for e in elements} == set(CONTROL_PATHS)
 
     wrong = run(repo, "connector-commit", "--tree-sha", "f" * 40, check=False)
     assert wrong.returncode != 0
@@ -118,9 +115,3 @@ def test_control_plan_rejects_moved_publish_head(tmp_path: Path) -> None:
     failed = run(repo, "connector-plan", "--target-remote-head", "e" * 40, check=False)
     assert failed.returncode != 0
     assert "publish HEAD moved" in failed.stderr
-
-
-def test_gateway_control_files_remain_small_independent_handoff_units() -> None:
-    sizes = {path: (ROOT / path).stat().st_size for path in CONTROL_PATHS}
-    assert max(sizes.values()) < 16 * 1024
-    assert not (ROOT / REMOVED_PATH).exists()

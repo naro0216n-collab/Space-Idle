@@ -54,7 +54,6 @@ def test_route_reachability_is_not_directly_gated_by_research_completion():
     route_id = RouteId("base.route.leo_lunar_orbit")
     route_definition = sim.transport.routes[route_id]
 
-    assert not hasattr(route_definition, "required_technologies")
     before = sim.transport.route_failures(route_id, sim.day)
     assert not any(failure.startswith("technology:") for failure in before)
 

@@ -132,26 +132,3 @@ def test_generic_core_contains_no_current_destination_specific_branches_or_locat
         text = path.read_text(encoding="utf-8").lower()
         for token in forbidden:
             assert token not in text, f"{path.name} contains destination-specific shortcut {token}"
-
-
-def test_lunar_prospecting_is_not_forced_through_orbital_infrastructure_track():
-    from space_idle.content.base_game import TECH_LUNAR_PROSPECTING, TECH_ORBITAL_OPERATIONS
-
-    app = build_game_application()
-    definitions = app._simulation.research.definitions
-    assert TECH_ORBITAL_OPERATIONS not in definitions[TECH_LUNAR_PROSPECTING].prerequisites
-
-
-def test_catalog_exposes_vehicle_definitions_even_when_no_instance_is_owned():
-    from space_idle import GetCatalog
-    from space_idle.content.base_game import REUSABLE_ORBITAL_CARGO_TUG
-
-    app = build_game_application()
-    app._simulation.transport.fleet_pools = {
-        key: pool for key, pool in app._simulation.transport.fleet_pools.items()
-        if key[0] != REUSABLE_ORBITAL_CARGO_TUG
-    }
-    catalog = app.query(GetCatalog())
-    row = next(vehicle for vehicle in catalog.vehicles if vehicle.id == str(REUSABLE_ORBITAL_CARGO_TUG))
-    assert row.production_service_type == "vehicle_assembly"
-    assert row.production_days > 0

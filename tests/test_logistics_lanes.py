@@ -10,6 +10,7 @@ from space_idle.content.base_game import (
     LEO,
     LUNAR_ORBIT,
     MACHINERY,
+    WATER,
     ORBITAL_LOGISTICS_NODE,
     PRECISION_ELECTRONICS,
     PROPELLANT,
@@ -23,10 +24,10 @@ from space_idle.resource_demand import ResourceDemand
 from space_idle.shared import DefinitionId, EntityId
 
 
-def _demand(amount_t: float, *, demand_id: str = "demand.test", destination=LEO, source=EARTH) -> ResourceDemand:
+def _demand(amount_t: float, *, demand_id: str = "demand.test", destination=LEO, source=EARTH, resource=MACHINERY) -> ResourceDemand:
     return ResourceDemand(
         EntityId(demand_id), "test", EntityId("test.owner"), destination,
-        MACHINERY, amount_t, 50, source,
+        resource, amount_t, 50, source,
     )
 
 
@@ -76,19 +77,18 @@ def test_lane_is_resource_agnostic_and_requested_capacity_limits_daily_cargo_flo
     sim = build_game_application()._simulation
     _owned_earth_leo_capacity(sim)
     lane_id = sim.logistics.create_lane(EARTH, LEO, 1.0, 50)
-    lane = sim.logistics.lanes[lane_id]
-    assert not hasattr(lane, "resource_id")
-    assert not hasattr(lane, "target_stock_t")
-    assert not hasattr(lane, "batch_t")
 
-    sim.inventory.add(EARTH, MACHINERY, 3.0)
-    demand = _demand(3.0)
-    _advance_logistics(sim, sim.day, (demand,))
+    sim.inventory.add(EARTH, MACHINERY, 1.0)
+    sim.inventory.add(EARTH, WATER, 1.0)
+    demands = (
+        _demand(0.5, demand_id="demand.machinery", resource=MACHINERY),
+        _demand(0.5, demand_id="demand.water", resource=WATER),
+    )
+    _advance_logistics(sim, sim.day, demands)
     flows = [flow for flow in sim.logistics.cargo_flows.values() if flow.lane_id == lane_id]
     assert sum(flow.amount_t for flow in flows) == pytest.approx(1.0)
-    assert all(flow.demand_id == demand.id for flow in flows)
-    assert not hasattr(sim.logistics, "orders")
-    assert not hasattr(sim.logistics, "missions")
+    assert {flow.resource_id for flow in flows} == {MACHINERY, WATER}
+    assert {flow.demand_id for flow in flows} == {demand.id for demand in demands}
 
 
 def test_lane_uses_parallel_transport_services_until_requested_capacity_is_filled():
@@ -169,13 +169,12 @@ def test_same_priority_lane_capacity_allocation_is_registration_order_independen
     assert forward[1.0] > 0
 
 
-def test_demand_without_lane_does_not_create_hidden_transport_state():
+def test_demand_without_lane_creates_no_cargo_flow():
     sim = build_game_application()._simulation
     _owned_earth_leo_capacity(sim)
     sim.inventory.add(EARTH, MACHINERY, 1.0)
     _advance_logistics(sim, sim.day, (_demand(1.0),))
     assert not sim.logistics.cargo_flows
-    assert not hasattr(sim.logistics, "orders")
 
 
 def test_one_demand_is_not_duplicated_across_multiple_matching_lanes():
@@ -277,7 +276,6 @@ def test_selected_research_prototype_site_declares_material_demand_until_stock_a
         if item.resource_id == PRECISION_ELECTRONICS
     )
     assert claim.requested_amount > 0
-    assert not hasattr(sim.research, "fund_prototype")
 
 
 def test_available_capacity_uses_shared_propellant_allocation_without_changing_required_units():

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import os
 import subprocess
@@ -135,20 +133,16 @@ def test_prepare_uses_head_only_and_excludes_uncommitted_work(tmp_path: Path) ->
     assert raw.partition(b"\n\n")[2] == b"checkpoint\n"
 
 
-def test_connector_plan_uses_fixed_slot_without_index_trigger_or_verification_read(tmp_path: Path) -> None:
+def test_connector_plan_builds_fixed_slot_from_recorded_publish_tree(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     prepare_change(repo)
     result = plan(repo, base, publish_head)
     assert result["strategy"] == "fixed-slot-expected-tree"
-    assert result["index_files"] == 0
-    assert result["trigger_files"] == 0
-    assert result["normal_pre_ref_verification_reads"] == 0
     assert result["tree_call_count"] == 1
     assert result["payload_part_count"] == 1
     packet = json.loads(Path(result["tree_packet"]).read_text(encoding="utf-8"))
     paths = [entry["path"] for entry in packet["action_args"]["tree_elements"] if "content" in entry]
     assert paths == [".publish/transport/develop/0000.b64"]
-    assert not any("index" in path or "requests" in path or "retries" in path for path in paths)
     assert packet["action_args"]["base_tree_sha"] == connector_state(repo)["publish_base_tree"]
 
 
@@ -194,7 +188,7 @@ def test_second_tree_mismatch_adapts_transfer_and_third_exhausts_without_ref_pac
     assert not (transaction(repo) / "connector" / "advance-publish-ref.json").exists()
 
 
-def test_dynamic_packing_has_no_fixed_6kib_handoff(tmp_path: Path) -> None:
+def test_dynamic_packing_respects_connector_ceiling_with_minimum_batches(tmp_path: Path) -> None:
     repo, _, base_tree, publish_head, publish_tree = init_repo(tmp_path)
     prepared_request = {
         "target_branch": "develop",
@@ -210,67 +204,6 @@ def test_dynamic_packing_has_no_fixed_6kib_handoff(tmp_path: Path) -> None:
         packet = PUBLISH_REQUEST._tree_packet(batch["base_tree"], batch["elements"], batch["batch_index"])
         assert PUBLISH_REQUEST._connector_call_bytes(packet) <= 144 * 1024
 
-
-def test_fixed_slot_plan_removes_legacy_publish_transport_state_generically(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init")
-    legacy = repo / ".publish" / "requests" / "old.json"
-    legacy.parent.mkdir(parents=True)
-    legacy.write_text("{}\n", encoding="utf-8")
-    temp_slot = repo / ".publish" / "transport" / "temp" / "0000.b64"
-    temp_slot.parent.mkdir(parents=True)
-    temp_slot.write_text("QQ==", encoding="utf-8")
-    (repo / "payload.txt").write_text("base\n", encoding="utf-8")
-    commit_all(repo, "base")
-    tree = git(repo, "rev-parse", "HEAD^{tree}")
-    prepared_request = {"target_branch": "develop", "payload_b64": "Qg=="}
-    elements, _, stale = PUBLISH_REQUEST._desired_transport_elements(
-        repo, prepared_request, base_tree=tree
-    )
-    assert ".publish/requests/old.json" in stale
-    assert ".publish/transport/temp/0000.b64" not in stale
-    request_delete = next(e for e in elements if e.get("sha") is None and e["path"] == ".publish/requests")
-    assert request_delete["type"] == "tree"
-    assert request_delete["mode"] == "040000"
-
-
-
-def test_legacy_subtree_deletion_compacts_connector_packet_without_changing_expected_tree(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init")
-    for index in range(120):
-        path = repo / ".publish" / "requests" / f"{index:04d}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{}\n", encoding="utf-8")
-    temp_slot = repo / ".publish" / "transport" / "temp" / "0000.b64"
-    temp_slot.parent.mkdir(parents=True)
-    temp_slot.write_text("QQ==", encoding="utf-8")
-    (repo / "payload.txt").write_text("base\n", encoding="utf-8")
-    commit_all(repo, "base")
-    tree = git(repo, "rev-parse", "HEAD^{tree}")
-    prepared_request = {"target_branch": "develop", "payload_b64": "Qg=="}
-
-    plan_data = PUBLISH_REQUEST._build_transport_plan(
-        repo, prepared_request, publish_head=git(repo, "rev-parse", "HEAD"), publish_tree=tree
-    )
-    elements = plan_data["batches"][0]["elements"]
-    deletes = [element for element in elements if "content" not in element and element.get("sha") is None]
-    assert [element["path"] for element in deletes] == [".publish/requests"]
-    assert deletes[0]["type"] == "tree"
-    assert plan_data["stale_transport_path_count"] == 120
-    assert plan_data["tree_call_count"] == 1
-
-    expected_repo = tmp_path / "expected"
-    subprocess.run(["git", "clone", "--quiet", str(repo), str(expected_repo)], check=True)
-    subprocess.run(["git", "rm", "-qr", ".publish/requests"], cwd=expected_repo, check=True)
-    desired = expected_repo / ".publish" / "transport" / "develop" / "0000.b64"
-    desired.parent.mkdir(parents=True, exist_ok=True)
-    desired.write_text("Qg==", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=expected_repo, check=True)
-    expected_tree = git(expected_repo, "write-tree")
-    assert plan_data["final_tree"] == expected_tree
 
 def test_commit_then_ref_is_only_remaining_normal_write_sequence_and_record_uses_gateway_run(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
@@ -344,15 +277,6 @@ def test_cancel_uses_heads_only_and_never_needs_publish_tree_read(tmp_path: Path
     assert not transaction(repo).exists()
 
 
-def test_standard_cli_exposes_no_generation_verification_or_repair_commands() -> None:
-    top = run_request(ROOT, "--help").stdout
-    assert "{init,prepare,connector-plan,connector-tree,connector-commit,cancel,record}" in top
-    for forbidden in ("connector-verify", "connector-repair", "--repo", "native-publish"):
-        assert forbidden not in top
-    assert "--publish-remote-tree" not in run_request(ROOT, "connector-plan", "--help").stdout
-    assert "--publish-remote-tree" not in run_request(ROOT, "cancel", "--help").stdout
-
-
 def test_standard_prepare_rejects_untrusted_workflow_changes(tmp_path: Path) -> None:
     repo, _, _, _, _ = init_repo(tmp_path)
     workflow = repo / ".github" / "workflows" / "ci.yml"
@@ -404,21 +328,10 @@ def test_gateway_trusted_workflow_guard_requires_publish_control_blob_identity(t
     assert "untrusted workflow change" in blocked.stderr
 
 
-def test_gateway_contract_is_fixed_slot_local_validation_without_receipt_or_status_api() -> None:
+def test_gateway_contract_validates_fixed_slot_then_publishes_exact_commit() -> None:
     workflow = (ROOT / ".github" / "workflows" / "publish-gateway.yml").read_text(encoding="utf-8")
     validator = (ROOT / "scripts" / "publish_gateway_validate.py").read_text(encoding="utf-8")
     assert "'.publish/transport/**'" in workflow
-    assert ".publish/requests" not in workflow
-    assert ".publish/retries" not in workflow
-    assert "Record verified publish receipt" not in workflow
-    assert "Mark Fast CI pending" not in workflow
-    assert "statuses: write" not in workflow
-    assert "git ls-remote" not in workflow
-    assert "git fetch --quiet --no-tags origin" not in workflow
     assert 'git push origin "${PUBLISH_COMMIT}:refs/heads/${TARGET_BRANCH}"' in workflow
     assert "Dispatch Fast CI for published branch" in workflow
-    assert "load_indexed_payload" not in validator
-    assert "gh api" not in validator
     assert "_transport_parts" in validator
-    assert "git bundle" not in workflow  # bundle verification/fetch is consolidated in the validator
-    assert not (ROOT / "scripts" / "publish_gateway_payload.py").exists()

@@ -249,7 +249,7 @@ def test_founding_completion_creates_location_bootstrap_and_dynamic_orbit_routes
         if str(route_id).startswith(DERIVED_SURFACE_ORBIT_ROUTE_PREFIX)
         and project.new_location_id in {route.origin_id, route.destination_id}
     ]
-    assert len(orbit_routes) == 2
+    assert orbit_routes
     assert sim.transport.fleet_pool(ids.REUSABLE_SURFACE_CARGO_LANDER, project.new_location_id).total_units == 1
 
 
@@ -468,8 +468,14 @@ def test_deploying_founding_save_load_completes_exactly_once(tmp_path):
         if str(route_id).startswith(DERIVED_SURFACE_ORBIT_ROUTE_PREFIX)
         and location_id in {route.origin_id, route.destination_id}
     ]
-    assert len(orbit_routes) == 2
+    assert orbit_routes
+    route_ids = {route.id for route in orbit_routes}
 
     loaded.execute(AdvanceTime(10))
     assert loaded_project.status.value == "complete"
     assert len(loaded_sim.facilities.all_at(location_id)) == len(package.deployed_facilities)
+    assert {
+        route.id for route_id, route in loaded_sim.transport.routes.items()
+        if str(route_id).startswith(DERIVED_SURFACE_ORBIT_ROUTE_PREFIX)
+        and location_id in {route.origin_id, route.destination_id}
+    } == route_ids

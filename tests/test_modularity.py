@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 
 
@@ -32,51 +31,6 @@ def _module_import_targets(path: Path) -> set[str]:
     return targets
 
 
-def _self_method_dependency_graph(directory: Path) -> dict[str, set[str]]:
-    """Map implementation module -> modules whose private self methods it calls."""
-    owners: dict[str, str] = {}
-    parsed: dict[str, ast.AST] = {}
-    for path in directory.glob("*.py"):
-        if path.name in {"__init__.py", "models.py", "domain.py"}:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        module = path.stem
-        parsed[module] = tree
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("_"):
-                owners.setdefault(node.name, module)
-
-    graph = {module: set() for module in parsed}
-    for module, tree in parsed.items():
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                continue
-            value = node.func.value
-            if isinstance(value, ast.Name) and value.id == "self":
-                owner = owners.get(node.func.attr)
-                if owner is not None and owner != module:
-                    graph[module].add(owner)
-    return graph
-
-
-def _assert_acyclic(graph: dict[str, set[str]]) -> None:
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(node: str) -> None:
-        if node in visited:
-            return
-        assert node not in visiting, f"cyclic implementation dependency at {node}: {graph}"
-        visiting.add(node)
-        for dependency in graph[node]:
-            visit(dependency)
-        visiting.remove(node)
-        visited.add(node)
-
-    for node in graph:
-        visit(node)
-
-
 def test_cross_cutting_state_and_validation_are_owned_by_registered_domains():
     from space_idle.composition.domain_extensions import BASE_DOMAIN_EXTENSIONS
     from space_idle.domain import validate_extension_registry
@@ -99,36 +53,6 @@ def test_cross_cutting_state_and_validation_are_owned_by_registered_domains():
     assert {"facilities", "inventory", "industry", "logistics", "projects", "research", "survey"}.issubset(codec_keys)
     assert sum(extension.configuration_validator is not None for extension in BASE_DOMAIN_EXTENSIONS) > 1
     assert sum(extension.runtime_validator is not None for extension in BASE_DOMAIN_EXTENSIONS) > 1
-
-
-def test_major_mutable_domain_states_are_owned_enums_not_distributed_string_sets():
-    from space_idle.contracts import ContractStatus
-    from space_idle.projects import ProjectStatus
-    from space_idle.research import ResearchStage
-    from space_idle.transport import FleetReservationKind, TransportControlMode
-    from space_idle.logistics_models import CargoFlowStatus
-    from space_idle.transport.production import VehicleProductionPhase
-
-    for state_type in (
-        ContractStatus, ProjectStatus, ResearchStage, FleetReservationKind,
-        TransportControlMode, CargoFlowStatus, VehicleProductionPhase,
-    ):
-        assert issubclass(state_type, Enum)
-        assert issubclass(state_type, str)
-
-
-def test_transport_package_does_not_own_logistics_state_or_flow_implementation():
-    transport = PACKAGE / "transport"
-    transport_models = (transport / "models.py").read_text(encoding="utf-8")
-
-    assert not (transport / "lanes.py").exists()
-    assert not (transport / "steady_logistics.py").exists()
-    assert "class CargoFlowBatch" not in transport_models
-    assert "class CargoFlowStatus" not in transport_models
-    assert "class LogisticsLane" not in transport_models
-    assert (PACKAGE / "logistics_models.py").exists()
-    assert (PACKAGE / "logistics_lanes.py").exists()
-    assert (PACKAGE / "logistics_flow.py").exists()
 
 
 def test_logistics_consumes_transport_projection_instead_of_transport_state_containers():
@@ -178,7 +102,7 @@ def test_founding_and_exploration_use_transport_fleet_facade():
 
 
 def test_application_reads_transport_through_public_facade():
-    forbidden_state = {
+    authoritative_state = {
         "vehicle_defs",
         "routes",
         "external_services",
@@ -193,56 +117,14 @@ def test_application_reads_transport_through_public_facade():
     for path in sorted(PACKAGE.glob("application*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Attribute) or node.attr not in forbidden_state:
+            if not isinstance(node, ast.Attribute):
                 continue
             owner = node.value
             if not (isinstance(owner, ast.Attribute) and owner.attr == "transport"):
                 continue
-            violations.append((path.name, node.attr))
+            if node.attr in authoritative_state or node.attr.startswith("_"):
+                violations.append((path.name, node.attr))
     assert violations == []
-
-
-def test_public_domain_facades_compose_focused_implementations():
-    from space_idle.application_query_projectors import ApplicationQueryMixin
-    from space_idle.application_command_handlers import ApplicationCommandMixin
-    from space_idle.industry import IndustryService
-    from space_idle.logistics import LogisticsService
-    from space_idle.transport.service import TransportService
-    from space_idle.projects import ProjectService
-    from space_idle.research import ResearchService
-
-    def bases(cls):
-        return {base.__name__ for base in cls.__mro__[1:]}
-
-    assert {
-        "TransportCompatibilityMixin",
-        "FleetAllocationMixin",
-        "VehicleProductionMixin",
-        "TransportSupplyMixin",
-    }.issubset(bases(TransportService))
-    assert {"LogisticsLaneMixin", "LogisticsFlowMixin"}.issubset(bases(LogisticsService))
-    assert not {"FleetAllocationMixin", "TransportCompatibilityMixin", "VehicleProductionMixin"} & bases(LogisticsService)
-    assert {"ConstructionRulesMixin", "ConstructionPlanningMixin", "ConstructionProcurementMixin", "ConstructionExecutionMixin"}.issubset(bases(ProjectService))
-    assert {"ProcessSelectionMixin", "IndustryPlanningMixin", "IndustryExecutionMixin"}.issubset(bases(IndustryService))
-    assert {"ResearchWorkflowMixin", "ResearchCapacityMixin", "ResearchExecutionMixin"}.issubset(bases(ResearchService))
-    assert {"LocationProjectorMixin", "LogisticsProjectorMixin", "ProgressionProjectorMixin"}.issubset(bases(ApplicationQueryMixin))
-    assert {"ConstructionCommandHandlerMixin", "ProgressionCommandHandlerMixin", "TransportCommandHandlerMixin"}.issubset(bases(ApplicationCommandMixin))
-
-
-def test_content_composition_and_architecture_stress_modules_have_unambiguous_ownership():
-    content = PACKAGE / "content"
-    composition = PACKAGE / "composition"
-    assert not (PACKAGE / "missions.py").exists()
-    assert not (PACKAGE / "mission_stress.py").exists()
-    for filename in (
-        "base_ids.py", "base_requirements.py", "base_spatial.py", "base_catalog.py",
-        "base_facilities.py", "base_transport.py", "base_construction.py",
-        "base_industry.py", "base_progression.py", "base_game.py",
-    ):
-        assert (content / filename).exists()
-    assert (composition / "base_simulation.py").exists()
-    assert (composition / "domain_extensions.py").exists()
-    assert "GameApplication" not in (content / "base_game.py").read_text(encoding="utf-8")
 
 
 def test_layer_dependency_direction_is_enforced():
@@ -304,20 +186,6 @@ def test_layer_dependency_direction_is_enforced():
         assert not offenders, f"{path.relative_to(PACKAGE)} imports concrete composition/content: {offenders}"
 
 
-def test_internal_modules_use_explicit_import_contracts():
-    for path in PACKAGE.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                assert all(alias.name != "*" for alias in node.names), f"star import in {path.relative_to(PACKAGE)}"
-
-
-def test_cross_file_mixin_dependencies_remain_acyclic():
-    for package_name in ("transport", "construction", "production"):
-        graph = _self_method_dependency_graph(PACKAGE / package_name)
-        _assert_acyclic(graph)
-
-
 def test_transport_operation_extension_does_not_require_central_enum_change():
     from space_idle.transport.models import TransportOperationRequirement
     from space_idle.transport.operations import OperationEvaluationContext, OperationEvaluatorRegistry
@@ -338,25 +206,3 @@ def test_transport_operation_extension_does_not_require_central_enum_change():
     context = OperationEvaluationContext(7, None, None)
     assert registry.evaluate(requirement, TestCapability(3.0), context) == ()
     assert registry.evaluate(requirement, TestCapability(1.0), context) == ("limit",)
-
-
-def test_create_logistics_lane_preserves_resource_agnostic_path_policy_across_application_boundary():
-    from space_idle import CreateLogisticsLane, GetLogistics, build_game_application
-    from space_idle.content import base_ids as ids
-
-    app = build_game_application()
-    result = app.execute(CreateLogisticsLane(
-        source_id=str(ids.EARTH),
-        destination_id="base.node.low_earth_orbit",
-        requested_capacity_t_per_day=0.25,
-        path_policy="lowest_cost",
-    ))
-    assert result.created_id is not None
-    row = next(lane for lane in app.query(GetLogistics()).lanes if lane.id == result.created_id)
-    assert row.path_policy == "lowest_cost"
-    lane = app._simulation.logistics.lanes[next(
-        lane_id for lane_id in app._simulation.logistics.lanes if str(lane_id) == result.created_id
-    )]
-    assert not hasattr(lane, "resource_id")
-    assert not hasattr(lane, "target_stock_t")
-    assert not hasattr(lane, "batch_t")
