@@ -178,13 +178,29 @@ def test_record_is_bound_to_prepared_head_even_after_local_head_advances(tmp_pat
     assert git(repo, "rev-parse", "HEAD") != checkpoint
 
 
+def _plan_args(base: str, tree: str) -> tuple[str, ...]:
+    return (
+        "connector-plan",
+        "--target-remote-head", base,
+        "--publish-remote-head", base,
+        "--publish-remote-tree", tree,
+    )
+
+
 def test_connector_plan_revalidates_manifest_and_remote_base(tmp_path: Path) -> None:
-    repo, base, _ = init_repo(tmp_path)
+    repo, base, base_tree = init_repo(tmp_path)
     (repo / "payload.txt").write_text("changed\n", encoding="utf-8")
     commit_all(repo, "change")
     run_request(repo, "prepare")
 
-    wrong_head = run_request(repo, "connector-plan", "--target-remote-head", "3" * 40, check=False)
+    wrong_head = run_request(
+        repo,
+        "connector-plan",
+        "--target-remote-head", "3" * 40,
+        "--publish-remote-head", base,
+        "--publish-remote-tree", base_tree,
+        check=False,
+    )
     assert wrong_head.returncode != 0
     assert "target branch HEAD moved since prepare" in wrong_head.stderr
 
@@ -192,55 +208,58 @@ def test_connector_plan_revalidates_manifest_and_remote_base(tmp_path: Path) -> 
     payload = str(request["payload_b64"])
     request["payload_b64"] = ("A" if payload[0] != "A" else "B") + payload[1:]
     manifest_path(repo).write_text(json.dumps(request), encoding="utf-8")
-    corrupt = run_request(repo, "connector-plan", "--target-remote-head", base, check=False)
+    corrupt = run_request(repo, *_plan_args(base, base_tree), check=False)
     assert corrupt.returncode != 0
     assert "sha256 mismatch" in corrupt.stderr or "invalid publish bundle" in corrupt.stderr
 
 
-def test_connector_plan_generates_indexed_payload_generation_and_submit_packet(tmp_path: Path) -> None:
-    repo, base, _ = init_repo(tmp_path)
+def test_connector_plan_builds_one_atomic_publish_generation(tmp_path: Path) -> None:
+    repo, base, base_tree = init_repo(tmp_path)
     (repo / "payload.txt").write_text("connector\n" * 400, encoding="utf-8")
     commit_all(repo, "connector transport")
     run_request(repo, "prepare")
     request = prepared(repo)
     request_id = str(request["request_id"])
-    plan = json.loads(run_request(repo, "connector-plan", "--target-remote-head", base).stdout)
-    assert plan["stage"] == "packets-ready"
-    assert plan["strategy"] == "append-only-payload-generations-then-request"
+    plan = json.loads(run_request(repo, *_plan_args(base, base_tree)).stdout)
+
+    assert plan["stage"] == "tree-ready"
+    assert plan["strategy"] == "atomic-inline-tree-generation"
     assert plan["current_generation"] == 0
-    assert plan["upload_call_count"] == 1
-    assert plan["response_sha_handoff_required"] is False
-    assert "copy/paste" in plan["next"]
+    assert plan["tree_call_count"] == 1
+    assert plan["payload_handoff_field_count"] >= 1
+    assert plan["blob_response_sha_handoff_required"] is False
+    assert plan["branch_updates_per_generation"] == 1
+    assert "GitHub.create_tree" in plan["next"]
 
-    upload = json.loads(Path(plan["upload_packets"][0]).read_text(encoding="utf-8"))
-    assert upload["action"] == "GitHub.create_file"
-    assert upload["generation"] == 0
-    assert upload["action_args"]["repository_full_name"] == "naro0216n-collab/Space-Idle"
-    assert upload["action_args"]["branch"] == "publish"
-    assert upload["action_args"]["path"] == f".publish/payloads/{request_id}/g0000/0000.b64"
-    assert plan["remote_payload_paths"] == [upload["action_args"]["path"]]
-    assert plan["remote_payload_dir"] == f".publish/payloads/{request_id}"
-    assert plan["expected_blob_git_oids"] == [upload["expected_blob_git_oid"]]
-
-    index_packet = json.loads(Path(plan["payload_index_packet"]).read_text(encoding="utf-8"))
-    assert index_packet["action"] == "GitHub.create_file"
-    assert index_packet["generation"] == 0
-    assert index_packet["action_args"]["path"] == f".publish/payloads/{request_id}/index-0000.json"
-    index = json.loads(index_packet["action_args"]["content"])
-    assert index["version"] == 1
-    assert index["request_id"] == request_id
+    tree_packet = json.loads(Path(plan["tree_packet"]).read_text(encoding="utf-8"))
+    assert tree_packet["action"] == "GitHub.create_tree"
+    assert tree_packet["action_args"]["base_tree_sha"] == base_tree
+    elements = tree_packet["action_args"]["tree_elements"]
+    assert all("content" in element and "sha" not in element for element in elements)
+    payload_elements = [
+        element for element in elements
+        if f".publish/payloads/{request_id}/g0000/" in element["path"]
+    ]
+    assert len(payload_elements) == plan["payload_handoff_field_count"]
+    index_element = next(
+        element for element in elements
+        if element["path"] == f".publish/payloads/{request_id}/index-0000.json"
+    )
+    trigger_element = next(
+        element for element in elements
+        if element["path"] == f".publish/requests/{request_id}.json"
+    )
+    index = json.loads(index_element["content"])
     assert index["generation"] == 0
     assert index["payload_chars"] == len(str(request["payload_b64"]))
-    assert index["payload_sha256"] == request["payload_sha256"]
-    assert index["parts"] == [{
-        "index": 0,
-        "path": "g0000/0000.b64",
-        "chars": len(upload["action_args"]["content"]),
-        "blob_git_oid": upload["expected_blob_git_oid"],
-    }]
+    assert index["part_count"] == len(payload_elements)
+    assert [part["chars"] for part in index["parts"]] == [len(e["content"]) for e in payload_elements]
+    assert [part["blob_git_oid"] for part in index["parts"]] == [
+        PUBLISH_REQUEST._git_object_oid(repo, "blob", e["content"].encode("utf-8"))
+        for e in payload_elements
+    ]
 
-    packet = json.loads(Path(plan["submit_request_packet"]).read_text(encoding="utf-8"))
-    transport = json.loads(packet["action_args"]["content"])
+    transport = json.loads(trigger_element["content"])
     assert transport["version"] == 7
     assert transport["payload_source"] == {
         "kind": "indexed-files",
@@ -248,113 +267,196 @@ def test_connector_plan_generates_indexed_payload_generation_and_submit_packet(t
         "minimum_generation": 0,
     }
 
-    replan = run_request(repo, "connector-plan", "--target-remote-head", base, check=False)
+    handoff_elements = [json.loads(Path(name).read_text(encoding="utf-8")) for name in plan["tree_element_files"]]
+    assert handoff_elements == elements
+
+    commit = json.loads(run_request(repo, "connector-tree", "--tree-sha", "4" * 40).stdout)
+    assert commit["stage"] == "commit-packet-ready"
+    commit_packet = json.loads(Path(commit["commit_packet"]).read_text(encoding="utf-8"))
+    assert commit_packet["action"] == "GitHub.create_commit"
+    assert commit_packet["action_args"]["tree_sha"] == "4" * 40
+    assert commit_packet["action_args"]["parent_sha"] == base
+
+    update = json.loads(run_request(repo, "connector-update", "--commit-sha", "5" * 40).stdout)
+    update_packet = json.loads(Path(update["update_packet"]).read_text(encoding="utf-8"))
+    assert update_packet["action"] == "GitHub.update_ref"
+    assert update_packet["action_args"] == {
+        "repository_full_name": "naro0216n-collab/Space-Idle",
+        "branch_name": "publish",
+        "sha": "5" * 40,
+        "force": False,
+    }
+
+    replan = run_request(repo, *_plan_args(base, base_tree), check=False)
     assert replan.returncode != 0
     assert "already initialized" in replan.stderr
 
-
-def test_initial_generation_keeps_fleet_sized_payload_in_one_file(tmp_path: Path) -> None:
+def test_handoff_fields_fit_in_one_tree_call_when_total_capacity_allows(tmp_path: Path) -> None:
     module = PUBLISH_REQUEST
-    repo, _, _ = init_repo(tmp_path)
-    parts = module._split_payload_for_file_calls(
-        repo, "naro0216n-collab/Space-Idle", "publish", "a" * 32, 0,
-        "A" * 81_780, module.CONNECTOR_CALL_BUDGET_BYTES
+    repo, base, base_tree = init_repo(tmp_path)
+    prepared_request = {
+        "request_id": "a" * 32,
+        "target_branch": "develop",
+        "base_sha": base,
+        "target_tree": base_tree,
+        "publish_commit": base,
+        "payload_b64": "A" * 81_780,
+        "payload_sha256": "b" * 64,
+    }
+    generation = module._generation_plan(
+        repo,
+        prepared_request,
+        0,
+        base_publish_head=base,
+        base_publish_tree=base_tree,
+        retry=False,
     )
-    assert len(parts) == 1
-    assert module._connector_call_bytes(parts[0]["packet"]) < 144 * 1024
+    assert generation["payload_part_count"] > 1
+    assert generation["tree_batch_call_count"] == 1
+    assert all(
+        len(element["content"]) <= module.CONNECTOR_HANDOFF_ELEMENT_CHARS
+        for element in generation["tree_batches"][0]
+        if "/g0000/" in element["path"]
+    )
 
-
-def test_connector_profile_uses_144_kib_as_initial_actual_call_upper_bound(tmp_path: Path) -> None:
+def test_connector_profile_uses_144_kib_as_tree_call_ceiling(tmp_path: Path) -> None:
     module = PUBLISH_REQUEST
-    repo, _, _ = init_repo(tmp_path)
-    request_id = "a" * 32
-    empty = module._connector_payload_file_packet(
-        repo, "naro0216n-collab/Space-Idle", "publish", request_id, 0, "", 0
+    repo, base, base_tree = init_repo(tmp_path)
+    prepared_request = {
+        "request_id": "a" * 32,
+        "target_branch": "develop",
+        "base_sha": base,
+        "target_tree": base_tree,
+        "publish_commit": base,
+        "payload_b64": "A" * 220_000,
+        "payload_sha256": "b" * 64,
+    }
+    generation = module._generation_plan(
+        repo,
+        prepared_request,
+        0,
+        base_publish_head=base,
+        base_publish_tree=base_tree,
+        retry=False,
     )
-    max_chars = module.CONNECTOR_CALL_BUDGET_BYTES - module._connector_call_bytes(empty)
+    batches = generation["tree_batches"]
+    assert len(batches) >= 2
+    for index, batch in enumerate(batches):
+        packet = module._generation_tree_packet(
+            base_tree="0" * 40,
+            elements=batch,
+            generation=0,
+            batch_index=index,
+        )
+        assert module._connector_call_bytes(packet) <= 144 * 1024
+    for left, right in zip(batches, batches[1:]):
+        combined = module._generation_tree_packet(
+            base_tree="0" * 40,
+            elements=[*left, *right],
+            generation=0,
+            batch_index=0,
+        )
+        assert module._connector_call_bytes(combined) > 144 * 1024
 
-    single = module._split_payload_for_file_calls(
-        repo, "naro0216n-collab/Space-Idle", "publish", request_id, 0,
-        "A" * max_chars, module.CONNECTOR_CALL_BUDGET_BYTES
-    )
-    assert len(single) == 1
-    assert module._connector_call_bytes(single[0]["packet"]) == 144 * 1024
-
-    split = module._split_payload_for_file_calls(
-        repo, "naro0216n-collab/Space-Idle", "publish", request_id, 0,
-        "A" * (max_chars + 1), module.CONNECTOR_CALL_BUDGET_BYTES
-    )
-    assert len(split) == 2
-    assert all(module._connector_call_bytes(part["packet"]) <= 144 * 1024 for part in split)
-
-
-def test_initial_generation_splits_only_when_actual_call_exceeds_limit(tmp_path: Path) -> None:
-    repo, base, _ = init_repo(tmp_path)
+def test_large_handoff_uses_minimum_tree_calls_and_one_branch_update(tmp_path: Path) -> None:
+    repo, base, base_tree = init_repo(tmp_path)
     content = "\n".join(
         f"{i:06d}:{hashlib.sha256(str(i).encode()).hexdigest()}" for i in range(7000)
     )
     (repo / "payload.txt").write_text(content + "\n", encoding="utf-8")
     commit_all(repo, "large connector transport")
     run_request(repo, "prepare")
-    plan = json.loads(run_request(repo, "connector-plan", "--target-remote-head", base).stdout)
-    assert plan["upload_call_count"] >= 2
+    plan = json.loads(run_request(repo, *_plan_args(base, base_tree)).stdout)
+    assert plan["payload_handoff_field_count"] >= 2
     assert plan["connector_call_budget_bytes"] == 144 * 1024
-    assert plan["generation_call_budget_bytes"] == 144 * 1024
-    for packet_name in plan["upload_packets"]:
-        packet = json.loads(Path(packet_name).read_text(encoding="utf-8"))
-        assert packet["action"] == "GitHub.create_file"
-        size = len(json.dumps(packet["action_args"], separators=(",", ":")).encode("utf-8"))
-        assert size <= 144 * 1024
+    assert plan["branch_updates_per_generation"] == 1
+    assert plan["tree_call_count"] >= 1
+    assert plan["tree_call_bytes"] <= 144 * 1024
+    tree_packet = json.loads(Path(plan["tree_packet"]).read_text(encoding="utf-8"))
+    assert tree_packet["action"] == "GitHub.create_tree"
+    assert all("content" in element for element in tree_packet["action_args"]["tree_elements"])
+    assert "GitHub.create_blob" not in Path(plan["tree_packet"]).read_text(encoding="utf-8")
 
-
-def test_connector_repair_creates_append_only_smaller_generation(tmp_path: Path) -> None:
-    repo, base, _ = init_repo(tmp_path)
+def test_connector_repair_rebuilds_one_atomic_tree_generation(tmp_path: Path) -> None:
+    repo, base, base_tree = init_repo(tmp_path)
     content = "\n".join(
         f"{i:05d}:{hashlib.sha256(str(i).encode()).hexdigest()}" for i in range(900)
     )
     (repo / "payload.txt").write_text(content + "\n", encoding="utf-8")
     commit_all(repo, "repair target")
     run_request(repo, "prepare")
-    plan = json.loads(run_request(repo, "connector-plan", "--target-remote-head", base).stdout)
-    initial_max = max(plan["upload_call_bytes"])
+    plan = json.loads(run_request(repo, *_plan_args(base, base_tree)).stdout)
+    initial_count = plan["payload_handoff_field_count"]
 
-    repair = json.loads(run_request(repo, "connector-repair").stdout)
-    assert repair["stage"] == "repair-generation-ready"
+    repair = json.loads(run_request(
+        repo,
+        "connector-repair",
+        "--publish-remote-head", base,
+        "--publish-remote-tree", base_tree,
+    ).stdout)
+    assert repair["stage"] == "tree-ready"
     assert repair["previous_generation"] == 0
     assert repair["generation"] == 1
-    assert repair["previous_max_upload_call_bytes"] == initial_max
-    assert repair["max_upload_call_bytes"] < initial_max
-    assert repair["upload_call_count"] >= plan["upload_call_count"]
-    assert "remote_blob_sha" not in json.dumps(repair)
+    assert repair["previous_payload_handoff_field_count"] == initial_count
+    assert repair["payload_handoff_field_count"] == initial_count
+    assert repair["connector_call_budget_bytes"] == 144 * 1024
+    assert repair["branch_updates_per_generation"] == 1
 
-    for packet_name in repair["upload_packets"]:
-        packet = json.loads(Path(packet_name).read_text(encoding="utf-8"))
-        assert packet["action"] == "GitHub.create_file"
-        assert packet["generation"] == 1
-        assert "/g0001/" in packet["action_args"]["path"]
-        assert "sha" not in packet["action_args"]
-
-    index_packet = json.loads(Path(repair["payload_index_packet"]).read_text(encoding="utf-8"))
-    assert index_packet["action"] == "GitHub.create_file"
-    assert index_packet["action_args"]["path"].endswith("/index-0001.json")
-    index = json.loads(index_packet["action_args"]["content"])
-    assert index["generation"] == 1
-    assert index["part_count"] == repair["upload_call_count"]
-
-    retry_packet = json.loads(Path(repair["retry_request_packet"]).read_text(encoding="utf-8"))
-    assert retry_packet["action"] == "GitHub.create_file"
-    assert retry_packet["action_args"]["path"].endswith("/g0001.json")
-    retry_request = json.loads(retry_packet["action_args"]["content"])
+    tree_packet = json.loads(Path(repair["tree_packet"]).read_text())
+    assert tree_packet["action"] == "GitHub.create_tree"
+    assert tree_packet["action_args"]["base_tree_sha"] == base_tree
+    assert all("content" in element and "sha" not in element for element in tree_packet["action_args"]["tree_elements"])
+    retry_element = next(
+        element for element in tree_packet["action_args"]["tree_elements"]
+        if element["path"].endswith("/g0001.json")
+    )
+    retry_request = json.loads(retry_element["content"])
     assert retry_request["version"] == 7
     assert retry_request["request_id"] == prepared(repo)["request_id"]
     assert retry_request["payload_source"]["minimum_generation"] == 1
 
-    repair2 = json.loads(run_request(repo, "connector-repair").stdout)
+    repair2 = json.loads(run_request(
+        repo,
+        "connector-repair",
+        "--publish-remote-head", base,
+        "--publish-remote-tree", base_tree,
+    ).stdout)
     assert repair2["generation"] == 2
-    assert repair2["max_upload_call_bytes"] < repair["max_upload_call_bytes"]
-    assert all("/g0002/" in json.loads(Path(name).read_text())["action_args"]["path"]
-               for name in repair2["upload_packets"])
+    assert repair2["payload_handoff_field_count"] == initial_count
 
+def test_repair_accepts_previous_atomic_generation_as_new_base(tmp_path: Path) -> None:
+    repo, base, base_tree = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("repair after ref update\n" * 300, encoding="utf-8")
+    commit_all(repo, "repair after atomic update")
+    run_request(repo, "prepare")
+    run_request(repo, *_plan_args(base, base_tree))
+    created_tree = "6" * 40
+    created_commit = "7" * 40
+    result = json.loads(run_request(repo, "connector-tree", "--tree-sha", created_tree).stdout)
+    while result["stage"] == "tree-ready":
+        result = json.loads(run_request(repo, "connector-tree", "--tree-sha", created_tree).stdout)
+    assert result["stage"] == "commit-packet-ready"
+    run_request(repo, "connector-update", "--commit-sha", created_commit)
+
+    repair = json.loads(run_request(
+        repo,
+        "connector-repair",
+        "--publish-remote-head", created_commit,
+        "--publish-remote-tree", created_tree,
+    ).stdout)
+    assert repair["generation"] == 1
+    assert repair["base_publish_head"] == created_commit
+    assert repair["base_publish_tree"] == created_tree
+
+    unrelated = run_request(
+        repo,
+        "connector-repair",
+        "--publish-remote-head", "8" * 40,
+        "--publish-remote-tree", "9" * 40,
+        check=False,
+    )
+    assert unrelated.returncode != 0
+    assert "not the active generation base" in unrelated.stderr
 
 def test_payload_index_is_self_consistent_and_uses_precomputed_blob_oids(tmp_path: Path) -> None:
     repo, _, _ = init_repo(tmp_path)
@@ -366,9 +468,7 @@ def test_payload_index_is_self_consistent_and_uses_precomputed_blob_oids(tmp_pat
         "payload_b64": payload,
         "payload_sha256": hashlib.sha256(base64.b64decode("YWJjZA==")).hexdigest(),
     }
-    parts = module._split_payload_for_file_calls(
-        repo, "naro0216n-collab/Space-Idle", "publish", request_id, 3, payload, 1024
-    )
+    parts = module._payload_parts_for_tree(repo, request_id, 3, payload)
     index = module._payload_index_document(prepared_request, request_id, 3, parts)
     assert index["generation"] == 3
     assert index["part_count"] == len(parts)
@@ -378,146 +478,87 @@ def test_payload_index_is_self_consistent_and_uses_precomputed_blob_oids(tmp_pat
         f"g0003/{i:04d}.b64" for i in range(len(parts))
     ]
 
-
-
-def test_connector_repair_migrates_active_v6_transport_without_reprepare(tmp_path: Path) -> None:
-    repo, base, _ = init_repo(tmp_path)
-    content = "\n".join(
-        f"{i:05d}:{hashlib.sha256(str(i).encode()).hexdigest()}" for i in range(900)
-    )
-    (repo / "payload.txt").write_text(content + "\n", encoding="utf-8")
-    commit_all(repo, "legacy repair target")
-    run_request(repo, "prepare")
-    request = prepared(repo)
-    request["version"] = 6
-    manifest_path(repo).write_text(json.dumps(request, indent=2), encoding="utf-8")
-
-    # Build a representative v6 connector state and upload packet from the same canonical payload.
-    output = plan_dir(repo)
-    output.mkdir(parents=True)
-    old_parts = PUBLISH_REQUEST._split_payload_for_file_calls(
-        repo, "naro0216n-collab/Space-Idle", "publish", str(request["request_id"]), 0,
-        str(request["payload_b64"]), PUBLISH_REQUEST.CONNECTOR_CALL_BUDGET_BYTES,
-    )
-    old_packet = old_parts[0]["packet"]
-    # Rewrite the generated v7 path into the legacy unversioned path shape.
-    old_packet["action_args"]["path"] = f".publish/payloads/{request['request_id']}/0000.b64"
-    old_packet.pop("generation", None)
-    old_path = output / "upload-part-000.json"
-    old_path.write_text(json.dumps(old_packet), encoding="utf-8")
-    submit_path = output / "submit-request.json"
-    submit_path.write_text("{}", encoding="utf-8")
-    legacy_state = {
-        "version": 4,
-        "stage": "packets-ready",
-        "manifest": str(manifest_path(repo)),
-        "request_id": request["request_id"],
-        "github_repository": "naro0216n-collab/Space-Idle",
-        "publish_branch": "publish",
+def test_display_handoff_fields_do_not_multiply_tree_sends_within_capacity(tmp_path: Path) -> None:
+    module = PUBLISH_REQUEST
+    repo, base, base_tree = init_repo(tmp_path)
+    request_id = "e" * 32
+    prepared_request = {
+        "request_id": request_id,
         "target_branch": "develop",
-        "target_remote_head": base,
-        "expected_blob_git_oids": [old_packet["expected_blob_git_oid"]],
-        "expected_payload_tree_git_oid": "1" * 40,
-        "upload_packets": [str(old_path)],
-        "remote_payload_paths": [old_packet["action_args"]["path"]],
-        "remote_payload_dir": f".publish/payloads/{request['request_id']}",
-        "submit_request_packet": str(submit_path),
+        "base_sha": base,
+        "target_tree": base_tree,
+        "publish_commit": base,
+        "payload_b64": "A" * 33_752,
+        "payload_sha256": "b" * 64,
     }
-    (output / "connector-state.json").write_text(json.dumps(legacy_state), encoding="utf-8")
+    generation = module._generation_plan(
+        repo,
+        prepared_request,
+        0,
+        base_publish_head=base,
+        base_publish_tree=base_tree,
+        retry=False,
+    )
+    assert generation["payload_part_count"] > 1
+    assert generation["tree_batch_call_count"] == 1
 
-    migrated = json.loads(run_request(repo, "connector-repair").stdout)
-    assert migrated["stage"] == "legacy-v6-repair-migrated"
-    assert migrated["generation"] == 0
-    assert prepared(repo)["version"] == 7
-    assert migrated["max_upload_call_bytes"] < PUBLISH_REQUEST._connector_call_bytes(old_packet)
-    assert all("/g0000/" in json.loads(Path(name).read_text())["action_args"]["path"]
-               for name in migrated["upload_packets"])
-    retry_packet = json.loads(Path(migrated["retry_request_packet"]).read_text())
-    retry_request = json.loads(retry_packet["action_args"]["content"])
-    assert retry_request["version"] == 7
-    assert retry_request["request_id"] == request["request_id"]
-    assert retry_request["base_sha"] == request["base_sha"]
-    assert retry_request["target_tree"] == request["target_tree"]
-    assert retry_request["publish_commit"] == request["publish_commit"]
-    assert retry_request["payload_source"]["minimum_generation"] == 0
-
-
-def test_record_can_close_an_already_prepared_v6_transaction(tmp_path: Path) -> None:
-    repo, _, _ = init_repo(tmp_path)
-    (repo / "payload.txt").write_text("legacy checkpoint\n", encoding="utf-8")
-    commit_all(repo, "legacy checkpoint")
+def test_cancel_requires_unchanged_remote_target_and_publish_tree(tmp_path: Path) -> None:
+    repo, base, base_tree = init_repo(tmp_path)
+    (repo / "payload.txt").write_text("cancel me\n", encoding="utf-8")
+    commit_all(repo, "obsolete checkpoint")
     run_request(repo, "prepare")
-    request = prepared(repo)
-    request["version"] = 6
-    manifest_path(repo).write_text(json.dumps(request), encoding="utf-8")
+    run_request(repo, *_plan_args(base, base_tree))
 
-    receipt_data = make_receipt(repo)
-    receipt_data["request_version"] = 6
-    receipt = tmp_path / "receipt-v6.json"
-    receipt.write_text(json.dumps(receipt_data), encoding="utf-8")
-    recorded = json.loads(run_request(repo, "record", "--receipt", str(receipt)).stdout)
-    assert recorded["verified"] is True
+    moved = run_request(
+        repo, "cancel",
+        "--target-remote-head", "8" * 40,
+        "--publish-remote-tree", base_tree,
+        check=False,
+    )
+    assert moved.returncode != 0
+    assert manifest_path(repo).exists()
+
+    changed_transport = run_request(
+        repo, "cancel",
+        "--target-remote-head", base,
+        "--publish-remote-tree", "9" * 40,
+        check=False,
+    )
+    assert changed_transport.returncode != 0
+    assert manifest_path(repo).exists()
+
+    cancelled = json.loads(run_request(
+        repo, "cancel",
+        "--target-remote-head", base,
+        "--publish-remote-tree", base_tree,
+    ).stdout)
+    assert cancelled["cancelled"] is True
+    assert cancelled["verified"] is True
     assert not manifest_path(repo).exists()
 
 
-def test_adaptive_repair_converges_from_observed_33k_class_packet_without_fixed_chunk_size(tmp_path: Path) -> None:
-    module = PUBLISH_REQUEST
-    repo, _, _ = init_repo(tmp_path)
-    request_id = "e" * 32
-    payload = "A" * 33_752
-    prepared_request = {
-        "request_id": request_id,
-        "payload_b64": payload,
-        "payload_sha256": "0" * 64,
-    }
-    parts0 = module._split_payload_for_file_calls(
-        repo, "naro0216n-collab/Space-Idle", "publish", request_id, 0,
-        payload, module.CONNECTOR_CALL_BUDGET_BYTES,
-    )
-    assert len(parts0) == 1
-    current = {
-        "generation": 0,
-        "upload_call_bytes": [module._connector_call_bytes(parts0[0]["packet"])],
-    }
-    previous_max = current["upload_call_bytes"][0]
-    assert 33_000 < previous_max < 40_000
-
-    for generation in range(1, 4):
-        budget = module._next_repair_call_budget(repo, prepared_request, current)
-        parts = module._split_payload_for_file_calls(
-            repo, "naro0216n-collab/Space-Idle", "publish", request_id, generation,
-            payload, budget,
-        )
-        next_max = max(module._connector_call_bytes(part["packet"]) for part in parts)
-        assert next_max < previous_max
-        current = {
-            "generation": generation,
-            "upload_call_bytes": [module._connector_call_bytes(part["packet"]) for part in parts],
-        }
-        previous_max = next_max
-    assert previous_max < 10_000
-    assert len(parts) > 1
-
 def test_standard_cli_has_no_alternative_repository_target_or_transaction_selectors() -> None:
     top = run_request(SCRIPT.parents[1], "--help").stdout
-    assert "{init,prepare,connector-plan,connector-repair,record}" in top
-    for forbidden in ("native-publish", " plan ", "--repo"):
+    assert "{init,prepare,connector-plan,connector-tree,connector-update,connector-repair,cancel,record}" in top
+    for forbidden in ("native-publish", "--repo"):
         assert forbidden not in f" {top.replace(chr(10), ' ')} "
     command_forbidden = {
         "init": ("--repo", "--local-ref", "--remote-commit", "--remote-tree", "source_snapshot"),
         "prepare": ("--repo", "--target-ref", "--output", "--target-branch", "--message"),
         "connector-plan": ("--repo", "--manifest", "--plan-dir", "--github-repository",
                            "--publish-branch", "--output-dir", "--connector-call-budget-bytes"),
+        "connector-tree": ("--repo", "--manifest", "--base-tree", "--content", "--path"),
+        "connector-update": ("--repo", "--manifest", "--branch", "--force"),
         "connector-repair": ("--repo", "--manifest", "--plan-dir", "--github-repository",
                              "--publish-branch", "--path", "--content", "--request-id",
                              "--part-index", "--remote-blob-sha"),
+        "cancel": ("--repo", "--manifest", "--request-id", "--force"),
         "record": ("--repo", "--manifest", "--remote-commit", "--remote-tree", "--local-ref"),
     }
     for command, forbidden_flags in command_forbidden.items():
         help_text = run_request(SCRIPT.parents[1], command, "--help").stdout
         for flag in forbidden_flags:
             assert flag not in help_text
-
 
 def test_prepare_is_head_only_develop_and_excludes_uncommitted_work(tmp_path: Path) -> None:
     repo, _, _ = init_repo(tmp_path)

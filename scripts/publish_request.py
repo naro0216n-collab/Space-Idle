@@ -18,9 +18,10 @@ WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-requ
 REQUEST_VERSION = 7
 RECEIPT_VERSION = 3
 CONNECTOR_CALL_BUDGET_BYTES = 144 * 1024
-MAX_BLOB_PARTS = 256
+CONNECTOR_HANDOFF_ELEMENT_CHARS = 6 * 1024
+MAX_PAYLOAD_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
-CONNECTOR_STATE_VERSION = 5
+CONNECTOR_STATE_VERSION = 7
 PAYLOAD_INDEX_VERSION = 1
 CONNECTOR_SUMMARY_NAME = "summary.json"
 TRANSACTION_DIR_NAME = "space-idle-publish-transaction"
@@ -458,48 +459,6 @@ def _receipt_file_path(request_id: str) -> str:
     return f".publish/receipts/{request_id}.json"
 
 
-def _connector_submit_packet(
-    github_repository: str,
-    publish_branch: str,
-    transport_request: dict[str, object],
-) -> dict[str, object]:
-    request_id = str(transport_request["request_id"])
-    content = json.dumps(transport_request, separators=(",", ":"), sort_keys=True) + "\n"
-    return {
-        "stage": "submit-publish-request",
-        "action": "GitHub.create_file",
-        "action_args": {
-            "repository_full_name": github_repository,
-            "path": _request_file_path(request_id),
-            "content": content,
-            "message": f"Submit publish request {request_id}",
-            "branch": publish_branch,
-        },
-    }
-
-
-def _connector_retry_packet(
-    github_repository: str,
-    publish_branch: str,
-    transport_request: dict[str, object],
-    generation: int,
-) -> dict[str, object]:
-    request_id = str(transport_request["request_id"])
-    content = json.dumps(transport_request, separators=(",", ":"), sort_keys=True) + "\n"
-    return {
-        "stage": "retry-publish-request",
-        "generation": generation,
-        "action": "GitHub.create_file",
-        "action_args": {
-            "repository_full_name": github_repository,
-            "path": _retry_request_file_path(request_id, generation),
-            "content": content,
-            "message": f"Retry publish request {request_id} generation {generation:04d}",
-            "branch": publish_branch,
-        },
-    }
-
-
 def _payload_generation_name(generation: int) -> str:
     if generation < 0:
         raise PublishStateError("payload generation must be non-negative")
@@ -523,35 +482,6 @@ def _payload_index_path(request_id: str, generation: int) -> str:
     return f".publish/payloads/{request_id}/index-{generation:04d}.json"
 
 
-def _connector_payload_file_packet(
-    repo: Path,
-    github_repository: str,
-    publish_branch: str,
-    request_id: str,
-    generation: int,
-    content: str,
-    index: int,
-) -> dict[str, object]:
-    oid = _git_object_oid(repo, "blob", content.encode("ascii"))
-    return {
-        "stage": "upload-payload-part",
-        "generation": generation,
-        "part_index": index,
-        "expected_blob_git_oid": oid,
-        "action": "GitHub.create_file",
-        "action_args": {
-            "repository_full_name": github_repository,
-            "path": _payload_file_path(request_id, generation, index),
-            "content": content,
-            "message": (
-                f"Upload publish payload {request_id} generation {generation:04d} "
-                f"part {index:04d}"
-            ),
-            "branch": publish_branch,
-        },
-    }
-
-
 def _connector_call_bytes(packet: dict[str, object]) -> int:
     action_args = packet.get("action_args")
     if not isinstance(action_args, dict):
@@ -559,49 +489,33 @@ def _connector_call_bytes(packet: dict[str, object]) -> int:
     return len(json.dumps(action_args, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def _split_payload_for_file_calls(
+def _payload_parts_for_tree(
     repo: Path,
-    github_repository: str,
-    publish_branch: str,
     request_id: str,
     generation: int,
     payload: str,
-    call_budget: int,
 ) -> list[dict[str, object]]:
-    if call_budget <= 0:
-        raise PublishStateError("Connector call budget must be positive")
-    empty = _connector_payload_file_packet(
-        repo, github_repository, publish_branch, request_id, generation, "", 0
-    )
-    max_chars = call_budget - _connector_call_bytes(empty)
-    if max_chars <= 0:
-        raise PublishStateError(
-            f"Connector call budget {call_budget} is too small even for an empty payload file upload"
-        )
+    if CONNECTOR_HANDOFF_ELEMENT_CHARS <= 0:
+        raise PublishStateError("Connector handoff element size must be positive")
     parts: list[dict[str, object]] = []
-    for start in range(0, len(payload), max_chars):
-        content = payload[start : start + max_chars]
-        packet = _connector_payload_file_packet(
-            repo, github_repository, publish_branch, request_id, generation, content, len(parts)
-        )
-        size = _connector_call_bytes(packet)
-        if size > call_budget:
-            raise PublishStateError(
-                f"payload part {len(parts)} needs a {size}-byte Connector call, exceeding "
-                f"the configured {call_budget}-byte budget"
-            )
+    for start in range(0, len(payload), CONNECTOR_HANDOFF_ELEMENT_CHARS):
+        content = payload[start : start + CONNECTOR_HANDOFF_ELEMENT_CHARS]
+        index = len(parts)
+        remote_path = _payload_file_path(request_id, generation, index)
         parts.append(
             {
-                "index": len(parts),
+                "index": index,
                 "chars": len(content),
-                "oid": packet["expected_blob_git_oid"],
-                "packet_bytes": size,
-                "packet": packet,
+                "oid": _git_object_oid(repo, "blob", content.encode("utf-8")),
+                "remote_path": remote_path,
+                "content": content,
             }
         )
-    if len(parts) > MAX_BLOB_PARTS:
+    if not parts:
+        raise PublishStateError("publish payload is empty")
+    if len(parts) > MAX_PAYLOAD_PARTS:
         raise PublishStateError(
-            f"publish payload needs {len(parts)} file uploads, exceeding limit {MAX_BLOB_PARTS}; "
+            f"publish payload needs {len(parts)} handoff fields, exceeding limit {MAX_PAYLOAD_PARTS}; "
             "publish an earlier coherent target-ref or revise the transport design"
         )
     return parts
@@ -635,105 +549,185 @@ def _payload_index_document(
     }
 
 
-def _connector_payload_index_packet(
-    repo: Path,
-    github_repository: str,
-    publish_branch: str,
-    prepared: dict[str, object],
-    request_id: str,
-    generation: int,
-    parts: list[dict[str, object]],
-) -> dict[str, object]:
-    index = _payload_index_document(prepared, request_id, generation, parts)
-    content = json.dumps(index, separators=(",", ":"), sort_keys=True) + "\n"
-    oid = _git_object_oid(repo, "blob", content.encode("utf-8"))
+def _tree_content_element(path: str, content: str) -> dict[str, str]:
     return {
-        "stage": "publish-payload-index",
+        "path": path,
+        "mode": "100644",
+        "type": "blob",
+        "content": content,
+    }
+
+
+def _generation_tree_packet(
+    *,
+    base_tree: str,
+    elements: list[dict[str, str]],
+    generation: int,
+    batch_index: int,
+) -> dict[str, object]:
+    return {
+        "stage": "assemble-publish-generation-tree",
         "generation": generation,
-        "expected_blob_git_oid": oid,
-        "action": "GitHub.create_file",
+        "tree_batch_index": batch_index,
+        "action": "GitHub.create_tree",
         "action_args": {
-            "repository_full_name": github_repository,
-            "path": _payload_index_path(request_id, generation),
-            "content": content,
-            "message": f"Index publish payload {request_id} generation {generation:04d}",
-            "branch": publish_branch,
+            "repository_full_name": GITHUB_REPOSITORY,
+            "base_tree_sha": base_tree,
+            "tree_elements": elements,
         },
     }
 
 
-def _generation_packets(
-    repo: Path,
-    output_dir: Path,
-    prepared: dict[str, object],
-    generation: int,
-    call_budget: int,
+def _pack_tree_elements(
+    elements: list[dict[str, str]],
     *,
-    prefix: str,
-) -> dict[str, object]:
-    request_id = str(prepared["request_id"])
-    payload = str(prepared["payload_b64"])
-    parts = _split_payload_for_file_calls(
-        repo, GITHUB_REPOSITORY, PUBLISH_BRANCH, request_id, generation, payload, call_budget
-    )
-    upload_packets: list[str] = []
-    blob_oids: list[str] = []
-    remote_payload_paths: list[str] = []
-    upload_call_bytes: list[int] = []
-    for part in parts:
-        packet_path = output_dir / f"{prefix}-upload-part-{int(part['index']):03d}.json"
-        packet_path.write_text(
-            json.dumps(part["packet"], indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    generation: int,
+) -> list[list[dict[str, str]]]:
+    batches: list[list[dict[str, str]]] = []
+    current: list[dict[str, str]] = []
+    dummy_base = "0" * 40
+    for element in elements:
+        candidate = [*current, element]
+        packet = _generation_tree_packet(
+            base_tree=dummy_base,
+            elements=candidate,
+            generation=generation,
+            batch_index=len(batches),
         )
-        upload_packets.append(str(packet_path))
-        blob_oids.append(str(part["oid"]))
-        remote_payload_paths.append(
-            _payload_file_path(request_id, generation, int(part["index"]))
+        if _connector_call_bytes(packet) <= CONNECTOR_CALL_BUDGET_BYTES:
+            current = candidate
+            continue
+        if not current:
+            raise PublishStateError(
+                f"single inline tree element at {element['path']} exceeds the fixed "
+                f"{CONNECTOR_CALL_BUDGET_BYTES}-byte Connector ceiling"
+            )
+        batches.append(current)
+        current = [element]
+        single = _generation_tree_packet(
+            base_tree=dummy_base,
+            elements=current,
+            generation=generation,
+            batch_index=len(batches),
         )
-        upload_call_bytes.append(int(part["packet_bytes"]))
+        if _connector_call_bytes(single) > CONNECTOR_CALL_BUDGET_BYTES:
+            raise PublishStateError(
+                f"single inline tree element at {element['path']} exceeds the fixed "
+                f"{CONNECTOR_CALL_BUDGET_BYTES}-byte Connector ceiling"
+            )
+    if current:
+        batches.append(current)
+    return batches
 
-    index_packet = _connector_payload_index_packet(
-        repo, GITHUB_REPOSITORY, PUBLISH_BRANCH, prepared, request_id, generation, parts
+
+def _write_tree_batch_packet(
+    output_dir: Path,
+    generation: dict[str, object],
+    batch_index: int,
+    base_tree: str,
+) -> dict[str, object]:
+    batches = generation.get("tree_batches")
+    if not isinstance(batches, list) or not (0 <= batch_index < len(batches)):
+        raise PublishStateError("Connector generation tree batch index is invalid")
+    elements = batches[batch_index]
+    if not isinstance(elements, list) or not elements:
+        raise PublishStateError("Connector generation tree batch is empty")
+    generation_number = int(generation["generation"])
+    packet = _generation_tree_packet(
+        base_tree=base_tree,
+        elements=elements,
+        generation=generation_number,
+        batch_index=batch_index,
     )
-    index_call_bytes = _connector_call_bytes(index_packet)
-    if index_call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
+    call_bytes = _connector_call_bytes(packet)
+    if call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
         raise PublishStateError(
-            f"payload index generation {generation} needs a {index_call_bytes}-byte Connector call, "
+            f"publish generation tree batch {batch_index} needs a {call_bytes}-byte Connector call, "
             f"exceeding the fixed Connector ceiling {CONNECTOR_CALL_BUDGET_BYTES}-byte budget"
         )
-    index_packet_path = output_dir / f"{prefix}-index.json"
-    index_packet_path.write_text(
-        json.dumps(index_packet, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    prefix = f"g{generation_number:04d}-tree-batch-{batch_index:03d}"
+    packet_path = output_dir / f"{prefix}.json"
+    packet_path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    header_path = output_dir / f"{prefix}-header.json"
+    header_path.write_text(
+        json.dumps(
+            {
+                "repository_full_name": GITHUB_REPOSITORY,
+                "base_tree_sha": base_tree,
+                "tree_element_count": len(elements),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
+    element_paths: list[str] = []
+    for element_index, element in enumerate(elements):
+        element_path = output_dir / f"{prefix}-element-{element_index:03d}.json"
+        element_path.write_text(
+            json.dumps(element, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        element_paths.append(str(element_path))
     return {
-        "generation": generation,
-        "call_budget_bytes": call_budget,
-        "upload_packets": upload_packets,
-        "expected_blob_git_oids": blob_oids,
-        "remote_payload_paths": remote_payload_paths,
-        "upload_call_bytes": upload_call_bytes,
-        "index_packet": str(index_packet_path),
-        "remote_index_path": _payload_index_path(request_id, generation),
-        "expected_index_blob_git_oid": index_packet["expected_blob_git_oid"],
-        "index_call_bytes": index_call_bytes,
+        "packet": str(packet_path),
+        "header": str(header_path),
+        "elements": element_paths,
+        "call_bytes": call_bytes,
+        "batch_index": batch_index,
+        "batch_count": len(batches),
     }
 
 
-def _next_repair_call_budget(repo: Path, prepared: dict[str, object], current: dict[str, object]) -> int:
-    sizes = current.get("upload_call_bytes")
-    if not isinstance(sizes, list) or not sizes or not all(isinstance(x, int) and x > 0 for x in sizes):
-        raise PublishStateError("active Connector generation has invalid upload call sizes")
-    previous_max = max(sizes)
-    generation = int(current["generation"]) + 1
-    empty = _connector_payload_file_packet(
-        repo, GITHUB_REPOSITORY, PUBLISH_BRANCH, str(prepared["request_id"]), generation, "", 0
+def _generation_plan(
+    repo: Path,
+    prepared: dict[str, object],
+    generation: int,
+    *,
+    base_publish_head: str,
+    base_publish_tree: str,
+    retry: bool,
+) -> dict[str, object]:
+    request_id = str(prepared["request_id"])
+    payload = str(prepared["payload_b64"])
+    parts = _payload_parts_for_tree(repo, request_id, generation, payload)
+    elements: list[dict[str, str]] = [
+        _tree_content_element(str(part["remote_path"]), str(part["content"]))
+        for part in parts
+    ]
+
+    index = _payload_index_document(prepared, request_id, generation, parts)
+    index_content = json.dumps(index, separators=(",", ":"), sort_keys=True) + "\n"
+    index_path = _payload_index_path(request_id, generation)
+    elements.append(_tree_content_element(index_path, index_content))
+
+    request = _v7_transport_request_for_generation(prepared, generation)
+    trigger_content = json.dumps(request, separators=(",", ":"), sort_keys=True) + "\n"
+    trigger_path = (
+        _retry_request_file_path(request_id, generation)
+        if retry
+        else _request_file_path(request_id)
     )
-    minimum = _connector_call_bytes(empty) + 1
-    if previous_max <= minimum:
-        raise PublishStateError(
-            "payload handoff cannot be subdivided further within the Connector action envelope"
-        )
-    return max(minimum, previous_max // 2)
+    elements.append(_tree_content_element(trigger_path, trigger_content))
+
+    batches = _pack_tree_elements(elements, generation=generation)
+    return {
+        "generation": generation,
+        "retry": retry,
+        "base_publish_head": base_publish_head,
+        "base_publish_tree": base_publish_tree,
+        "payload_part_count": len(parts),
+        "payload_handoff_element_chars": CONNECTOR_HANDOFF_ELEMENT_CHARS,
+        "expected_payload_blob_git_oids": [str(part["oid"]) for part in parts],
+        "remote_payload_paths": [str(part["remote_path"]) for part in parts],
+        "remote_index_path": index_path,
+        "expected_index_blob_git_oid": _git_object_oid(repo, "blob", index_content.encode("utf-8")),
+        "trigger_path": trigger_path,
+        "expected_trigger_blob_git_oid": _git_object_oid(repo, "blob", trigger_content.encode("utf-8")),
+        "tree_batches": batches,
+        "tree_batch_call_count": len(batches),
+    }
+
 
 def _source_snapshot_from_origin(repo: Path) -> Path:
     try:
@@ -938,14 +932,16 @@ def _read_connector_state(repo: Path) -> dict[str, object]:
     path = _connector_state_path(_connector_dir(repo))
     if not path.is_file():
         raise PublishStateError(
-            "Connector plan is not initialized; run connector-plan before recovery"
+            "Connector plan is not initialized; run connector-plan before continuing transport"
         )
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PublishStateError(f"invalid Connector state: {exc}") from exc
-    if state.get("version") != CONNECTOR_STATE_VERSION or state.get("stage") != "packets-ready":
-        raise PublishStateError("unsupported or incomplete Connector state")
+    if state.get("version") != CONNECTOR_STATE_VERSION:
+        raise PublishStateError("unsupported Connector state version")
+    if state.get("stage") not in {"tree-ready", "commit-packet-ready", "update-packet-ready"}:
+        raise PublishStateError("unsupported or incomplete Connector state stage")
     request_id = state.get("request_id")
     if not isinstance(request_id, str) or len(request_id) != 32:
         raise PublishStateError("invalid Connector state request_id")
@@ -953,156 +949,42 @@ def _read_connector_state(repo: Path) -> dict[str, object]:
     current_generation = state.get("current_generation")
     if not isinstance(generations, list) or not generations:
         raise PublishStateError("Connector state has no payload generations")
-    if not isinstance(current_generation, int) or current_generation != len(generations) - 1:
-        raise PublishStateError("Connector state current generation is inconsistent")
+    if not isinstance(current_generation, int):
+        raise PublishStateError("Connector state current generation is invalid")
     for expected_generation, generation in enumerate(generations):
         if not isinstance(generation, dict) or generation.get("generation") != expected_generation:
             raise PublishStateError("Connector state payload generation sequence is invalid")
-        uploads = generation.get("upload_packets")
-        oids = generation.get("expected_blob_git_oids")
         paths = generation.get("remote_payload_paths")
-        if not isinstance(uploads, list) or not uploads:
-            raise PublishStateError("Connector generation has no upload packets")
-        if not isinstance(oids, list) or len(oids) != len(uploads):
-            raise PublishStateError("Connector generation payload OID list is inconsistent")
-        if not isinstance(paths, list) or len(paths) != len(uploads):
+        part_count = generation.get("payload_part_count")
+        batches = generation.get("tree_batches")
+        if not isinstance(part_count, int) or part_count <= 0:
+            raise PublishStateError("Connector generation has no payload handoff fields")
+        if not isinstance(paths, list) or len(paths) != part_count:
             raise PublishStateError("Connector generation payload path list is inconsistent")
-        index_packet = generation.get("index_packet")
-        if not isinstance(index_packet, str) or not Path(index_packet).is_file():
-            raise PublishStateError("Connector generation payload index packet is missing")
+        if not isinstance(batches, list) or not batches:
+            raise PublishStateError("Connector generation has no tree batches")
+        for batch in batches:
+            if not isinstance(batch, list) or not batch:
+                raise PublishStateError("Connector generation tree batch is invalid")
+            for element in batch:
+                if not isinstance(element, dict):
+                    raise PublishStateError("Connector generation tree element is invalid")
+                if not all(key in element for key in ("path", "mode", "type", "content")):
+                    raise PublishStateError("Connector generation tree element is incomplete")
+    if current_generation != int(generations[-1]["generation"]):
+        raise PublishStateError("Connector state current generation is inconsistent")
+    if state.get("stage") == "tree-ready":
+        batch_index = state.get("tree_batch_index")
+        current = generations[-1]
+        assert isinstance(current, dict)
+        batches = current["tree_batches"]
+        assert isinstance(batches, list)
+        if not isinstance(batch_index, int) or not 0 <= batch_index < len(batches):
+            raise PublishStateError("Connector state tree batch index is invalid")
+        packet = state.get("tree_packet")
+        if not isinstance(packet, str) or not Path(packet).is_file():
+            raise PublishStateError("Connector state current tree packet is missing")
     return state
-
-
-def cmd_connector_plan(args: argparse.Namespace) -> int:
-    repo = _repo_from_cwd()
-    manifest = _manifest_path(repo)
-    verified = _verify_prepared_request(repo, manifest)
-    prepared = _read_prepared_request(manifest)
-    _require_hex_sha(args.target_remote_head, name="target remote HEAD")
-    if args.target_remote_head != prepared["base_sha"]:
-        raise PublishStateError(
-            "target branch HEAD moved since prepare: "
-            f"expected={prepared['base_sha']} actual={args.target_remote_head}"
-        )
-
-    output_dir = _connector_dir(repo)
-    if output_dir.exists() and any(output_dir.iterdir()):
-        raise PublishStateError(
-            f"Connector plan directory is already initialized: {output_dir}; "
-            "continue its generated packets instead of replanning transport"
-        )
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    generation = _generation_packets(
-        repo, output_dir, prepared, 0, CONNECTOR_CALL_BUDGET_BYTES, prefix="g0000"
-    )
-    request_id = str(prepared["request_id"])
-    remote_payload_dir = f".publish/payloads/{request_id}"
-    submit_request = _transport_request(
-        prepared,
-        {
-            "kind": "indexed-files",
-            "directory": remote_payload_dir,
-            "minimum_generation": 0,
-        },
-    )
-    submit_packet = _connector_submit_packet(
-        GITHUB_REPOSITORY, PUBLISH_BRANCH, submit_request
-    )
-    submit_call_bytes = _connector_call_bytes(submit_packet)
-    if submit_call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
-        raise PublishStateError(
-            f"publish request metadata needs a {submit_call_bytes}-byte Connector call, exceeding "
-            f"the fixed Connector ceiling {CONNECTOR_CALL_BUDGET_BYTES}-byte budget"
-        )
-    submit_path = output_dir / "submit-request.json"
-    submit_path.write_text(
-        json.dumps(submit_packet, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-
-    state = {
-        "version": CONNECTOR_STATE_VERSION,
-        "stage": "packets-ready",
-        "manifest": str(manifest),
-        "request_id": prepared["request_id"],
-        "github_repository": GITHUB_REPOSITORY,
-        "publish_branch": PUBLISH_BRANCH,
-        "target_branch": prepared["target_branch"],
-        "target_remote_head": args.target_remote_head,
-        "remote_payload_dir": remote_payload_dir,
-        "current_generation": 0,
-        "generations": [generation],
-        "submit_request_packet": str(submit_path),
-    }
-    _write_connector_state(output_dir, state)
-    summary = {
-        "stage": state["stage"],
-        "strategy": "append-only-payload-generations-then-request",
-        "manifest": str(manifest),
-        "request_id": prepared["request_id"],
-        "github_repository": GITHUB_REPOSITORY,
-        "publish_branch": PUBLISH_BRANCH,
-        "target_branch": prepared["target_branch"],
-        "target_remote_head": args.target_remote_head,
-        "connector_profile": "github-connector-fixed-ceiling-adaptive-recovery",
-        "connector_call_budget_bytes": CONNECTOR_CALL_BUDGET_BYTES,
-        "call_size_basis": "compact-json-action-args",
-        "current_generation": 0,
-        "generation_call_budget_bytes": generation["call_budget_bytes"],
-        "upload_call_count": len(generation["upload_packets"]),
-        "upload_call_bytes": generation["upload_call_bytes"],
-        "upload_packets": generation["upload_packets"],
-        "expected_blob_git_oids": generation["expected_blob_git_oids"],
-        "remote_payload_paths": generation["remote_payload_paths"],
-        "payload_index_packet": generation["index_packet"],
-        "remote_payload_index_path": generation["remote_index_path"],
-        "expected_payload_index_blob_git_oid": generation["expected_index_blob_git_oid"],
-        "remote_payload_dir": remote_payload_dir,
-        "submit_request_packet": str(submit_path),
-        "submit_call_bytes": submit_call_bytes,
-        "normal_remote_target_probe_calls": 1,
-        "response_sha_handoff_required": False,
-        "request_verified": bool(verified["verified"]),
-        "remote_request_path": _request_file_path(str(prepared["request_id"])),
-        "remote_receipt_path": _receipt_file_path(str(prepared["request_id"])),
-        "next": (
-            "copy/paste each generation upload packet action_args into the matching Connector call "
-            "in order, then the payload index packet, then the request packet"
-        ),
-        "verified": True,
-    }
-    _write_connector_summary(output_dir, summary)
-    print(json.dumps(summary, indent=2))
-    return 0
-
-
-def _read_legacy_connector_state(repo: Path) -> dict[str, object] | None:
-    path = _connector_state_path(_connector_dir(repo))
-    if not path.is_file():
-        return None
-    try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise PublishStateError(f"invalid Connector state: {exc}") from exc
-    return state if state.get("version") == 4 else None
-
-
-def _legacy_generation_budget(repo: Path, state: dict[str, object], prepared: dict[str, object]) -> int:
-    upload_packets = state.get("upload_packets")
-    if not isinstance(upload_packets, list) or not upload_packets:
-        raise PublishStateError("legacy Connector state has no upload packets")
-    sizes: list[int] = []
-    for packet_name in upload_packets:
-        packet_path = Path(str(packet_name))
-        if not packet_path.is_file():
-            raise PublishStateError("legacy Connector upload packet is missing")
-        try:
-            packet = json.loads(packet_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise PublishStateError(f"invalid legacy Connector upload packet: {exc}") from exc
-        sizes.append(_connector_call_bytes(packet))
-    current = {"generation": -1, "upload_call_bytes": sizes}
-    return _next_repair_call_budget(repo, prepared, current)
 
 
 def _v7_transport_request_for_generation(
@@ -1119,72 +1001,275 @@ def _v7_transport_request_for_generation(
     )
 
 
-def _write_retry_packet(
-    output_dir: Path, prepared: dict[str, object], generation: int
-) -> tuple[str, int]:
-    request = _v7_transport_request_for_generation(prepared, generation)
-    packet = _connector_retry_packet(GITHUB_REPOSITORY, PUBLISH_BRANCH, request, generation)
-    size = _connector_call_bytes(packet)
-    if size > CONNECTOR_CALL_BUDGET_BYTES:
-        raise PublishStateError(
-            f"retry request generation {generation} needs a {size}-byte Connector call, exceeding "
-            f"the fixed Connector ceiling {CONNECTOR_CALL_BUDGET_BYTES}-byte budget"
-        )
-    path = output_dir / f"g{generation:04d}-retry-request.json"
-    path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return str(path), size
+def _require_publish_base(head: str, tree: str) -> tuple[str, str]:
+    _require_hex_sha(head, name="publish remote HEAD")
+    _require_hex_sha(tree, name="publish remote tree")
+    return head, tree
 
 
-def _migrate_legacy_v6_repair(
-    repo: Path, prepared: dict[str, object], legacy: dict[str, object]
-) -> dict[str, object]:
-    if int(prepared["version"]) != 6:
-        raise PublishStateError("legacy Connector state does not match the active manifest version")
-    output_dir = _connector_dir(repo)
-    budget = _legacy_generation_budget(repo, legacy, prepared)
-    prepared["version"] = REQUEST_VERSION
-    _manifest_path(repo).write_text(
-        json.dumps(prepared, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    prepared = _read_prepared_request(_manifest_path(repo))
-    generation = _generation_packets(
-        repo, output_dir, prepared, 0, budget, prefix="g0000"
-    )
-    retry_packet, retry_call_bytes = _write_retry_packet(output_dir, prepared, 0)
-    remote_payload_dir = f".publish/payloads/{prepared['request_id']}"
-    state = {
-        "version": CONNECTOR_STATE_VERSION,
-        "stage": "packets-ready",
-        "manifest": str(_manifest_path(repo)),
-        "request_id": prepared["request_id"],
-        "github_repository": GITHUB_REPOSITORY,
-        "publish_branch": PUBLISH_BRANCH,
-        "target_branch": prepared["target_branch"],
-        "target_remote_head": legacy.get("target_remote_head", prepared["base_sha"]),
-        "remote_payload_dir": remote_payload_dir,
-        "current_generation": 0,
-        "generations": [generation],
-        "submit_request_packet": legacy.get("submit_request_packet"),
-        "legacy_v6_migrated": True,
-    }
-    _write_connector_state(output_dir, state)
+def _generation_summary(generation: dict[str, object]) -> dict[str, object]:
+    batches = generation["tree_batches"]
+    assert isinstance(batches, list)
     return {
-        "stage": "legacy-v6-repair-migrated",
-        "request_id": prepared["request_id"],
-        "generation": 0,
-        "generation_call_budget_bytes": budget,
-        "max_upload_call_bytes": max(int(x) for x in generation["upload_call_bytes"]),
-        "upload_call_count": len(generation["upload_packets"]),
-        "upload_packets": generation["upload_packets"],
-        "payload_index_packet": generation["index_packet"],
-        "retry_request_packet": retry_packet,
-        "retry_request_call_bytes": retry_call_bytes,
+        "generation": generation["generation"],
+        "payload_handoff_field_count": generation["payload_part_count"],
+        "payload_handoff_field_chars": generation["payload_handoff_element_chars"],
+        "tree_call_count": len(batches),
+        "trigger_path": generation["trigger_path"],
+        "remote_payload_paths": generation["remote_payload_paths"],
+        "remote_payload_index_path": generation["remote_index_path"],
+        "base_publish_head": generation["base_publish_head"],
+        "base_publish_tree": generation["base_publish_tree"],
+    }
+
+
+def _tree_ready_summary(
+    state: dict[str, object],
+    generation: dict[str, object],
+    materialized: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "stage": "tree-ready",
+        "request_id": state["request_id"],
+        "generation": generation["generation"],
+        "tree_batch_index": materialized["batch_index"],
+        "tree_batch_count": materialized["batch_count"],
+        "tree_call_bytes": materialized["call_bytes"],
+        "tree_packet": materialized["packet"],
+        "tree_header": materialized["header"],
+        "tree_element_files": materialized["elements"],
         "next": (
-            "copy/paste the generated upload packet action_args in order, then the payload index "
-            "packet, then the retry request packet"
+            "assemble one GitHub.create_tree call from the generated header and tree element files; "
+            "pass only the returned tree SHA to connector-tree"
         ),
         "verified": True,
     }
+
+
+def cmd_connector_plan(args: argparse.Namespace) -> int:
+    repo = _repo_from_cwd()
+    manifest = _manifest_path(repo)
+    verified = _verify_prepared_request(repo, manifest)
+    prepared = _read_prepared_request(manifest)
+    _require_hex_sha(args.target_remote_head, name="target remote HEAD")
+    if args.target_remote_head != prepared["base_sha"]:
+        raise PublishStateError(
+            "target branch HEAD moved since prepare: "
+            f"expected={prepared['base_sha']} actual={args.target_remote_head}"
+        )
+    publish_head, publish_tree = _require_publish_base(
+        args.publish_remote_head, args.publish_remote_tree
+    )
+
+    output_dir = _connector_dir(repo)
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise PublishStateError(
+            f"Connector plan directory is already initialized: {output_dir}; "
+            "continue its generated packets instead of replanning transport"
+        )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    generation = _generation_plan(
+        repo,
+        prepared,
+        0,
+        base_publish_head=publish_head,
+        base_publish_tree=publish_tree,
+        retry=False,
+    )
+    materialized = _write_tree_batch_packet(output_dir, generation, 0, publish_tree)
+    request_id = str(prepared["request_id"])
+    state = {
+        "version": CONNECTOR_STATE_VERSION,
+        "stage": "tree-ready",
+        "manifest": str(manifest),
+        "request_id": request_id,
+        "github_repository": GITHUB_REPOSITORY,
+        "publish_branch": PUBLISH_BRANCH,
+        "target_branch": prepared["target_branch"],
+        "target_remote_head": args.target_remote_head,
+        "current_generation": 0,
+        "tree_batch_index": 0,
+        "tree_packet": materialized["packet"],
+        "tree_header": materialized["header"],
+        "tree_element_files": materialized["elements"],
+        "generations": [generation],
+    }
+    _write_connector_state(output_dir, state)
+    summary = {
+        "strategy": "atomic-inline-tree-generation",
+        "manifest": str(manifest),
+        "request_id": request_id,
+        "github_repository": GITHUB_REPOSITORY,
+        "publish_branch": PUBLISH_BRANCH,
+        "target_branch": prepared["target_branch"],
+        "target_remote_head": args.target_remote_head,
+        "connector_profile": "github-create-tree-inline-content",
+        "connector_call_budget_bytes": CONNECTOR_CALL_BUDGET_BYTES,
+        "call_size_basis": "compact-json-action-args",
+        "current_generation": 0,
+        **_generation_summary(generation),
+        "normal_remote_target_probe_calls": 1,
+        "normal_publish_transport_probe_calls": 1,
+        "blob_response_sha_handoff_required": False,
+        "branch_updates_per_generation": 1,
+        "request_verified": bool(verified["verified"]),
+        "remote_request_path": _request_file_path(request_id),
+        "remote_receipt_path": _receipt_file_path(request_id),
+        **_tree_ready_summary(state, generation, materialized),
+    }
+    _write_connector_summary(output_dir, summary)
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+def _write_generation_commit_packet(
+    repo: Path,
+    state: dict[str, object],
+    generation: dict[str, object],
+    tree_sha: str,
+) -> dict[str, object]:
+    request_id = str(state["request_id"])
+    generation_number = int(generation["generation"])
+    message = (
+        f"Retry publish request {request_id} generation {generation_number:04d}"
+        if generation.get("retry")
+        else f"Submit publish request {request_id} generation {generation_number:04d}"
+    )
+    packet = {
+        "stage": "create-publish-generation-commit",
+        "generation": generation_number,
+        "action": "GitHub.create_commit",
+        "action_args": {
+            "repository_full_name": GITHUB_REPOSITORY,
+            "message": message,
+            "tree_sha": tree_sha,
+            "parent_sha": generation["base_publish_head"],
+        },
+    }
+    packet_path = _connector_dir(repo) / f"g{generation_number:04d}-create-commit.json"
+    packet_path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if _connector_call_bytes(packet) > CONNECTOR_CALL_BUDGET_BYTES:
+        raise PublishStateError("publish generation commit packet exceeds Connector hard ceiling")
+    state["stage"] = "commit-packet-ready"
+    state["created_tree"] = tree_sha
+    state["commit_packet"] = str(packet_path)
+    state.pop("tree_packet", None)
+    state.pop("tree_header", None)
+    state.pop("tree_element_files", None)
+    _write_connector_state(_connector_dir(repo), state)
+    summary = {
+        "stage": state["stage"],
+        "request_id": request_id,
+        "generation": generation_number,
+        "commit_packet": str(packet_path),
+        "next": (
+            "copy/paste the commit packet action_args into GitHub.create_commit; pass only the "
+            "returned commit SHA to connector-update"
+        ),
+        "verified": True,
+    }
+    _write_connector_summary(_connector_dir(repo), summary)
+    return summary
+
+
+def cmd_connector_tree(args: argparse.Namespace) -> int:
+    repo = _repo_from_cwd()
+    state = _read_connector_state(repo)
+    if state.get("stage") != "tree-ready":
+        raise PublishStateError(
+            f"connector-tree requires tree-ready, found {state.get('stage')}"
+        )
+    tree_sha = args.tree_sha
+    _require_hex_sha(tree_sha, name="created publish generation tree SHA")
+    generations = state["generations"]
+    assert isinstance(generations, list)
+    generation = generations[-1]
+    assert isinstance(generation, dict)
+    batches = generation["tree_batches"]
+    assert isinstance(batches, list)
+    batch_index = int(state["tree_batch_index"])
+    next_index = batch_index + 1
+    if next_index < len(batches):
+        materialized = _write_tree_batch_packet(
+            _connector_dir(repo), generation, next_index, tree_sha
+        )
+        state["tree_batch_index"] = next_index
+        state["tree_packet"] = materialized["packet"]
+        state["tree_header"] = materialized["header"]
+        state["tree_element_files"] = materialized["elements"]
+        _write_connector_state(_connector_dir(repo), state)
+        summary = _tree_ready_summary(state, generation, materialized)
+        _write_connector_summary(_connector_dir(repo), summary)
+        print(json.dumps(summary, indent=2))
+        return 0
+
+    summary = _write_generation_commit_packet(repo, state, generation, tree_sha)
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+def cmd_connector_update(args: argparse.Namespace) -> int:
+    repo = _repo_from_cwd()
+    state = _read_connector_state(repo)
+    if state.get("stage") != "commit-packet-ready":
+        raise PublishStateError(
+            f"connector-update requires commit-packet-ready, found {state.get('stage')}"
+        )
+    commit_sha = args.commit_sha
+    _require_hex_sha(commit_sha, name="created publish generation commit SHA")
+    generations = state["generations"]
+    assert isinstance(generations, list)
+    generation = generations[-1]
+    assert isinstance(generation, dict)
+    generation_number = int(generation["generation"])
+    packet = {
+        "stage": "advance-publish-transport-ref",
+        "generation": generation_number,
+        "action": "GitHub.update_ref",
+        "action_args": {
+            "repository_full_name": GITHUB_REPOSITORY,
+            "branch_name": PUBLISH_BRANCH,
+            "sha": commit_sha,
+            "force": False,
+        },
+    }
+    packet_path = _connector_dir(repo) / f"g{generation_number:04d}-advance-publish-ref.json"
+    packet_path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    state["stage"] = "update-packet-ready"
+    state["published_commit_candidate"] = commit_sha
+    state["update_packet"] = str(packet_path)
+    _write_connector_state(_connector_dir(repo), state)
+    summary = {
+        "stage": state["stage"],
+        "request_id": state["request_id"],
+        "generation": generation_number,
+        "update_packet": str(packet_path),
+        "branch_updates_per_generation": 1,
+        "next": (
+            "copy/paste the ref packet action_args into GitHub.update_ref. A successful non-force "
+            "update publishes the whole payload generation and its request/retry trigger atomically; "
+            "then wait for the Gateway receipt"
+        ),
+        "verified": True,
+    }
+    _write_connector_summary(_connector_dir(repo), summary)
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+def _allowed_repair_publish_bases(
+    state: dict[str, object], current: dict[str, object]
+) -> set[tuple[str, str]]:
+    allowed = {
+        (str(current["base_publish_head"]), str(current["base_publish_tree"]))
+    }
+    if state.get("stage") == "update-packet-ready":
+        candidate = state.get("published_commit_candidate")
+        created_tree = state.get("created_tree")
+        if isinstance(candidate, str) and isinstance(created_tree, str):
+            allowed.add((candidate, created_tree))
+    return allowed
 
 
 def cmd_connector_repair(args: argparse.Namespace) -> int:
@@ -1192,62 +1277,109 @@ def cmd_connector_repair(args: argparse.Namespace) -> int:
     manifest = _manifest_path(repo)
     prepared = _read_prepared_request(manifest)
     _verify_prepared_request(repo, manifest)
-    legacy = _read_legacy_connector_state(repo)
-    if legacy is not None:
-        result = _migrate_legacy_v6_repair(repo, prepared, legacy)
-        print(json.dumps(result, indent=2))
-        return 0
-
     state = _read_connector_state(repo)
     generations = state["generations"]
     assert isinstance(generations, list)
     current = generations[-1]
     assert isinstance(current, dict)
+    publish_head, publish_tree = _require_publish_base(
+        args.publish_remote_head, args.publish_remote_tree
+    )
+    allowed = _allowed_repair_publish_bases(state, current)
+    if (publish_head, publish_tree) not in allowed:
+        expected = ", ".join(f"{head}/{tree}" for head, tree in sorted(allowed))
+        raise PublishStateError(
+            "publish transport base is not the active generation base or its atomic commit; "
+            f"observed={publish_head}/{publish_tree} expected one of [{expected}]. "
+            "If the Gateway already wrote a receipt, fetch and record it instead of repairing."
+        )
+
     next_generation = int(state["current_generation"]) + 1
-    next_budget = _next_repair_call_budget(repo, prepared, current)
     output_dir = _connector_dir(repo)
-    generation = _generation_packets(
+    generation = _generation_plan(
         repo,
-        output_dir,
         prepared,
         next_generation,
-        next_budget,
-        prefix=f"g{next_generation:04d}",
+        base_publish_head=publish_head,
+        base_publish_tree=publish_tree,
+        retry=True,
     )
-    previous_max = max(int(value) for value in current["upload_call_bytes"])
-    next_max = max(int(value) for value in generation["upload_call_bytes"])
-    if next_max >= previous_max:
-        raise PublishStateError(
-            "adaptive payload recovery did not reduce the maximum Connector call size"
-        )
-    retry_packet, retry_call_bytes = _write_retry_packet(output_dir, prepared, next_generation)
+    materialized = _write_tree_batch_packet(output_dir, generation, 0, publish_tree)
+    previous_count = int(current["payload_part_count"])
+    next_count = int(generation["payload_part_count"])
     generations.append(generation)
     state["current_generation"] = next_generation
+    state["stage"] = "tree-ready"
+    state["tree_batch_index"] = 0
+    state["tree_packet"] = materialized["packet"]
+    state["tree_header"] = materialized["header"]
+    state["tree_element_files"] = materialized["elements"]
+    state.pop("created_tree", None)
+    state.pop("commit_packet", None)
+    state.pop("published_commit_candidate", None)
+    state.pop("update_packet", None)
     _write_connector_state(output_dir, state)
     result = {
         "stage": "repair-generation-ready",
+        "strategy": "atomic-inline-tree-generation",
         "request_id": state["request_id"],
         "previous_generation": next_generation - 1,
         "generation": next_generation,
-        "previous_max_upload_call_bytes": previous_max,
-        "generation_call_budget_bytes": next_budget,
-        "max_upload_call_bytes": next_max,
-        "upload_call_count": len(generation["upload_packets"]),
-        "upload_packets": generation["upload_packets"],
-        "expected_blob_git_oids": generation["expected_blob_git_oids"],
-        "remote_payload_paths": generation["remote_payload_paths"],
-        "payload_index_packet": generation["index_packet"],
-        "remote_payload_index_path": generation["remote_index_path"],
-        "expected_payload_index_blob_git_oid": generation["expected_index_blob_git_oid"],
-        "retry_request_packet": retry_packet,
-        "retry_request_call_bytes": retry_call_bytes,
-        "next": (
-            "copy/paste the generated upload packet action_args in order, then the payload index "
-            "packet, then the retry request packet"
-        ),
-        "verified": True,
+        "previous_payload_handoff_field_count": previous_count,
+        "payload_handoff_field_count": next_count,
+        "connector_call_budget_bytes": CONNECTOR_CALL_BUDGET_BYTES,
+        "branch_updates_per_generation": 1,
+        **_generation_summary(generation),
+        **_tree_ready_summary(state, generation, materialized),
     }
+    _write_connector_summary(output_dir, result)
     print(json.dumps(result, indent=2))
+    return 0
+
+
+def cmd_cancel(args: argparse.Namespace) -> int:
+    repo = _repo_from_cwd()
+    transaction = _transaction_dir(repo)
+    manifest = _manifest_path(repo)
+    if not manifest.exists():
+        raise PublishStateError("no active publish transaction to cancel")
+    request = _read_prepared_request(manifest)
+    state = _read_state(repo)
+    target_remote_head = args.target_remote_head
+    publish_remote_tree = args.publish_remote_tree
+    _require_hex_sha(target_remote_head, name="observed develop HEAD")
+    _require_hex_sha(publish_remote_tree, name="observed publish tree")
+    expected_target = str(request["base_sha"])
+    if target_remote_head != expected_target or target_remote_head != state["remote_commit"]:
+        raise PublishStateError(
+            "cannot cancel active publish transaction after develop moved; "
+            f"observed={target_remote_head} expected={expected_target}"
+        )
+    connector_state_path = _connector_dir(repo) / CONNECTOR_STATE_NAME
+    if connector_state_path.exists():
+        connector_state = _read_connector_state(repo)
+        generations = connector_state.get("generations")
+        if not isinstance(generations, list) or not generations or not isinstance(generations[0], dict):
+            raise PublishStateError("active Connector state has no initial publish base")
+        initial_tree = str(generations[0]["base_publish_tree"])
+        if publish_remote_tree != initial_tree:
+            raise PublishStateError(
+                "cannot cancel active publish transaction after publish transport content changed; "
+                f"observed_tree={publish_remote_tree} expected_tree={initial_tree}"
+            )
+    else:
+        raise PublishStateError(
+            "cannot cancel after prepare before publish transport base was recorded; run connector-plan first"
+        )
+    shutil.rmtree(transaction)
+    print(json.dumps({
+        "cancelled": True,
+        "request_id": request["request_id"],
+        "target_remote_head": target_remote_head,
+        "publish_remote_tree": publish_remote_tree,
+        "local_target_commit": request["local_target_commit"],
+        "verified": True,
+    }, indent=2))
     return 0
 
 def _read_publish_receipt(path: Path, *, expected_request_version: int) -> dict[str, object]:
@@ -1394,23 +1526,73 @@ def build_parser() -> argparse.ArgumentParser:
 
     connector_plan = sub.add_parser(
         "connector-plan",
-        help="after one develop HEAD check, generate only the required payload upload packets",
+        help="after the single develop and publish transport base observations, plan an atomic payload generation",
     )
     connector_plan.add_argument(
         "--target-remote-head",
         required=True,
-        help="observed develop HEAD from the single pre-publish remote check; verification input, not a target selector",
+        help="observed develop HEAD from the single pre-publish target check; verification input, not a target selector",
+    )
+    connector_plan.add_argument(
+        "--publish-remote-head",
+        required=True,
+        help="observed publish transport HEAD used as the atomic generation parent",
+    )
+    connector_plan.add_argument(
+        "--publish-remote-tree",
+        required=True,
+        help="observed publish transport tree used as the atomic generation base tree",
     )
     connector_plan.set_defaults(func=cmd_connector_plan)
+
+    connector_tree = sub.add_parser(
+        "connector-tree",
+        help="advance the atomic tree assembly or create the commit packet after the final tree call",
+    )
+    connector_tree.add_argument(
+        "--tree-sha", required=True, help="tree SHA returned by the generated GitHub.create_tree call"
+    )
+    connector_tree.set_defaults(func=cmd_connector_tree)
+
+    connector_update = sub.add_parser(
+        "connector-update",
+        help="create the non-force publish ref update packet for the atomic generation commit",
+    )
+    connector_update.add_argument(
+        "--commit-sha", required=True, help="commit SHA returned by the generated GitHub.create_commit call"
+    )
+    connector_update.set_defaults(func=cmd_connector_update)
 
     connector_repair = sub.add_parser(
         "connector-repair",
         help=(
-            "generate the next append-only payload generation with a smaller actual Connector "
-            "call envelope for the active transaction"
+            "generate the next atomic retry generation using the same 144 KiB remote action ceiling "
+            "from the observed publish transport base"
         ),
     )
+    connector_repair.add_argument(
+        "--publish-remote-head", required=True,
+        help="publish HEAD observed once when recovery is required",
+    )
+    connector_repair.add_argument(
+        "--publish-remote-tree", required=True,
+        help="publish tree observed with the recovery HEAD",
+    )
     connector_repair.set_defaults(func=cmd_connector_repair)
+
+    cancel = sub.add_parser(
+        "cancel",
+        help="cancel an unpublished active transaction after verifying develop and publish content are unchanged",
+    )
+    cancel.add_argument(
+        "--target-remote-head", required=True,
+        help="observed develop HEAD; must still equal the transaction base",
+    )
+    cancel.add_argument(
+        "--publish-remote-tree", required=True,
+        help="observed publish tree; must still equal the transaction initial transport base tree",
+    )
+    cancel.set_defaults(func=cmd_cancel)
 
     record = sub.add_parser("record", help="verify a Gateway receipt and close the active transaction")
     record.add_argument(

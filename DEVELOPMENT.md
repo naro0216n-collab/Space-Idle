@@ -84,23 +84,41 @@ GitHub反映の入口は差分種別で決める。
 
 1. 変更を責務としてまとまったlocal commitにする。
 2. `prepare`を実行して、現在の `HEAD` をpublish対象として固定する。
-3. remote `develop` HEADを1回取得し、そのSHAを `connector-plan` に渡す。
-4. helperが生成した各packetの `action_args` をコピペで対応するConnector callへ渡し、生成順に実行する。
-5. Gateway成功後、requestに対応するreceiptを取得して `record` に渡す。
-6. Fast CIは結果が次の判断に必要になった時点で確認する。
+3. remote `develop` HEADを1回、transport基点となる remote `publish` HEAD/treeを1回取得し、`connector-plan` に渡す。
+4. helperが生成したtree headerとtree element filesから1つの `GitHub.create_tree` actionを構成して実行する。長いpayloadはhandoff上複数の `content` elementへ分けるが、Connector call全体が144 KiB以内なら送信は1回である。
+5. 返却tree SHAを `connector-tree` に渡す。hard ceiling上1回に収まらない場合だけhelperが次の `create_tree` packetを生成し、収まる場合は直ちにcommit packetを生成する。複数tree callになってもbranchはまだ更新しない。
+6. 最終tree後に生成されたcommit packetを実行し、返却commit SHAを `connector-update` に渡す。生成されたnon-force ref packetを1回だけ実行し、この1回の `publish` branch更新でpayload part、index、request triggerを同時に可視化してGatewayを起動する。
+7. Gateway成功後、requestに対応するreceiptを取得して `record` に渡す。
+8. Fast CIは結果が次の判断に必要になった時点で確認する。
 
 ```bash
 python scripts/publish_request.py prepare
 ```
 
-remote `develop` HEADを取得した後、そのSHAを渡す。
+remote `develop` HEADとremote `publish` HEAD/treeをそれぞれ1回取得した後、その観測値を渡す。
 
 ```bash
 python scripts/publish_request.py connector-plan \
-  --target-remote-head <current-develop-head>
+  --target-remote-head <current-develop-head> \
+  --publish-remote-head <current-publish-head> \
+  --publish-remote-tree <current-publish-tree>
 ```
 
-`connector-plan` が生成した各packetの `action_args` をコピペで対応するConnector callへ渡し、生成順に実行する。
+`connector-plan` が生成したtree headerとtree element filesを、順序を変えず1つの `GitHub.create_tree` callへ組み立てる。個々の `content` elementはlocal handoff用に小さく保つが、Connector call全体が144 KiB以内なら分割送信しない。tree生成に成功したら返却tree SHAを渡す。
+
+```bash
+python scripts/publish_request.py connector-tree \
+  --tree-sha <create-tree-result-sha>
+```
+
+helperが次のtree packetを返した場合だけ同じ操作を繰り返す。commit packetを返したらそれを実行し、返却commit SHAを渡す。
+
+```bash
+python scripts/publish_request.py connector-update \
+  --commit-sha <create-commit-result-sha>
+```
+
+生成されたref packetを `GitHub.update_ref` で実行する。`force` は常にfalseであり、partごとのbranch更新や `create_file` は通常publish経路に置かない。
 
 Gateway成功後、receiptを取得して記録する。
 
@@ -109,9 +127,15 @@ python scripts/publish_request.py record \
   --receipt /tmp/publish-receipt.json
 ```
 
-active transactionが存在する場合は、そのtransactionの現在段階から続行する。新しいpublishを開始する判断はhelperに任せ、作業者は既存transactionの生成済みpacketを実行する。
+active transactionが存在する場合は、そのtransactionの現在段階から続行する。新しいpublishを開始する判断はhelperに任せ、作業者は既存transactionの生成済みpacketを実行する。prepared targetを公開する前にそのcheckpoint自体を取り消す必要が生じた場合は、remote `develop` HEADと `publish` treeを一度観測し、両方がtransaction開始時から内容上不変である場合だけ `cancel` で閉じる。transaction directoryを手動削除しない。
 
-Connector callが失敗した、結果が不明確だった、またはGatewayがpayload検証で停止した場合だけ、後述の Publish recovery に進む。
+```bash
+python scripts/publish_request.py cancel \
+  --target-remote-head <current-develop-head> \
+  --publish-remote-tree <current-publish-tree>
+```
+
+Connector handoffが失敗した、ref update結果が不明確だった、またはGatewayがpayload検証で停止した場合だけ、後述の Publish recovery に進む。
 
 ### Workflow maintenance procedure
 
@@ -176,15 +200,21 @@ control planeの実装は独立した小さなtracked fileへ分け、巨大なw
 
 ### Publish recovery
 
-通常publishでpayload転送が失敗、不明確、またはGatewayのpayload検証で停止した場合も、active transactionを正本として復旧する。remote payloadの個別取得やSHA転記は行わない。
+通常publishでpayload handoffが失敗、不明確、ref update結果が不明確、またはGatewayのpayload検証で停止した場合も、active transactionを正本として復旧する。remote payloadの個別取得やSHA転記は行わない。
+
+repair開始時だけremote `publish` HEAD/treeを1回取得し、その観測値を渡す。
 
 ```bash
-python scripts/publish_request.py connector-repair
+python scripts/publish_request.py connector-repair \
+  --publish-remote-head <current-publish-head> \
+  --publish-remote-tree <current-publish-tree>
 ```
 
-helperは直前世代の実Connector call sizeから、より小さいcall envelopeを持つ次世代payload packet群、世代index packet、同一request IDのretry request packetを生成する。各packetの `action_args` をコピペで対応するConnector callへ渡し、生成順に実行する。既存remote fileは上書きせず、新しい世代別pathへappend-onlyで作成する。
+helperは観測された `publish` 基点が、直前世代をまだbranchへ反映していない基点、または直前世代を原子的に反映したcommit/treeのいずれかであることを機械検証する。Gatewayが既にreceiptを記録した後の別commit等であればrepairせず停止する。
 
-repairでは既存submit packetや失敗jobを再利用せず、生成されたretry request packetまで実行してGateway検証を起動する。再度payload検証で停止した場合は同じ `connector-repair` を実行し、さらに細分化した次世代へ進む。request ID、base、target tree、publish commitはactive transactionのものを維持する。
+次世代も144 KiB hard ceilingをConnector call全体へ適用する。会話表示やlocal packet読出しで本文を複数sliceに分ける必要がある場合、helperはそれらを同一 `GitHub.create_tree` call内の複数 `content` elementとして扱う。call全体がhard ceiling以内なら送信は1回であり、handoff field数をtool call数へ伝播させない。hard ceilingを超える場合だけ、helperがtree elementsを必要最少数の連続 `create_tree` callへpackingする。blob返却SHAの中継や本文SHAの手動確認は行わない。
+
+その後は通常系と同じく、tree packet → `connector-tree` → 必要なら次tree packet → commit packet → `connector-update` → non-force ref packetの順で実行する。`publish` branch更新は世代ごとに1回だけであり、handoff fieldやtree batchをbranchへ個別公開しない。再度payload検証で停止した場合は同じhard ceiling契約のまま `connector-repair` で次世代へ進む。request ID、base、target tree、publish commitはactive transactionのものを維持する。
 
 remote `develop` HEAD、publish parent、target treeなどpublish対象そのものの整合性が崩れている場合はtransport recoveryではない。transactionを進めず、remote同期または実装状態の問題として調査する。
 
