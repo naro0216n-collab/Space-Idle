@@ -233,6 +233,40 @@ class FleetAllocationMixin:
             raise KeyError(reservation_id)
         del self.fleet_reservations[reservation_id]
 
+    def complete_fleet_reservation(
+        self,
+        reservation_id: EntityId,
+        *,
+        final_location_id: SpatialNodeId | None = None,
+        day: int = 0,
+    ) -> None:
+        """Finish an exclusive Fleet use and atomically place its units.
+
+        Owning domains choose the final location implied by their operation but do
+        not mutate Fleet pools.  Releasing the reservation, moving aggregate Fleet
+        quantity, and refilling allocation targets are one Fleet-domain transition.
+        """
+        reservation = self.fleet_reservations.get(reservation_id)
+        if reservation is None:
+            raise KeyError(reservation_id)
+        destination_id = final_location_id or reservation.location_id
+        if destination_id not in self.facilities.environment.graph.nodes:
+            raise KeyError(destination_id)
+
+        if destination_id != reservation.location_id:
+            source = self.fleet_pool(
+                reservation.vehicle_definition_id, reservation.location_id
+            )
+            if source.total_units < reservation.units:
+                raise RuntimeError("fleet reservation exceeds source pool")
+            source.total_units -= reservation.units
+            self.fleet_pool(
+                reservation.vehicle_definition_id, destination_id
+            ).total_units += reservation.units
+
+        del self.fleet_reservations[reservation_id]
+        self.reconcile_fleet_allocations(day)
+
     def _route_path_for_vehicle(
         self,
         source_id: SpatialNodeId,

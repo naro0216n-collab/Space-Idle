@@ -420,14 +420,14 @@ class ScientificExplorationService:
     ) -> None:
         if state.vehicle_definition_id is not None:
             reservation_id = EntityId(f"scientific_exploration:{definition.id}")
-            vehicle_definition_id = state.vehicle_definition_id
-            units = state.reserved_units
-            self.logistics.release_fleet_reservation(reservation_id)
-            if not definition.return_to_origin and definition.destination_id != definition.origin_id:
-                source = self.logistics.fleet_pool(vehicle_definition_id, definition.origin_id)
-                if source.total_units < units:
-                    raise RuntimeError("scientific exploration Fleet exceeds source pool")
-                source.total_units -= units
-                self.logistics.fleet_pool(vehicle_definition_id, definition.destination_id).total_units += units
-            self.logistics.reconcile_fleet_allocations(day)
+            final_location_id = (
+                definition.origin_id
+                if definition.return_to_origin
+                else definition.destination_id
+            )
+            self.logistics.complete_fleet_reservation(
+                reservation_id,
+                final_location_id=final_location_id,
+                day=day,
+            )
         state.phase = ScientificExplorationPhase.COMPLETE
