@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -19,6 +20,10 @@ CONNECTOR_CALL_BUDGET_BYTES = 96 * 1024
 MAX_BLOB_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
 CONNECTOR_SUMMARY_NAME = "summary.json"
+TRANSACTION_DIR_NAME = "space-idle-publish-transaction"
+WORKFLOW_TRANSACTION_DIR_NAME = "space-idle-workflow-maintenance-transaction"
+MANIFEST_NAME = "manifest.json"
+CONNECTOR_DIR_NAME = "connector"
 PUBLISH_BUNDLE_REF = "refs/space-idle/publish-request"
 PUBLISH_IDENTITY_NAME = "space-idle-publish-gateway"
 PUBLISH_IDENTITY_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
@@ -63,6 +68,31 @@ def _git_dir(repo: Path) -> Path:
 
 def _state_path(repo: Path) -> Path:
     return _git_dir(repo) / STATE_NAME
+
+
+def _repo_from_cwd() -> Path:
+    cwd = Path.cwd().resolve()
+    return Path(_git("rev-parse", "--show-toplevel", cwd=cwd)).resolve()
+
+
+def _transaction_dir(repo: Path) -> Path:
+    return _git_dir(repo) / TRANSACTION_DIR_NAME
+
+
+def _manifest_path(repo: Path) -> Path:
+    return _transaction_dir(repo) / MANIFEST_NAME
+
+
+def _connector_dir(repo: Path) -> Path:
+    return _transaction_dir(repo) / CONNECTOR_DIR_NAME
+
+
+def _require_no_active_transaction(repo: Path) -> None:
+    transaction = _transaction_dir(repo)
+    if transaction.exists() and any(transaction.iterdir()):
+        raise PublishStateError(
+            "an active publish transaction already exists; finish or record it before preparing another"
+        )
 
 
 def _read_state(repo: Path) -> dict[str, str]:
@@ -124,19 +154,19 @@ def _message_bytes(message: str) -> bytes:
     return message.encode("utf-8")
 
 
-def _default_message(repo: Path, state: dict[str, str], target_ref: str) -> str:
+def _default_message(repo: Path, state: dict[str, str], target_commit: str) -> str:
     local_head = state["local_head"]
     is_ancestor = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", local_head, target_ref],
+        ["git", "merge-base", "--is-ancestor", local_head, target_commit],
         cwd=repo,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     ).returncode == 0
     if is_ancestor:
-        commits = _git("rev-list", "--reverse", f"{local_head}..{target_ref}", cwd=repo).splitlines()
+        commits = _git("rev-list", "--reverse", f"{local_head}..{target_commit}", cwd=repo).splitlines()
         if len(commits) == 1:
             return _git("show", "-s", "--format=%B", commits[0], cwd=repo).rstrip() + "\n"
-    return _git("show", "-s", "--format=%B", target_ref, cwd=repo).rstrip() + "\n"
+    return _git("show", "-s", "--format=%B", target_commit, cwd=repo).rstrip() + "\n"
 
 
 def _require_hex_sha(value: str, *, name: str) -> None:
@@ -549,7 +579,7 @@ def _split_payload_for_blob_calls(
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
+    repo = _repo_from_cwd()
     _require_hex_sha(args.remote_commit, name="remote commit")
     _require_hex_sha(args.remote_tree, name="remote tree")
     local_commit = _git("rev-parse", "HEAD^{commit}", cwd=repo)
@@ -559,6 +589,12 @@ def cmd_init(args: argparse.Namespace) -> int:
             f"artifact/local tree mismatch: local={local_tree} remote={args.remote_tree}"
         )
     _write_state(repo, args.remote_commit, args.remote_tree, local_commit)
+    transaction = _transaction_dir(repo)
+    if transaction.exists():
+        shutil.rmtree(transaction)
+    workflow_transaction = _git_dir(repo) / WORKFLOW_TRANSACTION_DIR_NAME
+    if workflow_transaction.exists():
+        shutil.rmtree(workflow_transaction)
     marker = _git_dir(repo) / WORKFLOW_REHYDRATE_MARKER_NAME
     if marker.exists():
         marker.unlink()
@@ -567,10 +603,11 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_prepare(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
+    repo = _repo_from_cwd()
     state = _read_state(repo)
-    target_commit = _git("rev-parse", f"{args.target_ref}^{{commit}}", cwd=repo)
-    target_tree = _git("rev-parse", f"{args.target_ref}^{{tree}}", cwd=repo)
+    _require_no_active_transaction(repo)
+    target_commit = _git("rev-parse", "HEAD^{commit}", cwd=repo)
+    target_tree = _git("rev-parse", "HEAD^{tree}", cwd=repo)
     if target_tree == state["remote_tree"]:
         raise PublishStateError("local target tree already matches the last published tree")
     workflow_paths = _changed_workflow_paths(repo, state["remote_commit"], target_commit)
@@ -580,7 +617,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             "use `python scripts/workflow_maintenance.py prepare` for a workflow-only commit: "
             + ", ".join(workflow_paths)
         )
-    message = _message_bytes(_default_message(repo, state, args.target_ref))
+    message = _message_bytes(_default_message(repo, state, target_commit))
     publish_commit = _create_publish_commit(repo, state["remote_commit"], target_tree, message)
     payload_bytes = _bundle_bytes(repo, state["remote_commit"], publish_commit)
     payload_b64 = base64.b64encode(payload_bytes).decode("ascii")
@@ -596,10 +633,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "payload_b64": payload_b64,
         "local_target_commit": target_commit,
     }
-    if not args.output:
-        raise PublishStateError("prepare requires --output")
-    output = Path(args.output).resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
+    output = _manifest_path(repo)
+    output.parent.mkdir(parents=True, exist_ok=False)
     output.write_text(json.dumps(request, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     verified = _verify_prepared_request(repo, output)
     print(
@@ -623,13 +658,6 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             indent=2,
         )
     )
-    return 0
-
-
-def cmd_verify(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    verified = _verify_prepared_request(repo, Path(args.manifest).resolve())
-    print(json.dumps(verified, indent=2))
     return 0
 
 
@@ -700,8 +728,8 @@ def _validate_connector_state_manifest(
 
 
 def cmd_connector_plan(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    manifest = Path(args.manifest).resolve()
+    repo = _repo_from_cwd()
+    manifest = _manifest_path(repo)
     verified = _verify_prepared_request(repo, manifest)
     prepared = _read_prepared_request(manifest)
     _require_hex_sha(args.target_remote_head, name="target remote HEAD")
@@ -711,7 +739,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
             f"expected={prepared['base_sha']} actual={args.target_remote_head}"
         )
 
-    output_dir = Path(f"{manifest}.connector")
+    output_dir = _connector_dir(repo)
     if output_dir.exists() and any(output_dir.iterdir()):
         raise PublishStateError(
             f"Connector plan directory is already initialized: {output_dir}; "
@@ -790,8 +818,8 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
 
 
 def cmd_connector_root(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    output_dir = Path(args.plan_dir).resolve()
+    repo = _repo_from_cwd()
+    output_dir = _connector_dir(repo)
     state = _read_connector_state(output_dir)
     if state["stage"] != "uploads-planned":
         raise PublishStateError(
@@ -833,8 +861,8 @@ def cmd_connector_root(args: argparse.Namespace) -> int:
 
 
 def cmd_connector_submit(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    output_dir = Path(args.plan_dir).resolve()
+    repo = _repo_from_cwd()
+    output_dir = _connector_dir(repo)
     state = _read_connector_state(output_dir)
     if state["stage"] != "root-packet-ready":
         raise PublishStateError(
@@ -963,9 +991,9 @@ def _import_receipt_commit_object(repo: Path, receipt: dict[str, object]) -> dic
 
 
 def cmd_record(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
+    repo = _repo_from_cwd()
     state = _read_state(repo)
-    manifest = Path(args.manifest).resolve()
+    manifest = _manifest_path(repo)
     verified = _verify_prepared_request(repo, manifest)
     request = _read_prepared_request(manifest)
     receipt = _read_publish_receipt(Path(args.receipt).resolve())
@@ -993,6 +1021,9 @@ def cmd_record(args: argparse.Namespace) -> int:
     if failed:
         raise PublishStateError("publish receipt verification failed: " + ", ".join(failed))
     _write_state(repo, remote_commit, remote_tree, local_head)
+    transaction = _transaction_dir(repo)
+    if transaction.exists():
+        shutil.rmtree(transaction)
     print(
         json.dumps(
             {
@@ -1012,9 +1043,8 @@ def cmd_record(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate and track exact-tree publish requests for Space-Idle."
+        description="Generate and track the single standard Space-Idle develop publish transaction."
     )
-    parser.add_argument("--repo", default=".")
     sub = parser.add_subparsers(dest="command", required=True)
 
     init = sub.add_parser("init", help="initialize state from a verified source artifact")
@@ -1022,16 +1052,13 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--remote-tree", required=True)
     init.set_defaults(func=cmd_init)
 
-    prepare = sub.add_parser("prepare", help="generate one verified Git bundle publish request")
-    prepare.add_argument("--target-ref", default="HEAD")
-    prepare.add_argument("--output", required=True)
+    prepare = sub.add_parser("prepare", help="prepare HEAD as the single active develop publish transaction")
     prepare.set_defaults(func=cmd_prepare)
 
     connector_plan = sub.add_parser(
         "connector-plan",
-        help="generate minimum-call Connector packets; Gateway performs commit/ref publication after verification",
+        help="after one develop HEAD check, generate only the required payload upload packets",
     )
-    connector_plan.add_argument("--manifest", required=True)
     connector_plan.add_argument("--target-remote-head", required=True)
     connector_plan.set_defaults(func=cmd_connector_plan)
 
@@ -1039,23 +1066,16 @@ def build_parser() -> argparse.ArgumentParser:
         "connector-root",
         help="generate the payload root packet after all planned blob uploads succeeded",
     )
-    connector_root.add_argument("--plan-dir", required=True)
     connector_root.set_defaults(func=cmd_connector_root)
 
     connector_submit = sub.add_parser(
         "connector-submit",
         help="generate the final request packet only after the payload root was created",
     )
-    connector_submit.add_argument("--plan-dir", required=True)
     connector_submit.add_argument("--root-tree-sha", required=True)
     connector_submit.set_defaults(func=cmd_connector_submit)
 
-    verify = sub.add_parser("verify", help="re-run local verification of a prepared request")
-    verify.add_argument("--manifest", required=True)
-    verify.set_defaults(func=cmd_verify)
-
-    record = sub.add_parser("record", help="verify a Gateway receipt and advance recorded remote state")
-    record.add_argument("--manifest", required=True)
+    record = sub.add_parser("record", help="verify a Gateway receipt and close the active transaction")
     record.add_argument("--receipt", required=True)
     record.set_defaults(func=cmd_record)
     return parser

@@ -86,7 +86,7 @@ GitHub反映の入口は差分種別で一意に決める。作業者がtranspor
 
 通常publishは次の順序に固定する。
 
-1. ローカル変更を責務としてまとまったcommitにする。publish対象は明示したcommitted `target-ref` のtreeであり、その後にworking treeへ別の未commit作業があっても対象へ混入させない。
+1. ローカル変更を責務としてまとまったcommitにする。publish対象は `prepare` 実行時の現在 `HEAD` に固定され、working treeの未commit差分は対象にしない。別requestを並行開始せず、active transactionをreceipt記録まで完了させる。
 2. `scripts/publish_request.py prepare` で、記録済みremote commitを親、local target treeをtreeに持つ決定論的publish commitを作り、Git bundleへ格納する。生成物はv6 JSON requestで、bundle Base64、payload SHA-256、base commit、target tree、publish commit、local target commitを保持し、生成時にbundle/parent/treeを自己検証する。`.github/workflows/**` の差分を含むtargetはここでworkflow maintenance対象として分離し、通常Gateway requestを生成しない。
 3. publish直前に対象branch HEADを一度だけ取得する。`connector-plan`へ渡し、manifestの `base_sha` と一致しない場合は送信せず原因を調査する。
 4. `connector-plan` は固定Connector profileを使い、bundle Base64を独立Git blobへmaterializeするための `upload-part-*.json` だけを生成する。call budgetはhelper内部のtransport設定であり、CLIやmanifestから変更しない。必要な場合だけ実action引数bytesから最少数へ自動分割する。各uploadは独立しており並列実行できる。
@@ -95,43 +95,31 @@ GitHub反映の入口は差分種別で一意に決める。作業者がtranspor
 7. `submit-request.json` の `GitHub.create_file` を1回実行する。Publish Gatewayはrequest作成commitを契機に自動実行し、payload root tree、各blob OID、payload長、payload SHA-256、Git bundle、publish commit、parent/base、target tree、直前remote HEADを検証する。すべて一致した場合だけexact publish commitを対象branchへnon-force pushし、remote ref/treeを再確認する。
 8. Gatewayは成功receiptを `.publish/receipts/<request-id>.json` へ自動記録し、Fast CIをdispatchする。ローカルではreceiptを取得して `publish_request.py record` に渡す。`record` はmanifest内の `local_target_commit` を自動的に使用し、現在のlocal HEADが次作業へ進んでいてもrequest、receipt、当該local target tree、published commit objectの関係を機械検証した場合だけ次回publish stateを更新する。
 
-Connector transportはstageを `uploads-planned -> root-packet-ready -> submit-ready` としてローカルstateへ記録する。既に初期化されたplan directoryを再計画せず、そのstageで生成済みのpacketを使って続行する。payload uploadの失敗は該当packetを再送する。root作成が失敗した場合は、期待blobがmaterializeされていないtransport integrity failureとしてrequest生成前に停止し、upload packetの忠実な再送またはconnector実装自体の修正を行う。任意budgetへの縮小、payloadの手動分割、Base64再構成、inline requestへの切替は標準経路に含めない。
+Connector transportはstageを `uploads-planned -> root-packet-ready -> submit-ready` としてrepo-local active transactionへ記録する。manifestやplan directoryはhelperが `.git` 配下へ固定生成し、CLIから指定しない。既にactive transactionがある場合は再計画せず、そのstageで生成済みpacketを使って続行する。payload uploadの失敗は該当packetを再送する。root作成が失敗した場合は、期待blobがmaterializeされていないtransport integrity failureとしてrequest生成前に停止し、upload packetの忠実な再送またはconnector実装自体の修正を行う。任意budgetへの縮小、payloadの手動分割、Base64再構成、inline requestへの切替は標準経路に含めない。
 
-request生成例:
-
-```bash
-python scripts/publish_request.py prepare \
-  --target-ref HEAD \
-  --output /tmp/space-idle-publish.json
-```
-
-`prepare` は自動検証する。生成物の診断を独立実行する場合だけ `verify` を使う。
+標準実行例。`prepare` は現在 `HEAD` を自動検証してrepo-local active transactionを作成する。
 
 ```bash
-python scripts/publish_request.py verify \
-  --manifest /tmp/space-idle-publish.json
+python scripts/publish_request.py prepare
 ```
 
-対象branch HEADを一度取得した後、upload stageを生成する。
+対象branch `develop` HEADを一度だけ取得した後、そのSHAをupload stageへ渡す。
 
 ```bash
 python scripts/publish_request.py connector-plan \
-  --manifest /tmp/space-idle-publish.json \
-  --target-remote-head <current-target-head>
+  --target-remote-head <current-develop-head>
 ```
 
-全 `upload-part-*.json` の `GitHub.create_blob` が成功したらroot stageへ進む。
+出力された全 `upload-part-*.json` の `GitHub.create_blob` が成功したらroot stageへ進む。packet pathはhelper出力だけを使用し、別manifestやplan directoryを指定しない。
 
 ```bash
-python scripts/publish_request.py connector-root \
-  --plan-dir /tmp/space-idle-publish.json.connector
+python scripts/publish_request.py connector-root
 ```
 
 `assemble-payload-root.json` の `GitHub.create_tree` 成功後、その返却tree SHAを機械検証して最終request packetを生成する。
 
 ```bash
 python scripts/publish_request.py connector-submit \
-  --plan-dir /tmp/space-idle-publish.json.connector \
   --root-tree-sha <create-tree-result-sha>
 ```
 
@@ -139,7 +127,6 @@ Gateway成功後はrequest IDに対応するreceiptを取得し、次回基点�
 
 ```bash
 python scripts/publish_request.py record \
-  --manifest /tmp/space-idle-publish.json \
   --receipt /tmp/publish-receipt.json
 ```
 
@@ -150,19 +137,16 @@ python scripts/publish_request.py record \
 
 workflow更新は通常Publish Gatewayへ流さない。`scripts/workflow_maintenance.py` は `.github/workflows/**` だけが変更されたcommitted targetを受け付け、他パスが一件でも含まれれば開始前に拒否する。対象branchは `develop` に固定し、`main` や通常source publishへ兼用しない。
 
-入口は次の1つだけとする。
+入口は次の1つだけとする。対象は現在 `HEAD` に固定され、manifestやplan directoryはrepo-local transaction領域へ自動生成する。
 
 ```bash
-python scripts/workflow_maintenance.py prepare \
-  --target-ref HEAD \
-  --output /tmp/space-idle-workflow-maintenance.json
+python scripts/workflow_maintenance.py prepare
 ```
 
 `prepare` 後に `develop` HEADを一度だけ取得し、記録済みbaseと一致する場合だけConnector stageへ進む。
 
 ```bash
 python scripts/workflow_maintenance.py connector-plan \
-  --manifest /tmp/space-idle-workflow-maintenance.json \
   --target-remote-head <current-develop-head>
 ```
 
@@ -171,15 +155,13 @@ python scripts/workflow_maintenance.py connector-plan \
 全blob upload後にtree packetを生成する。削除workflowはtarget tree entryを `sha: null` として扱い、追加・変更workflowはlocal target commitの事前計算blob OIDを参照する。Connector返却blob SHAを後続入力へ採用しない。
 
 ```bash
-python scripts/workflow_maintenance.py connector-tree \
-  --plan-dir /tmp/space-idle-workflow-maintenance.json.connector
+python scripts/workflow_maintenance.py connector-tree
 ```
 
 `GitHub.create_tree` 成功後、その返却tree SHAがlocal target treeと一致した場合だけcommit packetを生成する。
 
 ```bash
 python scripts/workflow_maintenance.py connector-commit \
-  --plan-dir /tmp/space-idle-workflow-maintenance.json.connector \
   --tree-sha <create-tree-result-sha>
 ```
 
@@ -187,7 +169,6 @@ commit packetはrecorded `develop` HEADを唯一のparent、検証済みtarget t
 
 ```bash
 python scripts/workflow_maintenance.py connector-update \
-  --plan-dir /tmp/space-idle-workflow-maintenance.json.connector \
   --commit-sha <create-commit-result-sha>
 ```
 
@@ -195,7 +176,6 @@ python scripts/workflow_maintenance.py connector-update \
 
 ```bash
 python scripts/workflow_maintenance.py verify-remote \
-  --plan-dir /tmp/space-idle-workflow-maintenance.json.connector \
   --remote-head <develop-head-after-update> \
   --remote-tree <develop-tree-after-update>
 ```

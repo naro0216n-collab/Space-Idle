@@ -13,6 +13,9 @@ MANIFEST_VERSION = 1
 CONNECTOR_CALL_BUDGET_BYTES = 96 * 1024
 CONNECTOR_STATE_NAME = "workflow-maintenance-state.json"
 SUMMARY_NAME = "summary.json"
+TRANSACTION_DIR_NAME = "space-idle-workflow-maintenance-transaction"
+MANIFEST_NAME = "manifest.json"
+CONNECTOR_DIR_NAME = "connector"
 TARGET_BRANCH = "develop"
 WORKFLOW_PREFIX = ".github/workflows/"
 GITHUB_REPOSITORY = "naro0216n-collab/Space-Idle"
@@ -57,6 +60,31 @@ def _publish_state_path(repo: Path) -> Path:
 
 def _rehydrate_marker_path(repo: Path) -> Path:
     return _git_dir(repo) / REHYDRATE_MARKER_NAME
+
+
+def _repo_from_cwd() -> Path:
+    cwd = Path.cwd().resolve()
+    return Path(_git("rev-parse", "--show-toplevel", cwd=cwd)).resolve()
+
+
+def _transaction_dir(repo: Path) -> Path:
+    return _git_dir(repo) / TRANSACTION_DIR_NAME
+
+
+def _manifest_path(repo: Path) -> Path:
+    return _transaction_dir(repo) / MANIFEST_NAME
+
+
+def _connector_dir(repo: Path) -> Path:
+    return _transaction_dir(repo) / CONNECTOR_DIR_NAME
+
+
+def _require_no_active_transaction(repo: Path) -> None:
+    transaction = _transaction_dir(repo)
+    if transaction.exists() and any(transaction.iterdir()):
+        raise WorkflowMaintenanceError(
+            "an active workflow maintenance transaction already exists; finish it or rehydrate from source-snapshot"
+        )
 
 
 def _read_publish_state(repo: Path) -> dict[str, str]:
@@ -167,14 +195,15 @@ def _write_summary(plan_dir: Path, state: dict[str, object], **extra: object) ->
 
 
 def cmd_prepare(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
+    repo = _repo_from_cwd()
     state = _read_publish_state(repo)
     if _rehydrate_marker_path(repo).exists():
         raise WorkflowMaintenanceError(
             "a prior workflow maintenance update requires source-snapshot rehydration before another change"
         )
-    target_commit = _git("rev-parse", f"{args.target_ref}^{{commit}}", cwd=repo)
-    target_tree = _git("rev-parse", f"{args.target_ref}^{{tree}}", cwd=repo)
+    _require_no_active_transaction(repo)
+    target_commit = _git("rev-parse", "HEAD^{commit}", cwd=repo)
+    target_tree = _git("rev-parse", "HEAD^{tree}", cwd=repo)
     if target_tree == state["remote_tree"]:
         raise WorkflowMaintenanceError("local target tree already matches the recorded develop tree")
 
@@ -226,8 +255,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         "message": message,
         "changes": manifest_changes,
     }
-    output = Path(args.output).resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
+    output = _manifest_path(repo)
+    output.parent.mkdir(parents=True, exist_ok=False)
     _write_json(output, manifest)
     print(
         json.dumps(
@@ -248,15 +277,15 @@ def cmd_prepare(args: argparse.Namespace) -> int:
 
 
 def cmd_connector_plan(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    manifest_path = Path(args.manifest).resolve()
+    repo = _repo_from_cwd()
+    manifest_path = _manifest_path(repo)
     manifest = _load_manifest(manifest_path)
     _require_hex_sha(args.target_remote_head, name="target remote HEAD")
     if args.target_remote_head != manifest["base_commit"]:
         raise WorkflowMaintenanceError(
             "develop HEAD moved since workflow maintenance prepare; do not create connector packets"
         )
-    plan_dir = Path(str(manifest_path) + ".connector")
+    plan_dir = _connector_dir(repo)
     if _state_path(plan_dir).exists():
         raise WorkflowMaintenanceError(
             "workflow maintenance connector plan already exists; continue its recorded stage instead of replanning"
@@ -314,7 +343,8 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
 
 
 def cmd_connector_tree(args: argparse.Namespace) -> int:
-    plan_dir = Path(args.plan_dir).resolve()
+    repo = _repo_from_cwd()
+    plan_dir = _connector_dir(repo)
     state = _read_connector_state(plan_dir)
     if state["stage"] != "uploads-planned":
         raise WorkflowMaintenanceError(
@@ -358,7 +388,8 @@ def cmd_connector_tree(args: argparse.Namespace) -> int:
 
 
 def cmd_connector_commit(args: argparse.Namespace) -> int:
-    plan_dir = Path(args.plan_dir).resolve()
+    repo = _repo_from_cwd()
+    plan_dir = _connector_dir(repo)
     state = _read_connector_state(plan_dir)
     if state["stage"] != "tree-packet-ready":
         raise WorkflowMaintenanceError(
@@ -395,7 +426,8 @@ def cmd_connector_commit(args: argparse.Namespace) -> int:
 
 
 def cmd_connector_update(args: argparse.Namespace) -> int:
-    plan_dir = Path(args.plan_dir).resolve()
+    repo = _repo_from_cwd()
+    plan_dir = _connector_dir(repo)
     state = _read_connector_state(plan_dir)
     if state["stage"] != "commit-packet-ready":
         raise WorkflowMaintenanceError(
@@ -429,8 +461,8 @@ def cmd_connector_update(args: argparse.Namespace) -> int:
 
 
 def cmd_verify_remote(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    plan_dir = Path(args.plan_dir).resolve()
+    repo = _repo_from_cwd()
+    plan_dir = _connector_dir(repo)
     state = _read_connector_state(plan_dir)
     if state["stage"] != "update-packet-ready":
         raise WorkflowMaintenanceError(
@@ -476,49 +508,41 @@ def cmd_verify_remote(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Publish committed .github/workflows-only changes through the separately authorized "
-            "GitHub connector path. Normal source/game changes belong to publish_request.py."
+            "Publish the single active committed .github/workflows-only develop maintenance transaction. "
+            "Normal source/game changes belong to publish_request.py."
         )
     )
-    parser.add_argument("--repo", default=".", help="local repository path")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    prepare = sub.add_parser("prepare", help="prepare one workflow-only develop maintenance target")
-    prepare.add_argument("--target-ref", default="HEAD")
-    prepare.add_argument("--output", required=True)
+    prepare = sub.add_parser("prepare", help="prepare HEAD as the workflow-only develop maintenance target")
     prepare.set_defaults(func=cmd_prepare)
 
     connector_plan = sub.add_parser(
         "connector-plan", help="after one develop HEAD check, generate workflow blob upload packets only"
     )
-    connector_plan.add_argument("--manifest", required=True)
     connector_plan.add_argument("--target-remote-head", required=True)
     connector_plan.set_defaults(func=cmd_connector_plan)
 
     connector_tree = sub.add_parser(
         "connector-tree", help="after workflow blob uploads, generate the exact target tree packet"
     )
-    connector_tree.add_argument("--plan-dir", required=True)
     connector_tree.set_defaults(func=cmd_connector_tree)
 
     connector_commit = sub.add_parser(
         "connector-commit", help="after target tree creation, verify its SHA and generate commit packet"
     )
-    connector_commit.add_argument("--plan-dir", required=True)
     connector_commit.add_argument("--tree-sha", required=True)
     connector_commit.set_defaults(func=cmd_connector_commit)
 
     connector_update = sub.add_parser(
         "connector-update", help="after commit creation, generate the non-force develop ref update packet"
     )
-    connector_update.add_argument("--plan-dir", required=True)
     connector_update.add_argument("--commit-sha", required=True)
     connector_update.set_defaults(func=cmd_connector_update)
 
     verify_remote = sub.add_parser(
         "verify-remote", help="verify develop ref/tree after update and require source-snapshot rehydration"
     )
-    verify_remote.add_argument("--plan-dir", required=True)
     verify_remote.add_argument("--remote-head", required=True)
     verify_remote.add_argument("--remote-tree", required=True)
     verify_remote.set_defaults(func=cmd_verify_remote)
