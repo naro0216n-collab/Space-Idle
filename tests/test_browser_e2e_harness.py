@@ -120,13 +120,13 @@ def test_ci_entrypoint_coalesces_existing_workflow_commands(monkeypatch, tmp_pat
 def test_ci_secondary_entrypoint_refuses_to_skip_without_completed_suite(monkeypatch, tmp_path) -> None:
     support = _load_module("space_idle_e2e_support_ci_guard_test", PLAYWRIGHT_DIR / "e2e_support.py")
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GITHUB_WORKFLOW", "Fast CI")
+    monkeypatch.setenv("GITHUB_WORKFLOW", "Full Validation")
     monkeypatch.setenv("GITHUB_RUN_ID", "456")
-    monkeypatch.setenv("GITHUB_JOB", "chromium-smoke")
+    monkeypatch.setenv("GITHUB_JOB", "webkit-e2e")
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
 
     try:
-        support.guard_ci_secondary_entrypoint("lane_ui")
+        support.guard_ci_secondary_entrypoint("interaction_continuity")
     except RuntimeError as exc:
         assert "marker missing or inconsistent" in str(exc)
     else:
@@ -146,7 +146,9 @@ def test_ci_browser_jobs_preserve_scenario_coverage_for_shared_entrypoint() -> N
     )
     assert full.count(full_sequence) == 2
 
-    assert support.CI_WORKFLOW_SUITES["Fast CI"] == ("acceptance", "lane_ui")
+    # Fast CI deliberately keeps its two scripts independent: on the Linux runner,
+    # sharing one browser made the measured smoke step slower.
+    assert "Fast CI" not in support.CI_WORKFLOW_SUITES
     assert support.CI_WORKFLOW_SUITES["Full Validation"] == (
         "acceptance",
         "interaction_continuity",

@@ -9,7 +9,9 @@ from collections.abc import Iterator, Sequence
 from typing import Any, Callable
 
 CI_WORKFLOW_SUITES: dict[str, tuple[str, ...]] = {
-    "Fast CI": ("acceptance", "lane_ui"),
+    # macOS Full Validation showed ~35s of repeated process/bootstrap cost per
+    # scenario. Fast CI stays as independent processes because Linux measurement
+    # showed browser sharing increased its smoke step instead of reducing it.
     "Full Validation": ("acceptance", "interaction_continuity", "logistics_ui"),
 }
 
