@@ -8,7 +8,10 @@ from .application_views import (
     ProjectResourceRow,
     ProjectRow,
 )
-from .construction.models import FacilityUpgradeTarget, NewFacilityTarget, ProjectStatus
+from .construction.models import (
+    FacilityUpgradeTarget, LocationFoundingTarget, NewFacilityTarget,
+    ProjectStatus, SurfaceCellDevelopmentTarget,
+)
 from .facilities import FacilityPlacementScope
 from .shared import SpatialNodeId
 
@@ -105,7 +108,6 @@ class ProjectProjectorMixin:
                 continue
             recipe = sim.projects.recipe_for_project(project)
             facility_definition_id = sim.projects.target_facility_definition_id(project)
-            definition = sim.facilities.definitions[facility_definition_id]
             project_power = sim.power.snapshot(project.location_id, sim.facilities, sim.day)
             blockers = self._project_blockers(project, project_power, external_demands)
             resources = []
@@ -117,25 +119,45 @@ class ProjectProjectorMixin:
                 if state.import_committed_t is not None and shortage > 1e-9:
                     demand_id = f"demand.project:{project.id}:{requirement.resource_id}"
                 resources.append(ProjectResourceRow(
-                    str(requirement.resource_id),
-                    requirement.amount_t,
-                    reserved_t,
-                    state.committed_t,
-                    shortage,
-                    state.import_committed_t,
-                    demand_id,
+                    str(requirement.resource_id), requirement.amount_t, reserved_t, state.committed_t,
+                    shortage, state.import_committed_t, demand_id,
                 ))
-            if isinstance(project.target, NewFacilityTarget):
-                target_kind = "new_facility"; target_facility_id = None; target_level = None
+
+            target_facility_id = None
+            target_level = None
+            target_cell_id = None
+            target_body_id = None
+            target_location_id = None
+            target = project.target
+            if isinstance(target, NewFacilityTarget):
+                target_kind = "new_facility"
+                definition = sim.facilities.definitions[target.facility_def_id]
+                display_name = definition.display_name
+            elif isinstance(target, FacilityUpgradeTarget):
+                target_kind = "facility_upgrade"
+                target_facility_id = str(target.facility_id)
+                target_level = target.target_level
+                definition = sim.facilities.definitions[facility_definition_id]
+                display_name = definition.display_name
+            elif isinstance(target, LocationFoundingTarget):
+                target_kind = "location_founding"
+                target_cell_id = str(target.core_cell_id)
+                target_body_id = str(target.body_id)
+                target_location_id = str(target.new_location_id)
+                display_name = target.display_name
             else:
-                target_kind = "facility_upgrade"; target_facility_id = str(project.target.facility_id); target_level = project.target.target_level
+                target_kind = "surface_cell_development"
+                target_cell_id = str(target.cell_id)
+                target_location_id = str(project.location_id)
+                display_name = recipe.display_name
+
             rows.append(ProjectRow(
-                str(project.id), target_kind, str(project.location_id), str(facility_definition_id),
-                target_facility_id, target_level, definition.display_name, project.status, project.paused,
+                str(project.id), target_kind, str(project.location_id),
+                None if facility_definition_id is None else str(facility_definition_id),
+                target_facility_id, target_level, display_name, project.status, project.paused,
                 project.priority, project.sourcing_policy,
                 None if project.import_source_id is None else str(project.import_source_id),
-                sim.projects.settings_mutable(project.id),
-                sim.projects.sourcing_mutable(project.id),
+                sim.projects.settings_mutable(project.id), sim.projects.sourcing_mutable(project.id),
                 tuple(sim.projects.sourcing_policy_options()),
                 tuple(str(source_id) for source_id in sim.projects.import_source_options(project.id)),
                 project.construction_done, recipe.construction_work, project.construction_weight,
@@ -143,6 +165,7 @@ class ProjectProjectorMixin:
                 None if project.completed_facility_id is None else str(project.completed_facility_id),
                 tuple(resources), blockers,
                 None if project.site_cell_id is None else str(project.site_cell_id),
+                target_cell_id, target_body_id, target_location_id,
             ))
         return tuple(rows)
 

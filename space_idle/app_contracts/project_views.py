@@ -21,7 +21,7 @@ class BuildResourceOption:
 
 @dataclass(frozen=True)
 class BuildOptionRow:
-    facility_definition_id: str
+    facility_definition_id: str | None
     display_name: str
     construction_required: float
     self_deploying: bool
@@ -53,7 +53,7 @@ class ProjectRow:
     id: str
     target_kind: str
     location_id: str
-    facility_definition_id: str
+    facility_definition_id: str | None
     target_facility_id: str | None
     target_level: int | None
     display_name: str
@@ -74,6 +74,9 @@ class ProjectRow:
     resources: tuple[ProjectResourceRow, ...]
     blockers: tuple[tuple[str, str], ...]
     site_cell_id: str | None = None
+    target_cell_id: str | None = None
+    target_body_id: str | None = None
+    target_location_id: str | None = None
 
 
 @dataclass(frozen=True)

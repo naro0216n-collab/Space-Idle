@@ -24,6 +24,27 @@ class PlanFacilityUpgrade:
 
 
 @dataclass(frozen=True)
+class FoundLocation:
+    provider_location_id: str
+    new_location_id: str
+    display_name: str
+    body_id: str
+    core_cell_id: str
+    priority: int = 50
+    sourcing_policy: SourcingPolicyValue = "mixed"
+    import_source_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DevelopSurfaceCell:
+    location_id: str
+    cell_id: str
+    priority: int = 50
+    sourcing_policy: SourcingPolicyValue = "mixed"
+    import_source_id: str | None = None
+
+
+@dataclass(frozen=True)
 class CancelBuild:
     project_id: str
 

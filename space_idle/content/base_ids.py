@@ -49,6 +49,10 @@ MOON_CELL_NEARSIDE_MARE = SurfaceCellId("base.cell.moon.nearside_mare")
 MOON_CELL_EQUATORIAL_HIGHLANDS = SurfaceCellId("base.cell.moon.equatorial_highlands")
 MOON_CELL_FARSIDE_HIGHLANDS = SurfaceCellId("base.cell.moon.farside_highlands")
 
+# Construction project recipe IDs for geographic investment.
+LOCATION_FOUNDATION_PROJECT = DefinitionId("base.construction.location_foundation")
+SURFACE_CELL_DEVELOPMENT_PROJECT = DefinitionId("base.construction.surface_cell_development")
+
 # ---------------------------------------------------------------------------
 # Facilities. IDs and display names describe function, not placement.
 # ---------------------------------------------------------------------------

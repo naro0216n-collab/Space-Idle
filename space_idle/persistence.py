@@ -12,7 +12,7 @@ from .domain import validate_extension_registry
 from .simulation import OfflineProgressPolicy, OfflineProgressResult
 
 
-SAVE_SCHEMA_VERSION = 30
+SAVE_SCHEMA_VERSION = 31
 
 
 class SaveFormatError(ValueError):

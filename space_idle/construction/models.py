@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, TypeAlias
 
-from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
+from ..shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 
 # Procurement policy controls how long a project waits for inventory already at
@@ -65,7 +65,26 @@ class FacilityUpgradeRecipe:
             raise ValueError("facility upgrades cannot self-deploy")
 
 
-ProjectRecipe: TypeAlias = ConstructionRecipe | FacilityUpgradeRecipe
+@dataclass(frozen=True)
+class SpatialDevelopmentRecipe:
+    """Physical inputs and work for founding/expanding a surface Location."""
+
+    id: DefinitionId
+    display_name: str
+    resources: tuple[BuildResourceRequirement, ...]
+    construction_work: float
+    site_requirements: SiteRequirements = SiteRequirements()
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
+    self_deploying: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.display_name:
+            raise ValueError("spatial development recipe display name must not be empty")
+        if self.self_deploying:
+            raise ValueError("location development must consume construction capacity")
+
+
+ProjectRecipe: TypeAlias = ConstructionRecipe | FacilityUpgradeRecipe | SpatialDevelopmentRecipe
 
 
 @dataclass(frozen=True)
@@ -83,7 +102,30 @@ class FacilityUpgradeTarget:
             raise ValueError("facility upgrade target level must be at least 2")
 
 
-ConstructionTarget: TypeAlias = NewFacilityTarget | FacilityUpgradeTarget
+@dataclass(frozen=True)
+class LocationFoundingTarget:
+    recipe_id: DefinitionId
+    new_location_id: SpatialNodeId
+    display_name: str
+    body_id: CelestialBodyId
+    core_cell_id: SurfaceCellId
+
+    def __post_init__(self) -> None:
+        if not str(self.new_location_id):
+            raise ValueError("new location id must not be empty")
+        if not self.display_name:
+            raise ValueError("new location display name must not be empty")
+
+
+@dataclass(frozen=True)
+class SurfaceCellDevelopmentTarget:
+    recipe_id: DefinitionId
+    cell_id: SurfaceCellId
+
+
+ConstructionTarget: TypeAlias = (
+    NewFacilityTarget | FacilityUpgradeTarget | LocationFoundingTarget | SurfaceCellDevelopmentTarget
+)
 
 
 @dataclass(frozen=True)
@@ -100,11 +142,11 @@ class ConstructionResourceProviderSpec:
 
 @dataclass
 class ProjectResourceState:
-    """Mutable accounting for a recipe resource at the build destination."""
+    """Mutable accounting for a recipe resource at the build host Location."""
 
     committed_t: float = 0.0
-    # None while the project is still waiting for destination inventory. Once
-    # set, logistics may satisfy the remaining physical shortage from lanes.
+    # None while the project is still waiting for host inventory. Once set,
+    # logistics may satisfy the remaining physical shortage from lanes.
     import_committed_t: float | None = None
 
 
@@ -112,6 +154,9 @@ class ProjectResourceState:
 class ConstructionProject:
     id: ProjectId
     target: ConstructionTarget
+    # Existing operational Location/Node that owns procurement and supplies
+    # construction flow. For surface-cell development this is the Location being
+    # expanded; for founding it is the explicit staging/provider Location.
     location_id: SpatialNodeId
     priority: int
     sourcing_policy: SourcingPolicy
@@ -125,6 +170,8 @@ class ConstructionProject:
     resources: dict[DefinitionId, ProjectResourceState] = field(default_factory=dict)
     materials_committed: bool = False
     completed_facility_id: EntityId | None = None
+    # Facility placement state only. Geographic project target cells live on
+    # their target type so one cell never has two authoritative fields.
     site_cell_id: SurfaceCellId | None = None
 
 

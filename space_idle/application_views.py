@@ -33,7 +33,7 @@ from .app_contracts.progression_views import (
 )
 from .app_contracts.ui_reports import IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView
 from .app_contracts.surface_views import (
-    SurfaceCellDevelopmentOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
+    SurfaceCellDevelopmentOption, SurfaceCellFoundationOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
     SurfaceLocationTerritoryRow, SurfaceMapView, SurfaceResourceKnowledgeRow,
 )
 

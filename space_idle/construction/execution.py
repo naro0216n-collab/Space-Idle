@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from ..power import PowerSnapshot
 from ..shared import SpatialNodeId
-from .models import ConstructionProject, FacilityUpgradeTarget, NewFacilityTarget, ProjectStatus
+from .models import (
+    ConstructionProject, FacilityUpgradeTarget, LocationFoundingTarget, NewFacilityTarget,
+    ProjectStatus, SurfaceCellDevelopmentTarget,
+)
 
 
 class ConstructionExecutionMixin:
@@ -18,24 +21,44 @@ class ConstructionExecutionMixin:
                 site_cell_id=project.site_cell_id,
                 invested_resources=invested,
             )
-        else:
+        elif isinstance(target, FacilityUpgradeTarget):
             self.facilities.upgrade_to(
                 target.facility_id,
                 target.target_level,
                 invested_resources=invested,
             )
             project.completed_facility_id = target.facility_id
+        elif isinstance(target, LocationFoundingTarget):
+            self.facilities.environment.graph.found_location(
+                target.new_location_id, target.display_name, target.body_id, target.core_cell_id
+            )
+        else:
+            self.facilities.environment.graph.develop_surface_cell(
+                project.location_id, target.cell_id
+            )
         project.status = ProjectStatus.COMPLETE
 
     def _target_ready_for_execution(self, project: ConstructionProject) -> bool:
-        if not isinstance(project.target, FacilityUpgradeTarget):
-            return True
-        facility = self.facilities.facilities.get(project.target.facility_id)
-        return (
-            facility is not None
-            and facility.location_id == project.location_id
-            and facility.level == project.target.target_level - 1
-        )
+        target = project.target
+        if isinstance(target, FacilityUpgradeTarget):
+            facility = self.facilities.facilities.get(target.facility_id)
+            return (
+                facility is not None
+                and facility.location_id == project.location_id
+                and facility.level == target.target_level - 1
+            )
+        if isinstance(target, LocationFoundingTarget):
+            graph = self.facilities.environment.graph
+            return (
+                target.new_location_id not in graph.locations
+                and target.new_location_id not in graph.nodes
+                and not graph.location_foundation_failures(target.body_id, target.core_cell_id)
+            )
+        if isinstance(target, SurfaceCellDevelopmentTarget):
+            return not self.facilities.environment.graph.surface_cell_development_failures(
+                project.location_id, target.cell_id
+            )
+        return True
 
     def advance_construction(
         self, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int = 0

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .application_views import (
-    SurfaceCellDevelopmentOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
+    SurfaceCellDevelopmentOption, SurfaceCellFoundationOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
     SurfaceLocationTerritoryRow,
     SurfaceMapView,
     SurfaceResourceKnowledgeRow,
@@ -32,16 +32,25 @@ class SurfaceProjectorMixin:
             owner = sim.graph.owner_of_cell(cell.id)
             owner_state = None if owner is None else sim.graph.locations[owner]
             development_options_list = []
+            development_recipe = (
+                None if sim.projects.surface_cell_development_recipe_id is None
+                else sim.projects.spatial_recipes.get(sim.projects.surface_cell_development_recipe_id)
+            )
+            active_spatial_project = sim.projects.active_spatial_project_for_cell(cell.id)
             for location in sorted(
                 (row for row in sim.graph.locations.values() if row.body_id == body_id),
                 key=lambda row: str(row.id),
             ):
-                blockers = sim.graph.surface_cell_development_failures(location.id, cell.id)
+                location_power = sim.power.snapshot(location.id, sim.facilities, sim.day)
+                failures = sim.projects.surface_cell_development_failures(
+                    location.id, cell.id, sim.day, location_power
+                )
+                blockers = tuple((failure.code, failure.detail) for failure in failures)
                 projected_demand = None
                 projected_fulfillment = None
                 limiting_factors: tuple[str, ...] = ()
-                if not blockers and sim.surface_infrastructure is not None:
-                    location_power = sim.power.snapshot(location.id, sim.facilities, sim.day)
+                graph_blockers = sim.graph.surface_cell_development_failures(location.id, cell.id)
+                if not graph_blockers and sim.surface_infrastructure is not None:
                     projected = sim.surface_infrastructure.prospective_development_snapshot(
                         location.id, cell.id, sim.facilities, location_power, sim.day
                     )
@@ -50,11 +59,15 @@ class SurfaceProjectorMixin:
                     limiting_factors = projected.limiting_factors
                 development_options_list.append(
                     SurfaceCellDevelopmentOption(
-                        str(location.id),
-                        blockers,
-                        projected_demand,
-                        projected_fulfillment,
-                        limiting_factors,
+                        str(location.id), blockers, projected_demand, projected_fulfillment, limiting_factors,
+                        None if development_recipe is None else development_recipe.construction_work,
+                        () if development_recipe is None else tuple(
+                            (str(req.resource_id), req.amount_t) for req in development_recipe.resources
+                        ),
+                        () if development_recipe is None else tuple(sorted(
+                            str(technology) for technology in development_recipe.prerequisite_technologies - sim.projects.unlocked_technologies
+                        )),
+                        None if active_spatial_project is None else str(active_spatial_project.id),
                     )
                 )
             development_options = tuple(development_options_list)
@@ -100,6 +113,33 @@ class SurfaceProjectorMixin:
                     for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id))
                     if sim.facilities.definitions[recipe.facility_def_id].placement_scope is FacilityPlacementScope.SURFACE_CELL
                 )
+            foundation_recipe = (
+                None if sim.projects.location_founding_recipe_id is None
+                else sim.projects.spatial_recipes.get(sim.projects.location_founding_recipe_id)
+            )
+            foundation_options = ()
+            if foundation_recipe is not None:
+                foundation_rows = []
+                for provider_id in sorted(sim.graph.operational_node_ids(), key=str):
+                    provider = sim.graph.operational_node(provider_id)
+                    if provider.body_id != body_id:
+                        continue
+                    provider_power = sim.power.snapshot(provider_id, sim.facilities, sim.day)
+                    failures = sim.projects.location_founding_failures(
+                        provider_id, body_id, cell.id, sim.day, provider_power
+                    )
+                    foundation_rows.append(SurfaceCellFoundationOption(
+                        str(provider_id),
+                        foundation_recipe.construction_work,
+                        tuple((str(req.resource_id), req.amount_t) for req in foundation_recipe.resources),
+                        tuple(sorted(
+                            str(technology) for technology in foundation_recipe.prerequisite_technologies - sim.projects.unlocked_technologies
+                        )),
+                        tuple((failure.code, failure.detail) for failure in failures),
+                        None if active_spatial_project is None else str(active_spatial_project.id),
+                    ))
+                foundation_options = tuple(foundation_rows)
+
             rows.append(
                 SurfaceCellRow(
                     str(cell.id),
@@ -121,6 +161,7 @@ class SurfaceProjectorMixin:
                     sim.graph.location_foundation_failures(body_id, cell.id),
                     development_options,
                     facility_placement_options,
+                    foundation_options,
                 )
             )
         return SurfaceMapView(str(body.id), body.display_name, tuple(rows), locations)

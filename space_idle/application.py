@@ -9,7 +9,7 @@ from .application_commands import (
     GetResearch, GetRoutes, GetScientificExplorations, GetSurveys, GetTransportAllocations,
     GetTransportAllocationOptions, GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseLogisticsLane,
     PauseResearch, PauseScientificExploration, PauseSurvey, PauseTransportAllocation,
-    PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, ProduceVehicle, RelocateFleet,
+    PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, FoundLocation, DevelopSurfaceCell, ProduceVehicle, RelocateFleet,
     ResumeBuild, ResumeFacility, ResumeLogisticsLane, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
     ResumeVehicleProduction, SetConstructionWeight, SetFacilityProcess, SetMaintenancePriority,

@@ -5,10 +5,13 @@ from ..projects import (
     ConstructionRecipe,
     ConstructionResourceProviderSpec,
     FacilityUpgradeRecipe,
+    SpatialDevelopmentRecipe,
+    BuildResourceRequirement,
 )
-from ..site import SiteRequirements
+from ..site import SiteRequirements, RequiresFacet
 from . import base_ids as ids
 from . import base_requirements as req
+from ..spatial import SurfaceField
 
 
 def build_construction_recipes() -> dict:
@@ -181,3 +184,34 @@ def build_construction_resource_providers() -> dict:
 
 def sourcing_wait_days() -> dict[str, int]:
     return {"import_now": 0, "mixed": 45, "local_priority": 120}
+
+
+def build_spatial_development_recipes() -> dict:
+    surface_site = SiteRequirements(environment=(
+        RequiresFacet(SurfaceField, "surface", "surface terrain data is required"),
+    ))
+    recipes = (
+        SpatialDevelopmentRecipe(
+            ids.LOCATION_FOUNDATION_PROJECT,
+            "Surface Location Founding",
+            (
+                BuildResourceRequirement(ids.STRUCTURAL_COMPONENTS, 18.0),
+                BuildResourceRequirement(ids.MACHINERY, 12.0),
+                BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 8.0),
+            ),
+            120.0,
+            surface_site,
+        ),
+        SpatialDevelopmentRecipe(
+            ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
+            "Surface Territory Development",
+            (
+                BuildResourceRequirement(ids.STRUCTURAL_COMPONENTS, 5.0),
+                BuildResourceRequirement(ids.MACHINERY, 3.0),
+                BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 2.0),
+            ),
+            36.0,
+            surface_site,
+        ),
+    )
+    return {recipe.id: recipe for recipe in recipes}

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from ..power import PowerSnapshot
-from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
+from ..shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .models import (
     ConstructionProject,
     ConstructionTarget,
     FacilityUpgradeTarget,
+    LocationFoundingTarget,
     NewFacilityTarget,
+    SurfaceCellDevelopmentTarget,
     ProjectBlocker,
     ProjectResourceState,
     ProjectStatus,
@@ -40,11 +42,15 @@ class ConstructionPlanningMixin:
             )
             if placement_failures:
                 raise ValueError("; ".join(detail for _code, detail in placement_failures))
-        else:
+        elif isinstance(target, FacilityUpgradeTarget):
             if site_cell_id is not None:
                 raise ValueError("upgrade project must not duplicate facility site cell")
             facility = self.facilities.facilities[target.facility_id]
             recipe = self.upgrade_recipes[(facility.definition_id, target.target_level)]
+        else:
+            if site_cell_id is not None:
+                raise ValueError("spatial development target owns its cell directly")
+            recipe = self.spatial_recipes[target.recipe_id]
 
         self._counter += 1
         project_id = ProjectId(f"project.{self._counter}")
@@ -102,6 +108,83 @@ class ConstructionPlanningMixin:
         return self._create_project(
             FacilityUpgradeTarget(facility_id, target_level),
             facility.location_id,
+            priority,
+            sourcing_policy,
+            import_source_id,
+        )
+
+
+    def _active_spatial_target_conflict(
+        self, cell_id: SurfaceCellId, *, new_location_id: SpatialNodeId | None = None
+    ) -> bool:
+        for project in self.projects.values():
+            if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
+                continue
+            target = project.target
+            if isinstance(target, LocationFoundingTarget):
+                if target.core_cell_id == cell_id:
+                    return True
+                if new_location_id is not None and target.new_location_id == new_location_id:
+                    return True
+            elif isinstance(target, SurfaceCellDevelopmentTarget) and target.cell_id == cell_id:
+                return True
+        return False
+
+    def plan_location_founding(
+        self,
+        provider_location_id: SpatialNodeId,
+        new_location_id: SpatialNodeId,
+        display_name: str,
+        body_id: CelestialBodyId,
+        core_cell_id: SurfaceCellId,
+        priority: int,
+        sourcing_policy: SourcingPolicy,
+        day: int = 0,
+        import_source_id: SpatialNodeId | None = None,
+    ) -> ProjectId:
+        recipe_id = self.location_founding_recipe_id
+        if recipe_id is None or recipe_id not in self.spatial_recipes:
+            raise ValueError("location founding recipe is not configured")
+        graph = self.facilities.environment.graph
+        failures = list(graph.location_foundation_failures(body_id, core_cell_id))
+        if new_location_id in graph.locations or new_location_id in graph.nodes:
+            failures.append(("location_id_in_use", str(new_location_id)))
+        if graph.has_operational_node(provider_location_id):
+            host_body = graph.operational_node(provider_location_id).body_id
+            if host_body != body_id:
+                failures.append(("construction_host_body", f"host={host_body}, target={body_id}"))
+        if self._active_spatial_target_conflict(core_cell_id, new_location_id=new_location_id):
+            failures.append(("active_spatial_project", f"active spatial project already targets {core_cell_id}"))
+        if failures:
+            raise ValueError("; ".join(detail for _code, detail in failures))
+        return self._create_project(
+            LocationFoundingTarget(recipe_id, new_location_id, display_name, body_id, core_cell_id),
+            provider_location_id,
+            priority,
+            sourcing_policy,
+            import_source_id,
+        )
+
+    def plan_surface_cell_development(
+        self,
+        location_id: SpatialNodeId,
+        cell_id: SurfaceCellId,
+        priority: int,
+        sourcing_policy: SourcingPolicy,
+        day: int = 0,
+        import_source_id: SpatialNodeId | None = None,
+    ) -> ProjectId:
+        recipe_id = self.surface_cell_development_recipe_id
+        if recipe_id is None or recipe_id not in self.spatial_recipes:
+            raise ValueError("surface cell development recipe is not configured")
+        failures = list(self.facilities.environment.graph.surface_cell_development_failures(location_id, cell_id))
+        if self._active_spatial_target_conflict(cell_id):
+            failures.append(("active_spatial_project", f"active spatial project already targets {cell_id}"))
+        if failures:
+            raise ValueError("; ".join(detail for _code, detail in failures))
+        return self._create_project(
+            SurfaceCellDevelopmentTarget(recipe_id, cell_id),
+            location_id,
             priority,
             sourcing_policy,
             import_source_id,

@@ -12,12 +12,15 @@ from .construction.models import (
     BuildResourceRequirement,
     ConstructionRecipe,
     FacilityUpgradeRecipe,
+    SpatialDevelopmentRecipe,
     ConstructionProviderSpec,
     ConstructionResourceProviderSpec,
     ProjectResourceState,
     ConstructionProject,
     NewFacilityTarget,
     FacilityUpgradeTarget,
+    LocationFoundingTarget,
+    SurfaceCellDevelopmentTarget,
     ProjectBlocker,
     SourcingPolicy,
 )
@@ -39,6 +42,9 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     sourcing_wait_days: dict[SourcingPolicy, int]
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     construction_resource_providers: dict[DefinitionId, ConstructionResourceProviderSpec] = field(default_factory=dict)
+    spatial_recipes: dict[DefinitionId, SpatialDevelopmentRecipe] = field(default_factory=dict)
+    location_founding_recipe_id: DefinitionId | None = None
+    surface_cell_development_recipe_id: DefinitionId | None = None
     projects: dict[ProjectId, ConstructionProject] = field(default_factory=dict)
     _counter: int = 0
 

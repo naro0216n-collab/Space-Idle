@@ -24,6 +24,7 @@ from ..content.base_construction import (
     build_construction_recipes,
     build_construction_resource_providers,
     build_facility_upgrade_recipes,
+    build_spatial_development_recipes,
     sourcing_wait_days,
 )
 from ..content.base_contracts import build_contract_templates
@@ -92,6 +93,9 @@ def build_base_simulation() -> Simulation:
         sourcing_wait_days=sourcing_wait_days(),
         technology_state=technology,
         construction_resource_providers=build_construction_resource_providers(),
+        spatial_recipes=build_spatial_development_recipes(),
+        location_founding_recipe_id=ids.LOCATION_FOUNDATION_PROJECT,
+        surface_cell_development_recipe_id=ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
     )
 
     storage = StorageService(build_storage_provider_specs(), inventory, facilities)

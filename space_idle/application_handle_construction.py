@@ -7,13 +7,15 @@ from .application_commands import (
     PauseBuild,
     PlanBuild,
     PlanFacilityUpgrade,
+    FoundLocation,
+    DevelopSurfaceCell,
     ResumeBuild,
     SetConstructionWeight,
     SetProjectImportSource,
     SetProjectPriority,
     SetProjectSourcingPolicy,
 )
-from .shared import DefinitionId, EntityId, ProjectId, SurfaceCellId
+from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 
 
 class ConstructionCommandHandlerMixin:
@@ -41,6 +43,29 @@ class ConstructionCommandHandlerMixin:
                 import_source_id=(
                     None if command.import_source_id is None else self._require_location(command.import_source_id)
                 ),
+            )
+            return CommandResult(str(pid))
+        if isinstance(command, FoundLocation):
+            pid = sim.projects.plan_location_founding(
+                self._require_location(command.provider_location_id),
+                SpatialNodeId(command.new_location_id),
+                command.display_name,
+                CelestialBodyId(command.body_id),
+                SurfaceCellId(command.core_cell_id),
+                command.priority,
+                command.sourcing_policy,
+                day=sim.day,
+                import_source_id=(None if command.import_source_id is None else self._require_location(command.import_source_id)),
+            )
+            return CommandResult(str(pid))
+        if isinstance(command, DevelopSurfaceCell):
+            pid = sim.projects.plan_surface_cell_development(
+                self._require_location(command.location_id),
+                SurfaceCellId(command.cell_id),
+                command.priority,
+                command.sourcing_policy,
+                day=sim.day,
+                import_source_id=(None if command.import_source_id is None else self._require_location(command.import_source_id)),
             )
             return CommandResult(str(pid))
         if isinstance(command, CancelBuild):
