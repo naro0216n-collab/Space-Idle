@@ -24,6 +24,7 @@ from space_idle import (
     GetScientificExplorations,
     GetSurveys,
     GetTransportAllocations,
+    GetTransportAllocationOptions,
     GetWorld,
     PauseLogisticsLane,
     PlanBuild,
@@ -79,6 +80,40 @@ def test_transport_allocation_projection_exposes_target_fulfillment_and_derived_
     assert row.spare.forward_t_per_day == pytest.approx(
         row.available.forward_t_per_day - row.used.forward_t_per_day
     )
+
+
+def test_transport_service_requirements_are_projected_from_the_same_plan_for_options_and_allocations():
+    app = build_game_application()
+    option = next(
+        row
+        for row in app.query(GetTransportAllocationOptions(str(EARTH), str(LEO))).options
+        if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
+        and row.policy == "fastest"
+    )
+    requirements = {
+        (row.location_id, row.capability_id, row.mode)
+        for row in option.infrastructure_requirements
+    }
+    assert (str(EARTH), "launch_operations", "available") in requirements
+    assert (str(EARTH), "launch_vehicle_servicing", "available") in requirements
+    assert (str(EARTH), "vehicle_refueling", "available") in requirements
+    assert any(
+        location_id == str(EARTH)
+        and resource_id == str(ids.PROPELLANT)
+        and amount > 0
+        for location_id, resource_id, amount
+        in option.operational_resource_demand_at_full_unit
+    )
+
+    allocation_id = app.execute(CreateTransportAllocation(
+        str(ids.REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
+        control_mode="units", target_units=1,
+    )).created_id
+    allocation = next(
+        row for row in app.query(GetTransportAllocations()).items
+        if row.id == allocation_id
+    )
+    assert allocation.infrastructure_requirements == option.infrastructure_requirements
 
 
 def test_transport_allocation_priority_and_routing_policy_update_through_application():

@@ -184,6 +184,7 @@ class TransportServicePlan:
     nominal_per_unit: DirectionalCapacity
     resource_t_per_full_utilization_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
     servicing_units_per_full_utilization_day: float = 0.0
+    infrastructure_requirements: tuple[tuple[SpatialNodeId, str, float, str], ...] = ()
     blockers: tuple[str, ...] = ()
     resource_t_per_empty_cycle_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
     resource_t_per_forward_payload_increment_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()

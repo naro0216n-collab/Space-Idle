@@ -13,6 +13,7 @@ from .models import (
     FleetReservation,
     FleetReservationKind,
     OperationAssetDisposition,
+    OperationSupportLocation,
     PathPolicy,
     TransportAllocation,
     TransportCapacitySnapshot,
@@ -526,6 +527,68 @@ class FleetAllocationMixin:
                 full_resource_per_cycle[key] = full_resource_per_cycle.get(key, 0.0) + amount
         resources = _per_day(full_resource_per_cycle)
         servicing = 0.0 if cycle_days <= 1e-12 else 1.0 / cycle_days
+
+        # Decision surfaces need the same infrastructure contract that the
+        # service-plan and Available-Capacity paths evaluate.  Keep it on the
+        # derived plan rather than reconstructing support rules in Application/UI.
+        infrastructure: dict[tuple[SpatialNodeId, str, str], float] = {}
+
+        def _require(
+            location_id: SpatialNodeId, capability_id: str, minimum: float, mode: str
+        ) -> None:
+            key = (location_id, capability_id, mode)
+            infrastructure[key] = max(infrastructure.get(key, 0.0), max(0.0, minimum))
+
+        for route in (*forward_routes, *reverse_routes):
+            for location_id, site_requirements in (
+                (route.origin_id, route.origin_requirements),
+                (route.destination_id, route.destination_requirements),
+            ):
+                for requirement in site_requirements.capability_requirements:
+                    _require(
+                        location_id,
+                        requirement.capability_id,
+                        requirement.minimum_capacity,
+                        requirement.mode,
+                    )
+            present_operations = {operation.operation_type for operation in route.operations}
+            for support in definition.operation_support_requirements:
+                if support.operation_type not in present_operations:
+                    continue
+                location_id = (
+                    route.origin_id
+                    if support.location is OperationSupportLocation.ORIGIN
+                    else route.destination_id
+                )
+                _require(location_id, support.capability_id, 0.0, "available")
+
+        for location_id, resource_id, amount in resources:
+            if amount <= 1e-12:
+                continue
+            for support in definition.resource_support_requirements:
+                if support.resource_id == resource_id:
+                    _require(
+                        location_id,
+                        support.infrastructure_capability_id,
+                        0.0,
+                        "available",
+                    )
+
+        if definition.turnaround_capability_id is not None and servicing > 1e-12:
+            _require(
+                allocation.anchor_location_id,
+                definition.turnaround_capability_id,
+                servicing,
+                "available",
+            )
+
+        infrastructure_requirements = tuple(
+            (location_id, capability_id, minimum, mode)
+            for (location_id, capability_id, mode), minimum in sorted(
+                infrastructure.items(),
+                key=lambda row: (str(row[0][0]), row[0][1], row[0][2]),
+            )
+        )
         return TransportServicePlan(
             allocation.id,
             allocation.vehicle_definition_id,
@@ -543,6 +606,7 @@ class FleetAllocationMixin:
             nominal,
             resources,
             servicing,
+            infrastructure_requirements,
             tuple(dict.fromkeys(blockers)),
             empty_resources,
             forward_increment_resources,

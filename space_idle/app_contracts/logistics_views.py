@@ -9,6 +9,14 @@ class DirectionalCapacityRow:
 
 
 @dataclass(frozen=True)
+class InfrastructureRequirementRow:
+    location_id: str
+    capability_id: str
+    minimum_capacity: float
+    mode: str
+
+
+@dataclass(frozen=True)
 class RouteModeRow:
     id: str
     display_name: str
@@ -24,6 +32,7 @@ class RouteModeRow:
     propellant_resource_id: str | None
     full_load_propellant_t: float | None
     service_feasible: bool
+    infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
     blockers: tuple[str, ...]
 
 
@@ -81,6 +90,7 @@ class TransportAllocationRow:
     forward_latency_days: int
     reverse_latency_days: int | None
     operational_resource_demand: tuple[tuple[str, str, float], ...]
+    infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
     blockers: tuple[str, ...]
     limiting_factors: tuple[str, ...]
 
@@ -232,6 +242,7 @@ class TransportAllocationOptionRow:
     fleet_total_units: int
     fleet_free_units: int
     operational_resource_demand_at_full_unit: tuple[tuple[str, str, float], ...]
+    infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
     blockers: tuple[str, ...]
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .application_transport_support import infrastructure_requirement_rows
 from .application_views import (
     CargoFlowRow, CargoFlowsView, DirectionalCapacityRow, FleetPoolRow,
     FleetRelocationRow, FleetReleaseRow, FleetView, TransportAllocationRow,
@@ -134,6 +135,7 @@ class LogisticsStateProjectorMixin:
                         (str(location), str(resource_id), amount)
                         for location, resource_id, amount in snapshot.operational_resource_demand
                     ),
+                    infrastructure_requirements=infrastructure_requirement_rows(plan),
                     blockers=snapshot.blockers,
                     limiting_factors=snapshot.limiting_factors,
                 )

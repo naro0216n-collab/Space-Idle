@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .application_transport_support import vehicle_concept
+from .application_transport_support import infrastructure_requirement_rows, vehicle_concept
 from .application_views import (
     DirectionalCapacityRow,
     RouteModeRow,
@@ -63,6 +63,7 @@ class LogisticsRouteProjectorMixin:
                     ),
                     full_load_propellant_t=full_load_propellant,
                     service_feasible=plan.feasible,
+                    infrastructure_requirements=infrastructure_requirement_rows(plan),
                     blockers=plan.blockers,
                 )
             )
@@ -104,6 +105,7 @@ class LogisticsRouteProjectorMixin:
                     service_feasible=(
                         service.capacity_t_per_day > 1e-12 and not blockers
                     ),
+                    infrastructure_requirements=(),
                     blockers=blockers,
                 )
             )
@@ -200,6 +202,7 @@ class LogisticsRouteProjectorMixin:
                             for location_id, resource_id, amount
                             in plan.resource_t_per_full_utilization_day
                         ),
+                        infrastructure_requirements=infrastructure_requirement_rows(plan),
                         blockers=plan.blockers,
                     )
                 )
