@@ -165,9 +165,22 @@ def run() -> None:
             tug_relocate.wait_for(timeout=10000)
             tug_relocate.click()
             page.locator("#relocationDialog").wait_for(state="visible", timeout=10000)
-            page.locator("#relocationDestination").select_option(str(ids.LUNAR_ORBIT))
+            with page.expect_response(
+                lambda response: (
+                    "/api/v1/logistics/fleet-relocation-preview?" in response.url
+                    and f"destination_id={ids.LUNAR_ORBIT}" in response.url
+                ),
+                timeout=10000,
+            ) as relocation_response:
+                page.locator("#relocationDestination").select_option(str(ids.LUNAR_ORBIT))
+            assert relocation_response.value.ok, "relocation preview request failed"
             page.wait_for_function(
-                "() => document.querySelector('#relocationPreview .badge.ok')?.textContent === '実行可能'",
+                """() => {
+                    const root = document.querySelector('#relocationPreview');
+                    const text = root?.innerText || '';
+                    return root?.querySelector('.badge.ok')?.textContent === '実行可能'
+                        && ['経路', '所要', 'Infrastructure', '必要Resource'].every((row) => text.includes(row));
+                }""",
                 timeout=10000,
             )
             relocation_text = page.locator("#relocationPreview").inner_text()
