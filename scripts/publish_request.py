@@ -14,7 +14,7 @@ from pathlib import Path
 
 STATE_NAME = "space-idle-publish-state.json"
 WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
-REQUEST_VERSION = 7
+REQUEST_VERSION = 6
 RECEIPT_VERSION = 3
 CONNECTOR_CALL_BUDGET_BYTES = 96 * 1024
 MAX_BLOB_PARTS = 256
@@ -490,6 +490,46 @@ def _connector_blob_packet(
     }
 
 
+def _payload_tree_path(index: int) -> str:
+    return f"{index:04d}.b64"
+
+
+def _git_tree_oid(repo: Path, blob_oids: list[str]) -> str:
+    raw = bytearray()
+    for index, oid in enumerate(blob_oids):
+        _require_hex_sha(oid, name=f"payload blob oid {index}")
+        raw.extend(b"100644 ")
+        raw.extend(_payload_tree_path(index).encode("ascii"))
+        raw.append(0)
+        raw.extend(bytes.fromhex(oid))
+    return _git_object_oid(repo, "tree", bytes(raw))
+
+
+def _connector_payload_root_packet(
+    repo: Path,
+    github_repository: str,
+    blob_oids: list[str],
+) -> dict[str, object]:
+    root_oid = _git_tree_oid(repo, blob_oids)
+    return {
+        "stage": "assemble-payload-root",
+        "expected_tree_git_oid": root_oid,
+        "action": "GitHub.create_tree",
+        "action_args": {
+            "repository_full_name": github_repository,
+            "tree_elements": [
+                {
+                    "path": _payload_tree_path(index),
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": oid,
+                }
+                for index, oid in enumerate(blob_oids)
+            ],
+        },
+    }
+
+
 def _connector_call_bytes(packet: dict[str, object]) -> int:
     action_args = packet.get("action_args")
     if not isinstance(action_args, dict):
@@ -738,11 +778,25 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         blob_oids.append(str(part["oid"]))
         upload_call_bytes.append(int(part["packet_bytes"]))
 
+    root_packet = _connector_payload_root_packet(repo, GITHUB_REPOSITORY, blob_oids)
+    root_call_bytes = _connector_call_bytes(root_packet)
+    if root_call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
+        raise PublishStateError(
+            f"payload root tree needs a {root_call_bytes}-byte Connector call, exceeding "
+            f"the fixed Connector profile {CONNECTOR_CALL_BUDGET_BYTES}-byte budget"
+        )
+    expected_root_oid = str(root_packet["expected_tree_git_oid"])
+    root_path = output_dir / "assemble-payload-root.json"
+    root_path.write_text(
+        json.dumps(root_packet, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
     submit_request = _transport_request(
         prepared,
         {
-            "kind": "git-blobs",
-            "oids": blob_oids,
+            "kind": "git-tree",
+            "oid": expected_root_oid,
+            "part_count": len(blob_oids),
         },
     )
     submit_packet = _connector_submit_packet(
@@ -760,7 +814,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     )
 
     state = {
-        "version": 2,
+        "version": 3,
         "stage": "packets-ready",
         "manifest": str(manifest),
         "request_id": prepared["request_id"],
@@ -769,13 +823,15 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "target_branch": prepared["target_branch"],
         "target_remote_head": args.target_remote_head,
         "expected_blob_git_oids": blob_oids,
+        "expected_payload_tree_git_oid": expected_root_oid,
         "upload_packets": upload_packets,
+        "payload_root_packet": str(root_path),
         "submit_request_packet": str(submit_path),
     }
     _write_connector_state(output_dir, state)
     summary = {
         "stage": state["stage"],
-        "strategy": "ordered-git-blobs-then-request",
+        "strategy": "blob-tree-barrier-then-request",
         "manifest": str(manifest),
         "request_id": prepared["request_id"],
         "github_repository": GITHUB_REPOSITORY,
@@ -789,6 +845,9 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "upload_call_bytes": upload_call_bytes,
         "upload_packets": upload_packets,
         "expected_blob_git_oids": blob_oids,
+        "payload_root_packet": str(root_path),
+        "root_tree_call_bytes": root_call_bytes,
+        "expected_payload_tree_git_oid": expected_root_oid,
         "submit_request_packet": str(submit_path),
         "submit_call_bytes": submit_call_bytes,
         "normal_remote_target_probe_calls": 1,
@@ -796,12 +855,13 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "request_verified": bool(verified["verified"]),
         "remote_request_path": _request_file_path(str(prepared["request_id"])),
         "remote_receipt_path": _receipt_file_path(str(prepared["request_id"])),
-        "next": "execute every upload packet successfully, then execute the submit request packet once",
+        "next": "execute every upload packet, then the payload root packet, then the submit request packet",
         "verified": True,
     }
     _write_connector_summary(output_dir, summary)
     print(json.dumps(summary, indent=2))
     return 0
+
 
 def _read_publish_receipt(path: Path) -> dict[str, object]:
     try:

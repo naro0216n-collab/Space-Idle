@@ -93,7 +93,7 @@ def make_receipt(repo: Path) -> dict[str, object]:
     return {
         "version": 3,
         "request_id": request["request_id"],
-        "request_version": 7,
+        "request_version": 6,
         "target_branch": request["target_branch"],
         "base_commit": request["base_sha"],
         "target_tree": request["target_tree"],
@@ -174,34 +174,44 @@ def test_connector_plan_revalidates_manifest_and_remote_base(tmp_path: Path) -> 
     assert "sha256 mismatch" in corrupt.stderr or "invalid publish bundle" in corrupt.stderr
 
 
-def test_connector_transport_generates_ordered_blob_uploads_and_submit_without_sha_handoff(tmp_path: Path) -> None:
+def test_connector_plan_generates_blob_tree_and_submit_packets_without_sha_handoff(tmp_path: Path) -> None:
     repo, base, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("connector\n" * 400, encoding="utf-8")
     commit_all(repo, "connector transport")
     run_request(repo, "prepare")
     plan = json.loads(run_request(repo, "connector-plan", "--target-remote-head", base).stdout)
-    transaction_plan = plan_dir(repo)
     assert plan["stage"] == "packets-ready"
     assert plan["upload_call_count"] == 1
     assert plan["response_sha_handoff_required"] is False
-    assert Path(plan["submit_request_packet"]).exists()
-    assert not (transaction_plan / "assemble-payload-root.json").exists()
 
     upload = json.loads(Path(plan["upload_packets"][0]).read_text(encoding="utf-8"))
     assert upload["action"] == "GitHub.create_blob"
     assert upload["action_args"]["repository_full_name"] == "naro0216n-collab/Space-Idle"
     assert plan["expected_blob_git_oids"] == [upload["expected_blob_git_oid"]]
 
+    root = json.loads(Path(plan["payload_root_packet"]).read_text(encoding="utf-8"))
+    assert root["action"] == "GitHub.create_tree"
+    assert root["expected_tree_git_oid"] == plan["expected_payload_tree_git_oid"]
+    assert root["action_args"]["tree_elements"] == [{
+        "mode": "100644",
+        "path": "0000.b64",
+        "sha": upload["expected_blob_git_oid"],
+        "type": "blob",
+    }]
+
     packet = json.loads(Path(plan["submit_request_packet"]).read_text(encoding="utf-8"))
     transport = json.loads(packet["action_args"]["content"])
-    assert transport["version"] == 7
+    assert transport["version"] == 6
     assert transport["payload_source"] == {
-        "kind": "git-blobs", "oids": [upload["expected_blob_git_oid"]]
+        "kind": "git-tree",
+        "oid": root["expected_tree_git_oid"],
+        "part_count": 1,
     }
 
     replan = run_request(repo, "connector-plan", "--target-remote-head", base, check=False)
     assert replan.returncode != 0
     assert "already initialized" in replan.stderr
+
 
 
 def test_fixed_connector_profile_keeps_fleet_sized_payload_in_one_blob(tmp_path: Path) -> None:
@@ -231,24 +241,31 @@ def test_fixed_connector_profile_splits_only_when_actual_call_exceeds_limit(tmp_
         assert size <= 96 * 1024
 
 
-
-
-def test_ordered_blob_source_with_max_parts_fits_connector_profile(tmp_path: Path) -> None:
+def test_payload_root_oid_matches_git_tree_object_format(tmp_path: Path) -> None:
     repo, _, _ = init_repo(tmp_path)
     module = PUBLISH_REQUEST
-    prepared_request = {
-        "request_id": "a" * 32,
-        "target_branch": "develop",
-        "base_sha": "b" * 40,
-        "target_tree": "c" * 40,
-        "publish_commit": "d" * 40,
-        "payload_sha256": "e" * 64,
-        "payload_b64": "A",
-    }
-    source = {"kind": "git-blobs", "oids": ["f" * 40] * module.MAX_BLOB_PARTS}
-    request = module._transport_request(prepared_request, source)
-    packet = module._connector_submit_packet(module.GITHUB_REPOSITORY, module.PUBLISH_BRANCH, request)
+    contents = [b"alpha", b"beta", b"gamma"]
+    oids = [
+        subprocess.run(["git", "hash-object", "--stdin"], cwd=repo, input=x, check=True,
+                       stdout=subprocess.PIPE).stdout.decode().strip()
+        for x in contents
+    ]
+    expected = subprocess.run(
+        ["git", "mktree", "--missing"], cwd=repo,
+        input="".join(f"100644 blob {oid}\t{i:04d}.b64\n" for i, oid in enumerate(oids)),
+        text=True, check=True, stdout=subprocess.PIPE,
+    ).stdout.strip()
+    assert module._git_tree_oid(repo, oids) == expected
+
+
+def test_payload_root_with_max_parts_fits_connector_profile(tmp_path: Path) -> None:
+    repo, _, _ = init_repo(tmp_path)
+    module = PUBLISH_REQUEST
+    oids = [f"{index:040x}"[-40:] for index in range(1, module.MAX_BLOB_PARTS + 1)]
+    packet = module._connector_payload_root_packet(repo, module.GITHUB_REPOSITORY, oids)
+    assert len(packet["action_args"]["tree_elements"]) == module.MAX_BLOB_PARTS
     assert module._connector_call_bytes(packet) < module.CONNECTOR_CALL_BUDGET_BYTES
+
 
 def test_standard_cli_has_no_alternative_repository_target_or_transaction_selectors() -> None:
     top = run_request(SCRIPT.parents[1], "--help").stdout
@@ -301,10 +318,16 @@ def test_standard_prepare_rejects_workflow_changes_and_names_only_entrypoint(tmp
     assert not manifest_path(repo).exists()
 
 
-def test_gateway_contract_preserves_exact_commit_verification() -> None:
+def test_gateway_contract_is_v6_git_tree_and_exact_commit_verification() -> None:
     workflow = (SCRIPT.parents[1] / ".github" / "workflows" / "publish-gateway.yml").read_text(encoding="utf-8")
     assert "'.publish/requests/*.json'" in workflow
     assert ".publish/request.patch" not in workflow
+    assert "request['version'] != 6" in workflow
+    assert "git-tree" in workflow
+    assert "git-blobs" not in workflow
+    assert "if kind == 'git-tree':" in workflow
+    assert "GitHub payload tree identity mismatch" in workflow
+    assert "GitHub payload tree Git OID mismatch" in workflow
     assert "['git', 'hash-object', '--stdin']" in workflow
     assert "GitHub payload blob Git OID mismatch" in workflow
     assert "bundle sha256 mismatch" in workflow

@@ -80,13 +80,14 @@ GitHub反映の入口は差分種別で一意に決める。作業者がtranspor
 通常publishは次の順序に固定する。
 
 1. ローカル変更を責務としてまとまったcommitにする。publish対象は `prepare` 実行時の現在 `HEAD` に固定され、working treeの未commit差分は対象にしない。別requestを並行開始せず、active transactionをreceipt記録まで完了させる。
-2. `scripts/publish_request.py prepare` で、記録済みremote commitを親、local target treeをtreeに持つ決定論的publish commitを作り、Git bundleへ格納する。生成物はv7 JSON requestで、bundle Base64、payload SHA-256、base commit、target tree、publish commit、local target commitを保持し、生成時にbundle/parent/treeを自己検証する。`.github/workflows/**` の差分を含むtargetはここでworkflow maintenance対象として分離し、通常Gateway requestを生成しない。
+2. `scripts/publish_request.py prepare` で、記録済みremote commitを親、local target treeをtreeに持つ決定論的publish commitを作り、Git bundleへ格納する。生成物はv6 JSON requestで、bundle Base64、payload SHA-256、base commit、target tree、publish commit、local target commitを保持し、生成時にbundle/parent/treeを自己検証する。`.github/workflows/**` の差分を含むtargetはここでworkflow maintenance対象として分離し、通常Gateway requestを生成しない。
 3. publish直前に対象branch HEADを一度だけ取得する。`connector-plan`へ渡し、manifestの `base_sha` と一致しない場合は送信せず原因を調査する。
-4. `connector-plan` は固定Connector profileを使い、bundle Base64を独立Git blobへmaterializeする `upload-part-*.json` と、順序付きexpected blob OIDを直接参照する `submit-request.json` を一度に生成する。必要な場合だけ実action引数bytesから最少数へ自動分割する。各uploadは独立しており並列実行できる。返却blob SHAを後続入力へ転記しない。
-5. 全uploadが成功した後に `submit-request.json` の `GitHub.create_file` を1回実行する。Publish Gatewayはrequest内のordered blob OIDを順に取得し、各blobのGit OID、payload長、payload SHA-256、Git bundle、publish commit、parent/base、target tree、直前remote HEADを機械検証する。すべて一致した場合だけexact publish commitを対象branchへnon-force pushし、remote ref/treeを再確認する。期待blobが欠落・変質している場合はGatewayで停止し、対象branchを更新しない。
-6. Gatewayは成功receiptを `.publish/receipts/<request-id>.json` へ自動記録し、Fast CIをdispatchする。ローカルではreceiptを取得して `publish_request.py record` に渡す。`record` はmanifest内の `local_target_commit` を自動的に使用し、現在のlocal HEADが次作業へ進んでいてもrequest、receipt、当該local target tree、published commit objectの関係を機械検証した場合だけ次回publish stateを更新する。
+4. `connector-plan` は固定96 KiB Connector action上限を使い、bundle Base64が1 callに収まる場合は単一blob、超える場合だけ必要最少数の `upload-part-*.json` へ分割する。同時に、事前計算blob OIDを順序付きで参照する `assemble-payload-root.json` と、その事前計算tree OIDを参照する `submit-request.json` を生成する。chunk sizeを転送信頼性の調整値として扱わない。
+5. 全 `GitHub.create_blob` packetを実行した後、`assemble-payload-root.json` の `GitHub.create_tree` を実行する。期待blobがGitHub object storeに存在しなければここで失敗するため、requestは送信しない。成功時も返却tree SHAを別helper commandへ渡さない。
+6. root作成成功後に `submit-request.json` の `GitHub.create_file` を1回実行する。Publish Gatewayはpayload root tree、tree entry順序、各blob OID、payload長、payload SHA-256、Git bundle、publish commit、parent/base、target tree、直前remote HEADを検証する。すべて一致した場合だけexact publish commitを対象branchへnon-force pushし、remote ref/treeを再確認する。
+7. Gatewayは成功receiptを `.publish/receipts/<request-id>.json` へ自動記録し、Fast CIをdispatchする。ローカルではreceiptを取得して `publish_request.py record` に渡す。`record` はmanifest内の `local_target_commit` を自動的に使用し、現在のlocal HEADが次作業へ進んでいてもrequest、receipt、当該local target tree、published commit objectの関係を機械検証した場合だけ次回publish stateを更新する。
 
-Connector transportはrepo-local active transactionにupload packet群と最終request packetを固定生成する。manifestやplan directoryはhelperが `.git` 配下へ一意に生成し、CLIから指定しない。既にactive transactionがある場合は再計画せず、生成済みpacketを使って続行する。payload uploadの失敗は該当packetを忠実に再送する。任意budgetへの縮小、payloadの手動分割、Base64再構成、inline requestへの切替は標準経路に含めない。Gatewayがordered blob OIDからpayloadを再構築して完全性を検証するため、payload root tree作成、返却tree SHAの中継、root SHAを受け取る追加helper stageは置かない。
+Connector transportはrepo-local active transactionにblob upload、payload root tree、最終requestのpacketを固定生成する。manifestやplan directoryはhelperが `.git` 配下へ一意に生成し、CLIから指定しない。既にactive transactionがある場合は再計画せず、生成済みpacketを使って続行する。blob uploadまたはroot作成の失敗は該当する生成済みpacketを忠実に再実行する。任意budgetへの縮小、payloadの手動分割、Base64再構成、inline requestへの切替は標準経路に含めない。
 
 標準実行例。
 
@@ -101,7 +102,7 @@ python scripts/publish_request.py connector-plan \
   --target-remote-head <current-develop-head>
 ```
 
-helperが出力した全 `upload-part-*.json` の `GitHub.create_blob` を成功させ、その後 `submit-request.json` の `GitHub.create_file` を1回実行する。Connector返却SHAを別コマンドへ転記しない。
+helperが出力した全 `upload-part-*.json` の `GitHub.create_blob` を実行し、次に `assemble-payload-root.json` の `GitHub.create_tree`、最後に `submit-request.json` の `GitHub.create_file` を実行する。Connector返却SHAを別コマンドへ転記しない。
 
 Gateway成功後はrequest IDに対応するreceiptを取得し、次回基点を更新する。
 
@@ -110,8 +111,7 @@ python scripts/publish_request.py record \
   --receipt /tmp/publish-receipt.json
 ```
 
-標準Connector経路はGit bundle request v7だけを扱う。旧patch transport、payload root tree transport、段階的旧helper、manual record fallback、任意call-budget調整は維持しない。
-
+標準Connector経路はGit bundle request v6だけを扱う。旧patch transport、返却tree SHAを必要とする段階的helper、manual record fallback、任意call-budget調整は維持しない。
 
 ### Workflow maintenance procedure
 
@@ -130,7 +130,7 @@ python scripts/workflow_maintenance.py connector-plan \
   --target-remote-head <current-develop-head>
 ```
 
-`connector-plan` は変更後workflow fileの `GitHub.create_blob` packetだけを生成する。call budgetは通常publishと同じ固定96 KiB profileであり、CLIから変更しない。1 workflow fileのblob action自体がprofile上限を超える場合は自動細分化せず停止する。workflow fileは1 Git blobであるため、分割transportへ読み替えない。
+`connector-plan` は変更後workflow fileの `GitHub.create_blob` packetだけを生成する。workflow fileは単一Git blobであり通常payloadのように分割できないため、workflow maintenanceは独立した固定96 KiB Connector action profileを使い、CLIから変更しない。1 workflow fileのblob action自体がprofile上限を超える場合は自動細分化せず停止する。
 
 全blob upload後にtree packetを生成する。削除workflowはtarget tree entryを `sha: null` として扱い、追加・変更workflowはlocal target commitの事前計算blob OIDを参照する。Connector返却blob SHAを後続入力へ採用しない。
 
@@ -170,7 +170,8 @@ workflow maintenanceは通常publish stateへ動的に生成されたGitHub comm
 
 - target HEAD不一致: requestを作成しない。remote変更を調査し、必要なら最新source-snapshotから再同期する。
 - blob upload失敗: 失敗した生成済みupload packetだけを再送する。
-- blob OID、payload長、payload SHA-256、bundle、parent、target tree不一致: Gatewayが失敗し、対象branchは更新されない。
+- root tree作成失敗: requestは送信せず、blob uploadの忠実性を確認して同じ生成済みpacketを再実行する。
+- tree/blob OID、payload長、payload SHA-256、bundle、parent、target tree不一致: Gatewayが失敗し、対象branchは更新されない。
 - target branch push競合: forceしない。Gatewayの直前base再確認またはnon-force pushで停止する。
 - `.github/workflows/**` の変更: 通常Gatewayではrequestを生成しない。workflow更新権限を持つ分離されたmaintenance経路を使用し、必要なら `temp` でworkflow自体を隔離検証する。
 
