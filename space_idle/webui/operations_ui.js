@@ -23,6 +23,37 @@
     return `<div class="form-row"><label>優先度<input id="${prefix}PriorityInput" type="number" step="1" value="50" data-draft-key="${esc(draftScope)}:priority" ${disabledAttr}></label><label>調達方針<select id="${prefix}SourcingPolicy" data-draft-key="${esc(draftScope)}:sourcing" ${disabledAttr}>${policyRows}</select></label><label>優先供給元<select id="${prefix}ImportSource" data-draft-key="${esc(draftScope)}:source" ${disabledAttr}><option value="" ${selectedSource==null?'selected':''}>物流Laneから自動選択</option>${sourceRows}</select></label></div>`;
   }
 
+  const projectTargetLabel=(p)=>{
+    if(p.target_kind==='facility_upgrade')return `Facility Upgrade → Lv ${fmt(p.target_level,0)}`;
+    if(p.target_kind==='location_founding')return 'Location設立';
+    if(p.target_kind==='surface_cell_development')return 'Surface Cell開発';
+    return '新規施設建設';
+  };
+  const surfaceCell=(id)=>(state.surfaceMap?.cells||[]).find((row)=>row.id===id);
+  const surfaceCellLabel=(id)=>{
+    const cell=surfaceCell(id);
+    if(!cell)return id||'—';
+    if(cell.is_location_core&&cell.location_id)return `${locationName(cell.location_id)} 中心Cell`;
+    const tail=String(id).split('.').pop().replaceAll('_',' ');
+    return cell.location_id?`${locationName(cell.location_id)} · ${tail}`:tail;
+  };
+  const surfaceResourcesHtml=(rows)=>(rows||[]).map((row)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(row.resource_name||resourceName(row.resource_id))}</span><span>Knowledge Lv ${row.knowledge_level}</span></div><div class="cell-sub">存在確率 ${row.presence_probability==null?'—':pct(row.presence_probability)} · Potential ${row.visible_potential==null?'未確定':fmt(row.visible_potential,3)}${row.visible_potential_precision_fraction==null?'':row.visible_potential_precision_fraction<=0?' · 測定済み':` · ±${pct(row.visible_potential_precision_fraction)}`}</div></div>`).join('')||'<div class="empty-state">公開済み資源情報なし</div>';
+  const tupleResourcesHtml=(rows)=>(rows||[]).map(([resourceId,amount])=>`<div class="cell-sub">${esc(resourceName(resourceId))}: ${fmt(amount,2)} t</div>`).join('')||'<div class="cell-sub">追加資源なし</div>';
+  function surfacePlanControls(scope,option,disabled=false){
+    const policy=(option.sourcing_policy_options||[]).map((value)=>`<option value="${esc(value)}" ${value==='mixed'?'selected':''}>${esc(sourcingPolicyName(value))}</option>`).join('');
+    const sources=(option.import_source_options||[]).map((value)=>`<option value="${esc(value)}">${esc(locationName(value))}</option>`).join('');
+    const d=disabled?'disabled':'';
+    return `<div class="form-row surface-plan-controls"><label>優先度<input type="number" step="1" value="50" data-surface-plan-priority data-draft-key="${esc(scope)}:priority" ${d}></label><label>調達方針<select data-surface-plan-policy data-draft-key="${esc(scope)}:sourcing" ${d}>${policy}</select></label><label>優先供給元<select data-surface-plan-source data-draft-key="${esc(scope)}:source" ${d}><option value="">物流Laneから自動選択</option>${sources}</select></label></div>`;
+  }
+  const surfacePlanPayload=(button)=>{
+    const card=button.closest('.surface-action-card');
+    return {
+      priority:Number(card?.querySelector('[data-surface-plan-priority]')?.value??50),
+      sourcing_policy:card?.querySelector('[data-surface-plan-policy]')?.value||'mixed',
+      import_source_id:card?.querySelector('[data-surface-plan-source]')?.value||null,
+    };
+  };
+
   function renderOverviewTab(){
     const loc=state.location,flow=state.flow,issues=state.bottlenecks?.items||[];
     const storageRows=(loc.storage||[]).map((s)=>`<tr><td>${esc(storageClassLabels[s.storage_class]||s.storage_class)}</td><td>${fmt(s.stock_t)}</td><td>${fmt(s.service_capacity_t)}</td><td>${fmt(s.free_service_t)}</td><td>${fmt(s.unserviced_occupied_t)}</td></tr>`).join('');
@@ -43,7 +74,7 @@
 
   function renderConstructionTab(){
     const projects=state.projects?.items||[],options=state.buildOptions?.items||[];
-    const pRows=projects.map((p)=>{const target=p.target_kind==='facility_upgrade'?`Upgrade → Lv ${fmt(p.target_level,0)}`:'新規建設';return `<tr class="selectable" data-inspect="project" data-id="${esc(p.id)}"><td><div class="cell-main">${esc(p.display_name||p.facility_display_name||p.id)}</div><div class="cell-sub">${esc(target)} · ${esc(p.id)}</div></td><td>${esc(stateLabels[p.status]||p.status||(p.paused?'paused':'active'))}</td><td>${fmt(p.progress??p.construction_done??0)}/${fmt(p.construction_required??0)}</td><td>${p.priority??'—'}</td><td>${fmt(p.construction_weight??0,2)}</td><td>${esc(sourcingPolicyName(p.sourcing_policy))}</td><td>${(p.blockers||[]).length}</td></tr>`;}).join('');
+    const pRows=projects.map((p)=>{const target=projectTargetLabel(p);return `<tr class="selectable" data-inspect="project" data-id="${esc(p.id)}"><td><div class="cell-main">${esc(p.display_name||p.facility_display_name||p.id)}</div><div class="cell-sub">${esc(target)} · ${esc(p.id)}</div></td><td>${esc(stateLabels[p.status]||p.status||(p.paused?'paused':'active'))}</td><td>${fmt(p.progress??p.construction_done??0)}/${fmt(p.construction_required??0)}</td><td>${p.priority??'—'}</td><td>${fmt(p.construction_weight??0,2)}</td><td>${esc(sourcingPolicyName(p.sourcing_policy))}</td><td>${(p.blockers||[]).length}</td></tr>`;}).join('');
     const optionCards=options.map((o)=>{const blocked=(o.missing_technologies?.length||0)+(o.site_blockers?.length||0);return `<div class="route-mode-card"><div class="mode-title"><span>${esc(o.display_name)}</span><span class="badge ${blocked?'warn':'ok'}">${blocked?`${blocked} blocker`:'建設可'}</span></div><div class="cell-sub">工数 ${fmt(o.construction_required,0)} · 資源 ${o.resources?.length||0}種</div><div class="action-row" style="margin-top:8px"><button type="button" data-inspect="build-option" data-id="${esc(o.facility_definition_id)}">条件・詳細</button></div></div>`;}).join('');
     return `<div class="card-grid"><section class="card"><div class="card-heading"><h3>建設案件</h3><span class="badge">${projects.length}</span></div><div class="table-wrap"><table><thead><tr><th>案件</th><th>状態</th><th>進捗</th><th>優先</th><th>配分</th><th>調達</th><th>blocker</th></tr></thead><tbody>${pRows||'<tr><td colspan="7">進行中案件なし</td></tr>'}</tbody></table></div></section><section class="card"><div class="card-heading"><h3>新規建設</h3><span class="badge">${options.length}</span></div><div class="card-body">${optionCards||'<div class="empty-state">建設候補なし</div>'}</div></section></div>`;
   }
@@ -74,8 +105,42 @@
     return `<section class="card"><div class="card-heading"><h3>地表資源Survey</h3></div><div class="table-wrap"><table><thead><tr><th>資源・地域</th><th>状態</th><th>進捗</th><th>能力/日</th><th>存在確率</th><th>Resource Potential</th></tr></thead><tbody>${rows||'<tr><td colspan="6">この天体にSurvey対象なし</td></tr>'}</tbody></table></div></section>`;
   }
 
+
+  function renderSurfaceTab(){
+    const map=state.surfaceMap;
+    if(!map){
+      const summary=(state.world?.locations||[]).find((row)=>row.id===state.locationId);
+      const message=summary?.body_id?'地表マップを取得しています。':'このSpatial Nodeには表示可能な地表天体がありません。';
+      return `<section class="card"><div class="card-heading"><h3>地表マップ</h3></div><div class="empty-state">${message}</div></section>`;
+    }
+    const cells=map.cells||[];
+    if(!cells.length)return `<section class="card"><div class="card-heading"><h3>${esc(map.display_name)} 地表</h3></div><div class="empty-state">Surface Cellが定義されていません。</div></section>`;
+    const minLon=Math.min(...cells.map((c)=>Number(c.longitude_deg))),maxLon=Math.max(...cells.map((c)=>Number(c.longitude_deg)));
+    const minLat=Math.min(...cells.map((c)=>Number(c.latitude_deg))),maxLat=Math.max(...cells.map((c)=>Number(c.latitude_deg)));
+    const lonSpan=Math.max(1,maxLon-minLon),latSpan=Math.max(1,maxLat-minLat);
+    const pos=Object.fromEntries(cells.map((c)=>[c.id,{
+      x:8+84*(Number(c.longitude_deg)-minLon)/lonSpan,
+      y:8+84*(maxLat-Number(c.latitude_deg))/latSpan,
+    }]));
+    const seen=new Set(),lines=[];
+    for(const cell of cells){
+      for(const neighbor of cell.neighbor_ids||[]){
+        if(!pos[neighbor])continue;
+        const key=[cell.id,neighbor].sort().join('::');if(seen.has(key))continue;seen.add(key);
+        lines.push(`<line x1="${pos[cell.id].x*10}" y1="${pos[cell.id].y*4.8}" x2="${pos[neighbor].x*10}" y2="${pos[neighbor].y*4.8}"></line>`);
+      }
+    }
+    const buttons=cells.map((cell)=>{
+      const classes=['surface-cell-button',cell.developed?'is-developed':'',cell.is_location_core?'is-core':'',state.inspector?.type==='surface-cell'&&state.inspector.id===cell.id?'is-selected':''].filter(Boolean).join(' ');
+      const owner=cell.location_id?locationName(cell.location_id):'未所属';
+      return `<button type="button" class="${classes}" data-inspect="surface-cell" data-id="${esc(cell.id)}" style="left:${pos[cell.id].x}%;top:${pos[cell.id].y}%"><span class="surface-cell-name">${esc(surfaceCellLabel(cell.id))}</span><span class="surface-cell-meta">${esc(owner)} · ${fmt(cell.area_km2,0)} km²</span></button>`;
+    }).join('');
+    const locations=(map.locations||[]).map((loc)=>`<span class="badge">${esc(loc.display_name)} ${loc.developed_cell_ids?.length||0} Cell</span>`).join(' ');
+    return `<div class="surface-layout"><section class="card surface-map-card"><div class="card-heading"><div><h3>${esc(map.display_name)} 地表</h3><div class="cell-sub">Cellを選択してSurvey・開発・位置依存Facility・Location設立を判断します。</div></div><span class="badge">${cells.length} Cell</span></div><div class="surface-map-stage"><svg class="surface-map-links" viewBox="0 0 1000 480" preserveAspectRatio="none" aria-hidden="true">${lines.join('')}</svg>${buttons}</div><div class="surface-map-legend"><span><i class="legend-dot core"></i>Location中心</span><span><i class="legend-dot developed"></i>開発済み</span><span><i class="legend-dot undeveloped"></i>未開発</span></div></section><section class="card"><div class="card-heading"><h3>Location Territory</h3></div><div class="card-body">${locations||'<div class="empty-state">Locationなし</div>'}</div></section></div>`;
+  }
+
   function renderActiveTab(){
-    const renderers={overview:renderOverviewTab,facilities:renderFacilitiesTab,inventory:renderInventoryTab,construction:renderConstructionTab,research:renderResearchTab,'scientific-exploration':renderScientificExplorationTab,survey:renderSurveyTab};
+    const renderers={overview:renderOverviewTab,facilities:renderFacilitiesTab,inventory:renderInventoryTab,construction:renderConstructionTab,research:renderResearchTab,'scientific-exploration':renderScientificExplorationTab,survey:renderSurveyTab,surface:renderSurfaceTab};
     $('#operationsTabContent').innerHTML=(renderers[state.activeTab]||renderOverviewTab)();
   }
 
@@ -118,9 +183,12 @@
   }
   function renderProjectInspector(id){
     const p=state.projects?.items?.find((x)=>x.id===id);if(!p)return false;
-    const target=p.target_kind==='facility_upgrade'?`Facility Upgrade → Lv ${fmt(p.target_level,0)}`:'新規施設建設';
+    const target=projectTargetLabel(p);
     const targetRows=[['ID',esc(p.id)],['種別',esc(target)],['状態',esc(stateLabels[p.status]||p.status||(p.paused?'paused':'active'))],['優先度',esc(p.priority??'—')],['施工配分',esc(fmt(p.construction_weight??0,2))],['調達方針',esc(sourcingPolicyName(p.sourcing_policy))],['優先供給元',p.import_source_id?esc(locationName(p.import_source_id)):'物流Laneから自動選択'],['工数',`${fmt(p.progress??p.construction_done??0)}/${fmt(p.construction_required??0)}`]];
-    if(p.target_facility_id)targetRows.push(['対象設備',esc(p.target_facility_id)]);if(p.completed_facility_id)targetRows.push(['反映設備',esc(p.completed_facility_id)]);
+    if(p.target_facility_id)targetRows.push(['対象設備',esc(p.target_facility_id)]);
+    if(p.target_cell_id)targetRows.push(['対象Cell',esc(surfaceCellLabel(p.target_cell_id))]);
+    if(p.target_location_id)targetRows.push(['対象Location',esc(locationName(p.target_location_id))]);
+    if(p.completed_facility_id)targetRows.push(['反映設備',esc(p.completed_facility_id)]);
     const resourceRows=(p.resources||[]).map((r)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div><div class="cell-sub">予約 ${fmt(r.reserved_t)} t · 投入済 ${fmt(r.committed_t)} t · 不足 ${fmt(r.shortage_t)} t</div></div>`).join('');
     const demands=(state.demands||[]).filter((d)=>d.owner_kind==='project'&&d.owner_id===p.id);
     const demandHtml=demands.length?demands.map((d)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(d.resource_id))}</span><span>${fmt(d.remaining_t)} t 待ち</span></div><div class="cell-sub">${d.source_id?esc(locationName(d.source_id)):'Laneが供給元を選択'} → ${esc(locationName(d.destination_id))} · 輸送系内 ${fmt(d.pipeline_t)} t</div></div>`).join(''):'<div class="empty-state">現在の物流Demandなし</div>';
@@ -205,10 +273,63 @@
     setInspector(`${s.resource_name} · ${s.cell_label}`,section('探査状態',kv([['進捗',pct(s.progress_fraction)],['知識レベル',String(s.knowledge_level)],['Survey能力/日',fmt(s.capacity_points_per_day,2)],['存在確率',s.presence_probability==null?'—':pct(s.presence_probability)],['Resource Potential',potential],['推定精度',precision],['探査実施拠点',s.provider_location_id?esc(locationName(s.provider_location_id)):'—']]))+section('現在のblocker',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+section('操作',`<div class="action-stack">${actions}<div class="form-row"><label>探査配分<input id="surveyWeightInput" type="number" min="0" step="0.1" value="${weight}" data-draft-key="survey:${esc(id)}:weight" ${weightEditable?'':'disabled'}></label><button data-set-survey-weight="${esc(id)}" ${s.can_set_allocation?'':'disabled'}>配分を適用</button></div></div>`));return true;
   }
 
+
+  function renderSurfaceCellInspector(id){
+    const cell=surfaceCell(id);if(!cell)return false;
+    const terrain=Object.fromEntries(cell.terrain||[]);
+    const owner=cell.location_id?locationName(cell.location_id):'未所属';
+    const neighbors=(cell.neighbor_ids||[]).map((neighbor)=>`<span class="badge">${esc(surfaceCellLabel(neighbor))}</span>`).join(' ')||'<span class="badge">なし</span>';
+
+    const foundation=(cell.foundation_options||[]).map((option)=>{
+      const blockers=option.blockers||[],active=option.active_project_id;
+      const disabled=Boolean(blockers.length||active);
+      const missing=(option.missing_technologies||[]).map((tech)=>`<span class="badge warn">${esc(definitionName(tech))}</span>`).join(' ');
+      return `<div class="route-mode-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.provider_location_id))} から設立</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':blockers.length?`${blockers.length} blocker`:'設立可'}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)}</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${missing?`<div class="cell-sub">必要技術 ${missing}</div>`:''}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">Active Project: ${esc(active)}</div>`:''}<div class="form-row"><label>Location ID<input type="text" data-new-location-id data-draft-key="foundation:${esc(cell.id)}:${esc(option.provider_location_id)}:id" placeholder="player.location..."></label><label>表示名<input type="text" data-new-location-name data-draft-key="foundation:${esc(cell.id)}:${esc(option.provider_location_id)}:name" placeholder="新規地表拠点"></label></div>${surfacePlanControls(`foundation:${cell.id}:${option.provider_location_id}`,option,disabled)}<button type="button" class="primary" data-surface-found="${esc(option.provider_location_id)}" data-cell-id="${esc(cell.id)}" data-body-id="${esc(cell.body_id)}" ${disabled?'disabled':''}>このCellにLocation設立Projectを作成</button></div>`;
+    }).join('')||'<div class="empty-state">このCellへLocationを設立できる施工拠点がありません。</div>';
+
+    const development=(cell.development_options||[]).map((option)=>{
+      const blockers=option.blockers||[],active=option.active_project_id;
+      const disabled=Boolean(blockers.length||active);
+      const infra=option.projected_surface_infrastructure_fulfillment==null?'—':pct(option.projected_surface_infrastructure_fulfillment);
+      const limiting=(option.limiting_factors||[]).map((factor)=>`<span class="badge warn">${esc(A.userFacingText(factor))}</span>`).join(' ');
+      return `<div class="route-mode-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.location_id))} へ編入</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':blockers.length?`${blockers.length} blocker`:'開発可'}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · Projected Surface Infrastructure ${infra}</div>${option.projected_surface_infrastructure_demand==null?'':`<div class="cell-sub">Projected Demand ${fmt(option.projected_surface_infrastructure_demand,2)}</div>`}<div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${limiting?`<div class="cell-sub">Limiting: ${limiting}</div>`:''}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">Active Project: ${esc(active)}</div>`:''}${surfacePlanControls(`development:${cell.id}:${option.location_id}`,option,disabled)}<button type="button" class="primary" data-surface-develop="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>Surface Cell開発Projectを作成</button></div>`;
+    }).join('')||'<div class="empty-state">既存Locationへの開発候補なし</div>';
+
+    const facilities=(cell.facility_placement_options||[]).map((option)=>{
+      const blockers=[...(option.missing_technologies||[]).map((tech)=>['technology',tech]),...(option.site_blockers||[])];
+      const disabled=Boolean(blockers.length);
+      return `<div class="route-mode-card surface-action-card"><div class="mode-title"><span>${esc(option.display_name)}</span><span class="badge ${disabled?'warn':'ok'}">${disabled?`${blockers.length} blocker`:'建設可'}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · ${option.self_deploying?'自己展開':'通常施工'}</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${surfacePlanControls(`surface-build:${cell.id}:${option.facility_definition_id}`,option,disabled)}<button type="button" class="primary" data-surface-build="${esc(option.facility_definition_id)}" data-location-id="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>このCellへ建設Projectを作成</button></div>`;
+    }).join('')||'<div class="empty-state">このCellへ配置可能な位置依存Facilityはありません。</div>';
+
+    const foundationSection=cell.developed?'':section('Location設立',foundation);
+    const developmentSection=cell.developed?'':section('既存Locationから開発',development);
+    const facilitySection=cell.developed?section('位置依存Facility',facilities):'';
+    setInspector(surfaceCellLabel(cell.id),
+      section('Cell状態',kv([
+        ['Cell ID',esc(cell.id)],
+        ['所属Location',esc(owner)],
+        ['Location中心',cell.is_location_core?'はい':'いいえ'],
+        ['面積',`${fmt(cell.area_km2,0)} km²`],
+        ['緯度',`${fmt(cell.latitude_deg,2)}°`],
+        ['経度',`${fmt(cell.longitude_deg,2)}°`],
+      ]))+
+      section('Terrain',kv([
+        ['Terrain factor',fmt(terrain.terrain_factor,2)],
+        ['Bearing capacity',fmt(terrain.bearing_capacity_factor,2)],
+        ['Dust',fmt(terrain.dust_factor,2)],
+        ['Slope',fmt(terrain.slope_factor,2)],
+      ]))+
+      section('隣接Cell',neighbors)+
+      section('Resource Knowledge',surfaceResourcesHtml(cell.resources))+
+      foundationSection+developmentSection+facilitySection
+    );
+    return true;
+  }
+
   function renderInspector(){
     if(!state.inspector){setInspector('選択項目','<div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div>');return;}
     const {type,id}=state.inspector;
-    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector};
+    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'surface-cell':renderSurfaceCellInspector};
     if(!handlers[type]?.(id)){state.inspector=null;setInspector('選択項目','<div class="empty-state">項目の状態が変化しました。再選択してください。</div>');}
   }
 
@@ -233,8 +354,11 @@
 
   document.addEventListener('click',async(event)=>{
     if(state.activeView!=='operations')return;
-    const tab=event.target.closest('[data-tab]');if(tab){state.activeTab=tab.dataset.tab;state.inspector=null;render();return;}
-    const inspect=event.target.closest('[data-inspect]');if(inspect){state.inspector={type:inspect.dataset.inspect,id:inspect.dataset.id};renderInspector();$$('#operationsTabContent tr').forEach((tr)=>tr.classList.toggle('is-selected',tr.dataset.id===inspect.dataset.id));return;}
+    const tab=event.target.closest('[data-tab]');if(tab){state.activeTab=tab.dataset.tab;state.inspector=null;render();if(state.activeTab==='surface'){try{await A.loadUiSnapshot({preserveInteraction:false});}catch(e){banner(e.message,'error');}}return;}
+    const inspect=event.target.closest('[data-inspect]');if(inspect){state.inspector={type:inspect.dataset.inspect,id:inspect.dataset.id};if(inspect.dataset.inspect==='surface-cell')render();else{renderInspector();$$('#operationsTabContent tr').forEach((tr)=>tr.classList.toggle('is-selected',tr.dataset.id===inspect.dataset.id));}return;}
+    const surfaceBuild=event.target.closest('[data-surface-build]');if(surfaceBuild){const plan=surfacePlanPayload(surfaceBuild);try{await command('PlanBuild',{location_id:surfaceBuild.dataset.locationId,facility_id:surfaceBuild.dataset.surfaceBuild,site_cell_id:surfaceBuild.dataset.cellId,...plan});banner('Surface Cell建設Projectを作成しました');}catch{}return;}
+    const surfaceDevelop=event.target.closest('[data-surface-develop]');if(surfaceDevelop){const plan=surfacePlanPayload(surfaceDevelop);try{await command('DevelopSurfaceCell',{location_id:surfaceDevelop.dataset.surfaceDevelop,cell_id:surfaceDevelop.dataset.cellId,...plan});banner('Surface Cell開発Projectを作成しました');}catch{}return;}
+    const surfaceFound=event.target.closest('[data-surface-found]');if(surfaceFound){const card=surfaceFound.closest('.surface-action-card'),newId=card?.querySelector('[data-new-location-id]')?.value.trim(),displayName=card?.querySelector('[data-new-location-name]')?.value.trim();if(!newId||!displayName){banner('Location IDと表示名を入力してください','error');return;}const plan=surfacePlanPayload(surfaceFound);try{await command('FoundLocation',{provider_location_id:surfaceFound.dataset.surfaceFound,new_location_id:newId,display_name:displayName,body_id:surfaceFound.dataset.bodyId,core_cell_id:surfaceFound.dataset.cellId,...plan});banner('Location設立Projectを作成しました');}catch{}return;}
     const build=event.target.closest('[data-build]');if(build){const prefix=build.dataset.planPrefix||'buildPlan',priority=Number($(`#${prefix}PriorityInput`)?.value??50),sourcingPolicy=$(`#${prefix}SourcingPolicy`)?.value||'mixed',source=$(`#${prefix}ImportSource`)?.value||null;try{await command('PlanBuild',{location_id:state.locationId,facility_id:build.dataset.build,priority,sourcing_policy:sourcingPolicy,import_source_id:source});banner('建設計画を作成しました');}catch{}return;}
     const upgrade=event.target.closest('[data-upgrade]');if(upgrade){const prefix=upgrade.dataset.planPrefix||'upgradePlan',priority=Number($(`#${prefix}PriorityInput`)?.value??50),sourcingPolicy=$(`#${prefix}SourcingPolicy`)?.value||'mixed',source=$(`#${prefix}ImportSource`)?.value||null;try{const result=await command('PlanFacilityUpgrade',{facility_id:upgrade.dataset.upgrade,priority,sourcing_policy:sourcingPolicy,import_source_id:source});banner(`Upgrade案件 ${result?.created_id||''} を作成しました`);}catch{}return;}
     const cmd=event.target.closest('[data-command]');if(cmd){const payload={};if(cmd.dataset.facilityId)payload.facility_id=cmd.dataset.facilityId;if(cmd.dataset.projectId)payload.project_id=cmd.dataset.projectId;try{await command(cmd.dataset.command,payload);}catch{}return;}

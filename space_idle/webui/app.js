@@ -4,7 +4,7 @@
   const state = {
     revision:null, session:null, world:null, catalog:null, locationId:null, location:null,
     flow:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
-    research:null, scientificExplorations:null, surveys:null, contracts:null, logisticsSummary:null, logistics:null, routes:null,
+    research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, routes:null,
     fleet:null, transportAllocations:null, cargoFlows:null, lanes:null, demands:[],
     selectedRouteId:null, activeView:'operations', activeTab:'overview', inspector:null,
     busy:false, syncInFlight:null,
@@ -175,6 +175,7 @@
     if(data.build_options!==undefined)state.buildOptions=data.build_options;
     if(data.bottlenecks!==undefined)state.bottlenecks=data.bottlenecks;
     if(data.surveys!==undefined)state.surveys=data.surveys;
+    if(data.surface_map!==undefined)state.surfaceMap=data.surface_map;
     if(state.selectedRouteId&&!(state.routes?.items||[]).some((r)=>r.id===state.selectedRouteId))state.selectedRouteId=null;
   }
 
@@ -243,7 +244,7 @@
 
   function clearLocationSnapshot(){
     state.location=null; state.flow=null; state.bottlenecks=null; state.projects=null;
-    state.buildOptions=null; state.surveys=null; state.inspector=null;
+    state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.inspector=null;
   }
   async function loadUiSnapshot({preserveInteraction=true}={}){
     while(state.syncInFlight){
@@ -255,7 +256,11 @@
     const locationId=state.locationId;
     const request={locationId,promise:null};
     request.promise=(async()=>{
-      const suffix=locationId?`?location_id=${encodeURIComponent(locationId)}`:'';
+      const locationSummary=(state.world?.locations||[]).find((row)=>row.id===locationId);
+      const params=new URLSearchParams();
+      if(locationId)params.set('location_id',locationId);
+      if(locationSummary?.body_id&&state.activeTab==='surface')params.set('surface_body_id',locationSummary.body_id);
+      const suffix=params.size?`?${params.toString()}`:'';
       const data=await api(`/api/v1/ui-state${suffix}`);
       if(locationId!==state.locationId)return data;
       applyUiSnapshot(data);

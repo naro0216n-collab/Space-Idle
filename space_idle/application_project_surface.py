@@ -68,6 +68,8 @@ class SurfaceProjectorMixin:
                             str(technology) for technology in development_recipe.prerequisite_technologies - sim.projects.unlocked_technologies
                         )),
                         None if active_spatial_project is None else str(active_spatial_project.id),
+                        tuple(sim.projects.sourcing_policy_options()),
+                        tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(location.id)),
                     )
                 )
             development_options = tuple(development_options_list)
@@ -109,6 +111,8 @@ class SurfaceProjectorMixin:
                                 recipe.facility_def_id, owner, sim.day, power, site_cell_id=cell.id
                             )
                         ),
+                        tuple(sim.projects.sourcing_policy_options()),
+                        tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(owner)),
                     )
                     for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id))
                     if sim.facilities.definitions[recipe.facility_def_id].placement_scope is FacilityPlacementScope.SURFACE_CELL
@@ -137,6 +141,8 @@ class SurfaceProjectorMixin:
                         )),
                         tuple((failure.code, failure.detail) for failure in failures),
                         None if active_spatial_project is None else str(active_spatial_project.id),
+                        tuple(sim.projects.sourcing_policy_options()),
+                        tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(provider_id)),
                     ))
                 foundation_options = tuple(foundation_rows)
 

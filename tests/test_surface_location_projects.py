@@ -9,6 +9,7 @@ from space_idle import (
     ApplicationError,
     DevelopSurfaceCell,
     FoundLocation,
+    GetBuildOptions,
     GetProjects,
     GetSurfaceMap,
     build_game_application,
@@ -92,12 +93,17 @@ def test_surface_map_exposes_project_costs_blockers_and_active_project():
     cell = next(row for row in view.cells if row.id == str(ids.EARTH_CELL_COASTAL))
     dev = next(row for row in cell.development_options if row.location_id == str(ids.EARTH))
     assert dev.construction_required is not None and dev.construction_required > 0
+    assert "mixed" in dev.sourcing_policy_options
+    expected_sources = app.query(GetBuildOptions(str(ids.EARTH))).import_source_options
+    assert dev.import_source_options == expected_sources
     assert {resource_id for resource_id, _amount in dev.resources} == {
         str(ids.STRUCTURAL_COMPONENTS), str(ids.MACHINERY), str(ids.CONSTRUCTION_EQUIPMENT)
     }
     foundation = next(row for row in cell.foundation_options if row.provider_location_id == str(ids.EARTH))
     assert foundation.construction_required > dev.construction_required
     assert foundation.active_project_id is None
+    assert "mixed" in foundation.sourcing_policy_options
+    assert foundation.import_source_options == expected_sources
 
     project_id = app.execute(DevelopSurfaceCell(
         str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"

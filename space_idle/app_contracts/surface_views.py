@@ -25,6 +25,8 @@ class SurfaceFacilityPlacementOption:
     resources: tuple[tuple[str, float], ...]
     missing_technologies: tuple[str, ...]
     site_blockers: tuple[tuple[str, str], ...]
+    sourcing_policy_options: tuple[str, ...] = ()
+    import_source_options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,8 @@ class SurfaceCellFoundationOption:
     missing_technologies: tuple[str, ...]
     blockers: tuple[tuple[str, str], ...]
     active_project_id: str | None = None
+    sourcing_policy_options: tuple[str, ...] = ()
+    import_source_options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,8 @@ class SurfaceCellDevelopmentOption:
     resources: tuple[tuple[str, float], ...] = ()
     missing_technologies: tuple[str, ...] = ()
     active_project_id: str | None = None
+    sourcing_policy_options: tuple[str, ...] = ()
+    import_source_options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

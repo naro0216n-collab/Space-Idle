@@ -115,6 +115,8 @@ def test_surface_map_owns_surface_buildability_and_location_build_options_do_not
     )
     assert option.location_id == str(ids.EARTH)
     assert option.site_blockers == ()
+    assert "mixed" in option.sourcing_policy_options
+    assert option.import_source_options == build_options.import_source_options
 
     catalog = app.query(GetCatalog())
     robotic = next(

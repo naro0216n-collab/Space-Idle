@@ -19,6 +19,7 @@ from ..application_commands import (
     GetScientificExplorations,
     GetRoutes,
     GetSurveys,
+    GetSurfaceMap,
     GetTransportAllocations,
     GetWorld,
 )
@@ -42,6 +43,10 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
         if len(location_values) > 1:
             raise ApiPayloadError("location_id must appear once")
         location_id = location_values[0] if location_values else None
+        surface_body_values = params.get("surface_body_id", [])
+        if len(surface_body_values) > 1:
+            raise ApiPayloadError("surface_body_id must appear once")
+        surface_body_id = surface_body_values[0] if surface_body_values else None
 
         queries = {
             "world": GetWorld(),
@@ -66,6 +71,8 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
                 "bottlenecks": GetBottlenecks(location_id),
                 "surveys": GetSurveys(location_id),
             })
+        if surface_body_id:
+            queries["surface_map"] = GetSurfaceMap(surface_body_id)
 
         result = self.server.runtime.snapshot(queries)
         self._result(result, etag=f'"rev-{result.revision}"')

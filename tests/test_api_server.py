@@ -146,7 +146,7 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
     thread.start()
     try:
         status, _, payload = _request(
-            port, "GET", f"/api/v1/ui-state?location_id={ids.EARTH}"
+            port, "GET", f"/api/v1/ui-state?location_id={ids.EARTH}&surface_body_id={ids.EARTH_BODY}"
         )
         assert status == 200
         data = payload["data"]
@@ -161,6 +161,11 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
         surface_infrastructure = data["location"]["surface_infrastructure"]
         assert surface_infrastructure["fulfillment"] == 1.0
         assert str(ids.SURFACE_DISTRIBUTION_HUB) in surface_infrastructure["improvement_facility_definition_ids"]
+        surface_map = data["surface_map"]
+        assert surface_map["body_id"] == str(ids.EARTH_BODY)
+        coastal = next(row for row in surface_map["cells"] if row["id"] == str(ids.EARTH_CELL_COASTAL))
+        development = next(row for row in coastal["development_options"] if row["location_id"] == str(ids.EARTH))
+        assert "mixed" in development["sourcing_policy_options"]
     finally:
         server.shutdown()
         server.server_close()
@@ -254,6 +259,7 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert headers["Content-Type"].startswith("text/html")
         assert "拠点運用" in html
         assert "物流ネットワーク" in html
+        assert "地表マップ" in html
         assert 'id="operationsView"' in html
         assert 'id="logisticsView"' in html
         assert 'href="/research_tree.css"' in html
@@ -273,6 +279,7 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert status == 200
         assert headers["Content-Type"].startswith("text/javascript")
         assert "If-Match" in app_js
+        assert "surface_body_id" in app_js
 
         status, headers, body = _raw_request(port, "/operations_ui.js")
         operations_js = body.decode("utf-8")
@@ -282,6 +289,9 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert "FundResearchPrototype" in operations_js
         assert "StartScientificExploration" in operations_js
         assert "AssignExplorationFleet" in operations_js
+        assert "FoundLocation" in operations_js
+        assert "DevelopSurfaceCell" in operations_js
+        assert "data-surface-build" in operations_js
         assert "AssignExplorationVehicle" not in operations_js
 
         status, headers, body = _raw_request(port, "/logistics_ui.js")
