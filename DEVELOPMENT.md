@@ -175,6 +175,10 @@ Fast CIは小変更ごとの承認ゲートではない。run生成を確認し�
 
 Gameplay、Windows、WebKitを通常Fast CIへ常設しない。
 
+Browser E2Eは同一browser job内のシナリオを1つのPython processで順次実行する。既存workflowが複数のscenario scriptを順に呼ぶ場合も、最初のentrypointがjobのscenario集合を `playwright/run_suite.py` へ集約し、後続entrypointは完了markerを重いgame import前に検証して終了する。同一jobではPlaywrightとbrowser processを1回だけ起動し、各シナリオは独立したBrowserContext、GameRuntime、save用temp directory、HTTP serverを作り直す。browser process起動コストだけを共有し、cookie・storage・page・ゲーム状態等の検証状態は共有しない。runnerはbootstrap、browser起動、各scenario、全体の実時間をCI logへ出力し、長期化時にsetup・browser起動・scenario本体を切り分けられる状態を維持する。
+
+Chromium scenarioはrunner imageに実browserが存在すればそれを優先して全シナリオで共通使用し、存在しない場合はPlaywright Chromiumを使用する。シナリオごとに異なるChromium binaryを偶発的に使い分けない。
+
 ## Branch policy
 
 - `main`: ユーザー承認済み正準状態。明示的承認なしに更新しない。

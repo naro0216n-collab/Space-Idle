@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from e2e_support import (
+    guard_ci_secondary_entrypoint,
+    isolated_browser_context,
+    run_ci_suite_or_standalone,
+)
+
+if __name__ == "__main__" and guard_ci_secondary_entrypoint("acceptance"):
+    raise SystemExit(0)
+
 import http.client
 import json
 import os
 from pathlib import Path
-import shutil
 from threading import Thread
 import tempfile
 import time
@@ -15,12 +23,6 @@ from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
 from space_idle.simulation import OfflineProgressPolicy
 
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError as exc:  # pragma: no cover - developer environment guard
-    raise SystemExit(
-        "Playwright is required for E2E acceptance. Install with: pip install -e '.[e2e]'"
-    ) from exc
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = Path(os.environ.get("SPACE_IDLE_ARTIFACTS", ROOT / "playwright" / "artifacts")).resolve()
@@ -129,7 +131,7 @@ def _visible_button_min_height(page) -> float:
     )
 
 
-def run() -> dict[str, object]:
+def run(*, browser=None) -> dict[str, object]:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     transport = os.environ.get("SPACE_IDLE_E2E_TRANSPORT", "direct").strip().lower()
     if browser_name not in SUPPORTED_BROWSERS:
@@ -178,16 +180,9 @@ def run() -> dict[str, object]:
     try:
         _wait_for_server(f"{server_origin}/api/v1/health")
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
-        with sync_playwright() as p:
-            browser_type = getattr(p, browser_name)
-            launch_kwargs: dict[str, object] = {"headless": True}
-            if browser_name == "chromium":
-                chromium = os.environ.get("SPACE_IDLE_CHROMIUM") or shutil.which("chromium") or shutil.which("google-chrome")
-                if chromium:
-                    launch_kwargs["executable_path"] = chromium
-                launch_kwargs["args"] = ["--no-sandbox", "--disable-dev-shm-usage"]
-            browser = browser_type.launch(**launch_kwargs)
-            context = browser.new_context(
+        with isolated_browser_context(
+            browser_name,
+            browser=browser,
                 viewport={"width": 1194, "height": 834},
                 screen={"width": 1194, "height": 834},
                 has_touch=True,
@@ -199,7 +194,7 @@ def run() -> dict[str, object]:
                     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 "
                     "Mobile/15E148 Safari/604.1"
                 ),
-            )
+            ) as context:
             page = context.new_page()
             page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
             page.on("pageerror", lambda exc: page_errors.append(str(exc)))
@@ -533,7 +528,6 @@ def run() -> dict[str, object]:
                 "page_errors": list(page_errors),
                 "request_failures": list(request_failures),
             }
-            browser.close()
 
         _assert(not console_errors, f"browser console errors: {console_errors}")
         _assert(not page_errors, f"page errors: {page_errors}")
@@ -551,5 +545,6 @@ def run() -> dict[str, object]:
 
 
 if __name__ == "__main__":
-    result = run()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    result = run_ci_suite_or_standalone("acceptance", run)
+    if result is not None:
+        print(json.dumps(result, ensure_ascii=False, indent=2))

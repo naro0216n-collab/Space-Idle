@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+from e2e_support import (
+    guard_ci_secondary_entrypoint,
+    isolated_browser_context,
+    run_ci_suite_or_standalone,
+)
+
+if __name__ == "__main__" and guard_ci_secondary_entrypoint("interaction_continuity"):
+    raise SystemExit(0)
+
 import os
 from pathlib import Path
 from threading import Thread
@@ -11,10 +20,6 @@ from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.version import VERSION
 
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError as exc:  # pragma: no cover
-    raise SystemExit("Playwright is required for interaction-continuity E2E") from exc
 
 
 def _wait_for_server(origin: str, timeout: float = 10.0) -> None:
@@ -33,7 +38,7 @@ def _wait_for_server(origin: str, timeout: float = 10.0) -> None:
     raise RuntimeError(f"server did not become ready: {last_error}")
 
 
-def run() -> None:
+def run(*, browser=None) -> None:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in {"chromium", "webkit"}:
         raise ValueError(f"unsupported browser: {browser_name}")
@@ -51,9 +56,12 @@ def run() -> None:
 
     try:
         _wait_for_server(origin)
-        with sync_playwright() as p:
-            browser = getattr(p, browser_name).launch(headless=True)
-            page = browser.new_page(viewport={"width": 1194, "height": 834})
+        with isolated_browser_context(
+            browser_name,
+            browser=browser,
+            viewport={"width": 1194, "height": 834},
+        ) as context:
+            page = context.new_page()
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
             assert page.locator("#appVersion").inner_text() == f"v{VERSION}"
@@ -106,7 +114,6 @@ def run() -> None:
             assert priority.is_visible()
             assert priority.input_value() == "37"
             assert page.evaluate("() => document.activeElement?.id || ''") == "facilityPriorityInput"
-            browser.close()
     finally:
         server.shutdown()
         server.server_close()
@@ -115,4 +122,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    run_ci_suite_or_standalone("interaction_continuity", run)

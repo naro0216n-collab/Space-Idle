@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from e2e_support import (
+    guard_ci_secondary_entrypoint,
+    isolated_browser_context,
+    run_ci_suite_or_standalone,
+)
+
+if __name__ == "__main__" and guard_ci_secondary_entrypoint("lane_ui"):
+    raise SystemExit(0)
+
 import os
 from pathlib import Path
-import shutil
 from threading import Thread
 import tempfile
 import time
@@ -13,10 +21,6 @@ from space_idle.content import base_ids as ids
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.simulation import OfflineProgressPolicy
 
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError as exc:  # pragma: no cover
-    raise SystemExit("Playwright is required for lane UI E2E") from exc
 
 
 def _build_lane_test_application():
@@ -43,7 +47,7 @@ def _wait_for_server(origin: str, timeout: float = 10.0) -> None:
     raise RuntimeError(f"server did not become ready: {last_error}")
 
 
-def run() -> None:
+def run(*, browser=None) -> None:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in {"chromium", "webkit"}:
         raise ValueError(f"unsupported browser: {browser_name}")
@@ -61,16 +65,12 @@ def run() -> None:
 
     try:
         _wait_for_server(origin)
-        with sync_playwright() as p:
-            browser_type = getattr(p, browser_name)
-            launch_kwargs: dict[str, object] = {"headless": True}
-            if browser_name == "chromium":
-                executable = os.environ.get("SPACE_IDLE_CHROMIUM") or shutil.which("google-chrome") or shutil.which("chromium")
-                if executable:
-                    launch_kwargs["executable_path"] = executable
-                launch_kwargs["args"] = ["--no-sandbox", "--disable-dev-shm-usage"]
-            browser = browser_type.launch(**launch_kwargs)
-            page = browser.new_page(viewport={"width": 1194, "height": 834})
+        with isolated_browser_context(
+            browser_name,
+            browser=browser,
+            viewport={"width": 1194, "height": 834},
+        ) as context:
+            page = context.new_page()
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
             page.locator("#timePauseButton").click()
@@ -234,7 +234,6 @@ def run() -> None:
                 "() => document.querySelectorAll('#laneTable tbody button[data-lane-edit]').length === 0",
                 timeout=10000,
             )
-            browser.close()
     finally:
         server.shutdown()
         server.server_close()
@@ -243,4 +242,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    run_ci_suite_or_standalone("lane_ui", run)
