@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
 
 from .facilities import FacilityBook
 from .external_economy import ExternalEconomyState
 from .inventory import InventoryBook
 from .power import PowerService
-from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from .shared import DefinitionId, EntityId, SpatialNodeId
 from .technology import TechnologyState
 from .transport.compatibility import TransportCompatibilityMixin
 from .transport.fleet_allocations import FleetAllocationMixin
@@ -77,7 +76,6 @@ class LogisticsService(
     operation_registry: OperationEvaluatorRegistry = field(default_factory=build_default_operation_registry)
     surface_route_rules: tuple[SurfaceTransportRouteRule, ...] = ()
     surface_orbit_route_rules: tuple[SurfaceOrbitRouteRule, ...] = ()
-    surface_access_factor_provider: Callable[[SpatialNodeId, SurfaceCellId, int], float] | None = None
     fleet_pools: dict[tuple[DefinitionId, SpatialNodeId], FleetPool] = field(default_factory=dict)
     fleet_reservations: dict[EntityId, FleetReservation] = field(default_factory=dict)
     transport_allocations: dict[EntityId, TransportAllocation] = field(default_factory=dict)

@@ -235,6 +235,7 @@ class Simulation:
             self.logistics.vehicle_production_service_requests(self.day)
         )
         requests.extend(self.projects.construction_service_requests(self.day))
+        requests.extend(self.projects.surface_infrastructure_service_requests(self.day))
         if self.founding is not None:
             requests.extend(self.founding.service_requests(self.day))
         if self.survey is not None:
@@ -267,6 +268,44 @@ class Simulation:
         requests: tuple[ServiceCapacityRequest, ...] | None = None,
     ) -> ServiceCapacityAllocationPlan:
         requests = self._service_capacity_requests() if requests is None else requests
+        if self.surface_infrastructure is not None:
+            request_ids = {request.id for request in requests}
+            upstream = tuple(
+                self.surface_infrastructure.service_request(location_id)
+                for location_id in sorted(self.graph.locations, key=str)
+                if self.surface_infrastructure.service_request_id(location_id) not in request_ids
+            )
+            requests = requests + upstream
+
+        surface_plan: ServiceCapacityAllocationPlan | None = None
+        if self.surface_infrastructure is not None:
+            surface_requests = tuple(
+                request for request in requests
+                if request.service_type == self.surface_infrastructure.service_type
+            )
+            surface_nominal: dict[tuple[SpatialNodeId, str], float] = {}
+            surface_enabled: dict[tuple[SpatialNodeId, str], float] = {}
+            surface_limiting: dict[tuple[SpatialNodeId, str], tuple[str, ...]] = {}
+            for location_id in sorted(self.graph.locations, key=str):
+                key = (location_id, self.surface_infrastructure.service_type)
+                nominal_rate = self.facilities.nominal_service_capacity_at(
+                    location_id, self.surface_infrastructure.service_type, self.day
+                )
+                enabled_rate = self.surface_infrastructure.provider_available_capacity(
+                    location_id, self.facilities, power_by_location[location_id], self.day
+                )
+                surface_nominal[key] = nominal_rate
+                surface_enabled[key] = enabled_rate
+                surface_limiting[key] = (
+                    () if enabled_rate + 1e-9 >= nominal_rate else ("provider_dependency",)
+                )
+            surface_plan = allocate_service_capacity(
+                surface_requests,
+                nominal_supply=surface_nominal,
+                enabled_supply=surface_enabled,
+                limiting_factors=surface_limiting,
+            )
+
         dynamic_nominal: dict[tuple[SpatialNodeId, str], float] = {}
         dynamic_enabled: dict[tuple[SpatialNodeId, str], float] = {}
         for location_id in sorted(self._active_locations(), key=str):
@@ -328,12 +367,31 @@ class Simulation:
             elif (location_id, service_type) in dynamic_nominal:
                 nominal_rate = dynamic_nominal[(location_id, service_type)]
                 enabled_rate = dynamic_enabled.get((location_id, service_type), 0.0)
+            elif (
+                self.surface_infrastructure is not None
+                and service_type == self.surface_infrastructure.service_type
+            ):
+                nominal_rate = self.facilities.nominal_service_capacity_at(
+                    location_id, service_type, self.day
+                )
+                enabled_rate = self.surface_infrastructure.provider_available_capacity(
+                    location_id, self.facilities, power, self.day
+                )
             else:
                 nominal_rate = self.facilities.nominal_service_capacity_at(
                     location_id, service_type, self.day
                 )
+                provider_factors = (
+                    None
+                    if self.surface_infrastructure is None
+                    or surface_plan is None
+                    else self.surface_infrastructure.facility_availability_factors(
+                        location_id, service_type, self.facilities, surface_plan
+                    )
+                )
                 enabled_rate = self.facilities.enabled_service_capacity_at(
-                    location_id, service_type, power, self.day
+                    location_id, service_type, power, self.day,
+                    provider_factors=provider_factors,
                 )
             key = (location_id, service_type)
             nominal[key] = nominal_rate

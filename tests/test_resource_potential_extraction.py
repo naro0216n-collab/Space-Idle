@@ -71,16 +71,20 @@ def test_effective_opportunity_uses_surface_infrastructure_for_remote_cells():
     added = sim.graph.surface_cells[ids.EARTH_CELL_COASTAL].resource_potential_by_resource[ids.METAL_ORE]
 
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
-    constrained_power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+    constrained_decision = sim.tick_decision_projection()
+    constrained_power = constrained_decision.allocations.power_by_location[ids.EARTH]
     constrained = sim.extraction.effective_opportunity(
-        ids.EARTH, ids.METAL_ORE, sim.facilities, constrained_power, sim.day
+        ids.EARTH, ids.METAL_ORE, sim.facilities, constrained_power, sim.day,
+        constrained_decision.allocations.services,
     )
     assert constrained == pytest.approx(before)
 
     sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
-    supplied_power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+    supplied_decision = sim.tick_decision_projection()
+    supplied_power = supplied_decision.allocations.power_by_location[ids.EARTH]
     supplied = sim.extraction.effective_opportunity(
-        ids.EARTH, ids.METAL_ORE, sim.facilities, supplied_power, sim.day
+        ids.EARTH, ids.METAL_ORE, sim.facilities, supplied_power, sim.day,
+        supplied_decision.allocations.services,
     )
     assert supplied == pytest.approx(before + added)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..power import PowerSnapshot
+from ..service_capacity import ServiceCapacityAllocationPlan
 from ..shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirementFailure, SiteRequirements, evaluate_site_requirements
 from .models import (
@@ -207,6 +208,7 @@ class ConstructionRulesMixin:
         self,
         project: ConstructionProject,
         power: PowerSnapshot,
+        service_allocations: ServiceCapacityAllocationPlan,
         day: int = 0,
     ) -> float:
         """Return the spatial service factor applied to construction work.
@@ -223,21 +225,41 @@ class ConstructionRulesMixin:
         service = self.surface_infrastructure
         if service is None:
             return 1.0
+        if project.status not in {ProjectStatus.READY, ProjectStatus.BUILDING}:
+            try:
+                snapshot = service.prospective_development_snapshot(
+                    project.operational_node_id, project.target.cell_id, service_allocations
+                )
+            except (KeyError, ValueError):
+                return 0.0
+            return max(0.0, min(1.0, snapshot.fulfillment))
+
         try:
-            snapshot = service.prospective_development_snapshot(
-                project.operational_node_id, project.target.cell_id, self.facilities, power, day
+            base_fulfillment = service.fulfillment_from_plan(
+                project.operational_node_id, service_allocations
             )
+            request_id = self.surface_development_service_request_id(project.id)
+            request = service_allocations.request(request_id)
+            allocated = service_allocations.allocated(request_id)
         except (KeyError, ValueError):
             return 0.0
-        return max(0.0, min(1.0, snapshot.fulfillment))
+        expansion_fulfillment = (
+            1.0
+            if request.requested_rate <= 1e-12
+            else max(0.0, min(1.0, allocated / request.requested_rate))
+        )
+        return min(base_fulfillment, expansion_fulfillment)
 
     def project_limiting_factors(
         self,
         project: ConstructionProject,
         power: PowerSnapshot,
+        service_allocations: ServiceCapacityAllocationPlan,
         day: int = 0,
     ) -> tuple[str, ...]:
-        if self.project_construction_fulfillment(project, power, day) < 1.0 - 1e-9:
+        if self.project_construction_fulfillment(
+            project, power, service_allocations, day
+        ) < 1.0 - 1e-9:
             return ("surface_infrastructure",)
         return ()
 

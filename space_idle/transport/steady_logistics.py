@@ -712,7 +712,7 @@ class SteadyLogisticsMixin:
         assert resource_allocations is not None
         assert service_allocations is not None
         factor, allocation_limits = self._transport_operation_allocation_factor(
-            allocation_id, logistics_plan, resource_allocations, service_allocations
+            allocation_id, logistics_plan, resource_allocations, service_allocations, day
         )
         available = DirectionalCapacity(
             snapshot.available.forward_t_per_day * factor,
@@ -770,6 +770,7 @@ class SteadyLogisticsMixin:
         plan: LogisticsResourcePlan,
         resource_allocations: ResourceAllocationPlan,
         service_allocations: ServiceCapacityAllocationPlan,
+        day: int,
     ) -> tuple[float, tuple[str, ...]]:
         """Resolve one Transport Allocation's shared dependency fulfillment.
 
@@ -823,6 +824,31 @@ class SteadyLogisticsMixin:
                     f"{definition.turnaround_service_type}"
                 )
 
+        service_plan = self.derive_transport_service_plan(allocation_id, day)
+        surface_locations: set[SpatialNodeId] = set()
+        for route_id in service_plan.forward_path + service_plan.reverse_path:
+            geometry = self.route_geometry(route_id)
+            for endpoint in (geometry.origin, geometry.destination):
+                if endpoint.surface_cell_id is not None:
+                    surface_locations.add(endpoint.node_id)
+        for location_id in sorted(surface_locations, key=str):
+            request_id = EntityId(f"service.surface_distribution:{location_id}")
+            try:
+                request = service_allocations.request(request_id)
+                allocated = service_allocations.allocated(request_id)
+            except KeyError:
+                request = None
+                allocated = 0.0
+            if request is None:
+                ratio = 0.0
+            elif request.requested_rate <= 1e-12:
+                ratio = 1.0
+            else:
+                ratio = max(0.0, min(1.0, allocated / request.requested_rate))
+            ratios.append(ratio)
+            if ratio < 1.0 - 1e-12:
+                limiting.append(f"surface_infrastructure:{location_id}")
+
         factor = min(ratios) if ratios else 1.0
         return max(0.0, min(1.0, factor)), tuple(dict.fromkeys(limiting))
 
@@ -847,7 +873,7 @@ class SteadyLogisticsMixin:
         for allocation_id, _directional in plan.planned_usage:
             operation_factor[allocation_id], _limiting = (
                 self._transport_operation_allocation_factor(
-                    allocation_id, plan, allocations, service_allocations
+                    allocation_id, plan, allocations, service_allocations, day
                 )
             )
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 import math
-from typing import TYPE_CHECKING, Callable, Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .site import EnvironmentCondition
@@ -86,9 +86,6 @@ class FacilityBook:
     environment: EnvironmentResolver
     facilities: dict[EntityId, FacilityState] = field(default_factory=dict)
     _counter: int = 0
-    service_availability_factor_provider: Callable[[SpatialNodeId, str, "PowerSnapshot", int], Mapping[EntityId, float]] | None = field(
-        default=None, repr=False, compare=False
-    )
 
     def placement_failures(
         self,
@@ -293,22 +290,17 @@ class FacilityBook:
         service_type: str,
         power: "PowerSnapshot",
         day: int = 0,
+        *,
+        provider_factors: Mapping[EntityId, float] | None = None,
     ) -> float:
         """Provider flow enabled by already-resolved upstream dependencies.
 
-        This adapter currently exposes power, maintenance and upstream surface
-        infrastructure factors.  It is an allocation input; consumers must
-        still submit ServiceCapacityRequest and cannot independently consume
-        this value.
+        Upstream service fulfillment is supplied explicitly by the Simulation
+        allocation graph. FacilityBook never resolves another Service allocation
+        internally. Consumers must still submit ServiceCapacityRequest.
         """
         contributions: list[float] = []
-        service_factors = (
-            {}
-            if self.service_availability_factor_provider is None
-            else self.service_availability_factor_provider(
-                operational_node_id, service_type, power, day
-            )
-        )
+        service_factors = {} if provider_factors is None else provider_factors
         for facility in sorted(
             self.active_compatible_at(operational_node_id, day), key=lambda row: str(row.id)
         ):

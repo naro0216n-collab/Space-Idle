@@ -163,10 +163,10 @@ class ProjectProjectorMixin:
                 display_name = recipe.display_name
 
             construction_fulfillment = sim.projects.project_construction_fulfillment(
-                project, project_power, sim.day
+                project, project_power, decision.allocations.services, sim.day
             )
             limiting_factors = sim.projects.project_limiting_factors(
-                project, project_power, sim.day
+                project, project_power, decision.allocations.services, sim.day
             )
 
             rows.append(ProjectRow(

@@ -6,11 +6,7 @@ import math
 
 from .facilities import FacilityBook
 from .power import PowerSnapshot
-from .service_capacity import (
-    ServiceCapacityAllocationPlan,
-    ServiceCapacityRequest,
-    allocate_service_capacity,
-)
+from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import EntityId, SpatialNodeId, SurfaceCellId
 from .spatial import SpatialGraph
 
@@ -122,6 +118,10 @@ class SurfaceInfrastructureService:
     def demand(self, location_id: SpatialNodeId) -> float:
         return math.fsum(row.demand for row in self.load_sources(location_id))
 
+    @staticmethod
+    def service_request_id(location_id: SpatialNodeId) -> EntityId:
+        return EntityId(f"service.surface_distribution:{location_id}")
+
     def service_request(
         self,
         location_id: SpatialNodeId,
@@ -131,7 +131,7 @@ class SurfaceInfrastructureService:
     ) -> ServiceCapacityRequest:
         demand = self.demand(location_id) if requested_rate is None else requested_rate
         return ServiceCapacityRequest(
-            EntityId(f"service.surface_distribution:{location_id}"),
+            self.service_request_id(location_id),
             location_id,
             self.service_type,
             max(0.0, demand),
@@ -148,67 +148,56 @@ class SurfaceInfrastructureService:
         power: PowerSnapshot,
         day: int = 0,
         *,
-        cell_ids: set[SurfaceCellId] | frozenset[SurfaceCellId] | None = None,
-        additional_loads: tuple[SurfaceInfrastructureLoad, ...] = (),
         allocation_plan: ServiceCapacityAllocationPlan | None = None,
     ) -> SurfaceInfrastructureSnapshot:
         if location_id not in self.graph.locations:
             raise KeyError(location_id)
-        loads = list(
-            self.load_sources(location_id)
-            if cell_ids is None
-            else self.load_sources_for_cells(location_id, cell_ids)
-        )
-        loads.extend(additional_loads)
-        if any(load.demand < 0 for load in loads):
-            raise ValueError("surface infrastructure load must be non-negative")
+        loads = self.load_sources(location_id)
         demand = math.fsum(load.demand for load in loads)
-        nominal = facilities.nominal_service_capacity_at(
-            location_id, self.service_type, day
-        )
-        available = self._available_distribution_capacity(
-            location_id, facilities, power, day
-        )
-        request = self.service_request(
-            location_id, requested_rate=demand
-        )
         if allocation_plan is None:
-            allocation_plan = allocate_service_capacity(
-                (request,),
-                nominal_supply={(location_id, self.service_type): nominal},
-                enabled_supply={(location_id, self.service_type): available},
-                limiting_factors={
-                    (location_id, self.service_type):
-                        (() if available + 1e-9 >= nominal else ("provider_dependency",))
-                },
+            if demand > 1e-12:
+                raise ValueError(
+                    f"shared surface infrastructure allocation required for {location_id}"
+                )
+            nominal = facilities.nominal_service_capacity_at(
+                location_id, self.service_type, day
+            )
+            available = self.provider_available_capacity(
+                location_id, facilities, power, day
+            )
+            return SurfaceInfrastructureSnapshot(
+                location_id, nominal, available, 0.0, 1.0, loads, (), 0.0, available
             )
         summary = allocation_plan.summary(location_id, self.service_type)
-        fulfillment = 1.0 if demand <= 1e-12 else min(1.0, summary.allocated_rate / demand)
+        request_id = self.service_request_id(location_id)
+        try:
+            allocated = allocation_plan.allocated(request_id)
+        except KeyError as exc:
+            raise ValueError(
+                f"shared surface infrastructure allocation missing for {location_id}"
+            ) from exc
+        fulfillment = 1.0 if demand <= 1e-12 else min(1.0, allocated / demand)
         limiting = () if fulfillment >= 1.0 - 1e-9 else ("surface_infrastructure",)
         return SurfaceInfrastructureSnapshot(
             location_id,
-            nominal,
-            available,
+            summary.nominal_rate,
+            summary.enabled_rate,
             demand,
             fulfillment,
-            tuple(loads),
+            loads,
             limiting,
-            summary.allocated_rate,
+            allocated,
             summary.spare_rate,
         )
 
-    def _available_distribution_capacity(
+    def provider_available_capacity(
         self,
         location_id: SpatialNodeId,
         facilities: FacilityBook,
         power: PowerSnapshot,
         day: int,
     ) -> float:
-        """Available network supply before applying the network to consumers.
-
-        This deliberately does not call FacilityBook.enabled_service_capacity_at,
-        because remote Facility availability itself may depend on this service.
-        """
+        """Resolve only physical provider dependencies for this upstream service."""
         contributions: list[float] = []
         for facility in sorted(
             facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)
@@ -231,26 +220,39 @@ class SurfaceInfrastructureService:
                     )
         return math.fsum(contributions)
 
+    def fulfillment_from_plan(
+        self, location_id: SpatialNodeId, allocation_plan: ServiceCapacityAllocationPlan
+    ) -> float:
+        demand = self.demand(location_id)
+        if demand <= 1e-12:
+            return 1.0
+        try:
+            allocated = allocation_plan.allocated(self.service_request_id(location_id))
+        except KeyError as exc:
+            raise ValueError(
+                f"shared surface infrastructure allocation missing for {location_id}"
+            ) from exc
+        return max(0.0, min(1.0, allocated / demand))
+
     def facility_availability_factors(
         self,
         location_id: SpatialNodeId,
         service_type: str,
         facilities: FacilityBook,
-        power: PowerSnapshot,
-        day: int = 0,
-    ) -> dict[object, float]:
+        allocation_plan: ServiceCapacityAllocationPlan,
+    ) -> dict[EntityId, float]:
         if location_id not in self.graph.locations:
             return {}
         location = self.graph.locations[location_id]
-        snapshot = self.snapshot(location_id, facilities, power, day)
-        factors: dict[object, float] = {}
+        fulfillment = self.fulfillment_from_plan(location_id, allocation_plan)
+        factors: dict[EntityId, float] = {}
         for facility in facilities.all_at(location_id):
             if service_type in self.network_dependent_service_types:
-                factors[facility.id] = snapshot.fulfillment
+                factors[facility.id] = fulfillment
             elif facility.site_cell_id is None or facility.site_cell_id == location.core_cell_id:
                 factors[facility.id] = 1.0
             elif facility.site_cell_id in location.developed_cell_ids:
-                factors[facility.id] = snapshot.fulfillment
+                factors[facility.id] = fulfillment
             else:
                 factors[facility.id] = 0.0
         return factors
@@ -259,26 +261,55 @@ class SurfaceInfrastructureService:
         self,
         location_id: SpatialNodeId,
         cell_id: SurfaceCellId,
-        facilities: FacilityBook,
-        power: PowerSnapshot,
-        day: int = 0,
+        allocation_plan: ServiceCapacityAllocationPlan,
     ) -> float:
         location = self.graph.locations[location_id]
         if cell_id not in location.developed_cell_ids:
             return 0.0
-        return self.snapshot(location_id, facilities, power, day).fulfillment
+        return self.fulfillment_from_plan(location_id, allocation_plan)
 
     def prospective_development_snapshot(
         self,
         location_id: SpatialNodeId,
         cell_id: SurfaceCellId,
-        facilities: FacilityBook,
-        power: PowerSnapshot,
-        day: int = 0,
+        allocation_plan: ServiceCapacityAllocationPlan,
+        *,
+        development_request_id: EntityId | None = None,
     ) -> SurfaceInfrastructureSnapshot:
         failures = self.graph.surface_cell_development_failures(location_id, cell_id)
         if failures:
             raise ValueError("; ".join(detail for _code, detail in failures))
         cells = set(self.graph.locations[location_id].developed_cell_ids)
         cells.add(cell_id)
-        return self.snapshot(location_id, facilities, power, day, cell_ids=cells)
+        loads = self.load_sources_for_cells(location_id, cells)
+        demand = math.fsum(load.demand for load in loads)
+        summary = allocation_plan.summary(location_id, self.service_type)
+        try:
+            base_allocated = allocation_plan.allocated(self.service_request_id(location_id))
+        except KeyError as exc:
+            raise ValueError(
+                f"shared surface infrastructure allocation missing for {location_id}"
+            ) from exc
+        if development_request_id is None:
+            support = base_allocated + summary.spare_rate
+        else:
+            try:
+                support = base_allocated + allocation_plan.allocated(development_request_id)
+            except KeyError as exc:
+                raise ValueError(
+                    f"surface development allocation missing: {development_request_id}"
+                ) from exc
+        allocated = min(demand, support)
+        fulfillment = 1.0 if demand <= 1e-12 else min(1.0, allocated / demand)
+        limiting = () if fulfillment >= 1.0 - 1e-9 else ("surface_infrastructure",)
+        return SurfaceInfrastructureSnapshot(
+            location_id,
+            summary.nominal_rate,
+            summary.enabled_rate,
+            demand,
+            fulfillment,
+            loads,
+            limiting,
+            allocated,
+            max(0.0, summary.enabled_rate - allocated),
+        )

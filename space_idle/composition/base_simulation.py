@@ -101,21 +101,6 @@ def build_base_simulation() -> Simulation:
     industry = IndustryService(build_process_specs())
 
     surface_infrastructure = SurfaceInfrastructureService(graph)
-    facilities.service_availability_factor_provider = (
-        lambda location_id, service_type, power_snapshot, day: surface_infrastructure.facility_availability_factors(
-            location_id, service_type, facilities, power_snapshot, day
-        )
-    )
-    logistics.surface_access_factor_provider = (
-        lambda location_id, cell_id, day: surface_infrastructure.cell_access_factor(
-            location_id,
-            cell_id,
-            facilities,
-            power.snapshot(location_id, facilities, day),
-            day,
-        )
-    )
-
     survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph)
     for cell_id, resource_id in initial_known_surface_resource_knowledge():
         survey.initialize_known(cell_id, resource_id)

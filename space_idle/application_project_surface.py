@@ -53,8 +53,15 @@ class SurfaceProjectorMixin:
                 limiting_factors: tuple[str, ...] = ()
                 graph_blockers = sim.graph.surface_cell_development_failures(location.operational_node_id, cell.id)
                 if not graph_blockers and sim.surface_infrastructure is not None:
+                    development_request_id = (
+                        sim.projects.surface_development_service_request_id(active_spatial_project.id)
+                        if active_spatial_project is not None
+                        and active_spatial_project.operational_node_id == location.operational_node_id
+                        else None
+                    )
                     projected = sim.surface_infrastructure.prospective_development_snapshot(
-                        location.operational_node_id, cell.id, sim.facilities, location_power, sim.day
+                        location.operational_node_id, cell.id, decision.allocations.services,
+                        development_request_id=development_request_id,
                     )
                     projected_demand = projected.demand
                     projected_fulfillment = projected.fulfillment

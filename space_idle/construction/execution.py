@@ -55,6 +55,51 @@ class ConstructionExecutionMixin:
     def construction_service_request_id(project_id) -> EntityId:
         return EntityId(f"service.construction:{project_id}")
 
+    @staticmethod
+    def surface_development_service_request_id(project_id) -> EntityId:
+        return EntityId(f"service.surface_distribution.development:{project_id}")
+
+    def surface_infrastructure_service_requests(
+        self, day: int = 0
+    ) -> tuple[ServiceCapacityRequest, ...]:
+        service = self.surface_infrastructure
+        if service is None:
+            return ()
+        requests: list[ServiceCapacityRequest] = []
+        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
+            if (
+                project.paused
+                or project.status not in {ProjectStatus.READY, ProjectStatus.BUILDING}
+                or not isinstance(project.target, SurfaceCellDevelopmentTarget)
+                or not self._target_ready_for_execution(project)
+            ):
+                continue
+            location = service.graph.locations[project.operational_node_id]
+            cells = set(location.developed_cell_ids)
+            cells.add(project.target.cell_id)
+            prospective = sum(
+                row.demand
+                for row in service.load_sources_for_cells(
+                    project.operational_node_id, cells
+                )
+            )
+            incremental = max(0.0, prospective - service.demand(project.operational_node_id))
+            if incremental <= 1e-12:
+                continue
+            requests.append(
+                ServiceCapacityRequest(
+                    self.surface_development_service_request_id(project.id),
+                    project.operational_node_id,
+                    service.service_type,
+                    incremental,
+                    project.priority,
+                    "surface_development",
+                    EntityId(str(project.id)),
+                    "territory_expansion",
+                )
+            )
+        return tuple(requests)
+
     def construction_service_requests(
         self,
         day: int = 0,
@@ -114,7 +159,7 @@ class ConstructionExecutionMixin:
             )
             if self.project_site_failures(project, day, power):
                 continue
-            fulfillment = self.project_construction_fulfillment(project, power, day)
+            fulfillment = self.project_construction_fulfillment(project, power, service_allocations, day)
             if fulfillment <= 1e-12:
                 continue
             try:
