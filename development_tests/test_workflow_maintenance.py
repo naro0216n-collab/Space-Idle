@@ -57,7 +57,8 @@ def init_repo(tmp_path: Path) -> tuple[Path, str, str]:
     (source_snapshot / ".source-tree").write_text(tree + "\n", encoding="utf-8")
     (source_snapshot / ".source-branch").write_text("develop\n", encoding="utf-8")
     git(repo, "bundle", "create", str(source_snapshot / "repository.bundle"), "refs/heads/develop")
-    run(PUBLISH, repo, "init", str(source_snapshot))
+    git(repo, "remote", "add", "origin", str((source_snapshot / "repository.bundle").resolve()))
+    run(PUBLISH, repo, "init")
     return repo, base, tree
 
 
@@ -173,7 +174,8 @@ def test_workflow_maintenance_stages_exact_git_data_and_requires_rehydration(tmp
     (refreshed_snapshot / ".source-tree").write_text(target_tree + "\n", encoding="utf-8")
     (refreshed_snapshot / ".source-branch").write_text("develop\n", encoding="utf-8")
     git(repo, "bundle", "create", str(refreshed_snapshot / "repository.bundle"), "refs/heads/develop")
-    run(PUBLISH, repo, "init", str(refreshed_snapshot))
+    git(repo, "remote", "set-url", "origin", str((refreshed_snapshot / "repository.bundle").resolve()))
+    run(PUBLISH, repo, "init")
     marker = repo / ".git" / "space-idle-workflow-maintenance-rehydrate-required"
     assert not marker.exists()
     assert not plan_path.exists()

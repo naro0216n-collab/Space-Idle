@@ -532,7 +532,11 @@ def build_parser() -> argparse.ArgumentParser:
     connector_plan = sub.add_parser(
         "connector-plan", help="after one develop HEAD check, generate workflow blob upload packets only"
     )
-    connector_plan.add_argument("--target-remote-head", required=True)
+    connector_plan.add_argument(
+        "--target-remote-head",
+        required=True,
+        help="observed develop HEAD from the single pre-maintenance remote check; verification input, not a target selector",
+    )
     connector_plan.set_defaults(func=cmd_connector_plan)
 
     connector_tree = sub.add_parser(
@@ -543,22 +547,41 @@ def build_parser() -> argparse.ArgumentParser:
     connector_commit = sub.add_parser(
         "connector-commit", help="after target tree creation, verify its SHA and generate commit packet"
     )
-    connector_commit.add_argument("--tree-sha", required=True)
+    connector_commit.add_argument(
+        "--tree-sha",
+        required=True,
+        help="tree SHA returned by the executed create_tree packet; verification input",
+    )
     connector_commit.set_defaults(func=cmd_connector_commit)
 
     connector_update = sub.add_parser(
         "connector-update", help="after commit creation, generate the non-force develop ref update packet"
     )
-    connector_update.add_argument("--commit-sha", required=True)
-    connector_update.add_argument("--commit-tree-sha", required=True)
-    connector_update.add_argument("--commit-parent-sha", required=True)
+    connector_update.add_argument(
+        "--commit-sha", required=True,
+        help="commit SHA returned by the executed create_commit packet",
+    )
+    connector_update.add_argument(
+        "--commit-tree-sha", required=True,
+        help="tree SHA observed when reading the created commit; verification input",
+    )
+    connector_update.add_argument(
+        "--commit-parent-sha", required=True,
+        help="parent SHA observed when reading the created commit; verification input",
+    )
     connector_update.set_defaults(func=cmd_connector_update)
 
     verify_remote = sub.add_parser(
         "verify-remote", help="verify develop ref/tree after update and require source-snapshot rehydration"
     )
-    verify_remote.add_argument("--remote-head", required=True)
-    verify_remote.add_argument("--remote-tree", required=True)
+    verify_remote.add_argument(
+        "--remote-head", required=True,
+        help="develop HEAD observed after the non-force ref update; verification input",
+    )
+    verify_remote.add_argument(
+        "--remote-tree", required=True,
+        help="develop tree observed after the non-force ref update; verification input",
+    )
     verify_remote.set_defaults(func=cmd_verify_remote)
     return parser
 

@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import uuid
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 STATE_NAME = "space-idle-publish-state.json"
 WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
@@ -567,6 +568,39 @@ def _split_payload_for_file_calls(
     return parts
 
 
+def _source_snapshot_from_origin(repo: Path) -> Path:
+    try:
+        origin = _git("remote", "get-url", "origin", cwd=repo)
+    except subprocess.CalledProcessError as exc:
+        raise PublishStateError(
+            "restored repository has no readable origin; restore it from source-snapshot/repository.bundle"
+        ) from exc
+
+    if origin.startswith("file://"):
+        parsed = urlparse(origin)
+        if parsed.netloc not in {"", "localhost"}:
+            raise PublishStateError(
+                "origin must be the local source-snapshot repository.bundle, not a remote file URL"
+            )
+        bundle_path = Path(unquote(parsed.path))
+    else:
+        if "://" in origin or (":" in origin and not Path(origin).is_absolute()):
+            raise PublishStateError(
+                "origin must point to the local source-snapshot repository.bundle"
+            )
+        bundle_path = Path(origin)
+
+    if not bundle_path.is_absolute():
+        bundle_path = (repo / bundle_path).resolve()
+    else:
+        bundle_path = bundle_path.resolve()
+    if bundle_path.name != "repository.bundle" or not bundle_path.is_file():
+        raise PublishStateError(
+            "origin must point to an existing source-snapshot/repository.bundle"
+        )
+    return bundle_path.parent
+
+
 def _read_source_snapshot_metadata(source_snapshot: Path, *, repo: Path) -> tuple[str, str]:
     source_snapshot = source_snapshot.resolve()
     commit_path = source_snapshot / ".source-commit"
@@ -620,7 +654,8 @@ def _read_source_snapshot_metadata(source_snapshot: Path, *, repo: Path) -> tupl
 
 def cmd_init(args: argparse.Namespace) -> int:
     repo = _repo_from_cwd()
-    remote_commit, remote_tree = _read_source_snapshot_metadata(Path(args.source_snapshot), repo=repo)
+    source_snapshot = _source_snapshot_from_origin(repo)
+    remote_commit, remote_tree = _read_source_snapshot_metadata(source_snapshot, repo=repo)
     local_branch = _git("branch", "--show-current", cwd=repo)
     local_commit = _git("rev-parse", "HEAD^{commit}", cwd=repo)
     local_tree = _git("rev-parse", "HEAD^{tree}", cwd=repo)
@@ -977,8 +1012,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init = sub.add_parser("init", help="initialize state from the exact restored source-snapshot artifact")
-    init.add_argument("source_snapshot", help="directory containing .source-* metadata and repository.bundle")
+    init = sub.add_parser(
+        "init",
+        help="initialize state from the source-snapshot repository.bundle recorded as origin",
+    )
     init.set_defaults(func=cmd_init)
 
     prepare = sub.add_parser("prepare", help="prepare HEAD as the single active develop publish transaction")
@@ -988,11 +1025,19 @@ def build_parser() -> argparse.ArgumentParser:
         "connector-plan",
         help="after one develop HEAD check, generate only the required payload upload packets",
     )
-    connector_plan.add_argument("--target-remote-head", required=True)
+    connector_plan.add_argument(
+        "--target-remote-head",
+        required=True,
+        help="observed develop HEAD from the single pre-publish remote check; verification input, not a target selector",
+    )
     connector_plan.set_defaults(func=cmd_connector_plan)
 
     record = sub.add_parser("record", help="verify a Gateway receipt and close the active transaction")
-    record.add_argument("--receipt", required=True)
+    record.add_argument(
+        "--receipt",
+        required=True,
+        help="local file containing the fetched Gateway receipt for the active request",
+    )
     record.set_defaults(func=cmd_record)
     return parser
 
