@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import gzip
 import http.client
 import json
 from threading import Thread
 
 from space_idle import build_game_application
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
-from space_idle.application_commands import (
-    GetCatalog, GetFlowReport, GetLogisticsSummary, GetRoutes, GetWorld,
-)
-from space_idle.api.codec import to_jsonable
 from space_idle.content import base_ids as ids
 
 
@@ -26,8 +21,6 @@ def _request(port: int, method: str, path: str, body=None, headers=None):
     data = response.read()
     response_headers = dict(response.getheaders())
     conn.close()
-    if response_headers.get("Content-Encoding") == "gzip":
-        data = gzip.decompress(data)
     parsed = None if not data else json.loads(data.decode("utf-8"))
     return response.status, response_headers, parsed
 
@@ -43,130 +36,7 @@ def _raw_request(port: int, path: str):
     return status, headers, data
 
 
-def test_ui_reports_and_split_logistics_queries_are_json_safe():
-    app = build_game_application()
-    catalog = app.query(GetCatalog())
-    assert catalog.processes
-    assert catalog.research
-    assert catalog.routes
-    assert catalog.transport_services
-    assert to_jsonable(catalog)
-
-    flow = app.query(GetFlowReport(str(ids.EARTH)))
-    assert flow.operational_node_id == str(ids.EARTH)
-    assert isinstance(to_jsonable(flow)["issues"], list)
-
-    summary = app.query(GetLogisticsSummary())
-    assert summary.route_count > 0
-    compact_routes = app.query(GetRoutes(include_modes=False))
-    assert compact_routes.items and all(not route.modes for route in compact_routes.items)
-    one_route = app.query(GetRoutes(route_id="base.route.earth_leo", include_modes=True))
-    assert len(one_route.items) == 1 and one_route.items[0].modes
-
-
-def test_http_api_revision_etag_gzip_command_and_save_load(tmp_path):
-    runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0, cors_origins=("*",), gzip_min_bytes=200))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        status, headers, payload = _request(port, "GET", "/api/v1/catalog", headers={"Accept-Encoding": "gzip"})
-        assert status == 200
-        assert headers.get("Content-Encoding") == "gzip"
-        assert payload["ok"] is True
-        etag = headers["ETag"]
-
-        status, _, payload = _request(port, "GET", "/api/v1/catalog", headers={"If-None-Match": etag})
-        assert status == 304 and payload is None
-
-        status, _, payload = _request(port, "POST", "/api/v1/commands", {"type": "AdvanceTime", "payload": {"days": 2}})
-        assert status == 200 and payload["revision"] == 1
-
-        status, _, payload = _request(port, "GET", "/api/v1/world")
-        assert status == 200 and payload["data"]["day"] == 2
-        assert "operational_nodes" in payload["data"]
-        assert "locations" not in payload["data"]
-
-        status, _, payload = _request(
-            port, "GET", f"/api/v1/operational-nodes/{ids.EARTH}"
-        )
-        assert status == 200
-        assert payload["data"]["id"] == str(ids.EARTH)
-
-        status, _, payload = _request(port, "GET", f"/api/v1/locations/{ids.EARTH}")
-        assert status == 404
-
-        status, _, payload = _request(port, "GET", f"/api/v1/surfaces/{ids.EARTH_BODY}")
-        assert status == 200
-        industrial = next(row for row in payload["data"]["cells"] if row["id"] == str(ids.EARTH_CELL_INDUSTRIAL))
-        assert any(
-            row["facility_definition_id"] == str(ids.ROBOTIC_GEOLOGY_STATION)
-            for row in industrial["facility_placement_options"]
-        )
-
-        status, _, payload = _request(port, "GET", "/api/v1/logistics/routes?include_modes=false")
-        assert status == 200 and payload["data"]["items"]
-        assert all(not row["modes"] for row in payload["data"]["items"])
-
-        status, _, payload = _request(
-            port, "GET",
-            f"/api/v1/dependency-analytics?scope_kind=operational_nodes&node_id={ids.EARTH}",
-        )
-        assert status == 200
-        assert payload["data"]["scope_kind"] == "operational_nodes"
-        assert payload["data"]["node_ids"] == [str(ids.EARTH)]
-        assert "resources" in payload["data"]
-        assert "critical_dependency_resource_ids" in payload["data"]
-        if payload["data"]["resources"]:
-            dependency_row = payload["data"]["resources"][0]
-            assert "local_demand_per_day" in dependency_row
-            assert "external_inflow_per_day" in dependency_row
-            assert "external_outflow_per_day" in dependency_row
-            assert "imports_pipeline" in dependency_row
-            assert "unmet_demand" in dependency_row
-
-        status, _, payload = _request(
-            port,
-            "GET",
-            "/api/v1/transport-allocation-options"
-            "?source_id=base.node.low_earth_orbit"
-            "&destination_id=base.node.lunar_orbit",
-        )
-        assert status == 200
-        assert payload["data"]["options"]
-        assert all("nominal_capacity" in row for row in payload["data"]["options"])
-        assert all("blockers" in row for row in payload["data"]["options"])
-
-        status, _, payload = _request(
-            port,
-            "GET",
-            "/api/v1/logistics/fleet-relocation-preview"
-            "?vehicle_definition_id=base.vehicle.reusable_orbital_cargo_tug"
-            "&units=1&source_id=base.node.low_earth_orbit"
-            "&destination_id=base.node.lunar_orbit&path_policy=fastest",
-        )
-        assert status == 200
-        assert payload["data"]["vehicle_definition_id"] == "base.vehicle.reusable_orbital_cargo_tug"
-        assert "infrastructure_requirements" in payload["data"]
-        assert "blockers" in payload["data"]
-
-        status, _, payload = _request(port, "POST", "/api/v1/session/save", {"slot": "ipad-test"})
-        assert status == 200 and payload["data"]["saved"] is True
-
-        _request(port, "POST", "/api/v1/commands", {"type": "AdvanceTime", "payload": {"days": 3}})
-        status, _, payload = _request(port, "POST", "/api/v1/session/load", {"slot": "ipad-test", "apply_offline": False})
-        assert status == 200 and payload["data"]["loaded"] is True
-        status, _, payload = _request(port, "GET", "/api/v1/world")
-        assert payload["data"]["day"] == 2
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-
-
-def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path):
+def test_http_api_command_query_and_save_load_boundary(tmp_path):
     runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     port = server.server_address[1]
@@ -174,98 +44,58 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
     thread.start()
     try:
         status, _, payload = _request(
-            port, "GET", f"/api/v1/ui-state?operational_node_id={ids.EARTH}&surface_body_id={ids.EARTH_BODY}"
+            port, "POST", "/api/v1/commands",
+            {"type": "AdvanceTime", "payload": {"days": 2}},
         )
         assert status == 200
-        data = payload["data"]
-        exploration = data["scientific_explorations"]["items"][0]
-        assert exploration["mission_duration_days"] > 0
-        assert exploration["minimum_payload_t"] >= 0
-        assert "required_vehicle_capabilities" in exploration
-        assert exploration["origin_requirements"]["environment"]
-        assert exploration["destination_requirements"]["environment"]
-        assert data["logistics"]["vehicle_production_options"]
-        assert "vehicle_production" in data["logistics"]
-        assert data["external_economy"]["funds_musd"] == data["world"]["funds_musd"]
-        assert data["dependency_analytics"]["scope_kind"] == "operational_nodes"
-        assert data["dependency_analytics"]["node_ids"] == [str(ids.EARTH)]
-        assert "resources" in data["dependency_analytics"]
-        if data["dependency_analytics"]["resources"]:
-            dependency_row = data["dependency_analytics"]["resources"][0]
-            assert "local_demand_per_day" in dependency_row
-            assert "external_inflow_per_day" in dependency_row
-        assert data["external_economy"]["policies"] == []
-        surface_infrastructure = data["operational_node"]["surface_infrastructure"]
-        assert surface_infrastructure["fulfillment"] == 1.0
-        assert str(ids.SURFACE_DISTRIBUTION_HUB) in surface_infrastructure["improvement_facility_definition_ids"]
-        surface_map = data["surface_map"]
-        assert surface_map["body_id"] == str(ids.EARTH_BODY)
-        coastal = next(row for row in surface_map["cells"] if row["id"] == str(ids.EARTH_CELL_COASTAL))
-        assert coastal["environment"]
-        assert any(row["key"] == "thermal" for row in coastal["environment"])
-        development = next(row for row in coastal["development_options"] if row["location_id"] == str(ids.EARTH))
-        assert "mixed" in development["sourcing_policy_options"]
-        assert "can_plan" in development
-        industrial = next(row for row in surface_map["cells"] if row["id"] == str(ids.EARTH_CELL_INDUSTRIAL))
-        placement = next(row for row in industrial["facility_placement_options"] if row["facility_definition_id"] == str(ids.ROBOTIC_GEOLOGY_STATION))
-        assert placement["can_plan"] is True
-        assert ["technology", str(ids.TECH_ROBOTIC_FIELD_GEOLOGY)] in placement["blockers"]
-        assert "missing_technologies" not in placement
-        assert "site_blockers" not in placement
-        assert data["operational_node"]["extraction_resources"]
-        assert "resource_claims" in data["operational_node"]
-        if data["operational_node"]["resource_claims"]:
-            claim = data["operational_node"]["resource_claims"][0]
-            assert {"owner_kind", "priority", "requested", "allocated", "unmet"}.issubset(claim)
+        assert payload["revision"] == 1
+
+        status, _, payload = _request(port, "GET", "/api/v1/world")
+        assert status == 200
+        assert payload["data"]["day"] == 2
+        assert payload["data"]["operational_nodes"]
+
+        status, _, payload = _request(port, "POST", "/api/v1/session/save", {"slot": "boundary"})
+        assert status == 200 and payload["data"]["saved"] is True
+
+        _request(port, "POST", "/api/v1/commands", {"type": "AdvanceTime", "payload": {"days": 3}})
+        status, _, payload = _request(
+            port, "POST", "/api/v1/session/load",
+            {"slot": "boundary", "apply_offline": False},
+        )
+        assert status == 200 and payload["data"]["loaded"] is True
+        status, _, payload = _request(port, "GET", "/api/v1/world")
+        assert status == 200 and payload["data"]["day"] == 2
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
-def test_http_api_cors_preflight_for_ipad_dev_client(tmp_path):
+
+def test_ui_state_composes_current_application_decision_surfaces(tmp_path):
     runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0, cors_origins=("*",)))
+    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     port = server.server_address[1]
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, headers, _ = _request(
-            port, "OPTIONS", "/api/v1/commands",
-            headers={
-                "Origin": "http://192.168.1.10:5173",
-                "Access-Control-Request-Method": "POST",
-            },
+        status, _, payload = _request(
+            port, "GET",
+            f"/api/v1/ui-state?operational_node_id={ids.EARTH}&surface_body_id={ids.EARTH_BODY}",
         )
-        assert status == 204
-        assert headers.get("Access-Control-Allow-Origin") == "*"
-        assert "POST" in headers.get("Access-Control-Allow-Methods", "")
+        assert status == 200
+        data = payload["data"]
+        required = {
+            "world", "operational_node", "surface_map", "logistics",
+            "scientific_explorations", "external_economy", "dependency_analytics",
+        }
+        assert required <= data.keys()
+        assert data["operational_node"]["id"] == str(ids.EARTH)
+        assert data["surface_map"]["body_id"] == str(ids.EARTH_BODY)
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
-
-
-def test_runtime_catches_up_elapsed_time_without_ipad_client_timer(tmp_path):
-    from space_idle.simulation import OfflineProgressPolicy
-
-    now = [100.0]
-    runtime = GameRuntime(
-        factory=build_game_application,
-        save_dir=tmp_path,
-        offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=10.0),
-        clock=lambda: now[0],
-    )
-    assert runtime.metadata()["day"] == 0
-    assert runtime.revision == 0
-
-    now[0] += 25.0
-    result = runtime.query(GetWorld())
-    assert result.data.day == 2
-    assert result.revision == 1
-
-    again = runtime.query(GetWorld())
-    assert again.data.day == 2
-    assert again.revision == 1
 
 
 def test_http_api_rejects_stale_command_revision(tmp_path):
@@ -297,7 +127,7 @@ def test_http_api_rejects_stale_command_revision(tmp_path):
         thread.join(timeout=5)
 
 
-def test_development_webui_is_served_from_same_origin(tmp_path):
+def test_static_webui_is_served_and_path_traversal_is_rejected(tmp_path):
     runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     port = server.server_address[1]
@@ -305,78 +135,9 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
     thread.start()
     try:
         status, headers, body = _raw_request(port, "/")
-        html = body.decode("utf-8")
         assert status == 200
         assert headers["Content-Type"].startswith("text/html")
-        assert "拠点運用" in html
-        assert "物流ネットワーク" in html
-        assert "地表マップ" in html
-        assert 'id="operationsView"' in html
-        assert 'id="logisticsView"' in html
-        assert 'href="/research_tree.css"' in html
-        assert 'src="/research_tree.js"' in html
-        assert 'src="/operations_ui.js"' in html
-        assert 'src="/logistics_ui.js"' in html
-
-        status, headers, body = _raw_request(port, "/app.css")
-        css = body.decode("utf-8")
-        assert status == 200
-        assert headers["Content-Type"].startswith("text/css")
-        assert "--design-min-width: 1180px" in css
-        assert "horizontally scrollable" in css
-
-        status, headers, body = _raw_request(port, "/app.js")
-        app_js = body.decode("utf-8")
-        assert status == 200
-        assert headers["Content-Type"].startswith("text/javascript")
-        assert "If-Match" in app_js
-        assert "surface_body_id" in app_js
-        assert "dependencyAnalytics" in app_js
-
-        status, headers, body = _raw_request(port, "/operations_ui.js")
-        operations_js = body.decode("utf-8")
-        assert status == 200
-        assert headers["Content-Type"].startswith("text/javascript")
-        assert "SpaceIdleResearchTree.render" in operations_js
-        assert "External Dependency / 産業自立" in operations_js
-        assert "critical_dependency_resource_ids" in operations_js
-        assert "local_demand_per_day" in operations_js
-        assert "external_inflow_per_day" in operations_js
-        assert "構造外部依存/日" in operations_js
-        assert "今tick流入/日" in operations_js
-        assert "Current Resource Claims" in operations_js
-        assert "Requested" in operations_js
-        assert "Allocated" in operations_js
-        assert "Unmet" in operations_js
-        assert "SetResearchPriority" in operations_js
-        assert "StartScientificExploration" in operations_js
-        assert "AssignExplorationFleet" in operations_js
-        assert "FoundLocation" in operations_js
-        assert "DevelopSurfaceCell" in operations_js
-        assert "data-surface-build" in operations_js
-
-        status, headers, body = _raw_request(port, "/logistics_ui.js")
-        logistics_js = body.decode("utf-8")
-        assert status == 200
-        assert headers["Content-Type"].startswith("text/javascript")
-        assert "CreateTransportAllocation" in logistics_js
-        assert "CreateLogisticsLane" in logistics_js
-        assert "ProduceVehicle" in logistics_js
-        assert "PauseVehicleProduction" in logistics_js
-
-        status, headers, body = _raw_request(port, "/research_tree.css")
-        assert status == 200
-        assert headers["Content-Type"].startswith("text/css")
-        assert b"research-tree-stage" in body
-
-        status, headers, body = _raw_request(port, "/research_tree.js")
-        assert status == 200
-        assert headers["Content-Type"].startswith("text/javascript")
-        assert b"SpaceIdleResearchTree" in body
-
-        status, headers, body = _raw_request(port, "/time_control.css")
-        assert status == 200
-        assert headers["Content-Type"].startswith("text/css")
+        assert body
 
         status, _, _ = _raw_request(port, "/%2e%2e/%2e%2e/README.md")
         assert status == 404

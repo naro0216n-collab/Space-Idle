@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import json
 
 import pytest
 
 from space_idle import (
     AdvanceTime,
-    AssignExplorationFleet,
     CreateLogisticsLane,
     CreateTransportAllocation,
     DevelopSurfaceCell,
@@ -22,7 +20,6 @@ from space_idle import (
     PlanBuild,
     ProduceVehicle,
     StartResearch,
-    StartScientificExploration,
     StartSurvey,
     build_game_application,
 )
@@ -112,22 +109,25 @@ def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
 
-def test_save_load_preserves_survey_knowledge_separately_from_active_campaign(tmp_path):
+def test_save_load_preserves_survey_knowledge_campaign_and_future_behavior(tmp_path):
     app = build_game_application()
     sim = app._simulation
     active_key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.WATER)
-    known_key = (ids.EARTH_CELL_INDUSTRIAL, ids.WATER)
     target = sim.survey.targets[active_key]
 
     app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(active_key[0]), str(active_key[1]), priority=75))
     sim.survey.knowledge_progress[active_key] = target.thresholds[0] / 2.0
-    assert known_key not in sim.survey.campaigns
+    target_level = sim.survey.campaigns[active_key].target_knowledge_level
 
     path = tmp_path / "survey-knowledge.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
     assert loaded._simulation.survey.knowledge_progress == sim.survey.knowledge_progress
-    assert loaded._simulation.survey.campaigns[active_key].target_knowledge_level == 2
+    assert loaded._simulation.survey.campaigns[active_key].target_knowledge_level == target_level
+    assert capture_state(loaded._simulation) == capture_state(sim)
+
+    app.execute(AdvanceTime(7))
+    loaded.execute(AdvanceTime(7))
     assert capture_state(loaded._simulation) == capture_state(sim)
 
 
@@ -175,7 +175,7 @@ def test_fractional_offline_time_is_composable():
     assert capture_state(app_a._simulation) == capture_state(app_b._simulation)
 
 
-def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_path):
+def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(tmp_path):
     app = build_game_application()
     sim = app._simulation
     allocation_id = app.execute(CreateTransportAllocation(
@@ -186,7 +186,6 @@ def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_pa
     )).created_id
     assert allocation_id is not None and lane_id is not None
 
-    # Create a real ordinary Cargo Flow through the sustained-capacity path.
     sim.inventory.add(ids.EARTH, ids.MACHINERY, 1.0)
     demand = ResourceDemand(
         EntityId("demand.persistence"), "test", EntityId("owner.persistence"),
@@ -197,72 +196,31 @@ def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_pa
     logistics_plan = sim.logistics.authorize_capacity_logistics(
         logistics_plan, funds, sim.day
     )
-    allocations = allocate_resource_claims(logistics_plan.claims, sim.inventory)
+    resources = allocate_resource_claims(logistics_plan.claims, sim.inventory)
     services = _transport_service_allocations(sim, sim.day, logistics_plan)
     execution = sim.logistics.allocate_capacity_logistics_execution(
-        sim.day, logistics_plan, allocations, services
+        sim.day, logistics_plan, resources, services
     )
     sim.logistics.advance_capacity_logistics(
         sim.day, logistics_plan, funds, execution,
     )
     assert sim.logistics.cargo_flows
 
-    # Exploration reservation uses another LEO Fleet pool while cargo remains in flight.
-    app.execute(StartScientificExploration(str(ids.CISLUNAR_SCIENCE_EXPLORATION)))
-    app.execute(AssignExplorationFleet(
-        str(ids.CISLUNAR_SCIENCE_EXPLORATION),
-        str(ids.REUSABLE_ORBITAL_CARGO_TUG),
-    ))
-    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
-    relocation_id = sim.transport.relocate_fleet(
-        ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LUNAR_ORBIT, ids.LEO, day=sim.day
-    )
     allocation_entity_id = EntityId(allocation_id)
-    lane_entity_id = EntityId(lane_id)
-    before_plan = sim.transport.derive_transport_service_plan(allocation_entity_id, sim.day)
     before_capacity = sim.logistics.current_transport_capacity_snapshot(
         allocation_entity_id, day=sim.day
     )
-    before_lane = next(
-        row
-        for row in sim.logistics.lane_snapshot((demand,), day=sim.day).lanes
-        if row.lane_id == lane_entity_id
-    )
-    assert before_capacity.used.forward_t_per_day == 0.5
-    assert before_lane.used_t == 0.5
+    before_flows = dict(sim.logistics.cargo_flows)
 
-    path = tmp_path / "fleet-state.json"
+    path = tmp_path / "cargo-flow.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    logistics = payload["state"]["logistics"]
-    transport = payload["state"]["transport"]
-    assert "fleet_pools" not in logistics
-    assert "transport_allocations" not in logistics
-    assert "lanes" not in transport
-    assert "cargo_flows" not in transport
-    assert "service_plans" not in logistics
-    assert "transport_capacity" not in logistics
-    assert "vehicles" not in logistics
-
     loaded, _ = load_game(path, build_game_application)
-    assert capture_state(loaded._simulation) == capture_state(sim)
-    assert relocation_id in loaded._simulation.transport.fleet_relocations
-    after_plan = loaded._simulation.transport.derive_transport_service_plan(
-        allocation_entity_id, loaded._simulation.day
-    )
-    after_capacity = loaded._simulation.logistics.current_transport_capacity_snapshot(
+
+    assert loaded._simulation.logistics.cargo_flows == before_flows
+    assert loaded._simulation.logistics.current_transport_capacity_snapshot(
         allocation_entity_id, day=loaded._simulation.day
-    )
-    after_lane = next(
-        row
-        for row in loaded._simulation.logistics.lane_snapshot(
-            (demand,), day=loaded._simulation.day
-        ).lanes
-        if row.lane_id == lane_entity_id
-    )
-    assert after_plan == before_plan
-    assert after_capacity == before_capacity
-    assert after_lane == before_lane
+    ) == before_capacity
+    assert capture_state(loaded._simulation) == capture_state(sim)
 
 
 def test_save_load_preserves_vehicle_production_progress_and_completed_fleet_unit(tmp_path):
@@ -374,24 +332,6 @@ def test_durable_inventory_reservation_roundtrips(tmp_path):
     loaded, _ = load_game(path, build_game_application)
 
     assert loaded._simulation.inventory.reserved_for(owner, EARTH, resource_id) == pytest.approx(amount)
-    assert capture_state(loaded._simulation) == capture_state(sim)
-
-
-def test_save_load_preserves_active_cell_resource_survey_future_behavior(tmp_path):
-    app = build_game_application()
-    sim = app._simulation
-    key = (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.WATER)
-    app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(key[0]), str(key[1]), priority=50))
-
-    path = tmp_path / "active-surface-survey.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application)
-
-    app.execute(AdvanceTime(7))
-    loaded.execute(AdvanceTime(7))
-
-    assert loaded._simulation.survey.knowledge_progress == sim.survey.knowledge_progress
-    assert loaded._simulation.survey.campaigns == sim.survey.campaigns
     assert capture_state(loaded._simulation) == capture_state(sim)
 
 

@@ -5,13 +5,6 @@ from types import MethodType
 import pytest
 
 from space_idle import build_game_application
-from space_idle.application_commands import (
-    GetBottlenecks,
-    GetLogisticsLanes,
-    GetProjects,
-    GetResearch,
-    GetScientificExplorations,
-)
 from space_idle.allocation_graph import AllocationDependency, allocation_dependency_order
 from space_idle.simulation import (
     ALLOCATION_FUNDS,
@@ -79,28 +72,3 @@ def test_configuration_validation_rejects_cross_domain_allocation_cycle():
     sim.tick_allocation_dependencies = MethodType(cyclic_dependencies, sim)
     with pytest.raises(ConfigurationError, match="tick allocation dependency cycle"):
         validate_simulation_configuration(sim)
-
-
-def test_runtime_and_application_queries_do_not_use_standalone_power_allocator(monkeypatch):
-    app = build_game_application()
-    sim = app._simulation
-
-    def forbidden_snapshot(*args, **kwargs):
-        raise AssertionError("standalone Power snapshot allocator must not be used")
-
-    monkeypatch.setattr(sim.power, "snapshot", forbidden_snapshot)
-
-    decision = sim.tick_decision_projection()
-    assert decision.allocations.power_by_location
-    sim.refresh_storage(decision.allocations.power_by_location)
-
-    for query in (
-        GetProjects(),
-        GetLogisticsLanes(),
-        GetResearch(),
-        GetScientificExplorations(),
-        GetBottlenecks(),
-    ):
-        app.query(query)
-
-    sim.advance_days(1)

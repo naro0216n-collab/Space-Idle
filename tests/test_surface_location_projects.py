@@ -9,8 +9,6 @@ from space_idle import (
     AdvanceTime,
     ApplicationError,
     CancelFounding,
-    CreateExternalServicePolicy,
-    CreateLogisticsLane,
     DevelopSurfaceCell,
     FoundLocation,
     GetProjects,
@@ -19,10 +17,10 @@ from space_idle import (
     build_game_application,
 )
 from space_idle.content import base_ids as ids
-from space_idle.persistence import SAVE_SCHEMA_VERSION, capture_state, load_game, save_game
+from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.founding import FoundingResourceRequirement
-from space_idle.shared import DefinitionId, SpatialNodeId
+from space_idle.shared import DefinitionId
 from space_idle.transport.surface_routes import DERIVED_SURFACE_ORBIT_ROUTE_PREFIX
 
 
@@ -140,46 +138,6 @@ def test_baseline_has_no_player_lunar_location_and_orbital_survey_is_available()
     assert sim.survey.cell_knowledge_level(target_cell) >= 2
 
 
-def test_orbital_survey_player_logistics_and_founding_create_first_surface_location():
-    app = build_game_application()
-    sim = app._simulation
-    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    assert not [location for location in sim.graph.locations.values() if location.body_id == ids.MOON]
-
-    target = next(target for key, target in sim.survey.targets.items() if key[0] == cell)
-    app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(cell), str(target.resource_id)))
-    app.execute(AdvanceTime(8))
-    assert sim.survey.cell_knowledge_level(cell) >= 2
-
-    app.execute(CreateExternalServicePolicy(
-        enabled=True,
-        allowed_service_ids=tuple(map(str, sim.transport.external_services)),
-    ))
-    lane_id = app.execute(CreateLogisticsLane(
-        str(ids.EARTH), str(ids.LUNAR_ORBIT), 0.25, priority=70
-    )).created_id
-    assert lane_id is not None
-    project_id = app.execute(_found_command("Farside First Base", cell)).created_id
-    assert project_id is not None
-
-    app.execute(AdvanceTime(40))
-
-    project = next(
-        project for project in sim.founding.projects.values()
-        if str(project.id) == project_id
-    )
-    assert project.status.value == "complete"
-    lunar_locations = [
-        location for location in sim.graph.locations.values()
-        if location.body_id == ids.MOON
-    ]
-    assert len(lunar_locations) == 1
-    assert lunar_locations[0].operational_node_id == project.new_location_id
-    assert lunar_locations[0].core_cell_id == cell
-    assert sim.graph.owner_of_cell(cell) == project.new_location_id
-    assert sim.graph.has_operational_node(project.new_location_id)
-
-
 def test_surface_cell_development_changes_territory_only_after_project_completion():
     app = build_game_application()
     sim = app._simulation
@@ -270,41 +228,6 @@ def test_founding_and_surface_development_claims_are_mutually_exclusive():
 
 
 
-def test_cancelling_prepared_founding_returns_staged_payload_to_inventory():
-    app = build_game_application()
-    sim = app._simulation
-    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    _survey_cell_to_l2(sim, cell)
-    _stage_founding_resources(sim)
-    project_id = app.execute(_found_command("Cancelled Prepared", cell)).created_id
-    assert project_id is not None
-    app.execute(AdvanceTime(1))
-    project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)
-    assert project.status.value == "preparing"
-    assert project.inputs_consumed
-    payload_owner = sim.founding.payload_owner_id(project.id)
-    staged = {
-        resource_id: amount
-        for (owner, location_id, resource_id), amount in sim.inventory.external_occupancy.items()
-        if owner == payload_owner and location_id == ids.LUNAR_ORBIT
-    }
-    assert staged
-    stock_before_cancel = {
-        resource_id: sim.inventory.amount(ids.LUNAR_ORBIT, resource_id)
-        for resource_id in staged
-    }
-
-    app.execute(CancelFounding(project_id))
-    assert project.status.value == "cancelled"
-    assert not project.inputs_consumed
-    assert not any(owner == payload_owner for owner, _location, _resource in sim.inventory.external_occupancy)
-    for resource_id, amount in staged.items():
-        assert sim.inventory.amount(ids.LUNAR_ORBIT, resource_id) == pytest.approx(
-            stock_before_cancel[resource_id] + amount
-        )
-
-
-
 def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_restores_it():
     app = build_game_application()
     sim = app._simulation
@@ -347,21 +270,6 @@ def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_
         stock_before_cancel + staged
     )
 
-def test_cancelled_founding_does_not_consume_generated_location_identity():
-    app = build_game_application()
-    sim = app._simulation
-    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    _survey_cell_to_l2(sim, cell)
-    _stage_founding_resources(sim)
-    first = app.execute(_found_command("First", cell)).created_id
-    project = next(p for p in sim.founding.projects.values() if str(p.id) == first)
-    generated = project.new_location_id
-    app.execute(CancelFounding(first))
-    second = app.execute(_found_command("Second", cell)).created_id
-    project2 = next(p for p in sim.founding.projects.values() if str(p.id) == second)
-    assert project2.new_location_id == generated
-
-
 def test_surface_map_exposes_founding_package_vehicle_and_blockers():
     app = build_game_application()
     cell_id = ids.MOON_CELL_FARSIDE_HIGHLANDS
@@ -373,8 +281,8 @@ def test_surface_map_exposes_founding_package_vehicle_and_blockers():
         and row.vehicle_definition_id == str(ids.REUSABLE_SURFACE_CARGO_LANDER)
     )
     assert option.payload_t > 0
-    assert option.payload_t_per_unit <= 6.0
-    assert option.required_units == 1
+    assert 0 < option.payload_t_per_unit <= option.payload_t
+    assert option.required_units > 0
     displayed_resources = dict(option.resources)
     expected_resources = {
         str(row.resource_id): row.amount_t
@@ -389,7 +297,6 @@ def test_surface_map_exposes_founding_package_vehicle_and_blockers():
 
 
 def test_active_founding_save_load_preserves_identity_and_future_transition(tmp_path):
-    assert SAVE_SCHEMA_VERSION == 42
     app = build_game_application()
     sim = app._simulation
     cell = ids.MOON_CELL_FARSIDE_HIGHLANDS

@@ -193,9 +193,12 @@ def test_application_queries_expose_surface_knowledge_and_extraction_decision_st
     surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
     industrial = next(cell for cell in surface.cells if cell.id == str(ids.EARTH_CELL_INDUSTRIAL))
     metal = next(row for row in industrial.resources if row.resource_id == str(ids.METAL_ORE))
-    assert metal.knowledge_level == 4
-    assert metal.visible_potential is not None
-    assert metal.visible_potential_precision_fraction == 0.0
+    sim = app._simulation
+    assert metal.knowledge_level == sim.survey.knowledge_level(ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE)
+    assert metal.visible_potential == sim.survey.visible_potential(ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE)
+    assert metal.visible_potential_precision_fraction == sim.survey.visible_potential_precision_fraction(
+        ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE
+    )
 
     location = app.query(GetOperationalNode(str(ids.EARTH)))
     extraction = next(row for row in location.extraction_resources if row.resource_id == str(ids.METAL_ORE))

@@ -218,7 +218,7 @@ def test_demonstration_site_can_be_selected_despite_transient_active_capability_
     assert not selected.can_resume
 
 
-def test_partial_prototype_staging_returns_to_old_site_when_site_changes():
+def test_partial_prototype_staging_returns_to_previous_site_when_site_changes():
     app = build_game_application()
     sim = app._simulation
     research_id = DefinitionId("test.research.partial_prototype")

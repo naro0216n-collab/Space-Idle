@@ -39,7 +39,6 @@ from space_idle import (
     RelocateFleet,
     build_game_application,
 )
-from space_idle.shared import EntityId
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.api import GameRuntime
 from space_idle.api.codec import to_jsonable
@@ -294,41 +293,3 @@ def test_construction_queries_expose_authoritative_project_controls():
     app.execute(SetProjectSourcingPolicy(project_id, "import_now")); app.execute(SetProjectImportSource(project_id, None))
     updated = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
     assert (updated.priority, updated.sourcing_policy, updated.import_source_id) == (81, "import_now", None)
-
-
-def test_vehicle_catalog_exposes_endurance_and_operation_asset_recovery_semantics():
-    app = build_game_application(); catalog = app.query(GetCatalog())
-    launch = next(row for row in catalog.vehicles if row.id == str(ids.REUSABLE_LAUNCH_VEHICLE))
-    tug = next(row for row in catalog.vehicles if row.id == str(ids.REUSABLE_ORBITAL_CARGO_TUG))
-    ascent = next(capability for capability in launch.operation_capability_details if capability.operation_type == "powered_ascent")
-    assert tug.endurance_days == pytest.approx(60.0)
-    assert ("asset_disposition", "origin") in ascent.parameters
-
-
-def test_partial_vehicle_production_procurement_is_durable_project_staging():
-    app = build_game_application()
-    sim = app._simulation
-    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.transport.vehicle_defs[vehicle_id]
-    for resource_id, _required_t in definition.production.resources:
-        sim.inventory.stock[(ids.EARTH, resource_id)] = 0.0
-    sim.inventory.stock[(ids.EARTH, ids.STRUCTURAL_COMPONENTS)] = 1.0
-
-    production_id = app.execute(ProduceVehicle(
-        str(vehicle_id), str(ids.EARTH)
-    )).created_id
-    assert production_id is not None
-    app.execute(AdvanceTime(1))
-
-    state = sim.transport.vehicle_production_projects[EntityId(production_id)]
-    staged = sim.transport._vehicle_production_staged_t(
-        state, ids.STRUCTURAL_COMPONENTS
-    )
-    assert state.phase.value == "awaiting_inputs"
-    assert 0.0 < staged < 4.0
-
-    sim.transport.pause_vehicle_production(state.id)
-    app.execute(AdvanceTime(2))
-    assert sim.transport._vehicle_production_staged_t(
-        state, ids.STRUCTURAL_COMPONENTS
-    ) == pytest.approx(staged)

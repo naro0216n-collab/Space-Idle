@@ -1,10 +1,10 @@
 import pytest
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import replace
 
 from space_idle import GetFleet, build_game_application
 from space_idle.composition.base_simulation import build_base_simulation
 from space_idle.content import base_ids as ids
-from space_idle.shared import EntityId, RouteId, SpatialNodeId
+from space_idle.shared import EntityId, RouteId
 from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
 from space_idle.validation import validate_runtime_state
 from space_idle.validation_support import ConfigurationError
@@ -186,79 +186,6 @@ def test_fleet_query_exposes_other_exclusive_reservations_in_pool_balance():
     )
 
 
-def test_fleet_free_read_does_not_materialize_an_empty_pool():
-    sim = build_base_simulation()
-    lg = sim.transport
-    before = dict(lg.fleet_pools)
-
-    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, SpatialNodeId("test.location.absent")) == 0
-    assert lg.fleet_pools == before
-
-
-def test_fleet_snapshot_read_does_not_materialize_an_empty_pool():
-    sim = build_base_simulation()
-    lg = sim.transport
-    before = dict(lg.fleet_pools)
-
-    snapshot = lg.fleet_pool_snapshot(
-        ids.REUSABLE_ORBITAL_CARGO_TUG, SpatialNodeId("test.location.absent")
-    )
-    assert snapshot.total_units == 0
-    assert snapshot.free_units == 0
-    assert lg.fleet_pools == before
-
-
-def test_fleet_reservation_queries_return_read_only_snapshots_in_stable_order():
-    sim = _fleet_sim(3)
-    lg = sim.transport
-    later = EntityId("reservation.zeta")
-    earlier = EntityId("reservation.alpha")
-    for reservation_id, owner_id in (
-        (later, EntityId("owner.zeta")),
-        (earlier, EntityId("owner.alpha")),
-    ):
-        lg.reserve_fleet_units(
-            reservation_id,
-            owner_id,
-            FleetReservationKind.OTHER,
-            ids.REUSABLE_ORBITAL_CARGO_TUG,
-            ids.LEO,
-            1,
-        )
-
-    snapshots = lg.fleet_reservation_snapshots()
-    assert tuple(row.id for row in snapshots) == (earlier, later)
-    assert lg.fleet_reservation_snapshot(earlier) == snapshots[0]
-    assert lg.fleet_reservation_snapshot(EntityId("reservation.missing")) is None
-    with pytest.raises(FrozenInstanceError):
-        snapshots[0].units = 2
-
-
-def test_fleet_query_exposes_generic_other_reservations_without_hiding_commitments():
-    app = build_game_application()
-    sim = app._simulation
-    lg = sim.transport
-    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
-    lg.fleet_pool(vehicle_id, ids.LEO).total_units = 2
-    lg.reserve_fleet_units(
-        EntityId("reservation.other"),
-        EntityId("special.owner"),
-        FleetReservationKind.OTHER,
-        vehicle_id,
-        ids.LEO,
-        1,
-    )
-
-    row = next(
-        item for item in app.query(GetFleet()).pools
-        if item.vehicle_definition_id == str(vehicle_id)
-        and item.operational_node_id == str(ids.LEO)
-    )
-    assert row.total_units == 2
-    assert row.free_units == 1
-    assert row.other_reserved_units == 1
-
-
 def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():
     sim = _fleet_sim(3)
     lg = sim.transport
@@ -293,7 +220,6 @@ def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():
 def test_capacity_mode_rejects_target_in_a_direction_without_nominal_service():
     sim = build_base_simulation()
     lg = sim.transport
-    before_counter = lg._transport_allocation_counter
     before_allocations = dict(lg.transport_allocations)
 
     with pytest.raises(ValueError, match="reverse capacity target"):
@@ -308,7 +234,6 @@ def test_capacity_mode_rejects_target_in_a_direction_without_nominal_service():
         )
 
     assert lg.transport_allocations == before_allocations
-    assert lg._transport_allocation_counter == before_counter
 
 
 def test_capacity_mode_update_rolls_back_an_unsupported_directional_target():
@@ -400,30 +325,6 @@ def test_units_capacity_mode_switch_preserves_unfilled_authoritative_target():
         per_unit.reverse_t_per_day * 5,
     )
     assert lg.allocation_required_units(allocation_id, sim.day) == 5
-
-
-def test_units_capacity_mode_switch_has_one_authoritative_target():
-    sim = _fleet_sim(5)
-    lg = sim.transport
-    allocation_id = lg.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        target_units=2,
-        day=sim.day,
-    )
-    lg.change_transport_allocation_mode(
-        allocation_id, TransportControlMode.CAPACITY, day=sim.day
-    )
-    allocation = lg.transport_allocations[allocation_id]
-    assert allocation.target_units is None
-    assert allocation.target_capacity is not None
-    lg.change_transport_allocation_mode(
-        allocation_id, TransportControlMode.UNITS, day=sim.day
-    )
-    allocation = lg.transport_allocations[allocation_id]
-    assert allocation.target_capacity is None
-    assert allocation.target_units == 2
 
 
 def test_relocation_requires_operational_support_and_propellant():

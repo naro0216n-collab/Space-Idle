@@ -9,23 +9,29 @@ def test_orbital_survey_stops_at_provider_knowledge_limit_and_reveals_comparison
     sim = app._simulation
     key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.WATER)
     target = sim.survey.targets[key]
+    limit = sim.survey.reachable_knowledge_level(
+        ids.LUNAR_ORBIT, key[0], day=sim.day
+    )
 
     assert sim.survey.start_blockers(ids.LUNAR_ORBIT, *key, sim.day) == ()
-    assert sim.survey.reachable_knowledge_level(
-        ids.LUNAR_ORBIT, key[0], day=sim.day
-    ) == 2
+    assert 0 < limit < len(target.thresholds)
 
     sim.survey.start(ids.LUNAR_ORBIT, *key, priority=80, day=sim.day)
     assert key in sim.survey.campaigns
-    assert sim.survey.campaigns[key].target_knowledge_level == 2
+    assert sim.survey.campaigns[key].target_knowledge_level == limit
 
-    sim.advance_days(8)
+    for _ in range(100):
+        if key not in sim.survey.campaigns:
+            break
+        sim.advance_days(1)
+    else:
+        raise AssertionError("survey did not reach provider knowledge limit")
 
-    assert sim.survey.progress(*key) == target.thresholds[1]
-    assert sim.survey.knowledge_level(*key) == 2
+    target_threshold = target.thresholds[limit - 1]
+    assert sim.survey.progress(*key) == target_threshold
+    assert sim.survey.knowledge_level(*key) == limit
     assert not sim.survey.is_complete(*key)
     assert sim.survey.visible_potential(*key) is not None
-    assert key not in sim.survey.campaigns
     assert sim.survey.start_blockers(ids.LUNAR_ORBIT, *key, sim.day) == (
         "survey_provider_limit",
     )
@@ -37,7 +43,7 @@ def test_orbital_survey_stops_at_provider_knowledge_limit_and_reveals_comparison
     assert row.complete is False
     assert row.active is False
     assert row.can_start is False
-    assert row.target_knowledge_level == 2
-    assert row.target_threshold == target.thresholds[1]
+    assert row.target_knowledge_level == limit
+    assert row.target_threshold == target_threshold
     assert row.progress_fraction == 1.0
     assert row.blockers == ("survey_provider_limit",)

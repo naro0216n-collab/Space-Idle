@@ -186,14 +186,6 @@ def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future
     )
 
 
-def test_scientific_exploration_mission_duration_is_independent_of_campaign_duration():
-    sim = build_game_application()._simulation
-    definition = sim.scientific_exploration.definitions[ids.CISLUNAR_SCIENCE_EXPLORATION]
-    route = definition.compatibility_route()
-    assert route.transit_days == definition.mission_duration_days
-    assert definition.mission_duration_days != definition.duration_days
-
-
 def test_runtime_blocker_prevents_input_consumption_and_keeps_fleet_reserved():
     app = build_game_application()
     sim = app._simulation

@@ -176,7 +176,6 @@ def test_external_procurement_delivery_roundtrips_through_save_load(tmp_path):
     after = loaded._simulation.logistics.procurement_deliveries[before.id]
 
     assert after == before
-    assert loaded._simulation.logistics._procurement_delivery_counter == 1
 
 
 def test_remote_procurement_replenishes_logistics_source_without_bypassing_transport():

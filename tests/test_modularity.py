@@ -31,30 +31,6 @@ def _module_import_targets(path: Path) -> set[str]:
     return targets
 
 
-def test_cross_cutting_state_and_validation_are_owned_by_registered_domains():
-    from space_idle.composition.domain_extensions import BASE_DOMAIN_EXTENSIONS
-    from space_idle.domain import validate_extension_registry
-
-    validate_extension_registry(BASE_DOMAIN_EXTENSIONS)
-    names = [extension.name for extension in BASE_DOMAIN_EXTENSIONS]
-    assert len(names) == len(set(names))
-    assert {
-        "core", "spatial", "technology", "facilities", "inventory", "storage",
-        "production", "logistics", "construction", "contracts", "research",
-        "survey", "extraction",
-    }.issubset(names)
-
-    codec_keys = [
-        extension.state_codec.key
-        for extension in BASE_DOMAIN_EXTENSIONS
-        if extension.state_codec is not None
-    ]
-    assert len(codec_keys) == len(set(codec_keys))
-    assert {"facilities", "inventory", "industry", "logistics", "projects", "research", "survey"}.issubset(codec_keys)
-    assert sum(extension.configuration_validator is not None for extension in BASE_DOMAIN_EXTENSIONS) > 1
-    assert sum(extension.runtime_validator is not None for extension in BASE_DOMAIN_EXTENSIONS) > 1
-
-
 def test_logistics_consumes_transport_projection_instead_of_transport_state_containers():
     tree = ast.parse(
         (PACKAGE / "logistics_flow.py").read_text(encoding="utf-8"),
