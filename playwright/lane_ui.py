@@ -108,9 +108,20 @@ def run() -> None:
                 assert any(required in header for header in demand_headers), (
                     f"demand decision surface lacks {required}"
                 )
-            vehicle_headers = page.locator("#vehicleTable th").all_inner_texts()
-            for required in ("割当 / 移動先", "利用可能", "blocker"):
-                assert required in vehicle_headers, f"vehicle decision surface lacks {required}"
+            fleet_headers = page.locator("#vehicleTable th").all_inner_texts()
+            for required in ("所在地", "総数", "free", "Transport", "Exploration", "relocating", "releasing"):
+                assert required in fleet_headers, f"fleet decision surface lacks {required}"
+            allocation_headers = page.locator("#allocationTable th").all_inner_texts()
+            for required in (
+                "control / target",
+                "active / required",
+                "Nominal F/R",
+                "Available F/R",
+                "Used F/R",
+                "Spare F/R",
+                "blocker",
+            ):
+                assert required in allocation_headers, f"transport allocation decision surface lacks {required}"
 
             page.get_by_role("button", name="Laneを作成").click()
             page.locator("#laneDialog").wait_for(state="visible", timeout=10000)
@@ -154,7 +165,7 @@ def run() -> None:
             row = page.locator("#laneTable tbody tr[data-lane-row]").first
             row.get_by_role("button", name="再開").click()
             page.wait_for_function(
-                "() => document.querySelector('#laneTable tbody tr[data-lane-row]') && !document.querySelector('#laneTable tbody tr[data-lane-row]').innerText.includes('手動停止')",
+                "() => document.querySelector('#laneTable tbody tr[data-lane-row] .badge')?.textContent === '稼働'",
                 timeout=10000,
             )
 
