@@ -7,6 +7,7 @@ from ..logistics import (
     LogisticsService,
     OperationSupportLocation,
     OperationSupportRequirement,
+    ResourceSupportRequirement,
     PoweredAscentCapability,
     RouteDef,
     SpaceflightCapability,
@@ -135,7 +136,9 @@ def build_vehicle_definitions() -> dict:
                 propellant_t_per_total_t_per_km_s=0.040,
                 operation_capabilities=(PoweredAscentCapability(10.0, 10.0, 110000.0, OperationAssetDisposition.ORIGIN),),
                 operation_support_requirements=(OperationSupportRequirement(TransportOperationKind.POWERED_ASCENT, OperationSupportLocation.ORIGIN, "launch_operations"),),
+                resource_support_requirements=(ResourceSupportRequirement(ids.PROPELLANT, "vehicle_refueling", "refueling_interface"),),
                 endurance_days=14.0,
+                generic_capabilities=("refueling_interface",),
             ),
             production=VehicleProductionSpec(
                 capability_id="vehicle_assembly", days=10.0,
@@ -151,7 +154,9 @@ def build_vehicle_definitions() -> dict:
                 propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=4.0,
                 propellant_t_per_total_t_per_km_s=0.020,
                 operation_capabilities=(SpaceflightCapability(5.0),),
+                resource_support_requirements=(ResourceSupportRequirement(ids.PROPELLANT, "vehicle_refueling", "refueling_interface"),),
                 endurance_days=60.0,
+                generic_capabilities=("refueling_interface", "docking_interface"),
             ),
             production=VehicleProductionSpec(
                 capability_id="vehicle_assembly", days=4.0,
@@ -167,7 +172,9 @@ def build_vehicle_definitions() -> dict:
                 propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=3.0,
                 propellant_t_per_total_t_per_km_s=0.030,
                 operation_capabilities=(SpaceflightCapability(5.0), PoweredAscentCapability(2.1, 2.0, 1000.0), LandingCapability(2.1, 2.0, 1000.0)),
+                resource_support_requirements=(ResourceSupportRequirement(ids.PROPELLANT, "vehicle_refueling", "refueling_interface"),),
                 endurance_days=30.0,
+                generic_capabilities=("refueling_interface", "docking_interface"),
             ),
             production=VehicleProductionSpec(
                 capability_id="vehicle_assembly", days=3.0,

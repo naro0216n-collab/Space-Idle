@@ -228,10 +228,19 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:
     result: set[DefinitionId] = set()
-    for vehicle in sim.logistics.vehicle_defs.values():
-        profile = vehicle.performance
+    profiles = [
+        vehicle.performance for vehicle in sim.logistics.vehicle_defs.values()
+    ] + [
+        service.performance for service in sim.logistics.external_services.values()
+    ]
+    for profile in profiles:
         if profile.propellant_resource_id is not None:
             result.add(profile.propellant_resource_id)
+        result.update(
+            requirement.resource_id
+            for requirement in profile.resource_support_requirements
+        )
+    for vehicle in sim.logistics.vehicle_defs.values():
         result.update(resource_id for resource_id, _amount in vehicle.maintenance.resources)
         result.update(resource_id for resource_id, _amount in vehicle.production.resources)
     return result
@@ -259,6 +268,35 @@ def _validate_transport_profile(sim: Any, profile, known_capabilities: set[str],
         len(generic_capabilities) == len(set(generic_capabilities)),
         f"duplicate generic vehicle capability: {label}",
     )
+    resource_support_keys: set[tuple[DefinitionId, str, str | None]] = set()
+    for requirement in profile.resource_support_requirements:
+        _require(
+            bool(requirement.infrastructure_capability_id),
+            f"empty transport resource support capability: {label}",
+        )
+        _require(
+            requirement.infrastructure_capability_id in known_capabilities,
+            f"transport resource support references unknown capability: {label}/{requirement.infrastructure_capability_id}",
+        )
+        if requirement.vehicle_capability_id is not None:
+            _require(
+                bool(requirement.vehicle_capability_id),
+                f"empty transport resource vehicle capability: {label}",
+            )
+            _require(
+                requirement.vehicle_capability_id in generic_capabilities,
+                f"transport resource support requires undeclared vehicle capability: {label}/{requirement.vehicle_capability_id}",
+            )
+        key = (
+            requirement.resource_id,
+            requirement.infrastructure_capability_id,
+            requirement.vehicle_capability_id,
+        )
+        _require(
+            key not in resource_support_keys,
+            f"duplicate transport resource support requirement: {label}",
+        )
+        resource_support_keys.add(key)
     for capability in profile.operation_capabilities:
         _require(
             sim.logistics.operation_registry.supports(capability.operation_type),

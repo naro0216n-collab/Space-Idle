@@ -1,12 +1,16 @@
 import pytest
+from dataclasses import replace
 
 from space_idle import GetFleet, build_game_application
 from space_idle.composition.base_simulation import build_base_simulation
 from space_idle.content import base_ids as ids
-from space_idle.shared import EntityId
+from space_idle.shared import EntityId, RouteId
 from space_idle.transport.models import (
     DirectionalCapacity,
     FleetReservationKind,
+    OperationSupportLocation,
+    OperationSupportRequirement,
+    ResourceSupportRequirement,
     TransportControlMode,
 )
 
@@ -173,6 +177,86 @@ def test_relocation_requires_operational_support_and_propellant():
         assert "refueling" in str(exc) or "resource" in str(exc)
     else:
         raise AssertionError("relocation unexpectedly ignored operational requirements")
+
+
+def test_resource_support_uses_definition_capability_instead_of_magic_refueling_id():
+    sim = _fleet_sim(1)
+    lg = sim.logistics
+    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
+    definition = lg.vehicle_defs[vehicle_id]
+    lg.vehicle_defs[vehicle_id] = replace(
+        definition,
+        performance=replace(
+            definition.performance,
+            resource_support_requirements=(
+                ResourceSupportRequirement(
+                    ids.PROPELLANT,
+                    "spacecraft_servicing",
+                    "refueling_interface",
+                ),
+            ),
+        ),
+    )
+    node_definition = sim.facilities.definitions[ids.ORBITAL_LOGISTICS_NODE]
+    sim.facilities.definitions[ids.ORBITAL_LOGISTICS_NODE] = replace(
+        node_definition,
+        capability_supplies=tuple(
+            supply
+            for supply in node_definition.capability_supplies
+            if supply.id != "vehicle_refueling"
+        ),
+    )
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
+    sim.inventory.add(ids.LEO, ids.PROPELLANT, 10.0)
+    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
+
+    allocation_id = lg.create_transport_allocation(
+        vehicle_id, ids.LEO, ids.LUNAR_ORBIT, target_units=1, day=sim.day
+    )
+    snapshot = lg.transport_capacity_snapshot(allocation_id, day=sim.day)
+
+    assert snapshot.available.forward_t_per_day > 0
+    assert not any("vehicle_refueling" in value for value in snapshot.limiting_factors)
+
+
+def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
+    sim = _fleet_sim(1)
+    lg = sim.logistics
+    vehicle_id = ids.REUSABLE_SURFACE_CARGO_LANDER
+    definition = lg.vehicle_defs[vehicle_id]
+    lg.vehicle_defs[vehicle_id] = replace(
+        definition,
+        performance=replace(
+            definition.performance,
+            propellant_resource_id=None,
+            propellant_capacity_t=0.0,
+            propellant_t_per_total_t_per_km_s=0.0,
+            resource_support_requirements=(),
+            operation_support_requirements=(
+                OperationSupportRequirement(
+                    "landing", OperationSupportLocation.ORIGIN, "cargo_transfer"
+                ),
+            ),
+        ),
+    )
+    lg.fleet_pool(vehicle_id, ids.LEO).total_units = 1
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    allocation_id = lg.create_transport_allocation(
+        vehicle_id,
+        ids.LEO,
+        ids.SOUTH_POLAR_RIDGE,
+        target_units=1,
+        path=(
+            RouteId("base.route.leo_lunar_orbit"),
+            RouteId("base.route.lunar_orbit_ridge"),
+        ),
+        day=sim.day,
+    )
+    snapshot = lg.transport_capacity_snapshot(allocation_id, day=sim.day)
+
+    assert snapshot.available.forward_t_per_day == 0
+    assert f"infrastructure:{ids.LUNAR_ORBIT}:cargo_transfer" in snapshot.limiting_factors
 
 
 def test_relocation_keeps_units_exclusive_until_arrival():

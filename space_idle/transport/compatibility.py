@@ -14,6 +14,35 @@ from .operations import OperationEvaluationContext
 
 
 class TransportCompatibilityMixin:
+    def resource_support_failures(
+        self,
+        performance: TransportPerformanceProfile,
+        location_id: SpatialNodeId,
+        resource_id: DefinitionId,
+        day: int = 0,
+        *,
+        power: PowerSnapshot | None = None,
+    ) -> tuple[str, ...]:
+        """Return current support blockers for replenishing a vehicle resource."""
+        failures: list[str] = []
+        vehicle_capabilities = set(performance.generic_capabilities)
+        for requirement in performance.support_requirements_for_resource(resource_id):
+            if (
+                requirement.vehicle_capability_id is not None
+                and requirement.vehicle_capability_id not in vehicle_capabilities
+            ):
+                failures.append(f"vehicle_capability:{requirement.vehicle_capability_id}")
+            if not self._has_available_capability(
+                location_id,
+                requirement.infrastructure_capability_id,
+                day,
+                power=power,
+            ):
+                failures.append(
+                    f"infrastructure:{location_id}:{requirement.infrastructure_capability_id}"
+                )
+        return tuple(dict.fromkeys(failures))
+
     def route_failures(self, route_id: RouteId, day: int = 0) -> tuple[str, ...]:
         """Return endpoint/site blockers intrinsic to the route itself.
 

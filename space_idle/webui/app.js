@@ -42,6 +42,7 @@
     power_grid:'電力網',propellant_production:'推進剤製造',regolith_excavation:'レゴリス採掘',
     research_lab:'研究設備',robotic_operations:'ロボット運用',sintering:'焼結',
     spacecraft_servicing:'宇宙船整備',structural_fabrication:'構造材加工',surface_survey:'地表探査',
+    refueling_interface:'補給インターフェース',docking_interface:'ドッキングインターフェース',
     vehicle_assembly:'輸送機組立',vehicle_refueling:'輸送機補給',water_extraction:'水抽出',water_storage:'水保管',
   };
   const operationLabels={powered_ascent:'動力離昇',launch:'打上げ',spaceflight:'宇宙航行',landing:'着陸',atmospheric_entry:'大気圏突入'};

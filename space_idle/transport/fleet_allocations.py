@@ -753,8 +753,14 @@ class FleetAllocationMixin:
             if definition.propellant_resource_id is not None:
                 amount = definition.propellant_t(route, 0.0) * units
                 if amount > 1e-12:
-                    if not self._has_available_capability(route.origin_id, "vehicle_refueling", day):
-                        blockers.append(f"refueling:{route.origin_id}")
+                    blockers.extend(
+                        self.resource_support_failures(
+                            definition.performance,
+                            route.origin_id,
+                            definition.propellant_resource_id,
+                            day,
+                        )
+                    )
                     key = (route.origin_id, definition.propellant_resource_id)
                     propellant_requirements[key] = propellant_requirements.get(key, 0.0) + amount
         for (location_id, resource_id), amount in propellant_requirements.items():
@@ -884,16 +890,24 @@ class FleetAllocationMixin:
         forward_ratio = 1.0
         reverse_ratio = 1.0
         definition = self.vehicle_defs[allocation.vehicle_definition_id]
-        for support in definition.operation_support_requirements:
-            location_id = (
-                allocation.anchor_location_id
-                if support.location.value == "origin"
-                else allocation.destination_id
-            )
-            if not self._has_available_capability(location_id, support.capability_id, day):
-                forward_ratio = 0.0
-                reverse_ratio = 0.0
-                limiting.append(f"infrastructure:{location_id}:{support.capability_id}")
+        # Operation support is attached to the actual leg endpoint where the
+        # operation occurs.  Allocation endpoints are not sufficient for a
+        # multi-leg service and would incorrectly skip intermediate support.
+        for leg in plan.legs:
+            route = self.routes[leg.route_id]
+            present_operations = {operation.operation_type for operation in route.operations}
+            for support in definition.operation_support_requirements:
+                if support.operation_type not in present_operations:
+                    continue
+                location_id = (
+                    route.origin_id
+                    if support.location.value == "origin"
+                    else route.destination_id
+                )
+                if not self._has_available_capability(location_id, support.capability_id, day):
+                    forward_ratio = 0.0
+                    reverse_ratio = 0.0
+                    limiting.append(f"infrastructure:{location_id}:{support.capability_id}")
 
         # Turnaround servicing is a cycle-rate capacity, not merely a boolean
         # facility prerequisite. A partially provisioned service therefore
@@ -929,12 +943,12 @@ class FleetAllocationMixin:
                 full_demand = demand_per_day * active
                 if full_demand <= 1e-12:
                     continue
-                if (
-                    definition.propellant_resource_id == resource_id
-                    and not self._has_available_capability(location_id, "vehicle_refueling", day)
-                ):
+                support_failures = self.resource_support_failures(
+                    definition.performance, location_id, resource_id, day
+                )
+                if support_failures:
                     ratio = 0.0
-                    limiting.append(f"refueling:{location_id}")
+                    limiting.extend(support_failures)
                     continue
                 stock = self.inventory.available(location_id, resource_id)
                 resource_ratio = min(1.0, max(0.0, stock / full_demand))

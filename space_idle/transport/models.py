@@ -267,6 +267,20 @@ class OperationSupportRequirement:
 
 
 @dataclass(frozen=True)
+class ResourceSupportRequirement:
+    """Infrastructure/interface needed to replenish an operational resource.
+
+    The Core does not attach semantics to a particular resource or capability
+    id.  Content defines which infrastructure can replenish the resource and,
+    when needed, which interface the vehicle itself must expose.
+    """
+
+    resource_id: DefinitionId
+    infrastructure_capability_id: str
+    vehicle_capability_id: str | None = None
+
+
+@dataclass(frozen=True)
 class TransportOperationRequirement:
     operation_type: str
     delta_v_km_s: float = 0.0
@@ -340,6 +354,7 @@ class TransportPerformanceProfile:
     propellant_t_per_total_t_per_km_s: float = 0.0
     operation_capabilities: tuple[OperationCapability, ...] = ()
     operation_support_requirements: tuple[OperationSupportRequirement, ...] = ()
+    resource_support_requirements: tuple[ResourceSupportRequirement, ...] = ()
     endurance_days: float | None = None
     generic_capabilities: tuple[str, ...] = ()
 
@@ -354,6 +369,15 @@ class TransportPerformanceProfile:
         if capability is None:
             return None
         return getattr(capability, "asset_disposition", OperationAssetDisposition.DESTINATION)
+
+    def support_requirements_for_resource(
+        self, resource_id: DefinitionId
+    ) -> tuple[ResourceSupportRequirement, ...]:
+        return tuple(
+            requirement
+            for requirement in self.resource_support_requirements
+            if requirement.resource_id == resource_id
+        )
 
     def route_asset_disposition(self, route: RouteDef) -> OperationAssetDisposition:
         disposition = OperationAssetDisposition.DESTINATION
@@ -429,6 +453,8 @@ class VehicleDef:
     def propellant_t_per_total_t_per_km_s(self) -> float: return self.performance.propellant_t_per_total_t_per_km_s
     @property
     def operation_support_requirements(self) -> tuple[OperationSupportRequirement, ...]: return self.performance.operation_support_requirements
+    @property
+    def resource_support_requirements(self) -> tuple[ResourceSupportRequirement, ...]: return self.performance.resource_support_requirements
     @property
     def endurance_days(self) -> float | None: return self.performance.endurance_days
     @property
