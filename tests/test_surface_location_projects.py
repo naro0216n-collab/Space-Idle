@@ -138,3 +138,64 @@ def test_mid_project_save_load_preserves_geographic_target_and_future_transition
     loaded.execute(AdvanceTime(20))
     assert ids.EARTH_CELL_COASTAL in app._simulation.graph.locations[ids.EARTH].developed_cell_ids
     assert ids.EARTH_CELL_COASTAL in loaded._simulation.graph.locations[ids.EARTH].developed_cell_ids
+
+
+def test_surface_development_requires_content_configured_survey_knowledge():
+    app = build_game_application()
+    sim = app._simulation
+    view = app.query(GetSurfaceMap(str(ids.MOON)))
+    cell = next(row for row in view.cells if row.id == str(ids.MOON_CELL_SOUTH_POLAR_PLAIN))
+    dev = next(row for row in cell.development_options if row.location_id == str(ids.SOUTH_POLAR_RIDGE))
+    assert ("survey_knowledge", "level=0/1") in dev.blockers
+    with pytest.raises(ApplicationError, match="survey_knowledge: level=0/1"):
+        app.execute(DevelopSurfaceCell(
+            str(ids.SOUTH_POLAR_RIDGE),
+            str(ids.MOON_CELL_SOUTH_POLAR_PLAIN),
+            sourcing_policy="import_now",
+        ))
+
+    key = (ids.MOON_CELL_SOUTH_POLAR_PLAIN, ids.WATER)
+    sim.survey.knowledge_progress[key] = sim.survey.targets[key].thresholds[0]
+    view = app.query(GetSurfaceMap(str(ids.MOON)))
+    cell = next(row for row in view.cells if row.id == str(ids.MOON_CELL_SOUTH_POLAR_PLAIN))
+    dev = next(row for row in cell.development_options if row.location_id == str(ids.SOUTH_POLAR_RIDGE))
+    assert not any(code == "survey_knowledge" for code, _detail in dev.blockers)
+    assert app.execute(DevelopSurfaceCell(
+        str(ids.SOUTH_POLAR_RIDGE),
+        str(ids.MOON_CELL_SOUTH_POLAR_PLAIN),
+        sourcing_policy="import_now",
+    )).created_id is not None
+
+
+def test_location_founding_requires_content_configured_survey_knowledge():
+    app = build_game_application()
+    sim = app._simulation
+    target_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    view = app.query(GetSurfaceMap(str(ids.MOON)))
+    cell = next(row for row in view.cells if row.id == str(target_cell))
+    foundation = next(row for row in cell.foundation_options if row.provider_location_id == str(ids.SOUTH_POLAR_RIDGE))
+    assert ("survey_knowledge", "level=0/1") in foundation.blockers
+    with pytest.raises(ApplicationError, match="survey_knowledge: level=0/1"):
+        app.execute(FoundLocation(
+            str(ids.SOUTH_POLAR_RIDGE),
+            "test.location.unsurveyed.farside",
+            "Unsurveyed Farside Base",
+            str(ids.MOON),
+            str(target_cell),
+            sourcing_policy="import_now",
+        ))
+
+    key = (target_cell, ids.WATER)
+    sim.survey.knowledge_progress[key] = sim.survey.targets[key].thresholds[0]
+    view = app.query(GetSurfaceMap(str(ids.MOON)))
+    cell = next(row for row in view.cells if row.id == str(target_cell))
+    foundation = next(row for row in cell.foundation_options if row.provider_location_id == str(ids.SOUTH_POLAR_RIDGE))
+    assert not any(code == "survey_knowledge" for code, _detail in foundation.blockers)
+    assert app.execute(FoundLocation(
+        str(ids.SOUTH_POLAR_RIDGE),
+        "test.location.surveyed.farside",
+        "Surveyed Farside Base",
+        str(ids.MOON),
+        str(target_cell),
+        sourcing_policy="import_now",
+    )).created_id is not None

@@ -100,6 +100,10 @@ def build_base_simulation() -> Simulation:
         )
     )
 
+    survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph)
+    for cell_id, resource_id in initial_known_surface_resource_knowledge():
+        survey.initialize_known(cell_id, resource_id)
+
     projects = ProjectService(
         recipes=build_construction_recipes(),
         upgrade_recipes=build_facility_upgrade_recipes(),
@@ -109,6 +113,7 @@ def build_base_simulation() -> Simulation:
         power=power,
         sourcing_wait_days=sourcing_wait_days(),
         surface_infrastructure=surface_infrastructure,
+        surface_knowledge_level_provider=survey.cell_knowledge_level,
         technology_state=technology,
         construction_resource_providers=build_construction_resource_providers(),
         spatial_recipes=build_spatial_development_recipes(),
@@ -127,9 +132,6 @@ def build_base_simulation() -> Simulation:
         build_scientific_exploration_definitions(),
         facilities, inventory, power, logistics, research,
     )
-    survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph)
-    for cell_id, resource_id in initial_known_surface_resource_knowledge():
-        survey.initialize_known(cell_id, resource_id)
     extraction = ExtractionService(build_extraction_specs(), graph, surface_infrastructure)
 
     # Keep the Contract Domain composed and available for future events,

@@ -201,6 +201,7 @@ def build_spatial_development_recipes() -> dict:
             ),
             120.0,
             surface_site,
+            minimum_survey_knowledge_level=1,
         ),
         SpatialDevelopmentRecipe(
             ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
@@ -212,6 +213,7 @@ def build_spatial_development_recipes() -> dict:
             ),
             36.0,
             surface_site,
+            minimum_survey_knowledge_level=1,
         ),
     )
     return {recipe.id: recipe for recipe in recipes}

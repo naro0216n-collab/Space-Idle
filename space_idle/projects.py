@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .power import PowerService
-from .shared import DefinitionId, ProjectId
+from .shared import DefinitionId, ProjectId, SurfaceCellId
 from .technology import TechnologyState
 from .surface_infrastructure import SurfaceInfrastructureService
 from .construction.models import (
@@ -42,6 +43,7 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     power: PowerService
     sourcing_wait_days: dict[SourcingPolicy, int]
     surface_infrastructure: SurfaceInfrastructureService | None = None
+    surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     construction_resource_providers: dict[DefinitionId, ConstructionResourceProviderSpec] = field(default_factory=dict)
     spatial_recipes: dict[DefinitionId, SpatialDevelopmentRecipe] = field(default_factory=dict)

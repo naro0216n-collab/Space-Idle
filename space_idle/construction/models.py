@@ -76,12 +76,15 @@ class SpatialDevelopmentRecipe:
     site_requirements: SiteRequirements = SiteRequirements()
     prerequisite_technologies: frozenset[DefinitionId] = frozenset()
     self_deploying: bool = False
+    minimum_survey_knowledge_level: int = 0
 
     def __post_init__(self) -> None:
         if not self.display_name:
             raise ValueError("spatial development recipe display name must not be empty")
         if self.self_deploying:
             raise ValueError("location development must consume construction capacity")
+        if not 0 <= self.minimum_survey_knowledge_level <= 4:
+            raise ValueError("spatial development survey knowledge level must be within 0..4")
 
 
 ProjectRecipe: TypeAlias = ConstructionRecipe | FacilityUpgradeRecipe | SpatialDevelopmentRecipe

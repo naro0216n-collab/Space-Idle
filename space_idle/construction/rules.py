@@ -110,10 +110,19 @@ class ConstructionRulesMixin:
     ) -> tuple[SiteRequirementFailure, ...]:
         recipe = self.spatial_recipes[recipe_id]
         snapshot = power if power is not None else self.power.snapshot(location_id, self.facilities, day)
-        return evaluate_site_requirements(
+        failures = list(evaluate_site_requirements(
             recipe.site_requirements, location_id, day, self.facilities.environment, self.facilities, snapshot,
             environment_context_id=cell_id,
-        )
+        ))
+        required_level = recipe.minimum_survey_knowledge_level
+        if required_level > 0:
+            provider = self.surface_knowledge_level_provider
+            actual_level = 0 if provider is None else provider(cell_id)
+            if actual_level < required_level:
+                failures.append(SiteRequirementFailure(
+                    "survey_knowledge", f"level={actual_level}/{required_level}"
+                ))
+        return tuple(failures)
 
     def location_founding_failures(
         self, provider_location_id: SpatialNodeId, body_id, cell_id: SurfaceCellId,
@@ -184,14 +193,8 @@ class ConstructionRulesMixin:
             )
             environment_context = target.cell_id
         snapshot = power if power is not None else self.power.snapshot(project.location_id, self.facilities, day)
-        failures.extend(evaluate_site_requirements(
-            self._recipe_for_project(project).site_requirements,
-            project.location_id,
-            day,
-            self.facilities.environment,
-            self.facilities,
-            snapshot,
-            environment_context_id=environment_context,
+        failures.extend(self._spatial_recipe_site_failures(
+            target.recipe_id, project.location_id, environment_context, day, snapshot
         ))
         return tuple(dict.fromkeys(failures))
 

@@ -170,6 +170,20 @@ class SurveyService:
                 level = index
         return level  # type: ignore[return-value]
 
+    def cell_knowledge_level(self, cell_id: SurfaceCellId) -> KnowledgeLevel:
+        """Highest geological knowledge level available for a Surface Cell.
+
+        Spatial-development requirements depend on whether the site has been
+        surveyed at all, not on a particular Resource being privileged by Core.
+        Resource-specific decisions continue to use ``knowledge_level``.
+        """
+        levels = [
+            self.knowledge_level(target_cell_id, resource_id)
+            for target_cell_id, resource_id in self.targets
+            if target_cell_id == cell_id
+        ]
+        return max(levels, default=0)  # type: ignore[return-value]
+
     def is_complete(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
         return self.knowledge_level(cell_id, resource_id) >= 4
 

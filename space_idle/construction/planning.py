@@ -146,17 +146,22 @@ class ConstructionPlanningMixin:
         if recipe_id is None or recipe_id not in self.spatial_recipes:
             raise ValueError("location founding recipe is not configured")
         graph = self.facilities.environment.graph
-        failures = list(graph.location_foundation_failures(body_id, core_cell_id))
+        failures = [
+            (failure.code, failure.detail)
+            for failure in self.location_founding_failures(
+                provider_location_id, body_id, core_cell_id, day
+            )
+        ]
         if new_location_id in graph.locations or new_location_id in graph.nodes:
             failures.append(("location_id_in_use", str(new_location_id)))
-        if graph.has_operational_node(provider_location_id):
-            host_body = graph.operational_node(provider_location_id).body_id
-            if host_body != body_id:
-                failures.append(("construction_host_body", f"host={host_body}, target={body_id}"))
         if self._active_spatial_target_conflict(core_cell_id, new_location_id=new_location_id):
-            failures.append(("active_spatial_project", f"active spatial project already targets {core_cell_id}"))
+            # ``location_founding_failures`` already reports target-cell
+            # conflicts.  The explicit check here also covers an active
+            # founding project that reserved the requested Location identity.
+            if not any(code == "active_spatial_project" for code, _detail in failures):
+                failures.append(("active_spatial_project", f"active spatial project already targets {core_cell_id}"))
         if failures:
-            raise ValueError("; ".join(detail for _code, detail in failures))
+            raise ValueError("; ".join(f"{code}: {detail}" for code, detail in failures))
         return self._create_project(
             LocationFoundingTarget(recipe_id, new_location_id, display_name, body_id, core_cell_id),
             provider_location_id,
@@ -177,11 +182,12 @@ class ConstructionPlanningMixin:
         recipe_id = self.surface_cell_development_recipe_id
         if recipe_id is None or recipe_id not in self.spatial_recipes:
             raise ValueError("surface cell development recipe is not configured")
-        failures = list(self.facilities.environment.graph.surface_cell_development_failures(location_id, cell_id))
-        if self._active_spatial_target_conflict(cell_id):
-            failures.append(("active_spatial_project", f"active spatial project already targets {cell_id}"))
+        failures = [
+            (failure.code, failure.detail)
+            for failure in self.surface_cell_development_failures(location_id, cell_id, day)
+        ]
         if failures:
-            raise ValueError("; ".join(detail for _code, detail in failures))
+            raise ValueError("; ".join(f"{code}: {detail}" for code, detail in failures))
         return self._create_project(
             SurfaceCellDevelopmentTarget(recipe_id, cell_id),
             location_id,

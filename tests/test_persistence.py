@@ -8,6 +8,7 @@ from space_idle import (
     AssignExplorationFleet,
     CreateLogisticsLane,
     CreateTransportAllocation,
+    DevelopSurfaceCell,
     GetLocation,
     GetResearch,
     GetWorld,
@@ -35,8 +36,9 @@ from space_idle.content.base_game import (
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.resource_demand import ResourceDemand
-from space_idle.shared import EntityId
+from space_idle.shared import EntityId, CelestialBodyId, DefinitionId
 from space_idle.simulation import OfflineProgressPolicy
+from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
 
 
 def _advance_until_research_startable(app, research_id, max_days=2000):
@@ -295,3 +297,53 @@ def test_save_load_preserves_active_cell_resource_survey_future_behavior(tmp_pat
     assert loaded._simulation.survey.knowledge_progress == sim.survey.knowledge_progress
     assert loaded._simulation.survey.campaigns == sim.survey.campaigns
     assert capture_state(loaded._simulation) == capture_state(sim)
+
+
+def test_offline_progress_preserves_surface_cell_development_state_machine(tmp_path):
+    saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    policy = OfflineProgressPolicy(real_seconds_per_game_day=60.0, max_game_days_per_resume=30)
+    app = build_game_application()
+    app._simulation.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    result = app.execute(DevelopSurfaceCell(
+        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"
+    ))
+    assert result.created_id is not None
+
+    path = tmp_path / "surface-development-offline.json"
+    save_game(app, path, saved_at=saved_at)
+    elapsed_days = 20
+    loaded, _ = load_game(
+        path, build_game_application,
+        now=saved_at + timedelta(seconds=policy.real_seconds_per_game_day * elapsed_days),
+        offline_policy=policy,
+    )
+    direct, _ = load_game(path, build_game_application)
+    direct.execute(AdvanceTime(elapsed_days))
+
+    assert capture_state(loaded._simulation) == capture_state(direct._simulation)
+    assert ids.EARTH_CELL_COASTAL in loaded._simulation.graph.locations[ids.EARTH].developed_cell_ids
+
+
+def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):
+    body_id = CelestialBodyId(str(ids.EARTH_BODY))
+    species = DefinitionId("test.atmosphere.n2")
+
+    def factory():
+        app = build_game_application()
+        service = TerraformingService({
+            body_id: PlanetaryClimateState(body_id, 101325.0, 1.225, 288.0, {species: 1.0})
+        })
+        app._simulation.environment.overlays.append(TerraformingEnvironmentOverlay(service))
+        return app
+
+    app = factory()
+    overlay = app._simulation.environment.overlays[-1]
+    overlay.service.add_atmosphere(body_id, 250.0, 0.01, species, 0.0, 3.5)
+    before = app._simulation.environment.capture_overlay_state()
+
+    path = tmp_path / "dynamic-environment.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, factory)
+
+    assert loaded._simulation.environment.capture_overlay_state() == before
+    assert capture_state(loaded._simulation) == capture_state(app._simulation)
