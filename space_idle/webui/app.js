@@ -111,11 +111,11 @@
 
   const interactionControl=(identity)=>{
     if(!identity)return null;
-    if(identity.kind==='id')return document.getElementById(identity.value);
-    if(identity.kind==='draft')return $$('[data-draft-key]').find((control)=>control.dataset.draftKey===identity.value)||null;
+    if(identity.kind==='id')return document.getElementById(identity.key);
+    if(identity.kind==='draft')return $$('[data-draft-key]').find((control)=>control.dataset.draftKey===identity.key)||null;
     return null;
   };
-  const controlIdentity=(control)=>control?.id?{kind:'id',value:control.id}:control?.dataset?.draftKey?{kind:'draft',value:control.dataset.draftKey}:null;
+  const controlIdentity=(control)=>control?.dataset?.draftKey?{kind:'draft',key:control.dataset.draftKey}:control?.id?{kind:'id',key:control.id}:null;
   const controlBaseline=(control)=>{
     if(!control)return null;
     if(control.tagName==='SELECT'){
@@ -149,7 +149,7 @@
   function restoreInteraction(snapshot){
     if(!snapshot)return;
     for(const draft of snapshot.drafts||[]){
-      restoreDraftValue(interactionControl({kind:'draft',value:draft.key}),draft);
+      restoreDraftValue(interactionControl({kind:'draft',key:draft.key}),draft);
     }
     if(snapshot.control){
       const control=interactionControl(snapshot.control);
