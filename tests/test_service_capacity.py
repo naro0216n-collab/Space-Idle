@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle.service_capacity import ServiceCapacityRequest, allocate_service_capacity
+from space_idle.service_capacity import (
+    ServiceCapacityDependency, ServiceCapacityRequest, allocate_service_capacity,
+    service_capacity_dependency_order,
+)
 from space_idle.shared import EntityId, SpatialNodeId
 
 
@@ -79,3 +82,39 @@ def test_service_capacity_requirement_is_distinct_from_capability_requirement():
     assert [(row.code, row.detail) for row in failures] == [
         ("service_capacity:available", "research_execution:1/2")
     ]
+
+
+def test_service_capacity_dependency_order_is_upstream_first_and_deterministic():
+    dependencies = (
+        ServiceCapacityDependency("research", "surface"),
+        ServiceCapacityDependency("surface", "power"),
+        ServiceCapacityDependency("cargo", "surface"),
+    )
+    assert service_capacity_dependency_order(
+        {"cargo", "research", "surface", "power"}, dependencies
+    ) == ("power", "surface", "cargo", "research")
+
+
+def test_service_capacity_dependency_cycle_fails_closed():
+    dependencies = (
+        ServiceCapacityDependency("surface", "cargo"),
+        ServiceCapacityDependency("cargo", "surface"),
+    )
+    with pytest.raises(ValueError, match="service capacity dependency cycle"):
+        service_capacity_dependency_order({"surface", "cargo"}, dependencies)
+
+
+def test_configuration_validation_rejects_same_tick_service_dependency_cycle():
+    from space_idle import build_game_application
+    from space_idle.surface_infrastructure import SURFACE_DISTRIBUTION_SERVICE
+    from space_idle.validation import validate_simulation_configuration
+    from space_idle.validation_support import ConfigurationError
+
+    sim = build_game_application()._simulation
+    assert sim.surface_infrastructure is not None
+    sim.surface_infrastructure.network_dependent_service_types = frozenset(
+        {SURFACE_DISTRIBUTION_SERVICE}
+    )
+
+    with pytest.raises(ConfigurationError, match="service capacity dependency cycle"):
+        validate_simulation_configuration(sim)

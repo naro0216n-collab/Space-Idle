@@ -7,7 +7,7 @@ from .contracts import ContractService
 from .construction.models import CONSTRUCTION_SERVICE_TYPE
 from .domain import DomainExtension
 from .external_economy import ExternalEconomyState, FundsAllocationPlan, FundsRequest
-from .facilities import FacilityBook
+from .facilities import FacilityBook, FacilityPlacementScope
 from .founding import LocationFoundingService
 from .industry import IndustryService
 from .inventory import InventoryBook
@@ -20,8 +20,11 @@ from .research import ResearchService
 from .resource_claim import ResourceAllocationPlan, ResourceClaim, allocate_resource_claims
 from .service_capacity import (
     ServiceCapacityAllocationPlan,
+    ServiceCapacityDependency,
     ServiceCapacityRequest,
     allocate_service_capacity,
+    merge_service_capacity_plans,
+    service_capacity_dependency_order,
 )
 from .resource_demand import (
     ResourceDemand,
@@ -262,6 +265,133 @@ class Simulation:
             seen.add(request.id)
         return tuple(requests)
 
+    def service_capacity_dependencies(self) -> tuple[ServiceCapacityDependency, ...]:
+        """Declare static same-tick Service Capacity provider dependencies.
+
+        The graph is derived from generic placement/provider metadata.  A
+        Surface-Cell provider depends on the Location's aggregate distribution
+        service unless it is itself a provider of that upstream service.
+        Service types that intrinsically use the network (for example cargo
+        handling) declare the same edge independent of provider placement.
+        """
+        surface = self.surface_infrastructure
+        if surface is None:
+            return ()
+        upstream = surface.service_type
+        dependent = set(surface.network_dependent_service_types)
+        remote_dependent: set[str] = set()
+        for definition_id, definition in self.facilities.definitions.items():
+            if definition.placement_scope is not FacilityPlacementScope.SURFACE_CELL:
+                continue
+            remote_dependent.update(
+                supply.service_type
+                for supply in definition.service_capacity_supplies
+                if supply.service_type != upstream
+            )
+            if definition_id in self.projects.construction_providers:
+                remote_dependent.add(CONSTRUCTION_SERVICE_TYPE)
+            if self.survey is not None and definition_id in self.survey.providers:
+                remote_dependent.add(self.survey.SERVICE_TYPE)
+            if self.extraction is not None and definition_id in self.extraction.specs:
+                remote_dependent.add(
+                    self.extraction.service_type(
+                        self.extraction.specs[definition_id].resource_id
+                    )
+                )
+            remote_dependent.update(
+                self.industry.process_service_type(process.id)
+                for process in self.industry.processes.values()
+                if process.facility_def_id == definition_id
+            )
+        dependent.update(remote_dependent)
+        return tuple(
+            ServiceCapacityDependency(service_type, upstream)
+            for service_type in sorted(dependent)
+        )
+
+    def _service_provider_factors(
+        self,
+        location_id: SpatialNodeId,
+        service_type: str,
+        resolved_plan: ServiceCapacityAllocationPlan,
+        dependencies: tuple[ServiceCapacityDependency, ...],
+    ) -> dict | None:
+        surface = self.surface_infrastructure
+        if surface is None:
+            return None
+        if not any(
+            edge.service_type == service_type
+            and edge.upstream_service_type == surface.service_type
+            for edge in dependencies
+        ):
+            return None
+        return surface.facility_availability_factors(
+            location_id, service_type, self.facilities, resolved_plan
+        )
+
+    def _service_supply_at(
+        self,
+        location_id: SpatialNodeId,
+        service_type: str,
+        power: PowerSnapshot,
+        provider_factors: dict | None,
+    ) -> tuple[float, float]:
+        key = (location_id, service_type)
+        if service_type == CONSTRUCTION_SERVICE_TYPE:
+            return (
+                self.projects.construction_nominal_capacity_at(location_id, self.day),
+                self.projects.construction_capacity_at(
+                    location_id, power, self.day, provider_factors=provider_factors
+                ),
+            )
+        if self.survey is not None and service_type == self.survey.SERVICE_TYPE:
+            return (
+                self.survey.nominal_service_capacity_at(location_id, self.day),
+                self.survey.enabled_service_capacity_at(
+                    location_id, power, self.day, provider_factors=provider_factors
+                ),
+            )
+        if (
+            self.surface_infrastructure is not None
+            and service_type == self.surface_infrastructure.service_type
+        ):
+            return (
+                self.facilities.nominal_service_capacity_at(
+                    location_id, service_type, self.day
+                ),
+                self.surface_infrastructure.provider_available_capacity(
+                    location_id, self.facilities, power, self.day
+                ),
+            )
+
+        industry_nominal, industry_enabled = self.industry.service_supply(
+            location_id, self.facilities, power, self.day,
+            provider_factors=provider_factors,
+        )
+        if key in industry_nominal or key in industry_enabled:
+            return industry_nominal.get(key, 0.0), industry_enabled.get(key, 0.0)
+
+        if self.extraction is not None:
+            extraction_nominal, extraction_enabled = self.extraction.service_supply(
+                location_id, self.facilities, power, self.day,
+                provider_factors=provider_factors,
+            )
+            if key in extraction_nominal or key in extraction_enabled:
+                return (
+                    extraction_nominal.get(key, 0.0),
+                    extraction_enabled.get(key, 0.0),
+                )
+
+        return (
+            self.facilities.nominal_service_capacity_at(
+                location_id, service_type, self.day
+            ),
+            self.facilities.enabled_service_capacity_at(
+                location_id, service_type, power, self.day,
+                provider_factors=provider_factors,
+            ),
+        )
+
     def _allocate_tick_services(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
@@ -277,143 +407,78 @@ class Simulation:
             )
             requests = requests + upstream
 
-        surface_plan: ServiceCapacityAllocationPlan | None = None
-        if self.surface_infrastructure is not None:
-            surface_requests = tuple(
-                request for request in requests
-                if request.service_type == self.surface_infrastructure.service_type
+        locations = tuple(
+            sorted(
+                self._active_locations() | set(self.graph.operational_node_ids()),
+                key=str,
             )
-            surface_nominal: dict[tuple[SpatialNodeId, str], float] = {}
-            surface_enabled: dict[tuple[SpatialNodeId, str], float] = {}
-            surface_limiting: dict[tuple[SpatialNodeId, str], tuple[str, ...]] = {}
-            for location_id in sorted(self.graph.locations, key=str):
-                key = (location_id, self.surface_infrastructure.service_type)
-                nominal_rate = self.facilities.nominal_service_capacity_at(
-                    location_id, self.surface_infrastructure.service_type, self.day
-                )
-                enabled_rate = self.surface_infrastructure.provider_available_capacity(
-                    location_id, self.facilities, power_by_location[location_id], self.day
-                )
-                surface_nominal[key] = nominal_rate
-                surface_enabled[key] = enabled_rate
-                surface_limiting[key] = (
-                    () if enabled_rate + 1e-9 >= nominal_rate else ("provider_dependency",)
-                )
-            surface_plan = allocate_service_capacity(
-                surface_requests,
-                nominal_supply=surface_nominal,
-                enabled_supply=surface_enabled,
-                limiting_factors=surface_limiting,
-            )
-
-        dynamic_nominal: dict[tuple[SpatialNodeId, str], float] = {}
-        dynamic_enabled: dict[tuple[SpatialNodeId, str], float] = {}
-        for location_id in sorted(self._active_locations(), key=str):
-            power = power_by_location[location_id]
-            industry_nominal, industry_enabled = self.industry.service_supply(
-                location_id, self.facilities, power, self.day
-            )
-            extraction_nominal: dict[tuple[SpatialNodeId, str], float] = {}
-            extraction_enabled: dict[tuple[SpatialNodeId, str], float] = {}
-            if self.extraction is not None:
-                extraction_nominal, extraction_enabled = self.extraction.service_supply(
-                    location_id, self.facilities, power, self.day
-                )
-            for source, target in (
-                (industry_nominal, dynamic_nominal),
-                (industry_enabled, dynamic_enabled),
-                (extraction_nominal, dynamic_nominal),
-                (extraction_enabled, dynamic_enabled),
-            ):
-                for key, amount in source.items():
-                    target[key] = target.get(key, 0.0) + amount
-        keys = {
-            (request.operational_node_id, request.service_type)
-            for request in requests
-        }
-        keys.update(dynamic_nominal)
-        for location_id in self._active_locations() | set(self.graph.operational_node_ids()):
-            for service_type in self.facilities.service_types():
-                if self.facilities.nominal_service_capacity_at(
-                    location_id, service_type, self.day
-                ) > 1e-12:
-                    keys.add((location_id, service_type))
-            if (
-                self.survey is not None
-                and self.survey.nominal_service_capacity_at(location_id, self.day) > 1e-12
-            ):
-                keys.add((location_id, self.survey.SERVICE_TYPE))
-        nominal: dict[tuple[SpatialNodeId, str], float] = {}
-        enabled: dict[tuple[SpatialNodeId, str], float] = {}
-        limiting: dict[tuple[SpatialNodeId, str], tuple[str, ...]] = {}
-        for location_id, service_type in sorted(
-            keys, key=lambda row: (str(row[0]), row[1])
-        ):
-            power = power_by_location[location_id]
-            if service_type == CONSTRUCTION_SERVICE_TYPE:
-                nominal_rate = self.projects.construction_nominal_capacity_at(
-                    location_id, self.day
-                )
-                enabled_rate = self.projects.construction_capacity_at(
-                    location_id, power, self.day
-                )
-            elif self.survey is not None and service_type == self.survey.SERVICE_TYPE:
-                nominal_rate = self.survey.nominal_service_capacity_at(
-                    location_id, self.day
-                )
-                enabled_rate = self.survey.enabled_service_capacity_at(
-                    location_id, power, self.day
-                )
-            elif (location_id, service_type) in dynamic_nominal:
-                nominal_rate = dynamic_nominal[(location_id, service_type)]
-                enabled_rate = dynamic_enabled.get((location_id, service_type), 0.0)
-            elif (
-                self.surface_infrastructure is not None
-                and service_type == self.surface_infrastructure.service_type
-            ):
-                nominal_rate = self.facilities.nominal_service_capacity_at(
-                    location_id, service_type, self.day
-                )
-                enabled_rate = self.surface_infrastructure.provider_available_capacity(
-                    location_id, self.facilities, power, self.day
-                )
-            else:
-                nominal_rate = self.facilities.nominal_service_capacity_at(
-                    location_id, service_type, self.day
-                )
-                provider_factors = (
-                    None
-                    if self.surface_infrastructure is None
-                    or surface_plan is None
-                    else self.surface_infrastructure.facility_availability_factors(
-                        location_id, service_type, self.facilities, surface_plan
-                    )
-                )
-                enabled_rate = self.facilities.enabled_service_capacity_at(
-                    location_id, service_type, power, self.day,
-                    provider_factors=provider_factors,
-                )
-            key = (location_id, service_type)
-            nominal[key] = nominal_rate
-            enabled[key] = enabled_rate
-            factors: list[str] = []
-            if nominal_rate <= 1e-12:
-                if any(
-                    request.operational_node_id == location_id
-                    and request.service_type == service_type
-                    and request.requested_rate > 1e-12
-                    for request in requests
-                ):
-                    factors.append("provider_absent")
-            elif enabled_rate + 1e-9 < nominal_rate:
-                factors.append("provider_dependency")
-            limiting[key] = tuple(factors)
-        return allocate_service_capacity(
-            requests,
-            nominal_supply=nominal,
-            enabled_supply=enabled,
-            limiting_factors=limiting,
         )
+        service_types = {request.service_type for request in requests}
+        service_types.update(self.facilities.service_types())
+        service_types.add(CONSTRUCTION_SERVICE_TYPE)
+        service_types.update(
+            self.industry.process_service_type(process.id)
+            for process in self.industry.processes.values()
+        )
+        if self.extraction is not None:
+            service_types.update(
+                self.extraction.service_type(spec.resource_id)
+                for spec in self.extraction.specs.values()
+            )
+        if self.survey is not None:
+            service_types.add(self.survey.SERVICE_TYPE)
+        dependencies = self.service_capacity_dependencies()
+        order = service_capacity_dependency_order(service_types, dependencies)
+
+        plans: list[ServiceCapacityAllocationPlan] = []
+        for service_type in order:
+            resolved_plan = merge_service_capacity_plans(plans)
+            stage_requests = tuple(
+                request for request in requests if request.service_type == service_type
+            )
+            nominal: dict[tuple[SpatialNodeId, str], float] = {}
+            enabled: dict[tuple[SpatialNodeId, str], float] = {}
+            limiting: dict[tuple[SpatialNodeId, str], tuple[str, ...]] = {}
+            requested_locations = {
+                request.operational_node_id for request in stage_requests
+            }
+            for location_id in locations:
+                power = power_by_location[location_id]
+                provider_factors = self._service_provider_factors(
+                    location_id, service_type, resolved_plan, dependencies
+                )
+                nominal_rate, enabled_rate = self._service_supply_at(
+                    location_id, service_type, power, provider_factors
+                )
+                if (
+                    nominal_rate <= 1e-12
+                    and enabled_rate <= 1e-12
+                    and location_id not in requested_locations
+                ):
+                    continue
+                key = (location_id, service_type)
+                nominal[key] = nominal_rate
+                enabled[key] = enabled_rate
+                factors: list[str] = []
+                if nominal_rate <= 1e-12:
+                    if any(
+                        request.operational_node_id == location_id
+                        and request.requested_rate > 1e-12
+                        for request in stage_requests
+                    ):
+                        factors.append("provider_absent")
+                elif enabled_rate + 1e-9 < nominal_rate:
+                    factors.append("provider_dependency")
+                limiting[key] = tuple(factors)
+            plans.append(
+                allocate_service_capacity(
+                    stage_requests,
+                    nominal_supply=nominal,
+                    enabled_supply=enabled,
+                    limiting_factors=limiting,
+                )
+            )
+        return merge_service_capacity_plans(plans)
 
     def service_capacity_allocation_projection(self) -> ServiceCapacityAllocationPlan:
         return self.tick_decision_projection().allocations.services

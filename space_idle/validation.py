@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .domain import validate_extension_registry
 from .simulation import Simulation
+from .service_capacity import service_capacity_dependency_order
 from .validation_support import ConfigurationError, ValidationContext
 
 
@@ -13,6 +14,23 @@ def validate_simulation_configuration(sim: Simulation) -> None:
         validator = extension.configuration_validator
         if validator is not None:
             validator(sim, ctx)
+
+    dependencies = sim.service_capacity_dependencies()
+    for dependency in dependencies:
+        if dependency.service_type not in ctx.known_service_types:
+            raise ConfigurationError(
+                "service capacity dependency references unknown service type: "
+                + dependency.service_type
+            )
+        if dependency.upstream_service_type not in ctx.known_service_types:
+            raise ConfigurationError(
+                "service capacity dependency references unknown upstream service type: "
+                + dependency.upstream_service_type
+            )
+    try:
+        service_capacity_dependency_order(ctx.known_service_types, dependencies)
+    except ValueError as exc:
+        raise ConfigurationError(str(exc)) from exc
 
 
 def validate_runtime_state(sim: Simulation) -> None:

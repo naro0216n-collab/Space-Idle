@@ -7,9 +7,7 @@ from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .knowledge import DomainActivity
 from .power import PowerSnapshot
-from .service_capacity import (
-    ServiceCapacityAllocationPlan, ServiceCapacityRequest, allocate_service_capacity,
-)
+from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .spatial import SpatialGraph
 from .surface_infrastructure import SurfaceInfrastructureService
@@ -96,6 +94,8 @@ class ExtractionService:
         facilities: FacilityBook,
         power: PowerSnapshot,
         day: int = 0,
+        *,
+        provider_factors: dict[EntityId, float] | None = None,
     ) -> tuple[dict[tuple[SpatialNodeId, str], float], dict[tuple[SpatialNodeId, str], float]]:
         spec_by, nominal_by, fulfillment_by, _reasons = self._facility_inputs(
             location_id, facilities, power, day
@@ -106,23 +106,9 @@ class ExtractionService:
             key = (location_id, self.service_type(spec.resource_id))
             amount = nominal_by.get(facility_id, 0.0)
             nominal[key] = nominal.get(key, 0.0) + amount
-            enabled[key] = enabled.get(key, 0.0) + amount * fulfillment_by.get(facility_id, 0.0)
+            upstream = (provider_factors or {}).get(facility_id, 1.0)
+            enabled[key] = enabled.get(key, 0.0) + amount * fulfillment_by.get(facility_id, 0.0) * upstream
         return nominal, enabled
-
-    def _standalone_service_plan(
-        self,
-        location_id: SpatialNodeId,
-        facilities: FacilityBook,
-        power: PowerSnapshot,
-        day: int,
-    ) -> ServiceCapacityAllocationPlan:
-        requests = self.service_requests(location_id, facilities, day)
-        nominal, enabled = self.service_supply(location_id, facilities, power, day)
-        return allocate_service_capacity(
-            requests,
-            nominal_supply=nominal,
-            enabled_supply=enabled,
-        )
 
     def effective_opportunity(
         self,
@@ -200,10 +186,10 @@ class ExtractionService:
         spec_by, nominal_by, fulfillment_by, _reasons = self._facility_inputs(
             location_id, facilities, power, day
         )
+        if service_allocations is None:
+            raise ValueError("extraction planning requires the shared ServiceCapacityAllocationPlan")
         shared_service_allocations = service_allocations
-        allocation_plan = service_allocations or self._standalone_service_plan(
-            location_id, facilities, power, day
-        )
+        allocation_plan = service_allocations
         resource_ids = {
             spec.resource_id for spec in spec_by.values()
         }
@@ -264,9 +250,9 @@ class ExtractionService:
         spec_by, nominal_by, fulfillment_by, reasons = self._facility_inputs(
             location_id, facilities, power, day
         )
-        allocation_plan = service_allocations or self._standalone_service_plan(
-            location_id, facilities, power, day
-        )
+        if service_allocations is None:
+            raise ValueError("extraction planning requires the shared ServiceCapacityAllocationPlan")
+        allocation_plan = service_allocations
         resource_summary = {
             row.resource_id: row
             for row in self.resource_snapshots(

@@ -135,6 +135,102 @@ class ServiceCapacityAllocationPlan:
         )
 
 
+
+@dataclass(frozen=True)
+class ServiceCapacityDependency:
+    """A same-tick provider edge between finite service types.
+
+    ``service_type`` is the downstream service whose Available supply depends
+    on allocation of ``upstream_service_type``. Dependencies are transient
+    planning/configuration data, not persisted state.
+    """
+
+    service_type: str
+    upstream_service_type: str
+
+    def __post_init__(self) -> None:
+        if not self.service_type or not self.upstream_service_type:
+            raise ValueError("service capacity dependency types must not be empty")
+
+
+def service_capacity_dependency_order(
+    service_types: Iterable[str],
+    dependencies: Iterable[ServiceCapacityDependency],
+) -> tuple[str, ...]:
+    """Return a deterministic upstream-first order and reject cycles."""
+
+    nodes = set(service_types)
+    edges = tuple(dependencies)
+    for edge in edges:
+        nodes.add(edge.service_type)
+        nodes.add(edge.upstream_service_type)
+
+    downstream: dict[str, set[str]] = {node: set() for node in nodes}
+    indegree: dict[str, int] = {node: 0 for node in nodes}
+    seen: set[tuple[str, str]] = set()
+    for edge in edges:
+        key = (edge.upstream_service_type, edge.service_type)
+        if key in seen:
+            continue
+        seen.add(key)
+        downstream[edge.upstream_service_type].add(edge.service_type)
+        indegree[edge.service_type] += 1
+
+    ready = sorted(node for node, count in indegree.items() if count == 0)
+    ordered: list[str] = []
+    while ready:
+        node = ready.pop(0)
+        ordered.append(node)
+        for dependent in sorted(downstream[node]):
+            indegree[dependent] -= 1
+            if indegree[dependent] == 0:
+                ready.append(dependent)
+                ready.sort()
+
+    if len(ordered) != len(nodes):
+        cyclic = tuple(sorted(node for node, count in indegree.items() if count > 0))
+        raise ValueError(
+            "service capacity dependency cycle: " + " -> ".join(cyclic)
+        )
+    return tuple(ordered)
+
+
+def merge_service_capacity_plans(
+    plans: Iterable[ServiceCapacityAllocationPlan],
+) -> ServiceCapacityAllocationPlan:
+    """Combine disjoint service-type stage results into one tick plan."""
+
+    rows = tuple(plans)
+    requests: list[ServiceCapacityRequest] = []
+    allocations: list[ServiceCapacityAllocation] = []
+    nominal: dict[tuple[SpatialNodeId, str], float] = {}
+    enabled: dict[tuple[SpatialNodeId, str], float] = {}
+    limiting: dict[tuple[SpatialNodeId, str], tuple[str, ...]] = {}
+    for plan in rows:
+        requests.extend(plan.requests)
+        allocations.extend(plan.allocations)
+        for source, target in (
+            (plan.supply_nominal, nominal),
+            (plan.supply_enabled, enabled),
+            (plan.supply_limiting_factors, limiting),
+        ):
+            for key, value in source.items():
+                if key in target:
+                    raise ValueError(f"duplicate staged service capacity supply: {key}")
+                target[key] = value
+
+    request_ids = [request.id for request in requests]
+    if len(request_ids) != len(set(request_ids)):
+        raise ValueError("duplicate staged service capacity request id")
+    allocation_by_id = {row.request_id: row for row in allocations}
+    ordered_requests = tuple(
+        sorted(requests, key=lambda request: (-request.priority, _request_order_key(request)))
+    )
+    ordered_allocations = tuple(allocation_by_id[request.id] for request in ordered_requests)
+    return ServiceCapacityAllocationPlan(
+        ordered_requests, ordered_allocations, nominal, enabled, limiting
+    )
+
 def _request_order_key(request: ServiceCapacityRequest) -> tuple:
     return (
         request.owner_kind,

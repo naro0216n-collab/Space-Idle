@@ -101,10 +101,14 @@ def test_owned_transport_is_physical_while_external_transport_requires_policy_an
 def test_extraction_stops_when_output_storage_service_is_full():
     app = build_game_application()
     sim = app._simulation
-    power = sim.power.snapshot(EARTH, sim.facilities, sim.day)
+    decision = sim.tick_decision_projection()
+    power = decision.allocations.power_by_location[EARTH]
+    services = decision.allocations.services
     initial = next(
         row
-        for row in sim.extraction.snapshots(EARTH, sim.facilities, sim.inventory, power, sim.day)
+        for row in sim.extraction.snapshots(
+            EARTH, sim.facilities, sim.inventory, power, sim.day, services
+        )
         if row.output_t_per_day > 0
     )
     spec = sim.extraction.specs[initial.facility_def_id]
@@ -115,11 +119,15 @@ def test_extraction_stops_when_output_storage_service_is_full():
     before = sim.inventory.amount(EARTH, spec.output_resource_id)
     blocked = next(
         row
-        for row in sim.extraction.snapshots(EARTH, sim.facilities, sim.inventory, power, sim.day)
+        for row in sim.extraction.snapshots(
+            EARTH, sim.facilities, sim.inventory, power, sim.day, services
+        )
         if row.facility_id == initial.facility_id
     )
     assert blocked.output_t_per_day == 0.0
     assert any(reason.startswith("storage:") for reason in blocked.limiting_factors)
 
-    sim.extraction.advance_day(EARTH, sim.facilities, sim.inventory, power, sim.day)
+    sim.extraction.advance_day(
+        EARTH, sim.facilities, sim.inventory, power, sim.day, services
+    )
     assert sim.inventory.amount(EARTH, spec.output_resource_id) == before

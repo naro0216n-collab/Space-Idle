@@ -98,9 +98,7 @@ class IndustryPlanningMixin:
         if resource_allocations is None:
             raise ValueError("industry planning requires the shared ResourceAllocationPlan")
         if service_allocations is None:
-            service_allocations = self.standalone_service_plan(
-                location_id, facilities, power, day
-            )
+            raise ValueError("industry planning requires the shared ServiceCapacityAllocationPlan")
 
         power_factors = {
             facility.id: max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))

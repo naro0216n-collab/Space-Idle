@@ -10,13 +10,37 @@ from space_idle.extraction_service import ExtractionService
 from space_idle.facilities import FacilityBook
 from space_idle.persistence import save_game
 from space_idle.power import PowerSnapshot
+from space_idle.service_capacity import allocate_service_capacity
+
+
+def _service_plan(sim, facilities, power):
+    surface_request = sim.surface_infrastructure.service_request(ids.EARTH)
+    requests = (surface_request,) + sim.extraction.service_requests(
+        ids.EARTH, facilities, sim.day
+    )
+    nominal, enabled = sim.extraction.service_supply(
+        ids.EARTH, facilities, power, sim.day
+    )
+    surface_key = (ids.EARTH, sim.surface_infrastructure.service_type)
+    nominal[surface_key] = facilities.nominal_service_capacity_at(
+        ids.EARTH, sim.surface_infrastructure.service_type, sim.day
+    )
+    enabled[surface_key] = sim.surface_infrastructure.provider_available_capacity(
+        ids.EARTH, facilities, power, sim.day
+    )
+    return allocate_service_capacity(
+        requests, nominal_supply=nominal, enabled_supply=enabled
+    )
 
 
 def _resource_snapshot(sim, resource_id):
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+    services = _service_plan(sim, sim.facilities, power)
     return next(
         row
-        for row in sim.extraction.resource_snapshots(ids.EARTH, sim.facilities, power, sim.day)
+        for row in sim.extraction.resource_snapshots(
+            ids.EARTH, sim.facilities, power, sim.day, services
+        )
         if row.resource_id == resource_id
     )
 
@@ -30,10 +54,13 @@ def test_extraction_does_not_consume_static_resource_potential():
     }
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
     before_stock = sim.inventory.amount(ids.EARTH, ids.AGGREGATE)
+    services = _service_plan(sim, sim.facilities, power)
     aggregate = _resource_snapshot(sim, ids.AGGREGATE)
     assert aggregate.output_t_per_day > 0.0
 
-    sim.extraction.advance_day(ids.EARTH, sim.facilities, sim.inventory, power, sim.day)
+    sim.extraction.advance_day(
+        ids.EARTH, sim.facilities, sim.inventory, power, sim.day, services
+    )
 
     assert sim.inventory.amount(ids.EARTH, ids.AGGREGATE) > before_stock
     assert {
@@ -96,12 +123,18 @@ def test_operational_fulfillment_scales_soft_saturation_output():
     full_power = PowerSnapshot(0.0, 0.0, 0.0, {facility_id: 1.0}, {facility_id: 1.0})
     half_power = PowerSnapshot(0.0, 0.0, 0.0, {facility_id: 0.5}, {facility_id: 1.0})
 
+    full_services = _service_plan(base, facilities, full_power)
+    half_services = _service_plan(base, facilities, half_power)
     full = next(
-        row for row in base.extraction.resource_snapshots(ids.EARTH, facilities, full_power, base.day)
+        row for row in base.extraction.resource_snapshots(
+            ids.EARTH, facilities, full_power, base.day, full_services
+        )
         if row.resource_id == ids.METAL_ORE
     )
     half = next(
-        row for row in base.extraction.resource_snapshots(ids.EARTH, facilities, half_power, base.day)
+        row for row in base.extraction.resource_snapshots(
+            ids.EARTH, facilities, half_power, base.day, half_services
+        )
         if row.resource_id == ids.METAL_ORE
     )
 
@@ -136,9 +169,12 @@ def test_new_extraction_capacity_changes_throughput_and_registration_order_does_
         facilities = FacilityBook(definitions, base.facilities.environment)
         for level in levels:
             facilities.install(ids.METAL_ORE_MINE, ids.EARTH, level=level)
+        services = _service_plan(base, facilities, power)
         return next(
             row
-            for row in base.extraction.resource_snapshots(ids.EARTH, facilities, power, base.day)
+            for row in base.extraction.resource_snapshots(
+                ids.EARTH, facilities, power, base.day, services
+            )
             if row.resource_id == ids.METAL_ORE
         )
 

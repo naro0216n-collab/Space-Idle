@@ -279,7 +279,8 @@ class ConstructionRulesMixin:
         return capacity
 
     def construction_capacity_at(
-        self, location_id: SpatialNodeId, power: PowerSnapshot, day: int = 0
+        self, location_id: SpatialNodeId, power: PowerSnapshot, day: int = 0, *,
+        provider_factors: dict[EntityId, float] | None = None,
     ) -> float:
         """Enabled Construction Service Capacity before consumer allocation."""
         capacity = 0.0
@@ -289,7 +290,8 @@ class ConstructionRulesMixin:
                 continue
             utilization = power.utilization_by_facility.get(facility.id, 1.0)
             maintenance = power.maintenance_factor_by_facility.get(facility.id, 1.0)
-            capacity += spec.work_per_day * utilization * maintenance
+            upstream = (provider_factors or {}).get(facility.id, 1.0)
+            capacity += spec.work_per_day * utilization * maintenance * upstream
         for resource_id, spec in self.construction_resource_providers.items():
             capacity += (
                 self.inventory.available(location_id, resource_id)

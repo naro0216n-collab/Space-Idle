@@ -383,9 +383,12 @@ class SurveyService:
         provider_operational_node_id: SpatialNodeId,
         power: PowerSnapshot | None = None,
         day: int = 0,
+        *,
+        provider_factors: dict[EntityId, float] | None = None,
     ) -> float:
         return sum(
             self._facility_survey_capacity(facility, spec, power)
+            * (provider_factors or {}).get(facility.id, 1.0)
             for facility in self.facilities.active_compatible_at(provider_operational_node_id, day)
             for spec in (self.providers.get(facility.definition_id),)
             if spec is not None

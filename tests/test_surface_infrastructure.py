@@ -155,6 +155,35 @@ def test_remote_surface_facility_capability_remains_categorical_under_surface_se
     assert station_id in sim.facilities.facilities
 
 
+def test_remote_surface_survey_supply_is_enabled_by_shared_surface_dependency_allocation():
+    sim = build_game_application()._simulation
+    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
+    sim.facilities.install(
+        ids.ROBOTIC_GEOLOGY_STATION,
+        ids.EARTH,
+        site_cell_id=ids.EARTH_CELL_COASTAL,
+    )
+
+    constrained = sim.tick_decision_projection().allocations.services.summary(
+        ids.EARTH, "survey_observation"
+    )
+    assert constrained.nominal_rate == pytest.approx(9.0)
+    assert constrained.enabled_rate == 0.0
+    assert constrained.limiting_factors == ("provider_dependency",)
+
+    sim.facilities.install(
+        ids.SURFACE_DISTRIBUTION_HUB,
+        ids.EARTH,
+        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+    )
+    supplied = sim.tick_decision_projection().allocations.services.summary(
+        ids.EARTH, "survey_observation"
+    )
+    assert supplied.nominal_rate == pytest.approx(9.0)
+    assert supplied.enabled_rate == pytest.approx(9.0)
+    assert supplied.limiting_factors == ()
+
+
 def test_surface_cell_development_progress_is_limited_by_surface_infrastructure():
     app = build_game_application()
     sim = app._simulation

@@ -7,11 +7,7 @@ from .inventory import InventoryBook
 from .power import PowerSnapshot
 from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .resource_demand import ResourceDemand
-from .service_capacity import (
-    ServiceCapacityAllocationPlan,
-    ServiceCapacityRequest,
-    allocate_service_capacity,
-)
+from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .production import (
     ProcessSpec, ProcessSnapshot, ProcessSelectionMixin,
@@ -71,6 +67,8 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         facilities: FacilityBook,
         power: PowerSnapshot,
         day: int = 0,
+        *,
+        provider_factors: dict[EntityId, float] | None = None,
     ) -> tuple[dict[tuple[SpatialNodeId, str], float], dict[tuple[SpatialNodeId, str], float]]:
         """Return nominal and dependency-enabled Process Capacity supply."""
         nominal: dict[tuple[SpatialNodeId, str], float] = {}
@@ -83,31 +81,18 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 continue
             key = (location_id, self.process_service_type(process.id))
             nominal[key] = nominal.get(key, 0.0) + 1.0
+            upstream = (provider_factors or {}).get(facility.id, 1.0)
             factor = max(
                 0.0,
                 min(
                     1.0,
                     power.utilization_by_facility.get(facility.id, 1.0)
-                    * power.maintenance_factor_by_facility.get(facility.id, 1.0),
+                    * power.maintenance_factor_by_facility.get(facility.id, 1.0)
+                    * upstream,
                 ),
             )
             enabled[key] = enabled.get(key, 0.0) + factor
         return nominal, enabled
-
-    def standalone_service_plan(
-        self,
-        location_id: SpatialNodeId,
-        facilities: FacilityBook,
-        power: PowerSnapshot,
-        day: int = 0,
-    ) -> ServiceCapacityAllocationPlan:
-        requests = self.service_requests(location_id, facilities, day)
-        nominal, enabled = self.service_supply(location_id, facilities, power, day)
-        return allocate_service_capacity(
-            requests,
-            nominal_supply=nominal,
-            enabled_supply=enabled,
-        )
 
     def resource_demands(
         self,
