@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
-from .facilities import FacilityBook
+from .facilities import FacilityBook, FacilityState
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .spatial import EnvironmentResolver, IlluminationField
 
@@ -53,13 +53,14 @@ class PowerService:
     specs: dict[DefinitionId, PowerSpec]
     environment: EnvironmentResolver
 
-    def _generation(self, spec: PowerSpec, location_id: SpatialNodeId, day: int) -> float:
+    def _generation(self, spec: PowerSpec, facility: FacilityState, facilities: FacilityBook, day: int) -> float:
         model = spec.generation
         if model is None:
             return 0.0
         if isinstance(model, FixedGeneration):
             return model.mw
-        illumination = self.environment.get(location_id, IlluminationField, day)
+        context_id = facilities.facility_environment_context(facility)
+        illumination = self.environment.get(context_id, IlluminationField, day)
         if illumination is None:
             return 0.0
         return (
@@ -83,7 +84,7 @@ class PowerService:
             maintenance = facilities.maintenance_factor(facility.id)
             maintenance_factors[facility.id] = maintenance
             if not facility.paused:
-                generation += self._generation(spec, location_id, day) * maintenance
+                generation += self._generation(spec, facility, facilities, day) * maintenance
             load = spec.standby_load_mw if facility.paused else spec.load_mw
             if load > 0:
                 priority = facility.power_priority if facility.power_priority is not None else spec.default_priority

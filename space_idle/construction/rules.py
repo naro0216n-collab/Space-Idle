@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from ..power import PowerSnapshot
-from ..shared import DefinitionId, EntityId, SpatialNodeId
-from ..site import SiteRequirements, evaluate_site_requirements
+from ..shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from ..site import SiteRequirementFailure, SiteRequirements, evaluate_site_requirements
 from .models import (
     ConstructionProject,
     FacilityUpgradeRecipe,
@@ -47,15 +47,32 @@ class ConstructionRulesMixin:
         location_id: SpatialNodeId,
         day: int = 0,
         power: PowerSnapshot | None = None,
+        *,
+        site_cell_id: SurfaceCellId | None = None,
+        existing_facility_id: EntityId | None = None,
     ):
         definition = self.facilities.definitions[recipe.facility_def_id]
+        if existing_facility_id is None:
+            placement = self.facilities.placement_failures(
+                recipe.facility_def_id, location_id, site_cell_id
+            )
+            if placement:
+                return tuple(SiteRequirementFailure(code, detail) for code, detail in placement)
+            environment_context = self.facilities.placement_context(
+                recipe.facility_def_id, location_id, site_cell_id
+            )
+        else:
+            facility = self.facilities.facilities[existing_facility_id]
+            environment_context = self.facilities.facility_environment_context(facility)
         snapshot = power if power is not None else self.power.snapshot(location_id, self.facilities, day)
         failures = list(evaluate_site_requirements(
             SiteRequirements(environment=definition.installation_environment),
             location_id, day, self.facilities.environment, self.facilities, snapshot,
+            environment_context_id=environment_context,
         ))
         failures.extend(evaluate_site_requirements(
             recipe.site_requirements, location_id, day, self.facilities.environment, self.facilities, snapshot,
+            environment_context_id=environment_context,
         ))
         return tuple(dict.fromkeys(failures))
 
@@ -65,8 +82,12 @@ class ConstructionRulesMixin:
         location_id: SpatialNodeId,
         day: int = 0,
         power: PowerSnapshot | None = None,
+        *,
+        site_cell_id: SurfaceCellId | None = None,
     ):
-        return self._site_failures_for_recipe(self.recipes[facility_def_id], location_id, day, power)
+        return self._site_failures_for_recipe(
+            self.recipes[facility_def_id], location_id, day, power, site_cell_id=site_cell_id
+        )
 
     def upgrade_site_failures(
         self,
@@ -77,12 +98,22 @@ class ConstructionRulesMixin:
     ):
         facility = self.facilities.facilities[facility_id]
         recipe = self.upgrade_recipes[(facility.definition_id, target_level)]
-        return self._site_failures_for_recipe(recipe, facility.location_id, day, power)
+        return self._site_failures_for_recipe(
+            recipe, facility.location_id, day, power, existing_facility_id=facility_id
+        )
 
     def project_site_failures(
         self, project: ConstructionProject, day: int = 0, power: PowerSnapshot | None = None
     ):
-        return self._site_failures_for_recipe(self._recipe_for_project(project), project.location_id, day, power)
+        if isinstance(project.target, FacilityUpgradeTarget):
+            return self._site_failures_for_recipe(
+                self._recipe_for_project(project), project.location_id, day, power,
+                existing_facility_id=project.target.facility_id,
+            )
+        return self._site_failures_for_recipe(
+            self._recipe_for_project(project), project.location_id, day, power,
+            site_cell_id=project.site_cell_id,
+        )
 
     def construction_capacity_at(self, location_id: SpatialNodeId, power: PowerSnapshot, day: int) -> float:
         capacity = 0.0

@@ -46,6 +46,7 @@ class FacilityDefinitionRow:
     installation_environment: tuple[RequirementConditionRow, ...] = ()
     operating_environment: tuple[RequirementConditionRow, ...] = ()
     maintenance_fraction_per_year: float = 0.0
+    placement_scope: str = "LOCATION"
 
 
 @dataclass(frozen=True)

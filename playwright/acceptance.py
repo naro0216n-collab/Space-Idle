@@ -365,7 +365,7 @@ def run() -> dict[str, object]:
 
             page.locator(f'[data-location-id="{ids.EARTH}"]').click()
             page.locator('[data-tab="survey"]').click()
-            known_survey = page.locator(f'tr[data-inspect="survey"][data-id="{ids.WATER}"]')
+            known_survey = page.locator(f'tr[data-inspect="survey"][data-id="{ids.EARTH_CELL_INDUSTRIAL}::{ids.WATER}"]')
             known_survey.wait_for(timeout=10000)
             _assert("完了" in known_survey.inner_text(), "initial knowledge must not appear as an active survey campaign")
             known_survey.click()
@@ -375,7 +375,7 @@ def run() -> dict[str, object]:
 
             page.locator(f'[data-location-id="{ids.SOUTH_POLAR_RIDGE}"]').click()
             page.locator('[data-tab="survey"]').click()
-            survey_row = page.locator(f'tr[data-inspect="survey"][data-id="{ids.WATER}"]')
+            survey_row = page.locator(f'tr[data-inspect="survey"][data-id="{ids.MOON_CELL_SOUTH_POLAR_RIDGE}::{ids.WATER}"]')
             survey_row.wait_for(timeout=10000)
             survey_row.click()
             _assert(page.locator('#surveyWeightInput').is_enabled(), "startable survey must expose initial allocation")

@@ -13,6 +13,20 @@ class SurfaceResourceKnowledgeRow:
     visible_potential_precision_fraction: float | None
 
 
+
+
+@dataclass(frozen=True)
+class SurfaceFacilityPlacementOption:
+    facility_definition_id: str
+    display_name: str
+    location_id: str
+    construction_required: float
+    self_deploying: bool
+    resources: tuple[tuple[str, float], ...]
+    missing_technologies: tuple[str, ...]
+    site_blockers: tuple[tuple[str, str], ...]
+
+
 @dataclass(frozen=True)
 class SurfaceCellRow:
     id: str
@@ -28,6 +42,7 @@ class SurfaceCellRow:
     is_location_core: bool
     foundation_blockers: tuple[tuple[str, str], ...]
     development_options: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
+    facility_placement_options: tuple[SurfaceFacilityPlacementOption, ...] = ()
 
 
 @dataclass(frozen=True)

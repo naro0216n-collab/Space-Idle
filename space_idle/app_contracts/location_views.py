@@ -50,6 +50,8 @@ class FacilityRow:
     maintenance_satisfaction: float = 1.0
     operational_utilization: float = 1.0
     operating_blockers: tuple[tuple[str, str], ...] = ()
+    placement_scope: str = "LOCATION"
+    site_cell_id: str | None = None
 
 
 @dataclass(frozen=True)

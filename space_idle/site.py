@@ -7,14 +7,14 @@ if TYPE_CHECKING:
     from .facilities import FacilityBook
     from .power import PowerSnapshot
 from .shared import SpatialNodeId
-from .spatial import EnvironmentResolver, SpatialFacet
+from .spatial import EnvironmentResolver, SpatialContextId, SpatialFacet
 
 
 class EnvironmentCondition(Protocol):
     code: str
     description: str
 
-    def matches(self, environment: EnvironmentResolver, location_id: SpatialNodeId, day: int) -> bool: ...
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId, day: int) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -23,8 +23,8 @@ class RequiresFacet:
     code: str
     description: str
 
-    def matches(self, environment: EnvironmentResolver, location_id: SpatialNodeId, day: int) -> bool:
-        return environment.get(location_id, self.facet_type, day) is not None
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId, day: int) -> bool:
+        return environment.get(context_id, self.facet_type, day) is not None
 
 
 @dataclass(frozen=True)
@@ -40,8 +40,8 @@ class FacetValueRange:
         if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
             raise ValueError("facet minimum cannot exceed maximum")
 
-    def matches(self, environment: EnvironmentResolver, location_id: SpatialNodeId, day: int) -> bool:
-        facet = environment.get(location_id, self.facet_type, day)
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId, day: int) -> bool:
+        facet = environment.get(context_id, self.facet_type, day)
         if facet is None:
             return False
         value = getattr(facet, self.attribute)
@@ -89,10 +89,13 @@ def evaluate_site_requirements(
     environment: EnvironmentResolver,
     facilities: "FacilityBook",
     power: "PowerSnapshot | None" = None,
+    *,
+    environment_context_id: SpatialContextId | None = None,
 ) -> tuple[SiteRequirementFailure, ...]:
     failures: list[SiteRequirementFailure] = []
+    context_id = location_id if environment_context_id is None else environment_context_id
     for condition in requirements.environment:
-        if not condition.matches(environment, location_id, day):
+        if not condition.matches(environment, context_id, day):
             failures.append(SiteRequirementFailure(condition.code, condition.description))
 
     for requirement in requirements.capability_requirements:

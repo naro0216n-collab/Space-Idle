@@ -8,7 +8,7 @@ from ..validation_support import (
     require as _require,
     validate_site_requirements as _validate_site_requirements,
 )
-from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId
+from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .models import (
     ConstructionProject,
     FacilityUpgradeTarget,
@@ -44,6 +44,7 @@ def capture_projects(sim: Any) -> dict[str, Any]:
                 "id": str(project.id),
                 "target": _capture_target(project.target),
                 "location_id": str(project.location_id),
+                "site_cell_id": None if project.site_cell_id is None else str(project.site_cell_id),
                 "priority": project.priority,
                 "sourcing_policy": project.sourcing_policy,
                 "import_source_id": None if project.import_source_id is None else str(project.import_source_id),
@@ -85,6 +86,7 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
             id=project_id,
             target=_restore_target(row["target"]),
             location_id=SpatialNodeId(row["location_id"]),
+            site_cell_id=None if row["site_cell_id"] is None else SurfaceCellId(row["site_cell_id"]),
             priority=int(row["priority"]),
             sourcing_policy=row["sourcing_policy"],
             import_source_id=None if row["import_source_id"] is None else SpatialNodeId(row["import_source_id"]),
@@ -160,7 +162,14 @@ def validate_runtime(sim: Any) -> None:
         if isinstance(project.target, NewFacilityTarget):
             _require(project.target.facility_def_id in sim.projects.recipes, f"project references unknown build recipe: {project_id}")
             recipe = sim.projects.recipes[project.target.facility_def_id]
+            _require(
+                not sim.facilities.placement_failures(
+                    project.target.facility_def_id, project.location_id, project.site_cell_id
+                ),
+                f"project has invalid facility placement: {project_id}",
+            )
         else:
+            _require(project.site_cell_id is None, f"upgrade project duplicates facility site cell: {project_id}")
             _require(project.target.facility_id in sim.facilities.facilities, f"upgrade project references unknown facility: {project_id}")
             facility = sim.facilities.facilities[project.target.facility_id]
             _require(facility.location_id == project.location_id, f"upgrade project location mismatch: {project_id}")
@@ -185,6 +194,8 @@ def validate_runtime(sim: Any) -> None:
             completed = sim.facilities.facilities[project.completed_facility_id]
             _require(completed.location_id == project.location_id, f"completed facility location mismatch: {project_id}")
             _require(completed.definition_id == recipe.facility_def_id, f"completed facility definition mismatch: {project_id}")
+            if isinstance(project.target, NewFacilityTarget):
+                _require(completed.site_cell_id == project.site_cell_id, f"completed facility site mismatch: {project_id}")
             if isinstance(project.target, FacilityUpgradeTarget):
                 _require(project.completed_facility_id == project.target.facility_id, f"upgrade completed wrong facility: {project_id}")
         else:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..power import PowerSnapshot
-from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId
+from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .models import (
     ConstructionProject,
     ConstructionTarget,
@@ -22,6 +22,7 @@ class ConstructionPlanningMixin:
         priority: int,
         sourcing_policy: SourcingPolicy,
         import_source_id: SpatialNodeId | None,
+        site_cell_id: SurfaceCellId | None = None,
     ) -> ProjectId:
         if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
@@ -34,7 +35,14 @@ class ConstructionPlanningMixin:
 
         if isinstance(target, NewFacilityTarget):
             recipe = self.recipes[target.facility_def_id]
+            placement_failures = self.facilities.placement_failures(
+                target.facility_def_id, location_id, site_cell_id
+            )
+            if placement_failures:
+                raise ValueError("; ".join(detail for _code, detail in placement_failures))
         else:
+            if site_cell_id is not None:
+                raise ValueError("upgrade project must not duplicate facility site cell")
             facility = self.facilities.facilities[target.facility_id]
             recipe = self.upgrade_recipes[(facility.definition_id, target.target_level)]
 
@@ -52,6 +60,7 @@ class ConstructionPlanningMixin:
             sourcing_policy,
             import_source_id,
             resources=resources,
+            site_cell_id=site_cell_id,
         )
         return project_id
 
@@ -63,11 +72,12 @@ class ConstructionPlanningMixin:
         sourcing_policy: SourcingPolicy,
         day: int = 0,
         import_source_id: SpatialNodeId | None = None,
+        site_cell_id: SurfaceCellId | None = None,
     ) -> ProjectId:
         if facility_def_id not in self.recipes:
             raise KeyError(facility_def_id)
         return self._create_project(
-            NewFacilityTarget(facility_def_id), location_id, priority, sourcing_policy, import_source_id
+            NewFacilityTarget(facility_def_id), location_id, priority, sourcing_policy, import_source_id, site_cell_id
         )
 
     def plan_upgrade(

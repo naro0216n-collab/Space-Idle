@@ -190,6 +190,8 @@ class LocationProjectorMixin:
                     facility.maintenance_satisfaction,
                     operational_utilization,
                     tuple(operating_blockers),
+                    definition.placement_scope.value,
+                    None if facility.site_cell_id is None else str(facility.site_cell_id),
                 )
             )
 

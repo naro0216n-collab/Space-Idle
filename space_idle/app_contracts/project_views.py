@@ -73,6 +73,7 @@ class ProjectRow:
     completed_facility_id: str | None
     resources: tuple[ProjectResourceRow, ...]
     blockers: tuple[tuple[str, str], ...]
+    site_cell_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -27,6 +27,7 @@ def project_facilities(projector):
             tuple(condition_definition_row(condition) for condition in definition.installation_environment),
             tuple(condition_definition_row(condition) for condition in definition.operating_environment),
             definition.maintenance_fraction_per_year,
+            definition.placement_scope.value,
         )
         for definition in sorted(projector._simulation.facilities.definitions.values(), key=lambda d: str(d.id))
     )

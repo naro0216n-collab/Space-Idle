@@ -13,7 +13,7 @@ from .application_commands import (
     SetProjectPriority,
     SetProjectSourcingPolicy,
 )
-from .shared import DefinitionId, EntityId, ProjectId
+from .shared import DefinitionId, EntityId, ProjectId, SurfaceCellId
 
 
 class ConstructionCommandHandlerMixin:
@@ -29,6 +29,7 @@ class ConstructionCommandHandlerMixin:
                 import_source_id=(
                     None if command.import_source_id is None else self._require_location(command.import_source_id)
                 ),
+                site_cell_id=None if command.site_cell_id is None else SurfaceCellId(command.site_cell_id),
             )
             return CommandResult(str(pid))
         if isinstance(command, PlanFacilityUpgrade):

@@ -12,6 +12,7 @@ class PlanBuild:
     priority: int = 50
     sourcing_policy: SourcingPolicyValue = "mixed"
     import_source_id: str | None = None
+    site_cell_id: str | None = None
 
 
 @dataclass(frozen=True)

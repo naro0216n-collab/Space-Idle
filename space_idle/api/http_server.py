@@ -14,7 +14,7 @@ from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
     GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogisticsLanes,
     GetLogisticsSummary, GetProjects, GetResearch, GetRoutes, GetSurveys,
-    GetTransportAllocationOptions, GetTransportAllocations, GetWorld,
+    GetTransportAllocationOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
 )
 from ..persistence import SaveFormatError
 from .codec import ApiPayloadError, command_schema, decode_command, to_jsonable
@@ -260,6 +260,13 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/v1/world":
             self._query_result(GetWorld())
+            return
+        surface_prefix = "/api/v1/surfaces/"
+        if path.startswith(surface_prefix):
+            body_id = unquote(path[len(surface_prefix):])
+            if not body_id:
+                raise ApiPayloadError("body id is required")
+            self._query_result(GetSurfaceMap(body_id))
             return
         if path == "/api/v1/bottlenecks":
             self._query_result(GetBottlenecks(_one(params, "location_id")))

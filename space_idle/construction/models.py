@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, TypeAlias
 
-from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId
+from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 
 # Procurement policy controls how long a project waits for inventory already at
@@ -125,6 +125,7 @@ class ConstructionProject:
     resources: dict[DefinitionId, ProjectResourceState] = field(default_factory=dict)
     materials_committed: bool = False
     completed_facility_id: EntityId | None = None
+    site_cell_id: SurfaceCellId | None = None
 
 
 @dataclass(frozen=True)

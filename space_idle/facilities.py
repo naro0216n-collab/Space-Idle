@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Mapping
 
-from .shared import DefinitionId, EntityId, SpatialNodeId
+from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .site import EnvironmentCondition
-from .spatial import EnvironmentResolver
+from .spatial import EnvironmentResolver, SpatialContextId
 
 if TYPE_CHECKING:
     from .power import PowerSnapshot
+
+
+class FacilityPlacementScope(str, Enum):
+    LOCATION = "LOCATION"
+    SURFACE_CELL = "SURFACE_CELL"
 
 
 @dataclass(frozen=True)
@@ -34,10 +40,13 @@ class FacilityDef:
     # Fraction of cumulative construction/upgrade resource investment required
     # per game year. The value is content balance; Core only supplies the rule.
     maintenance_fraction_per_year: float = 0.0
+    placement_scope: FacilityPlacementScope = FacilityPlacementScope.LOCATION
 
     def __post_init__(self) -> None:
         if self.maintenance_fraction_per_year < 0:
             raise ValueError("facility maintenance fraction must be non-negative")
+        if not isinstance(self.placement_scope, FacilityPlacementScope):
+            raise ValueError("facility placement scope must be a FacilityPlacementScope")
 
 
 @dataclass
@@ -51,6 +60,7 @@ class FacilityState:
     level: int = 1
     invested_resources: dict[DefinitionId, float] = field(default_factory=dict)
     maintenance_satisfaction: float = 1.0
+    site_cell_id: SurfaceCellId | None = None
 
     def __post_init__(self) -> None:
         if self.level < 1:
@@ -68,11 +78,59 @@ class FacilityBook:
     facilities: dict[EntityId, FacilityState] = field(default_factory=dict)
     _counter: int = 0
 
+    def placement_failures(
+        self,
+        definition_id: DefinitionId,
+        location_id: SpatialNodeId,
+        site_cell_id: SurfaceCellId | None = None,
+    ) -> tuple[tuple[str, str], ...]:
+        if definition_id not in self.definitions:
+            return (("unknown_facility_definition", f"unknown facility definition: {definition_id}"),)
+        if not self.environment.graph.has_operational_node(location_id):
+            return (("unknown_location", f"unknown facility location: {location_id}"),)
+        definition = self.definitions[definition_id]
+        if definition.placement_scope is FacilityPlacementScope.LOCATION:
+            if site_cell_id is not None:
+                return (("site_cell_not_allowed", "LOCATION facility must not specify a surface cell"),)
+            return ()
+        if site_cell_id is None:
+            return (("site_cell_required", "SURFACE_CELL facility requires a surface cell"),)
+        location = self.environment.graph.locations.get(location_id)
+        if location is None:
+            return (("surface_location_required", "SURFACE_CELL facility requires a surface Location"),)
+        cell = self.environment.graph.surface_cells.get(site_cell_id)
+        if cell is None:
+            return (("unknown_site_cell", f"unknown surface cell: {site_cell_id}"),)
+        if cell.body_id != location.body_id:
+            return (("site_cell_body_mismatch", "surface cell belongs to another celestial body"),)
+        if site_cell_id not in location.developed_cell_ids:
+            return (("site_cell_not_developed", "surface cell is not developed by the facility Location"),)
+        return ()
+
+    def placement_context(
+        self,
+        definition_id: DefinitionId,
+        location_id: SpatialNodeId,
+        site_cell_id: SurfaceCellId | None = None,
+    ) -> SpatialContextId:
+        failures = self.placement_failures(definition_id, location_id, site_cell_id)
+        if failures:
+            raise ValueError("; ".join(detail for _code, detail in failures))
+        definition = self.definitions[definition_id]
+        if definition.placement_scope is FacilityPlacementScope.LOCATION:
+            return location_id
+        assert site_cell_id is not None
+        return site_cell_id
+
+    def facility_environment_context(self, facility: FacilityState) -> SpatialContextId:
+        return self.placement_context(facility.definition_id, facility.location_id, facility.site_cell_id)
+
     def install(
         self,
         definition_id: DefinitionId,
         location_id: SpatialNodeId,
         *,
+        site_cell_id: SurfaceCellId | None = None,
         power_priority: int | None = None,
         maintenance_priority: int = 50,
         level: int = 1,
@@ -82,6 +140,11 @@ class FacilityBook:
             raise KeyError(definition_id)
         if not self.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
+        placement_failures = self.placement_failures(definition_id, location_id, site_cell_id)
+        if placement_failures:
+            if placement_failures[0][0] == "unknown_site_cell":
+                raise KeyError(site_cell_id)
+            raise ValueError("; ".join(detail for _code, detail in placement_failures))
         if level < 1:
             raise ValueError("facility level must be positive")
         investment = dict(invested_resources or {})
@@ -99,6 +162,7 @@ class FacilityBook:
             level=level,
             invested_resources=investment,
             maintenance_satisfaction=1.0,
+            site_cell_id=site_cell_id,
         )
         return entity_id
 
@@ -142,8 +206,9 @@ class FacilityBook:
     def environment_failures(self, facility: FacilityState, day: int) -> tuple[tuple[str, str], ...]:
         definition = self.definitions[facility.definition_id]
         failures: list[tuple[str, str]] = []
+        context_id = self.facility_environment_context(facility)
         for condition in definition.operating_environment:
-            if not condition.matches(self.environment, facility.location_id, day):
+            if not condition.matches(self.environment, context_id, day):
                 failures.append((condition.code, condition.description))
         return tuple(failures)
 

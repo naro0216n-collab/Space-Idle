@@ -32,7 +32,7 @@ from .app_contracts.progression_views import (
 )
 from .app_contracts.ui_reports import IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView
 from .app_contracts.surface_views import (
-    SurfaceCellRow, SurfaceLocationTerritoryRow, SurfaceMapView, SurfaceResourceKnowledgeRow,
+    SurfaceCellRow, SurfaceFacilityPlacementOption, SurfaceLocationTerritoryRow, SurfaceMapView, SurfaceResourceKnowledgeRow,
 )
 
 QueryResult: TypeAlias = (

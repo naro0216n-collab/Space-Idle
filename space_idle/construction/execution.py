@@ -15,6 +15,7 @@ class ConstructionExecutionMixin:
             project.completed_facility_id = self.facilities.install(
                 target.facility_def_id,
                 project.location_id,
+                site_cell_id=project.site_cell_id,
                 invested_resources=invested,
             )
         else:

@@ -86,6 +86,14 @@ def test_http_api_revision_etag_gzip_command_and_save_load(tmp_path):
         status, _, payload = _request(port, "GET", "/api/v1/world")
         assert status == 200 and payload["data"]["day"] == 2
 
+        status, _, payload = _request(port, "GET", f"/api/v1/surfaces/{ids.EARTH_BODY}")
+        assert status == 200
+        industrial = next(row for row in payload["data"]["cells"] if row["id"] == str(ids.EARTH_CELL_INDUSTRIAL))
+        assert any(
+            row["facility_definition_id"] == str(ids.ROBOTIC_GEOLOGY_STATION)
+            for row in industrial["facility_placement_options"]
+        )
+
         status, _, payload = _request(port, "GET", "/api/v1/logistics/routes?include_modes=false")
         assert status == 200 and payload["data"]["items"]
         assert all(not row["modes"] for row in payload["data"]["items"])

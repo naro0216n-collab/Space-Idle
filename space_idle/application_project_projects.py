@@ -9,6 +9,7 @@ from .application_views import (
     ProjectRow,
 )
 from .construction.models import FacilityUpgradeTarget, NewFacilityTarget, ProjectStatus
+from .facilities import FacilityPlacementScope
 from .shared import SpatialNodeId
 
 
@@ -141,6 +142,7 @@ class ProjectProjectorMixin:
                 project.materials_committed,
                 None if project.completed_facility_id is None else str(project.completed_facility_id),
                 tuple(resources), blockers,
+                None if project.site_cell_id is None else str(project.site_cell_id),
             ))
         return tuple(rows)
 
@@ -149,6 +151,8 @@ class ProjectProjectorMixin:
         rows = []
         for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id)):
             definition = sim.facilities.definitions[recipe.facility_def_id]
+            if definition.placement_scope is not FacilityPlacementScope.LOCATION:
+                continue
             failures = sim.projects.site_failures(
                 recipe.facility_def_id, location_id, sim.day,
                 sim.power.snapshot(location_id, sim.facilities, sim.day),

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from .application_views import (
-    SurfaceCellRow,
+    SurfaceCellRow, SurfaceFacilityPlacementOption,
     SurfaceLocationTerritoryRow,
     SurfaceMapView,
     SurfaceResourceKnowledgeRow,
 )
+from .facilities import FacilityPlacementScope
 from .shared import CelestialBodyId
 
 
@@ -60,6 +61,28 @@ class SurfaceProjectorMixin:
                         key=lambda key: str(key[1]),
                     )
                 )
+            facility_placement_options = ()
+            if owner is not None:
+                power = sim.power.snapshot(owner, sim.facilities, sim.day)
+                facility_placement_options = tuple(
+                    SurfaceFacilityPlacementOption(
+                        str(recipe.facility_def_id),
+                        sim.facilities.definitions[recipe.facility_def_id].display_name,
+                        str(owner),
+                        recipe.construction_work,
+                        recipe.self_deploying,
+                        tuple((str(req.resource_id), req.amount_t) for req in recipe.resources),
+                        tuple(sorted(str(technology) for technology in recipe.prerequisite_technologies - sim.projects.unlocked_technologies)),
+                        tuple(
+                            (failure.code, failure.detail)
+                            for failure in sim.projects.site_failures(
+                                recipe.facility_def_id, owner, sim.day, power, site_cell_id=cell.id
+                            )
+                        ),
+                    )
+                    for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id))
+                    if sim.facilities.definitions[recipe.facility_def_id].placement_scope is FacilityPlacementScope.SURFACE_CELL
+                )
             rows.append(
                 SurfaceCellRow(
                     str(cell.id),
@@ -80,6 +103,7 @@ class SurfaceProjectorMixin:
                     owner_state is not None and owner_state.core_cell_id == cell.id,
                     sim.graph.location_foundation_failures(body_id, cell.id),
                     development_options,
+                    facility_placement_options,
                 )
             )
         return SurfaceMapView(str(body.id), body.display_name, tuple(rows), locations)
