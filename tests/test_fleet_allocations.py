@@ -379,6 +379,40 @@ def test_fleet_query_exposes_releasing_units_and_recovery_time():
     assert release.remaining_days == release.release_day - sim.day
 
 
+def test_fleet_query_filters_transitional_state_with_pool_scope():
+    app = build_game_application()
+    sim = app._simulation
+    lg = sim.logistics
+    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
+    lg.fleet_pool(vehicle_id, ids.LEO).total_units = 3
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
+    sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
+    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
+
+    allocation_id = lg.create_transport_allocation(
+        vehicle_id, ids.LEO, ids.LUNAR_ORBIT, target_units=2, day=0
+    )
+    lg.transport_allocations[allocation_id].last_operated_day = 2
+    sim.day = 3
+    lg.update_transport_allocation(allocation_id, target_units=1, day=sim.day)
+    relocation_id = lg.relocate_fleet(
+        vehicle_id, 1, ids.LEO, ids.LUNAR_ORBIT, day=sim.day
+    )
+
+    leo = app.query(GetFleet(str(ids.LEO), str(vehicle_id)))
+    assert [row.id for row in leo.relocations] == [str(relocation_id)]
+    assert [row.allocation_id for row in leo.releases] == [str(allocation_id)]
+
+    lunar_orbit = app.query(GetFleet(str(ids.LUNAR_ORBIT), str(vehicle_id)))
+    assert [row.id for row in lunar_orbit.relocations] == [str(relocation_id)]
+    assert lunar_orbit.releases == ()
+
+    earth = app.query(GetFleet(str(ids.EARTH), str(vehicle_id)))
+    assert earth.relocations == ()
+    assert earth.releases == ()
+
+
 def test_bidirectional_service_resource_use_counts_empty_return_not_loaded_return():
     sim = _fleet_sim(1)
     lg = sim.logistics

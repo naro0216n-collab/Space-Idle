@@ -285,12 +285,28 @@ def run() -> dict[str, object]:
             _assert(page.locator("#upgradePlanSourcingPolicy").is_visible(), "upgrade planning must expose sourcing policy before project creation")
             _assert(page.locator("#upgradePlanImportSource").is_visible(), "upgrade planning must expose preferred import source before project creation")
             page.locator("#upgradePlanPriorityInput").fill("73")
+            # The form is a multi-field draft. Moving focus to another control
+            # must not let periodic synchronization overwrite the first edit.
+            page.locator("#upgradePlanSourcingPolicy").focus()
+            page.wait_for_timeout(1200)
+            _assert(
+                page.locator("#upgradePlanPriorityInput").input_value() == "73",
+                "non-focused construction planning drafts must survive periodic refresh",
+            )
             page.locator("#upgradePlanSourcingPolicy").select_option("import_now")
             source_select = page.locator("#upgradePlanImportSource")
             source_values = source_select.locator("option").evaluate_all("opts => opts.map(o => o.value).filter(Boolean)")
             selected_source = source_values[0] if source_values else None
             if selected_source is not None:
                 source_select.select_option(selected_source)
+            # Unsaved planning values are client-owned drafts. A refresh with no
+            # authoritative change must not silently reset them before submission.
+            page.evaluate("async () => { await window.SpaceIdleApp.loadUiSnapshot(); }")
+            _assert(page.locator("#upgradePlanPriorityInput").input_value() == "73", "upgrade planning priority must survive refresh")
+            _assert(page.locator("#upgradePlanSourcingPolicy").input_value() == "import_now", "upgrade sourcing policy must survive refresh")
+            if selected_source is not None:
+                _assert(page.locator("#upgradePlanImportSource").input_value() == selected_source, "upgrade import source must survive refresh")
+            upgrade_button = page.locator('#inspectorContent [data-upgrade]').first
             upgrade_button.click()
             page.wait_for_function(
                 "() => !document.body.classList.contains('is-busy')",

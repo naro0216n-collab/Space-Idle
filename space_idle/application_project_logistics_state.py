@@ -53,7 +53,12 @@ class LogisticsStateProjectorMixin:
             )
         return tuple(rows)
 
-    def _fleet_relocation_rows(self) -> tuple[FleetRelocationRow, ...]:
+    def _fleet_relocation_rows(
+        self,
+        *,
+        location_id: str | None = None,
+        vehicle_definition_id: str | None = None,
+    ) -> tuple[FleetRelocationRow, ...]:
         sim = self._simulation
         return tuple(
             FleetRelocationRow(
@@ -63,9 +68,20 @@ class LogisticsStateProjectorMixin:
                 row.departure_day, row.arrival_day,
             )
             for row in sorted(sim.logistics.fleet_relocations.values(), key=lambda row: str(row.id))
+            if (vehicle_definition_id is None or str(row.vehicle_definition_id) == vehicle_definition_id)
+            and (
+                location_id is None
+                or str(row.source_id) == location_id
+                or str(row.destination_id) == location_id
+            )
         )
 
-    def _fleet_release_rows(self) -> tuple[FleetReleaseRow, ...]:
+    def _fleet_release_rows(
+        self,
+        *,
+        location_id: str | None = None,
+        vehicle_definition_id: str | None = None,
+    ) -> tuple[FleetReleaseRow, ...]:
         sim = self._simulation
         return tuple(
             FleetReleaseRow(
@@ -79,6 +95,8 @@ class LogisticsStateProjectorMixin:
                 max(0, row.release_day - sim.day),
             )
             for row in sorted(sim.logistics.fleet_releases.values(), key=lambda row: str(row.id))
+            if (location_id is None or str(row.location_id) == location_id)
+            and (vehicle_definition_id is None or str(row.vehicle_definition_id) == vehicle_definition_id)
         )
 
     def _transport_allocation_rows(self) -> tuple[TransportAllocationRow, ...]:
@@ -196,8 +214,14 @@ class LogisticsStateProjectorMixin:
                 location_id=query.location_id,
                 vehicle_definition_id=query.vehicle_definition_id,
             ),
-            self._fleet_relocation_rows(),
-            self._fleet_release_rows(),
+            self._fleet_relocation_rows(
+                location_id=query.location_id,
+                vehicle_definition_id=query.vehicle_definition_id,
+            ),
+            self._fleet_release_rows(
+                location_id=query.location_id,
+                vehicle_definition_id=query.vehicle_definition_id,
+            ),
         )
 
     def _transport_allocations_view(self) -> TransportAllocationsView:
