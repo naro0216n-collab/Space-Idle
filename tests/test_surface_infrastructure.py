@@ -61,14 +61,19 @@ def test_surface_distribution_facility_supplies_nominal_and_available_capacity()
 
     facility_id = sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
     supplied = _snapshot(sim)
-    assert supplied.nominal_capacity == pytest.approx(1.0)
-    assert supplied.available_capacity == pytest.approx(1.0)
-    assert supplied.fulfillment == pytest.approx(1.0)
+    assert supplied.nominal_capacity > 0.0
+    assert supplied.available_capacity == pytest.approx(supplied.nominal_capacity)
+    assert supplied.fulfillment == pytest.approx(
+        min(1.0, supplied.available_capacity / supplied.demand)
+    )
 
     degraded = _snapshot(sim, {facility_id: 0.5})
-    assert degraded.nominal_capacity == pytest.approx(1.0)
-    assert degraded.available_capacity == pytest.approx(0.5)
-    assert degraded.fulfillment == pytest.approx(0.5)
+    assert degraded.nominal_capacity == pytest.approx(supplied.nominal_capacity)
+    assert degraded.available_capacity == pytest.approx(supplied.available_capacity * 0.5)
+    assert degraded.fulfillment == pytest.approx(
+        min(1.0, degraded.available_capacity / degraded.demand)
+    )
+    assert degraded.fulfillment < supplied.fulfillment
     assert degraded.limiting_factors == ("surface_infrastructure",)
 
 
@@ -171,10 +176,11 @@ def test_remote_surface_survey_supply_is_enabled_by_shared_surface_dependency_al
         site_cell_id=ids.EARTH_CELL_COASTAL,
     )
 
+    expected_rate = sim.survey.providers[ids.ROBOTIC_GEOLOGY_STATION].points_per_day
     constrained = sim.tick_decision_projection().allocations.services.summary(
         ids.EARTH, "survey_observation"
     )
-    assert constrained.nominal_rate == pytest.approx(9.0)
+    assert constrained.nominal_rate == pytest.approx(expected_rate)
     assert constrained.enabled_rate == 0.0
     assert constrained.limiting_factors == ("provider_dependency",)
 
@@ -186,8 +192,8 @@ def test_remote_surface_survey_supply_is_enabled_by_shared_surface_dependency_al
     supplied = sim.tick_decision_projection().allocations.services.summary(
         ids.EARTH, "survey_observation"
     )
-    assert supplied.nominal_rate == pytest.approx(9.0)
-    assert supplied.enabled_rate == pytest.approx(9.0)
+    assert supplied.nominal_rate == pytest.approx(expected_rate)
+    assert supplied.enabled_rate == pytest.approx(expected_rate)
     assert supplied.limiting_factors == ()
 
 

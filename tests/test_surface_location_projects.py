@@ -208,7 +208,10 @@ def test_founding_completion_creates_location_bootstrap_and_dynamic_orbit_routes
         and project.new_location_id in {route.origin_id, route.destination_id}
     ]
     assert orbit_routes
-    assert sim.transport.fleet_pool(ids.REUSABLE_SURFACE_CARGO_LANDER, project.new_location_id).total_units == 1
+    assert (
+        sim.transport.fleet_pool(ids.REUSABLE_SURFACE_CARGO_LANDER, project.new_location_id).total_units
+        == package.required_units
+    )
 
 
 def test_founding_and_surface_development_claims_are_mutually_exclusive():

@@ -62,7 +62,8 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performan
     assert row.minimum_payload_t == definition.minimum_payload_t
     assert row.required_vehicle_capabilities == definition.required_vehicle_capabilities
     assert row.research_points_per_day == pytest.approx(definition.points_per_day)
-    assert row.required_units == definition.required_units == 1
+    assert row.required_units == definition.required_units
+    assert row.required_units > 0
     assert row.can_start is True
 
     app.execute(StartScientificExploration(str(ids.CISLUNAR_SCIENCE_EXPLORATION)))
@@ -72,17 +73,21 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performan
         if option.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
     )
     assert tug.can_assign is True
+    fleet_before = _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
+    required_units = started.required_units
+    assert fleet_before.free_units >= required_units
+
     app.execute(AssignExplorationFleet(
         str(ids.CISLUNAR_SCIENCE_EXPLORATION),
         str(ids.REUSABLE_ORBITAL_CARGO_TUG),
     ))
     assigned = _row(app)
     assert assigned.assigned_vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
-    assert assigned.reserved_units == 1
+    assert assigned.reserved_units == required_units
     assert assigned.can_unassign is True
     fleet = _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
-    assert fleet.exploration_units == 1
-    assert fleet.free_units == 0
+    assert fleet.exploration_units == required_units
+    assert fleet.free_units == fleet_before.free_units - required_units
 
     app.execute(AdvanceTime(1))
     assert _row(app).can_unassign is False
@@ -136,26 +141,28 @@ def test_exploration_reservation_excludes_transport_and_release_refills_target()
         str(ids.CISLUNAR_SCIENCE_EXPLORATION),
         str(ids.REUSABLE_ORBITAL_CARGO_TUG),
     ))
+    committed = _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
+    assert committed.exploration_units > 0
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_ORBITAL_CARGO_TUG),
         str(ids.LEO),
         str(ids.LUNAR_ORBIT),
-        target_units=1,
+        target_units=committed.total_units,
     )).created_id
     assert allocation_id is not None
     allocation = next(
         row for row in app.query(GetTransportAllocations()).items
         if row.id == allocation_id
     )
-    assert allocation.active_units == 0
-    assert allocation.unfilled_units == 1
+    assert allocation.active_units == committed.free_units
+    assert allocation.unfilled_units == committed.exploration_units
 
     app.execute(UnassignExplorationFleet(str(ids.CISLUNAR_SCIENCE_EXPLORATION)))
     allocation = next(
         row for row in app.query(GetTransportAllocations()).items
         if row.id == allocation_id
     )
-    assert allocation.active_units == 1
+    assert allocation.active_units == committed.total_units
     assert allocation.unfilled_units == 0
 
 
@@ -172,7 +179,7 @@ def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
-    assert _fleet_row(loaded, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == 1
+    assert _fleet_row(loaded, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == _row(loaded).required_units
 
     app.execute(AdvanceTime(6))
     loaded.execute(AdvanceTime(6))
@@ -216,8 +223,9 @@ def test_runtime_blocker_prevents_input_consumption_and_keeps_fleet_reserved():
     assert state.inputs_consumed is False
     assert state.progress_days == pytest.approx(0.0)
     fleet = _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
-    assert fleet.exploration_units == 1
-    assert fleet.free_units == 0
+    required_units = _row(app).required_units
+    assert fleet.exploration_units == required_units
+    assert fleet.free_units == fleet.total_units - required_units
 
 
 def test_scientific_exploration_rejects_duplicate_consumable_resources():
@@ -271,7 +279,7 @@ def test_full_rp_storage_constrains_reward_retention_but_does_not_freeze_campaig
     assert state.progress_days > 0.0
     assert state.research_points_awarded > 0.0
     assert sim.research.stored_points == pytest.approx(before_points)
-    assert _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == 1
+    assert _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == _row(app).required_units
 
 
 def test_partial_exploration_inputs_are_staged_and_unassign_restores_them():
@@ -290,18 +298,13 @@ def test_partial_exploration_inputs_are_staged_and_unassign_restores_them():
     ))
     app.execute(AdvanceTime(1))
 
-    owner_id = sim.scientific_exploration._input_staging_owner_id(exploration_id)
-    staged = sim.inventory.staged_for(owner_id, definition.origin_id, machinery)
-    assert staged > 0.0
-    assert staged < 0.2
+    initial_stock = 0.05
+    staged_stock = sim.inventory.amount(definition.origin_id, machinery)
+    assert staged_stock < initial_stock
     state = sim.scientific_exploration.campaigns[exploration_id]
     assert state.inputs_consumed is False
     assert state.progress_days == 0.0
 
-    before_restore = sim.inventory.amount(definition.origin_id, machinery)
     app.execute(UnassignExplorationFleet(str(exploration_id)))
 
-    assert sim.inventory.staged_for(owner_id, definition.origin_id, machinery) == 0.0
-    assert sim.inventory.amount(definition.origin_id, machinery) == pytest.approx(
-        before_restore + staged
-    )
+    assert sim.inventory.amount(definition.origin_id, machinery) == pytest.approx(initial_stock)

@@ -191,7 +191,7 @@ def test_one_demand_is_not_duplicated_across_multiple_matching_lanes():
         if flow.demand_id == demand.id and flow.lane_id in {first, second}
     ]
     assert sum(flow.amount_t for flow in flows) == pytest.approx(demand.amount_t)
-    assert sim.logistics._flow_pipeline_by_demand({demand.id})[demand.id] == pytest.approx(demand.amount_t)
+    assert sim.logistics.cargo_flow_pipeline_t(demand.id) == pytest.approx(demand.amount_t)
 
 
 def _unlock_orbital_logistics(sim) -> None:

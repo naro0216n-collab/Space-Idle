@@ -237,15 +237,14 @@ def test_partial_prototype_staging_returns_to_previous_site_when_site_changes():
     app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
     app.execute(AdvanceTime(1))
 
-    owner_id = sim.research._prototype_staging_owner_id(research_id)
-    assert sim.inventory.staged_for(owner_id, EARTH, resource_id) == 0.25
+    assert sim.research.prototype_staged_t(research_id, EARTH, resource_id) == 0.25
     assert sim.inventory.amount(EARTH, resource_id) == 0.0
 
     app.execute(SetResearchPrototypeSite(str(research_id), str(LEO)))
 
-    assert sim.inventory.staged_for(owner_id, EARTH, resource_id) == 0.0
+    assert sim.research.prototype_staged_t(research_id, EARTH, resource_id) == 0.0
     assert sim.inventory.amount(EARTH, resource_id) == 0.25
-    assert sim.inventory.staged_for(owner_id, LEO, resource_id) == 0.0
+    assert sim.research.prototype_staged_t(research_id, LEO, resource_id) == 0.0
 
 
 def test_demonstration_progress_requires_allocated_research_execution_service():

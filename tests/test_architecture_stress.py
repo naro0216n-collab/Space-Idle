@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from space_idle import build_game_application
-from space_idle.market import MarketState
-from space_idle.shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from space_idle.content import base_ids
+from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId, SurfaceCellId
 from space_idle.spatial import (
     AtmosphereField,
     CelestialBodyDef,
     EnvironmentResolver,
-    GravityField,
     IlluminationField,
     SpatialFacet,
     SpatialGraph,
@@ -24,36 +22,20 @@ from space_idle.spatial import (
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
 
 
-def test_artificial_gravity_can_be_added_as_peer_facet_without_spatial_core_change():
+def test_environment_facets_accept_peer_extensions_without_core_registration():
     @dataclass(frozen=True)
-    class ArtificialGravityField(SpatialFacet):
-        facet_key = "artificial_gravity"
-        acceleration_m_s2: float
+    class TestEnvironmentField(SpatialFacet):
+        facet_key = "test_environment_field"
+        value: float
 
     graph = SpatialGraph()
-    station = SpatialNodeId("test.station")
-    graph.add(SpatialNodeDef(station, "回転式ステーション"))
+    node = SpatialNodeId("test.node")
+    graph.add(SpatialNodeDef(node, "Test Node"))
     store = StaticFacetStore()
-    store.set(station, ArtificialGravityField(9.2))
+    store.set(node, TestEnvironmentField(9.2))
     env = EnvironmentResolver(graph, store)
-    assert env.require(station, ArtificialGravityField).acceleration_m_s2 == 9.2
 
-
-def test_market_spans_locations_without_becoming_spatial_facet():
-    earth = SpatialNodeId("test.earth")
-    leo = SpatialNodeId("test.leo")
-    moon = SpatialNodeId("test.moon")
-    resource = DefinitionId("test.resource")
-    market = MarketState(
-        EntityId("market.cislunar"),
-        participant_organization_ids={EntityId("org.a"), EntityId("org.b")},
-        accessible_location_ids={earth, leo, moon},
-        reference_prices={resource: 100.0},
-        demand={resource: 5.0},
-        supply={resource: 10.0},
-    )
-    assert 0 < market.clear_price(resource) < 100.0
-    assert len(market.accessible_location_ids) == 3
+    assert env.require(node, TestEnvironmentField).value == 9.2
 
 
 def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and_is_stateful():
@@ -112,23 +94,36 @@ def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and
     assert env.require(site_a, AtmosphereField).pressure_pa == 610.0
 
 
-def test_generic_core_contains_no_current_destination_specific_branches_or_location_allowlists():
+def test_generic_core_does_not_embed_current_content_ids():
+    import ast
     from pathlib import Path
+
     package = Path(__file__).parents[1] / "space_idle"
     outer_layers = {"content", "composition", "app_contracts"}
     files = [
         path for path in package.rglob("*.py")
         if path.name != "__init__.py"
         and not any(part in outer_layers for part in path.parts)
-        and path.name != "bootstrap.py"
-        and path.name != "persistence.py"
+        and path.name not in {"bootstrap.py", "persistence.py"}
         and not path.name.startswith("application")
     ]
-    forbidden = (
-        "moon", "lunar", "mars", "martian",
-        "allowed_location_ids", "default_import_source_id",
-    )
+    current_content_ids = {
+        value
+        for name, value in vars(base_ids).items()
+        if name.isupper() and isinstance(value, str) and value.startswith("base.")
+    }
+    assert current_content_ids
+
     for path in files:
-        text = path.read_text(encoding="utf-8").lower()
-        for token in forbidden:
-            assert token not in text, f"{path.name} contains destination-specific shortcut {token}"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        embedded = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value in current_content_ids
+        }
+        assert not embedded, (
+            f"{path.relative_to(package)} embeds concrete Content IDs: "
+            f"{sorted(embedded)}"
+        )

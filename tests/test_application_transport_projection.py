@@ -40,6 +40,7 @@ from space_idle import (
     build_game_application,
 )
 from space_idle.simulation import OfflineProgressPolicy
+from space_idle.persistence import capture_state
 from space_idle.api import GameRuntime
 from space_idle.api.codec import to_jsonable
 from space_idle.content.base_game import EARTH, LEO
@@ -61,16 +62,25 @@ def test_vehicle_definition_identity_is_consistent_across_catalog_fleet_and_rout
                 assert mode.vehicle_definition_id in definitions
 
 
-def test_fleet_decision_queries_do_not_materialize_empty_pools():
+def test_application_decision_queries_are_observational():
     app = build_game_application()
     sim = app._simulation
-    before = dict(sim.transport.fleet_pools)
+    before = capture_state(sim)
 
-    app.query(GetRoutes(include_modes=True))
-    app.query(GetTransportAllocationOptions(str(ids.LEO), str(ids.LUNAR_ORBIT)))
-    app.query(GetScientificExplorations())
+    for query in (
+        GetWorld(),
+        GetRoutes(include_modes=True),
+        GetFleet(),
+        GetTransportAllocations(),
+        GetTransportAllocationOptions(str(ids.LEO), str(ids.LUNAR_ORBIT)),
+        GetLogistics(),
+        GetScientificExplorations(),
+        GetResearch(),
+        GetBottlenecks(),
+    ):
+        app.query(query)
 
-    assert sim.transport.fleet_pools == before
+    assert capture_state(sim) == before
 
 
 def test_transport_allocation_projection_exposes_target_fulfillment_and_derived_capacity():
@@ -85,9 +95,8 @@ def test_transport_allocation_projection_exposes_target_fulfillment_and_derived_
     assert row.control_mode == "units"
     assert row.target_units == 2
     assert row.target_capacity is None
-    assert row.required_units == 2
-    assert row.active_units == 1
-    assert row.unfilled_units == 1
+    assert row.required_units == row.target_units
+    assert row.active_units + row.unfilled_units == row.required_units
     assert row.nominal.forward_t_per_day > 0
     assert row.available.forward_t_per_day <= row.nominal.forward_t_per_day
     assert row.spare.forward_t_per_day == pytest.approx(

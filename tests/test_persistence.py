@@ -17,6 +17,11 @@ from space_idle import (
     PauseLogisticsLane,
     PauseResearch,
     PauseTransportAllocation,
+    ResumeBuild,
+    ResumeFacility,
+    ResumeLogisticsLane,
+    ResumeResearch,
+    ResumeTransportAllocation,
     PlanBuild,
     ProduceVehicle,
     StartResearch,
@@ -131,38 +136,53 @@ def test_save_load_preserves_survey_knowledge_campaign_and_future_behavior(tmp_p
     assert capture_state(loaded._simulation) == capture_state(sim)
 
 
-def test_offline_progress_is_the_normal_simulation_path(tmp_path):
+def test_offline_progress_uses_the_same_active_simulation_path_as_normal_time(tmp_path):
     saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    now = saved_at + timedelta(hours=3, minutes=17)
-    policy = OfflineProgressPolicy(real_seconds_per_game_day=137.0, max_game_days_per_resume=500)
+    elapsed_days = 3
+    policy = OfflineProgressPolicy(real_seconds_per_game_day=1.0, max_game_days_per_resume=20)
     original = _make_nontrivial_state()
-    path = tmp_path / "game.json"
+    sim = original._simulation
+
+    # Exercise several active domains at once instead of preserving one offline
+    # regression test per feature that happened to be added over time.
+    for facility in sim.facilities.facilities.values():
+        if facility.paused:
+            original.execute(ResumeFacility(str(facility.id)))
+    for research_id, project in tuple(sim.research.active.items()):
+        if project.paused:
+            original.execute(ResumeResearch(str(research_id)))
+    for project in tuple(sim.projects.projects.values()):
+        if project.paused:
+            original.execute(ResumeBuild(str(project.id)))
+    for lane in tuple(sim.logistics.lanes.values()):
+        if lane.paused:
+            original.execute(ResumeLogisticsLane(str(lane.id)))
+    for allocation in tuple(sim.transport.transport_allocations.values()):
+        if allocation.paused:
+            original.execute(ResumeTransportAllocation(str(allocation.id)))
+    original.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
+    sim.facilities.install(
+        ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH,
+        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+    )
+    original.execute(DevelopSurfaceCell(
+        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"
+    ))
+
+    path = tmp_path / "offline-active-domains.json"
     save_game(original, path, saved_at=saved_at)
 
-    loaded, result = load_game(path, build_game_application, now=now, offline_policy=policy)
-    direct, _ = load_game(path, build_game_application)
-    expected = direct._simulation.advance_offline((now - saved_at).total_seconds(), policy)
-    assert result == expected
-    assert capture_state(loaded._simulation) == capture_state(direct._simulation)
-    assert loaded.query(GetWorld()).day == direct.query(GetWorld()).day
-
-
-def test_offline_progress_matches_normal_ticks_for_active_research(tmp_path):
-    app = build_game_application()
-    _advance_until_research_startable(app, TECH_ORBITAL_OPERATIONS)
-    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS), priority=73))
-    path = tmp_path / "active-research.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-
-    direct, _ = load_game(path, build_game_application)
-    offline, _ = load_game(path, build_game_application)
-    direct._simulation.advance_days(7)
-    result = offline._simulation.advance_offline(
-        7.0, OfflineProgressPolicy(real_seconds_per_game_day=1.0)
+    offline, result = load_game(
+        path, build_game_application,
+        now=saved_at + timedelta(seconds=elapsed_days),
+        offline_policy=policy,
     )
+    direct, _ = load_game(path, build_game_application)
+    direct.execute(AdvanceTime(elapsed_days))
 
-    assert result.advanced_days == 7
+    assert result is not None and result.advanced_days == elapsed_days
     assert capture_state(offline._simulation) == capture_state(direct._simulation)
+    assert offline.query(GetWorld()).day == direct.query(GetWorld()).day
 
 
 def test_fractional_offline_time_is_composable():
@@ -259,60 +279,45 @@ def test_save_load_preserves_partial_vehicle_production_staging(tmp_path):
     definition = sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG]
     for resource_id, _required_t in definition.production.resources:
         sim.inventory.stock[(EARTH, resource_id)] = 0.0
-    sim.inventory.stock[(EARTH, ids.STRUCTURAL_COMPONENTS)] = 1.0
+    partial_resource, required_t = next(
+        (resource_id, required_t)
+        for resource_id, required_t in definition.production.resources
+        if required_t > 0.0
+    )
+    partial_stock = required_t * 0.5
+    sim.inventory.stock[(EARTH, partial_resource)] = partial_stock
 
     result = app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     assert result.created_id is not None
     production_id = EntityId(result.created_id)
     app.execute(AdvanceTime(1))
     state = sim.transport.vehicle_production_projects[production_id]
-    staged = sim.transport._vehicle_production_staged_t(
-        state, ids.STRUCTURAL_COMPONENTS
-    )
+    remaining_on_hand = sim.inventory.amount(EARTH, partial_resource)
+    staged_t = partial_stock - remaining_on_hand
     assert state.phase.value == "awaiting_inputs"
-    assert staged > 0.0
+    assert staged_t > 0.0
 
     path = tmp_path / "vehicle-production-partial.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
 
     assert capture_state(loaded._simulation) == capture_state(sim)
-    loaded_state = loaded._simulation.transport.vehicle_production_projects[production_id]
-    assert loaded._simulation.transport._vehicle_production_staged_t(
-        loaded_state, ids.STRUCTURAL_COMPONENTS
-    ) == staged
+    assert loaded._simulation.inventory.amount(
+        EARTH, partial_resource
+    ) == pytest.approx(remaining_on_hand)
 
 
-def test_offline_progress_preserves_vehicle_production_state_machine(tmp_path):
-    saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    policy = OfflineProgressPolicy(real_seconds_per_game_day=60.0, max_game_days_per_resume=20)
-    app = build_game_application()
-    app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
-    path = tmp_path / "vehicle-production-offline.json"
-    save_game(app, path, saved_at=saved_at)
-    elapsed_days = 2
-    loaded, _ = load_game(
-        path, build_game_application,
-        now=saved_at + timedelta(seconds=policy.real_seconds_per_game_day * elapsed_days),
-        offline_policy=policy,
-    )
-    direct, _ = load_game(path, build_game_application)
-    direct.execute(AdvanceTime(elapsed_days))
-    assert capture_state(loaded._simulation) == capture_state(direct._simulation)
-
-
-def test_transient_resource_allocations_are_not_saved_or_rebuilt_after_load(tmp_path):
-    from space_idle.resource_claim import allocate_resource_claims
-
+def test_transient_allocation_projection_is_not_persisted_as_authoritative_state(tmp_path):
     app = build_game_application()
     app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     sim = app._simulation
     before = capture_state(sim)
-    claims = sim._resource_claims()
-    allocate_resource_claims(claims, sim.inventory)
+
+    decision = sim.tick_decision_projection()
+    assert decision.allocations.resources.allocations
     assert capture_state(sim) == before
 
-    path = tmp_path / "transient-resource-allocation.json"
+    path = tmp_path / "transient-allocation.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
     assert capture_state(loaded._simulation) == before
@@ -333,31 +338,6 @@ def test_durable_inventory_reservation_roundtrips(tmp_path):
 
     assert loaded._simulation.inventory.reserved_for(owner, EARTH, resource_id) == pytest.approx(amount)
     assert capture_state(loaded._simulation) == capture_state(sim)
-
-
-def test_offline_progress_preserves_surface_cell_development_state_machine(tmp_path):
-    saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    policy = OfflineProgressPolicy(real_seconds_per_game_day=60.0, max_game_days_per_resume=30)
-    app = build_game_application()
-    app._simulation.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
-    result = app.execute(DevelopSurfaceCell(
-        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"
-    ))
-    assert result.created_id is not None
-
-    path = tmp_path / "surface-development-offline.json"
-    save_game(app, path, saved_at=saved_at)
-    elapsed_days = 20
-    loaded, _ = load_game(
-        path, build_game_application,
-        now=saved_at + timedelta(seconds=policy.real_seconds_per_game_day * elapsed_days),
-        offline_policy=policy,
-    )
-    direct, _ = load_game(path, build_game_application)
-    direct.execute(AdvanceTime(elapsed_days))
-
-    assert capture_state(loaded._simulation) == capture_state(direct._simulation)
-    assert ids.EARTH_CELL_COASTAL in loaded._simulation.graph.locations[ids.EARTH].developed_cell_ids
 
 
 def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):

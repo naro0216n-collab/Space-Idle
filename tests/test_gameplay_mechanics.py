@@ -30,7 +30,8 @@ def test_transport_fleet_investment_is_explicit_and_lane_demand_does_not_resize_
         if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
         and row.operational_node_id == str(ids.EARTH)
     )
-    assert before.total_units == 1 and before.free_units == 1
+    assert before.total_units > 0
+    assert before.free_units == before.total_units
     assert app.query(GetLogistics()).allocations == ()
 
     app.execute(CreateLogisticsLane(str(ids.EARTH), str(ids.LEO), 100.0, priority=100))
@@ -39,7 +40,7 @@ def test_transport_fleet_investment_is_explicit_and_lane_demand_does_not_resize_
         if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
         and row.operational_node_id == str(ids.EARTH)
     )
-    assert after_lane.free_units == 1
+    assert after_lane.free_units == before.free_units
 
     app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
@@ -50,7 +51,8 @@ def test_transport_fleet_investment_is_explicit_and_lane_demand_does_not_resize_
         if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
         and row.operational_node_id == str(ids.EARTH)
     )
-    assert allocated.transport_units == 1 and allocated.free_units == 0
+    assert allocated.transport_units == 1
+    assert allocated.free_units == before.free_units - 1
 
 
 def test_paused_lane_keeps_project_demand_visible_without_dispatching_cargo_flow():
@@ -128,7 +130,10 @@ def test_capacity_mode_target_is_not_auto_increased_by_lane_demand():
         target_reverse_t_per_day=0.0, priority=70,
     )).created_id
     assert allocation_id is not None
+    before = next(row for row in app.query(GetLogistics()).allocations if row.id == allocation_id)
+
     app.execute(CreateLogisticsLane(str(ids.EARTH), str(ids.LEO), 100.0, priority=100))
-    allocation = next(row for row in app.query(GetLogistics()).allocations if row.id == allocation_id)
-    assert allocation.target_capacity.forward_t_per_day == pytest.approx(1.0)
-    assert allocation.required_units == 1
+    after = next(row for row in app.query(GetLogistics()).allocations if row.id == allocation_id)
+
+    assert after.target_capacity == before.target_capacity
+    assert after.required_units == before.required_units
