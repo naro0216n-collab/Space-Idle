@@ -81,7 +81,7 @@ git diff --check
 1. ローカル変更を責務としてまとまったcommitにする。publish対象は明示したcommitted `target-ref` のtreeであり、その後にworking treeへ別の未commit作業があっても対象へ混入させない。
 2. `scripts/publish_request.py prepare` で、記録済みremote commitを親、local target treeをtreeに持つ決定論的publish commitを作り、Git bundleへ格納する。生成物はv6 JSON requestで、bundle Base64、payload SHA-256、base commit、target tree、publish commit、local target commitを保持し、生成時にbundle/parent/treeを自己検証する。
 3. publish直前に対象branch HEADを一度だけ取得する。`connector-plan`へ渡し、manifestの `base_sha` と一致しない場合は送信せず原因を調査する。
-4. Connector経路では `connector-plan` がbundle Base64を必ず独立Git blobとしてmaterializeする。実際のaction引数をcompact JSONへシリアライズしたbytesでcall容量を判定し、必要な場合だけcall予算から逆算した最少数のpartへ自動分割する。各partは独立した `GitHub.create_blob` として並列送信する。payloadをrequest本文へ直接埋め込むinline経路は使わない。
+4. Connector経路では `connector-plan` がbundle Base64を必ず独立Git blobとしてmaterializeする。実際のaction引数をcompact JSONへシリアライズしたbytesでcall容量を判定し、必要な場合だけcall予算から逆算した最少数のpartへ自動分割する。各partは独立した `GitHub.create_blob` として並列送信する。execution bridgeが生成済みpacketを忠実に引き渡せない場合は、remote requestを送る前に `--connector-call-budget-bytes` を下げて `connector-plan` を再実行し、helperにより小さいpacketへ再計画させる。ChatGPT側でpayload境界やBase64を作り直さない。payloadをrequest本文へ直接埋め込むinline経路は使わない。
 5. helperは各partのGit blob OIDと、それらを順序付きで参照するpayload root tree OIDを事前計算し、root tree作成packetと小さい最終request packetを同時に生成する。全part送信後、事前計算blob OIDだけを使う `GitHub.create_tree` を1回実行し、成功したら事前生成済み `GitHub.create_file` request packetを実行する。materializationとroot bindingを分離することで、Connectorへ渡したcontentが変化して別blobが生成された場合は期待blob OIDが存在せずroot作成が失敗し、request送信前に停止する。`create_blob` と `create_tree` の返却SHAは後続入力にせず、内容の正確性を返却SHAの手動比較に依存させない。Gatewayは成立済みrootからOID整合性を最終検証する。
 6. Publish Gatewayはrequest作成commitを契機に自動実行する。payload root treeを取得し、root tree OID、各blob OID、payload長、payload SHA-256、Git bundle、publish commit、parent/base、target treeを検証する。すべて一致し、対象branch HEADがbaseのままである場合だけexact publish commitを対象branchへnon-force pushし、直後にremote commit/treeを再検証する。SHA不整合時は対象branchを更新しない。
 7. Gatewayは成功receiptを `.publish/receipts/<request-id>.json` へ自動記録し、Fast CIをdispatchする。ローカルではreceiptを取得して `publish_request.py record` に渡す。`record` はmanifest内の `local_target_commit` を自動的に使用し、現在のlocal HEADが次作業へ進んでいても、request、receipt、当該local target tree、published commit objectの関係を機械検証した場合だけ次回publish stateを更新する。local target SHAを手動で引き渡さない。
@@ -138,7 +138,7 @@ python scripts/publish_request.py record \
 ### Publish failure handling
 
 - target HEAD不一致: requestを作成しない。remote変更を調査し、必要なら最新source-snapshotから再同期する。
-- `create_blob`失敗: 失敗したcallを再送する。root tree作成失敗時は最終requestを作成せず、必要なupload packetを再実行してからroot作成を再試行する。blob/tree返却SHAは比較・中継しない。Gatewayがrequest記載の事前計算OIDと実在objectを機械照合する。
+- payload transport失敗: `create_blob` 自体が失敗した場合はそのcallを再送する。packet転送の忠実性に問題がある場合は、最終requestを送信する前に `connector-plan --connector-call-budget-bytes <smaller-budget>` でhelperに再分割させる。root tree作成失敗時も最終requestは送信せず、生成済みupload packetを再実行するか、必要なら同じ方法で再計画してからroot作成を再試行する。blob/tree返却SHAは比較・中継せず、payloadの手動分割・Base64再構成も行わない。Gatewayがrequest記載の事前計算OIDと実在objectを機械照合する。
 - blob OID、payload長、payload SHA-256、bundle、parent、target tree不一致: Gatewayが失敗し、対象branchは更新されない。
 - target branch push競合: forceしない。Gatewayの直前base再確認またはnon-force pushで停止する。
 - Gateway自体の変更: まずローカルで構文・契約を検証し、固定 `publish` branchのcontrol planeへ候補Gatewayを反映した後、明示的に `temp` をtargetとするrequestで実動作を隔離検証する。成功後に同じsource変更を通常の `develop` publish対象へ含める。`temp` のcommit・tree・request・payload等を `develop` publish入力として再利用しない。
