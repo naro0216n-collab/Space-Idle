@@ -28,14 +28,7 @@ unzip source-snapshot.zip -d source-artifact
 branch="$(cat source-artifact/.source-branch)"
 git clone -b "$branch" source-artifact/repository.bundle space-idle-local
 cd space-idle-local
-git bundle verify ../source-artifact/repository.bundle
-
-test "$(git branch --show-current)" = "$branch"
-test "$(git rev-parse HEAD)" = "$(cat ../source-artifact/.source-commit)"
-test "$(git rev-parse 'HEAD^{tree}')" = "$(cat ../source-artifact/.source-tree)"
-python scripts/publish_request.py init \
-  --remote-commit "$(cat ../source-artifact/.source-commit)" \
-  --remote-tree "$(cat ../source-artifact/.source-tree)"
+python scripts/publish_request.py init ../source-artifact
 ```
 
 artifactのcommit/treeを復元できない場合は別方式へ読み替えず、artifact生成または取得経路の問題として扱う。

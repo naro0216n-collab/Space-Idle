@@ -47,9 +47,16 @@ def init_repo(tmp_path: Path) -> tuple[Path, str, str]:
     workflow.write_text("name: CI\non: workflow_dispatch\n", encoding="utf-8")
     (repo / "game.txt").write_text("base\n", encoding="utf-8")
     commit_all(repo, "base")
+    git(repo, "branch", "-M", "develop")
     base = git(repo, "rev-parse", "HEAD")
     tree = git(repo, "rev-parse", "HEAD^{tree}")
-    run(PUBLISH, repo, "init", "--remote-commit", base, "--remote-tree", tree)
+    source_snapshot = tmp_path / "source-snapshot"
+    source_snapshot.mkdir()
+    (source_snapshot / ".source-commit").write_text(base + "\n", encoding="utf-8")
+    (source_snapshot / ".source-tree").write_text(tree + "\n", encoding="utf-8")
+    (source_snapshot / ".source-branch").write_text("develop\n", encoding="utf-8")
+    git(repo, "bundle", "create", str(source_snapshot / "repository.bundle"), "refs/heads/develop")
+    run(PUBLISH, repo, "init", str(source_snapshot))
     return repo, base, tree
 
 
@@ -163,7 +170,13 @@ def test_workflow_maintenance_stages_exact_git_data_and_requires_rehydration(tmp
     assert "source-snapshot" in blocked.stderr
 
     # A verified source-snapshot init is the only route back to normal publish.
-    run(PUBLISH, repo, "init", "--remote-commit", created_commit, "--remote-tree", target_tree)
+    refreshed_snapshot = tmp_path / "source-snapshot-after-maintenance"
+    refreshed_snapshot.mkdir()
+    (refreshed_snapshot / ".source-commit").write_text(created_commit + "\n", encoding="utf-8")
+    (refreshed_snapshot / ".source-tree").write_text(target_tree + "\n", encoding="utf-8")
+    (refreshed_snapshot / ".source-branch").write_text("develop\n", encoding="utf-8")
+    git(repo, "bundle", "create", str(refreshed_snapshot / "repository.bundle"), "refs/heads/develop")
+    run(PUBLISH, repo, "init", str(refreshed_snapshot))
     marker = repo / ".git" / "space-idle-workflow-maintenance-rehydrate-required"
     assert not marker.exists()
     assert not plan_path.exists()

@@ -40,20 +40,50 @@ def plan_dir(repo: Path) -> Path:
     return repo / ".git" / "space-idle-publish-transaction" / "connector"
 
 
+def write_source_snapshot(repo: Path, destination: Path) -> Path:
+    destination.mkdir()
+    commit = git(repo, "rev-parse", "HEAD^{commit}")
+    tree = git(repo, "rev-parse", "HEAD^{tree}")
+    (destination / ".source-commit").write_text(commit + "\n", encoding="utf-8")
+    (destination / ".source-tree").write_text(tree + "\n", encoding="utf-8")
+    (destination / ".source-branch").write_text("develop\n", encoding="utf-8")
+    git(repo, "bundle", "create", str(destination / "repository.bundle"), "refs/heads/develop")
+    return destination
+
+
 def init_repo(tmp_path: Path) -> tuple[Path, str, str]:
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init")
     (repo / "payload.txt").write_text("base\n", encoding="utf-8")
     commit_all(repo, "base")
+    git(repo, "branch", "-M", "develop")
     base_commit = git(repo, "rev-parse", "HEAD")
     base_tree = git(repo, "rev-parse", "HEAD^{tree}")
-    run_request(repo, "init", "--remote-commit", base_commit, "--remote-tree", base_tree)
+    source_snapshot = write_source_snapshot(repo, tmp_path / "source-snapshot")
+    run_request(repo, "init", str(source_snapshot))
     return repo, base_commit, base_tree
 
 
 def prepared(repo: Path) -> dict[str, object]:
     return json.loads(manifest_path(repo).read_text(encoding="utf-8"))
+
+
+def test_init_rejects_a_snapshot_that_is_not_the_exact_restored_head(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    (repo / "payload.txt").write_text("base\n", encoding="utf-8")
+    commit_all(repo, "base")
+    git(repo, "branch", "-M", "develop")
+    source_snapshot = write_source_snapshot(repo, tmp_path / "source-snapshot")
+
+    (repo / "payload.txt").write_text("later\n", encoding="utf-8")
+    commit_all(repo, "later")
+
+    result = run_request(repo, "init", str(source_snapshot), check=False)
+    assert result.returncode != 0
+    assert not (repo / ".git" / "space-idle-publish-state.json").exists()
 
 
 def make_receipt(repo: Path) -> dict[str, object]:
@@ -243,7 +273,7 @@ def test_standard_cli_has_no_alternative_repository_target_or_transaction_select
     for forbidden in ("native-publish", " plan ", "--repo"):
         assert forbidden not in f" {top.replace(chr(10), ' ')} "
     command_forbidden = {
-        "init": ("--repo", "--local-ref"),
+        "init": ("--repo", "--local-ref", "--remote-commit", "--remote-tree"),
         "prepare": ("--repo", "--target-ref", "--output", "--target-branch", "--message"),
         "connector-plan": ("--repo", "--manifest", "--plan-dir", "--github-repository",
                            "--publish-branch", "--output-dir", "--connector-call-budget-bytes"),

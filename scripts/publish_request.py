@@ -578,17 +578,76 @@ def _split_payload_for_blob_calls(
     return parts
 
 
+def _read_source_snapshot_metadata(source_snapshot: Path, *, repo: Path) -> tuple[str, str]:
+    source_snapshot = source_snapshot.resolve()
+    commit_path = source_snapshot / ".source-commit"
+    tree_path = source_snapshot / ".source-tree"
+    branch_path = source_snapshot / ".source-branch"
+    bundle_path = source_snapshot / "repository.bundle"
+    missing = [
+        str(path.name)
+        for path in (commit_path, tree_path, branch_path, bundle_path)
+        if not path.is_file()
+    ]
+    if missing:
+        raise PublishStateError(
+            "source-snapshot directory is incomplete; missing: " + ", ".join(missing)
+        )
+    remote_commit = commit_path.read_text(encoding="utf-8").strip()
+    remote_tree = tree_path.read_text(encoding="utf-8").strip()
+    branch = branch_path.read_text(encoding="utf-8").strip()
+    _require_hex_sha(remote_commit, name="source-snapshot commit")
+    _require_hex_sha(remote_tree, name="source-snapshot tree")
+    if branch != TARGET_BRANCH:
+        raise PublishStateError(
+            f"source-snapshot branch must be {TARGET_BRANCH!r}, got {branch!r}"
+        )
+    verify = subprocess.run(
+        ["git", "bundle", "verify", str(bundle_path)],
+        cwd=repo,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if verify.returncode != 0:
+        raise PublishStateError(
+            "source-snapshot bundle verification failed: " + verify.stderr.strip()
+        )
+    heads = subprocess.run(
+        ["git", "bundle", "list-heads", str(bundle_path)],
+        cwd=source_snapshot,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout.splitlines()
+    expected_head = f"{remote_commit} refs/heads/{TARGET_BRANCH}"
+    if expected_head not in heads:
+        raise PublishStateError(
+            "source-snapshot metadata does not match repository.bundle develop head"
+        )
+    return remote_commit, remote_tree
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     repo = _repo_from_cwd()
-    _require_hex_sha(args.remote_commit, name="remote commit")
-    _require_hex_sha(args.remote_tree, name="remote tree")
+    remote_commit, remote_tree = _read_source_snapshot_metadata(Path(args.source_snapshot), repo=repo)
+    local_branch = _git("branch", "--show-current", cwd=repo)
     local_commit = _git("rev-parse", "HEAD^{commit}", cwd=repo)
     local_tree = _git("rev-parse", "HEAD^{tree}", cwd=repo)
-    if local_tree != args.remote_tree:
+    if local_branch != TARGET_BRANCH:
         raise PublishStateError(
-            f"artifact/local tree mismatch: local={local_tree} remote={args.remote_tree}"
+            f"restored repository branch must be {TARGET_BRANCH!r}, got {local_branch!r}"
         )
-    _write_state(repo, args.remote_commit, args.remote_tree, local_commit)
+    if local_commit != remote_commit:
+        raise PublishStateError(
+            f"artifact/local commit mismatch: local={local_commit} artifact={remote_commit}"
+        )
+    if local_tree != remote_tree:
+        raise PublishStateError(
+            f"artifact/local tree mismatch: local={local_tree} artifact={remote_tree}"
+        )
+    _write_state(repo, remote_commit, remote_tree, local_commit)
     transaction = _transaction_dir(repo)
     if transaction.exists():
         shutil.rmtree(transaction)
@@ -598,7 +657,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     marker = _git_dir(repo) / WORKFLOW_REHYDRATE_MARKER_NAME
     if marker.exists():
         marker.unlink()
-    print(json.dumps({"remote_commit": args.remote_commit, "remote_tree": args.remote_tree, "local_head": local_commit}, indent=2))
+    print(json.dumps({"remote_commit": remote_commit, "remote_tree": remote_tree, "local_head": local_commit}, indent=2))
     return 0
 
 
@@ -1047,9 +1106,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init = sub.add_parser("init", help="initialize state from a verified source artifact")
-    init.add_argument("--remote-commit", required=True)
-    init.add_argument("--remote-tree", required=True)
+    init = sub.add_parser("init", help="initialize state from the exact restored source-snapshot artifact")
+    init.add_argument("source_snapshot", help="directory containing .source-* metadata and repository.bundle")
     init.set_defaults(func=cmd_init)
 
     prepare = sub.add_parser("prepare", help="prepare HEAD as the single active develop publish transaction")
