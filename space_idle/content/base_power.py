@@ -27,6 +27,7 @@ def build_power_specs() -> dict:
         ids.CRYOGENIC_STORAGE: PowerSpec(None, 0.06, 95, 0.06),
         ids.BULK_STORAGE: PowerSpec(None, 0.0, 90),
         ids.CARGO_WAREHOUSE: PowerSpec(None, 0.02, 90),
+        ids.SURFACE_DISTRIBUTION_HUB: PowerSpec(None, 0.08, 75),
         ids.ELECTROLYSIS_PLANT: PowerSpec(None, 0.22, 60),
         ids.PROPELLANT_PLANT: PowerSpec(None, 0.16, 55),
         ids.REGOLITH_SINTERING: PowerSpec(None, 0.30, 50),

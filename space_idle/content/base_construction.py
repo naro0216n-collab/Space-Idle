@@ -84,6 +84,9 @@ def build_construction_recipes() -> dict:
         ids.CRYOGENIC_STORAGE: req._surface_recipe(ids.CRYOGENIC_STORAGE, 3, 2, 0.8, 22),
         ids.BULK_STORAGE: req._surface_recipe(ids.BULK_STORAGE, 2, 1, 0.1, 10),
         ids.CARGO_WAREHOUSE: req._surface_recipe(ids.CARGO_WAREHOUSE, 3, 1, 0.2, 14),
+        ids.SURFACE_DISTRIBUTION_HUB: req._surface_recipe(
+            ids.SURFACE_DISTRIBUTION_HUB, 5, 4, 1, 28
+        ),
         ids.ELECTROLYSIS_PLANT: req._surface_recipe(
             ids.ELECTROLYSIS_PLANT, 3, 3, 1.2, 28,
             technologies=frozenset({ids.TECH_INDUSTRIAL_ELECTROLYSIS}),

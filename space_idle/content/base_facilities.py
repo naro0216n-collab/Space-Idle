@@ -30,6 +30,13 @@ def build_facility_definitions() -> dict:
         ids.CRYOGENIC_STORAGE: FacilityDef(ids.CRYOGENIC_STORAGE, "極低温貯蔵設備", req._capabilities("cryogenic_storage", "vehicle_refueling"), surface, surface),
         ids.BULK_STORAGE: FacilityDef(ids.BULK_STORAGE, "バルク原料置場", req._capabilities("bulk_storage"), surface, surface),
         ids.CARGO_WAREHOUSE: FacilityDef(ids.CARGO_WAREHOUSE, "一般貨物倉庫", req._capabilities("cargo_storage"), surface, surface),
+        ids.SURFACE_DISTRIBUTION_HUB: FacilityDef(
+            ids.SURFACE_DISTRIBUTION_HUB,
+            "地表物流・配給ハブ",
+            req._capabilities("surface_distribution"),
+            surface,
+            surface,
+        ),
         ids.ELECTROLYSIS_PLANT: FacilityDef(ids.ELECTROLYSIS_PLANT, "工業電解設備", req._capabilities("industrial_electrolysis"), surface, surface),
         ids.PROPELLANT_PLANT: FacilityDef(ids.PROPELLANT_PLANT, "推進剤調製設備", req._capabilities("propellant_production"), surface, surface),
         ids.REGOLITH_SINTERING: FacilityDef(ids.REGOLITH_SINTERING, "レゴリス焼結設備", req._capabilities("sintering"), surface, surface),

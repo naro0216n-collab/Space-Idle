@@ -61,15 +61,28 @@ def test_higher_opportunity_preserves_more_expansion_value_at_same_capacity():
     assert ExtractionService.marginal_response(capacity, 50.0) > ExtractionService.marginal_response(capacity, 5.0)
 
 
-def test_effective_opportunity_aggregates_developed_surface_cells():
+def test_effective_opportunity_uses_surface_infrastructure_for_remote_cells():
     app = build_game_application()
     sim = app._simulation
-    before = sim.extraction.effective_opportunity(ids.EARTH, ids.METAL_ORE)
+    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+    before = sim.extraction.effective_opportunity(
+        ids.EARTH, ids.METAL_ORE, sim.facilities, power, sim.day
+    )
     added = sim.graph.surface_cells[ids.EARTH_CELL_COASTAL].resource_potential_by_resource[ids.METAL_ORE]
 
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
+    constrained_power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+    constrained = sim.extraction.effective_opportunity(
+        ids.EARTH, ids.METAL_ORE, sim.facilities, constrained_power, sim.day
+    )
+    assert constrained == pytest.approx(before)
 
-    assert sim.extraction.effective_opportunity(ids.EARTH, ids.METAL_ORE) == pytest.approx(before + added)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH)
+    supplied_power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+    supplied = sim.extraction.effective_opportunity(
+        ids.EARTH, ids.METAL_ORE, sim.facilities, supplied_power, sim.day
+    )
+    assert supplied == pytest.approx(before + added)
 
 
 def test_operational_fulfillment_scales_soft_saturation_output():

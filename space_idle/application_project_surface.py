@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .application_views import (
-    SurfaceCellRow, SurfaceFacilityPlacementOption,
+    SurfaceCellDevelopmentOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
     SurfaceLocationTerritoryRow,
     SurfaceMapView,
     SurfaceResourceKnowledgeRow,
@@ -31,16 +31,33 @@ class SurfaceProjectorMixin:
         for cell in sim.graph.cells_for_body(body_id):
             owner = sim.graph.owner_of_cell(cell.id)
             owner_state = None if owner is None else sim.graph.locations[owner]
-            development_options = tuple(
-                (
-                    str(location.id),
-                    sim.graph.surface_cell_development_failures(location.id, cell.id),
+            development_options_list = []
+            for location in sorted(
+                (row for row in sim.graph.locations.values() if row.body_id == body_id),
+                key=lambda row: str(row.id),
+            ):
+                blockers = sim.graph.surface_cell_development_failures(location.id, cell.id)
+                projected_demand = None
+                projected_fulfillment = None
+                limiting_factors: tuple[str, ...] = ()
+                if not blockers and sim.surface_infrastructure is not None:
+                    location_power = sim.power.snapshot(location.id, sim.facilities, sim.day)
+                    projected = sim.surface_infrastructure.prospective_development_snapshot(
+                        location.id, cell.id, sim.facilities, location_power, sim.day
+                    )
+                    projected_demand = projected.demand
+                    projected_fulfillment = projected.fulfillment
+                    limiting_factors = projected.limiting_factors
+                development_options_list.append(
+                    SurfaceCellDevelopmentOption(
+                        str(location.id),
+                        blockers,
+                        projected_demand,
+                        projected_fulfillment,
+                        limiting_factors,
+                    )
                 )
-                for location in sorted(
-                    (row for row in sim.graph.locations.values() if row.body_id == body_id),
-                    key=lambda row: str(row.id),
-                )
-            )
+            development_options = tuple(development_options_list)
             resources = ()
             if sim.survey is not None:
                 resources = tuple(

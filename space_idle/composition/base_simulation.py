@@ -13,6 +13,7 @@ from ..research import ResearchService
 from ..shared import AccountState
 from ..simulation import Simulation
 from ..storage import StorageService
+from ..surface_infrastructure import SurfaceInfrastructureService
 from ..survey import ExtractionService, SurveyService
 from ..technology import TechnologyState
 from ..scientific_exploration import ScientificExplorationService
@@ -107,7 +108,13 @@ def build_base_simulation() -> Simulation:
     survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph)
     for cell_id, resource_id in initial_known_surface_resource_knowledge():
         survey.initialize_known(cell_id, resource_id)
-    extraction = ExtractionService(build_extraction_specs(), graph)
+    surface_infrastructure = SurfaceInfrastructureService(graph)
+    facilities.availability_factor_provider = (
+        lambda location_id, capability_id, power_snapshot, day: surface_infrastructure.facility_availability_factors(
+            location_id, capability_id, facilities, power_snapshot, day
+        )
+    )
+    extraction = ExtractionService(build_extraction_specs(), graph, surface_infrastructure)
 
     # Keep the Contract Domain composed and available for future events,
     # collaboration, or scenario content. Base Game starts with no offers.
@@ -117,6 +124,7 @@ def build_base_simulation() -> Simulation:
         0, account, graph, environment, inventory, facilities, power, storage,
         industry, logistics, projects, technology, contracts, research, survey, extraction,
         scientific_exploration=scientific_exploration, maintenance=maintenance,
+        surface_infrastructure=surface_infrastructure,
     )
     initial_locations = {facility.location_id for facility in facilities.facilities.values()} | set(graph.operational_node_ids())
     initial_power = {loc: power.snapshot(loc, facilities, 0) for loc in sorted(initial_locations, key=str)}

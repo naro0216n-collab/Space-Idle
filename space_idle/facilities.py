@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Mapping
+import math
+from typing import TYPE_CHECKING, Callable, Mapping
 
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .site import EnvironmentCondition
@@ -77,6 +78,9 @@ class FacilityBook:
     environment: EnvironmentResolver
     facilities: dict[EntityId, FacilityState] = field(default_factory=dict)
     _counter: int = 0
+    availability_factor_provider: Callable[[SpatialNodeId, str, "PowerSnapshot", int], Mapping[EntityId, float]] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def placement_failures(
         self,
@@ -243,12 +247,16 @@ class FacilityBook:
         return max(0.0, min(1.0, self.facilities[facility_id].maintenance_satisfaction))
 
     def _capacity_from_facilities(self, facilities: list[FacilityState], capability_id: str, *, maintenance: bool = False) -> float:
-        total = 0.0
-        for facility in facilities:
+        contributions: list[float] = []
+        for facility in sorted(facilities, key=lambda row: str(row.id)):
             definition = self.definitions[facility.definition_id]
             factor = self.maintenance_factor(facility.id) if maintenance else 1.0
-            total += sum(supply.rated_capacity * factor for supply in definition.capability_supplies if supply.id == capability_id)
-        return total
+            contributions.extend(
+                supply.rated_capacity * factor
+                for supply in definition.capability_supplies
+                if supply.id == capability_id
+            )
+        return math.fsum(contributions)
 
     def infrastructure_capability_capacity_at(self, location_id: SpatialNodeId, capability_id: str, day: int = 0) -> float:
         facilities = [f for f in self.all_at(location_id) if self.is_environmentally_compatible(f, day)]
@@ -259,17 +267,23 @@ class FacilityBook:
         return self._capacity_from_facilities(self.active_compatible_at(location_id, day), capability_id)
 
     def available_capability_capacity_at(self, location_id: SpatialNodeId, capability_id: str, power: PowerSnapshot, day: int = 0) -> float:
-        total = 0.0
-        for facility in self.active_compatible_at(location_id, day):
+        contributions: list[float] = []
+        service_factors = (
+            {}
+            if self.availability_factor_provider is None
+            else self.availability_factor_provider(location_id, capability_id, power, day)
+        )
+        for facility in sorted(self.active_compatible_at(location_id, day), key=lambda row: str(row.id)):
             definition = self.definitions[facility.definition_id]
             utilization = max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
             factor = utilization * power.maintenance_factor_by_facility.get(
                 facility.id, self.maintenance_factor(facility.id)
             )
+            factor *= max(0.0, min(1.0, service_factors.get(facility.id, 1.0)))
             for supply in definition.capability_supplies:
                 if supply.id == capability_id:
-                    total += supply.rated_capacity * factor
-        return total
+                    contributions.append(supply.rated_capacity * factor)
+        return math.fsum(contributions)
 
     def capability_ids(self) -> set[str]:
         return {supply.id for definition in self.definitions.values() for supply in definition.capability_supplies}

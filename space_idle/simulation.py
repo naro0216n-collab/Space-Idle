@@ -23,6 +23,7 @@ from .resource_demand import (
 from .shared import AccountState, SpatialNodeId
 from .spatial import EnvironmentResolver, SpatialGraph
 from .storage import StorageService
+from .surface_infrastructure import SurfaceInfrastructureService
 from .technology import TechnologyState
 from .survey import ExtractionService, SurveyService
 from .scientific_exploration import ScientificExplorationService
@@ -71,6 +72,7 @@ class Simulation:
     extraction: ExtractionService | None = None
     scientific_exploration: ScientificExplorationService | None = None
     maintenance: FacilityMaintenanceService | None = None
+    surface_infrastructure: SurfaceInfrastructureService | None = None
     content_id: str = "unconfigured"
     pending_offline_game_days: float = 0.0
     domain_extensions: tuple[DomainExtension, ...] = ()

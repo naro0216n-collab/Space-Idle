@@ -11,6 +11,8 @@ from .application_views import (
     IndustryRow,
     InventoryRow,
     LocationView,
+    SurfaceInfrastructureLoadRow,
+    SurfaceInfrastructureRow,
     StorageRow,
 )
 from .shared import SpatialNodeId
@@ -315,6 +317,35 @@ class LocationProjectorMixin:
             > 1e-9
         )
 
+        surface_infrastructure = None
+        if sim.surface_infrastructure is not None and location_id in sim.graph.locations:
+            snapshot = sim.surface_infrastructure.snapshot(
+                location_id, sim.facilities, power, sim.day
+            )
+            improvement_ids = tuple(
+                sorted(
+                    str(definition.id)
+                    for definition in sim.facilities.definitions.values()
+                    if definition.id in sim.projects.recipes
+                    and any(
+                        supply.id == sim.surface_infrastructure.capability_id
+                        for supply in definition.capability_supplies
+                    )
+                )
+            )
+            surface_infrastructure = SurfaceInfrastructureRow(
+                snapshot.nominal_capacity,
+                snapshot.available_capacity,
+                snapshot.demand,
+                snapshot.fulfillment,
+                tuple(
+                    SurfaceInfrastructureLoadRow(load.code, load.demand)
+                    for load in snapshot.load_sources
+                ),
+                snapshot.limiting_factors,
+                improvement_ids,
+            )
+
         return LocationView(
             str(location_id),
             node.display_name,
@@ -325,6 +356,7 @@ class LocationProjectorMixin:
             power.allocated_mw,
             sim.projects.construction_capacity_at(location_id, power, sim.day),
             capability_rows,
+            surface_infrastructure,
             self._inventory_rows(location_id),
             self._storage_rows(location_id),
             tuple(facilities),

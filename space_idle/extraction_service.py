@@ -8,6 +8,7 @@ from .inventory import InventoryBook
 from .power import PowerSnapshot
 from .shared import DefinitionId, SpatialNodeId
 from .spatial import SpatialGraph
+from .surface_infrastructure import SurfaceInfrastructureService
 from .exploration_models import ExtractionResourceSnapshot, ExtractionSpec, ExtractionSnapshot
 
 
@@ -15,6 +16,7 @@ from .exploration_models import ExtractionResourceSnapshot, ExtractionSpec, Extr
 class ExtractionService:
     specs: dict[DefinitionId, ExtractionSpec]
     graph: SpatialGraph
+    surface_infrastructure: SurfaceInfrastructureService
 
     @staticmethod
     def diminishing_response(installed_capacity: float, effective_opportunity: float) -> float:
@@ -37,12 +39,32 @@ class ExtractionService:
             return 0.0
         return 1.0 / (1.0 + capacity / opportunity)
 
-    def effective_opportunity(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float:
+    def static_opportunity(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         location = self.graph.locations.get(location_id)
         if location is None:
             return 0.0
         return math.fsum(
             self.graph.surface_cells[cell_id].resource_potential_by_resource.get(resource_id, 0.0)
+            for cell_id in sorted(location.developed_cell_ids, key=str)
+        )
+
+    def effective_opportunity(
+        self,
+        location_id: SpatialNodeId,
+        resource_id: DefinitionId,
+        facilities: FacilityBook,
+        power: PowerSnapshot,
+        day: int = 0,
+    ) -> float:
+        location = self.graph.locations.get(location_id)
+        if location is None:
+            return 0.0
+        infrastructure = self.surface_infrastructure.snapshot(
+            location_id, facilities, power, day
+        )
+        return math.fsum(
+            self.graph.surface_cells[cell_id].resource_potential_by_resource.get(resource_id, 0.0)
+            * (1.0 if cell_id == location.core_cell_id else infrastructure.fulfillment)
             for cell_id in sorted(location.developed_cell_ids, key=str)
         )
 
@@ -130,7 +152,9 @@ class ExtractionService:
                 for facility_id in ordered_active_ids
             )
             operational = 0.0 if installed <= 1e-12 else fulfilled_nominal / installed
-            opportunity = self.effective_opportunity(location_id, resource_id)
+            opportunity = self.effective_opportunity(
+                location_id, resource_id, facilities, power, day
+            )
             response = self.diminishing_response(installed, opportunity)
             output = response * operational
             diminishing_efficiency = 0.0 if installed <= 1e-12 else response / installed
@@ -162,6 +186,9 @@ class ExtractionService:
             row.resource_id: row
             for row in self.resource_snapshots(location_id, facilities, power, day)
         }
+        infrastructure = self.surface_infrastructure.snapshot(
+            location_id, facilities, power, day
+        ) if location_id in self.graph.locations else None
 
         pre_storage: dict[object, float] = {}
         for resource_id, summary in resource_summary.items():
@@ -225,6 +252,12 @@ class ExtractionService:
             summary = resource_summary.get(spec.resource_id)
             opportunity = 0.0 if summary is None else summary.effective_opportunity
             marginal = 0.0 if summary is None else summary.marginal_efficiency
+            if (
+                infrastructure is not None
+                and infrastructure.fulfillment < 1.0 - 1e-9
+                and self.static_opportunity(location_id, spec.resource_id) > opportunity + 1e-12
+            ):
+                reasons.setdefault(facility.id, []).append("surface_infrastructure")
             scale = 0.0 if nominal <= 1e-12 else max(0.0, min(1.0, output / nominal))
             rows.append(
                 ExtractionSnapshot(

@@ -63,6 +63,23 @@ class CapabilityRow:
 
 
 @dataclass(frozen=True)
+class SurfaceInfrastructureLoadRow:
+    code: str
+    demand: float
+
+
+@dataclass(frozen=True)
+class SurfaceInfrastructureRow:
+    nominal_capacity: float
+    available_capacity: float
+    demand: float
+    fulfillment: float
+    load_sources: tuple[SurfaceInfrastructureLoadRow, ...]
+    limiting_factors: tuple[str, ...]
+    improvement_facility_definition_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class IndustryRow:
     facility_id: str
     facility_definition_id: str
@@ -122,6 +139,7 @@ class LocationView:
     power_allocated_mw: float
     construction_capacity_per_day: float
     capabilities: tuple[CapabilityRow, ...]
+    surface_infrastructure: SurfaceInfrastructureRow | None
     inventory: tuple[InventoryRow, ...]
     storage: tuple[StorageRow, ...]
     facilities: tuple[FacilityRow, ...]

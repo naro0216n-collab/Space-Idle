@@ -139,8 +139,8 @@ def validate_extraction_runtime(sim: Any) -> None:
             spec.resource_id for spec in sim.extraction.specs.values()
         }:
             _require(
-                sim.extraction.effective_opportunity(location_id, resource_id) >= 0.0,
-                f"negative effective extraction opportunity: {(location_id, resource_id)}",
+                sim.extraction.static_opportunity(location_id, resource_id) >= 0.0,
+                f"negative extraction opportunity: {(location_id, resource_id)}",
             )
 
 

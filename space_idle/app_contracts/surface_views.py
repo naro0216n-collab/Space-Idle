@@ -28,6 +28,15 @@ class SurfaceFacilityPlacementOption:
 
 
 @dataclass(frozen=True)
+class SurfaceCellDevelopmentOption:
+    location_id: str
+    blockers: tuple[tuple[str, str], ...]
+    projected_surface_infrastructure_demand: float | None = None
+    projected_surface_infrastructure_fulfillment: float | None = None
+    limiting_factors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class SurfaceCellRow:
     id: str
     body_id: str
@@ -41,7 +50,7 @@ class SurfaceCellRow:
     location_id: str | None
     is_location_core: bool
     foundation_blockers: tuple[tuple[str, str], ...]
-    development_options: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
+    development_options: tuple[SurfaceCellDevelopmentOption, ...]
     facility_placement_options: tuple[SurfaceFacilityPlacementOption, ...] = ()
 
 
