@@ -12,10 +12,6 @@ space-idle-api = "space_idle.api.__main__:main"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "-m 'not development'"
-markers = [
-  "development: development and publish tooling tests excluded from the normal game suite",
-]
 
 [tool.setuptools.packages.find]
 include = ["space_idle*"]

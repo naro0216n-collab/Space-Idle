@@ -66,13 +66,13 @@ python -m playwright install chromium
 高速に再現できる検証はローカルで実行する。
 
 ```bash
-pytest -q -m "not development" --ignore=tests/test_gameplay_mechanics.py
+pytest -q --ignore=tests/test_gameplay_mechanics.py
 git diff --check
 ```
 
 実ブラウザ、clean install、OS差などローカル環境で十分再現できない検証は、対応するテストも変更単位に含めてGitHub CIで実行する。
 
-Publish Gatewayやpublish helperなど開発環境そのもののテストは `development` markerへ分離し、通常のゲーム本体suiteには含めない。関連機構を変更した場合だけ `pytest -q -m development tests/test_publish_request.py` で専用検証する。
+Publish Gateway、publish helper、CI/E2E harnessなど開発環境そのものの契約テストは `development_tests/` に物理分離し、ゲーム本体の `tests/` と通常suiteには含めない。開発基盤を変更した場合は `pytest -q development_tests`、publish経路だけを変更した場合は `pytest -q development_tests/test_publish_request.py` で専用検証する。実ブラウザの受入シナリオは `playwright/` に置き、この開発基盤テストとも分離する。
 
 ## Publish procedure
 
