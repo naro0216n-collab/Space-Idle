@@ -63,7 +63,7 @@ class LogisticsLaneProjectorMixin:
             )
             procurement_arrivals = [
                 row.ready_day
-                for row in sim.logistics.procurement_deliveries.values()
+                for row in sim.logistics.procurement_delivery_snapshots()
                 if row.demand_id == demand.id
                 and row.delivery_node_id == demand.destination_id
             ]
@@ -179,7 +179,7 @@ class LogisticsLaneProjectorMixin:
                 lane.paused,
                 tuple(dict.fromkeys(metrics[lane.id].blockers + tuple(funds_blockers.get(str(lane.id), ())))),
             )
-            for lane in sorted(sim.logistics.lanes.values(), key=lambda row: str(row.id))
+            for lane in sim.logistics.lane_definitions()
         )
 
     def _logistics_lanes_view(self) -> LogisticsLanesView:

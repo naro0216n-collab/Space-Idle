@@ -204,6 +204,24 @@ def test_lane_capacity_and_priority_can_be_updated_without_replacing_lane():
     assert after.priority == 80
 
 
+def test_vehicle_production_option_separates_plan_acceptance_from_runtime_blockers():
+    app = build_game_application()
+    option = next(
+        row
+        for row in app.query(GetLogistics()).vehicle_production_options
+        if row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+        and row.operational_node_id == str(LEO)
+    )
+
+    assert any(blocker.startswith("service:enabled:") for blocker in option.blockers)
+    assert option.can_plan is True
+
+    result = app.execute(
+        ProduceVehicle(str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(LEO), priority=44)
+    )
+    assert result.created_id is not None
+
+
 def test_vehicle_production_exposes_resource_and_service_priority_control():
     app = build_game_application()
     production_id = app.execute(ProduceVehicle(

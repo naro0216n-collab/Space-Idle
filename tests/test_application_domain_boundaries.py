@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 
@@ -64,3 +65,18 @@ def test_transport_and_logistics_own_disjoint_authoritative_state():
         "vehicle_defs", "routes", "external_services",
     }.issubset(transport_fields)
     assert not {"lanes", "cargo_flows"} & transport_fields
+
+
+def test_application_reads_logistics_mutable_state_through_public_snapshots():
+    forbidden_state = {"lanes", "cargo_flows", "procurement_deliveries"}
+    violations: list[tuple[str, str]] = []
+    for path in sorted(PACKAGE.glob("application*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute) or node.attr not in forbidden_state:
+                continue
+            owner = node.value
+            if not (isinstance(owner, ast.Attribute) and owner.attr == "logistics"):
+                continue
+            violations.append((path.name, node.attr))
+    assert violations == []

@@ -184,6 +184,7 @@ class VehicleProductionOptionRow:
     production_days: float
     resources: tuple[tuple[str, float], ...]
     blockers: tuple[str, ...]
+    can_plan: bool
 
 
 @dataclass(frozen=True)

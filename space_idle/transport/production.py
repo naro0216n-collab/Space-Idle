@@ -56,18 +56,13 @@ class VehicleProductionMixin:
         if not production.resources:
             raise ValueError("vehicle production requires physical resource inputs")
 
-        failures = self.vehicle_production_site_failures(
+        failures = self.vehicle_production_plan_failures(
             vehicle_definition_id, location_id, day=day
         )
-        structural = tuple(
-            failure
-            for failure in failures
-            if not failure.code.startswith("service:enabled")
-        )
-        if structural:
+        if failures:
             raise ValueError(
                 "vehicle production site requirements not met: "
-                + "; ".join(failure.detail for failure in structural)
+                + "; ".join(failure.detail for failure in failures)
             )
 
         self._vehicle_production_counter += 1
@@ -112,6 +107,21 @@ class VehicleProductionMixin:
                     "vehicle production priority can only change before inputs are consumed"
                 )
             state.priority = priority
+
+    def vehicle_production_plan_failures(
+        self,
+        vehicle_definition_id: DefinitionId,
+        location_id: SpatialNodeId,
+        *,
+        day: int = 0,
+    ) -> tuple[SiteRequirementFailure, ...]:
+        return tuple(
+            failure
+            for failure in self.vehicle_production_site_failures(
+                vehicle_definition_id, location_id, day=day
+            )
+            if not failure.code.startswith("service:enabled")
+        )
 
     def vehicle_production_site_failures(
         self,

@@ -171,7 +171,7 @@ class LogisticsStateProjectorMixin:
                 service_destinations=tuple(str(value) for value in flow.service_destinations),
                 departure_day=flow.departure_day, ready_day=flow.ready_day, status=flow.status.value,
             )
-            for flow in sorted(sim.logistics.cargo_flows.values(), key=lambda row: str(row.id))
+            for flow in sorted(sim.logistics.cargo_flow_snapshots(), key=lambda row: str(row.id))
         )
 
     def _procurement_delivery_rows(self) -> tuple[ProcurementDeliveryRow, ...]:
@@ -191,7 +191,7 @@ class LogisticsStateProjectorMixin:
                 status=row.status.value,
             )
             for row in sorted(
-                sim.logistics.procurement_deliveries.values(), key=lambda row: str(row.id)
+                sim.logistics.procurement_delivery_snapshots(), key=lambda row: str(row.id)
             )
         )
 
@@ -210,12 +210,22 @@ class LogisticsStateProjectorMixin:
                         definition.id, node.id, day=sim.day, power=power
                     )
                 )
+                plan_failures = sim.transport.vehicle_production_plan_failures(
+                    definition.id, node.id, day=sim.day
+                )
                 rows.append(
                     VehicleProductionOptionRow(
-                        str(definition.id), definition.display_name, str(node.id),
-                        definition.production.service_type, definition.production.days,
-                        tuple((str(resource_id), amount) for resource_id, amount in definition.production.resources),
-                        blockers,
+                        vehicle_definition_id=str(definition.id),
+                        display_name=definition.display_name,
+                        operational_node_id=str(node.id),
+                        production_service_type=definition.production.service_type,
+                        production_days=definition.production.days,
+                        resources=tuple(
+                            (str(resource_id), amount)
+                            for resource_id, amount in definition.production.resources
+                        ),
+                        blockers=blockers,
+                        can_plan=not plan_failures,
                     )
                 )
         return tuple(rows)
