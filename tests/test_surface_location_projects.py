@@ -47,11 +47,8 @@ def test_surface_cell_development_changes_territory_only_after_project_completio
 def test_location_founding_is_a_project_and_allows_a_disconnected_valid_core_cell():
     app = build_game_application()
     sim = app._simulation
-    new_location_id = "test.location.earth_coastal"
-
     result = app.execute(FoundLocation(
         str(ids.EARTH),
-        new_location_id,
         "Coastal Industrial Base",
         str(ids.EARTH_BODY),
         str(ids.EARTH_CELL_COASTAL),
@@ -59,6 +56,10 @@ def test_location_founding_is_a_project_and_allows_a_disconnected_valid_core_cel
     ))
     project_id = result.created_id
     assert project_id is not None
+    planned = next(project for project in app.query(GetProjects()).items if project.id == project_id)
+    new_location_id = planned.target_location_id
+    assert new_location_id is not None
+    assert new_location_id.startswith("player.location.")
     assert SpatialNodeId(new_location_id) not in sim.graph.locations
 
     app.execute(AdvanceTime(25))
@@ -80,7 +81,6 @@ def test_competing_spatial_projects_cannot_claim_the_same_cell():
     with pytest.raises(ApplicationError, match="active"):
         app.execute(FoundLocation(
             str(ids.EARTH),
-            "test.location.competing",
             "Competing Base",
             str(ids.EARTH_BODY),
             str(ids.EARTH_CELL_COASTAL),
@@ -140,6 +140,36 @@ def test_mid_project_save_load_preserves_geographic_target_and_future_transition
     assert ids.EARTH_CELL_COASTAL in loaded._simulation.graph.locations[ids.EARTH].developed_cell_ids
 
 
+def test_mid_project_save_load_preserves_generated_founding_identity_and_future_transition(tmp_path):
+    app = build_game_application()
+    project_id = app.execute(FoundLocation(
+        str(ids.EARTH),
+        "Persisted Coastal Base",
+        str(ids.EARTH_BODY),
+        str(ids.EARTH_CELL_COASTAL),
+        sourcing_policy="import_now",
+    )).created_id
+    assert project_id is not None
+    planned = next(row for row in app.query(GetProjects()).items if row.id == project_id)
+    generated_location_id = planned.target_location_id
+    assert generated_location_id is not None
+
+    app.execute(AdvanceTime(4))
+    path = tmp_path / "location-founding.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application)
+    loaded_row = next(row for row in loaded.query(GetProjects()).items if row.id == project_id)
+    assert loaded_row.target_location_id == generated_location_id
+
+    app.execute(AdvanceTime(25))
+    loaded.execute(AdvanceTime(25))
+    location_id = SpatialNodeId(generated_location_id)
+    assert location_id in app._simulation.graph.locations
+    assert location_id in loaded._simulation.graph.locations
+    assert app._simulation.graph.locations[location_id].core_cell_id == ids.EARTH_CELL_COASTAL
+    assert loaded._simulation.graph.locations[location_id].core_cell_id == ids.EARTH_CELL_COASTAL
+
+
 def test_surface_development_requires_content_configured_survey_knowledge():
     app = build_game_application()
     sim = app._simulation
@@ -178,7 +208,6 @@ def test_location_founding_requires_content_configured_survey_knowledge():
     with pytest.raises(ApplicationError, match="survey_knowledge: level=0/1"):
         app.execute(FoundLocation(
             str(ids.SOUTH_POLAR_RIDGE),
-            "test.location.unsurveyed.farside",
             "Unsurveyed Farside Base",
             str(ids.MOON),
             str(target_cell),
@@ -193,7 +222,6 @@ def test_location_founding_requires_content_configured_survey_knowledge():
     assert not any(code == "survey_knowledge" for code, _detail in foundation.blockers)
     assert app.execute(FoundLocation(
         str(ids.SOUTH_POLAR_RIDGE),
-        "test.location.surveyed.farside",
         "Surveyed Farside Base",
         str(ids.MOON),
         str(target_cell),

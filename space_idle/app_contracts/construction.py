@@ -26,7 +26,6 @@ class PlanFacilityUpgrade:
 @dataclass(frozen=True)
 class FoundLocation:
     provider_location_id: str
-    new_location_id: str
     display_name: str
     body_id: str
     core_cell_id: str

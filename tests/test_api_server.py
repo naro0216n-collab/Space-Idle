@@ -5,12 +5,14 @@ import http.client
 import json
 from threading import Thread
 
+import pytest
+
 from space_idle import build_game_application
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.application_commands import (
     GetCatalog, GetFlowReport, GetLogisticsSummary, GetRoutes, GetWorld,
 )
-from space_idle.api.codec import to_jsonable
+from space_idle.api.codec import ApiPayloadError, command_schema, decode_command, to_jsonable
 from space_idle.content import base_ids as ids
 
 
@@ -41,6 +43,23 @@ def _raw_request(port: int, path: str):
     status = response.status
     conn.close()
     return status, headers, data
+
+
+def test_found_location_command_keeps_internal_location_identity_out_of_public_contract():
+    schema = next(row for row in command_schema() if row["type"] == "FoundLocation")
+    parameter_names = {row["name"] for row in schema["parameters"]}
+    assert "new_location_id" not in parameter_names
+    with pytest.raises(ApiPayloadError, match="unknown command fields: new_location_id"):
+        decode_command({
+            "type": "FoundLocation",
+            "payload": {
+                "provider_location_id": str(ids.EARTH),
+                "new_location_id": "client.chosen.location",
+                "display_name": "Client Chosen ID",
+                "body_id": str(ids.EARTH_BODY),
+                "core_cell_id": str(ids.EARTH_CELL_COASTAL),
+            },
+        })
 
 
 def test_ui_reports_and_split_logistics_queries_are_json_safe():
@@ -293,6 +312,8 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert "StartScientificExploration" in operations_js
         assert "AssignExplorationFleet" in operations_js
         assert "FoundLocation" in operations_js
+        assert "data-new-location-id" not in operations_js
+        assert "new_location_id" not in operations_js
         assert "DevelopSurfaceCell" in operations_js
         assert "data-surface-build" in operations_js
         assert "AssignExplorationVehicle" not in operations_js

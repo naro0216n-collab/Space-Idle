@@ -15,7 +15,7 @@ from .application_commands import (
     SetProjectPriority,
     SetProjectSourcingPolicy,
 )
-from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
+from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SurfaceCellId
 
 
 class ConstructionCommandHandlerMixin:
@@ -48,7 +48,6 @@ class ConstructionCommandHandlerMixin:
         if isinstance(command, FoundLocation):
             pid = sim.projects.plan_location_founding(
                 self._require_location(command.provider_location_id),
-                SpatialNodeId(command.new_location_id),
                 command.display_name,
                 CelestialBodyId(command.body_id),
                 SurfaceCellId(command.core_cell_id),

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from hashlib import sha256
+
 from ..power import PowerSnapshot
 from ..shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .models import (
@@ -17,6 +19,32 @@ from .models import (
 
 
 class ConstructionPlanningMixin:
+    def _generated_location_id(
+        self, body_id: CelestialBodyId, core_cell_id: SurfaceCellId
+    ) -> SpatialNodeId:
+        """Allocate an internal Location identity for a player-founded site.
+
+        Location identity is application state, not a player decision.  The
+        physical founding site gives us a deterministic base while the suffix
+        guard keeps the allocator valid even if old/cancelled project state or
+        future content happens to collide with that base.
+        """
+        digest = sha256(f"{body_id}\0{core_cell_id}".encode("utf-8")).hexdigest()[:24]
+        base = f"player.location.{digest}"
+        graph = self.facilities.environment.graph
+        occupied = set(graph.operational_node_ids())
+        occupied.update(
+            target.new_location_id
+            for project in self.projects.values()
+            if isinstance((target := project.target), LocationFoundingTarget)
+        )
+        candidate = SpatialNodeId(base)
+        suffix = 2
+        while candidate in occupied:
+            candidate = SpatialNodeId(f"{base}.{suffix}")
+            suffix += 1
+        return candidate
+
     def _create_project(
         self,
         target: ConstructionTarget,
@@ -113,27 +141,9 @@ class ConstructionPlanningMixin:
             import_source_id,
         )
 
-
-    def _active_spatial_target_conflict(
-        self, cell_id: SurfaceCellId, *, new_location_id: SpatialNodeId | None = None
-    ) -> bool:
-        for project in self.projects.values():
-            if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
-                continue
-            target = project.target
-            if isinstance(target, LocationFoundingTarget):
-                if target.core_cell_id == cell_id:
-                    return True
-                if new_location_id is not None and target.new_location_id == new_location_id:
-                    return True
-            elif isinstance(target, SurfaceCellDevelopmentTarget) and target.cell_id == cell_id:
-                return True
-        return False
-
     def plan_location_founding(
         self,
         provider_location_id: SpatialNodeId,
-        new_location_id: SpatialNodeId,
         display_name: str,
         body_id: CelestialBodyId,
         core_cell_id: SurfaceCellId,
@@ -145,23 +155,15 @@ class ConstructionPlanningMixin:
         recipe_id = self.location_founding_recipe_id
         if recipe_id is None or recipe_id not in self.spatial_recipes:
             raise ValueError("location founding recipe is not configured")
-        graph = self.facilities.environment.graph
         failures = [
             (failure.code, failure.detail)
             for failure in self.location_founding_failures(
                 provider_location_id, body_id, core_cell_id, day
             )
         ]
-        if new_location_id in graph.locations or new_location_id in graph.nodes:
-            failures.append(("location_id_in_use", str(new_location_id)))
-        if self._active_spatial_target_conflict(core_cell_id, new_location_id=new_location_id):
-            # ``location_founding_failures`` already reports target-cell
-            # conflicts.  The explicit check here also covers an active
-            # founding project that reserved the requested Location identity.
-            if not any(code == "active_spatial_project" for code, _detail in failures):
-                failures.append(("active_spatial_project", f"active spatial project already targets {core_cell_id}"))
         if failures:
             raise ValueError("; ".join(f"{code}: {detail}" for code, detail in failures))
+        new_location_id = self._generated_location_id(body_id, core_cell_id)
         return self._create_project(
             LocationFoundingTarget(recipe_id, new_location_id, display_name, body_id, core_cell_id),
             provider_location_id,
