@@ -8,14 +8,14 @@ from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .logistics_procurement import ExternalProcurementMixin
 from .shared import DefinitionId, EntityId
-from .transport.lanes import LaneRuntimeMetrics, LogisticsLaneSnapshot, TransportLaneMixin
-from .transport.models import CargoFlowBatch, LogisticsLane
+from .logistics_lanes import LaneRuntimeMetrics, LogisticsLaneMixin, LogisticsLaneSnapshot
+from .logistics_models import CargoFlowBatch, LogisticsLane
 from .transport.service import TransportService
-from .transport.steady_logistics import SteadyLogisticsMixin
+from .logistics_flow import LogisticsFlowMixin
 
 
 @dataclass
-class LogisticsService(TransportLaneMixin, SteadyLogisticsMixin, ExternalProcurementMixin):
+class LogisticsService(LogisticsLaneMixin, LogisticsFlowMixin, ExternalProcurementMixin):
     """Logistics demand/capacity allocation and Cargo Flow state owner."""
 
     transport: TransportService

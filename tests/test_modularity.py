@@ -106,7 +106,7 @@ def test_major_mutable_domain_states_are_owned_enums_not_distributed_string_sets
     from space_idle.projects import ProjectStatus
     from space_idle.research import ResearchStage
     from space_idle.transport import FleetReservationKind, TransportControlMode
-    from space_idle.transport import CargoFlowStatus
+    from space_idle.logistics_models import CargoFlowStatus
     from space_idle.transport.production import VehicleProductionPhase
 
     for state_type in (
@@ -115,6 +115,20 @@ def test_major_mutable_domain_states_are_owned_enums_not_distributed_string_sets
     ):
         assert issubclass(state_type, Enum)
         assert issubclass(state_type, str)
+
+
+def test_transport_package_does_not_own_logistics_state_or_flow_implementation():
+    transport = PACKAGE / "transport"
+    transport_models = (transport / "models.py").read_text(encoding="utf-8")
+
+    assert not (transport / "lanes.py").exists()
+    assert not (transport / "steady_logistics.py").exists()
+    assert "class CargoFlowBatch" not in transport_models
+    assert "class CargoFlowStatus" not in transport_models
+    assert "class LogisticsLane" not in transport_models
+    assert (PACKAGE / "logistics_models.py").exists()
+    assert (PACKAGE / "logistics_lanes.py").exists()
+    assert (PACKAGE / "logistics_flow.py").exists()
 
 
 def test_public_domain_facades_compose_focused_implementations():
@@ -130,7 +144,7 @@ def test_public_domain_facades_compose_focused_implementations():
         return {base.__name__ for base in cls.__mro__[1:]}
 
     assert {"TransportCompatibilityMixin", "FleetAllocationMixin", "VehicleProductionMixin"}.issubset(bases(TransportService))
-    assert {"TransportLaneMixin", "SteadyLogisticsMixin"}.issubset(bases(LogisticsService))
+    assert {"LogisticsLaneMixin", "LogisticsFlowMixin"}.issubset(bases(LogisticsService))
     assert not {"FleetAllocationMixin", "TransportCompatibilityMixin", "VehicleProductionMixin"} & bases(LogisticsService)
     assert {"ConstructionRulesMixin", "ConstructionPlanningMixin", "ConstructionProcurementMixin", "ConstructionExecutionMixin"}.issubset(bases(ProjectService))
     assert {"ProcessSelectionMixin", "IndustryPlanningMixin", "IndustryExecutionMixin"}.issubset(bases(IndustryService))

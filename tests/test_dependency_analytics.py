@@ -12,7 +12,7 @@ from space_idle.persistence import load_game, save_game
 from space_idle.shared import DefinitionId, EntityId
 from space_idle.validation import validate_catalog_coverage
 from space_idle.validation_support import ConfigurationError
-from space_idle.transport.models import CargoFlowBatch
+from space_idle.logistics_models import CargoFlowBatch
 
 
 def _resource(view, resource_id):

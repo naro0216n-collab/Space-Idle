@@ -225,7 +225,7 @@ def test_remote_procurement_replenishes_logistics_source_without_bypassing_trans
 
 def test_explicit_source_demand_is_not_replaced_by_destination_procurement():
     from space_idle.external_procurement import ExternalProcurementServiceDef
-    from space_idle.transport.steady_logistics import LogisticsResourcePlan
+    from space_idle.logistics_flow import LogisticsResourcePlan
 
     sim = build_base_simulation()
     demand = _demand(destination=ids.LEO, amount=1.0, source=ids.EARTH)

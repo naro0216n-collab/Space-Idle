@@ -41,7 +41,7 @@ from .surface_infrastructure import SurfaceInfrastructureService
 from .technology import TechnologyState
 from .survey import ExtractionService, SurveyService
 from .scientific_exploration import ScientificExplorationService
-from .transport.steady_logistics import LogisticsExecutionAllocation, LogisticsResourcePlan
+from .logistics_flow import LogisticsExecutionAllocation, LogisticsResourcePlan
 
 
 @dataclass(frozen=True)

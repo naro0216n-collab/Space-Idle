@@ -5,7 +5,8 @@ from typing import Any
 from .domain import DomainExtension, StateCodec
 from .external_procurement import ProcurementDeliveryBatch, ProcurementDeliveryStatus
 from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
-from .transport.models import CargoFlowBatch, CargoFlowStatus, LogisticsLane, PathPolicy
+from .logistics_models import CargoFlowBatch, CargoFlowStatus, LogisticsLane
+from .transport.models import PathPolicy
 from .validation_support import require as _require
 
 def capture_logistics(sim: Any) -> dict[str, Any]:

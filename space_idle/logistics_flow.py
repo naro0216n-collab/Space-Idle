@@ -3,21 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import heapq
 
-from ..external_economy import FundsAllocationPlan, FundsRequest
-from ..knowledge import DomainActivity
-from ..resource_claim import ResourceAllocationPlan, ResourceClaim
-from ..resource_demand import ResourceDemand
-from ..service_capacity import ServiceCapacityAllocationPlan
-from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
-from .lanes import DemandSupplyOptions, LaneRuntimeMetrics, LogisticsLaneSnapshot
-from .models import (
-    CargoFlowBatch,
-    CargoFlowStatus,
-    DirectionalCapacity,
-    LogisticsLane,
-    PathPolicy,
-    TransportCapacitySnapshot,
-)
+from .external_economy import FundsAllocationPlan, FundsRequest
+from .knowledge import DomainActivity
+from .resource_claim import ResourceAllocationPlan, ResourceClaim
+from .resource_demand import ResourceDemand
+from .service_capacity import ServiceCapacityAllocationPlan
+from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
+from .logistics_lanes import DemandSupplyOptions, LaneRuntimeMetrics, LogisticsLaneSnapshot
+from .logistics_models import CargoFlowBatch, CargoFlowStatus, LogisticsLane
+from .transport.models import DirectionalCapacity, PathPolicy, TransportCapacitySnapshot
 
 
 @dataclass(frozen=True)
@@ -97,7 +91,7 @@ class LogisticsExecutionAllocation:
         return 1.0, ()
 
 
-class SteadyLogisticsMixin:
+class LogisticsFlowMixin:
     """Shared sustained-capacity allocation and Cargo Flow execution.
 
     The daily capacity budget is derived from Transport Allocations and external

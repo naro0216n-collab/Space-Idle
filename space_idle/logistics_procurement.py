@@ -14,7 +14,7 @@ from .resource_demand import ResourceDemand
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
 if TYPE_CHECKING:
-    from .transport.steady_logistics import LogisticsResourcePlan
+    from .logistics_flow import LogisticsResourcePlan
 
 
 class ExternalProcurementMixin:

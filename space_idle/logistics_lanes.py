@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..resource_demand import ResourceDemand
-from ..shared import EntityId, RouteId, SpatialNodeId
-from .models import LogisticsLane, PathPolicy
+from .resource_demand import ResourceDemand
+from .shared import EntityId, RouteId, SpatialNodeId
+from .logistics_models import LogisticsLane
+from .transport.models import PathPolicy
 
 
 @dataclass(frozen=True)
@@ -33,8 +34,8 @@ class DemandSupplyOptions:
     earliest_confirmed_arrival_day: int | None
 
 
-class TransportLaneMixin:
-    """Player-owned Logistics Lane configuration only.
+class LogisticsLaneMixin:
+    """Player-owned Logistics Lane configuration.
 
     Lane state expresses demand for shared Transport Capacity. Fleet selection,
     service construction, capacity derivation, and Cargo Flow execution belong
