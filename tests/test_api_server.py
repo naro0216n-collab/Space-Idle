@@ -126,6 +126,13 @@ def test_http_api_revision_etag_gzip_command_and_save_load(tmp_path):
         assert payload["data"]["node_ids"] == [str(ids.EARTH)]
         assert "resources" in payload["data"]
         assert "critical_dependency_resource_ids" in payload["data"]
+        if payload["data"]["resources"]:
+            dependency_row = payload["data"]["resources"][0]
+            assert "local_demand_per_day" in dependency_row
+            assert "external_inflow_per_day" in dependency_row
+            assert "external_outflow_per_day" in dependency_row
+            assert "imports_pipeline" in dependency_row
+            assert "unmet_demand" in dependency_row
 
         status, _, payload = _request(
             port,
@@ -191,6 +198,10 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
         assert data["dependency_analytics"]["scope_kind"] == "operational_nodes"
         assert data["dependency_analytics"]["node_ids"] == [str(ids.EARTH)]
         assert "resources" in data["dependency_analytics"]
+        if data["dependency_analytics"]["resources"]:
+            dependency_row = data["dependency_analytics"]["resources"][0]
+            assert "local_demand_per_day" in dependency_row
+            assert "external_inflow_per_day" in dependency_row
         assert data["external_economy"]["policies"] == []
         surface_infrastructure = data["location"]["surface_infrastructure"]
         assert surface_infrastructure["fulfillment"] == 1.0
@@ -326,6 +337,10 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert "SpaceIdleResearchTree.render" in operations_js
         assert "External Dependency / 産業自立" in operations_js
         assert "critical_dependency_resource_ids" in operations_js
+        assert "local_demand_per_day" in operations_js
+        assert "external_inflow_per_day" in operations_js
+        assert "構造外部依存/日" in operations_js
+        assert "今tick流入/日" in operations_js
         assert "SetResearchPriority" in operations_js
         assert "FundResearchPrototype" not in operations_js
         assert "StartScientificExploration" in operations_js

@@ -57,6 +57,22 @@ class LogisticsResourcePlan:
     spending_requests: tuple[FundsRequest, ...] = ()
 
 
+@dataclass(frozen=True)
+class LogisticsDispatchProjection:
+    lane_id: EntityId
+    demand_id: EntityId
+    resource_id: DefinitionId
+    source_id: SpatialNodeId
+    destination_id: SpatialNodeId
+    amount_t: float
+
+
+@dataclass(frozen=True)
+class LogisticsExecutionProjection:
+    dispatches: tuple[LogisticsDispatchProjection, ...]
+    operational_resource_use: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+
+
 class SteadyLogisticsMixin:
     """Shared sustained-capacity allocation and Cargo Flow execution.
 
@@ -703,14 +719,22 @@ class SteadyLogisticsMixin:
             if flow.amount_t <= 1e-9:
                 del self.cargo_flows[flow_id]
 
-    def advance_capacity_logistics(
+    def _project_capacity_logistics_execution(
         self,
         day: int,
         plan: LogisticsResourcePlan,
         allocations: ResourceAllocationPlan,
-        funds: FundsAllocationPlan,
-    ) -> tuple[DomainActivity, ...]:
-        """Execute only transport work authorized by ResourceAllocation."""
+    ) -> tuple[
+        tuple[tuple[_PlannedDispatch, float], ...],
+        dict[EntityId, DirectionalCapacity],
+        dict[tuple[EntityId, SpatialNodeId, DefinitionId], float],
+    ]:
+        """Resolve executable dispatch and operation-resource use without mutation.
+
+        This is the single interpretation of an authorized LogisticsResourcePlan.
+        Queries use it to observe the same Resource-allocation limits that execution
+        will apply; Domain execution then consumes exactly this projection.
+        """
         operation_factor: dict[EntityId, float] = {}
         for allocation_id, _directional in plan.planned_usage:
             ratios: list[float] = []
@@ -735,11 +759,14 @@ class SteadyLogisticsMixin:
                 cargo_budget[claim.id] = 0.0
 
         used: dict[EntityId, DirectionalCapacity] = {}
-        activities: list[DomainActivity] = []
-        requests_by_id = {request.id: request for request in plan.spending_requests}
+        executable: list[tuple[_PlannedDispatch, float]] = []
         for row in plan.dispatches:
             path_factor = min(
-                (operation_factor.get(edge.allocation_id, 1.0) for edge in row.path if edge.allocation_id is not None),
+                (
+                    operation_factor.get(edge.allocation_id, 1.0)
+                    for edge in row.path
+                    if edge.allocation_id is not None
+                ),
                 default=1.0,
             )
             allowed_by_operation = row.amount_t * max(0.0, min(1.0, path_factor))
@@ -747,7 +774,59 @@ class SteadyLogisticsMixin:
             amount = min(allowed_by_operation, allowed_by_cargo)
             if amount <= 1e-9:
                 continue
+            executable.append((row, amount))
+            cargo_budget[row.cargo_claim_id] = max(0.0, allowed_by_cargo - amount)
+            used = self._allocation_used_after(used, row.path, amount)
 
+        operational = self._operational_resource_totals_by_allocation(used, day)
+        return tuple(executable), used, operational
+
+    def capacity_logistics_execution_projection(
+        self,
+        day: int,
+        plan: LogisticsResourcePlan,
+        allocations: ResourceAllocationPlan,
+    ) -> LogisticsExecutionProjection:
+        executable, _used, operational = self._project_capacity_logistics_execution(
+            day, plan, allocations
+        )
+        dispatches = tuple(
+            LogisticsDispatchProjection(
+                row.lane_id,
+                row.demand.id,
+                row.demand.resource_id,
+                self.lanes[row.lane_id].source_id,
+                self.lanes[row.lane_id].destination_id,
+                amount,
+            )
+            for row, amount in executable
+        )
+        resource_use = tuple(
+            (location_id, resource_id, amount)
+            for (_allocation_id, location_id, resource_id), amount in sorted(
+                operational.items(),
+                key=lambda item: (
+                    str(item[0][1]), str(item[0][2]), str(item[0][0])
+                ),
+            )
+            if amount > 1e-12
+        )
+        return LogisticsExecutionProjection(dispatches, resource_use)
+
+    def advance_capacity_logistics(
+        self,
+        day: int,
+        plan: LogisticsResourcePlan,
+        allocations: ResourceAllocationPlan,
+        funds: FundsAllocationPlan,
+    ) -> tuple[DomainActivity, ...]:
+        """Execute only transport work authorized by ResourceAllocation."""
+        executable, used, operational = self._project_capacity_logistics_execution(
+            day, plan, allocations
+        )
+        activities: list[DomainActivity] = []
+        requests_by_id = {request.id: request for request in plan.spending_requests}
+        for row, amount in executable:
             lane = self.lanes[row.lane_id]
             demand = row.demand
             self.inventory.consume_allocated(lane.source_id, demand.resource_id, amount)
@@ -765,8 +844,6 @@ class SteadyLogisticsMixin:
                         actual_cost,
                         day,
                     )
-            cargo_budget[row.cargo_claim_id] = max(0.0, allowed_by_cargo - amount)
-            used = self._allocation_used_after(used, row.path, amount)
 
             self._cargo_flow_counter += 1
             flow_id = EntityId(f"cargo.flow.{self._cargo_flow_counter}")
@@ -790,9 +867,9 @@ class SteadyLogisticsMixin:
                 day + sum(edge.latency_days for edge in row.path),
             )
 
-        operational = self._operational_resource_totals_by_allocation(used, day)
         for (allocation_id, location_id, resource_id), amount in sorted(
-            operational.items(), key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2]))
+            operational.items(),
+            key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2])),
         ):
             if amount <= 1e-12:
                 continue

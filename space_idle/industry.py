@@ -156,6 +156,8 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 resource_id,
                 target_t,
                 50,
+                None,
+                target_t,
             ))
         return tuple(demands)
 

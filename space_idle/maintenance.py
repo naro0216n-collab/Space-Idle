@@ -115,17 +115,19 @@ class FacilityMaintenanceService:
                 ))
         return tuple(rows)
 
-    def advance_day(
-        self, allocations: ResourceAllocationPlan, day: int = 0
-    ) -> None:
+    def satisfaction_projection(
+        self, allocations: ResourceAllocationPlan
+    ) -> dict[EntityId, float]:
+        """Project facility maintenance fulfillment from shared allocation."""
         satisfaction: dict[EntityId, float] = {}
-        requirements_by_facility: dict[EntityId, dict[DefinitionId, float]] = {}
-
-        for facility in sorted(self.facilities.facilities.values(), key=lambda row: str(row.id)):
+        for facility in sorted(
+            self.facilities.facilities.values(), key=lambda row: str(row.id)
+        ):
             requirements = self.facilities.maintenance_requirements_per_day(facility.id)
-            requirements_by_facility[facility.id] = requirements
             ratios: list[float] = []
-            for resource_id, required in sorted(requirements.items(), key=lambda row: str(row[0])):
+            for resource_id, required in sorted(
+                requirements.items(), key=lambda row: str(row[0])
+            ):
                 if required <= 1e-12:
                     continue
                 claim_id = self._claim_id(facility.id, resource_id)
@@ -135,19 +137,45 @@ class FacilityMaintenanceService:
                     allocated = 0.0
                 ratios.append(min(1.0, max(0.0, allocated) / required))
             satisfaction[facility.id] = min(ratios) if ratios else 1.0
+        return satisfaction
 
-        # Consume every co-input with the same facility-level factor. Allocated
-        # but unused material remains ordinary stock; it is not a reservation.
-        for facility in sorted(self.facilities.facilities.values(), key=lambda row: str(row.id)):
+    def resource_consumption_projection(
+        self, allocations: ResourceAllocationPlan
+    ) -> tuple[tuple[SpatialNodeId, DefinitionId, float], ...]:
+        """Project actual recurring maintenance resource consumption.
+
+        Co-inputs share the facility-level fulfillment factor, matching
+        ``advance_day``. Allocated material that cannot participate because a
+        co-input is short remains stock and is not reported as consumption.
+        """
+        satisfaction = self.satisfaction_projection(allocations)
+        totals: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
+        for facility in sorted(
+            self.facilities.facilities.values(), key=lambda row: str(row.id)
+        ):
             factor = satisfaction[facility.id]
             for resource_id, required in sorted(
-                requirements_by_facility[facility.id].items(), key=lambda row: str(row[0])
+                self.facilities.maintenance_requirements_per_day(facility.id).items(),
+                key=lambda row: str(row[0]),
             ):
                 amount = required * factor
-                if amount > 1e-12:
-                    self.inventory.consume_allocated(
-                        facility.operational_node_id, resource_id, amount
-                    )
+                if amount <= 1e-12:
+                    continue
+                key = (facility.operational_node_id, resource_id)
+                totals[key] = totals.get(key, 0.0) + amount
+        return tuple(
+            (node_id, resource_id, amount)
+            for (node_id, resource_id), amount in sorted(
+                totals.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
+            )
+        )
+
+    def advance_day(
+        self, allocations: ResourceAllocationPlan, day: int = 0
+    ) -> None:
+        satisfaction = self.satisfaction_projection(allocations)
+        for node_id, resource_id, amount in self.resource_consumption_projection(allocations):
+            self.inventory.consume_allocated(node_id, resource_id, amount)
 
         for facility in self.facilities.facilities.values():
             facility.maintenance_satisfaction = max(

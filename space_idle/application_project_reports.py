@@ -42,20 +42,27 @@ class ApplicationReportProjectorMixin:
         sim = self._simulation
         nodes = self._dependency_scope_nodes(query)
         scope = set(nodes)
-        powers = {
-            node_id: sim.power.snapshot(node_id, sim.facilities, sim.day)
-            for node_id in nodes
-        }
-        resource_allocations = sim.resource_allocation_projection()
-        service_allocations = sim.service_capacity_allocation_projection()
+        decision = sim.tick_decision_projection()
+        powers = decision.snapshot.power_by_location
+        resource_allocations = decision.allocations.resources
+        service_allocations = decision.allocations.services
+        logistics_execution = sim.logistics.capacity_logistics_execution_projection(
+            sim.day, decision.allocations.logistics, resource_allocations
+        )
 
         production: dict[object, float] = defaultdict(float)
         consumption: dict[object, float] = defaultdict(float)
-        imports: dict[object, float] = defaultdict(float)
-        exports: dict[object, float] = defaultdict(float)
+        recurring_demand: dict[object, float] = defaultdict(float)
+        external_inflow: dict[object, float] = defaultdict(float)
+        external_outflow: dict[object, float] = defaultdict(float)
+        imports_pipeline: dict[object, float] = defaultdict(float)
+        exports_pipeline: dict[object, float] = defaultdict(float)
         unmet: dict[object, float] = defaultdict(float)
         dependency_sources: dict[object, set[SpatialNodeId]] = defaultdict(set)
 
+        # Production and actual recurring consumption are projected from the same
+        # allocation result the next normal tick would execute. Same-tick output is
+        # intentionally not fed back into that allocation.
         for node_id in nodes:
             power = powers[node_id]
             for snap in sim.industry.snapshots(
@@ -72,12 +79,45 @@ class ApplicationReportProjectorMixin:
                     service_allocations,
                 ):
                     production[snap.output_resource_id] += snap.output_t_per_day
-            for facility in sim.facilities.all_at(node_id):
-                factor = max(0.0, min(1.0, facility.maintenance_satisfaction))
-                for resource_id, amount in sim.facilities.maintenance_requirements_per_day(
-                    facility.id
-                ).items():
-                    consumption[resource_id] += amount * factor
+
+        if sim.maintenance is not None:
+            for node_id, resource_id, amount in sim.maintenance.resource_consumption_projection(
+                resource_allocations
+            ):
+                if node_id in scope:
+                    consumption[resource_id] += amount
+
+        for node_id, resource_id, amount in logistics_execution.operational_resource_use:
+            if node_id in scope:
+                consumption[resource_id] += amount
+
+        # Recurring ResourceDemand is the structural daily requirement before
+        # current stock/pipeline masks a dependency. Transport operation demand is
+        # created during Logistics planning, so its current-tick claims are the
+        # authoritative recurring requirement for that service usage.
+        for demand in decision.intents.resource_demands:
+            if demand.destination_id not in scope or demand.recurring_rate_t_per_day is None:
+                continue
+            recurring_demand[demand.resource_id] += demand.recurring_rate_t_per_day
+        for claim in decision.allocations.logistics.claims:
+            if claim.owner_kind != "transport_operation" or claim.operational_node_id not in scope:
+                continue
+            recurring_demand[claim.resource_id] += claim.requested_amount
+
+        # Current authorized dispatch is a one-day flow. Existing CargoFlow state is
+        # a stock in the pipeline and therefore remains a separate quantity.
+        projected_dispatch_by_demand: dict[object, float] = defaultdict(float)
+        for dispatch in logistics_execution.dispatches:
+            projected_dispatch_by_demand[dispatch.demand_id] += dispatch.amount_t
+            source_inside = dispatch.source_id in scope
+            destination_inside = dispatch.destination_id in scope
+            if source_inside == destination_inside:
+                continue
+            if destination_inside:
+                external_inflow[dispatch.resource_id] += dispatch.amount_t
+                dependency_sources[dispatch.resource_id].add(dispatch.source_id)
+            else:
+                external_outflow[dispatch.resource_id] += dispatch.amount_t
 
         for flow in sim.logistics.cargo_flows.values():
             source_inside = flow.source_id in scope
@@ -85,16 +125,23 @@ class ApplicationReportProjectorMixin:
             if source_inside == destination_inside:
                 continue
             if destination_inside:
-                imports[flow.resource_id] += flow.amount_t
+                imports_pipeline[flow.resource_id] += flow.amount_t
                 dependency_sources[flow.resource_id].add(flow.source_id)
             else:
-                exports[flow.resource_id] += flow.amount_t
+                exports_pipeline[flow.resource_id] += flow.amount_t
 
-        external_demands = sim.resource_demands(powers)
-        for demand in external_demands:
+        # Unmet Demand is the residual off-site need after local stock, existing
+        # pipeline, and the current tick's actually executable dispatch are credited.
+        # Internal sourcing remains internal to the selected scope and is never
+        # labeled as an external source.
+        for demand in decision.plan.external_demands:
             if demand.destination_id not in scope:
                 continue
-            remaining = sim.logistics.demand_remaining_t(demand)
+            remaining = max(
+                0.0,
+                sim.logistics.demand_remaining_t(demand)
+                - projected_dispatch_by_demand[demand.id],
+            )
             if remaining <= 1e-12:
                 continue
             unmet[demand.resource_id] += remaining
@@ -107,18 +154,27 @@ class ApplicationReportProjectorMixin:
                 ):
                     dependency_sources[demand.resource_id].add(lane.source_id)
 
-        resource_ids = set(production) | set(consumption) | set(imports) | set(exports) | set(unmet)
+        resource_ids = (
+            set(production) | set(consumption) | set(recurring_demand) |
+            set(external_inflow) | set(external_outflow) |
+            set(imports_pipeline) | set(exports_pipeline) | set(unmet)
+        )
         rows: list[DependencyMetricRow] = []
         for resource_id in sorted(resource_ids, key=str):
             definition = self._catalog.resources.get(resource_id)
             produced = production[resource_id]
             consumed = consumption[resource_id]
-            dependency_rate = max(0.0, consumed - produced)
-            coverage = None if consumed <= 1e-12 else min(1.0, produced / consumed)
+            demand_rate = recurring_demand[resource_id]
+            dependency_rate = max(0.0, demand_rate - produced)
+            covered_rate = max(0.0, demand_rate - dependency_rate)
+            coverage = (
+                None if demand_rate <= 1e-12
+                else min(1.0, covered_rate / demand_rate)
+            )
             limiting: list[str] = []
             if unmet[resource_id] > 1e-9:
                 limiting.append("unmet_demand")
-            if dependency_rate > 1e-9 or imports[resource_id] > 1e-9:
+            if dependency_rate > 1e-9:
                 limiting.append("external_dependency")
             rows.append(DependencyMetricRow(
                 str(resource_id),
@@ -127,10 +183,13 @@ class ApplicationReportProjectorMixin:
                 (str(resource_id),),
                 produced,
                 consumed,
+                demand_rate,
                 dependency_rate,
                 coverage,
-                imports[resource_id],
-                exports[resource_id],
+                external_inflow[resource_id],
+                external_outflow[resource_id],
+                imports_pipeline[resource_id],
+                exports_pipeline[resource_id],
                 unmet[resource_id],
                 tuple(str(value) for value in sorted(dependency_sources[resource_id], key=str)),
                 tuple(limiting),
@@ -138,8 +197,14 @@ class ApplicationReportProjectorMixin:
 
         by_id = {row.id: row for row in rows}
         group_rows: list[DependencyMetricRow] = []
-        for group_id, group in sorted(self._catalog.resource_groups.items(), key=lambda item: str(item[0])):
-            members = tuple(by_id[str(resource_id)] for resource_id in group.resource_ids if str(resource_id) in by_id)
+        for group_id, group in sorted(
+            self._catalog.resource_groups.items(), key=lambda item: str(item[0])
+        ):
+            members = tuple(
+                by_id[str(resource_id)]
+                for resource_id in group.resource_ids
+                if str(resource_id) in by_id
+            )
             if not members:
                 continue
             units = {member.unit for member in members}
@@ -147,16 +212,27 @@ class ApplicationReportProjectorMixin:
                 raise ValueError(f"resource group {group_id} mixes incompatible units")
             produced = sum(row.local_production_per_day for row in members)
             consumed = sum(row.local_consumption_per_day for row in members)
+            demand_rate = sum(row.local_demand_per_day for row in members)
+            dependency_rate = sum(row.external_dependency_per_day for row in members)
+            covered_rate = max(0.0, demand_rate - dependency_rate)
             group_rows.append(DependencyMetricRow(
                 str(group_id), group.display_name, next(iter(units)),
                 tuple(row.id for row in members),
-                produced, consumed, max(0.0, consumed - produced),
-                None if consumed <= 1e-12 else min(1.0, produced / consumed),
+                produced, consumed, demand_rate, dependency_rate,
+                None if demand_rate <= 1e-12 else min(1.0, covered_rate / demand_rate),
+                sum(row.external_inflow_per_day for row in members),
+                sum(row.external_outflow_per_day for row in members),
                 sum(row.imports_pipeline for row in members),
                 sum(row.exports_pipeline for row in members),
                 sum(row.unmet_demand for row in members),
-                tuple(sorted({source for row in members for source in row.dependency_source_node_ids})),
-                tuple(dict.fromkeys(factor for row in members for factor in row.limiting_factors)),
+                tuple(sorted({
+                    source
+                    for row in members
+                    for source in row.dependency_source_node_ids
+                })),
+                tuple(dict.fromkeys(
+                    factor for row in members for factor in row.limiting_factors
+                )),
             ))
 
         return DependencyAnalyticsView(
@@ -166,7 +242,10 @@ class ApplicationReportProjectorMixin:
             sim.day,
             tuple(rows),
             tuple(group_rows),
-            tuple(row.id for row in rows if row.unmet_demand > 1e-9),
+            tuple(
+                row.id for row in rows
+                if row.external_dependency_per_day > 1e-9 or row.unmet_demand > 1e-9
+            ),
         )
 
     @staticmethod

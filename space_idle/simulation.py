@@ -89,6 +89,14 @@ class TickAllocations:
     services: ServiceCapacityAllocationPlan
 
 
+@dataclass(frozen=True)
+class TickDecisionProjection:
+    snapshot: TickPhysicalSnapshot
+    intents: TickIntents
+    plan: TickPlan
+    allocations: TickAllocations
+
+
 @dataclass
 class Simulation:
     day: int
@@ -410,6 +418,25 @@ class Simulation:
         }
         return self._allocate_tick_services(powers)
 
+    def tick_decision_projection(self) -> TickDecisionProjection:
+        """Project the current tick's intent, planning and allocation without mutation.
+
+        This deliberately excludes boundary settlement and Domain execution. It is
+        suitable for Application queries that must explain the same decisions the
+        next tick execution would use from the current authoritative state.
+        """
+        locations = self._active_locations() | set(self.graph.operational_node_ids())
+        ordered_locations = tuple(sorted(locations, key=str))
+        powers = {
+            location_id: self.power.snapshot(location_id, self.facilities, self.day)
+            for location_id in ordered_locations
+        }
+        snapshot = TickPhysicalSnapshot(self.day, ordered_locations, powers)
+        intents = self._generate_tick_intents(snapshot)
+        plan = self._plan_tick(intents)
+        allocations = self._allocate_tick(snapshot, intents, plan)
+        return TickDecisionProjection(snapshot, intents, plan, allocations)
+
     def external_funds_projection(self) -> tuple[tuple[FundsRequest, ...], FundsAllocationPlan]:
         """Project current External Service spending requests and authorization.
 
@@ -438,12 +465,9 @@ class Simulation:
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> ResourceAllocationPlan:
         """Derive the current shared Resource allocation without mutating state."""
-        locations = self._active_locations()
-        powers = power_by_location or {
-            loc: self.power.snapshot(loc, self.facilities, self.day)
-            for loc in sorted(locations, key=str)
-        }
-        gross_demands = self._gross_resource_demands(powers)
+        if power_by_location is None:
+            return self.tick_decision_projection().allocations.resources
+        gross_demands = self._gross_resource_demands(power_by_location)
         external_demands = tuple(
             demand
             for resolution in resolve_local_resource_supply(gross_demands, self.inventory)
@@ -458,7 +482,7 @@ class Simulation:
         authorized_logistics = self.logistics.authorize_capacity_logistics(
             logistics_plan, funds, self.day
         )
-        return self._allocate_tick_resources(powers, authorized_logistics.claims)
+        return self._allocate_tick_resources(power_by_location, authorized_logistics.claims)
 
     def advance_to_day(self, target_day: int) -> None:
         if target_day < self.day:

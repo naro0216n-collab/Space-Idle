@@ -11,8 +11,11 @@ class DependencyMetricRow:
     member_resource_ids: tuple[str, ...]
     local_production_per_day: float
     local_consumption_per_day: float
+    local_demand_per_day: float
     external_dependency_per_day: float
     local_coverage_ratio: float | None
+    external_inflow_per_day: float
+    external_outflow_per_day: float
     imports_pipeline: float
     exports_pipeline: float
     unmet_demand: float

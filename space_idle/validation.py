@@ -40,3 +40,19 @@ def validate_catalog_coverage(sim: Simulation, catalog) -> None:
             raise ConfigurationError(f"resource catalog key mismatch: {resource_id}")
         if not definition.display_name or not definition.unit or not definition.category:
             raise ConfigurationError(f"resource catalog metadata is incomplete: {resource_id}")
+    for group_id, group in catalog.resource_groups.items():
+        if group_id != group.id:
+            raise ConfigurationError(f"resource group catalog key mismatch: {group_id}")
+        if not group.display_name or not group.resource_ids:
+            raise ConfigurationError(f"resource group definition is incomplete: {group_id}")
+        if len(set(group.resource_ids)) != len(group.resource_ids):
+            raise ConfigurationError(f"resource group contains duplicate members: {group_id}")
+        missing_members = set(group.resource_ids) - set(catalog.resources)
+        if missing_members:
+            raise ConfigurationError(
+                f"resource group {group_id} references missing resources: "
+                + ",".join(sorted(map(str, missing_members)))
+            )
+        units = {catalog.resources[resource_id].unit for resource_id in group.resource_ids}
+        if len(units) != 1:
+            raise ConfigurationError(f"resource group mixes incompatible units: {group_id}")
