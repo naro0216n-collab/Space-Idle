@@ -5,6 +5,7 @@ from space_idle import GetFleet, build_game_application
 from space_idle.composition.base_simulation import build_base_simulation
 from space_idle.content import base_ids as ids
 from space_idle.shared import EntityId, RouteId
+from space_idle.site import CapabilityRequirement, SiteRequirements
 from space_idle.transport.models import (
     DirectionalCapacity,
     FleetReservationKind,
@@ -218,6 +219,45 @@ def test_resource_support_uses_definition_capability_instead_of_magic_refueling_
 
     assert snapshot.available.forward_t_per_day > 0
     assert not any("vehicle_refueling" in value for value in snapshot.limiting_factors)
+
+
+def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execution():
+    sim = _fleet_sim(1)
+    lg = sim.logistics
+    lg.external_services.clear()
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
+    sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
+    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
+
+    route_id = RouteId("base.route.leo_lunar_orbit")
+    route = lg.routes[route_id]
+    lg.routes[route_id] = replace(
+        route,
+        origin_requirements=SiteRequirements(
+            route.origin_requirements.environment,
+            (CapabilityRequirement("research_lab", 0.01, "available"),),
+        ),
+    )
+    allocation_id = lg.create_transport_allocation(
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        ids.LEO,
+        ids.LUNAR_ORBIT,
+        target_units=1,
+        day=sim.day,
+    )
+
+    plan = lg.derive_transport_service_plan(allocation_id, sim.day)
+    snapshot = lg.transport_capacity_snapshot(allocation_id, day=sim.day)
+
+    assert plan.nominal_per_unit.forward_t_per_day > 0
+    assert any("research_lab" in blocker for blocker in plan.blockers)
+    assert snapshot.nominal.forward_t_per_day > 0
+    assert snapshot.available.forward_t_per_day == 0
+    assert snapshot.available.reverse_t_per_day == 0
+    lane_id = lg.create_lane(ids.LEO, ids.LUNAR_ORBIT, 1.0, 50)
+    lane = next(row for row in lg.lane_snapshot((), sim.day).lanes if row.lane_id == lane_id)
+    assert lane.effective_capacity_t_per_day == 0
 
 
 def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():

@@ -887,8 +887,12 @@ class FleetAllocationMixin:
         limiting: list[str] = []
         blockers = list(plan.blockers)
 
-        forward_ratio = 1.0
-        reverse_ratio = 1.0
+        # Service-plan blockers are authoritative for whether a sustained
+        # service can operate at all.  Nominal remains a design/cycle value,
+        # while Available must drop to zero whenever execution would omit the
+        # service edge for the same plan.
+        forward_ratio = 0.0 if plan.blockers else 1.0
+        reverse_ratio = 0.0 if plan.blockers else 1.0
         definition = self.vehicle_defs[allocation.vehicle_definition_id]
         # Operation support is attached to the actual leg endpoint where the
         # operation occurs.  Allocation endpoints are not sufficient for a
