@@ -1,5 +1,5 @@
 import pytest
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 
 from space_idle import GetFleet, build_game_application
 from space_idle.composition.base_simulation import build_base_simulation
@@ -65,6 +65,32 @@ def test_fleet_snapshot_read_does_not_materialize_an_empty_pool():
     assert snapshot.total_units == 0
     assert snapshot.free_units == 0
     assert lg.fleet_pools == before
+
+
+def test_fleet_reservation_queries_return_read_only_snapshots_in_stable_order():
+    sim = _fleet_sim(3)
+    lg = sim.logistics
+    later = EntityId("reservation.zeta")
+    earlier = EntityId("reservation.alpha")
+    for reservation_id, owner_id in (
+        (later, EntityId("owner.zeta")),
+        (earlier, EntityId("owner.alpha")),
+    ):
+        lg.reserve_fleet_units(
+            reservation_id,
+            owner_id,
+            FleetReservationKind.OTHER,
+            ids.REUSABLE_ORBITAL_CARGO_TUG,
+            ids.LEO,
+            1,
+        )
+
+    snapshots = lg.fleet_reservation_snapshots()
+    assert tuple(row.id for row in snapshots) == (earlier, later)
+    assert lg.fleet_reservation_snapshot(earlier) == snapshots[0]
+    assert lg.fleet_reservation_snapshot(EntityId("reservation.missing")) is None
+    with pytest.raises(FrozenInstanceError):
+        snapshots[0].units = 2
 
 
 def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():

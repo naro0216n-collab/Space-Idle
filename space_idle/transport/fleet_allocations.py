@@ -14,6 +14,7 @@ from .models import (
     FleetRelease,
     FleetReservation,
     FleetReservationKind,
+    FleetReservationSnapshot,
     OperationAssetDisposition,
     OperationSupportLocation,
     PathPolicy,
@@ -142,6 +143,36 @@ class FleetAllocationMixin:
                 f"total={total_units} committed={committed}"
             )
         return free
+
+    def fleet_reservation_snapshot(
+        self, reservation_id: EntityId
+    ) -> FleetReservationSnapshot | None:
+        reservation = self.fleet_reservations.get(reservation_id)
+        if reservation is None:
+            return None
+        return FleetReservationSnapshot(
+            reservation.id,
+            reservation.owner_id,
+            reservation.kind,
+            reservation.vehicle_definition_id,
+            reservation.location_id,
+            reservation.units,
+        )
+
+    def fleet_reservation_snapshots(self) -> tuple[FleetReservationSnapshot, ...]:
+        return tuple(
+            FleetReservationSnapshot(
+                reservation.id,
+                reservation.owner_id,
+                reservation.kind,
+                reservation.vehicle_definition_id,
+                reservation.location_id,
+                reservation.units,
+            )
+            for reservation in sorted(
+                self.fleet_reservations.values(), key=lambda row: str(row.id)
+            )
+        )
 
     def fleet_pool_snapshot(
         self, vehicle_definition_id: DefinitionId, location_id: SpatialNodeId

@@ -8,7 +8,7 @@ from .models import (
     SpaceflightCapability, LandingCapability, AtmosphericEntryCapability,
     TransportPerformanceProfile, VehicleEconomicsSpec, VehicleProductionSpec,
     VehicleMaintenanceSpec, VehicleDef, ExternalTransportServiceDef,
-    FleetPool, FleetReservation, FleetRelocation, FleetRelease,
+    FleetPool, FleetReservation, FleetReservationSnapshot, FleetRelocation, FleetRelease,
     DirectionalCapacity, TransportAllocation, TransportServicePlan,
     TransportCapacitySnapshot, CargoFlowBatch, LogisticsLane,
 )
@@ -27,7 +27,7 @@ __all__ = [
     'SpaceflightCapability', 'LandingCapability', 'AtmosphericEntryCapability',
     'TransportPerformanceProfile', 'VehicleEconomicsSpec', 'VehicleProductionSpec',
     'VehicleMaintenanceSpec', 'VehicleDef', 'ExternalTransportServiceDef',
-    'FleetPool', 'FleetReservation', 'FleetRelocation', 'FleetRelease',
+    'FleetPool', 'FleetReservation', 'FleetReservationSnapshot', 'FleetRelocation', 'FleetRelease',
     'DirectionalCapacity', 'TransportAllocation', 'TransportServicePlan',
     'TransportCapacitySnapshot', 'CargoFlowBatch', 'LogisticsLane',
     'OperationEvaluationContext', 'OperationEvaluatorRegistry',

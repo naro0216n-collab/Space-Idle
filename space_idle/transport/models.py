@@ -92,6 +92,16 @@ class FleetReservation:
             raise ValueError("fleet reservation units must be positive")
 
 
+@dataclass(frozen=True)
+class FleetReservationSnapshot:
+    id: EntityId
+    owner_id: EntityId
+    kind: FleetReservationKind
+    vehicle_definition_id: DefinitionId
+    location_id: SpatialNodeId
+    units: int
+
+
 @dataclass
 class FleetRelocation:
     id: EntityId

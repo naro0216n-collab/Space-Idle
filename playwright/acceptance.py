@@ -498,6 +498,19 @@ def run() -> dict[str, object]:
                 portrait_logistics["left0"] < portrait_logistics["left1"] < portrait_logistics["left2"],
                 "portrait logistics must preserve route/network/inspector order",
             )
+            network_locations = page.locator("#networkNodes [data-network-location]")
+            expected_network_locations = page.locator("#routeOriginFilter option").count() - 1
+            _assert(
+                network_locations.count() == expected_network_locations,
+                "network must render every location exposed by the Application view",
+            )
+            network_positions = network_locations.evaluate_all(
+                "rows => rows.map(row => { const node=row.closest('.network-node'); return `${node.style.left}:${node.style.top}`; })"
+            )
+            _assert(
+                len(set(network_positions)) == len(network_positions),
+                "network layout must give each rendered location a distinct position",
+            )
 
             results = {
                 "browser": browser_name,

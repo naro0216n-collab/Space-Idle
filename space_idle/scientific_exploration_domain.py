@@ -98,7 +98,7 @@ def validate_runtime(sim: Any) -> None:
         _require(-1e-9 <= state.progress_days <= definition.duration_days + 1e-8, f"invalid scientific exploration progress: {definition_id}")
         _require(-1e-9 <= state.research_points_awarded <= definition.research_points_total + 1e-8, f"invalid scientific exploration RP award: {definition_id}")
         reservation_id = EntityId(f"scientific_exploration:{definition_id}")
-        reservation = sim.logistics.fleet_reservations.get(reservation_id)
+        reservation = sim.logistics.fleet_reservation_snapshot(reservation_id)
         if state.vehicle_definition_id is None:
             _require(state.reserved_units == 0, f"unassigned scientific exploration retains reserved units: {definition_id}")
             _require(reservation is None, f"unassigned scientific exploration retains Fleet reservation: {definition_id}")

@@ -33,7 +33,7 @@ class LogisticsStateProjectorMixin:
         )
         keys.update(
             (row.vehicle_definition_id, row.location_id)
-            for row in sim.logistics.fleet_reservations.values()
+            for row in sim.logistics.fleet_reservation_snapshots()
         )
         rows: list[FleetPoolRow] = []
         for definition_id, node_id in sorted(keys, key=lambda row: (str(row[0]), str(row[1]))):

@@ -58,11 +58,29 @@
     $('#routeList').innerHTML=filteredRoutes().map((r)=>`<button type="button" class="route-button ${r.id===state.selectedRouteId?'is-selected':''}" data-route-id="${esc(r.id)}"><div class="cell-main">${esc(r.display_name)}</div><div class="route-status"><span>${esc(locationName(r.origin_id))} → ${esc(locationName(r.destination_id))}</span><span class="badge ${r.service_feasible_now?'ok':r.available?'warn':''}">${r.service_feasible_now?'Service可':r.available?'運用条件待ち':'Route不成立'}</span></div></button>`).join('')||'<div class="empty-state">条件に一致するRouteなし</div>';
   }
 
-  const nodePositions={'base.node.earth_surface':[12,50],'base.node.low_earth_orbit':[34,50],'base.node.lunar_orbit':[60,50],'base.node.south_polar_ridge':[84,22],'base.node.polar_cold_trap':[84,50],'base.node.nearside_mare':[84,78]};
+  function networkPositions(locations){
+    const groups=new Map();
+    for(const loc of locations){
+      const groupKey=loc.body_id||`unbound:${loc.id}`;
+      if(!groups.has(groupKey))groups.set(groupKey,[]);
+      groups.get(groupKey).push(loc);
+    }
+    const keys=[...groups.keys()].sort((a,b)=>a.localeCompare(b));
+    const positions={};
+    keys.forEach((key,groupIndex)=>{
+      const members=groups.get(key).slice().sort((a,b)=>`${a.kind}:${a.display_name}:${a.id}`.localeCompare(`${b.kind}:${b.display_name}:${b.id}`));
+      const x=keys.length===1?50:12+(76*groupIndex/(keys.length-1));
+      members.forEach((loc,index)=>{
+        const y=members.length===1?50:18+(64*index/(members.length-1));
+        positions[loc.id]=[x,y];
+      });
+    });
+    return positions;
+  }
   function renderNetwork(){
-    const svg=$('#networkSvg'),nodes=$('#networkNodes'),routes=state.routes?.items||[];
-    svg.innerHTML=routes.map((r)=>{const a=nodePositions[r.origin_id],b=nodePositions[r.destination_id];if(!a||!b)return'';return `<line x1="${a[0]*9}" y1="${a[1]*4.7}" x2="${b[0]*9}" y2="${b[1]*4.7}" class="network-line ${r.service_feasible_now?'available':''} ${r.id===state.selectedRouteId?'selected':''}" data-route-line="${esc(r.id)}" />`;}).join('');
-    nodes.innerHTML=(state.world?.locations||[]).map((loc)=>{const p=nodePositions[loc.id]||[50,50];return `<div class="network-node" style="left:${p[0]}%;top:${p[1]}%"><button type="button" data-network-location="${esc(loc.id)}"><span class="node-name">${esc(loc.display_name)}</span><span class="node-meta">設備 ${loc.facility_count} · 建設 ${loc.active_project_count}</span></button></div>`;}).join('');
+    const svg=$('#networkSvg'),nodes=$('#networkNodes'),routes=state.routes?.items||[],locations=state.world?.locations||[],positions=networkPositions(locations);
+    svg.innerHTML=routes.map((r)=>{const a=positions[r.origin_id],b=positions[r.destination_id];if(!a||!b)return'';return `<line x1="${a[0]*9}" y1="${a[1]*4.7}" x2="${b[0]*9}" y2="${b[1]*4.7}" class="network-line ${r.service_feasible_now?'available':''} ${r.id===state.selectedRouteId?'selected':''}" data-route-line="${esc(r.id)}" />`;}).join('');
+    nodes.innerHTML=locations.map((loc)=>{const p=positions[loc.id]||[50,50];return `<div class="network-node" style="left:${p[0]}%;top:${p[1]}%"><button type="button" data-network-location="${esc(loc.id)}"><span class="node-name">${esc(loc.display_name)}</span><span class="node-meta">設備 ${loc.facility_count} · 建設 ${loc.active_project_count}</span></button></div>`;}).join('');
   }
 
   function renderLanes(){
