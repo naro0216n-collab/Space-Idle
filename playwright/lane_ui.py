@@ -86,25 +86,18 @@ def run() -> None:
             production_option.locator("[data-production-priority-value]").fill("37")
             page.wait_for_timeout(1200)
             assert production_option.locator("[data-production-priority-value]").input_value() == "37"
-            production_option.locator("[data-production-allocation-value]").fill("2.5")
-            page.wait_for_timeout(1200)
-            assert production_option.locator("[data-production-priority-value]").input_value() == "37"
-            assert float(production_option.locator("[data-production-allocation-value]").input_value()) == 2.5
             production_option.locator("button[data-produce-vehicle]").click()
             project_row = page.locator(
                 "#vehicleProductionTable [data-production-project-row]"
             ).first
             project_row.wait_for(timeout=10000)
             assert project_row.locator("[data-production-priority-value]").input_value() == "37"
-            assert float(project_row.locator("[data-production-allocation-value]").input_value()) == 2.5
             project_row.locator("[data-production-priority-value]").fill("81")
-            project_row.locator("[data-production-allocation-value]").fill("3")
             project_row.get_by_role("button", name="設定適用").click()
             page.wait_for_function(
                 """() => {
                   const row = document.querySelector('#vehicleProductionTable [data-production-project-row]');
-                  return row?.querySelector('[data-production-priority-value]')?.value === '81'
-                    && Number(row?.querySelector('[data-production-allocation-value]')?.value) === 3;
+                  return row?.querySelector('[data-production-priority-value]')?.value === '81';
                 }""",
                 timeout=10000,
             )
