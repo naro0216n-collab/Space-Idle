@@ -81,7 +81,7 @@ class ContractService:
         locations = (
             (template.target_location_id,)
             if template.target_location_id is not None
-            else tuple(self.facilities.environment.graph.nodes)
+            else self.facilities.environment.graph.operational_node_ids()
         )
         return any(
             not evaluate_site_requirements(

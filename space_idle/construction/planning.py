@@ -23,11 +23,11 @@ class ConstructionPlanningMixin:
         sourcing_policy: SourcingPolicy,
         import_source_id: SpatialNodeId | None,
     ) -> ProjectId:
-        if location_id not in self.facilities.environment.graph.nodes:
+        if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
         if sourcing_policy not in self.sourcing_wait_days:
             raise ValueError(f"unknown sourcing policy: {sourcing_policy}")
-        if import_source_id is not None and import_source_id not in self.facilities.environment.graph.nodes:
+        if import_source_id is not None and not self.facilities.environment.graph.has_operational_node(import_source_id):
             raise KeyError(import_source_id)
         if import_source_id == location_id:
             raise ValueError("import source must differ from project location")
@@ -119,13 +119,13 @@ class ConstructionPlanningMixin:
         return tuple(self.sourcing_wait_days)
 
     def import_source_options_for_location(self, location_id: SpatialNodeId) -> tuple[SpatialNodeId, ...]:
-        if location_id not in self.facilities.environment.graph.nodes:
+        if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
         return tuple(
             sorted(
                 (
                     candidate_id
-                    for candidate_id in self.facilities.environment.graph.nodes
+                    for candidate_id in self.facilities.environment.graph.operational_node_ids()
                     if candidate_id != location_id
                 ),
                 key=str,
@@ -165,7 +165,7 @@ class ConstructionPlanningMixin:
 
     def set_import_source(self, project_id: ProjectId, location_id: SpatialNodeId | None) -> None:
         project = self.projects[project_id]
-        if location_id is not None and location_id not in self.facilities.environment.graph.nodes:
+        if location_id is not None and not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
         if location_id == project.location_id:
             raise ValueError("import source must differ from project location")

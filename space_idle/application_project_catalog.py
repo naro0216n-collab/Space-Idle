@@ -34,7 +34,7 @@ class CatalogWorldProjectorMixin:
     def _world_view(self) -> WorldView:
         sim = self._simulation
         locations = []
-        for node in sorted(sim.graph.nodes.values(), key=lambda n: str(n.id)):
+        for node in sim.graph.operational_nodes():
             facility_count = sum(1 for facility in sim.facilities.facilities.values() if facility.location_id == node.id)
             active_projects = sum(
                 1 for project in sim.projects.projects.values()

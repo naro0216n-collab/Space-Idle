@@ -114,7 +114,7 @@ class LocationProjectorMixin:
 
     def _location_view(self, location_id: SpatialNodeId) -> LocationView:
         sim = self._simulation
-        node = sim.graph.nodes[location_id]
+        node = sim.graph.operational_node(location_id)
         power = sim.power.snapshot(location_id, sim.facilities, sim.day)
         research_power = {location_id: power}
 

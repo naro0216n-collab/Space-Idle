@@ -253,10 +253,11 @@ def test_transport_operation_extension_does_not_require_central_enum_change():
 
 def test_create_logistics_lane_preserves_resource_agnostic_path_policy_across_application_boundary():
     from space_idle import CreateLogisticsLane, GetLogistics, build_game_application
+    from space_idle.content import base_ids as ids
 
     app = build_game_application()
     result = app.execute(CreateLogisticsLane(
-        source_id="base.node.earth_surface",
+        source_id=str(ids.EARTH),
         destination_id="base.node.low_earth_orbit",
         requested_capacity_t_per_day=0.25,
         path_policy="lowest_cost",

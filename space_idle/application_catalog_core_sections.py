@@ -82,5 +82,5 @@ def project_locations(projector):
             None if node.parent_id is None else str(node.parent_id),
             None if node.body_id is None else str(node.body_id), node.kind.value,
         )
-        for node in sorted(projector._simulation.graph.nodes.values(), key=lambda n: str(n.id))
+        for node in projector._simulation.graph.operational_nodes()
     )

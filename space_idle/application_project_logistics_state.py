@@ -168,7 +168,7 @@ class LogisticsStateProjectorMixin:
         for definition in sorted(sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)):
             if definition.production.capability_id is None or definition.production.days <= 1e-12:
                 continue
-            for node in sorted(sim.graph.nodes.values(), key=lambda row: str(row.id)):
+            for node in sim.graph.operational_nodes():
                 power = sim.power.snapshot(node.id, sim.facilities, sim.day)
                 blockers = tuple(
                     f"{failure.code}:{failure.detail}"

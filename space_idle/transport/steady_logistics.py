@@ -437,7 +437,7 @@ class SteadyLogisticsMixin:
         pipeline = self._flow_pipeline_by_demand({row.id for row in demand_rows})
         stock_budget = {
             (location_id, resource_id): self.inventory.available(location_id, resource_id)
-            for location_id in self.facilities.environment.graph.nodes
+            for location_id in self.facilities.environment.graph.operational_node_ids()
             for resource_id in {row.resource_id for row in demand_rows}
         }
         # Operational resources may not appear in the demand set.

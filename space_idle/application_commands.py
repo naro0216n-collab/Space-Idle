@@ -25,7 +25,7 @@ from .app_contracts.transport import (
 )
 from .app_contracts.contracts import AcceptContract, DeclineContract
 from .app_contracts.queries import (
-    GetCatalog, GetWorld, GetLocation, GetFlowReport, GetBottlenecks, GetProjects,
+    GetCatalog, GetWorld, GetSurfaceMap, GetLocation, GetFlowReport, GetBottlenecks, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetRoutes, GetFleet,
     GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetLogisticsLanes, GetTransportAllocationOptions,
     GetResearch, GetScientificExplorations, GetSurveys, GetContracts,
@@ -47,7 +47,7 @@ Command: TypeAlias = (
     DeclineContract | AdvanceTime
 )
 Query: TypeAlias = (
-    GetCatalog | GetWorld | GetLocation | GetFlowReport | GetBottlenecks | GetProjects |
+    GetCatalog | GetWorld | GetSurfaceMap | GetLocation | GetFlowReport | GetBottlenecks | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetRoutes | GetFleet |
     GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetLogisticsLanes | GetTransportAllocationOptions |
     GetResearch | GetScientificExplorations | GetSurveys | GetContracts

@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypeVar, cast
 
-from .shared import CelestialBodyId, DefinitionId, SpatialNodeId
-from .spatial import AtmosphereField, EnvironmentOverlay, SpatialFacet, SpatialGraph, SpatialNodeKind, ThermalField
+from .shared import CelestialBodyId, DefinitionId
+from .spatial import AtmosphereField, EnvironmentOverlay, SpatialContextId, SpatialFacet, SpatialGraph, ThermalField
 
 FacetT = TypeVar("FacetT", bound=SpatialFacet)
 
@@ -98,16 +98,16 @@ class TerraformingEnvironmentOverlay(EnvironmentOverlay):
     def apply(
         self,
         graph: SpatialGraph,
-        node_id: SpatialNodeId,
+        context_id: SpatialContextId,
         facet_type: type[FacetT],
         current: FacetT | None,
         day: int,
     ) -> FacetT | None:
-        node = graph.nodes[node_id]
+        body_id = graph.context_body_id(context_id)
         climate = (
-            None
-            if node.body_id is None or node.kind is not SpatialNodeKind.SURFACE
-            else self.service.climates.get(node.body_id)
+            self.service.climates.get(body_id)
+            if body_id is not None and graph.is_surface_context(context_id)
+            else None
         )
         if climate is None:
             return current

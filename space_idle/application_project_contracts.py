@@ -45,7 +45,7 @@ class ContractProgressionProjectorMixin:
                             sim.facilities,
                             sim.power.snapshot(node.id, sim.facilities, sim.day),
                         )
-                        for node in sim.graph.nodes.values()
+                        for node in sim.graph.operational_nodes()
                     )
                     else ("site_requirements",)
                 )

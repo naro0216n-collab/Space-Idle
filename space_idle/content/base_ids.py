@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..shared import CelestialBodyId, DefinitionId, SpatialNodeId
+from ..shared import CelestialBodyId, DefinitionId, SpatialNodeId, SurfaceCellId
 
 STRUCTURAL_COMPONENTS = DefinitionId("base.resource.structural_components")
 MACHINERY = DefinitionId("base.resource.machinery")
@@ -19,17 +19,35 @@ HYDROGEN = DefinitionId("base.resource.hydrogen")
 PROPELLANT = DefinitionId("base.resource.chemical_propellant")
 
 # ---------------------------------------------------------------------------
-# Spatial nodes. Hierarchy expresses containment; environmental behavior is
-# resolved through typed facets rather than node-name branches.
+# Spatial content. Surface geography is separate from player-operated
+# Locations; orbital/non-surface nodes remain SpatialNodeDef endpoints.
 # ---------------------------------------------------------------------------
 EARTH_BODY = CelestialBodyId("base.body.earth")
-EARTH = SpatialNodeId("base.node.earth_surface")
-LEO = SpatialNodeId("base.node.low_earth_orbit")
 MOON = CelestialBodyId("base.body.moon")
+
+# Player-operated/pre-existing economic Locations. These IDs continue to own
+# Inventory/Facility/Fleet state, but are no longer static surface geography.
+EARTH = SpatialNodeId("base.location.earth_industrial")
+SOUTH_POLAR_RIDGE = SpatialNodeId("base.location.lunar_south_polar_ridge")
+POLAR_COLD_TRAP = SpatialNodeId("base.location.lunar_polar_cold_trap")
+NEARSIDE_MARE = SpatialNodeId("base.location.lunar_nearside_mare")
+
+# Non-surface spatial nodes.
+LEO = SpatialNodeId("base.node.low_earth_orbit")
 LUNAR_ORBIT = SpatialNodeId("base.node.lunar_orbit")
-SOUTH_POLAR_RIDGE = SpatialNodeId("base.node.south_polar_ridge")
-POLAR_COLD_TRAP = SpatialNodeId("base.node.polar_cold_trap")
-NEARSIDE_MARE = SpatialNodeId("base.node.nearside_mare")
+
+# Surface Cell topology. Cell counts intentionally differ by body and the
+# topology does not assume six neighbors.
+EARTH_CELL_INDUSTRIAL = SurfaceCellId("base.cell.earth.industrial_core")
+EARTH_CELL_COASTAL = SurfaceCellId("base.cell.earth.coastal")
+EARTH_CELL_INLAND = SurfaceCellId("base.cell.earth.inland")
+
+MOON_CELL_SOUTH_POLAR_RIDGE = SurfaceCellId("base.cell.moon.south_polar_ridge")
+MOON_CELL_POLAR_COLD_TRAP = SurfaceCellId("base.cell.moon.polar_cold_trap")
+MOON_CELL_SOUTH_POLAR_PLAIN = SurfaceCellId("base.cell.moon.south_polar_plain")
+MOON_CELL_NEARSIDE_MARE = SurfaceCellId("base.cell.moon.nearside_mare")
+MOON_CELL_EQUATORIAL_HIGHLANDS = SurfaceCellId("base.cell.moon.equatorial_highlands")
+MOON_CELL_FARSIDE_HIGHLANDS = SurfaceCellId("base.cell.moon.farside_highlands")
 
 # ---------------------------------------------------------------------------
 # Facilities. IDs and display names describe function, not placement.

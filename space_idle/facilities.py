@@ -80,7 +80,7 @@ class FacilityBook:
     ) -> EntityId:
         if definition_id not in self.definitions:
             raise KeyError(definition_id)
-        if location_id not in self.environment.graph.nodes:
+        if not self.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
         if level < 1:
             raise ValueError("facility level must be positive")

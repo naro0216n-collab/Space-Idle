@@ -5,7 +5,7 @@ from .application_commands import (
     GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogistics,
     GetLogisticsLanes, GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
     GetScientificExplorations, GetSurveys, GetTransportAllocations,
-    GetTransportAllocationOptions, GetWorld, Query,
+    GetTransportAllocationOptions, GetWorld, GetSurfaceMap, Query,
 )
 from .application_views import ProjectsView, QueryResult
 
@@ -28,6 +28,12 @@ class ApplicationQueryRouterMixin:
             return self._catalog_view()
         if isinstance(query, GetWorld):
             return self._world_view()
+        if isinstance(query, GetSurfaceMap):
+            from .shared import CelestialBodyId
+            body_id = CelestialBodyId(query.body_id)
+            if body_id not in self._simulation.graph.bodies:
+                raise KeyError(body_id)
+            return self._surface_map_view(body_id)
         if isinstance(query, GetLocation):
             return self._location_view(self._require_location(query.location_id))
         if isinstance(query, GetFlowReport):

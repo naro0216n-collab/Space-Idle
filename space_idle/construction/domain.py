@@ -153,9 +153,9 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 def validate_runtime(sim: Any) -> None:
     active_upgrade_targets: set[EntityId] = set()
     for project_id, project in sim.projects.projects.items():
-        _require(project.location_id in sim.graph.nodes, f"project references unknown location: {project_id}")
+        _require(sim.graph.has_operational_node(project.location_id), f"project references unknown location: {project_id}")
         if project.import_source_id is not None:
-            _require(project.import_source_id in sim.graph.nodes, f"project import source is unknown: {project_id}")
+            _require(sim.graph.has_operational_node(project.import_source_id), f"project import source is unknown: {project_id}")
             _require(project.import_source_id != project.location_id, f"project import source equals destination: {project_id}")
         if isinstance(project.target, NewFacilityTarget):
             _require(project.target.facility_def_id in sim.projects.recipes, f"project references unknown build recipe: {project_id}")

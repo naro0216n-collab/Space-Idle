@@ -62,13 +62,13 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 
 def validate_runtime(sim: Any) -> None:
     for (location_id, resource_id), amount in sim.inventory.stock.items():
-        _require(location_id in sim.graph.nodes, f"inventory references unknown location: {location_id}")
+        _require(sim.graph.has_operational_node(location_id), f"inventory references unknown location: {location_id}")
         _require(amount >= -1e-9, f"negative inventory: {location_id}/{resource_id}")
         reserved = sim.inventory.reserved_total(location_id, resource_id)
         _require(reserved >= -1e-9, f"negative reservation: {location_id}/{resource_id}")
         _require(reserved <= amount + 1e-8, f"reservations exceed stock: {location_id}/{resource_id}")
     for (_owner, location_id, resource_id), amount in sim.inventory.reserved.items():
-        _require(location_id in sim.graph.nodes, f"reservation references unknown location: {location_id}/{resource_id}")
+        _require(sim.graph.has_operational_node(location_id), f"reservation references unknown location: {location_id}/{resource_id}")
         _require(amount >= -1e-9, f"negative reservation row: {location_id}/{resource_id}")
     for (_owner, location_id, resource_id), amount in sim.inventory.external_occupancy.items():
         _require(amount >= -1e-9, f"negative external storage occupancy: {location_id}/{resource_id}")

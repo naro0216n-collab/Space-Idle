@@ -135,11 +135,11 @@ def validate_runtime(sim: Any) -> None:
                 f"invalid demonstration progress: {research_id}",
             )
         _require(
-            state.prototype_location_id is None or state.prototype_location_id in sim.graph.nodes,
+            state.prototype_location_id is None or sim.graph.has_operational_node(state.prototype_location_id),
             f"research prototype references unknown location: {research_id}",
         )
         _require(
-            state.demonstration_location_id is None or state.demonstration_location_id in sim.graph.nodes,
+            state.demonstration_location_id is None or sim.graph.has_operational_node(state.demonstration_location_id),
             f"research demonstration references unknown location: {research_id}",
         )
     _require(sim.research.completed.issubset(sim.research.definitions), "completed research contains unknown definition")

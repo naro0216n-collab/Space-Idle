@@ -15,7 +15,7 @@ class ResearchProgressionProjectorMixin:
         if sim.research is None:
             return ()
         rows: list[ResearchSiteOptionRow] = []
-        for node in sorted(sim.graph.nodes.values(), key=lambda row: str(row.id)):
+        for node in sim.graph.operational_nodes():
             blockers = (
                 sim.research.demonstration_site_blockers(definition.id, node.id, sim.day)
                 if demonstration
@@ -69,7 +69,7 @@ class ResearchProgressionProjectorMixin:
             return ResearchView(0.0, 0.0, 0.0, False, (), ())
         power_by_location = {
             node.id: sim.power.snapshot(node.id, sim.facilities, sim.day)
-            for node in sim.graph.nodes.values()
+            for node in sim.graph.operational_nodes()
             if sim.facilities.all_at(node.id)
         }
         generation = sim.research.generation_rate(power_by_location, sim.day)

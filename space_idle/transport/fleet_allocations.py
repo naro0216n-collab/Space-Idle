@@ -81,7 +81,7 @@ class FleetAllocationMixin:
     ) -> None:
         if vehicle_definition_id not in self.vehicle_defs:
             raise KeyError(vehicle_definition_id)
-        if location_id not in self.facilities.environment.graph.nodes:
+        if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
         if count < 0:
             raise ValueError("fleet unit count must be non-negative")
@@ -300,7 +300,7 @@ class FleetAllocationMixin:
         if reservation is None:
             raise KeyError(reservation_id)
         destination_id = final_location_id or reservation.location_id
-        if destination_id not in self.facilities.environment.graph.nodes:
+        if not self.facilities.environment.graph.has_operational_node(destination_id):
             raise KeyError(destination_id)
 
         if destination_id != reservation.location_id:
@@ -750,9 +750,9 @@ class FleetAllocationMixin:
     ) -> EntityId:
         if vehicle_definition_id not in self.vehicle_defs:
             raise KeyError(vehicle_definition_id)
-        if anchor_location_id not in self.facilities.environment.graph.nodes:
+        if not self.facilities.environment.graph.has_operational_node(anchor_location_id):
             raise KeyError(anchor_location_id)
-        if destination_id not in self.facilities.environment.graph.nodes:
+        if not self.facilities.environment.graph.has_operational_node(destination_id):
             raise KeyError(destination_id)
         self._transport_allocation_counter += 1
         allocation_id = EntityId(f"transport.allocation.{self._transport_allocation_counter}")
@@ -937,9 +937,9 @@ class FleetAllocationMixin:
         """Derive the exact decision contract used to start a Fleet relocation."""
         if vehicle_definition_id not in self.vehicle_defs:
             raise KeyError(vehicle_definition_id)
-        if source_id not in self.facilities.environment.graph.nodes:
+        if not self.facilities.environment.graph.has_operational_node(source_id):
             raise KeyError(source_id)
-        if destination_id not in self.facilities.environment.graph.nodes:
+        if not self.facilities.environment.graph.has_operational_node(destination_id):
             raise KeyError(destination_id)
 
         blockers: list[str] = []

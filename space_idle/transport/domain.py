@@ -388,18 +388,18 @@ def validate_runtime(sim: Any) -> None:
     for (vehicle_definition_id, location_id), pool in lg.fleet_pools.items():
         _require(pool.vehicle_definition_id == vehicle_definition_id and pool.location_id == location_id, f"fleet pool key mismatch: {vehicle_definition_id}/{location_id}")
         _require(vehicle_definition_id in lg.vehicle_defs, f"fleet pool references unknown vehicle definition: {vehicle_definition_id}")
-        _require(location_id in sim.graph.nodes, f"fleet pool references unknown location: {vehicle_definition_id}/{location_id}")
+        _require(sim.graph.has_operational_node(location_id), f"fleet pool references unknown location: {vehicle_definition_id}/{location_id}")
         _require(pool.total_units >= 0, f"negative fleet total: {vehicle_definition_id}/{location_id}")
         _require(lg.fleet_free_units(vehicle_definition_id, location_id) >= 0, f"fleet pool overcommitted: {vehicle_definition_id}/{location_id}")
     for reservation_id, reservation in lg.fleet_reservations.items():
         _require(reservation_id == reservation.id, f"fleet reservation key mismatch: {reservation_id}")
         _require(reservation.vehicle_definition_id in lg.vehicle_defs, f"fleet reservation references unknown vehicle definition: {reservation_id}")
-        _require(reservation.location_id in sim.graph.nodes, f"fleet reservation references unknown location: {reservation_id}")
+        _require(sim.graph.has_operational_node(reservation.location_id), f"fleet reservation references unknown location: {reservation_id}")
         _require(reservation.units > 0, f"fleet reservation has non-positive units: {reservation_id}")
     for allocation_id, allocation in lg.transport_allocations.items():
         _require(allocation_id == allocation.id, f"transport allocation key mismatch: {allocation_id}")
         _require(allocation.vehicle_definition_id in lg.vehicle_defs, f"transport allocation references unknown vehicle definition: {allocation_id}")
-        _require(allocation.anchor_location_id in sim.graph.nodes and allocation.destination_id in sim.graph.nodes, f"transport allocation references unknown endpoint: {allocation_id}")
+        _require(sim.graph.has_operational_node(allocation.anchor_location_id) and sim.graph.has_operational_node(allocation.destination_id), f"transport allocation references unknown endpoint: {allocation_id}")
         _require(allocation.active_units >= 0, f"transport allocation has negative active units: {allocation_id}")
         if allocation.path is not None:
             lg.validate_path_structure(allocation.anchor_location_id, allocation.destination_id, allocation.path)
@@ -408,7 +408,7 @@ def validate_runtime(sim: Any) -> None:
     for relocation_id, relocation in lg.fleet_relocations.items():
         _require(relocation_id == relocation.id, f"fleet relocation key mismatch: {relocation_id}")
         _require(relocation.vehicle_definition_id in lg.vehicle_defs, f"fleet relocation references unknown vehicle definition: {relocation_id}")
-        _require(relocation.source_id in sim.graph.nodes and relocation.destination_id in sim.graph.nodes, f"fleet relocation references unknown endpoint: {relocation_id}")
+        _require(sim.graph.has_operational_node(relocation.source_id) and sim.graph.has_operational_node(relocation.destination_id), f"fleet relocation references unknown endpoint: {relocation_id}")
         _require(relocation.arrival_day > relocation.departure_day, f"invalid fleet relocation timing: {relocation_id}")
     for release_id, release in lg.fleet_releases.items():
         _require(release_id == release.id, f"fleet release key mismatch: {release_id}")
@@ -416,11 +416,11 @@ def validate_runtime(sim: Any) -> None:
         # physically returning. The release record itself owns the recovery
         # identity until release_day.
         _require(release.vehicle_definition_id in lg.vehicle_defs, f"fleet release references unknown vehicle definition: {release_id}")
-        _require(release.location_id in sim.graph.nodes, f"fleet release references unknown location: {release_id}")
+        _require(sim.graph.has_operational_node(release.location_id), f"fleet release references unknown location: {release_id}")
         _require(release.units > 0, f"fleet release has non-positive units: {release_id}")
     for flow_id, flow in lg.cargo_flows.items():
         _require(flow_id == flow.id, f"cargo flow key mismatch: {flow_id}")
-        _require(flow.source_id in sim.graph.nodes and flow.destination_id in sim.graph.nodes, f"cargo flow references unknown endpoint: {flow_id}")
+        _require(sim.graph.has_operational_node(flow.source_id) and sim.graph.has_operational_node(flow.destination_id), f"cargo flow references unknown endpoint: {flow_id}")
         _require(flow.amount_t > 0, f"cargo flow has non-positive amount: {flow_id}")
         _require(flow.ready_day >= flow.departure_day, f"cargo flow arrives before departure: {flow_id}")
         if flow.lane_id is not None:
@@ -428,7 +428,7 @@ def validate_runtime(sim: Any) -> None:
     for project_id, state in lg.vehicle_production_projects.items():
         _require(project_id == state.id, f"vehicle production state key mismatch: {project_id}")
         _require(state.vehicle_definition_id in lg.vehicle_defs, f"vehicle production references unknown definition: {project_id}")
-        _require(state.location_id in sim.graph.nodes, f"vehicle production references unknown location: {project_id}")
+        _require(sim.graph.has_operational_node(state.location_id), f"vehicle production references unknown location: {project_id}")
         _require(state.progress_days >= -1e-9, f"negative vehicle production progress: {project_id}")
         definition = lg.vehicle_defs[state.vehicle_definition_id]
         _require(state.progress_days <= definition.production.days + 1.0 + 1e-9, f"vehicle production progress exceeds duration: {project_id}")
@@ -438,7 +438,7 @@ def validate_runtime(sim: Any) -> None:
             _require(state.completed_units == 0, f"incomplete vehicle production has completed units: {project_id}")
     for lane_id, lane in lg.lanes.items():
         _require(lane_id == lane.id, f"lane key mismatch: {lane_id}")
-        _require(lane.source_id in sim.graph.nodes and lane.destination_id in sim.graph.nodes, f"lane references unknown endpoint: {lane_id}")
+        _require(sim.graph.has_operational_node(lane.source_id) and sim.graph.has_operational_node(lane.destination_id), f"lane references unknown endpoint: {lane_id}")
         _require(lane.source_id != lane.destination_id, f"lane loops to same location: {lane_id}")
         _require(lane.requested_capacity_t_per_day > 0, f"lane has non-positive requested capacity: {lane_id}")
         if lane.path is not None:

@@ -4,18 +4,22 @@ from dataclasses import dataclass
 
 from space_idle import build_game_application
 from space_idle.market import MarketState
-from space_idle.shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId
+from space_idle.shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from space_idle.spatial import (
     AtmosphereField,
     CelestialBodyDef,
     EnvironmentResolver,
     GravityField,
     IlluminationField,
+    LocationState,
     SpatialFacet,
     SpatialGraph,
     SpatialNodeDef,
     SpatialNodeKind,
     StaticFacetStore,
+    SurfaceCellDef,
+    SurfaceField,
+    SurfacePoint,
     ThermalField,
 )
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
@@ -53,27 +57,41 @@ def test_market_spans_locations_without_becoming_spatial_facet():
     assert len(market.accessible_location_ids) == 3
 
 
-def test_terraforming_body_state_projects_to_surface_nodes_but_not_orbit_and_is_stateful():
+def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and_is_stateful():
     mars_body = CelestialBodyId("test.body.mars")
+    cell_a = SurfaceCellId("test.mars.cell_a")
+    cell_b = SurfaceCellId("test.mars.cell_b")
     site_a = SpatialNodeId("test.mars.site_a")
     site_b = SpatialNodeId("test.mars.site_b")
     orbit = SpatialNodeId("test.mars.orbit")
     graph = SpatialGraph()
     graph.add_body(CelestialBodyDef(mars_body, "火星"))
-    graph.add(SpatialNodeDef(site_a, "火星A", body_id=mars_body, kind=SpatialNodeKind.SURFACE))
-    graph.add(SpatialNodeDef(site_b, "火星B", body_id=mars_body, kind=SpatialNodeKind.SURFACE))
-    graph.add(SpatialNodeDef(orbit, "火星周回軌道", body_id=mars_body, kind=SpatialNodeKind.ORBITAL, inherits_parent_environment=False))
+    graph.add_surface_cell(SurfaceCellDef(
+        cell_a, mars_body, 100.0, SurfacePoint(5.0, 10.0), frozenset({cell_b}), SurfaceField()
+    ))
+    graph.add_surface_cell(SurfaceCellDef(
+        cell_b, mars_body, 120.0, SurfacePoint(8.0, 12.0), frozenset({cell_a}), SurfaceField()
+    ))
+    graph.add_location(LocationState(site_a, "火星A", mars_body, cell_a))
+    graph.add_location(LocationState(site_b, "火星B", mars_body, cell_b))
+    graph.add(SpatialNodeDef(
+        orbit, "火星周回軌道", body_id=mars_body, kind=SpatialNodeKind.ORBITAL,
+        inherits_parent_environment=False,
+    ))
     static = StaticFacetStore()
-    static.set(site_a, AtmosphereField(610.0, 0.020, {DefinitionId("co2"): 0.95}))
-    static.set(site_b, AtmosphereField(610.0, 0.020, {DefinitionId("co2"): 0.95}))
-    static.set(site_a, ThermalField(210.0))
-    static.set(site_b, ThermalField(210.0))
-    static.set(site_a, IlluminationField(590.0, 0.65))
-    static.set(site_b, IlluminationField(590.0, 0.40))
+    static.set(cell_a, AtmosphereField(610.0, 0.020, {DefinitionId("co2"): 0.95}))
+    static.set(cell_b, AtmosphereField(610.0, 0.020, {DefinitionId("co2"): 0.95}))
+    static.set(cell_a, ThermalField(210.0))
+    static.set(cell_b, ThermalField(210.0))
+    static.set(cell_a, IlluminationField(590.0, 0.65))
+    static.set(cell_b, IlluminationField(590.0, 0.40))
     static.set(orbit, AtmosphereField(0.0, 0.0, {}))
     static.set(orbit, ThermalField(245.0))
 
-    climate = PlanetaryClimateState(mars_body, 610.0, 0.020, 210.0, {DefinitionId("co2"): 0.95, DefinitionId("n2"): 0.05})
+    climate = PlanetaryClimateState(
+        mars_body, 610.0, 0.020, 210.0,
+        {DefinitionId("co2"): 0.95, DefinitionId("n2"): 0.05},
+    )
     service = TerraformingService({mars_body: climate})
     env = EnvironmentResolver(graph, static, [TerraformingEnvironmentOverlay(service)])
 

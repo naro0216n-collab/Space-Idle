@@ -49,7 +49,7 @@ class VehicleProductionMixin:
     ) -> EntityId:
         if vehicle_definition_id not in self.vehicle_defs:
             raise KeyError(vehicle_definition_id)
-        if location_id not in self.facilities.environment.graph.nodes:
+        if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
         definition = self.vehicle_defs[vehicle_definition_id]
         production = definition.production

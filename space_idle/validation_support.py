@@ -48,4 +48,4 @@ class ValidationContext:
         technologies = set(sim.technology.completed)
         if sim.research is not None:
             technologies.update(sim.research.definitions)
-        return cls(sim.graph.nodes, sim.facilities.definitions, sim.facilities.capability_ids(), technologies)
+        return cls(sim.graph.operational_node_map(), sim.facilities.definitions, sim.facilities.capability_ids(), technologies)

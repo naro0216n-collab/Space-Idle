@@ -7,7 +7,7 @@ from .application_commands import (
     GetBuildOptions, GetCatalog, GetCargoFlows, GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport,
     GetLocation, GetLogistics, GetLogisticsLanes, GetLogisticsSummary, GetProjects,
     GetResearch, GetRoutes, GetScientificExplorations, GetSurveys, GetTransportAllocations,
-    GetTransportAllocationOptions, GetWorld, PauseBuild, PauseFacility, PauseLogisticsLane,
+    GetTransportAllocationOptions, GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseLogisticsLane,
     PauseResearch, PauseScientificExploration, PauseSurvey, PauseTransportAllocation,
     PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, ProduceVehicle, RelocateFleet,
     ResumeBuild, ResumeFacility, ResumeLogisticsLane, ResumeResearch,

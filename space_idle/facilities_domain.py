@@ -96,7 +96,7 @@ def validate_runtime(sim: Any) -> None:
     for facility_id, facility in sim.facilities.facilities.items():
         _require(facility_id == facility.id, f"facility state key mismatch: {facility_id}")
         _require(facility.definition_id in sim.facilities.definitions, f"facility state has unknown definition: {facility_id}")
-        _require(facility.location_id in sim.graph.nodes, f"facility state has unknown location: {facility_id}")
+        _require(sim.graph.has_operational_node(facility.location_id), f"facility state has unknown location: {facility_id}")
         _require(facility.level >= 1, f"facility state has invalid level: {facility_id}")
         _require(isinstance(facility.maintenance_priority, int), f"facility maintenance priority must be an integer: {facility_id}")
         _require(all(amount >= -1e-9 for amount in facility.invested_resources.values()), f"facility has negative invested resource: {facility_id}")

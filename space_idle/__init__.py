@@ -10,7 +10,7 @@ from .application import (
     GetCargoFlows, GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogistics,
     GetLogisticsLanes, GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
     GetScientificExplorations, GetSurveys, GetTransportAllocations, GetTransportAllocationOptions,
-    GetWorld, PauseBuild, PauseFacility, PauseLogisticsLane, PauseResearch,
+    GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseLogisticsLane, PauseResearch,
     PauseScientificExploration, PauseSurvey, PauseTransportAllocation,
     PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, ProduceVehicle, RelocateFleet,
     ResumeBuild, ResumeFacility, ResumeLogisticsLane, ResumeResearch,

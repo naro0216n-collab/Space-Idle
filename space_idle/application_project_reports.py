@@ -263,7 +263,7 @@ class ApplicationReportProjectorMixin:
         location_filter = None if location_id is None else str(location_id)
         issues: list[IssueRow] = []
         if location_id is None:
-            for node in sorted(sim.graph.nodes.values(), key=lambda row: str(row.id)):
+            for node in sim.graph.operational_nodes():
                 issues.extend(self._location_operational_issues(node.id))
         else:
             issues.extend(self._location_operational_issues(location_id))

@@ -6,6 +6,8 @@ class GetCatalog: pass
 @dataclass(frozen=True)
 class GetWorld: pass
 @dataclass(frozen=True)
+class GetSurfaceMap: body_id: str
+@dataclass(frozen=True)
 class GetLocation: location_id: str
 @dataclass(frozen=True)
 class GetFlowReport: location_id: str

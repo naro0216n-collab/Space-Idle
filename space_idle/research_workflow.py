@@ -101,7 +101,7 @@ class ResearchWorkflowMixin:
         day: int = 0,
         power: PowerSnapshot | None = None,
     ) -> tuple[SiteRequirementFailure, ...]:
-        if location_id not in self.facilities.environment.graph.nodes:
+        if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
         definition = self.definitions[research_id]
         prototype = definition.prototype

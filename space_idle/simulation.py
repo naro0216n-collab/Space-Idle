@@ -92,7 +92,7 @@ class Simulation:
         return locations
 
     def refresh_storage(self) -> None:
-        locations = set(self.graph.nodes) | {
+        locations = set(self.graph.operational_node_ids()) | {
             facility.location_id for facility in self.facilities.facilities.values()
         }
         power_by_location = {

@@ -11,6 +11,7 @@ from space_idle.application_commands import (
     GetCatalog, GetFlowReport, GetLogisticsSummary, GetRoutes, GetWorld,
 )
 from space_idle.api.codec import to_jsonable
+from space_idle.content import base_ids as ids
 
 
 def _request(port: int, method: str, path: str, body=None, headers=None):
@@ -51,8 +52,8 @@ def test_ui_reports_and_split_logistics_queries_are_json_safe():
     assert catalog.transport_services
     assert to_jsonable(catalog)
 
-    flow = app.query(GetFlowReport("base.node.earth_surface"))
-    assert flow.location_id == "base.node.earth_surface"
+    flow = app.query(GetFlowReport(str(ids.EARTH)))
+    assert flow.location_id == str(ids.EARTH)
     assert isinstance(to_jsonable(flow)["issues"], list)
 
     summary = app.query(GetLogisticsSummary())
@@ -137,7 +138,7 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
     thread.start()
     try:
         status, _, payload = _request(
-            port, "GET", "/api/v1/ui-state?location_id=base.node.earth_surface"
+            port, "GET", f"/api/v1/ui-state?location_id={ids.EARTH}"
         )
         assert status == 200
         data = payload["data"]
