@@ -262,7 +262,11 @@ Surface CellはFacility配置スロットではない。通常Facilityを建設�
 
 ### 8.1 プレイヤーによるLocation設立
 
-地表LocationはContent側が「月南極高地」「表側海地域」等の候補をあらかじめ列挙する方式を基本とせず、プレイヤーがSurvey結果と地形・資源・環境条件を見てSurface Cell上の任意地点へ設立する。
+地表LocationはContent側が「月南極高地」「表側海地域」等の候補をあらかじめ列挙する方式を基本とせず、プレイヤーがSurvey結果と地形・資源・環境条件を見てSurface Cell上の任意地点へ設立する。標準の月面開発では、開始時からプレイヤー運営の月面Locationを与えず、月周回等の既存非地表Nodeから広域Surveyを行い、その結果を比較して最初の月面Locationを選ぶ。既設Surface LocationをContentとして持たせるのは、シナリオの前提として既存拠点が明示される場合に限る。
+
+Location設立前のSurface CellはInventoryや通常物流LaneのNodeではない。最初の拠点は、既存の軌道・宇宙Node等をstaging originとして、Survey済みCellへFounding / Deployment Operationを実施することで成立させる。設立処理は「まだ存在しないDestination Inventoryへ通常Construction資材を配送する」方式にはしない。必要Resource、展開資産、輸送・着陸能力、準備作業、所要時間、SiteRequirementsを一つの設立Projectとして満たし、成功時にLocationを生成する。
+
+Founding PackageはContentで定義し、設立直後に通常の建設・物流へ移行するための最小運用基盤を与えられるようにする。何を含めるかは固定のCore特例にせず、初期Storage、Surface access / cargo handling、電力、Survey、Construction等のFacility・Asset・InventoryをPackageから構成する。これにより「Locationを作るにはLocation側の倉庫やGatewayが既に必要」という循環依存を作らない。
 
 Locationは一点座標ではなく、プレイヤーが運営する経済・産業・物流上の拠点である。設立時のCore Cellと、そこから連続して開発したSurface Cell群を持つ。
 
@@ -271,8 +275,8 @@ Location
 ├ core cell
 ├ contiguous developed cells
 ├ Inventory
-├ Facilities
-└ logistics connections
+├ Facilities / deployed founding assets
+└ logistics connections derived after founding
 ```
 
 新たな開発Cellは既存領域へ隣接することを基本とし、離れた地域を同一Locationの飛び地として無償取得しない。遠隔地域を利用したい場合は領域を連続的に拡張するか、別Locationを設立する。
@@ -326,7 +330,7 @@ Dynamic
 
 Locationは物流上の経済Nodeだが、地表Locationを代表座標一点として距離計算しない。位置が意味を持つ地表輸送では、実際に接続に使用するGateway / access pointのSurface Cell間から距離・所要時間・必要Operationを導出する。Location拡大によって二つの開発圏が接近した場合、旧Core Cell間距離を理由に長距離輸送扱いを固定しない。
 
-Surface Cell自体はInventory Nodeや物流Lane Nodeにはしない。Location内移動は集約Surface Infrastructureとして扱い、Location間Routeだけを物流Networkへ公開する。これにより惑星表面のCell解像度を物流Node数へ直接転嫁しない。
+Surface Cell自体はInventory Nodeや物流Lane Nodeにはしない。Location内移動は集約Surface Infrastructureとして扱い、成立済みLocation間のRouteだけを通常物流Networkへ公開する。Location設立前のCellはFounding / Deployment Operationの物理targetにはなれるが、通常Cargo Flowのdestination Inventoryにはならない。設立完了後はLocationのSurface access / Gatewayと軌道・他Locationとの物理関係から利用可能Routeを導出し、将来生成されるLocation IDを静的Route一覧へ事前列挙しない。これにより惑星表面のCell解像度を物流Node数へ直接転嫁しない。
 
 ### 9.1 Fleet配分と輸送能力
 
@@ -524,7 +528,9 @@ Unknown
 → Measured Resource Potential
 ```
 
-初期の広域観測では粗い地域差を示し、より詳細なSurveyによって候補CellのPotential推定幅を狭められる。Surveyは基地設立・領域拡張・新鉱業拠点投資の意思決定情報を提供する。
+初期の広域観測では粗い地域差を示し、より詳細なSurveyによって候補CellのPotential推定幅を狭められる。Survey手段は観測位置・方式ごとに到達範囲と到達可能なKnowledge深度を持つ。軌道Remote SurveyはSurface Locationが存在しなくても対象天体の広域Cellを観測でき、最初のLocation候補比較に必要な粗いKnowledgeを与える。地表Surveyや近接観測は既設Location、展開Asset、到達可能範囲等を必要とする代わりに、より高いKnowledge Levelまで精査できる。Surveyは基地設立・領域拡張・新鉱業拠点投資の意思決定情報を提供する。
+
+Survey開始条件を単なる「providerとtargetが同一天体」に縮退させない。ProviderのObservation / Sensor Capability、providerのSpatial context、target coverage、必要Operation、到達可能Knowledge Levelから可否と進行を決める。広域軌道SurveyはSurface物流Routeを要求せず、Surface Surveyは通常物流や現地運用条件と接続できる。
 
 完了Campaignは能力配分対象から自動的に外し、余剰Survey能力を未完了対象へ再配分する。地球の一般鉱物等、開始時点で既知とする資源はSurface Cellごとの初期Knowledgeを高い状態で定義してよい。
 
@@ -534,10 +540,10 @@ Unknown
 
 月面は以下のように発展する。
 
-1. 軌道から広域Surveyを行う
+1. 月面Locationを持たない状態で軌道から広域Surveyを行う
 2. 有望Surface Cellを比較する
-3. 任意地点へ初期Locationを設立する
-4. 隣接CellをSurvey・開発して産業圏を拡大する
+3. 軌道等のstaging nodeからFounding / Deployment Operationを行い、任意地点へ最初のLocationを設立する
+4. 設立Packageが与える最小運用基盤から通常物流・建設へ接続し、隣接CellをSurvey・開発して産業圏を拡大する
 5. Resource PotentialとInstalled Extraction Capacityを組み合わせて初期ISRUを成立させる
 6. 基礎工業・Surface Infrastructure・物流Gatewayを増強する
 7. 遠隔有望地域へ第二Locationを設立し、Location間Surface Logisticsを形成する
@@ -612,7 +618,7 @@ LLMはプレイヤーの主要判断を代行させない。
 主要Command例：
 
 - 時間一時停止・再開・速度変更
-- Location設立・隣接Surface Cell開発
+- 軌道Survey結果からのLocation設立Deployment・隣接Surface Cell開発
 - 建設計画・停止・再開・取消
 - 設備停止・再開・Levelアップ
 - Process選択・電力優先度
@@ -766,7 +772,7 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 16. 資源・中間材の種類は増やしてよいが、物流設定数の爆発を避ける。
 17. 定常物流では品目別補充より拠点間輸送能力、Fleet配分、方式、優先度を主要判断とする。
 18. 通常物流は個体Vehicle Missionの反復ではなく共有Transport CapacityとCargo Flowとして扱い、輸送latencyは保持する。
-19. 地表Locationは固定候補から選ぶのではなく、天体Surface Cell上へ設立し、隣接地域を開発して拡大できる。
+19. 地表Locationは固定候補から選ぶのではなく、Surface拠点を前提としない軌道Surveyで候補を比較し、天体Surface Cell上へ最初の拠点をDeploymentしてから隣接地域を開発して拡大できる。
 20. Surface Cellは物理地理・資源・環境・開発領域の単位とし、通常Facility配置スロットや物流Nodeとして扱わない。
 21. 地表資源は有限ReserveではなくResource Potentialと採掘設備能力のsoft saturationで表現し、採掘設備数へハード上限を置かない。
 22. 新技術は高性能Facilityや工法を解禁し、既存設備を研究完了だけで自動強化しない。
@@ -806,7 +812,7 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 - 発電・配電・部分稼働
 - 在庫・倉庫・保管サービス
 - Celestial Bodyごとに可変数のSurface Cellを持つ天体マップ
-- 任意地点へのLocation設立と隣接Cell開発
+- Surface拠点なしの軌道Surveyから任意地点へ最初のLocationを設立し、隣接Cellを開発する一連の進行
 - Resource Potential / soft saturation採掘
 - Surface Infrastructureによる大規模Locationの集約内部物流負荷
 - Spatial Node
