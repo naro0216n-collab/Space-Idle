@@ -12,6 +12,11 @@ class GetLocation: location_id: str
 @dataclass(frozen=True)
 class GetFlowReport: location_id: str
 @dataclass(frozen=True)
+class GetDependencyAnalytics:
+    scope_kind: str = "player"
+    scope_id: str | None = None
+    node_ids: tuple[str, ...] = ()
+@dataclass(frozen=True)
 class GetBottlenecks: location_id: str | None = None
 @dataclass(frozen=True)
 class GetProjects: location_id: str | None = None

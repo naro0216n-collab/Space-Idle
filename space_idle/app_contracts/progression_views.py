@@ -53,6 +53,7 @@ class ResearchRow:
     id: str
     display_name: str
     status: str
+    stages: tuple[str, ...]
     paused: bool
     priority: int
     can_start: bool

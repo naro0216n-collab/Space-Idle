@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
-    GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogisticsLanes,
+    GetContracts, GetDependencyAnalytics, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogisticsLanes,
     GetLogisticsSummary, GetProjects, GetResearch, GetRoutes, GetSurveys,
     GetTransportAllocationOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
 )
@@ -267,6 +267,12 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             if not body_id:
                 raise ApiPayloadError("body id is required")
             self._query_result(GetSurfaceMap(body_id))
+            return
+        if path == "/api/v1/dependency-analytics":
+            scope_kind = _one(params, "scope_kind") or "player"
+            scope_id = _one(params, "scope_id")
+            node_ids = tuple(params.get("node_id", ()))
+            self._query_result(GetDependencyAnalytics(scope_kind, scope_id, node_ids))
             return
         if path == "/api/v1/bottlenecks":
             self._query_result(GetBottlenecks(_one(params, "location_id")))

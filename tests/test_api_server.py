@@ -118,6 +118,16 @@ def test_http_api_revision_etag_gzip_command_and_save_load(tmp_path):
         assert all(not row["modes"] for row in payload["data"]["items"])
 
         status, _, payload = _request(
+            port, "GET",
+            f"/api/v1/dependency-analytics?scope_kind=operational_nodes&node_id={ids.EARTH}",
+        )
+        assert status == 200
+        assert payload["data"]["scope_kind"] == "operational_nodes"
+        assert payload["data"]["node_ids"] == [str(ids.EARTH)]
+        assert "resources" in payload["data"]
+        assert "critical_dependency_resource_ids" in payload["data"]
+
+        status, _, payload = _request(
             port,
             "GET",
             "/api/v1/transport-allocation-options"
@@ -178,6 +188,9 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
         assert data["logistics"]["vehicle_production_options"]
         assert "vehicle_production" in data["logistics"]
         assert data["external_economy"]["funds_musd"] == data["world"]["funds_musd"]
+        assert data["dependency_analytics"]["scope_kind"] == "operational_nodes"
+        assert data["dependency_analytics"]["node_ids"] == [str(ids.EARTH)]
+        assert "resources" in data["dependency_analytics"]
         assert data["external_economy"]["policies"] == []
         surface_infrastructure = data["location"]["surface_infrastructure"]
         assert surface_infrastructure["fulfillment"] == 1.0
@@ -304,12 +317,15 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert headers["Content-Type"].startswith("text/javascript")
         assert "If-Match" in app_js
         assert "surface_body_id" in app_js
+        assert "dependencyAnalytics" in app_js
 
         status, headers, body = _raw_request(port, "/operations_ui.js")
         operations_js = body.decode("utf-8")
         assert status == 200
         assert headers["Content-Type"].startswith("text/javascript")
         assert "SpaceIdleResearchTree.render" in operations_js
+        assert "External Dependency / 産業自立" in operations_js
+        assert "critical_dependency_resource_ids" in operations_js
         assert "SetResearchPriority" in operations_js
         assert "FundResearchPrototype" not in operations_js
         assert "StartScientificExploration" in operations_js

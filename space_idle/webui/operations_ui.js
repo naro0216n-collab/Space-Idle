@@ -96,7 +96,15 @@
   function renderInventoryTab(){
     const flowMap=Object.fromEntries((state.flow?.resources||[]).map((r)=>[r.resource_id,r]));
     const rows=(state.location?.inventory||[]).filter((r)=>r.amount||r.reserved||flowMap[r.resource_id]?.local_production_per_day||flowMap[r.resource_id]?.local_consumption_per_day||flowMap[r.resource_id]?.inbound_in_transit_t||flowMap[r.resource_id]?.arrival_waiting_t).map((r)=>{const f=flowMap[r.resource_id]||{};return `<tr class="selectable" data-inspect="resource" data-id="${esc(r.resource_id)}"><td><div class="cell-main">${esc(r.display_name)}</div><div class="cell-sub">${esc(r.storage_class)}</div></td><td>${fmt(r.amount)}</td><td>${fmt(r.available)}</td><td>${signed(f.local_net_per_day)}</td><td>${fmt(f.inbound_in_transit_t)}</td><td>${fmt(f.outbound_in_transit_t)}</td><td>${fmt(f.arrival_waiting_t)}</td><td>${fmt(r.free_capacity)}</td></tr>`;}).join('');
-    return `<section class="card"><div class="card-heading"><h3>在庫・ローカルフロー・物流状態</h3></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>在庫</th><th>利用可</th><th>Local net/日</th><th>入荷中</th><th>出荷中</th><th>到着待機</th><th>空容量</th></tr></thead><tbody>${rows||'<tr><td colspan="8">表示対象なし</td></tr>'}</tbody></table></div></section>`;
+    const analytics=state.dependencyAnalytics;
+    const dependencyRows=(analytics?.resources||[]).map((r)=>{
+      const sources=(r.dependency_source_node_ids||[]).map(locationName).join(' / ')||'—';
+      const limits=(r.limiting_factors||[]).map(A.userFacingText).join(' / ')||'なし';
+      return `<tr><td><div class="cell-main">${esc(r.display_name)}</div><div class="cell-sub">${esc(r.id)}</div></td><td>${fmt(r.local_production_per_day,2)}</td><td>${fmt(r.local_consumption_per_day,2)}</td><td>${r.local_coverage_ratio==null?'—':pct(r.local_coverage_ratio)}</td><td>${fmt(r.external_dependency_per_day,2)}</td><td>${fmt(r.imports_pipeline,2)}</td><td>${fmt(r.exports_pipeline,2)}</td><td>${fmt(r.unmet_demand,2)}</td><td>${esc(sources)}</td><td>${esc(limits)}</td></tr>`;
+    }).join('');
+    const groupRows=(analytics?.resource_groups||[]).map((r)=>`<tr><td>${esc(r.display_name)}</td><td>${fmt(r.local_production_per_day,2)}</td><td>${fmt(r.local_consumption_per_day,2)}</td><td>${r.local_coverage_ratio==null?'—':pct(r.local_coverage_ratio)}</td><td>${fmt(r.external_dependency_per_day,2)}</td><td>${fmt(r.imports_pipeline,2)}</td><td>${fmt(r.exports_pipeline,2)}</td><td>${fmt(r.unmet_demand,2)}</td></tr>`).join('');
+    const dependencyCard=`<section class="card"><div class="card-heading"><h3>External Dependency / 産業自立</h3><span class="badge ${(analytics?.critical_dependency_resource_ids||[]).length?'warn':'ok'}">${(analytics?.critical_dependency_resource_ids||[]).length} critical</span></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>現地生産/日</th><th>現地消費/日</th><th>Local coverage</th><th>外部依存/日</th><th>Import pipeline</th><th>Export pipeline</th><th>未充足</th><th>依存元</th><th>Limiting factor</th></tr></thead><tbody>${dependencyRows||'<tr><td colspan="10">対象フローなし</td></tr>'}</tbody></table></div>${groupRows?`<div class="table-wrap"><table><thead><tr><th>Resource Group</th><th>現地生産/日</th><th>現地消費/日</th><th>Local coverage</th><th>外部依存/日</th><th>Import pipeline</th><th>Export pipeline</th><th>未充足</th></tr></thead><tbody>${groupRows}</tbody></table></div>`:''}</section>`;
+    return `<div class="card-grid"><section class="card"><div class="card-heading"><h3>在庫・ローカルフロー・物流状態</h3></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>在庫</th><th>利用可</th><th>Local net/日</th><th>入荷中</th><th>出荷中</th><th>到着待機</th><th>空容量</th></tr></thead><tbody>${rows||'<tr><td colspan="8">表示対象なし</td></tr>'}</tbody></table></div></section>${dependencyCard}</div>`;
   }
 
   function renderConstructionTab(){
@@ -287,7 +295,11 @@
     }else if(r.status==='operational_experience'){
       phase=section('Operational Experience',experienceHtml(r));
     }
-    const startState=['available','locked'].includes(r.status)?section('開始条件',kv([['Theory総必要RP',fmt(r.research_point_cost,1)],['保有RP',fmt(state.research?.stored_points,1)],['RP Pool容量',fmt(state.research?.storage_capacity_points,1)],['開始時一括消費','なし']])):'';
+    const stageNames={theory:'Theory',prototype:'Prototype',demonstration:'Demonstration',operational_experience:'Operational Experience'};
+    const stageSequence=(r.stages||[]).map((x)=>stageNames[x]||x).join(' → ')||'—';
+    const startRows=[['Stage構成',esc(stageSequence)],['保有RP',fmt(state.research?.stored_points,1)],['RP Pool容量',fmt(state.research?.storage_capacity_points,1)]];
+    if((r.stages||[]).includes('theory'))startRows.splice(1,0,['Theory総必要RP',fmt(r.research_point_cost,1)]);
+    const startState=['available','locked'].includes(r.status)?section('開始条件',kv(startRows)):'';
     const priorityControl=`<div class="form-row"><label>研究優先度<input id="researchPriorityInput" type="number" step="1" value="${esc(r.priority??50)}" data-draft-key="research:${esc(r.id)}:priority"></label>${r.can_set_priority?`<button type="button" data-set-research-priority="${esc(r.id)}">優先度を適用</button>`:''}</div>`;
     setInspector(r.display_name,section('状態',kv([['段階',esc(stateLabels[r.status]||r.status)],['優先度',fmt(r.priority,0)],['Stage進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)}`],['RP requested / allocated',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)}`],['Execution requested / allocated',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)}`]]))+section('前提',(r.prerequisites||[]).length?(r.prerequisites||[]).map((x)=>`<span class="badge">${esc(definitionName(x))}</span>`).join(' '):'<span class="badge ok">なし</span>')+startState+section('現在のblocker',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:'<span class="badge ok">なし</span>')+phase+section('研究操作',`<div class="action-stack">${priorityControl}${action}</div>`));
     return true;

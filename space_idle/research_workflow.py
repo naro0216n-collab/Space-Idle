@@ -11,6 +11,11 @@ from .research_models import ResearchStage, ResearchState
 
 class ResearchWorkflowMixin:
     RESEARCH_EXECUTION_SERVICE = "research_execution"
+    _TRANSIENT_SITE_BLOCKERS = frozenset({
+        "manual_pause",
+        "capability:active",
+        "service_capacity:available",
+    })
 
     @staticmethod
     def _project_owner_id(research_id: DefinitionId) -> EntityId:
@@ -309,13 +314,17 @@ class ResearchWorkflowMixin:
         location_id: SpatialNodeId,
         day: int = 0,
     ) -> None:
-        blockers = self.prototype_site_blockers(research_id, location_id, day)
-        if blockers:
+        state = self.active.get(research_id)
+        if state is None or state.stage is not ResearchStage.PROTOTYPE:
+            raise ValueError("研究は試作段階ではありません")
+        structural = self._structural_site_blockers(
+            self.prototype_site_blockers(research_id, location_id, day)
+        )
+        if structural:
             raise ValueError(
                 "prototype site requirements not met: "
-                + "; ".join(detail for _code, detail in blockers)
+                + "; ".join(detail for _code, detail in structural)
             )
-        state = self.active[research_id]
         previous = state.prototype_location_id
         if previous is not None and previous != location_id:
             self._restore_prototype_staging(research_id, previous)
@@ -390,14 +399,17 @@ class ResearchWorkflowMixin:
         location_id: SpatialNodeId,
         day: int = 0,
     ) -> None:
-        blockers = self.demonstration_site_blockers(research_id, location_id, day)
-        structural = tuple(blocker for blocker in blockers if blocker[0] != "capability:active")
+        state = self.active.get(research_id)
+        if state is None or state.stage is not ResearchStage.DEMONSTRATION:
+            raise ValueError("研究は実証段階ではありません")
+        structural = self._structural_site_blockers(
+            self.demonstration_site_blockers(research_id, location_id, day)
+        )
         if structural:
             raise ValueError(
                 "demonstration site requirements not met: "
                 + "; ".join(detail for _code, detail in structural)
             )
-        state = self.active[research_id]
         state.demonstration_location_id = location_id
         state.stage_progress = 0.0
 
@@ -439,7 +451,14 @@ class ResearchWorkflowMixin:
     def can_select_prototype_site(
         self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0
     ) -> bool:
-        return not self.prototype_site_blockers(research_id, location_id, day)
+        state = self.active.get(research_id)
+        return (
+            state is not None
+            and state.stage is ResearchStage.PROTOTYPE
+            and not self._structural_site_blockers(
+                self.prototype_site_blockers(research_id, location_id, day)
+            )
+        )
 
     def demonstration_site_blockers(
         self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0
@@ -459,11 +478,21 @@ class ResearchWorkflowMixin:
     def can_select_demonstration_site(
         self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0
     ) -> bool:
-        return not any(
-            code != "capability:active"
-            for code, _detail in self.demonstration_site_blockers(
-                research_id, location_id, day
+        state = self.active.get(research_id)
+        return (
+            state is not None
+            and state.stage is ResearchStage.DEMONSTRATION
+            and not self._structural_site_blockers(
+                self.demonstration_site_blockers(research_id, location_id, day)
             )
+        )
+
+    @classmethod
+    def _structural_site_blockers(
+        cls, blockers: tuple[tuple[str, str], ...]
+    ) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            blocker for blocker in blockers if blocker[0] not in cls._TRANSIENT_SITE_BLOCKERS
         )
 
     def prototype_blockers(

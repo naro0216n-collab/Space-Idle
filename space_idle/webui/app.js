@@ -3,7 +3,7 @@
 
   const state = {
     revision:null, session:null, world:null, catalog:null, locationId:null, location:null,
-    flow:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
+    flow:null, dependencyAnalytics:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, routes:null,
     fleet:null, transportAllocations:null, cargoFlows:null, lanes:null, demands:[], externalEconomy:null,
     selectedRouteId:null, activeView:'operations', activeTab:'overview', inspector:null,
@@ -71,6 +71,8 @@
     text=text.replace(/external_period_budget/g,'External Serviceの期間予算不足');
     text=text.replace(/external_minimum_reserve/g,'最低留保Fundsにより支出不可');
     text=text.replace(/external_funds/g,'External Service用Funds不足');
+    text=text.replace(/unmet_demand/g,'未充足需要');
+    text=text.replace(/external_dependency/g,'外部依存');
     for(const map of definitionMaps()){
       for(const [id,item] of Object.entries(map)){
         if(text.includes(id)&&item?.display_name)text=text.split(id).join(item.display_name);
@@ -176,6 +178,7 @@
     state.lanes=data.lanes??state.lanes; state.demands=state.lanes?.demands||[]; state.externalEconomy=data.external_economy??state.externalEconomy;
     if(data.location!==undefined)state.location=data.location;
     if(data.flow!==undefined)state.flow=data.flow;
+    if(data.dependency_analytics!==undefined)state.dependencyAnalytics=data.dependency_analytics;
     if(data.projects!==undefined)state.projects=data.projects;
     if(data.build_options!==undefined)state.buildOptions=data.build_options;
     if(data.bottlenecks!==undefined)state.bottlenecks=data.bottlenecks;
@@ -248,7 +251,7 @@
   }
 
   function clearLocationSnapshot(){
-    state.location=null; state.flow=null; state.bottlenecks=null; state.projects=null;
+    state.location=null; state.flow=null; state.dependencyAnalytics=null; state.bottlenecks=null; state.projects=null;
     state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.inspector=null;
   }
   async function loadUiSnapshot({preserveInteraction=true}={}){

@@ -73,7 +73,8 @@ GitHub反映の入口は差分種別で決める。
 
 - `.github/workflows/**` を含まない通常変更は `scripts/publish_request.py` を使用する。
 - `.github/workflows/**` だけを変更する場合は後述の Workflow maintenance procedure を使用する。
-- workflowと通常変更が混在する場合は、責務ごとにcommitを分け、通常変更を先にpublishする。
+- `.github/workflows/publish-gateway.yml` は、先に Publish control maintenance で固定 `publish` branchへ同一blobを反映済みの場合に限り、通常publishへ同梱できる。Gatewayがcontrol blobとの一致を機械検証する。
+- 上記以外のworkflowと通常変更が混在する場合は、責務ごとにcommitを分け、通常変更を先にpublishする。
 
 `publish` branchはPublish Gateway専用のtransport branchであり、通常開発や統合には使用しない。
 
@@ -84,7 +85,7 @@ GitHub反映の入口は差分種別で決める。
 1. 変更を責務としてまとまったlocal commitにする。
 2. `prepare`を実行して、現在の `HEAD` をpublish対象として固定する。
 3. remote `develop` HEADを1回取得し、そのSHAを `connector-plan` に渡す。
-4. helperが生成したpacketを生成順に実行する。各packetは `action` と `action_args` が完全なConnector呼び出しであり、**1 packetを1 Connector callとしてそのまま実行する**。
+4. helperが生成した各packetの `action_args` をコピペで対応するConnector callへ渡し、生成順に実行する。
 5. Gateway成功後、requestに対応するreceiptを取得して `record` に渡す。
 6. Fast CIは結果が次の判断に必要になった時点で確認する。
 
@@ -99,7 +100,7 @@ python scripts/publish_request.py connector-plan \
   --target-remote-head <current-develop-head>
 ```
 
-`connector-plan` が生成したpacketを生成順に実行する。packetの内容は作業者が再設計する入力ではなく、そのcall自体の実行仕様である。
+`connector-plan` が生成した各packetの `action_args` をコピペで対応するConnector callへ渡し、生成順に実行する。
 
 Gateway成功後、receiptを取得して記録する。
 
@@ -118,7 +119,7 @@ Connector callが失敗した、結果が不明確だった、またはGateway�
 
 1. workflow-only commitを現在の `HEAD` として `prepare` する。
 2. remote `develop` HEADを1回取得し、そのSHAを `connector-plan` に渡す。
-3. helperが生成したworkflow blob packetを、通常publishと同じく1 packetずつそのまま実行する。
+3. helperが生成したworkflow blob packetの `action_args` をコピペで対応するConnector callへ渡し、生成順に実行する。
 4. `connector-tree` が生成したtree packetを実行し、返却tree SHAを `connector-commit` に渡す。
 5. commit packetを実行する。生成commitを1回取得し、そのcommit SHA・tree SHA・parent SHAを `connector-update` に渡す。
 6. ref update packetを実行する。更新後の `develop` HEADとtreeを1回取得し、`verify-remote` に渡す。
@@ -142,22 +143,48 @@ python scripts/workflow_maintenance.py verify-remote \
 
 各stageではhelperが生成したpacketと、直前stageが要求する観測値だけを次へ渡す。
 
-### Publish recovery
+### Publish control maintenance procedure
 
-通常publishで問題が発生した場合も、active transactionを正本として復旧する。
+Publish Gateway の control plane (`.github/workflows/publish-gateway.yml` と Gateway validator scripts) は `scripts/publish_control_maintenance.py` で固定 `publish` branchへ反映する。通常のgame/source publishや `develop` workflow maintenanceとは混在させない。
 
-- payload uploadが明確に失敗し、remote fileが作成されていない場合は、そのupload packetをもう一度実行する。
-- upload結果が不明確な場合、またはGatewayがpayload blob不一致を報告した場合は、対象remote pathを1回取得する。remote blobが期待値と異なる場合は、観測したblob SHAを `connector-repair` に渡す。
+1. control plane変更をcommitし、clean worktreeで `prepare` する。
+2. remote `publish` HEADとtreeを1回取得し、`connector-plan` に渡す。
+3. helperが生成したblob packetの `action_args` をコピペで `GitHub.create_blob` へ渡す。返却blob SHAは本文を確認せず `connector-tree` へ渡し、helperが正準blob OIDとの一致を機械判定する。
+4. helperが生成したtree、commit、non-force ref update packetを順に実行する。
+5. 更新後の `publish` HEADとtreeを1回取得し、`verify-remote` に渡してtransactionを閉じる。`develop` は変更されないためsource-snapshot再構築は不要。
 
 ```bash
-python scripts/publish_request.py connector-repair \
-  --part-index <mismatched-part-index> \
-  --remote-blob-sha <observed-remote-blob-sha>
+python scripts/publish_control_maintenance.py prepare
+python scripts/publish_control_maintenance.py connector-plan \
+  --target-remote-head <current-publish-head> \
+  --target-remote-tree <current-publish-tree>
+python scripts/publish_control_maintenance.py connector-tree \
+  --blob '<control-path>=<create-blob-result-sha>' \
+  --blob '<control-path>=<create-blob-result-sha>'
+python scripts/publish_control_maintenance.py connector-commit \
+  --tree-sha <create-tree-result-sha>
+python scripts/publish_control_maintenance.py connector-update \
+  --commit-sha <create-commit-result-sha> \
+  --commit-tree-sha <fetched-commit-tree-sha> \
+  --commit-parent-sha <fetched-commit-parent-sha>
+python scripts/publish_control_maintenance.py verify-remote \
+  --remote-head <publish-head-after-update> \
+  --remote-tree <publish-tree-after-update>
 ```
 
-helperが生成したrepair packetを、通常packetと同じく **1 packet = 1 Connector call** として実行する。実行後は対象pathを1回取得し、helperが示す期待blob OIDと一致したことを確認して既存transactionを続行する。
+control planeの実装は独立した小さなtracked fileへ分け、巨大なworkflow本文をConnector callへ再構成しない。blob本文の成立判定はGit blob OIDで行い、tree/commit/refはhelperが生成するGit data packetだけを使用する。
 
-request送信前なら既存のsubmit packetへ進む。Gateway送信後にpayload検証で停止した場合は、payload修復後に同じ失敗Gateway jobをrerunする。
+### Publish recovery
+
+通常publishでpayload転送が失敗、不明確、またはGatewayのpayload検証で停止した場合も、active transactionを正本として復旧する。remote payloadの個別取得やSHA転記は行わない。
+
+```bash
+python scripts/publish_request.py connector-repair
+```
+
+helperは直前世代の実Connector call sizeから、より小さいcall envelopeを持つ次世代payload packet群、世代index packet、同一request IDのretry request packetを生成する。各packetの `action_args` をコピペで対応するConnector callへ渡し、生成順に実行する。既存remote fileは上書きせず、新しい世代別pathへappend-onlyで作成する。
+
+repairでは既存submit packetや失敗jobを再利用せず、生成されたretry request packetまで実行してGateway検証を起動する。再度payload検証で停止した場合は同じ `connector-repair` を実行し、さらに細分化した次世代へ進む。request ID、base、target tree、publish commitはactive transactionのものを維持する。
 
 remote `develop` HEAD、publish parent、target treeなどpublish対象そのものの整合性が崩れている場合はtransport recoveryではない。transactionを進めず、remote同期または実装状態の問題として調査する。
 

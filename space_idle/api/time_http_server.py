@@ -9,6 +9,7 @@ from ..application_commands import (
     GetCargoFlows,
     GetFleet,
     GetContracts,
+    GetDependencyAnalytics,
     GetFlowReport,
     GetLocation,
     GetLogistics,
@@ -68,6 +69,7 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             queries.update({
                 "location": GetLocation(location_id),
                 "flow": GetFlowReport(location_id),
+                "dependency_analytics": GetDependencyAnalytics("operational_nodes", node_ids=(location_id,)),
                 "projects": GetProjects(location_id),
                 "build_options": GetBuildOptions(location_id),
                 "bottlenecks": GetBottlenecks(location_id),

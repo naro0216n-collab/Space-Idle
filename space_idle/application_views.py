@@ -34,6 +34,7 @@ from .app_contracts.progression_views import (
     ContractRow, ContractsView,
 )
 from .app_contracts.ui_reports import IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView
+from .app_contracts.analytics_views import DependencyMetricRow, DependencyAnalyticsView
 from .app_contracts.surface_views import (
     SurfaceCellDevelopmentOption, SurfaceCellFoundationOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
     SurfaceLocationTerritoryRow, SurfaceMapView, SurfaceResourceKnowledgeRow,
@@ -44,6 +45,7 @@ from .app_contracts.economy_views import (
 
 QueryResult: TypeAlias = (
     CatalogView | WorldView | SurfaceMapView | LocationView | FlowReportView | BottlenecksView |
+    DependencyAnalyticsView |
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     RoutesView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |
     LogisticsLanesView | TransportAllocationOptionsView | ResearchView |

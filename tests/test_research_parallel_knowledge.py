@@ -35,15 +35,23 @@ def _set_earth_research_execution_capacity(sim, rate: float) -> None:
     )
 
 
-def _parallel_projection(start_order: tuple[DefinitionId, DefinitionId]):
+def _parallel_projection(
+    start_order: tuple[DefinitionId, DefinitionId],
+    *,
+    execution_rate: float = 20.0,
+    stored_points: float = 1.0,
+):
     app = build_game_application()
     sim = app._simulation
-    _set_earth_research_execution_capacity(sim, 20.0)
+    _set_earth_research_execution_capacity(sim, execution_rate)
     for research_id in start_order:
         sim.research.definitions[research_id] = ResearchDefinition(
-            research_id, str(research_id), research_point_cost=10.0
+            research_id,
+            str(research_id),
+            research_point_cost=10.0,
+            stages=(ResearchStage.THEORY,),
         )
-    sim.research.stored_points = 1.0
+    sim.research.stored_points = stored_points
     for research_id in start_order:
         app.execute(StartResearch(str(research_id), priority=50))
     return app
@@ -62,6 +70,38 @@ def test_parallel_theory_same_priority_is_proportional_and_registration_order_in
         assert first_rows[rid].rp_requested == 10.0
         assert first_rows[rid].rp_allocated == 0.5
         assert second_rows[rid].rp_allocated == first_rows[rid].rp_allocated
+
+
+def test_parallel_theory_execution_capacity_is_shared_independently_of_start_order():
+    a = DefinitionId("test.research.execution.parallel.a")
+    b = DefinitionId("test.research.execution.parallel.b")
+    first = _parallel_projection((a, b), execution_rate=1.0, stored_points=100.0)
+    second = _parallel_projection((b, a), execution_rate=1.0, stored_points=100.0)
+
+    first_rows = {rid: _research_row(first, rid) for rid in (a, b)}
+    second_rows = {rid: _research_row(second, rid) for rid in (a, b)}
+    for rid in (a, b):
+        assert first_rows[rid].execution_requested == 10.0
+        assert first_rows[rid].execution_allocated == 0.5
+        assert second_rows[rid].execution_allocated == first_rows[rid].execution_allocated
+        assert first_rows[rid].rp_requested == 0.5
+        assert first_rows[rid].rp_allocated == 0.5
+
+
+def test_research_priority_controls_shared_execution_capacity_before_rp_consumption():
+    a = DefinitionId("test.research.execution.priority.a")
+    b = DefinitionId("test.research.execution.priority.b")
+    app = _parallel_projection((a, b), execution_rate=1.0, stored_points=100.0)
+
+    app.execute(SetResearchPriority(str(a), 100))
+    app.execute(SetResearchPriority(str(b), 10))
+
+    high = _research_row(app, a)
+    low = _research_row(app, b)
+    assert high.execution_allocated == 1.0
+    assert low.execution_allocated == 0.0
+    assert high.rp_requested == 1.0
+    assert low.rp_requested == 0.0
 
 
 def test_research_priority_controls_shared_rp_allocation_without_project_order():
@@ -96,6 +136,7 @@ def test_operational_experience_does_not_accumulate_from_research_time_itself():
         "Experience Wait",
         0.0,
         operational_experience=ResearchOperationalExperienceSpec({category: 1.0}),
+        stages=(ResearchStage.OPERATIONAL_EXPERIENCE,),
     )
 
     sim.research.start(research_id, day=sim.day)
@@ -121,6 +162,7 @@ def test_actual_extraction_activity_contributes_to_knowledge_and_unblocks_resear
         operational_experience=ResearchOperationalExperienceSpec({
             ids.EXPERIENCE_EXTRACTION_OPERATIONS: 0.1,
         }),
+        stages=(ResearchStage.OPERATIONAL_EXPERIENCE,),
     )
 
     sim.research.start(research_id, day=sim.day)

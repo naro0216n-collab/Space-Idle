@@ -28,7 +28,7 @@ from .app_contracts.economy import (
     CreateExternalServicePolicy, DeleteExternalServicePolicy, SetExternalServicePolicy,
 )
 from .app_contracts.queries import (
-    GetCatalog, GetWorld, GetSurfaceMap, GetLocation, GetFlowReport, GetBottlenecks, GetProjects,
+    GetCatalog, GetWorld, GetSurfaceMap, GetLocation, GetFlowReport, GetDependencyAnalytics, GetBottlenecks, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetRoutes, GetFleet,
     GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetLogisticsLanes, GetTransportAllocationOptions,
     GetResearch, GetScientificExplorations, GetSurveys, GetContracts, GetExternalEconomy,
@@ -51,7 +51,7 @@ Command: TypeAlias = (
     DeleteExternalServicePolicy | AdvanceTime
 )
 Query: TypeAlias = (
-    GetCatalog | GetWorld | GetSurfaceMap | GetLocation | GetFlowReport | GetBottlenecks | GetProjects |
+    GetCatalog | GetWorld | GetSurfaceMap | GetLocation | GetFlowReport | GetDependencyAnalytics | GetBottlenecks | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetRoutes | GetFleet |
     GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetLogisticsLanes | GetTransportAllocationOptions |
     GetResearch | GetScientificExplorations | GetSurveys | GetContracts | GetExternalEconomy

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
-    GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogistics,
+    GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetLocation, GetLogistics,
     GetLogisticsLanes, GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
     GetScientificExplorations, GetSurveys, GetTransportAllocations,
     GetTransportAllocationOptions, GetWorld, GetSurfaceMap, Query,
@@ -39,6 +39,8 @@ class ApplicationQueryRouterMixin:
             return self._location_view(self._require_location(query.location_id))
         if isinstance(query, GetFlowReport):
             return self._flow_report_view(self._require_location(query.location_id))
+        if isinstance(query, GetDependencyAnalytics):
+            return self._dependency_analytics_view(query)
         if isinstance(query, GetBottlenecks):
             return self._bottlenecks_view(None if query.location_id is None else self._require_location(query.location_id))
         if isinstance(query, GetProjects):

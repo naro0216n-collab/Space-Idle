@@ -28,7 +28,12 @@
       const label = statusLabels[item.status] || item.status;
       return {ratio:required > 0 ? done / required : 0, text:`${label} ${fmt(done,1)}/${fmt(required,1)}`};
     }
-    return {ratio:0, text:`Theory必要RP ${fmt(item.research_point_cost,1)}`};
+    const firstStage = (item.stages || [])[0];
+    const firstLabel = statusLabels[firstStage] || firstStage || '未定義';
+    if (firstStage === 'theory') {
+      return {ratio:0, text:`開始: ${firstLabel} · 必要RP ${fmt(item.research_point_cost,1)}`};
+    }
+    return {ratio:0, text:`開始: ${firstLabel}`};
   }
 
 

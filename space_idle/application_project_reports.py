@@ -2,11 +2,173 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from .application_views import BottlenecksView, FlowReportView, IssueRow, ResourceFlowRow
-from .shared import SpatialNodeId
+from .application_views import (
+    BottlenecksView, DependencyAnalyticsView, DependencyMetricRow,
+    FlowReportView, IssueRow, ResourceFlowRow,
+)
+from .application_commands import GetDependencyAnalytics
+from .shared import CelestialBodyId, SpatialNodeId
 
 
 class ApplicationReportProjectorMixin:
+    def _dependency_scope_nodes(
+        self, query: GetDependencyAnalytics
+    ) -> tuple[SpatialNodeId, ...]:
+        graph = self._simulation.graph
+        kind = query.scope_kind
+        if kind == "player":
+            if query.scope_id is not None or query.node_ids:
+                raise ValueError("player analytics scope takes no scope id or node ids")
+            return tuple(sorted(graph.operational_node_ids(), key=str))
+        if kind == "body":
+            if query.scope_id is None or query.node_ids:
+                raise ValueError("body analytics scope requires exactly one scope id")
+            return graph.nodes_for_body(CelestialBodyId(query.scope_id))
+        if kind == "operational_nodes":
+            if query.scope_id is not None or not query.node_ids:
+                raise ValueError("operational_nodes analytics scope requires node ids")
+            nodes = tuple(SpatialNodeId(value) for value in query.node_ids)
+            if len(set(nodes)) != len(nodes):
+                raise ValueError("analytics scope contains duplicate operational nodes")
+            for node_id in nodes:
+                if not graph.has_operational_node(node_id):
+                    raise KeyError(node_id)
+            return tuple(sorted(nodes, key=str))
+        raise ValueError(f"unsupported analytics scope kind: {kind}")
+
+    def _dependency_analytics_view(
+        self, query: GetDependencyAnalytics
+    ) -> DependencyAnalyticsView:
+        sim = self._simulation
+        nodes = self._dependency_scope_nodes(query)
+        scope = set(nodes)
+        powers = {
+            node_id: sim.power.snapshot(node_id, sim.facilities, sim.day)
+            for node_id in nodes
+        }
+        resource_allocations = sim.resource_allocation_projection()
+        service_allocations = sim.service_capacity_allocation_projection()
+
+        production: dict[object, float] = defaultdict(float)
+        consumption: dict[object, float] = defaultdict(float)
+        imports: dict[object, float] = defaultdict(float)
+        exports: dict[object, float] = defaultdict(float)
+        unmet: dict[object, float] = defaultdict(float)
+        dependency_sources: dict[object, set[SpatialNodeId]] = defaultdict(set)
+
+        for node_id in nodes:
+            power = powers[node_id]
+            for snap in sim.industry.snapshots(
+                node_id, sim.facilities, sim.inventory, power, sim.day,
+                resource_allocations, service_allocations,
+            ):
+                for resource_id, amount in snap.output_rates_per_day.items():
+                    production[resource_id] += amount
+                for resource_id, amount in snap.input_rates_per_day.items():
+                    consumption[resource_id] += amount
+            if sim.extraction is not None:
+                for snap in sim.extraction.snapshots(
+                    node_id, sim.facilities, sim.inventory, power, sim.day,
+                    service_allocations,
+                ):
+                    production[snap.output_resource_id] += snap.output_t_per_day
+            for facility in sim.facilities.all_at(node_id):
+                factor = max(0.0, min(1.0, facility.maintenance_satisfaction))
+                for resource_id, amount in sim.facilities.maintenance_requirements_per_day(
+                    facility.id
+                ).items():
+                    consumption[resource_id] += amount * factor
+
+        for flow in sim.logistics.cargo_flows.values():
+            source_inside = flow.source_id in scope
+            destination_inside = flow.destination_id in scope
+            if source_inside == destination_inside:
+                continue
+            if destination_inside:
+                imports[flow.resource_id] += flow.amount_t
+                dependency_sources[flow.resource_id].add(flow.source_id)
+            else:
+                exports[flow.resource_id] += flow.amount_t
+
+        external_demands = sim.resource_demands(powers)
+        for demand in external_demands:
+            if demand.destination_id not in scope:
+                continue
+            remaining = sim.logistics.demand_remaining_t(demand)
+            if remaining <= 1e-12:
+                continue
+            unmet[demand.resource_id] += remaining
+            if demand.source_id is not None and demand.source_id not in scope:
+                dependency_sources[demand.resource_id].add(demand.source_id)
+            for lane in sim.logistics.lanes.values():
+                if (
+                    lane.source_id not in scope
+                    and sim.logistics.lane_accepts_demand(lane, demand)
+                ):
+                    dependency_sources[demand.resource_id].add(lane.source_id)
+
+        resource_ids = set(production) | set(consumption) | set(imports) | set(exports) | set(unmet)
+        rows: list[DependencyMetricRow] = []
+        for resource_id in sorted(resource_ids, key=str):
+            definition = self._catalog.resources.get(resource_id)
+            produced = production[resource_id]
+            consumed = consumption[resource_id]
+            dependency_rate = max(0.0, consumed - produced)
+            coverage = None if consumed <= 1e-12 else min(1.0, produced / consumed)
+            limiting: list[str] = []
+            if unmet[resource_id] > 1e-9:
+                limiting.append("unmet_demand")
+            if dependency_rate > 1e-9 or imports[resource_id] > 1e-9:
+                limiting.append("external_dependency")
+            rows.append(DependencyMetricRow(
+                str(resource_id),
+                str(resource_id) if definition is None else definition.display_name,
+                "t" if definition is None else definition.unit,
+                (str(resource_id),),
+                produced,
+                consumed,
+                dependency_rate,
+                coverage,
+                imports[resource_id],
+                exports[resource_id],
+                unmet[resource_id],
+                tuple(str(value) for value in sorted(dependency_sources[resource_id], key=str)),
+                tuple(limiting),
+            ))
+
+        by_id = {row.id: row for row in rows}
+        group_rows: list[DependencyMetricRow] = []
+        for group_id, group in sorted(self._catalog.resource_groups.items(), key=lambda item: str(item[0])):
+            members = tuple(by_id[str(resource_id)] for resource_id in group.resource_ids if str(resource_id) in by_id)
+            if not members:
+                continue
+            units = {member.unit for member in members}
+            if len(units) != 1:
+                raise ValueError(f"resource group {group_id} mixes incompatible units")
+            produced = sum(row.local_production_per_day for row in members)
+            consumed = sum(row.local_consumption_per_day for row in members)
+            group_rows.append(DependencyMetricRow(
+                str(group_id), group.display_name, next(iter(units)),
+                tuple(row.id for row in members),
+                produced, consumed, max(0.0, consumed - produced),
+                None if consumed <= 1e-12 else min(1.0, produced / consumed),
+                sum(row.imports_pipeline for row in members),
+                sum(row.exports_pipeline for row in members),
+                sum(row.unmet_demand for row in members),
+                tuple(sorted({source for row in members for source in row.dependency_source_node_ids})),
+                tuple(dict.fromkeys(factor for row in members for factor in row.limiting_factors)),
+            ))
+
+        return DependencyAnalyticsView(
+            query.scope_kind,
+            query.scope_id,
+            tuple(str(value) for value in nodes),
+            sim.day,
+            tuple(rows),
+            tuple(group_rows),
+            tuple(row.id for row in rows if row.unmet_demand > 1e-9),
+        )
+
     @staticmethod
     def _issue(
         code: str,

@@ -336,7 +336,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         tree_packet=None,
         commit_packet=None,
         update_packet=None,
-        next="execute every workflow blob upload, then run connector-tree",
+        next="copy/paste each generated packet action_args into the matching Connector call in order, then run connector-tree",
     )
     print(json.dumps(summary, indent=2))
     return 0
@@ -381,7 +381,7 @@ def cmd_connector_tree(args: argparse.Namespace) -> int:
         state,
         tree_packet=str(packet_path),
         expected_tree_git_oid=state["target_tree"],
-        next="execute the workflow tree packet; after success pass its returned tree SHA to connector-commit",
+        next="copy/paste the workflow tree packet action_args into the matching Connector call; pass its returned tree SHA to connector-commit",
     )
     print(json.dumps(summary, indent=2))
     return 0
@@ -419,7 +419,7 @@ def cmd_connector_commit(args: argparse.Namespace) -> int:
         plan_dir,
         state,
         commit_packet=str(packet_path),
-        next="execute the workflow commit packet; pass its returned commit SHA to connector-update",
+        next="copy/paste the workflow commit packet action_args into the matching Connector call; pass its returned commit SHA to connector-update",
     )
     print(json.dumps(summary, indent=2))
     return 0
@@ -466,7 +466,7 @@ def cmd_connector_update(args: argparse.Namespace) -> int:
         state,
         update_packet=str(packet_path),
         published_commit_candidate=args.commit_sha,
-        next="execute the non-force ref update, fetch develop once, then run verify-remote",
+        next="copy/paste the ref update packet action_args into the matching Connector call, fetch develop once, then run verify-remote",
     )
     print(json.dumps(summary, indent=2))
     return 0

@@ -4,7 +4,7 @@ from .application_commands import (
     AcceptContract, AdvanceTime, ApplicationError, CancelBuild, ChangeTransportAllocationMode,
     CreateLogisticsLane, CreateTransportAllocation, DeclineContract, DeleteLogisticsLane,
     DeleteTransportAllocation, SetResearchPriority, GetBottlenecks,
-    GetBuildOptions, GetCatalog, GetCargoFlows, GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport,
+    GetBuildOptions, GetCatalog, GetCargoFlows, GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics,
     GetLocation, GetLogistics, GetLogisticsLanes, GetLogisticsSummary, GetProjects,
     GetResearch, GetRoutes, GetScientificExplorations, GetSurveys, GetTransportAllocations,
     GetTransportAllocationOptions, GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseLogisticsLane,

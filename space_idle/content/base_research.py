@@ -48,6 +48,20 @@ def _experience(category: str, amount: float) -> ResearchOperationalExperienceSp
     return ResearchOperationalExperienceSpec({category: amount})
 
 
+THEORY_PROTOTYPE = (ResearchStage.THEORY, ResearchStage.PROTOTYPE)
+THEORY_PROTOTYPE_DEMONSTRATION = (
+    ResearchStage.THEORY,
+    ResearchStage.PROTOTYPE,
+    ResearchStage.DEMONSTRATION,
+)
+THEORY_PROTOTYPE_DEMONSTRATION_EXPERIENCE = (
+    ResearchStage.THEORY,
+    ResearchStage.PROTOTYPE,
+    ResearchStage.DEMONSTRATION,
+    ResearchStage.OPERATIONAL_EXPERIENCE,
+)
+
+
 def build_experience_contribution_rules() -> tuple[ExperienceContributionRule, ...]:
     return (
         ExperienceContributionRule("transport", ids.EXPERIENCE_TRANSPORT_OPERATIONS, 1.0),
@@ -68,6 +82,7 @@ def build_research_definitions() -> dict:
             "自律ランデブー・標準ドッキング運用",
             120.0,
             prototype=_prototype(lab, {ids.PRECISION_ELECTRONICS: 0.5}),
+            stages=THEORY_PROTOTYPE,
         ),
         ids.TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS: ResearchDefinition(
             ids.TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS,
@@ -75,6 +90,7 @@ def build_research_definitions() -> dict:
             220.0,
             frozenset({ids.TECH_ORBITAL_OPERATIONS}),
             _prototype(lab, {ids.MACHINERY: 0.8, ids.PRECISION_ELECTRONICS: 0.8}),
+            stages=THEORY_PROTOTYPE,
         ),
         ids.TECH_CISLUNAR_LOGISTICS: ResearchDefinition(
             ids.TECH_CISLUNAR_LOGISTICS,
@@ -82,6 +98,7 @@ def build_research_definitions() -> dict:
             420.0,
             frozenset({ids.TECH_ORBITAL_OPERATIONS}),
             _prototype(lab, {ids.MACHINERY: 1.0, ids.PRECISION_ELECTRONICS: 0.5}),
+            stages=THEORY_PROTOTYPE,
         ),
         ids.TECH_CREWED_ORBITAL_RESEARCH: ResearchDefinition(
             ids.TECH_CREWED_ORBITAL_RESEARCH,
@@ -90,6 +107,7 @@ def build_research_definitions() -> dict:
             frozenset({ids.TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS, ids.TECH_CISLUNAR_LOGISTICS}),
             _prototype(lab, {ids.MACHINERY: 1.5, ids.PRECISION_ELECTRONICS: 1.0}),
             _demonstration(8, orbital_lab),
+            stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
         ids.TECH_LUNAR_PROSPECTING: ResearchDefinition(
             ids.TECH_LUNAR_PROSPECTING,
@@ -98,6 +116,7 @@ def build_research_definitions() -> dict:
             frozenset({ids.TECH_CISLUNAR_LOGISTICS}),
             _prototype(lab, {ids.PRECISION_ELECTRONICS: 1.0}),
             _demonstration(6, orbital_lab),
+            stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
         ids.TECH_ROBOTIC_FIELD_GEOLOGY: ResearchDefinition(
             ids.TECH_ROBOTIC_FIELD_GEOLOGY,
@@ -106,6 +125,7 @@ def build_research_definitions() -> dict:
             frozenset({ids.TECH_LUNAR_PROSPECTING}),
             _prototype(lab, {ids.MACHINERY: 1.5, ids.PRECISION_ELECTRONICS: 1.2}),
             _demonstration(8, surface_survey),
+            stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
         ids.TECH_VOLATILE_ISRU: ResearchDefinition(
             ids.TECH_VOLATILE_ISRU,
@@ -117,6 +137,7 @@ def build_research_definitions() -> dict:
                 20,
                 SiteRequirements(req.COLD_VOLATILE_SURFACE_ENV, req._available_requirements("surface_survey")),
             ),
+            stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
         ids.TECH_REGOLITH_EXCAVATION: ResearchDefinition(
             ids.TECH_REGOLITH_EXCAVATION,
@@ -125,6 +146,7 @@ def build_research_definitions() -> dict:
             frozenset({ids.TECH_ROBOTIC_FIELD_GEOLOGY}),
             _prototype(lab, {ids.MACHINERY: 1.5, ids.PRECISION_ELECTRONICS: 0.5}),
             _demonstration(10, surface_survey),
+            stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
         ids.TECH_SAMPLE_ANALYSIS_SYSTEMS: ResearchDefinition(
             ids.TECH_SAMPLE_ANALYSIS_SYSTEMS,
@@ -132,6 +154,7 @@ def build_research_definitions() -> dict:
             2400.0,
             frozenset({ids.TECH_ROBOTIC_FIELD_GEOLOGY, ids.TECH_REGOLITH_EXCAVATION}),
             _prototype(surface_lab, {ids.MACHINERY: 2.5, ids.PRECISION_ELECTRONICS: 2.0}),
+            stages=THEORY_PROTOTYPE,
         ),
         ids.TECH_LUNAR_MATERIALS: ResearchDefinition(
             ids.TECH_LUNAR_MATERIALS,
@@ -140,6 +163,7 @@ def build_research_definitions() -> dict:
             frozenset({ids.TECH_SAMPLE_ANALYSIS_SYSTEMS, ids.TECH_REGOLITH_EXCAVATION}),
             _prototype(surface_lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.6}),
             _demonstration(10, regolith_demo),
+            stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
         ids.TECH_ORE_BENEFICIATION: ResearchDefinition(
             ids.TECH_ORE_BENEFICIATION,
@@ -149,12 +173,7 @@ def build_research_definitions() -> dict:
             _prototype(surface_lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.8}),
             _demonstration(10, regolith_demo),
             _experience(ids.EXPERIENCE_EXTRACTION_OPERATIONS, 20.0),
-            (
-                ResearchStage.THEORY,
-                ResearchStage.PROTOTYPE,
-                ResearchStage.DEMONSTRATION,
-                ResearchStage.OPERATIONAL_EXPERIENCE,
-            ),
+            THEORY_PROTOTYPE_DEMONSTRATION_EXPERIENCE,
         ),
         ids.TECH_VACUUM_REGOLITH_PROCESS_RESEARCH: ResearchDefinition(
             ids.TECH_VACUUM_REGOLITH_PROCESS_RESEARCH,
@@ -166,6 +185,7 @@ def build_research_definitions() -> dict:
                 12,
                 SiteRequirements(req.VACUUM_SURFACE_ENV, req._available_requirements("regolith_excavation")),
             ),
+            stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
         ids.TECH_HIGH_TEMPERATURE_METALLURGY: ResearchDefinition(
             ids.TECH_HIGH_TEMPERATURE_METALLURGY,
@@ -177,6 +197,7 @@ def build_research_definitions() -> dict:
                 12,
                 SiteRequirements(req.SURFACE_ENV, req._available_requirements("ore_processing")),
             ),
+            stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
         ids.TECH_STRUCTURAL_FABRICATION: ResearchDefinition(
             ids.TECH_STRUCTURAL_FABRICATION,
@@ -189,12 +210,7 @@ def build_research_definitions() -> dict:
                 SiteRequirements(req.SURFACE_ENV, req._available_requirements("metallurgy")),
             ),
             _experience(ids.EXPERIENCE_MANUFACTURING_OPERATIONS, 20.0),
-            (
-                ResearchStage.THEORY,
-                ResearchStage.PROTOTYPE,
-                ResearchStage.DEMONSTRATION,
-                ResearchStage.OPERATIONAL_EXPERIENCE,
-            ),
+            THEORY_PROTOTYPE_DEMONSTRATION_EXPERIENCE,
         ),
         ids.TECH_PRECISION_MACHINING: ResearchDefinition(
             ids.TECH_PRECISION_MACHINING,
@@ -206,6 +222,7 @@ def build_research_definitions() -> dict:
                 8,
                 SiteRequirements(req.SURFACE_ENV, req._available_requirements("metallurgy")),
             ),
+            stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
         ids.TECH_HEAVY_EQUIPMENT_ASSEMBLY: ResearchDefinition(
             ids.TECH_HEAVY_EQUIPMENT_ASSEMBLY,
@@ -220,6 +237,7 @@ def build_research_definitions() -> dict:
                     req._available_requirements("structural_fabrication", "basic_machine_shop"),
                 ),
             ),
+            stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
         ids.TECH_INDUSTRIAL_ELECTROLYSIS: ResearchDefinition(
             ids.TECH_INDUSTRIAL_ELECTROLYSIS,
@@ -231,6 +249,7 @@ def build_research_definitions() -> dict:
                 12,
                 SiteRequirements(req.SURFACE_ENV, req._available_requirements("water_extraction")),
             ),
+            stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
         ids.TECH_PROPELLANT_HANDLING: ResearchDefinition(
             ids.TECH_PROPELLANT_HANDLING,
@@ -246,12 +265,7 @@ def build_research_definitions() -> dict:
                 ),
             ),
             _experience(ids.EXPERIENCE_TRANSPORT_OPERATIONS, 20.0),
-            (
-                ResearchStage.THEORY,
-                ResearchStage.PROTOTYPE,
-                ResearchStage.DEMONSTRATION,
-                ResearchStage.OPERATIONAL_EXPERIENCE,
-            ),
+            THEORY_PROTOTYPE_DEMONSTRATION_EXPERIENCE,
         ),
     }
 

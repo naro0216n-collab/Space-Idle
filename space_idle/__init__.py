@@ -8,7 +8,7 @@ from .application import (
     ChangeTransportAllocationMode, CreateLogisticsLane, CreateTransportAllocation,
     DeclineContract, DeleteLogisticsLane, DeleteTransportAllocation,
     SetResearchPriority, GameApplication, GetBottlenecks, GetBuildOptions, GetCatalog,
-    GetCargoFlows, GetContracts, GetExternalEconomy, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogistics,
+    GetCargoFlows, GetContracts, GetDependencyAnalytics, GetExternalEconomy, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogistics,
     GetLogisticsLanes, GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
     GetScientificExplorations, GetSurveys, GetTransportAllocations, GetTransportAllocationOptions,
     GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseLogisticsLane, PauseResearch,

@@ -5,7 +5,7 @@ from math import isclose
 
 from space_idle import AdvanceTime, GetResearch, PauseFacility, ResumeFacility, StartResearch, build_game_application
 from space_idle.content.base_game import TECH_ORBITAL_OPERATIONS
-from space_idle.research import ResearchDefinition
+from space_idle.research import ResearchDefinition, ResearchStage
 from space_idle.shared import DefinitionId
 
 
@@ -123,6 +123,7 @@ def test_research_total_cost_may_exceed_rp_storage_capacity():
         research_id,
         "Long Theory",
         research_point_cost=capacity + 10.0,
+        stages=(ResearchStage.THEORY,),
     )
 
     row = _research_row(app, research_id)
@@ -146,6 +147,7 @@ def test_global_research_points_do_not_use_provider_research_allowlists():
         research_id,
         "Unscoped Research",
         research_point_cost=1.0,
+        stages=(ResearchStage.THEORY,),
     )
     sim.research.stored_points = 1.0
 

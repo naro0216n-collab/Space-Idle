@@ -62,19 +62,7 @@ class ResearchDefinition:
         if self.research_point_cost < 0:
             raise ValueError("research point cost must be non-negative")
         if not self.stages:
-            inferred = tuple(
-                stage
-                for stage, enabled in (
-                    (ResearchStage.THEORY, self.research_point_cost > 0),
-                    (ResearchStage.PROTOTYPE, self.prototype is not None),
-                    (ResearchStage.DEMONSTRATION, self.demonstration is not None),
-                    (ResearchStage.OPERATIONAL_EXPERIENCE, self.operational_experience is not None),
-                )
-                if enabled
-            )
-            if not inferred:
-                raise ValueError("research definition must define at least one stage")
-            object.__setattr__(self, "stages", inferred)
+            raise ValueError("research definition must explicitly define its stages")
         if len(set(self.stages)) != len(self.stages):
             raise ValueError("research definition cannot repeat a stage")
         if ResearchStage.THEORY in self.stages and self.research_point_cost <= 0:

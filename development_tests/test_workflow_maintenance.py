@@ -128,6 +128,7 @@ def test_workflow_maintenance_stages_exact_git_data_and_requires_rehydration(tmp
     plan_path = maintenance_plan(repo)
     assert plan["stage"] == "uploads-planned"
     assert plan["upload_call_count"] == 1
+    assert "copy/paste" in plan["next"]
     upload = json.loads(Path(plan["upload_packets"][0]).read_text(encoding="utf-8"))
     assert upload["action"] == "GitHub.create_blob"
     assert upload["action_args"]["repository_full_name"] == "naro0216n-collab/Space-Idle"

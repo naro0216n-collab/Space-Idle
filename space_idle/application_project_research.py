@@ -229,6 +229,7 @@ class ResearchProgressionProjectorMixin:
                 str(definition.id),
                 definition.display_name,
                 status,
+                tuple(stage.value for stage in definition.stages),
                 False if state is None else state.paused,
                 priority,
                 not start_blockers,
