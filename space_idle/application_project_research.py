@@ -18,6 +18,7 @@ class ResearchProgressionProjectorMixin:
         definition,
         *,
         demonstration: bool,
+        power_by_location,
     ) -> tuple[ResearchSiteOptionRow, ...]:
         sim = self._simulation
         if sim.research is None:
@@ -25,9 +26,19 @@ class ResearchProgressionProjectorMixin:
         rows: list[ResearchSiteOptionRow] = []
         for node in sim.graph.operational_nodes():
             blockers = (
-                sim.research.demonstration_site_blockers(definition.id, node.id, sim.day)
+                sim.research.demonstration_site_blockers(
+                    definition.id,
+                    node.id,
+                    sim.day,
+                    power_by_location.get(node.id),
+                )
                 if demonstration
-                else sim.research.prototype_site_blockers(definition.id, node.id, sim.day)
+                else sim.research.prototype_site_blockers(
+                    definition.id,
+                    node.id,
+                    sim.day,
+                    power_by_location.get(node.id),
+                )
             )
             rows.append(ResearchSiteOptionRow(
                 str(node.id),
@@ -159,19 +170,35 @@ class ResearchProgressionProjectorMixin:
                 else str(state.demonstration_operational_node_id)
             )
             prototype_sites = (
-                self._research_site_options(definition, demonstration=False)
+                self._research_site_options(
+                    definition,
+                    demonstration=False,
+                    power_by_location=power_by_location,
+                )
                 if status == ResearchStage.PROTOTYPE.value else ()
             )
             demonstration_sites = (
-                self._research_site_options(definition, demonstration=True)
+                self._research_site_options(
+                    definition,
+                    demonstration=True,
+                    power_by_location=power_by_location,
+                )
                 if status == ResearchStage.DEMONSTRATION.value else ()
             )
             prototype_blockers = (
-                sim.research.prototype_blockers(definition.id, sim.day)
+                sim.research.prototype_blockers(
+                    definition.id,
+                    sim.day,
+                    power_by_location=power_by_location,
+                )
                 if status == ResearchStage.PROTOTYPE.value else ()
             )
             demonstration_blockers = (
-                sim.research.demonstration_blockers(definition.id, sim.day)
+                sim.research.demonstration_blockers(
+                    definition.id,
+                    sim.day,
+                    power_by_location=power_by_location,
+                )
                 if status == ResearchStage.DEMONSTRATION.value else ()
             )
 

@@ -14,6 +14,7 @@ class ScientificExplorationProjectorMixin:
         service = sim.scientific_exploration
         if service is None:
             return ScientificExplorationsView(())
+        power_by_location = sim.tick_decision_projection().allocations.power_by_location
         rows: list[ScientificExplorationRow] = []
         for definition in sorted(service.definitions.values(), key=lambda row: str(row.id)):
             state = service.campaigns.get(definition.id)
@@ -34,7 +35,11 @@ class ScientificExplorationProjectorMixin:
                     None if state.vehicle_definition_id is None else str(state.vehicle_definition_id)
                 )
                 reserved_units = state.reserved_units
-                blockers = service.blockers(definition.id, day=sim.day)
+                blockers = service.blockers(
+                    definition.id,
+                    day=sim.day,
+                    power_by_location=power_by_location,
+                )
 
             fleet_options: list[ScientificExplorationFleetOptionRow] = []
             for vehicle_definition in sorted(
@@ -44,7 +49,10 @@ class ScientificExplorationProjectorMixin:
                     vehicle_definition.id, definition.origin_id
                 )
                 option_blockers = service.fleet_failures(
-                    definition.id, vehicle_definition.id, day=sim.day
+                    definition.id,
+                    vehicle_definition.id,
+                    day=sim.day,
+                    power_by_location=power_by_location,
                 )
                 if state is not None and state.vehicle_definition_id == vehicle_definition.id:
                     option_blockers = ()
@@ -58,7 +66,10 @@ class ScientificExplorationProjectorMixin:
                         required_units=definition.required_units,
                         blockers=option_blockers,
                         can_assign=service.can_assign_fleet(
-                            definition.id, vehicle_definition.id, day=sim.day
+                            definition.id,
+                            vehicle_definition.id,
+                            day=sim.day,
+                            power_by_location=power_by_location,
                         ),
                     )
                 )

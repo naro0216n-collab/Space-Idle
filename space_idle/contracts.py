@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .facilities import FacilityBook
-from .power import PowerService
+from .power import PowerService, PowerSnapshot
 from .shared import AccountState, ContractId, DefinitionId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
 
@@ -74,7 +74,10 @@ class ContractService:
         state.status = ContractStatus.DECLINED
 
     def _capability_contract_complete(
-        self, template: CapabilityContractTemplate, day: int
+        self,
+        template: CapabilityContractTemplate,
+        day: int,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> bool:
         locations = (
             (template.target_operational_node_id,)
@@ -88,18 +91,22 @@ class ContractService:
                 day,
                 self.facilities.environment,
                 self.facilities,
-                self.power.snapshot(location_id, self.facilities, day),
+                None if power_by_location is None else power_by_location.get(location_id),
             )
             for location_id in locations
         )
 
-    def advance_day(self, day: int) -> None:
+    def advance_day(
+        self,
+        day: int,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+    ) -> None:
         for state in self.contracts.values():
             if state.status not in {ContractStatus.OFFERED, ContractStatus.ACCEPTED}:
                 continue
             template = self.templates[state.template_id]
             if state.status == ContractStatus.ACCEPTED and self._capability_contract_complete(
-                template, day
+                template, day, power_by_location
             ):
                 state.status = ContractStatus.COMPLETED
                 self.account.earn(template.reward_musd)

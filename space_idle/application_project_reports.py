@@ -363,6 +363,7 @@ class ApplicationReportProjectorMixin:
     def _global_logistics_issues(self, location_filter: str | None) -> tuple[IssueRow, ...]:
         sim = self._simulation
         issues: list[IssueRow] = []
+        decision = sim.tick_decision_projection()
 
         # Route issues are intrinsic endpoint/site constraints. Vehicle/Fleet
         # feasibility is projected through Transport Allocation rather than
@@ -402,7 +403,11 @@ class ApplicationReportProjectorMixin:
             state_location = str(state.operational_node_id)
             if location_filter is not None and state_location != location_filter:
                 continue
-            for blocker in sim.transport.vehicle_production_blockers(state.id, day=sim.day):
+            for blocker in sim.transport.vehicle_production_blockers(
+                state.id,
+                day=sim.day,
+                power=decision.allocations.power_by_location[state.operational_node_id],
+            ):
                 code, _, detail = blocker.partition(":")
                 resource_id = None
                 if code == "resource" and detail:
@@ -414,7 +419,6 @@ class ApplicationReportProjectorMixin:
                     definition_id=str(state.vehicle_definition_id), resource_id=resource_id,
                 ))
 
-        decision = sim.tick_decision_projection()
         demands = decision.plan.external_demands
         lane_snapshot = sim.logistics.lane_snapshot(
             demands,

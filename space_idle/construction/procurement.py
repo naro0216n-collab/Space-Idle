@@ -80,11 +80,10 @@ class ConstructionProcurementMixin:
             recipe = self._recipe_for_project(project)
             if not recipe.prerequisite_technologies.issubset(self.unlocked_technologies):
                 continue
-            if self.project_site_failures(
-                project,
-                day,
-                self.power.snapshot(project.operational_node_id, self.facilities, day),
-            ):
+            # Boundary policy maturation only checks structural/nominal site
+            # viability.  Current Power availability is an allocation result
+            # and cannot be recomputed here before the tick DAG runs.
+            if self.project_site_failures(project, day, None):
                 continue
             if isinstance(project.target, FacilityUpgradeTarget) and any(
                 blocker.code.startswith("upgrade_") for blocker in self.blockers(project.id, day)

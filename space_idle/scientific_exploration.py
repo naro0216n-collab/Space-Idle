@@ -152,7 +152,7 @@ class ScientificExplorationService:
         ):
             snapshot = (
                 None if power_by_location is None else power_by_location.get(location_id)
-            ) or self.power.snapshot(location_id, self.facilities, day)
+            )
             for failure in evaluate_site_requirements(
                 requirements,
                 location_id,
@@ -170,12 +170,18 @@ class ScientificExplorationService:
         vehicle_definition_id: DefinitionId,
         *,
         day: int = 0,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[str, ...]:
         definition = self.definitions[definition_id]
         if vehicle_definition_id not in self.transport.vehicle_defs:
             return ("unknown_vehicle_definition",)
         failures = list(
-            self._route_failures_for_fleet(definition, vehicle_definition_id, day)
+            self._route_failures_for_fleet(
+                definition,
+                vehicle_definition_id,
+                day,
+                power_by_location,
+            )
         )
         free = self.transport.fleet_free_units(
             vehicle_definition_id, definition.origin_id
@@ -209,6 +215,7 @@ class ScientificExplorationService:
         vehicle_definition_id: DefinitionId,
         *,
         day: int = 0,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> bool:
         state = self.campaigns.get(definition_id)
         if (
@@ -218,7 +225,10 @@ class ScientificExplorationService:
         ):
             return False
         return not self.fleet_failures(
-            definition_id, vehicle_definition_id, day=day
+            definition_id,
+            vehicle_definition_id,
+            day=day,
+            power_by_location=power_by_location,
         )
 
     def can_unassign_fleet(self, definition_id: DefinitionId) -> bool:
@@ -237,6 +247,7 @@ class ScientificExplorationService:
         vehicle_definition_id: DefinitionId,
         *,
         day: int = 0,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> None:
         state = self.campaigns[definition_id]
         if state.phase is ScientificExplorationPhase.COMPLETE:
@@ -244,7 +255,10 @@ class ScientificExplorationService:
         if state.vehicle_definition_id is not None:
             raise ValueError("scientific exploration already has Fleet assigned")
         failures = self.fleet_failures(
-            definition_id, vehicle_definition_id, day=day
+            definition_id,
+            vehicle_definition_id,
+            day=day,
+            power_by_location=power_by_location,
         )
         if failures:
             raise ValueError(

@@ -170,9 +170,7 @@ def build_base_simulation() -> Simulation:
         scientific_exploration=scientific_exploration, maintenance=maintenance,
         surface_infrastructure=surface_infrastructure,
     )
-    initial_locations = {facility.operational_node_id for facility in facilities.facilities.values()} | set(graph.operational_node_ids())
-    initial_power = {loc: power.snapshot(loc, facilities, 0) for loc in sorted(initial_locations, key=str)}
-    storage.refresh(0, initial_power)
+    sim.refresh_storage()
     sim.content_id = "base_game.gameplay.v0.4.5"
     sim.domain_extensions = BASE_DOMAIN_EXTENSIONS
     return sim

@@ -153,10 +153,7 @@ class ConstructionExecutionMixin:
             recipe = self._recipe_for_project(project)
             if recipe.self_deploying or recipe.construction_work <= 1e-12:
                 continue
-            power = power_by_location.get(
-                project.operational_node_id,
-                self.power.snapshot(project.operational_node_id, self.facilities, day),
-            )
+            power = power_by_location[project.operational_node_id]
             if self.project_site_failures(project, day, power):
                 continue
             fulfillment = self.project_construction_fulfillment(project, power, service_allocations, day)
@@ -196,11 +193,7 @@ class ConstructionExecutionMixin:
             ):
                 continue
             recipe = self._recipe_for_project(project)
-            power = power_by_location.get(project.operational_node_id)
-            if power is None:
-                power = self.power.snapshot(
-                    project.operational_node_id, self.facilities, day
-                )
+            power = power_by_location[project.operational_node_id]
             if self.project_site_failures(project, day, power):
                 continue
             if recipe.self_deploying or recipe.construction_work <= 1e-12:

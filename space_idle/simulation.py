@@ -83,6 +83,7 @@ class TickIntents:
 
 @dataclass(frozen=True)
 class TickPlan:
+    demand_resolutions: tuple[ResourceDemandResolution, ...]
     external_demands: tuple[ResourceDemand, ...]
     logistics: LogisticsResourcePlan
     procurement: ExternalProcurementPlan
@@ -178,14 +179,14 @@ class Simulation:
                 locations.add(definition.destination_id)
         return locations
 
-    def refresh_storage(self) -> None:
-        locations = set(self.graph.operational_node_ids()) | {
-            facility.operational_node_id for facility in self.facilities.facilities.values()
-        }
-        power_by_location = {
-            loc: self.power.snapshot(loc, self.facilities, self.day)
-            for loc in sorted(locations, key=str)
-        }
+    def refresh_storage(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+    ) -> None:
+        if power_by_location is None:
+            power_by_location = (
+                self.tick_decision_projection().allocations.power_by_location
+            )
         self.storage.refresh(self.day, power_by_location)
 
     def _gross_resource_demands(self) -> tuple[ResourceDemand, ...]:
@@ -216,17 +217,12 @@ class Simulation:
         return tuple(demands)
 
     def resource_demand_resolutions(self) -> tuple[ResourceDemandResolution, ...]:
-        """Expose gross need and deterministic on-site allocation for queries."""
-        return resolve_local_resource_supply(self._gross_resource_demands(), self.inventory)
+        """Return local/external Resource Demand from the shared tick plan."""
+        return self.tick_decision_projection().plan.demand_resolutions
 
     def resource_demands(self) -> tuple[ResourceDemand, ...]:
-        """Return only the true off-site shortage after shared local netting."""
-        rows: list[ResourceDemand] = []
-        for resolution in self.resource_demand_resolutions():
-            demand = resolution.external_demand()
-            if demand is not None:
-                rows.append(demand)
-        return tuple(rows)
+        """Return external Resource Demand from the shared tick plan."""
+        return self.tick_decision_projection().plan.external_demands
 
     def _resource_claims(self) -> tuple[ResourceClaim, ...]:
         claims: list[ResourceClaim] = list(self.projects.resource_claims(self.day))
@@ -621,11 +617,12 @@ class Simulation:
         )
 
     def _plan_tick(self, intents: TickIntents) -> TickPlan:
+        demand_resolutions = resolve_local_resource_supply(
+            intents.resource_demands, self.inventory
+        )
         external_demands = tuple(
             demand
-            for resolution in resolve_local_resource_supply(
-                intents.resource_demands, self.inventory
-            )
+            for resolution in demand_resolutions
             if (demand := resolution.external_demand()) is not None
         )
         logistics_plan = self.logistics.plan_capacity_logistics(
@@ -634,7 +631,9 @@ class Simulation:
         procurement_plan = self.logistics.plan_external_procurement(
             self.day, external_demands, logistics_plan
         )
-        return TickPlan(external_demands, logistics_plan, procurement_plan)
+        return TickPlan(
+            demand_resolutions, external_demands, logistics_plan, procurement_plan
+        )
 
     def _complete_service_requests(
         self, requests: tuple[ServiceCapacityRequest, ...]
@@ -917,7 +916,9 @@ class Simulation:
         self.transport.synchronize_surface_access_routes()
         next_day = self.day + 1
         if self.contracts is not None:
-            self.contracts.advance_day(next_day)
+            self.contracts.advance_day(
+                next_day, allocations.power_by_location
+            )
         self.day = next_day
         self.refresh_storage()
 

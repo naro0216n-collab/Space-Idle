@@ -200,14 +200,13 @@ class ResearchWorkflowMixin:
         prototype = self.definitions[research_id].prototype
         if prototype is None:
             raise ValueError("research has no prototype stage")
-        snapshot = power or self.power.snapshot(location_id, self.facilities, day)
         return evaluate_site_requirements(
             prototype.site_requirements,
             location_id,
             day,
             self.facilities.environment,
             self.facilities,
-            snapshot,
+            power,
         )
 
     @staticmethod
@@ -411,18 +410,21 @@ class ResearchWorkflowMixin:
         demonstration = self.definitions[research_id].demonstration
         if demonstration is None:
             raise ValueError("research has no demonstration stage")
-        snapshot = power or self.power.snapshot(location_id, self.facilities, day)
         return evaluate_site_requirements(
             demonstration.site_requirements,
             location_id,
             day,
             self.facilities.environment,
             self.facilities,
-            snapshot,
+            power,
         )
 
     def prototype_site_blockers(
-        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0
+        self,
+        research_id: DefinitionId,
+        location_id: SpatialNodeId,
+        day: int = 0,
+        power: PowerSnapshot | None = None,
     ) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
         if state is None or state.stage is not ResearchStage.PROTOTYPE:
@@ -432,7 +434,9 @@ class ResearchWorkflowMixin:
             blockers.append(("manual_pause", "研究が手動停止中"))
         blockers.extend(
             (failure.code, failure.detail)
-            for failure in self.prototype_failures(research_id, location_id, day)
+            for failure in self.prototype_failures(
+                research_id, location_id, day, power
+            )
         )
         return tuple(blockers)
 
@@ -449,7 +453,11 @@ class ResearchWorkflowMixin:
         )
 
     def demonstration_site_blockers(
-        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0
+        self,
+        research_id: DefinitionId,
+        location_id: SpatialNodeId,
+        day: int = 0,
+        power: PowerSnapshot | None = None,
     ) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
         if state is None or state.stage is not ResearchStage.DEMONSTRATION:
@@ -459,7 +467,9 @@ class ResearchWorkflowMixin:
             blockers.append(("manual_pause", "研究が手動停止中"))
         blockers.extend(
             (failure.code, failure.detail)
-            for failure in self.demonstration_failures(research_id, location_id, day)
+            for failure in self.demonstration_failures(
+                research_id, location_id, day, power
+            )
         )
         return tuple(blockers)
 
@@ -484,7 +494,10 @@ class ResearchWorkflowMixin:
         )
 
     def prototype_blockers(
-        self, research_id: DefinitionId, day: int = 0
+        self,
+        research_id: DefinitionId,
+        day: int = 0,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
         if state is None or state.stage is not ResearchStage.PROTOTYPE:
@@ -498,7 +511,12 @@ class ResearchWorkflowMixin:
             return tuple(blockers)
         blockers.extend(
             (failure.code, failure.detail)
-            for failure in self.prototype_failures(research_id, location_id, day)
+            for failure in self.prototype_failures(
+                research_id,
+                location_id,
+                day,
+                None if power_by_location is None else power_by_location.get(location_id),
+            )
         )
         prototype = self.definitions[research_id].prototype
         if prototype is None:
@@ -515,7 +533,10 @@ class ResearchWorkflowMixin:
         return tuple(blockers)
 
     def demonstration_blockers(
-        self, research_id: DefinitionId, day: int = 0
+        self,
+        research_id: DefinitionId,
+        day: int = 0,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
         if state is None or state.stage is not ResearchStage.DEMONSTRATION:
@@ -529,7 +550,12 @@ class ResearchWorkflowMixin:
             return tuple(blockers)
         blockers.extend(
             (failure.code, failure.detail)
-            for failure in self.demonstration_failures(research_id, location_id, day)
+            for failure in self.demonstration_failures(
+                research_id,
+                location_id,
+                day,
+                None if power_by_location is None else power_by_location.get(location_id),
+            )
         )
         return tuple(blockers)
 
@@ -597,9 +623,13 @@ class ResearchWorkflowMixin:
                 blockers.append(("research_execution", "Research execution能力なし"))
             return tuple(blockers)
         if state.stage is ResearchStage.PROTOTYPE:
-            return self.prototype_blockers(research_id, day)
+            return self.prototype_blockers(
+                research_id, day, power_by_location=power_by_location
+            )
         if state.stage is ResearchStage.DEMONSTRATION:
-            return self.demonstration_blockers(research_id, day)
+            return self.demonstration_blockers(
+                research_id, day, power_by_location=power_by_location
+            )
         if state.stage is ResearchStage.OPERATIONAL_EXPERIENCE:
             return self.operational_experience_blockers(research_id)
         return ()

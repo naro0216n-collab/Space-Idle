@@ -5,24 +5,15 @@ from .shared import SpatialNodeId
 
 
 class ResearchCapacityMixin:
-    def _power_by_location(self, day: int) -> dict[SpatialNodeId, PowerSnapshot]:
-        locations = {
-            facility.operational_node_id
-            for facility in self.facilities.facilities.values()
-            if facility.definition_id in self.providers
-        }
-        return {
-            location_id: self.power.snapshot(location_id, self.facilities, day)
-            for location_id in sorted(locations, key=str)
-        }
-
     def _provider_factor(self, facility_id, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int) -> float:
         facility = self.facilities.facilities[facility_id]
         if not self.facilities.is_active_and_compatible(facility, day):
             return 0.0
         snapshot = power_by_location.get(facility.operational_node_id)
         if snapshot is None:
-            snapshot = self.power.snapshot(facility.operational_node_id, self.facilities, day)
+            # Missing allocation data means a nominal query, not permission to
+            # run a private Power allocation outside the tick DAG.
+            return 1.0
         return max(
             0.0,
             min(
@@ -50,7 +41,7 @@ class ResearchCapacityMixin:
         return spec.storage_capacity_points * self._provider_factor(facility_id, power_by_location, day)
 
     def generation_rate(self, power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None, day: int = 0) -> float:
-        snapshots = self._power_by_location(day) if power_by_location is None else power_by_location
+        snapshots = {} if power_by_location is None else power_by_location
         return sum(
             self.provider_generation(facility.id, snapshots, day)
             for facility in self.facilities.facilities.values()
@@ -58,7 +49,7 @@ class ResearchCapacityMixin:
         )
 
     def storage_capacity(self, power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None, day: int = 0) -> float:
-        snapshots = self._power_by_location(day) if power_by_location is None else power_by_location
+        snapshots = {} if power_by_location is None else power_by_location
         return sum(
             self.provider_storage_capacity(facility.id, snapshots, day)
             for facility in self.facilities.facilities.values()

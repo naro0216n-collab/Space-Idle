@@ -260,8 +260,10 @@ class ConstructionPlanningMixin:
         missing_tech = recipe.prerequisite_technologies - self.unlocked_technologies
         if missing_tech:
             blockers.append(ProjectBlocker("technology", ",".join(sorted(map(str, missing_tech)))))
-        site_power = power if power is not None else self.power.snapshot(project.operational_node_id, self.facilities, day)
-        for failure in self.project_site_failures(project, day, site_power):
+        # ``None`` means a structural/nominal site check.  Current-tick
+        # availability must be supplied by the shared allocation projection;
+        # planning/query code must not run a private Power allocation.
+        for failure in self.project_site_failures(project, day, power):
             blockers.append(ProjectBlocker(failure.code, failure.detail))
         if project.status in {ProjectStatus.PROCURING, ProjectStatus.READY} and not project.materials_committed:
             waited = 0 if project.procurement_started_day is None else day - project.procurement_started_day

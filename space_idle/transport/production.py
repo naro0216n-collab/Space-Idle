@@ -123,11 +123,6 @@ class VehicleProductionMixin:
     ) -> tuple[SiteRequirementFailure, ...]:
         definition = self.vehicle_defs[vehicle_definition_id]
         production = definition.production
-        snapshot = (
-            power
-            if power is not None
-            else self.power.snapshot(location_id, self.facilities, day)
-        )
         failures = list(
             evaluate_site_requirements(
                 production.site_requirements,
@@ -135,12 +130,18 @@ class VehicleProductionMixin:
                 day,
                 self.facilities.environment,
                 self.facilities,
-                snapshot,
+                power,
             )
         )
         if production.service_type is not None:
-            enabled = self.facilities.enabled_service_capacity_at(
-                location_id, production.service_type, snapshot, day
+            enabled = (
+                self.facilities.nominal_service_capacity_at(
+                    location_id, production.service_type, day
+                )
+                if power is None
+                else self.facilities.enabled_service_capacity_at(
+                    location_id, production.service_type, power, day
+                )
             )
             if enabled <= 1e-12:
                 failures.append(
@@ -301,9 +302,7 @@ class VehicleProductionMixin:
         )
         for state in waiting:
             self._stage_vehicle_production_allocations(state, resource_allocations)
-            power = power_by_location.get(state.operational_node_id)
-            if power is None:
-                power = self.power.snapshot(state.operational_node_id, self.facilities, day)
+            power = power_by_location[state.operational_node_id]
             if self.vehicle_production_blockers(
                 state.id,
                 day=day,
@@ -363,9 +362,7 @@ class VehicleProductionMixin:
         ):
             if state.phase is not VehicleProductionPhase.BUILDING or state.paused:
                 continue
-            power = power_by_location.get(state.operational_node_id)
-            if power is None:
-                power = self.power.snapshot(state.operational_node_id, self.facilities, day)
+            power = power_by_location[state.operational_node_id]
             blockers = tuple(
                 blocker
                 for blocker in self.vehicle_production_blockers(

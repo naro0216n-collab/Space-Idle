@@ -5,10 +5,15 @@ from .application_views import LogisticsLaneRow, LogisticsLanesView, ResourceDem
 
 class LogisticsLaneProjectorMixin:
     def _demand_rows(
-        self, demands=None, snapshot=None, execution_allocation=None
+        self, demands=None, snapshot=None, execution_allocation=None, resolutions=None
     ) -> tuple[ResourceDemandRow, ...]:
         sim = self._simulation
-        resolutions = sim.resource_demand_resolutions()
+        if resolutions is None:
+            decision = sim.tick_decision_projection()
+            resolutions = decision.plan.demand_resolutions
+            if demands is None:
+                demands = decision.plan.external_demands
+        resolutions = tuple(resolutions)
         external_demands = tuple(
             demand for resolution in resolutions
             if (demand := resolution.external_demand()) is not None
@@ -133,7 +138,9 @@ class LogisticsLaneProjectorMixin:
     ) -> tuple[LogisticsLaneRow, ...]:
         sim = self._simulation
         decision = sim.tick_decision_projection() if decision is None else decision
-        demand_rows = sim.resource_demands() if demands is None else tuple(demands)
+        demand_rows = (
+            decision.plan.external_demands if demands is None else tuple(demands)
+        )
         lane_snapshot = (
             sim.logistics.lane_snapshot(
                 demand_rows,
@@ -187,6 +194,9 @@ class LogisticsLaneProjectorMixin:
         return LogisticsLanesView(
             self._lane_rows(demands, snapshot, decision),
             self._demand_rows(
-                demands, snapshot, decision.allocations.transport
+                demands,
+                snapshot,
+                decision.allocations.transport,
+                decision.plan.demand_resolutions,
             ),
         )

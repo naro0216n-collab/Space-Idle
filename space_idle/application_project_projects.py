@@ -231,7 +231,11 @@ class ProjectProjectorMixin:
                     for status in sim.founding.project_resource_status(project.id)
                 ]
                 blockers = self._resource_blockers(
-                    sim.founding.blockers(project.id, sim.day),
+                    sim.founding.blockers(
+                        project.id,
+                        sim.day,
+                        powers[project.staging_node_id],
+                    ),
                     owner_kind="founding",
                     owner_id=str(project.id),
                     demands=founding_demands,

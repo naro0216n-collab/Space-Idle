@@ -45,7 +45,13 @@ class ProgressionCommandHandlerMixin:
             elif isinstance(command, ResumeScientificExploration):
                 sim.scientific_exploration.resume(exploration_id)
             elif isinstance(command, AssignExplorationFleet):
-                sim.scientific_exploration.assign_fleet(exploration_id, DefinitionId(command.vehicle_definition_id), day=sim.day)
+                powers = sim.tick_decision_projection().allocations.power_by_location
+                sim.scientific_exploration.assign_fleet(
+                    exploration_id,
+                    DefinitionId(command.vehicle_definition_id),
+                    day=sim.day,
+                    power_by_location=powers,
+                )
             else:
                 sim.scientific_exploration.unassign_fleet(exploration_id, day=sim.day)
             return CommandResult()

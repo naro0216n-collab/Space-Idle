@@ -227,10 +227,17 @@ class LocationFoundingService:
             actual = self.surface_knowledge_level_provider(cell_id)
             if actual < package.minimum_survey_knowledge_level:
                 failures.append(FoundingBlocker("survey_knowledge", f"{actual}/{package.minimum_survey_knowledge_level}"))
-        snapshot = power if power is not None else self.power.snapshot(staging_node_id, self.facilities, day)
-        if self.facilities.enabled_service_capacity_at(
-            staging_node_id, package.preparation_service_type, snapshot, day
-        ) <= 1e-12:
+        snapshot = power
+        preparation_capacity = (
+            self.facilities.nominal_service_capacity_at(
+                staging_node_id, package.preparation_service_type, day
+            )
+            if snapshot is None
+            else self.facilities.enabled_service_capacity_at(
+                staging_node_id, package.preparation_service_type, snapshot, day
+            )
+        )
+        if preparation_capacity <= 1e-12:
             failures.append(FoundingBlocker("staging_service", package.preparation_service_type))
         for failure in evaluate_site_requirements(
             package.staging_requirements,
@@ -499,10 +506,17 @@ class LocationFoundingService:
                 failures.append(FoundingBlocker("cell_claimed", str(claimant)))
         if project.status is FoundingStatus.PREPARING:
             package = self.packages[project.founding_package_id]
-            snapshot = power if power is not None else self.power.snapshot(project.staging_node_id, self.facilities, day)
-            if self.facilities.enabled_service_capacity_at(
-                project.staging_node_id, package.preparation_service_type, snapshot, day
-            ) <= 1e-12:
+            snapshot = power
+            preparation_capacity = (
+                self.facilities.nominal_service_capacity_at(
+                    project.staging_node_id, package.preparation_service_type, day
+                )
+                if snapshot is None
+                else self.facilities.enabled_service_capacity_at(
+                    project.staging_node_id, package.preparation_service_type, snapshot, day
+                )
+            )
+            if preparation_capacity <= 1e-12:
                 failures.append(FoundingBlocker("staging_service", package.preparation_service_type))
             if not project.inputs_consumed:
                 for requirement in self.project_resource_requirements(project.id):
@@ -641,12 +655,11 @@ class LocationFoundingService:
                 invested_resources={req.resource_id: req.amount_t for req in deployment.invested_resources},
             )
         if package.initial_inventory:
-            facility_locations = {facility.operational_node_id for facility in self.facilities.facilities.values()}
-            power_by_location = {
-                location_id: self.power.snapshot(location_id, self.facilities, day)
-                for location_id in facility_locations
-            }
-            self.storage.refresh(day, power_by_location)
+            # Founding completion is a boundary transition.  Establish the new
+            # physical/nominal storage envelope without privately allocating
+            # Power; current-tick usable capacity is derived by Simulation's
+            # allocation graph after the boundary.
+            self.storage.refresh(day, {})
             for req in package.initial_inventory:
                 self.inventory.add(project.new_location_id, req.resource_id, req.amount_t)
         reservation_id = self.fleet_reservation_id(project.id)

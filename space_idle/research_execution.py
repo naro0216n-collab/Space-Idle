@@ -148,9 +148,7 @@ class ResearchExecutionMixin:
                 prototype = self.definitions[research_id].prototype
                 if location_id is None or prototype is None:
                     continue
-                snapshot = power_by_location.get(location_id)
-                if snapshot is None:
-                    snapshot = self.power.snapshot(location_id, self.facilities, day)
+                snapshot = power_by_location[location_id]
                 if self.prototype_failures(research_id, location_id, day, snapshot):
                     continue
                 resources_ready = all(
@@ -167,9 +165,7 @@ class ResearchExecutionMixin:
                 demonstration = self.definitions[research_id].demonstration
                 if location_id is None or demonstration is None:
                     continue
-                snapshot = power_by_location.get(location_id)
-                if snapshot is None:
-                    snapshot = self.power.snapshot(location_id, self.facilities, day)
+                snapshot = power_by_location[location_id]
                 if self.demonstration_failures(research_id, location_id, day, snapshot):
                     continue
                 if self._stage_services_fulfilled(
