@@ -31,76 +31,74 @@ def _module_import_targets(path: Path) -> set[str]:
     return targets
 
 
-def test_logistics_consumes_transport_projection_instead_of_transport_state_containers():
-    tree = ast.parse(
-        (PACKAGE / "logistics_flow.py").read_text(encoding="utf-8"),
-        filename="logistics_flow.py",
-    )
-    forbidden_state = {"transport_allocations", "vehicle_defs", "routes", "external_services"}
-    direct_state_reads = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Attribute) or node.attr not in forbidden_state:
-            continue
-        owner = node.value
-        if (
-            isinstance(owner, ast.Attribute)
-            and owner.attr == "transport"
-            and isinstance(owner.value, ast.Name)
-            and owner.value.id == "self"
-        ):
-            direct_state_reads.append(node.attr)
-    assert direct_state_reads == []
+def test_domain_authoritative_state_is_not_read_directly_across_domain_boundaries():
+    from space_idle.logistics import LogisticsService
+    from space_idle.transport.service import TransportService
 
-
-def test_founding_and_exploration_use_transport_fleet_facade():
-    forbidden_state = {"vehicle_defs", "fleet_reservations"}
-    violations: list[tuple[str, str]] = []
-    for filename in (
-        "founding.py",
-        "founding_domain.py",
-        "scientific_exploration.py",
-        "scientific_exploration_domain.py",
-    ):
-        tree = ast.parse(
-            (PACKAGE / filename).read_text(encoding="utf-8"),
-            filename=filename,
-        )
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Attribute) or node.attr not in forbidden_state:
-                continue
-            owner = node.value
-            if not (isinstance(owner, ast.Attribute) and owner.attr == "transport"):
-                continue
-            root = owner.value
-            if isinstance(root, ast.Name) and root.id in {"self", "sim"}:
-                violations.append((filename, node.attr))
-    assert violations == []
-
-
-def test_application_reads_transport_through_public_facade():
     authoritative_state = {
-        "vehicle_defs",
-        "routes",
-        "external_services",
-        "fleet_pools",
-        "fleet_reservations",
-        "transport_allocations",
-        "fleet_relocations",
-        "fleet_releases",
-        "vehicle_production_projects",
+        "transport": {
+            "vehicle_defs",
+            "routes",
+            "external_services",
+            "fleet_pools",
+            "fleet_reservations",
+            "transport_allocations",
+            "fleet_relocations",
+            "fleet_releases",
+            "vehicle_production_projects",
+        },
+        "logistics": {"lanes", "cargo_flows", "procurement_deliveries"},
     }
+    service_fields = {
+        "transport": set(TransportService.__dataclass_fields__),
+        "logistics": set(LogisticsService.__dataclass_fields__),
+    }
+
+    for domain, fields in authoritative_state.items():
+        assert fields <= service_fields[domain]
+        for other_domain, other_fields in service_fields.items():
+            if other_domain != domain:
+                assert not fields & other_fields
+
     violations: list[tuple[str, str]] = []
-    for path in sorted(PACKAGE.glob("application*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
+    for path in PACKAGE.rglob("*.py"):
+        rel = path.relative_to(PACKAGE)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(rel))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Attribute):
                 continue
             owner = node.value
-            if not (isinstance(owner, ast.Attribute) and owner.attr == "transport"):
+            if not isinstance(owner, ast.Attribute):
                 continue
-            if node.attr in authoritative_state or node.attr.startswith("_"):
-                violations.append((path.name, node.attr))
+            domain = owner.attr
+            fields = authoritative_state.get(domain)
+            if fields is None or node.attr not in fields:
+                continue
+            if domain == "transport" and rel.parts[0] == "transport":
+                continue
+            if domain == "logistics" and rel.name.startswith("logistics"):
+                continue
+            violations.append((str(rel), f"{domain}.{node.attr}"))
+
     assert violations == []
+
+    construction_files = [PACKAGE / "projects.py", *(PACKAGE / "construction").glob("*.py")]
+    for path in construction_files:
+        targets = _module_import_targets(path)
+        offenders = sorted(
+            target
+            for target in targets
+            if target.startswith(
+                (
+                    "space_idle.logistics",
+                    "space_idle.transport",
+                    "space_idle.external_economy",
+                )
+            )
+        )
+        assert not offenders, (
+            f"{path.relative_to(PACKAGE)} bypasses Resource Demand / Claim boundary: {offenders}"
+        )
 
 
 def test_layer_dependency_direction_is_enforced():
