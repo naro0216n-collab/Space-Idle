@@ -4,16 +4,19 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import re
 import shutil
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from typing import Any, Callable
 
-CI_WORKFLOW_SUITES: dict[str, tuple[str, ...]] = {
-    # macOS Full Validation showed ~35s of repeated process/bootstrap cost per
-    # scenario. Fast CI stays as independent processes because Linux measurement
-    # showed browser sharing increased its smoke step instead of reducing it.
-    "Full Validation": ("acceptance", "interaction_continuity", "logistics_ui"),
-}
+
+# Process coalescing is a runner-specific optimization policy, not a list of tests.
+# The scenario set itself is derived from the current workflow job so additions or
+# reordering cannot silently diverge from what CI declares it will execute.
+COALESCED_CI_WORKFLOWS = frozenset({"Full Validation"})
+_WORKFLOW_SCENARIO_RE = re.compile(
+    r"^\s*python(?:3)?\s+playwright/([A-Za-z_][A-Za-z0-9_]*)\.py(?:\s.*)?$"
+)
 
 
 def browser_launch_kwargs(browser_name: str) -> dict[str, object]:
@@ -31,10 +34,99 @@ def browser_launch_kwargs(browser_name: str) -> dict[str, object]:
     return launch_kwargs
 
 
+def _workflow_path() -> Path | None:
+    explicit = os.environ.get("SPACE_IDLE_CI_WORKFLOW_FILE")
+    if explicit:
+        return Path(explicit)
+
+    workflow_ref = os.environ.get("GITHUB_WORKFLOW_REF", "")
+    marker = "/.github/workflows/"
+    if marker in workflow_ref:
+        relative = ".github/workflows/" + workflow_ref.split(marker, 1)[1].split("@", 1)[0]
+        return Path(__file__).resolve().parents[1] / relative
+
+    workflow_name = os.environ.get("GITHUB_WORKFLOW", "")
+    workflow_root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+    if workflow_root.is_dir():
+        for path in sorted((*workflow_root.glob("*.yml"), *workflow_root.glob("*.yaml"))):
+            try:
+                first_lines = path.read_text(encoding="utf-8").splitlines()[:20]
+            except OSError:
+                continue
+            if any(line.strip() == f"name: {workflow_name}" for line in first_lines):
+                return path
+    return None
+
+
+def _job_block(workflow_text: str, job_name: str) -> tuple[str, ...]:
+    """Return the raw YAML lines belonging to one top-level workflow job.
+
+    This intentionally reads only the stable `jobs.<job>` indentation contract and
+    does not attempt to implement YAML. Browser scenario commands are then extracted
+    from `python playwright/<scenario>.py` lines in that job.
+    """
+    lines = workflow_text.splitlines()
+    jobs_index = next((i for i, line in enumerate(lines) if line == "jobs:"), None)
+    if jobs_index is None:
+        return ()
+
+    job_header = f"  {job_name}:"
+    start = next((i for i in range(jobs_index + 1, len(lines)) if lines[i] == job_header), None)
+    if start is None:
+        return ()
+
+    block: list[str] = []
+    for line in lines[start + 1 :]:
+        if line and not line.startswith(" "):
+            break
+        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", line):
+            break
+        block.append(line)
+    return tuple(block)
+
+
+def _declared_job_scenarios(path: Path, job_name: str) -> tuple[str, ...]:
+    try:
+        block = _job_block(path.read_text(encoding="utf-8"), job_name)
+    except OSError as exc:
+        raise RuntimeError(f"cannot read CI workflow {path}: {exc}") from exc
+
+    scenarios = tuple(
+        match.group(1)
+        for line in block
+        if (match := _WORKFLOW_SCENARIO_RE.match(line)) is not None
+    )
+    if len(scenarios) != len(set(scenarios)):
+        raise RuntimeError(
+            f"CI E2E job {job_name!r} declares duplicate browser scenario commands: {scenarios}"
+        )
+    return scenarios
+
+
 def ci_suite() -> tuple[str, ...] | None:
     if os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
         return None
-    return CI_WORKFLOW_SUITES.get(os.environ.get("GITHUB_WORKFLOW", ""))
+    workflow_name = os.environ.get("GITHUB_WORKFLOW", "")
+    if workflow_name not in COALESCED_CI_WORKFLOWS:
+        return None
+
+    job_name = os.environ.get("GITHUB_JOB", "")
+    workflow = _workflow_path()
+    if not job_name or workflow is None:
+        raise RuntimeError(
+            "coalesced CI E2E could not resolve its workflow job; "
+            "GITHUB_JOB and workflow file are required"
+        )
+    scenarios = _declared_job_scenarios(workflow, job_name)
+    if not scenarios:
+        raise RuntimeError(
+            f"coalesced CI E2E found no browser scenario commands in {workflow}:{job_name}"
+        )
+    return scenarios
+
+
+def scenario_name(entrypoint: str | os.PathLike[str]) -> str:
+    return Path(entrypoint).stem
 
 
 def _ci_marker_path() -> Path:
@@ -58,35 +150,37 @@ def _read_completed_ci_suite() -> tuple[str, ...] | None:
     return tuple(suite)
 
 
-def guard_ci_secondary_entrypoint(scenario_name: str) -> bool:
-    """Skip a later CI command only after the first command completed the suite.
+def guard_ci_secondary_entrypoint(entrypoint: str | os.PathLike[str]) -> bool:
+    """Skip a later CI command only after the declared job suite completed.
 
-    Existing workflow files invoke scenarios as separate Python commands. The first
-    scenario coalesces the job into one process/browser; later commands reach this
-    guard before importing the game and verify the completion marker instead of
-    paying the cold-start cost again.
+    The current workflow job is the source of truth for scenario membership and
+    ordering. If a new scenario is inserted before the coalescing entrypoint but does
+    not participate in this harness, the marker is absent and CI fails closed rather
+    than silently omitting or duplicating coverage.
     """
+    name = scenario_name(entrypoint)
     suite = ci_suite()
-    if suite is None or scenario_name not in suite or scenario_name == suite[0]:
+    if suite is None or name not in suite or name == suite[0]:
         return False
     completed = _read_completed_ci_suite()
     if completed != suite:
         raise RuntimeError(
-            f"CI E2E suite marker missing or inconsistent before {scenario_name}: "
+            f"CI E2E suite marker missing or inconsistent before {name}: "
             f"expected {suite}, got {completed}"
         )
-    print(f"E2E scenario already completed by shared CI suite: {scenario_name}", flush=True)
+    print(f"E2E scenario already completed by shared CI suite: {name}", flush=True)
     return True
 
 
-def run_ci_suite_or_standalone(scenario_name: str, standalone: Callable[[], Any]) -> Any:
+def run_ci_suite_or_standalone(
+    entrypoint: str | os.PathLike[str], standalone: Callable[[], Any]
+) -> Any:
+    name = scenario_name(entrypoint)
     suite = ci_suite()
-    if suite is None or scenario_name not in suite:
+    if suite is None or name not in suite:
         return standalone()
-    if scenario_name != suite[0]:
-        raise RuntimeError(
-            f"secondary CI E2E entrypoint {scenario_name} reached execution without guard"
-        )
+    if name != suite[0]:
+        raise RuntimeError(f"secondary CI E2E entrypoint {name} reached execution without guard")
 
     from run_suite import run_scenarios
 
@@ -121,24 +215,11 @@ def managed_browser(browser_name: str) -> Iterator[Any]:
 
 
 @contextmanager
-def isolated_browser_context(
-    browser_name: str,
-    *,
-    browser: Any | None = None,
-    **context_options: Any,
-) -> Iterator[Any]:
-    """Create a fresh BrowserContext while optionally reusing a suite browser."""
-    if browser is None:
-        with managed_browser(browser_name) as owned_browser:
-            context = owned_browser.new_context(**context_options)
-            try:
-                yield context
-            finally:
-                context.close()
-        return
-
-    context = browser.new_context(**context_options)
-    try:
-        yield context
-    finally:
-        context.close()
+def isolated_browser_context(browser_name: str, **context_options: Any) -> Iterator[Any]:
+    """Create a fresh browser process and BrowserContext for one E2E scenario."""
+    with managed_browser(browser_name) as browser:
+        context = browser.new_context(**context_options)
+        try:
+            yield context
+        finally:
+            context.close()

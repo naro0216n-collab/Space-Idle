@@ -6,7 +6,7 @@ from e2e_support import (
     run_ci_suite_or_standalone,
 )
 
-if __name__ == "__main__" and guard_ci_secondary_entrypoint("lane_ui"):
+if __name__ == "__main__" and guard_ci_secondary_entrypoint(__file__):
     raise SystemExit(0)
 
 import os
@@ -47,7 +47,7 @@ def _wait_for_server(origin: str, timeout: float = 10.0) -> None:
     raise RuntimeError(f"server did not become ready: {last_error}")
 
 
-def run(*, browser=None) -> None:
+def run() -> None:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in {"chromium", "webkit"}:
         raise ValueError(f"unsupported browser: {browser_name}")
@@ -67,7 +67,6 @@ def run(*, browser=None) -> None:
         _wait_for_server(origin)
         with isolated_browser_context(
             browser_name,
-            browser=browser,
             viewport={"width": 1194, "height": 834},
         ) as context:
             page = context.new_page()
@@ -242,4 +241,4 @@ def run(*, browser=None) -> None:
 
 
 if __name__ == "__main__":
-    run_ci_suite_or_standalone("lane_ui", run)
+    run_ci_suite_or_standalone(__file__, run)

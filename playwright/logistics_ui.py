@@ -6,7 +6,7 @@ from e2e_support import (
     run_ci_suite_or_standalone,
 )
 
-if __name__ == "__main__" and guard_ci_secondary_entrypoint("logistics_ui"):
+if __name__ == "__main__" and guard_ci_secondary_entrypoint(__file__):
     raise SystemExit(0)
 
 import os
@@ -51,7 +51,7 @@ def _build_logistics_test_application():
     return app
 
 
-def run(*, browser=None) -> None:
+def run() -> None:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in {"chromium", "webkit"}:
         raise ValueError(f"unsupported browser: {browser_name}")
@@ -86,7 +86,6 @@ def run(*, browser=None) -> None:
         _wait_for_server(origin)
         with isolated_browser_context(
             browser_name,
-            browser=browser,
                 viewport={"width": 1194, "height": 834},
                 has_touch=True,
                 locale="ja-JP",
@@ -213,4 +212,4 @@ def run(*, browser=None) -> None:
 
 
 if __name__ == "__main__":
-    run_ci_suite_or_standalone("logistics_ui", run)
+    run_ci_suite_or_standalone(__file__, run)

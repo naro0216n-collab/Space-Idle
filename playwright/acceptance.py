@@ -6,7 +6,7 @@ from e2e_support import (
     run_ci_suite_or_standalone,
 )
 
-if __name__ == "__main__" and guard_ci_secondary_entrypoint("acceptance"):
+if __name__ == "__main__" and guard_ci_secondary_entrypoint(__file__):
     raise SystemExit(0)
 
 import http.client
@@ -131,7 +131,7 @@ def _visible_button_min_height(page) -> float:
     )
 
 
-def run(*, browser=None) -> dict[str, object]:
+def run() -> dict[str, object]:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     transport = os.environ.get("SPACE_IDLE_E2E_TRANSPORT", "direct").strip().lower()
     if browser_name not in SUPPORTED_BROWSERS:
@@ -182,7 +182,6 @@ def run(*, browser=None) -> dict[str, object]:
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
         with isolated_browser_context(
             browser_name,
-            browser=browser,
                 viewport={"width": 1194, "height": 834},
                 screen={"width": 1194, "height": 834},
                 has_touch=True,
@@ -545,6 +544,6 @@ def run(*, browser=None) -> dict[str, object]:
 
 
 if __name__ == "__main__":
-    result = run_ci_suite_or_standalone("acceptance", run)
+    result = run_ci_suite_or_standalone(__file__, run)
     if result is not None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
