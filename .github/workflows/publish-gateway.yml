@@ -4,7 +4,7 @@ on:
   push:
     branches: [publish]
     paths:
-      - '.publish/request.patch'
+      - '.publish/requests/*.json'
 
 permissions:
   contents: write
@@ -24,152 +24,156 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Parse and verify request
+      - name: Resolve request file
         shell: bash
         run: |
+          set -euo pipefail
+          mapfile -t requests < <(
+            git diff-tree --no-commit-id --name-only --diff-filter=A -r "${GITHUB_SHA}" -- .publish/requests \
+              | grep -E '^\.publish/requests/[0-9a-f]{32}\.json$' || true
+          )
+          if [ "${#requests[@]}" -ne 1 ]; then
+            echo "Expected exactly one newly added publish request, found ${#requests[@]}" >&2
+            exit 1
+          fi
+          echo "REQUEST_FILE=${requests[0]}" >> "$GITHUB_ENV"
+
+      - name: Parse and verify request payload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
           python - <<'PY'
           import base64
-          import gzip
           import hashlib
+          import json
           import os
           import re
           import subprocess
           from pathlib import Path
 
-          request_path = Path('.publish/request.patch')
-          text = request_path.read_text(encoding='utf-8')
-          headers = {}
-          for line in text.splitlines():
-              if not line.startswith('# '):
-                  continue
-              key, sep, value = line[2:].partition(': ')
-              if sep:
-                  headers[key] = value
-
-          common = {
-              'version', 'request-id', 'target-branch', 'base-sha', 'target-tree',
-              'chunk-count', 'chunks-tree-git-oid', 'message-b64',
+          request_path = Path(os.environ['REQUEST_FILE'])
+          request = json.loads(request_path.read_text(encoding='utf-8'))
+          required = {
+              'version', 'request_id', 'target_branch', 'base_sha', 'target_tree',
+              'publish_commit', 'payload_sha256', 'payload_encoding', 'payload_chars',
+              'payload_source',
           }
-          missing = common - headers.keys()
+          missing = required - request.keys()
           if missing:
-              raise SystemExit(f'missing headers: {sorted(missing)}')
-          version = headers['version']
-          if version == '3':
-              required = {'patch-sha256', 'patch-encoding'}
-              missing = required - headers.keys()
-              if missing:
-                  raise SystemExit(f'missing headers: {sorted(missing)}')
-              if headers['patch-encoding'] != 'gzip-base64-chunks':
-                  raise SystemExit('unsupported patch encoding')
-          elif version == '4':
-              required = {'payload-sha256', 'payload-encoding', 'publish-commit'}
-              missing = required - headers.keys()
-              if missing:
-                  raise SystemExit(f'missing headers: {sorted(missing)}')
-              if headers['payload-encoding'] != 'git-bundle-base64-chunks':
-                  raise SystemExit('unsupported bundle encoding')
-              if not re.fullmatch(r'[0-9a-f]{40}', headers['publish-commit']):
-                  raise SystemExit('invalid publish commit')
-          else:
+              raise SystemExit(f'missing request fields: {sorted(missing)}')
+          if request['version'] != 5:
               raise SystemExit('unsupported request version')
-          if headers['target-branch'] not in {'develop', 'temp'}:
-              raise SystemExit('unsupported target branch')
-          if not re.fullmatch(r'[0-9a-f]{40}', headers['base-sha']):
-              raise SystemExit('invalid base sha')
-          if not re.fullmatch(r'[0-9a-f]{40}', headers['target-tree']):
-              raise SystemExit('invalid target tree')
-          if not re.fullmatch(r'[0-9a-f]{32}', headers['request-id']):
+          request_id = request['request_id']
+          if not isinstance(request_id, str) or not re.fullmatch(r'[0-9a-f]{32}', request_id):
               raise SystemExit('invalid request id')
-          try:
-              chunk_count = int(headers['chunk-count'])
-          except ValueError as exc:
-              raise SystemExit('invalid chunk count') from exc
-          if not 1 <= chunk_count <= 256:
-              raise SystemExit('invalid chunk count')
+          if request_path.name != f'{request_id}.json':
+              raise SystemExit('request id does not match request filename')
+          if request['target_branch'] not in {'develop', 'temp'}:
+              raise SystemExit('unsupported target branch')
 
-          expected_chunks_tree = headers['chunks-tree-git-oid']
           object_format = subprocess.check_output(
               ['git', 'rev-parse', '--show-object-format'], text=True
           ).strip()
           oid_length = 40 if object_format == 'sha1' else 64 if object_format == 'sha256' else 0
-          if oid_length == 0 or not re.fullmatch(rf'[0-9a-f]{{{oid_length}}}', expected_chunks_tree):
-              raise SystemExit('invalid chunks tree Git OID')
-          actual_chunks_tree = subprocess.check_output(
-              ['git', 'rev-parse', 'HEAD:.publish/chunks'], text=True
-          ).strip()
-          if actual_chunks_tree != expected_chunks_tree:
+          if oid_length == 0:
+              raise SystemExit(f'unsupported Git object format: {object_format}')
+          for key in ('base_sha', 'target_tree', 'publish_commit'):
+              value = request[key]
+              if not isinstance(value, str) or not re.fullmatch(rf'[0-9a-f]{{{oid_length}}}', value):
+                  raise SystemExit(f'invalid {key}')
+          if not isinstance(request['payload_sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', request['payload_sha256']):
+              raise SystemExit('invalid payload sha256')
+          if request['payload_encoding'] != 'git-bundle-base64':
+              raise SystemExit('unsupported payload encoding')
+          if not isinstance(request['payload_chars'], int) or request['payload_chars'] <= 0:
+              raise SystemExit('invalid payload size')
+
+          current = subprocess.check_output(
+              ['git', 'ls-remote', 'origin', f"refs/heads/{request['target_branch']}"],
+              text=True,
+          ).strip().split()
+          if not current or current[0] != request['base_sha']:
+              actual = current[0] if current else '<missing>'
               raise SystemExit(
-                  f'chunks tree mismatch: expected {expected_chunks_tree}, got {actual_chunks_tree}'
+                  f"target moved before payload validation: expected {request['base_sha']}, got {actual}"
               )
 
-          payload_parts = []
-          for index in range(chunk_count):
-              key = f'chunk-{index:04d}-sha256'
-              expected = headers.get(key)
-              if expected is None or not re.fullmatch(r'[0-9a-f]{64}', expected):
-                  raise SystemExit(f'missing or invalid digest for chunk {index:04d}')
-              chunk_path = Path('.publish/chunks') / f'{index:04d}.txt'
-              try:
-                  chunk = chunk_path.read_text(encoding='ascii')
-              except OSError as exc:
-                  raise SystemExit(f'missing chunk {index:04d}') from exc
-              if chunk != chunk.strip():
-                  raise SystemExit(f'chunk {index:04d} contains transport whitespace')
-              actual = hashlib.sha256(chunk.encode('ascii')).hexdigest()
-              if actual != expected:
-                  raise SystemExit(f'chunk {index:04d} sha256 mismatch: {actual}')
-              payload_parts.append(chunk)
+          source = request['payload_source']
+          if not isinstance(source, dict):
+              raise SystemExit('invalid payload source')
+          kind = source.get('kind')
+          if kind == 'inline':
+              payload_text = source.get('data')
+              if not isinstance(payload_text, str) or not payload_text:
+                  raise SystemExit('invalid inline payload')
+          elif kind == 'git-blobs':
+              parts = source.get('parts')
+              if not isinstance(parts, list) or not 1 <= len(parts) <= 256:
+                  raise SystemExit('invalid blob part list')
+              payload_parts = []
+              for index, part in enumerate(parts):
+                  if not isinstance(part, dict):
+                      raise SystemExit(f'invalid blob part {index}')
+                  oid = part.get('oid')
+                  chars = part.get('chars')
+                  if not isinstance(oid, str) or not re.fullmatch(rf'[0-9a-f]{{{oid_length}}}', oid):
+                      raise SystemExit(f'invalid blob oid at part {index}')
+                  if not isinstance(chars, int) or chars <= 0:
+                      raise SystemExit(f'invalid blob length at part {index}')
+                  response = json.loads(subprocess.check_output(
+                      ['gh', 'api', f"repos/{os.environ['GITHUB_REPOSITORY']}/git/blobs/{oid}"],
+                      text=True,
+                  ))
+                  if response.get('sha') != oid or response.get('encoding') != 'base64':
+                      raise SystemExit(f'GitHub blob identity mismatch at part {index}')
+                  try:
+                      raw = base64.b64decode(response['content'], validate=False)
+                      text = raw.decode('ascii')
+                  except Exception as exc:
+                      raise SystemExit(f'invalid GitHub blob payload at part {index}: {exc}') from exc
+                  if len(text) != chars:
+                      raise SystemExit(f'GitHub blob length mismatch at part {index}')
+                  actual_oid = subprocess.check_output(
+                      ['git', 'hash-object', '--stdin'], input=text.encode('ascii')
+                  ).decode('ascii').strip()
+                  if actual_oid != oid:
+                      raise SystemExit(
+                          f'GitHub blob Git OID mismatch at part {index}: expected {oid}, got {actual_oid}'
+                      )
+                  payload_parts.append(text)
+              payload_text = ''.join(payload_parts)
+          else:
+              raise SystemExit('unsupported payload source')
 
+          if len(payload_text) != request['payload_chars']:
+              raise SystemExit(
+                  f"payload character count mismatch: expected {request['payload_chars']}, got {len(payload_text)}"
+              )
           try:
-              payload_bytes = base64.b64decode(''.join(payload_parts), validate=True)
-              message_bytes = base64.b64decode(headers['message-b64'], validate=True)
+              payload_bytes = base64.b64decode(payload_text, validate=True)
           except Exception as exc:
-              raise SystemExit(f'invalid Base64 request payload: {exc}') from exc
-          if not message_bytes.strip():
-              raise SystemExit('empty commit message')
+              raise SystemExit(f'invalid bundle Base64: {exc}') from exc
+          digest = hashlib.sha256(payload_bytes).hexdigest()
+          if digest != request['payload_sha256']:
+              raise SystemExit(
+                  f"bundle sha256 mismatch: expected {request['payload_sha256']}, got {digest}"
+              )
 
           runner_temp = Path(os.environ['RUNNER_TEMP'])
-          message_path = runner_temp / 'commit-message.txt'
-          message_path.write_bytes(message_bytes)
-          env_values = {
-              'REQUEST_VERSION': version,
-              'REQUEST_ID': headers['request-id'],
-              'TARGET_BRANCH': headers['target-branch'],
-              'BASE_SHA': headers['base-sha'],
-              'TARGET_TREE': headers['target-tree'],
-              'CHUNKS_TREE_GIT_OID': headers['chunks-tree-git-oid'],
-              'MESSAGE_FILE': str(message_path),
-          }
-
-          if version == '3':
-              try:
-                  patch_bytes = gzip.decompress(payload_bytes)
-                  patch = patch_bytes.decode('utf-8')
-              except Exception as exc:
-                  raise SystemExit(f'invalid compressed patch payload: {exc}') from exc
-              if not patch.startswith('diff --git '):
-                  raise SystemExit('empty or invalid git patch')
-              digest = hashlib.sha256(patch_bytes).hexdigest()
-              if digest != headers['patch-sha256']:
-                  raise SystemExit(f'patch sha256 mismatch: {digest}')
-              patch_path = runner_temp / 'publish.patch'
-              patch_path.write_text(patch, encoding='utf-8', newline='')
-              env_values['PATCH_FILE'] = str(patch_path)
-          else:
-              digest = hashlib.sha256(payload_bytes).hexdigest()
-              if digest != headers['payload-sha256']:
-                  raise SystemExit(f'bundle sha256 mismatch: {digest}')
-              bundle_path = runner_temp / 'publish.bundle'
-              bundle_path.write_bytes(payload_bytes)
-              env_values['BUNDLE_FILE'] = str(bundle_path)
-              env_values['PUBLISH_COMMIT'] = headers['publish-commit']
-
+          bundle_path = runner_temp / 'publish.bundle'
+          bundle_path.write_bytes(payload_bytes)
           with Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8') as env:
-              for key, value in env_values.items():
-                  env.write(f'{key}={value}\n')
+              env.write(f"REQUEST_ID={request_id}\n")
+              env.write(f"TARGET_BRANCH={request['target_branch']}\n")
+              env.write(f"BASE_SHA={request['base_sha']}\n")
+              env.write(f"TARGET_TREE={request['target_tree']}\n")
+              env.write(f"PUBLISH_COMMIT={request['publish_commit']}\n")
+              env.write(f"BUNDLE_FILE={bundle_path}\n")
           PY
 
-      - name: Publish exact target tree
+      - name: Publish exact target commit
         shell: bash
         run: |
           set -euo pipefail
@@ -179,57 +183,31 @@ jobs:
             exit 1
           fi
 
-          if [ "${REQUEST_VERSION}" = "4" ]; then
-            git fetch --quiet --no-tags origin "${BASE_SHA}"
-            git bundle verify "${BUNDLE_FILE}"
-            incoming_ref="refs/space-idle/incoming/${REQUEST_ID}"
-            trap 'git update-ref -d "${incoming_ref}" >/dev/null 2>&1 || true' EXIT
-            git fetch --quiet "${BUNDLE_FILE}" "refs/space-idle/publish-request:${incoming_ref}"
-            fetched="$(git rev-parse "${incoming_ref}")"
-            if [ "${fetched}" != "${PUBLISH_COMMIT}" ]; then
-              echo "Bundle commit mismatch: expected ${PUBLISH_COMMIT}, got ${fetched}" >&2
-              exit 1
-            fi
-            actual_parent="$(git rev-parse "${PUBLISH_COMMIT}^")"
-            if [ "${actual_parent}" != "${BASE_SHA}" ]; then
-              echo "Publish parent mismatch: expected ${BASE_SHA}, got ${actual_parent}" >&2
-              exit 1
-            fi
-            actual_tree="$(git rev-parse "${PUBLISH_COMMIT}^{tree}")"
-            if [ "${actual_tree}" != "${TARGET_TREE}" ]; then
-              echo "Target tree mismatch: expected ${TARGET_TREE}, got ${actual_tree}" >&2
-              exit 1
-            fi
-            python - <<'PY'
-          import os
-          import subprocess
-          from pathlib import Path
-
-          raw = subprocess.check_output(['git', 'cat-file', 'commit', os.environ['PUBLISH_COMMIT']])
-          _, sep, body = raw.partition(b'\n\n')
-          if not sep or body != Path(os.environ['MESSAGE_FILE']).read_bytes():
-              raise SystemExit('publish commit message mismatch')
-          PY
-            published_sha="${PUBLISH_COMMIT}"
-            git push origin "${PUBLISH_COMMIT}:refs/heads/${TARGET_BRANCH}"
-          else
-            git checkout --detach "${BASE_SHA}"
-            git apply --index --binary "${PATCH_FILE}"
-            actual_tree="$(git write-tree)"
-            if [ "${actual_tree}" != "${TARGET_TREE}" ]; then
-              echo "Target tree mismatch: expected ${TARGET_TREE}, got ${actual_tree}" >&2
-              exit 1
-            fi
-            git config user.name "space-idle-publish-gateway"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -F "${MESSAGE_FILE}"
-            published_sha="$(git rev-parse HEAD)"
-            git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          git fetch --quiet --no-tags origin "${BASE_SHA}"
+          git bundle verify "${BUNDLE_FILE}"
+          incoming_ref="refs/space-idle/incoming/${REQUEST_ID}"
+          trap 'git update-ref -d "${incoming_ref}" >/dev/null 2>&1 || true' EXIT
+          git fetch --quiet "${BUNDLE_FILE}" "refs/space-idle/publish-request:${incoming_ref}"
+          fetched="$(git rev-parse "${incoming_ref}")"
+          if [ "${fetched}" != "${PUBLISH_COMMIT}" ]; then
+            echo "Bundle commit mismatch: expected ${PUBLISH_COMMIT}, got ${fetched}" >&2
+            exit 1
+          fi
+          actual_parent="$(git rev-parse "${PUBLISH_COMMIT}^")"
+          if [ "${actual_parent}" != "${BASE_SHA}" ]; then
+            echo "Publish parent mismatch: expected ${BASE_SHA}, got ${actual_parent}" >&2
+            exit 1
+          fi
+          actual_tree="$(git rev-parse "${PUBLISH_COMMIT}^{tree}")"
+          if [ "${actual_tree}" != "${TARGET_TREE}" ]; then
+            echo "Target tree mismatch: expected ${TARGET_TREE}, got ${actual_tree}" >&2
+            exit 1
           fi
 
+          git push origin "${PUBLISH_COMMIT}:refs/heads/${TARGET_BRANCH}"
           remote_after="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
-          if [ "${remote_after}" != "${published_sha}" ]; then
-            echo "Remote ref verification failed: expected ${published_sha}, found ${remote_after}" >&2
+          if [ "${remote_after}" != "${PUBLISH_COMMIT}" ]; then
+            echo "Remote ref verification failed: expected ${PUBLISH_COMMIT}, found ${remote_after}" >&2
             exit 1
           fi
           git fetch --quiet --no-tags origin "refs/heads/${TARGET_BRANCH}"
@@ -239,9 +217,8 @@ jobs:
             exit 1
           fi
 
-          echo "PUBLISHED_SHA=${published_sha}" >> "$GITHUB_ENV"
+          echo "PUBLISHED_SHA=${PUBLISH_COMMIT}" >> "$GITHUB_ENV"
           echo "PUBLISHED_TREE=${remote_tree}" >> "$GITHUB_ENV"
-          echo "Published and verified ${published_sha} tree ${remote_tree} on ${TARGET_BRANCH}"
 
       - name: Record verified publish receipt
         env:
@@ -258,20 +235,19 @@ jobs:
           from pathlib import Path
 
           receipt = {
-              "version": 2,
-              "request_id": os.environ["REQUEST_ID"],
-              "request_version": int(os.environ["REQUEST_VERSION"]),
-              "target_branch": os.environ["TARGET_BRANCH"],
-              "base_commit": os.environ["BASE_SHA"],
-              "target_tree": os.environ["TARGET_TREE"],
-              "chunks_tree_git_oid": os.environ["CHUNKS_TREE_GIT_OID"],
-              "published_commit": os.environ["PUBLISHED_SHA"],
-              "published_tree": os.environ["PUBLISHED_TREE"],
-              "published_commit_object_b64": os.environ["PUBLISHED_COMMIT_OBJECT_B64"],
+              'version': 3,
+              'request_id': os.environ['REQUEST_ID'],
+              'request_version': 5,
+              'target_branch': os.environ['TARGET_BRANCH'],
+              'base_commit': os.environ['BASE_SHA'],
+              'target_tree': os.environ['TARGET_TREE'],
+              'published_commit': os.environ['PUBLISHED_SHA'],
+              'published_tree': os.environ['PUBLISHED_TREE'],
+              'published_commit_object_b64': os.environ['PUBLISHED_COMMIT_OBJECT_B64'],
           }
-          Path(os.environ["RUNNER_TEMP"], "publish-receipt.json").write_text(
-              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
+          Path(os.environ['RUNNER_TEMP'], 'publish-receipt.json').write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
           )
           PY
           receipt_b64="$(base64 -w0 "${receipt_path}")"
