@@ -305,20 +305,20 @@ def test_multistage_cargo_flow_records_handoffs_and_cumulative_latency():
         initial_destination_machinery
     )
 
-    sim.logistics._progress_cargo_arrivals(flow.ready_day - 1)
+    sim.logistics.settle_cargo_arrivals(flow.ready_day - 1)
     assert flow.id in sim.logistics.cargo_flows
     assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == pytest.approx(
         initial_destination_machinery
     )
 
-    sim.logistics._progress_cargo_arrivals(flow.ready_day)
+    sim.logistics.settle_cargo_arrivals(flow.ready_day)
     assert flow.id not in sim.logistics.cargo_flows
     assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == pytest.approx(
         initial_destination_machinery + dispatched_amount
     )
 
 
-def test_transport_capacity_does_not_use_same_tick_propellant_arrival():
+def test_transport_capacity_uses_only_cargo_settled_at_tick_boundary():
     sim = build_game_application()._simulation
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
@@ -360,23 +360,28 @@ def test_transport_capacity_does_not_use_same_tick_propellant_arrival():
     sim.inventory.add(LEO, MACHINERY, 1.0)
     outbound = _demand(
         1.0,
-        demand_id="demand.same-tick-propellant",
+        demand_id="demand.boundary-propellant",
         destination=LUNAR_ORBIT,
         source=LEO,
     )
+
+    # Movement/execution for day 2 does not perform boundary admission.
     _advance_logistics(sim, 2, (outbound,))
-    assert sim.inventory.available(LEO, PROPELLANT) > 0
+    assert sim.inventory.available(LEO, PROPELLANT) == pytest.approx(0.0)
     assert not any(
         flow.lane_id == outbound_lane and flow.demand_id == outbound.id
         for flow in sim.logistics.cargo_flows.values()
     )
 
-    _advance_logistics(sim, 3, (outbound,))
+    # Once day 2 boundary settlement runs, the arrival belongs to the physical
+    # snapshot for day 2 and may support that tick's allocation.
+    sim.logistics.settle_cargo_arrivals(2)
+    assert sim.inventory.available(LEO, PROPELLANT) > 0
+    _advance_logistics(sim, 2, (outbound,))
     assert any(
         flow.lane_id == outbound_lane and flow.demand_id == outbound.id
         for flow in sim.logistics.cargo_flows.values()
     )
-
 
 def test_cargo_arrival_waits_for_destination_storage_admission():
     sim = build_game_application()._simulation
@@ -397,14 +402,14 @@ def test_cargo_arrival_waits_for_destination_storage_admission():
     )
     assert sim.inventory.amount(EARTH, MACHINERY) == pytest.approx(source_before - 1.0)
 
-    sim.logistics._progress_cargo_arrivals(flow.ready_day)
+    sim.logistics.settle_cargo_arrivals(flow.ready_day)
     assert flow.id in sim.logistics.cargo_flows
     assert flow.status.value == "arrival_waiting"
     assert flow.amount_t == pytest.approx(1.0)
     assert sim.inventory.amount(LEO, MACHINERY) == pytest.approx(destination_before)
 
     sim.inventory.consume_allocated(LEO, PRECISION_ELECTRONICS, 1.0)
-    sim.logistics._progress_cargo_arrivals(flow.ready_day + 1)
+    sim.logistics.settle_cargo_arrivals(flow.ready_day + 1)
     assert flow.id not in sim.logistics.cargo_flows
     assert sim.inventory.amount(LEO, MACHINERY) == pytest.approx(destination_before + 1.0)
 

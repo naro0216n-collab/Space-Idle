@@ -409,17 +409,17 @@ def run() -> dict[str, object]:
             survey_row = page.locator(f'tr[data-inspect="survey"][data-id="{ids.MOON_CELL_SOUTH_POLAR_RIDGE}::{ids.WATER}"]')
             survey_row.wait_for(timeout=10000)
             survey_row.click()
-            _assert(page.locator('#surveyWeightInput').is_enabled(), "startable survey must expose initial allocation")
-            _assert(float(page.locator('#surveyWeightInput').input_value()) == 1.0, "survey initial allocation must come from the application contract")
-            page.locator('#surveyWeightInput').fill("0.5")
+            _assert(page.locator('#surveyPriorityInput').is_enabled(), "startable survey must expose priority")
+            _assert(int(page.locator('#surveyPriorityInput').input_value()) == 50, "survey priority must come from the application contract")
+            page.locator('#surveyPriorityInput').fill("70")
             survey_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey"]')
             _assert(survey_lifecycle.get_attribute('data-survey-action') == 'start', "unstarted survey lifecycle control must expose start")
             survey_lifecycle.click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             survey_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey"]')
             _assert(survey_lifecycle.get_attribute('data-survey-action') == 'pause' and survey_lifecycle.is_enabled(), "active survey lifecycle control must transition to pause")
-            _assert(page.locator('#inspectorContent [data-set-survey-weight]').is_enabled(), "active survey must expose allocation command")
-            _assert(float(page.locator('#surveyWeightInput').input_value()) == 0.5, "survey start allocation must round-trip through the UI")
+            _assert(page.locator('#inspectorContent [data-set-survey-priority]').is_enabled(), "active survey must expose priority command")
+            _assert(int(page.locator('#surveyPriorityInput').input_value()) == 70, "survey start priority must round-trip through the UI")
 
             # A surveyed Cell must become a player-selectable founding site; the
             # UI must use the Application-projected option rather than inventing

@@ -575,12 +575,16 @@ class LocationFoundingService:
         allocations: ResourceAllocationPlan,
         service_allocations: ServiceCapacityAllocationPlan,
         day: int,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> None:
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
             if project.status is FoundingStatus.PREPARING:
                 if project.paused:
                     continue
-                blockers = self.blockers(project.id, day)
+                power = None if power_by_location is None else power_by_location.get(
+                    project.staging_node_id
+                )
+                blockers = self.blockers(project.id, day, power)
                 non_resource = [b for b in blockers if b.code != "resource_shortage"]
                 if non_resource:
                     continue
@@ -603,9 +607,16 @@ class LocationFoundingService:
                     project.status = FoundingStatus.DEPLOYING
                     project.departure_day = day
                     project.arrival_day = day + package.transit_days
-            elif project.status is FoundingStatus.DEPLOYING:
-                if project.arrival_day is not None and day >= project.arrival_day:
-                    self._complete(project, day)
+
+    def settle_arrivals(self, day: int) -> None:
+        """Complete deployments whose arrival time was reached before this tick."""
+        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
+            if (
+                project.status is FoundingStatus.DEPLOYING
+                and project.arrival_day is not None
+                and project.arrival_day <= day
+            ):
+                self._complete(project, day)
 
     def _complete(self, project: LocationFoundingProject, day: int) -> None:
         graph = self.facilities.environment.graph

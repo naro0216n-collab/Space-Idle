@@ -33,6 +33,7 @@ from .surface_infrastructure import SurfaceInfrastructureService
 from .technology import TechnologyState
 from .survey import ExtractionService, SurveyService
 from .scientific_exploration import ScientificExplorationService
+from .transport.steady_logistics import LogisticsResourcePlan
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,32 @@ class OfflineProgressResult:
     advanced_days: int
     pending_fractional_day: float
     capped: bool
+
+
+@dataclass(frozen=True)
+class TickPhysicalSnapshot:
+    day: int
+    ordered_locations: tuple[SpatialNodeId, ...]
+    power_by_location: dict[SpatialNodeId, PowerSnapshot]
+
+
+@dataclass(frozen=True)
+class TickIntents:
+    resource_demands: tuple[ResourceDemand, ...]
+    resource_claims: tuple[ResourceClaim, ...]
+    service_requests: tuple[ServiceCapacityRequest, ...]
+
+
+@dataclass(frozen=True)
+class TickPlan:
+    external_demands: tuple[ResourceDemand, ...]
+    logistics: LogisticsResourcePlan
+
+
+@dataclass(frozen=True)
+class TickAllocations:
+    resources: ResourceAllocationPlan
+    services: ServiceCapacityAllocationPlan
 
 
 @dataclass
@@ -213,8 +240,14 @@ class Simulation:
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
         logistics_claims: tuple[ResourceClaim, ...] = (),
+        *,
+        domain_claims: tuple[ResourceClaim, ...] | None = None,
     ) -> ResourceAllocationPlan:
-        claims = self._resource_claims(power_by_location) + tuple(logistics_claims)
+        claims = (
+            self._resource_claims(power_by_location)
+            if domain_claims is None
+            else domain_claims
+        ) + tuple(logistics_claims)
         return allocate_resource_claims(claims, self.inventory)
 
     def _service_capacity_requests(
@@ -259,8 +292,13 @@ class Simulation:
     def _allocate_tick_services(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        requests: tuple[ServiceCapacityRequest, ...] | None = None,
     ) -> ServiceCapacityAllocationPlan:
-        requests = self._service_capacity_requests(power_by_location)
+        requests = (
+            self._service_capacity_requests(power_by_location)
+            if requests is None
+            else requests
+        )
         dynamic_nominal: dict[tuple[SpatialNodeId, str], float] = {}
         dynamic_enabled: dict[tuple[SpatialNodeId, str], float] = {}
         for location_id in sorted(self._active_locations(), key=str):
@@ -418,90 +456,168 @@ class Simulation:
             capped=capped,
         )
 
+    def _settle_tick_boundary(self) -> None:
+        """Settle state whose completion time was reached before this tick."""
+        self.logistics.advance_fleet_state(self.day)
+        if self.founding is not None:
+            self.founding.settle_arrivals(self.day)
+        self.logistics.synchronize_surface_access_routes()
+        self.logistics.settle_cargo_arrivals(self.day)
+
+        # Procurement wait/policy maturation is a clock-boundary transition.
+        # It may expose intents for this tick but never consumes inventory.
+        self.projects.advance_procurement(self.day)
+
+    def _physical_tick_snapshot(self) -> TickPhysicalSnapshot:
+        locations = self._active_locations() | set(self.graph.operational_node_ids())
+        ordered_locations = tuple(sorted(locations, key=str))
+        power_by_location = {
+            location_id: self.power.snapshot(
+                location_id, self.facilities, self.day
+            )
+            for location_id in ordered_locations
+        }
+        self.storage.refresh(self.day, power_by_location)
+        return TickPhysicalSnapshot(
+            self.day, ordered_locations, power_by_location
+        )
+
+    def _generate_tick_intents(self, snapshot: TickPhysicalSnapshot) -> TickIntents:
+        return TickIntents(
+            resource_demands=self._gross_resource_demands(snapshot.power_by_location),
+            resource_claims=self._resource_claims(snapshot.power_by_location),
+            service_requests=self._service_capacity_requests(snapshot.power_by_location),
+        )
+
+    def _plan_tick(self, intents: TickIntents) -> TickPlan:
+        external_demands = tuple(
+            demand
+            for resolution in resolve_local_resource_supply(
+                intents.resource_demands, self.inventory
+            )
+            if (demand := resolution.external_demand()) is not None
+        )
+        logistics_plan = self.logistics.plan_capacity_logistics(
+            self.day, external_demands
+        )
+        return TickPlan(external_demands, logistics_plan)
+
+    def _allocate_tick(
+        self,
+        snapshot: TickPhysicalSnapshot,
+        intents: TickIntents,
+        plan: TickPlan,
+    ) -> TickAllocations:
+        resources = self._allocate_tick_resources(
+            snapshot.power_by_location,
+            plan.logistics.claims,
+            domain_claims=intents.resource_claims,
+        )
+        services = self._allocate_tick_services(
+            snapshot.power_by_location,
+            intents.service_requests,
+        )
+        return TickAllocations(resources, services)
+
+    def _execute_tick_domains(
+        self,
+        snapshot: TickPhysicalSnapshot,
+        allocations: TickAllocations,
+    ) -> None:
+        active_locations = set(self._active_locations())
+        for location_id in snapshot.ordered_locations:
+            if location_id not in active_locations:
+                continue
+            self.industry.advance_day(
+                location_id,
+                self.facilities,
+                self.inventory,
+                snapshot.power_by_location[location_id],
+                self.day,
+                allocations.resources,
+                allocations.services,
+            )
+            if self.extraction is not None:
+                self.extraction.advance_day(
+                    location_id,
+                    self.facilities,
+                    self.inventory,
+                    snapshot.power_by_location[location_id],
+                    self.day,
+                    allocations.services,
+                )
+
+        if self.research is not None:
+            self.research.advance_day(
+                snapshot.power_by_location,
+                allocations.resources,
+                allocations.services,
+                self.day,
+            )
+        if self.scientific_exploration is not None:
+            self.scientific_exploration.advance_day(
+                snapshot.power_by_location, allocations.resources, self.day
+            )
+        if self.survey is not None:
+            self.survey.advance_day(
+                snapshot.power_by_location, allocations.services, self.day
+            )
+        if self.maintenance is not None:
+            self.maintenance.advance_day(allocations.resources, self.day)
+
+        self.logistics.advance_vehicle_production_day(
+            snapshot.power_by_location,
+            allocations.resources,
+            allocations.services,
+            self.day,
+        )
+        self.projects.finalize_procurement(allocations.resources, self.day)
+        self.projects.advance_construction(
+            snapshot.power_by_location, allocations.services, self.day
+        )
+        if self.founding is not None:
+            self.founding.advance_day(
+                allocations.resources,
+                allocations.services,
+                self.day,
+                snapshot.power_by_location,
+            )
+
+    def _progress_tick_movement(
+        self,
+        plan: TickPlan,
+        allocations: TickAllocations,
+    ) -> None:
+        # Movement is deliberately after every Domain execution.  It may spend
+        # only amounts authorized from the start-of-tick allocation and cannot
+        # admit arriving Cargo to Inventory until the next boundary.
+        self.logistics.advance_fleet_relocations(allocations.resources, self.day)
+        self.logistics.advance_capacity_logistics(
+            self.day, plan.logistics, allocations.resources
+        )
+
+    def _settle_tick_state_transitions(
+        self, snapshot: TickPhysicalSnapshot
+    ) -> None:
+        if self.research is not None:
+            self.research.settle_completions()
+        self.projects.settle_completions(snapshot.power_by_location, self.day)
+        self.logistics.synchronize_surface_access_routes()
+        self.refresh_storage()
+        next_day = self.day + 1
+        if self.contracts is not None:
+            self.contracts.advance_day(next_day)
+        self.day = next_day
+
     def advance_days(self, days: int) -> None:
         if days < 0:
             raise ValueError("days must be non-negative")
         for _ in range(days):
-            # Boundary settlement precedes the physical snapshot. Planning below
-            # is observational and must not mutate Fleet state.
-            self.logistics.advance_fleet_state(self.day)
-            self.logistics.synchronize_surface_access_routes()
-            locations = self._active_locations()
-            ordered_locations = sorted(locations, key=str)
-            power_before = {
-                loc: self.power.snapshot(loc, self.facilities, self.day)
-                for loc in ordered_locations
-            }
-            self.storage.refresh(self.day, power_before)
-
-            # Project policy transitions happen before intent generation. They may
-            # expose a future ResourceDemand, but they never claim inventory.
-            self.projects.advance_procurement(self.day)
-
-            gross_demands = self._gross_resource_demands(power_before)
-            external_demands = tuple(
-                resolution.external_demand()
-                for resolution in resolve_local_resource_supply(gross_demands, self.inventory)
-                if resolution.external_demand() is not None
-            )
-            logistics_plan = self.logistics.plan_capacity_logistics(
-                self.day, external_demands
-            )
-            resource_allocations = self._allocate_tick_resources(
-                power_before, logistics_plan.claims
-            )
-            service_allocations = self._allocate_tick_services(power_before)
-
-            # Every Domain below may use only its allocation. Execution order no
-            # longer decides who owns scarce start-of-tick inventory.
-            self.logistics.advance_fleet_relocations(resource_allocations, self.day)
-            self.logistics.advance_capacity_logistics(
-                self.day, logistics_plan, resource_allocations
-            )
-
-            for loc in ordered_locations:
-                self.industry.advance_day(
-                    loc,
-                    self.facilities,
-                    self.inventory,
-                    power_before[loc],
-                    self.day,
-                    resource_allocations,
-                    service_allocations,
-                )
-                if self.extraction is not None:
-                    self.extraction.advance_day(
-                        loc, self.facilities, self.inventory, power_before[loc], self.day,
-                        service_allocations,
-                    )
-
-            if self.research is not None:
-                self.research.advance_day(
-                    power_before, resource_allocations, service_allocations, self.day
-                )
-            if self.scientific_exploration is not None:
-                self.scientific_exploration.advance_day(
-                    power_before, resource_allocations, self.day
-                )
-            if self.survey is not None:
-                self.survey.advance_day(power_before, service_allocations, self.day)
-            if self.maintenance is not None:
-                self.maintenance.advance_day(resource_allocations, self.day)
-
-            self.logistics.advance_vehicle_production_day(
-                power_before, resource_allocations, service_allocations, self.day
-            )
-            self.projects.finalize_procurement(resource_allocations, self.day)
-            self.projects.advance_construction(
-                power_before, service_allocations, self.day
-            )
-            if self.founding is not None:
-                self.founding.advance_day(
-                    resource_allocations, service_allocations, self.day
-                )
-            self.logistics.synchronize_surface_access_routes()
-            self.refresh_storage()
-            next_day = self.day + 1
-            if self.contracts is not None:
-                self.contracts.advance_day(next_day)
-            self.day = next_day
+            self._settle_tick_boundary()
+            snapshot = self._physical_tick_snapshot()
+            intents = self._generate_tick_intents(snapshot)
+            plan = self._plan_tick(intents)
+            allocations = self._allocate_tick(snapshot, intents, plan)
+            self._execute_tick_domains(snapshot, allocations)
+            self._progress_tick_movement(plan, allocations)
+            self._settle_tick_state_transitions(snapshot)

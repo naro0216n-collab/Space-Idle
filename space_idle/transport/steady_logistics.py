@@ -525,7 +525,13 @@ class SteadyLogisticsMixin:
             if flow.departure_day == departure_day and flow.lane_id == lane_id
         )
 
-    def _progress_cargo_arrivals(self, day: int) -> None:
+    def settle_cargo_arrivals(self, day: int) -> None:
+        """Settle Cargo Flow batches that reached their boundary arrival time.
+
+        Arrival admission is a Simulation boundary operation.  Dispatch during
+        the current tick must never feed inventory back into the same tick's
+        allocation graph, even if a route's modeled latency is minimal.
+        """
         for flow_id in sorted(tuple(self.cargo_flows), key=str):
             flow = self.cargo_flows[flow_id]
             if flow.status is CargoFlowStatus.IN_TRANSIT and flow.ready_day <= day:
@@ -627,7 +633,6 @@ class SteadyLogisticsMixin:
         for allocation_id, directional in used.items():
             if directional.forward_t_per_day > 1e-12 or directional.reverse_t_per_day > 1e-12:
                 self.transport_allocations[allocation_id].last_operated_day = day
-        self._progress_cargo_arrivals(day)
 
     def lane_snapshot(
         self, demands: tuple[ResourceDemand, ...], day: int = 0

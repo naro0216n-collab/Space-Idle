@@ -41,5 +41,18 @@ class ResearchExecutionMixin:
             if allocated + 1e-9 < 1.0:
                 continue
             state.demonstration_done_days += 1
-            if state.demonstration_done_days >= demonstration.days:
-                self._complete(state.definition_id)
+
+    def settle_completions(self) -> None:
+        """Apply research completion only after the tick's execution phase."""
+        completed = [
+            state.definition_id
+            for state in self.active.values()
+            if (
+                state.status is ResearchPhase.DEMONSTRATION
+                and self.definitions[state.definition_id].demonstration is not None
+                and state.demonstration_done_days
+                >= self.definitions[state.definition_id].demonstration.days
+            )
+        ]
+        for research_id in sorted(completed, key=str):
+            self._complete(research_id)

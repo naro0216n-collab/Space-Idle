@@ -430,6 +430,66 @@ def test_relocation_plan_is_the_execution_contract_for_time_and_resources():
         )
 
 
+
+
+def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
+    from space_idle.resource_claim import allocate_resource_claims
+    from space_idle.resource_demand import ResourceDemand
+
+    sim = _fleet_sim(1)
+    lg = sim.logistics
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
+    sim.refresh_storage()
+    sim.inventory.stock[(ids.LEO, ids.PROPELLANT)] = 0.0
+
+    relocation_id = lg.relocate_fleet(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO, ids.LUNAR_ORBIT, day=0
+    )
+    relocation = lg.fleet_relocations[relocation_id]
+    required = sum(
+        need.required_t
+        for need in relocation.resource_needs
+        if need.operational_node_id == ids.LEO and need.resource_id == ids.PROPELLANT
+    )
+    assert required > 0.0
+
+    lane_id = lg.create_lane(ids.EARTH, ids.LEO, required, 100)
+    sim.inventory.add(ids.EARTH, ids.PROPELLANT, required)
+    demand = ResourceDemand(
+        EntityId("demand.boundary-relocation-propellant"),
+        "test",
+        EntityId("owner.boundary-relocation-propellant"),
+        ids.LEO,
+        ids.PROPELLANT,
+        required,
+        100,
+        ids.EARTH,
+    )
+    plan = lg.plan_capacity_logistics(0, (demand,))
+    allocations = allocate_resource_claims(plan.claims, sim.inventory)
+    lg.advance_capacity_logistics(0, plan, allocations)
+    flow = next(
+        row for row in lg.cargo_flows.values()
+        if row.lane_id == lane_id and row.demand_id == demand.id
+    )
+    assert flow.ready_day > 0
+
+    # Prevent the normal planner from creating another shipment while time moves
+    # to the boundary where this seeded Cargo Flow becomes ready.
+    lg.lanes[lane_id].paused = True
+    lg.external_services.clear()
+    sim.advance_to_day(flow.ready_day)
+    assert relocation.departure_day is None
+    assert sim.inventory.available(ids.LEO, ids.PROPELLANT) == pytest.approx(0.0)
+
+    sim.advance_days(1)
+
+    assert relocation.departure_day == flow.ready_day
+    assert relocation.arrival_day == flow.ready_day + relocation.travel_days
+    assert flow.id not in lg.cargo_flows
+
+
 def test_resource_support_uses_definition_capability_instead_of_magic_refueling_id():
     sim = _fleet_sim(1)
     lg = sim.logistics

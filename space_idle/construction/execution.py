@@ -106,22 +106,6 @@ class ConstructionExecutionMixin:
         service_allocations: ServiceCapacityAllocationPlan,
         day: int = 0,
     ) -> None:
-        for project in self.projects.values():
-            if not project.paused and project.status == ProjectStatus.READY:
-                recipe = self._recipe_for_project(project)
-                if not self._target_ready_for_execution(project):
-                    continue
-                power = power_by_location.get(
-                    project.operational_node_id,
-                    self.power.snapshot(
-                        project.operational_node_id, self.facilities, day
-                    ),
-                )
-                if self.project_site_failures(project, day, power):
-                    continue
-                if recipe.self_deploying or recipe.construction_work <= 1e-12:
-                    self._finish_project(project)
-
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
             if (
                 project.paused
@@ -160,4 +144,30 @@ class ConstructionExecutionMixin:
             project.construction_done += work
             if project.construction_done + 1e-9 >= recipe.construction_work:
                 project.construction_done = recipe.construction_work
+
+    def settle_completions(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        day: int = 0,
+    ) -> None:
+        """Apply completed project side effects in the state-transition phase."""
+        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
+            if (
+                project.paused
+                or project.status not in {ProjectStatus.READY, ProjectStatus.BUILDING}
+                or not self._target_ready_for_execution(project)
+            ):
+                continue
+            recipe = self._recipe_for_project(project)
+            power = power_by_location.get(project.operational_node_id)
+            if power is None:
+                power = self.power.snapshot(
+                    project.operational_node_id, self.facilities, day
+                )
+            if self.project_site_failures(project, day, power):
+                continue
+            if recipe.self_deploying or recipe.construction_work <= 1e-12:
+                self._finish_project(project)
+                continue
+            if project.construction_done + 1e-9 >= recipe.construction_work:
                 self._finish_project(project)
