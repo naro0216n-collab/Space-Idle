@@ -37,13 +37,16 @@ from .app_contracts.surface_views import (
     SurfaceCellDevelopmentOption, SurfaceCellFoundationOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
     SurfaceLocationTerritoryRow, SurfaceMapView, SurfaceResourceKnowledgeRow,
 )
+from .app_contracts.economy_views import (
+    ExternalEconomyView, ExternalServicePolicyRow, FundsAuthorizationRow,
+)
 
 QueryResult: TypeAlias = (
     CatalogView | WorldView | SurfaceMapView | LocationView | FlowReportView | BottlenecksView |
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     RoutesView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |
     LogisticsLanesView | TransportAllocationOptionsView | ResearchView |
-    ScientificExplorationsView | SurveysView | ContractsView
+    ScientificExplorationsView | SurveysView | ContractsView | ExternalEconomyView
 )
 
 __all__ = [name for name in globals() if not name.startswith('_') and name not in {'TypeAlias'}]

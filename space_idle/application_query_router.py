@@ -6,6 +6,7 @@ from .application_commands import (
     GetLogisticsLanes, GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
     GetScientificExplorations, GetSurveys, GetTransportAllocations,
     GetTransportAllocationOptions, GetWorld, GetSurfaceMap, Query,
+    GetExternalEconomy,
 )
 from .application_views import ProjectsView, QueryResult
 
@@ -90,4 +91,6 @@ class ApplicationQueryRouterMixin:
             )
         if isinstance(query, GetContracts):
             return self._contracts_view()
+        if isinstance(query, GetExternalEconomy):
+            return self._external_economy_view()
         raise TypeError(f"unsupported query: {type(query).__name__}")

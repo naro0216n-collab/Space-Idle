@@ -170,6 +170,33 @@
     $('#vehicleProductionTable').innerHTML=`<table><thead><tr><th>建造中</th><th>進捗</th><th>状態</th><th>優先度</th><th>blocker</th><th>操作</th></tr></thead><tbody>${projectRows||'<tr><td colspan="6">建造中Vehicleなし</td></tr>'}</tbody></table><table><thead><tr><th>建造候補</th><th>期間</th><th>必要資源</th><th>優先度</th><th>blocker</th><th>操作</th></tr></thead><tbody>${optionRows||'<tr><td colspan="6">建造候補なし</td></tr>'}</tbody></table>`;
   }
 
+  function externalServiceDefinitions(){
+    return state.catalog?.transport_services||[];
+  }
+  function externalServiceOptions(selected=[]){
+    const chosen=new Set(selected||[]);
+    return externalServiceDefinitions().map((service)=>`<label class="cell-sub"><input type="checkbox" data-policy-service="${esc(service.id)}" ${chosen.has(service.id)?'checked':''}> ${esc(service.display_name)} · ${esc(service.id)}</label>`).join('');
+  }
+  function numberOrNull(input){const raw=input?.value?.trim();return raw===''?null:Number(raw);}
+  function renderExternalEconomy(){
+    const economy=state.externalEconomy;if(!economy)return;
+    $('#externalFundsBadge').textContent=`$${fmt(economy.funds_musd,2)}M`;
+    const auth=(economy.authorizations||[]);
+    const authRows=auth.map((row)=>`<tr><td>${esc(definitionName(row.service_id))}</td><td>${esc(ownerLabel(row.owner_kind))} · ${esc(row.owner_id)}</td><td>${fmt(row.requested_musd,2)}</td><td>${fmt(row.authorized_musd,2)}</td><td>${fmt(row.unmet_musd,2)}</td><td>${esc((row.limiting_factors||[]).join(' / ')||'—')}</td></tr>`).join('');
+    const policies=(economy.policies||[]).map((policy)=>`<div class="route-mode-card" data-external-policy-row="${esc(policy.id)}" data-policy-scope-kind="${esc(policy.scope_kind)}" data-policy-scope-id="${esc(policy.scope_id||'')}"><div class="mode-title"><span>${esc(policy.id)} · ${esc(policy.scope_kind)}${policy.scope_id?`:${esc(policy.scope_id)}`:''}</span><span class="badge ${policy.enabled?'ok':'warn'}">${policy.enabled?'許可':'停止'}</span></div><label class="cell-sub"><input type="checkbox" data-policy-enabled ${policy.enabled?'checked':''}> External Serviceを許可</label><div class="action-stack" data-policy-services>${externalServiceOptions(policy.allowed_service_ids)}</div>${kv([
+      ['1 request上限',`<input data-policy-cap type="number" min="0" step="0.01" value="${policy.spending_cap_musd==null?'':esc(policy.spending_cap_musd)}" placeholder="制限なし"> M`],
+      ['期間予算',`<input data-policy-budget type="number" min="0" step="0.01" value="${policy.period_budget_musd==null?'':esc(policy.period_budget_musd)}" placeholder="制限なし"> M / <input data-policy-period type="number" min="1" step="1" value="${esc(policy.period_days)}" style="width:5em">日`],
+      ['最低留保Funds',`<input data-policy-reserve type="number" min="0" step="0.01" value="${esc(policy.minimum_reserve_musd)}"> M`],
+      ['期間消費 / 残額',`${fmt(policy.spent_in_period_musd,2)} / ${policy.remaining_period_budget_musd==null?'∞':fmt(policy.remaining_period_budget_musd,2)} M`],
+    ])}<div class="action-row"><button type="button" data-policy-save="${esc(policy.id)}">設定適用</button><button type="button" class="danger-button" data-policy-delete="${esc(policy.id)}">削除</button></div></div>`).join('');
+    const noPolicy=(economy.policies||[]).length?'':'<div class="issue"><div class="issue-title">Policy未設定: External Serviceはdefault-denyです。Owned Fleetはこの設定に依存しません。</div></div>';
+    $('#externalEconomyPanel').innerHTML=`<div style="padding:8px">${kv([['現在Funds',`$${fmt(economy.funds_musd,2)}M`],['前tick External支出',`$${fmt(economy.last_tick_spent_musd,2)}M`]])}${noPolicy}${policies}<div class="route-mode-card" data-new-external-policy><div class="mode-title"><span>Global Policyを追加</span></div><label class="cell-sub"><input type="checkbox" data-policy-enabled checked> External Serviceを許可</label><div class="action-stack" data-policy-services>${externalServiceOptions()}</div>${kv([['1 request上限','<input data-policy-cap type="number" min="0" step="0.01" placeholder="制限なし"> M'],['期間予算','<input data-policy-budget type="number" min="0" step="0.01" placeholder="制限なし"> M / <input data-policy-period type="number" min="1" step="1" value="30" style="width:5em">日'],['最低留保Funds','<input data-policy-reserve type="number" min="0" step="0.01" value="0"> M']])}<button type="button" class="primary" data-policy-create>Policy作成</button></div><h4>当tick Spending Authorization</h4><div class="table-wrap"><table><thead><tr><th>Service</th><th>対象</th><th>requested M</th><th>authorized M</th><th>unmet M</th><th>limiting factor</th></tr></thead><tbody>${authRows||'<tr><td colspan="6">現在のExternal spending requestなし</td></tr>'}</tbody></table></div></div>`;
+  }
+  function policyPayload(root){
+    const services=[...root.querySelectorAll('[data-policy-service]:checked')].map((node)=>node.dataset.policyService);
+    return {enabled:Boolean(root.querySelector('[data-policy-enabled]')?.checked),allowed_service_ids:services,scope_kind:root.dataset.policyScopeKind||'global',scope_id:root.dataset.policyScopeId||null,spending_cap_musd:numberOrNull(root.querySelector('[data-policy-cap]')),period_budget_musd:numberOrNull(root.querySelector('[data-policy-budget]')),period_days:Number(root.querySelector('[data-policy-period]')?.value||30),minimum_reserve_musd:Number(root.querySelector('[data-policy-reserve]')?.value||0)};
+  }
+
   function renderCargoFlows(){
     const items=state.cargoFlows?.items||logistics().cargo_flows||[]; $('#cargoCountBadge').textContent=`${items.length}件`;
     const rows=items.map((f)=>`<tr><td><div class="cell-main">${esc(resourceName(f.resource_id))}</div><div class="cell-sub">${esc(ownerLabel(f.owner_kind))} · ${esc(f.owner_id)}</div></td><td>${esc(locationName(f.source_id))} → ${esc(locationName(f.destination_id))}</td><td>${fmt(f.amount_t)} t</td><td>${esc(f.status)}</td><td>Day ${fmt(f.departure_day,0)} → ${fmt(f.ready_day,0)}</td><td>${esc((f.service_ids||[]).map(definitionName).join(' → '))}</td></tr>`).join('');
@@ -225,7 +252,7 @@
   function render(){
     if(!state.logisticsSummary||!state.routes)return;const s=state.logisticsSummary;
     $('#logisticsSummary').innerHTML=[['Fleet',`${s.free_fleet_units}/${s.fleet_units} free`],['Allocation',`${s.allocation_count} · 未充足 ${s.unfilled_allocation_units}`],['Lane',`${s.lane_count}`],['Demand',`${s.demand_count}`],['待ち需要',`${fmt(s.queued_demand_t)} t`],['輸送中',`${fmt(s.in_transit_t)} t`],['到着待機',`${fmt(s.arrival_waiting_t)} t`]].map(metricHtml).join('');
-    populateLocationSelects();renderRouteFilters();renderRouteList();renderNetwork();renderLanes();renderDemands();renderFleet();renderAllocations();renderVehicleProduction();renderCargoFlows();renderRouteInspector();
+    populateLocationSelects();renderRouteFilters();renderRouteList();renderNetwork();renderLanes();renderDemands();renderFleet();renderAllocations();renderVehicleProduction();renderCargoFlows();renderExternalEconomy();renderRouteInspector();
   }
 
   document.addEventListener('click',async(event)=>{
@@ -244,6 +271,9 @@
     const produce=event.target.closest('[data-produce-vehicle]');if(produce){const row=produce.closest('[data-production-option-row]');try{await command('ProduceVehicle',{vehicle_definition_id:produce.dataset.produceVehicle,operational_node_id:produce.dataset.productionLocation,priority:Number(row.querySelector('[data-production-priority-value]').value)});}catch{}return;}
     const productionToggle=event.target.closest('[data-production-toggle]');if(productionToggle){try{await command(productionToggle.dataset.paused==='1'?'ResumeVehicleProduction':'PauseVehicleProduction',{production_id:productionToggle.dataset.productionToggle});}catch{}return;}
     const productionSettings=event.target.closest('[data-production-settings]');if(productionSettings){const row=productionSettings.closest('[data-production-project-row]');try{await command('SetVehicleProductionSettings',{production_id:productionSettings.dataset.productionSettings,priority:Number(row.querySelector('[data-production-priority-value]').value)});}catch{}return;}
+    const policyCreate=event.target.closest('[data-policy-create]');if(policyCreate){const root=policyCreate.closest('[data-new-external-policy]');try{await command('CreateExternalServicePolicy',policyPayload(root));}catch{}return;}
+    const policySave=event.target.closest('[data-policy-save]');if(policySave){const root=policySave.closest('[data-external-policy-row]');try{await command('SetExternalServicePolicy',{policy_id:policySave.dataset.policySave,...policyPayload(root)});}catch{}return;}
+    const policyDelete=event.target.closest('[data-policy-delete]');if(policyDelete){try{await command('DeleteExternalServicePolicy',{policy_id:policyDelete.dataset.policyDelete});}catch{}return;}
     const edit=event.target.closest('[data-lane-edit]');if(edit){const lane=(state.lanes?.items||[]).find((x)=>x.id===edit.dataset.laneEdit);if(lane)openLaneDialog(null,lane);return;}
     const toggle=event.target.closest('[data-lane-toggle]');if(toggle){try{await command(toggle.dataset.paused==='1'?'ResumeLogisticsLane':'PauseLogisticsLane',{lane_id:toggle.dataset.laneToggle});}catch{}return;}
     const del=event.target.closest('[data-lane-delete]');if(del){try{await command('DeleteLogisticsLane',{lane_id:del.dataset.laneDelete});}catch{}return;}

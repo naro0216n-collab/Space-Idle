@@ -105,6 +105,20 @@ class LogisticsLaneProjectorMixin:
         demand_rows = sim.resource_demands() if demands is None else tuple(demands)
         lane_snapshot = sim.logistics.lane_snapshot(demand_rows, sim.day) if snapshot is None else snapshot
         metrics = {row.lane_id: row for row in lane_snapshot.lanes}
+        _requests, funds = sim.external_funds_projection()
+        funds_blockers: dict[str, list[str]] = {}
+        factor_codes = {
+            "spending_cap": "external_spending_cap",
+            "period_budget": "external_period_budget",
+            "funds": "external_funds",
+            "minimum_reserve": "external_minimum_reserve",
+        }
+        for row in funds.rows:
+            if row.owner_kind != "lane" or row.unmet_musd <= 1e-9:
+                continue
+            bucket = funds_blockers.setdefault(str(row.owner_id), [])
+            for factor in row.limiting_factors:
+                bucket.append(factor_codes.get(factor, f"external_spending:{factor}"))
         return tuple(
             LogisticsLaneRow(
                 str(lane.id),
@@ -118,7 +132,7 @@ class LogisticsLaneProjectorMixin:
                 None if lane.path is None else tuple(str(route_id) for route_id in lane.path),
                 lane.path_policy.value,
                 lane.paused,
-                metrics[lane.id].blockers,
+                tuple(dict.fromkeys(metrics[lane.id].blockers + tuple(funds_blockers.get(str(lane.id), ())))),
             )
             for lane in sorted(sim.logistics.lanes.values(), key=lambda row: str(row.id))
         )

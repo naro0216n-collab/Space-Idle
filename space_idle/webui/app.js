@@ -5,7 +5,7 @@
     revision:null, session:null, world:null, catalog:null, locationId:null, location:null,
     flow:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, routes:null,
-    fleet:null, transportAllocations:null, cargoFlows:null, lanes:null, demands:[],
+    fleet:null, transportAllocations:null, cargoFlows:null, lanes:null, demands:[], externalEconomy:null,
     selectedRouteId:null, activeView:'operations', activeTab:'overview', inspector:null,
     busy:false, syncInFlight:null,
   };
@@ -66,6 +66,11 @@
     text=text.replace(/endurance:([0-9.+-]+)\/([0-9.+-]+)/g,(_,required,available)=>`航続期間不足: ${required} / ${available} 日`);
     text=text.replace(/resource:([^:;]+):([^:;]+):([0-9.+-]+)\/([0-9.+-]+)/g,(_,locationId,resourceId,current,required)=>`${locationName(locationId)}の${resourceName(resourceId)}不足: ${current} / ${required} t`);
     text=text.replace(/relocation_path:(.+)/g,(_,detail)=>`移動経路不成立: ${detail}`);
+    text=text.replace(/external_policy_denied:([^;]+)/g,(_,id)=>`External Service Policy未許可: ${definitionName(id)}`);
+    text=text.replace(/external_spending_cap/g,'External Serviceの1 request支出上限');
+    text=text.replace(/external_period_budget/g,'External Serviceの期間予算不足');
+    text=text.replace(/external_minimum_reserve/g,'最低留保Fundsにより支出不可');
+    text=text.replace(/external_funds/g,'External Service用Funds不足');
     for(const map of definitionMaps()){
       for(const [id,item] of Object.entries(map)){
         if(text.includes(id)&&item?.display_name)text=text.split(id).join(item.display_name);
@@ -168,7 +173,7 @@
     state.session=data.session; state.world=data.world; state.globalIssues=data.global_issues;
     state.research=data.research; state.scientificExplorations=data.scientific_explorations; state.contracts=data.contracts; state.logisticsSummary=data.logistics_summary; state.logistics=data.logistics;
     state.routes=data.routes; state.fleet=data.fleet; state.transportAllocations=data.transport_allocations; state.cargoFlows=data.cargo_flows;
-    state.lanes=data.lanes??state.lanes; state.demands=state.lanes?.demands||[];
+    state.lanes=data.lanes??state.lanes; state.demands=state.lanes?.demands||[]; state.externalEconomy=data.external_economy??state.externalEconomy;
     if(data.location!==undefined)state.location=data.location;
     if(data.flow!==undefined)state.flow=data.flow;
     if(data.projects!==undefined)state.projects=data.projects;

@@ -4,9 +4,10 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .facilities import FacilityBook
+from .external_economy import ExternalEconomyState
 from .inventory import InventoryBook
 from .power import PowerService
-from .shared import AccountState, DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .technology import TechnologyState
 from .transport.compatibility import TransportCompatibilityMixin
 from .transport.fleet_allocations import FleetAllocationMixin
@@ -68,7 +69,7 @@ class LogisticsService(
 ):
     routes: dict
     inventory: InventoryBook
-    account: AccountState
+    external_economy: ExternalEconomyState
     facilities: FacilityBook
     power: PowerService
     vehicle_defs: dict[DefinitionId, VehicleDef] = field(default_factory=dict)

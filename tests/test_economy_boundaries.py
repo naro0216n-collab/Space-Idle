@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from space_idle import AdvanceTime, GetCatalog, GetContracts, GetWorld, build_game_application
+from space_idle import (
+    AdvanceTime, CreateExternalServicePolicy, GetCatalog, GetContracts, GetWorld,
+    build_game_application,
+)
 from space_idle.content.base_game import (
     EARTH,
     LEO,
     REUSABLE_LAUNCH_VEHICLE,
     WATER,
+    EARTH_LEO_LAUNCH_SERVICE,
 )
 
 
@@ -34,12 +38,19 @@ def test_base_game_starts_without_contract_offers_or_contract_only_resources():
     assert "base.resource.contract_payload" not in resource_ids
 
 
-def test_owned_transport_is_physical_while_commercial_transport_uses_money():
+def test_owned_transport_is_physical_while_external_transport_requires_policy_and_funds():
     def demand():
         return ResourceDemand(
             EntityId("demand.economy"), "test", EntityId("owner.economy"),
             LEO, WATER, 1.0, 100, EARTH,
         )
+
+    def execute(sim):
+        raw = sim.logistics.plan_capacity_logistics(sim.day, (demand(),))
+        funds = sim.external_economy.allocate(raw.spending_requests, sim.day)
+        plan = sim.logistics.authorize_capacity_logistics(raw, funds, sim.day)
+        resources = allocate_resource_claims(plan.claims, sim.inventory)
+        sim.logistics.advance_capacity_logistics(sim.day, plan, resources, funds)
 
     owned = build_game_application()
     owned_sim = owned._simulation
@@ -50,9 +61,7 @@ def test_owned_transport_is_physical_while_commercial_transport_uses_money():
     owned_sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
     owned_sim.inventory.add(EARTH, WATER, 1.0)
     owned_before = owned.query(GetWorld()).funds_musd
-    owned_plan = owned_sim.logistics.plan_capacity_logistics(owned_sim.day, (demand(),))
-    owned_allocations = allocate_resource_claims(owned_plan.claims, owned_sim.inventory)
-    owned_sim.logistics.advance_capacity_logistics(owned_sim.day, owned_plan, owned_allocations)
+    execute(owned_sim)
     assert owned.query(GetWorld()).funds_musd == owned_before
     assert owned_sim.logistics.cargo_flows
 
@@ -60,11 +69,18 @@ def test_owned_transport_is_physical_while_commercial_transport_uses_money():
     commercial_sim = commercial._simulation
     commercial_sim.logistics.transport_allocations.clear()
     commercial_sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
-    commercial_sim.inventory.add(EARTH, WATER, 1.0)
+    commercial_sim.inventory.add(EARTH, WATER, 2.0)
     commercial_before = commercial.query(GetWorld()).funds_musd
-    commercial_plan = commercial_sim.logistics.plan_capacity_logistics(commercial_sim.day, (demand(),))
-    commercial_allocations = allocate_resource_claims(commercial_plan.claims, commercial_sim.inventory)
-    commercial_sim.logistics.advance_capacity_logistics(commercial_sim.day, commercial_plan, commercial_allocations)
+
+    execute(commercial_sim)
+    assert commercial.query(GetWorld()).funds_musd == commercial_before
+    assert not commercial_sim.logistics.cargo_flows
+
+    commercial.execute(CreateExternalServicePolicy(
+        enabled=True,
+        allowed_service_ids=(str(EARTH_LEO_LAUNCH_SERVICE),),
+    ))
+    execute(commercial_sim)
     assert commercial.query(GetWorld()).funds_musd < commercial_before
     assert commercial_sim.logistics.cargo_flows
 

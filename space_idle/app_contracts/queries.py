@@ -56,3 +56,5 @@ class GetScientificExplorations: pass
 class GetSurveys: provider_location_id: str | None = None
 @dataclass(frozen=True)
 class GetContracts: pass
+@dataclass(frozen=True)
+class GetExternalEconomy: pass

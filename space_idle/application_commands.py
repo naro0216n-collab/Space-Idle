@@ -24,11 +24,14 @@ from .app_contracts.transport import (
     UpdateLogisticsLane, PauseLogisticsLane, ResumeLogisticsLane, DeleteLogisticsLane,
 )
 from .app_contracts.contracts import AcceptContract, DeclineContract
+from .app_contracts.economy import (
+    CreateExternalServicePolicy, DeleteExternalServicePolicy, SetExternalServicePolicy,
+)
 from .app_contracts.queries import (
     GetCatalog, GetWorld, GetSurfaceMap, GetLocation, GetFlowReport, GetBottlenecks, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetRoutes, GetFleet,
     GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetLogisticsLanes, GetTransportAllocationOptions,
-    GetResearch, GetScientificExplorations, GetSurveys, GetContracts,
+    GetResearch, GetScientificExplorations, GetSurveys, GetContracts, GetExternalEconomy,
 )
 
 Command: TypeAlias = (
@@ -44,13 +47,14 @@ Command: TypeAlias = (
     PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |
     CreateLogisticsLane | UpdateLogisticsLane | PauseLogisticsLane |
     ResumeLogisticsLane | DeleteLogisticsLane | AcceptContract |
-    DeclineContract | AdvanceTime
+    DeclineContract | CreateExternalServicePolicy | SetExternalServicePolicy |
+    DeleteExternalServicePolicy | AdvanceTime
 )
 Query: TypeAlias = (
     GetCatalog | GetWorld | GetSurfaceMap | GetLocation | GetFlowReport | GetBottlenecks | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetRoutes | GetFleet |
     GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetLogisticsLanes | GetTransportAllocationOptions |
-    GetResearch | GetScientificExplorations | GetSurveys | GetContracts
+    GetResearch | GetScientificExplorations | GetSurveys | GetContracts | GetExternalEconomy
 )
 
 __all__ = [name for name in globals() if not name.startswith('_') and name not in {'TypeAlias'}]

@@ -177,6 +177,8 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
         assert exploration["destination_requirements"]["environment"]
         assert data["logistics"]["vehicle_production_options"]
         assert "vehicle_production" in data["logistics"]
+        assert data["external_economy"]["funds_musd"] == data["world"]["funds_musd"]
+        assert data["external_economy"]["policies"] == []
         surface_infrastructure = data["location"]["surface_infrastructure"]
         assert surface_infrastructure["fulfillment"] == 1.0
         assert str(ids.SURFACE_DISTRIBUTION_HUB) in surface_infrastructure["improvement_facility_definition_ids"]

@@ -37,11 +37,23 @@ def _owned_earth_leo_capacity(sim, units: int = 1):
     )
 
 
+def _allow_external_transport(sim) -> None:
+    for service_id in sim.logistics.external_services:
+        sim.external_economy.register_service(service_id)
+    sim.external_economy.create_policy(
+        enabled=True,
+        allowed_service_ids=tuple(sim.logistics.external_services),
+        day=sim.day,
+    )
+
+
 def _advance_logistics(sim, day, demands):
     plan = sim.logistics.plan_capacity_logistics(day, tuple(demands))
-    allocations = allocate_resource_claims(plan.claims, sim.inventory)
-    sim.logistics.advance_capacity_logistics(day, plan, allocations)
-    return plan, allocations
+    funds = sim.external_economy.allocate(plan.spending_requests, day)
+    authorized = sim.logistics.authorize_capacity_logistics(plan, funds, day)
+    allocations = allocate_resource_claims(authorized.claims, sim.inventory)
+    sim.logistics.advance_capacity_logistics(day, authorized, allocations, funds)
+    return authorized, allocations
 
 
 def test_lane_is_resource_agnostic_and_requested_capacity_limits_daily_cargo_flow():
@@ -74,6 +86,7 @@ def test_lane_uses_parallel_transport_services_until_requested_capacity_is_fille
     sim.logistics.external_services[second_id] = replace(
         base, id=second_id, display_name="Parallel Earth-LEO", capacity_t_per_day=0.4
     )
+    _allow_external_transport(sim)
     lane_id = sim.logistics.create_lane(EARTH, LEO, 2.0, 100)
     sim.inventory.add(EARTH, MACHINERY, 2.0)
     demand = _demand(2.0, demand_id="demand.parallel-services")
@@ -90,6 +103,7 @@ def test_lane_uses_parallel_transport_services_until_requested_capacity_is_fille
 def test_parallel_lanes_share_transport_capacity_without_double_consumption():
     sim = build_game_application()._simulation
     sim.logistics.transport_allocations.clear()
+    _allow_external_transport(sim)
     high_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
     low_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 50)
     sim.inventory.add(EARTH, MACHINERY, 2.0)
@@ -118,6 +132,7 @@ def test_same_priority_lane_capacity_allocation_is_registration_order_independen
     def run(capacities: tuple[float, float]) -> dict[float, float]:
         sim = build_game_application()._simulation
         sim.logistics.transport_allocations.clear()
+        _allow_external_transport(sim)
         sim.inventory.add(EARTH, MACHINERY, 3.0)
         lanes = {
             capacity: sim.logistics.create_lane(EARTH, LEO, capacity, 50)
@@ -282,6 +297,7 @@ def test_multistage_lane_requires_capacity_on_every_handoff_leg():
 
 def test_multistage_cargo_flow_records_handoffs_and_cumulative_latency():
     sim = build_game_application()._simulation
+    _allow_external_transport(sim)
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
     sim.refresh_storage()
     lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 1.0, 100)
@@ -335,6 +351,7 @@ def test_transport_capacity_uses_only_cargo_settled_at_tick_boundary():
     if leo_propellant > 0:
         sim.inventory.consume_allocated(LEO, PROPELLANT, leo_propellant)
 
+    _allow_external_transport(sim)
     inbound_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
     outbound_lane = sim.logistics.create_lane(LEO, LUNAR_ORBIT, 1.0, 100)
     sim.inventory.add(EARTH, PROPELLANT, 1.0)
@@ -385,6 +402,7 @@ def test_transport_capacity_uses_only_cargo_settled_at_tick_boundary():
 
 def test_cargo_arrival_waits_for_destination_storage_admission():
     sim = build_game_application()._simulation
+    _allow_external_transport(sim)
     lane_id = sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
     free_before = sim.inventory.free_capacity(LEO, MACHINERY)
     assert free_before is not None and free_before > 0
@@ -429,8 +447,10 @@ def test_dispatch_source_claim_competes_with_higher_priority_local_use():
         "test_local_use", EntityId("owner.local-use"), "local_use",
     )
 
+    funds = sim.external_economy.allocate(plan.spending_requests, sim.day)
+    plan = sim.logistics.authorize_capacity_logistics(plan, funds, sim.day)
     allocations = allocate_resource_claims(plan.claims + (local_claim,), sim.inventory)
-    sim.logistics.advance_capacity_logistics(sim.day, plan, allocations)
+    sim.logistics.advance_capacity_logistics(sim.day, plan, allocations, funds)
 
     assert allocations.allocated(local_claim.id) == pytest.approx(1.0)
     assert allocations.allocated(cargo_claim.id) == pytest.approx(0.0)

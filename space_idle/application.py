@@ -17,7 +17,8 @@ from .application_commands import (
     SetResearchDemonstrationSite, SetResearchPrototypeSite, SetSurveyPriority,
     SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration,
     StartSurvey, UnassignExplorationFleet, UpdateLogisticsLane,
-    UpdateTransportAllocation, AssignExplorationFleet,
+    UpdateTransportAllocation, AssignExplorationFleet, CreateExternalServicePolicy,
+    SetExternalServicePolicy, DeleteExternalServicePolicy, GetExternalEconomy,
 )
 
 from .application_command_handlers import ApplicationCommandMixin

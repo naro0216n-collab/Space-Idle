@@ -164,8 +164,14 @@ def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_pa
         ids.LEO, ids.MACHINERY, 0.5, 100, ids.EARTH,
     )
     logistics_plan = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
+    funds = sim.external_economy.allocate(logistics_plan.spending_requests, sim.day)
+    logistics_plan = sim.logistics.authorize_capacity_logistics(
+        logistics_plan, funds, sim.day
+    )
     allocations = allocate_resource_claims(logistics_plan.claims, sim.inventory)
-    sim.logistics.advance_capacity_logistics(sim.day, logistics_plan, allocations)
+    sim.logistics.advance_capacity_logistics(
+        sim.day, logistics_plan, allocations, funds
+    )
     assert sim.logistics.cargo_flows
 
     # Exploration reservation uses another LEO Fleet pool while cargo remains in flight.

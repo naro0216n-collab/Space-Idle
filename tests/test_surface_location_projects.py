@@ -9,6 +9,7 @@ from space_idle import (
     AdvanceTime,
     ApplicationError,
     CancelFounding,
+    CreateExternalServicePolicy,
     CreateLogisticsLane,
     DevelopSurfaceCell,
     FoundLocation,
@@ -150,6 +151,10 @@ def test_orbital_survey_player_logistics_and_founding_create_first_surface_locat
     app.execute(AdvanceTime(8))
     assert sim.survey.cell_knowledge_level(cell) >= 2
 
+    app.execute(CreateExternalServicePolicy(
+        enabled=True,
+        allowed_service_ids=tuple(map(str, sim.logistics.external_services)),
+    ))
     lane_id = app.execute(CreateLogisticsLane(
         str(ids.EARTH), str(ids.LUNAR_ORBIT), 0.25, priority=70
     )).created_id
@@ -384,7 +389,7 @@ def test_surface_map_exposes_founding_package_vehicle_and_blockers():
 
 
 def test_active_founding_save_load_preserves_identity_and_future_transition(tmp_path):
-    assert SAVE_SCHEMA_VERSION == 35
+    assert SAVE_SCHEMA_VERSION == 36
     app = build_game_application()
     sim = app._simulation
     cell = ids.MOON_CELL_FARSIDE_HIGHLANDS

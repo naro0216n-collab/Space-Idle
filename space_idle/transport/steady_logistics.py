@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import heapq
 
+from ..external_economy import FundsAllocationPlan, FundsRequest
 from ..resource_claim import ResourceAllocationPlan, ResourceClaim
 from ..resource_demand import ResourceDemand
 from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
@@ -39,6 +40,12 @@ class _PlannedDispatch:
     path: tuple[_ServiceEdge, ...]
     amount_t: float
     cargo_claim_id: EntityId
+    spending_request_ids: tuple[EntityId, ...] = ()
+    raw_amount_t: float | None = None
+
+    @property
+    def planned_amount_t(self) -> float:
+        return self.amount_t if self.raw_amount_t is None else self.raw_amount_t
 
 
 @dataclass(frozen=True)
@@ -46,6 +53,7 @@ class LogisticsResourcePlan:
     dispatches: tuple[_PlannedDispatch, ...]
     claims: tuple[ResourceClaim, ...]
     planned_usage: tuple[tuple[EntityId, DirectionalCapacity], ...]
+    spending_requests: tuple[FundsRequest, ...] = ()
 
 
 class SteadyLogisticsMixin:
@@ -213,9 +221,23 @@ class SteadyLogisticsMixin:
         return result
 
     def lane_service_path(
-        self, lane: LogisticsLane, day: int, edges: tuple[_ServiceEdge, ...] | None = None
+        self,
+        lane: LogisticsLane,
+        day: int,
+        edges: tuple[_ServiceEdge, ...] | None = None,
+        *,
+        enforce_external_policy: bool = True,
     ) -> tuple[_ServiceEdge, ...]:
         available = self._service_edges(day) if edges is None else edges
+        if enforce_external_policy:
+            available = tuple(
+                edge
+                for edge in available
+                if edge.external_service_id is None
+                or self.external_economy.service_allowed(
+                    edge.external_service_id, "lane", lane.id
+                )
+            )
         if lane.path is None:
             return self._automatic_service_path(
                 lane.source_id, lane.destination_id, available, lane.path_policy
@@ -335,6 +357,18 @@ class SteadyLogisticsMixin:
         return EntityId(f"claim.logistics.cargo:{lane_id}:{demand_id}")
 
     @staticmethod
+    def _spending_request_id(
+        lane_id: EntityId,
+        demand_id: EntityId,
+        service_id: DefinitionId,
+        edge_key: str,
+        dispatch_index: int,
+    ) -> EntityId:
+        return EntityId(
+            f"funds.logistics:{lane_id}:{demand_id}:{service_id}:{edge_key}:{dispatch_index}"
+        )
+
+    @staticmethod
     def _operation_claim_id(
         allocation_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId
     ) -> EntityId:
@@ -357,15 +391,6 @@ class SteadyLogisticsMixin:
                 totals[key] = totals.get(key, 0.0) + amount
         return totals
 
-    @staticmethod
-    def _funds_limited_amount(
-        path: tuple[_ServiceEdge, ...], upper: float, funds_budget: float
-    ) -> float:
-        cost_per_t = sum(edge.cost_musd_per_t for edge in path)
-        if cost_per_t <= 1e-12:
-            return upper
-        return min(upper, max(0.0, funds_budget) / cost_per_t)
-
     def plan_capacity_logistics(
         self, day: int, demands: tuple[ResourceDemand, ...]
     ) -> LogisticsResourcePlan:
@@ -380,8 +405,8 @@ class SteadyLogisticsMixin:
         demand_rows = tuple(sorted(demands, key=lambda row: (-row.priority, str(row.id))))
         pipeline = self._flow_pipeline_by_demand({row.id for row in demand_rows})
         used: dict[EntityId, DirectionalCapacity] = {}
-        funds_budget = self.account.funds_musd
         dispatches: list[_PlannedDispatch] = []
+        spending_requests: list[FundsRequest] = []
 
         for lane in sorted(self.lanes.values(), key=self._lane_execution_key):
             if lane.paused:
@@ -410,23 +435,57 @@ class SteadyLogisticsMixin:
                         break
                     path_capacity = min(remaining[edge.key] for edge in path)
                     upper = min(gap, lane_capacity - used_lane, path_capacity)
-                    amount = self._funds_limited_amount(path, upper, funds_budget)
+                    amount = upper
                     if amount <= 1e-9:
                         break
 
                     used = self._allocation_used_after(used, path, amount)
-                    cost = amount * sum(edge.cost_musd_per_t for edge in path)
-                    funds_budget -= cost
                     for edge in path:
                         remaining[edge.key] -= amount
                     used_lane += amount
                     pipeline[demand.id] += amount
+                    spending_ids: list[EntityId] = []
+                    for edge in path:
+                        if (
+                            edge.external_service_id is None
+                            or edge.cost_musd_per_t <= 1e-12
+                        ):
+                            continue
+                        policy = self.external_economy.resolve_policy(
+                            edge.external_service_id, "lane", lane.id
+                        )
+                        if policy is None:
+                            raise RuntimeError(
+                                "external service entered plan without policy authorization"
+                            )
+                        request_id = self._spending_request_id(
+                            lane.id,
+                            demand.id,
+                            edge.external_service_id,
+                            edge.key,
+                            len(dispatches),
+                        )
+                        spending_ids.append(request_id)
+                        spending_requests.append(
+                            FundsRequest(
+                                request_id,
+                                policy.id,
+                                edge.external_service_id,
+                                amount * edge.cost_musd_per_t,
+                                lane.priority,
+                                "lane",
+                                lane.id,
+                                f"transport:{demand.id}",
+                            )
+                        )
                     dispatches.append(_PlannedDispatch(
                         lane.id,
                         demand,
                         path,
                         amount,
                         self._cargo_claim_id(lane.id, demand.id),
+                        tuple(spending_ids),
+                        amount,
                     ))
 
         cargo_totals: dict[EntityId, float] = {}
@@ -474,6 +533,104 @@ class SteadyLogisticsMixin:
             tuple(dispatches),
             tuple(claims),
             tuple(sorted(used.items(), key=lambda row: str(row[0]))),
+            tuple(sorted(spending_requests, key=lambda row: str(row.id))),
+        )
+
+    def authorize_capacity_logistics(
+        self,
+        plan: LogisticsResourcePlan,
+        funds: FundsAllocationPlan,
+        day: int,
+    ) -> LogisticsResourcePlan:
+        """Apply Funds authorization before Resource allocation.
+
+        External spending is an upstream dependency of dispatch. Reducing a paid
+        dispatch here prevents denied external work from reserving source stock or
+        owned-fleet operating resources later in the same allocation phase.
+        """
+        dispatches: list[_PlannedDispatch] = []
+        used: dict[EntityId, DirectionalCapacity] = {}
+        requests_by_id = {request.id: request for request in plan.spending_requests}
+        for row in plan.dispatches:
+            amount = row.amount_t
+            for request_id in row.spending_request_ids:
+                request = requests_by_id[request_id]
+                if request.requested_musd <= 1e-12:
+                    continue
+                authorized = funds.authorized(request_id)
+                amount = min(
+                    amount,
+                    row.amount_t * max(0.0, authorized) / request.requested_musd,
+                )
+            if amount <= 1e-12:
+                continue
+            dispatches.append(
+                _PlannedDispatch(
+                    row.lane_id,
+                    row.demand,
+                    row.path,
+                    amount,
+                    row.cargo_claim_id,
+                    row.spending_request_ids,
+                    row.planned_amount_t,
+                )
+            )
+            used = self._allocation_used_after(used, row.path, amount)
+
+        cargo_totals: dict[EntityId, float] = {}
+        cargo_meta: dict[EntityId, _PlannedDispatch] = {}
+        for row in dispatches:
+            cargo_totals[row.cargo_claim_id] = (
+                cargo_totals.get(row.cargo_claim_id, 0.0) + row.amount_t
+            )
+            cargo_meta.setdefault(row.cargo_claim_id, row)
+
+        claims: list[ResourceClaim] = []
+        for claim_id, requested in sorted(cargo_totals.items(), key=lambda row: str(row[0])):
+            row = cargo_meta[claim_id]
+            demand = row.demand
+            lane = self.lanes[row.lane_id]
+            claims.append(
+                ResourceClaim(
+                    claim_id,
+                    lane.source_id,
+                    demand.resource_id,
+                    requested,
+                    demand.priority,
+                    "logistics_dispatch",
+                    demand.owner_id,
+                    f"lane:{lane.id}",
+                    demand_id=demand.id,
+                )
+            )
+
+        operational = self._operational_resource_totals_by_allocation(used, day)
+        for (allocation_id, location_id, resource_id), requested in sorted(
+            operational.items(),
+            key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2])),
+        ):
+            if requested <= 1e-12:
+                continue
+            allocation = self.transport_allocations[allocation_id]
+            claims.append(
+                ResourceClaim(
+                    self._operation_claim_id(
+                        allocation_id, location_id, resource_id
+                    ),
+                    location_id,
+                    resource_id,
+                    requested,
+                    allocation.priority,
+                    "transport_operation",
+                    allocation_id,
+                    "sustained_transport",
+                )
+            )
+        return LogisticsResourcePlan(
+            tuple(dispatches),
+            tuple(claims),
+            tuple(sorted(used.items(), key=lambda row: str(row[0]))),
+            plan.spending_requests,
         )
 
     def _latest_completed_transport_day(self, day: int) -> int:
@@ -550,6 +707,7 @@ class SteadyLogisticsMixin:
         day: int,
         plan: LogisticsResourcePlan,
         allocations: ResourceAllocationPlan,
+        funds: FundsAllocationPlan,
     ) -> None:
         """Execute only transport work authorized by ResourceAllocation."""
         operation_factor: dict[EntityId, float] = {}
@@ -576,6 +734,7 @@ class SteadyLogisticsMixin:
                 cargo_budget[claim.id] = 0.0
 
         used: dict[EntityId, DirectionalCapacity] = {}
+        requests_by_id = {request.id: request for request in plan.spending_requests}
         for row in plan.dispatches:
             path_factor = min(
                 (operation_factor.get(edge.allocation_id, 1.0) for edge in row.path if edge.allocation_id is not None),
@@ -589,10 +748,21 @@ class SteadyLogisticsMixin:
 
             lane = self.lanes[row.lane_id]
             demand = row.demand
-            cost = amount * sum(edge.cost_musd_per_t for edge in row.path)
             self.inventory.consume_allocated(lane.source_id, demand.resource_id, amount)
-            if cost > 1e-12 and not self.account.spend(cost):
-                raise RuntimeError("external transport funds changed after planning")
+            if row.spending_request_ids:
+                raw_amount = row.planned_amount_t
+                execution_factor = 0.0 if raw_amount <= 1e-12 else amount / raw_amount
+                for request_id in row.spending_request_ids:
+                    authorization = funds.authorization(request_id)
+                    request = requests_by_id[request_id]
+                    actual_cost = request.requested_musd * execution_factor
+                    if actual_cost > authorization.authorized_musd + 1e-8:
+                        raise RuntimeError("external transport spend exceeded funds authorization")
+                    self.external_economy.spend_authorized(
+                        authorization,
+                        actual_cost,
+                        day,
+                    )
             cargo_budget[row.cargo_claim_id] = max(0.0, allowed_by_cargo - amount)
             used = self._allocation_used_after(used, row.path, amount)
 
@@ -634,6 +804,28 @@ class SteadyLogisticsMixin:
             if directional.forward_t_per_day > 1e-12 or directional.reverse_t_per_day > 1e-12:
                 self.transport_allocations[allocation_id].last_operated_day = day
 
+    def _external_policy_blockers_for_lane(
+        self, lane: LogisticsLane, day: int, edges: tuple[_ServiceEdge, ...]
+    ) -> tuple[str, ...]:
+        try:
+            physical_path = self.lane_service_path(
+                lane, day, edges, enforce_external_policy=False
+            )
+        except ValueError:
+            return ()
+        denied = {
+            edge.external_service_id
+            for edge in physical_path
+            if edge.external_service_id is not None
+            and not self.external_economy.service_allowed(
+                edge.external_service_id, "lane", lane.id
+            )
+        }
+        return tuple(
+            f"external_policy_denied:{service_id}"
+            for service_id in sorted(denied, key=str)
+        )
+
     def lane_snapshot(
         self, demands: tuple[ResourceDemand, ...], day: int = 0
     ) -> LogisticsLaneSnapshot:
@@ -648,9 +840,18 @@ class SteadyLogisticsMixin:
                     self._lane_transport_capacity(lane, day, edges, remaining)
                     if not lane.paused else 0.0
                 )
+                if effective <= 1e-12 and not lane.paused:
+                    blockers.extend(
+                        self._external_policy_blockers_for_lane(lane, day, edges)
+                    )
             except ValueError as exc:
                 effective = 0.0
-                blockers.append(f"transport_capacity:{exc}")
+                policy_blockers = self._external_policy_blockers_for_lane(
+                    lane, day, edges
+                )
+                blockers.extend(policy_blockers)
+                if not policy_blockers:
+                    blockers.append(f"transport_capacity:{exc}")
             if lane.paused:
                 blockers.append("manual_pause")
             queued = sum(
@@ -691,7 +892,10 @@ class SteadyLogisticsMixin:
                 if path and not lane.paused:
                     operational.append(lane.id)
             except ValueError as exc:
-                blockers.append(f"transport_capacity:{exc}")
+                policy_blockers = self._external_policy_blockers_for_lane(
+                    lane, day, edges
+                )
+                blockers.extend(policy_blockers or (f"transport_capacity:{exc}",))
         arrivals = [
             flow.ready_day
             for flow in self.cargo_flows.values()

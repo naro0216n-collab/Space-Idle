@@ -6,6 +6,7 @@ import math
 from .contracts import ContractService
 from .construction.models import CONSTRUCTION_SERVICE_TYPE
 from .domain import DomainExtension
+from .external_economy import ExternalEconomyState, FundsAllocationPlan, FundsRequest
 from .facilities import FacilityBook
 from .founding import LocationFoundingService
 from .industry import IndustryService
@@ -26,7 +27,7 @@ from .resource_demand import (
     resolve_local_resource_supply,
     ResourceDemandResolution,
 )
-from .shared import AccountState, SpatialNodeId
+from .shared import SpatialNodeId
 from .spatial import EnvironmentResolver, SpatialGraph
 from .storage import StorageService
 from .surface_infrastructure import SurfaceInfrastructureService
@@ -81,6 +82,8 @@ class TickPlan:
 
 @dataclass(frozen=True)
 class TickAllocations:
+    funds: FundsAllocationPlan
+    logistics: LogisticsResourcePlan
     resources: ResourceAllocationPlan
     services: ServiceCapacityAllocationPlan
 
@@ -88,7 +91,7 @@ class TickAllocations:
 @dataclass
 class Simulation:
     day: int
-    account: AccountState
+    external_economy: ExternalEconomyState
     graph: SpatialGraph
     environment: EnvironmentResolver
     inventory: InventoryBook
@@ -404,6 +407,29 @@ class Simulation:
         }
         return self._allocate_tick_services(powers)
 
+    def external_funds_projection(self) -> tuple[tuple[FundsRequest, ...], FundsAllocationPlan]:
+        """Project current External Service spending requests and authorization.
+
+        This is observational: it rebuilds planning from current authoritative
+        state but does not spend Funds or mutate policy budgets.
+        """
+        locations = self._active_locations()
+        powers = {
+            loc: self.power.snapshot(loc, self.facilities, self.day)
+            for loc in sorted(locations, key=str)
+        }
+        gross_demands = self._gross_resource_demands(powers)
+        external_demands = tuple(
+            demand
+            for resolution in resolve_local_resource_supply(gross_demands, self.inventory)
+            if (demand := resolution.external_demand()) is not None
+        )
+        logistics_plan = self.logistics.plan_capacity_logistics(
+            self.day, external_demands
+        )
+        requests = logistics_plan.spending_requests
+        return requests, self.external_economy.allocate(requests, self.day)
+
     def resource_allocation_projection(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
@@ -423,7 +449,13 @@ class Simulation:
         logistics_plan = self.logistics.plan_capacity_logistics(
             self.day, external_demands
         )
-        return self._allocate_tick_resources(powers, logistics_plan.claims)
+        funds = self.external_economy.allocate(
+            logistics_plan.spending_requests, self.day
+        )
+        authorized_logistics = self.logistics.authorize_capacity_logistics(
+            logistics_plan, funds, self.day
+        )
+        return self._allocate_tick_resources(powers, authorized_logistics.claims)
 
     def advance_to_day(self, target_day: int) -> None:
         if target_day < self.day:
@@ -458,6 +490,7 @@ class Simulation:
 
     def _settle_tick_boundary(self) -> None:
         """Settle state whose completion time was reached before this tick."""
+        self.external_economy.settle_periods(self.day)
         self.logistics.advance_fleet_state(self.day)
         if self.founding is not None:
             self.founding.settle_arrivals(self.day)
@@ -508,16 +541,22 @@ class Simulation:
         intents: TickIntents,
         plan: TickPlan,
     ) -> TickAllocations:
+        funds = self.external_economy.allocate(
+            plan.logistics.spending_requests, self.day
+        )
+        authorized_logistics = self.logistics.authorize_capacity_logistics(
+            plan.logistics, funds, self.day
+        )
         resources = self._allocate_tick_resources(
             snapshot.power_by_location,
-            plan.logistics.claims,
+            authorized_logistics.claims,
             domain_claims=intents.resource_claims,
         )
         services = self._allocate_tick_services(
             snapshot.power_by_location,
             intents.service_requests,
         )
-        return TickAllocations(resources, services)
+        return TickAllocations(funds, authorized_logistics, resources, services)
 
     def _execute_tick_domains(
         self,
@@ -593,7 +632,10 @@ class Simulation:
         # admit arriving Cargo to Inventory until the next boundary.
         self.logistics.advance_fleet_relocations(allocations.resources, self.day)
         self.logistics.advance_capacity_logistics(
-            self.day, plan.logistics, allocations.resources
+            self.day,
+            allocations.logistics,
+            allocations.resources,
+            allocations.funds,
         )
 
     def _settle_tick_state_transitions(

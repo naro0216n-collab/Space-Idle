@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .domain_extensions import BASE_DOMAIN_EXTENSIONS
 from ..contracts import ContractService
+from ..external_economy import ExternalEconomyState
 from ..facilities import FacilityBook
 from ..founding import LocationFoundingService
 from ..industry import IndustryService
@@ -69,17 +70,18 @@ def build_base_simulation() -> Simulation:
     inventory = InventoryBook()
     configure_initial_inventory(inventory)
 
-    # Money remains an auxiliary settlement balance for explicitly financial
-    # boundaries such as commercial transport. Base-game growth is not funded
+    # Funds are organization-level settlement state. External spending is
+    # authorized by explicit policy/allocation; base-game growth is not funded
     # by passive income or automatically offered contracts.
     account = AccountState(1800.0)
+    external_economy = ExternalEconomyState(account)
     technology = TechnologyState()
     power = PowerService(build_power_specs(), environment)
 
     logistics = LogisticsService(
         routes=build_route_definitions(),
         inventory=inventory,
-        account=account,
+        external_economy=external_economy,
         facilities=facilities,
         power=power,
         surface_route_rules=build_surface_route_rules(),
@@ -87,6 +89,8 @@ def build_base_simulation() -> Simulation:
         technology_state=technology,
     )
     logistics.external_services.update(build_external_transport_services())
+    for service_id in logistics.external_services:
+        external_economy.register_service(service_id)
     logistics.vehicle_defs.update(build_vehicle_definitions())
     logistics.synchronize_surface_access_routes()
     for vehicle_definition_id, count, location_id in initial_vehicle_deployments():
@@ -160,7 +164,7 @@ def build_base_simulation() -> Simulation:
     contracts = ContractService(build_contract_templates(), facilities, logistics, power, account)
 
     sim = Simulation(
-        day=0, account=account, graph=graph, environment=environment, inventory=inventory,
+        day=0, external_economy=external_economy, graph=graph, environment=environment, inventory=inventory,
         facilities=facilities, power=power, storage=storage, industry=industry, logistics=logistics,
         projects=projects, technology=technology, founding=founding, contracts=contracts,
         research=research, survey=survey, extraction=extraction,

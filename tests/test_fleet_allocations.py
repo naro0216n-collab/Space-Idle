@@ -455,6 +455,11 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     assert required > 0.0
 
     lane_id = lg.create_lane(ids.EARTH, ids.LEO, required, 100)
+    sim.external_economy.create_policy(
+        enabled=True,
+        allowed_service_ids=tuple(lg.external_services),
+        day=sim.day,
+    )
     sim.inventory.add(ids.EARTH, ids.PROPELLANT, required)
     demand = ResourceDemand(
         EntityId("demand.boundary-relocation-propellant"),
@@ -467,8 +472,10 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
         ids.EARTH,
     )
     plan = lg.plan_capacity_logistics(0, (demand,))
+    funds = sim.external_economy.allocate(plan.spending_requests, 0)
+    plan = lg.authorize_capacity_logistics(plan, funds, 0)
     allocations = allocate_resource_claims(plan.claims, sim.inventory)
-    lg.advance_capacity_logistics(0, plan, allocations)
+    lg.advance_capacity_logistics(0, plan, allocations, funds)
     flow = next(
         row for row in lg.cargo_flows.values()
         if row.lane_id == lane_id and row.demand_id == demand.id
