@@ -242,9 +242,12 @@ def run() -> None:
             row = lane_rows.first
             row.get_by_role("button", name="再開").click()
             page.wait_for_function(
-                "() => document.querySelector('#laneTable tbody button[data-lane-edit]')?.closest('tr')?.querySelector('.badge')?.textContent === '稼働'",
+                "() => document.querySelector('#laneTable tbody button[data-lane-toggle]')?.textContent === '停止'",
                 timeout=10000,
             )
+            row = lane_rows.first
+            assert row.locator(".badge").inner_text() == "阻害"
+            assert "External Service Policy未許可" in row.inner_text()
 
             lane_rows.first.get_by_role("button", name="削除").click()
             page.wait_for_function(
