@@ -204,7 +204,16 @@
   }
 
   function render(){
-    const loc=state.location;if(!loc)return;
+    const loc=state.location;
+    if(!loc){
+      $('#locationTitle').textContent=locationName(state.locationId);
+      $('#locationKind').textContent='地点状態を取得中';
+      $('#headlineMetrics').innerHTML='';
+      $$('.tab-button').forEach((b)=>b.classList.toggle('is-active',b.dataset.tab===state.activeTab));
+      $('#operationsTabContent').innerHTML='<div class="empty-state">地点状態を取得しています。</div>';
+      setInspector('選択項目','<div class="empty-state">地点状態の取得後に操作できます。</div>');
+      return;
+    }
     $('#locationTitle').textContent=loc.display_name;
     const kind=(state.world?.locations||[]).find((x)=>x.id===loc.id)?.kind;
     $('#locationKind').textContent=`${A.locationKindLabels[kind]||kind||'拠点'}拠点`;
