@@ -200,6 +200,65 @@ def test_player_founded_surface_location_receives_location_to_location_routes_wi
     assert surface_mode.service_feasible
 
 
+
+def test_surface_interface_route_endpoint_resolves_facility_site_cell_and_application_projection():
+    app = build_game_application()
+    sim = app._simulation
+
+    origin_interface = sim.facilities.install(
+        ids.ROBOTIC_GEOLOGY_STATION,
+        ids.SOUTH_POLAR_RIDGE,
+        site_cell_id=ids.MOON_CELL_SOUTH_POLAR_RIDGE,
+    )
+    destination_interface = sim.facilities.install(
+        ids.ROBOTIC_GEOLOGY_STATION,
+        ids.NEARSIDE_MARE,
+        site_cell_id=ids.MOON_CELL_NEARSIDE_MARE,
+    )
+    route = RouteDef(
+        RouteId("test.route.surface_interfaces"),
+        RouteEndpoint(ids.SOUTH_POLAR_RIDGE, surface_interface_id=origin_interface),
+        RouteEndpoint(ids.NEARSIDE_MARE, surface_interface_id=destination_interface),
+        transit_days=99,
+        operations=(TransportOperationRequirement(TransportOperationKind.SURFACE_TRANSPORT),),
+        display_name="Surface interface route",
+    )
+    sim.logistics.routes[route.id] = route
+
+    geometry = sim.logistics.route_geometry(route.id)
+    assert geometry.same_body_surface
+    assert geometry.origin.locator_kind == "surface_interface"
+    assert geometry.origin.locator_id == str(origin_interface)
+    assert geometry.origin.surface_cell_id == ids.MOON_CELL_SOUTH_POLAR_RIDGE
+    assert geometry.destination.locator_kind == "surface_interface"
+    assert geometry.destination.locator_id == str(destination_interface)
+    assert geometry.destination.surface_cell_id == ids.MOON_CELL_NEARSIDE_MARE
+    assert geometry.distance_km is not None and geometry.distance_km > 0.0
+
+    row = app.query(GetRoutes(route_id=str(route.id), include_modes=False)).items[0]
+    assert row.origin_endpoint.locator_kind == "surface_interface"
+    assert row.origin_endpoint.locator_id == str(origin_interface)
+    assert row.origin_endpoint.surface_cell_id == str(ids.MOON_CELL_SOUTH_POLAR_RIDGE)
+    assert row.destination_endpoint.locator_kind == "surface_interface"
+    assert row.destination_endpoint.locator_id == str(destination_interface)
+    assert row.destination_endpoint.surface_cell_id == str(ids.MOON_CELL_NEARSIDE_MARE)
+    assert row.same_body_surface
+    assert row.distance_km == geometry.distance_km
+
+    sim.facilities.pause(origin_interface)
+    blocked = app.query(GetRoutes(route_id=str(route.id), include_modes=False)).items[0]
+    assert not blocked.available
+    assert any(
+        blocker.startswith("origin:interface:manual_pause:")
+        for blocker in blocked.blockers
+    )
+
+    sim.facilities.resume(origin_interface)
+    sim.facilities.facilities[origin_interface].maintenance_satisfaction = 0.0
+    blocked = app.query(GetRoutes(route_id=str(route.id), include_modes=False)).items[0]
+    assert not blocked.available
+    assert "origin:interface:maintenance:facility unavailable" in blocked.blockers
+
 def test_external_surface_service_latency_uses_endpoint_geometry():
     app = build_game_application()
     sim = app._simulation

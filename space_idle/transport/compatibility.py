@@ -84,6 +84,19 @@ class TransportCompatibilityMixin:
                 failures.append(f"{prefix}:endpoint:{exc}")
                 continue
             power = self.power.snapshot(endpoint.location_id, self.facilities, day)
+            if endpoint.surface_interface_id is not None:
+                interface = self.facilities.facilities[endpoint.surface_interface_id]
+                for code, detail in self.facilities.activation_failures(interface, day):
+                    failures.append(f"{prefix}:interface:{code}:{detail}")
+                if not interface.paused and not self.facilities.environment_failures(interface, day):
+                    maintenance = power.maintenance_factor_by_facility.get(
+                        interface.id, self.facilities.maintenance_factor(interface.id)
+                    )
+                    if maintenance <= 1e-12:
+                        failures.append(f"{prefix}:interface:maintenance:facility unavailable")
+                    utilization = power.utilization_by_facility.get(interface.id, 1.0)
+                    if utilization <= 1e-12:
+                        failures.append(f"{prefix}:interface:power:facility unavailable")
             for failure in evaluate_site_requirements(
                 requirements,
                 endpoint.location_id,
