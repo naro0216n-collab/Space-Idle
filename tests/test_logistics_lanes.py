@@ -106,6 +106,30 @@ def test_parallel_lanes_share_transport_capacity_without_double_consumption():
     assert sum(by_lane.values()) == pytest.approx(service_capacity)
 
 
+def test_same_priority_lane_capacity_allocation_is_registration_order_independent():
+    def run(capacities: tuple[float, float]) -> dict[float, float]:
+        sim = build_game_application()._simulation
+        sim.logistics.transport_allocations.clear()
+        sim.inventory.add(EARTH, MACHINERY, 3.0)
+        lanes = {
+            capacity: sim.logistics.create_lane(EARTH, LEO, capacity, 50)
+            for capacity in capacities
+        }
+        demand = _demand(3.0, demand_id="demand.same-priority-lanes")
+        sim.logistics.advance_capacity_logistics(sim.day, (demand,))
+        used = {capacity: 0.0 for capacity in capacities}
+        by_id = {lane_id: capacity for capacity, lane_id in lanes.items()}
+        for flow in sim.logistics.cargo_flows.values():
+            if flow.lane_id in by_id:
+                used[by_id[flow.lane_id]] += flow.amount_t
+        return used
+
+    forward = run((1.0, 2.0))
+    reverse = run((2.0, 1.0))
+    assert forward == pytest.approx(reverse)
+    assert forward[1.0] > 0
+
+
 def test_demand_without_lane_does_not_create_hidden_transport_state():
     sim = build_game_application()._simulation
     _owned_earth_leo_capacity(sim)

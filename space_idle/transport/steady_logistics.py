@@ -241,6 +241,19 @@ class SteadyLogisticsMixin:
                 scratch[edge.key] -= amount
         return total
 
+    @staticmethod
+    def _lane_execution_key(lane: LogisticsLane) -> tuple:
+        """Order equal-priority Lane work by configuration, not creation order."""
+        return (
+            -lane.priority,
+            str(lane.source_id),
+            str(lane.destination_id),
+            lane.path_policy.value,
+            tuple(str(route_id) for route_id in (lane.path or ())),
+            lane.requested_capacity_t_per_day,
+            str(lane.id),
+        )
+
     def _flow_pipeline_by_demand(self, demand_ids: set[EntityId]) -> dict[EntityId, float]:
         pipeline = {demand_id: 0.0 for demand_id in demand_ids}
         for flow in self.cargo_flows.values():
@@ -384,10 +397,7 @@ class SteadyLogisticsMixin:
         funds_budget = self.account.funds_musd
         lane_metrics: dict[EntityId, LaneRuntimeMetrics] = {}
 
-        for lane in sorted(
-            self.lanes.values(),
-            key=lambda row: (-row.priority, str(row.source_id), str(row.destination_id), str(row.id)),
-        ):
+        for lane in sorted(self.lanes.values(), key=self._lane_execution_key):
             blockers: list[str] = []
             if lane.paused:
                 blockers.append("manual_pause")
