@@ -88,6 +88,8 @@ class ScientificExplorationProjectorMixin:
                         for resource_id, amount in definition.consumable_resources
                     ),
                     required_units=definition.required_units,
+                    minimum_payload_t=definition.minimum_payload_t,
+                    required_vehicle_capabilities=definition.required_vehicle_capabilities,
                     assigned_vehicle_definition_id=assigned_vehicle_definition_id,
                     reserved_units=reserved_units,
                     blockers=blockers,

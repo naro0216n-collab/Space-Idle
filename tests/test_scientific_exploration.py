@@ -59,6 +59,8 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performan
 
     definition = sim.scientific_exploration.definitions[ids.CISLUNAR_SCIENCE_EXPLORATION]
     assert row.mission_duration_days == definition.mission_duration_days
+    assert row.minimum_payload_t == definition.minimum_payload_t
+    assert row.required_vehicle_capabilities == definition.required_vehicle_capabilities
     assert row.research_points_per_day == pytest.approx(definition.points_per_day)
     assert row.required_units == definition.required_units == 1
     assert row.can_start is True
@@ -85,6 +87,46 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performan
     app.execute(AdvanceTime(1))
     assert _row(app).can_unassign is False
     assert capture_state(sim)["survey"] == before_survey
+
+
+def test_scientific_exploration_fleet_contract_checks_usable_payload_and_generic_capability():
+    app = build_game_application()
+    sim = app._simulation
+    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
+    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
+    definition = sim.scientific_exploration.definitions[exploration_id]
+    vehicle = sim.logistics.vehicle_defs[vehicle_id]
+
+    sim.scientific_exploration.definitions[exploration_id] = replace(
+        definition,
+        minimum_payload_t=vehicle.max_cargo_for_route(definition.compatibility_route()) + 0.1,
+        required_vehicle_capabilities=("docking",),
+    )
+    failures = sim.scientific_exploration.fleet_failures(
+        exploration_id, vehicle_id, day=sim.day
+    )
+    assert any(blocker.startswith("payload_capacity:") for blocker in failures)
+    assert "vehicle_capability:docking" in failures
+
+    sim.logistics.vehicle_defs[vehicle_id] = replace(
+        vehicle,
+        performance=replace(vehicle.performance, generic_capabilities=("docking",)),
+    )
+    sim.scientific_exploration.definitions[exploration_id] = replace(
+        definition,
+        minimum_payload_t=vehicle.max_cargo_for_route(definition.compatibility_route()),
+        required_vehicle_capabilities=("docking",),
+    )
+    row = _row(app)
+    tug = next(
+        option for option in row.fleet_options
+        if option.vehicle_definition_id == str(vehicle_id)
+    )
+    assert tug.blockers == ()
+    assert row.minimum_payload_t == pytest.approx(
+        vehicle.max_cargo_for_route(definition.compatibility_route())
+    )
+    assert row.required_vehicle_capabilities == ("docking",)
 
 
 def test_exploration_reservation_excludes_transport_and_release_refills_target():
@@ -196,6 +238,19 @@ def test_scientific_exploration_rejects_duplicate_consumable_resources():
         consumable_resources=((ids.MACHINERY, 0.1), (ids.MACHINERY, 0.2)),
     )
     with pytest.raises(ConfigurationError, match="duplicate consumable resource"):
+        validate_simulation_configuration(sim)
+
+
+def test_scientific_exploration_rejects_invalid_vehicle_capability_requirements():
+    app = build_game_application()
+    sim = app._simulation
+    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
+    definition = sim.scientific_exploration.definitions[exploration_id]
+    sim.scientific_exploration.definitions[exploration_id] = replace(
+        definition,
+        required_vehicle_capabilities=("docking", "docking"),
+    )
+    with pytest.raises(ConfigurationError, match="duplicate vehicle capability requirement"):
         validate_simulation_configuration(sim)
 
 

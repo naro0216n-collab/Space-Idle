@@ -176,12 +176,13 @@
     }).join('')||'<div class="empty-state">Fleet候補なし</div>';
     const inputs=(x.consumable_resources||[]).map(([rid,amount])=>`${esc(resourceName(rid))} ${fmt(amount)}t`).join(' / ')||'追加消耗資源なし';
     const operations=(x.operations||[]).map(([op,dv])=>`${esc(A.operationName(op))} ${fmt(dv,2)} km/s`).join(' / ')||'—';
+    const vehicleCapabilities=(x.required_vehicle_capabilities||[]).map((id)=>esc(capabilityName(id))).join(' / ')||'追加Vehicle能力なし';
     const blockers=x.blockers||[];
     let action=lifecycleButton({domain:'exploration',id:x.id,canStart:x.can_start,canPause:x.can_pause,canResume:x.can_resume,complete:x.status==='complete',startLabel:'Campaign開始',pauseLabel:'停止',resumeLabel:'再開',completeLabel:'Campaign完了'});
     if(x.can_unassign)action+=`<button type="button" data-exploration-unassign="${esc(x.id)}">Fleet割当解除</button>`;
     setInspector(x.display_name,
       section('Campaign',kv([['出発',esc(locationName(x.origin_id))],['対象/到着',esc(locationName(x.destination_id))],['Mission Duration要件',`${fmt(x.mission_duration_days,0)}日`],['Campaign所要期間',`${fmt(x.duration_days,1)}日`],['進捗',`${fmt(x.progress_days,1)}日`],['期待RP',fmt(x.research_points_total,1)],['RP/日',fmt(x.research_points_per_day,2)],['獲得済RP',fmt(x.research_points_awarded,1)],['必要unit',fmt(x.required_units,0)],['割当Fleet',x.assigned_vehicle_definition_id?`${esc(definitionName(x.assigned_vehicle_definition_id))} · ${fmt(x.reserved_units,0)} unit`:'未割当']]))+
-      section('必要条件',`<div class="cell-sub">Operation: ${operations}</div><div class="cell-sub">消耗資源: ${inputs}</div><h3>${esc(locationName(x.origin_id))} の地点条件</h3>${siteRequirementsHtml(x.origin_requirements)}<h3>${esc(locationName(x.destination_id))} の地点条件</h3>${siteRequirementsHtml(x.destination_requirements)}`)+
+      section('必要条件',`<div class="cell-sub">Operation: ${operations}</div><div class="cell-sub">Minimum Payload: ${fmt(x.minimum_payload_t,2)} t</div><div class="cell-sub">Vehicle Capability: ${vehicleCapabilities}</div><div class="cell-sub">消耗資源: ${inputs}</div><h3>${esc(locationName(x.origin_id))} の地点条件</h3>${siteRequirementsHtml(x.origin_requirements)}<h3>${esc(locationName(x.destination_id))} の地点条件</h3>${siteRequirementsHtml(x.destination_requirements)}`)+
       section('現在のblocker',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['exploration',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+
       section('Fleet適合性',vehicleRows)+
       section('操作',`<div class="action-stack">${action||'<span class="badge">操作なし</span>'}</div>`)

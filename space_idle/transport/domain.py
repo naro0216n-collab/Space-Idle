@@ -250,6 +250,15 @@ def _validate_transport_profile(sim: Any, profile, known_capabilities: set[str],
         _require(profile.propellant_capacity_t > 0, f"propellant rate without tank capacity: {label}")
     operation_types = [capability.operation_type for capability in profile.operation_capabilities]
     _require(len(operation_types) == len(set(operation_types)), f"duplicate transport operation capability: {label}")
+    generic_capabilities = list(profile.generic_capabilities)
+    _require(
+        all(capability for capability in generic_capabilities),
+        f"empty generic vehicle capability: {label}",
+    )
+    _require(
+        len(generic_capabilities) == len(set(generic_capabilities)),
+        f"duplicate generic vehicle capability: {label}",
+    )
     for capability in profile.operation_capabilities:
         _require(
             sim.logistics.operation_registry.supports(capability.operation_type),

@@ -118,6 +118,8 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
         data = payload["data"]
         exploration = data["scientific_explorations"]["items"][0]
         assert exploration["mission_duration_days"] > 0
+        assert exploration["minimum_payload_t"] >= 0
+        assert "required_vehicle_capabilities" in exploration
         assert exploration["origin_requirements"]["environment"]
         assert exploration["destination_requirements"]["environment"]
         assert data["logistics"]["vehicle_production_options"]

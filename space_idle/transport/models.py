@@ -341,6 +341,7 @@ class TransportPerformanceProfile:
     operation_capabilities: tuple[OperationCapability, ...] = ()
     operation_support_requirements: tuple[OperationSupportRequirement, ...] = ()
     endurance_days: float | None = None
+    generic_capabilities: tuple[str, ...] = ()
 
     def capability_for(self, operation_type: str) -> OperationCapability | None:
         for capability in self.operation_capabilities:
@@ -430,6 +431,8 @@ class VehicleDef:
     def operation_support_requirements(self) -> tuple[OperationSupportRequirement, ...]: return self.performance.operation_support_requirements
     @property
     def endurance_days(self) -> float | None: return self.performance.endurance_days
+    @property
+    def generic_capabilities(self) -> tuple[str, ...]: return self.performance.generic_capabilities
     @property
     def operating_cost_musd_per_cycle(self) -> float: return self.economics.operating_cost_musd_per_cycle
     @property

@@ -168,12 +168,22 @@ class FleetAllocationMixin:
         *,
         activity_days: float = 0.0,
         return_to_origin: bool = False,
+        minimum_payload_t: float = 0.0,
+        required_vehicle_capabilities: tuple[str, ...] = (),
         day: int = 0,
     ) -> tuple[str, ...]:
         """Evaluate a finite Fleet use without exposing Fleet internals to its owner Domain."""
         definition = self.vehicle_defs[vehicle_definition_id]
         failures = list(
             self.performance_route_failures(route, definition.performance, day)
+        )
+        usable_payload_t = definition.max_cargo_for_route(route)
+        if usable_payload_t + 1e-9 < minimum_payload_t:
+            failures.append(f"payload_capacity:{usable_payload_t:g}/{minimum_payload_t:g}")
+        vehicle_capabilities = set(definition.generic_capabilities)
+        failures.extend(
+            f"vehicle_capability:{capability}"
+            for capability in sorted(set(required_vehicle_capabilities) - vehicle_capabilities)
         )
         travel_days = max(1, round(route.transit_days * definition.transit_time_multiplier))
         if return_to_origin and definition.route_asset_disposition(route) is OperationAssetDisposition.DESTINATION:

@@ -68,6 +68,16 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(definition.duration_days > 0, f"scientific exploration has non-positive campaign duration: {definition_id}")
         _require(definition.research_points_total > 0, f"scientific exploration has non-positive RP reward: {definition_id}")
         _require(definition.required_units > 0, f"scientific exploration has non-positive Fleet requirement: {definition_id}")
+        _require(definition.minimum_payload_t >= 0, f"scientific exploration has negative minimum payload: {definition_id}")
+        vehicle_capabilities = list(definition.required_vehicle_capabilities)
+        _require(
+            all(capability for capability in vehicle_capabilities),
+            f"scientific exploration has empty vehicle capability requirement: {definition_id}",
+        )
+        _require(
+            len(vehicle_capabilities) == len(set(vehicle_capabilities)),
+            f"scientific exploration has duplicate vehicle capability requirement: {definition_id}",
+        )
         _require(all(amount >= 0 for _resource, amount in definition.consumable_resources), f"scientific exploration has negative consumable: {definition_id}")
         consumable_ids = [resource_id for resource_id, _amount in definition.consumable_resources]
         _require(

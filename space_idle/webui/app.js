@@ -65,7 +65,9 @@
       }
     }
     text=text.replace(/technology:([^;]+)/g,(_,ids)=>`技術不足: ${ids.split(',').map((x)=>definitionName(x.trim())).join('、')}`);
+    text=text.replace(/vehicle_capability:([a-zA-Z0-9_.-]+)/g,(_,id)=>`Vehicle能力不足: ${capabilityName(id)}`);
     text=text.replace(/capability:([a-zA-Z0-9_.-]+)/g,(_,id)=>`能力不足: ${capabilityName(id)}`);
+    text=text.replace(/payload_capacity:([0-9.+-]+)\/([0-9.+-]+)/g,(_,current,required)=>`利用可能Payload不足: ${current} / ${required} t`);
     text=text.replace(/(available|active|infrastructure):([a-zA-Z0-9_.-]+):([0-9.+-]+)\/([0-9.+-]+)/g,(_,kind,id,current,required)=>{
       const label=kind==='available'?'利用可能能力':kind==='active'?'稼働能力':'インフラ能力';
       return `${label}不足: ${capabilityName(id)} ${current} / ${required}`;
@@ -199,7 +201,7 @@
     let message=userFacingText(rawMessage);
     if(rawCategory==='technology'&&definitionName(rawMessage)!==rawMessage)message=`必要技術: ${definitionName(rawMessage)}`;
     if(rawCategory==='capability')message=`必要能力: ${capabilityName(rawMessage)}`;
-    const categoryLabels={technology:'技術条件',capability:'能力条件',environment:'環境条件',contract:'契約',logistics:'物流',construction:'建設',research:'研究',survey:'探査',storage:'保管',power:'電力'};
+    const categoryLabels={technology:'技術条件',capability:'能力条件',environment:'環境条件',contract:'契約',logistics:'物流',construction:'建設',research:'研究',exploration:'科学探査',survey:'探査',storage:'保管',power:'電力'};
     const category=categoryLabels[rawCategory]||userFacingText(rawCategory);
     const context=!Array.isArray(issue)&&issue.entity_id?definitionName(issue.entity_id):'';
     const meta=[category,context&&context!==issue.entity_id?context:''].filter(Boolean).join(' · ');

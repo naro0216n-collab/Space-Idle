@@ -90,6 +90,8 @@ class ScientificExplorationRow:
     research_points_awarded: float
     consumable_resources: tuple[tuple[str, float], ...]
     required_units: int
+    minimum_payload_t: float
+    required_vehicle_capabilities: tuple[str, ...]
     assigned_vehicle_definition_id: str | None
     reserved_units: int
     blockers: tuple[str, ...]

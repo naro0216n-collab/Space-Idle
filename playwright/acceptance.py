@@ -339,6 +339,8 @@ def run() -> dict[str, object]:
             exploration_rows.first.click()
             exploration_text = page.locator("#inspectorContent").inner_text()
             _assert("Mission Duration要件" in exploration_text, "exploration inspector must expose mission duration without redefining it as transit time")
+            _assert("Minimum Payload" in exploration_text, "exploration inspector must expose minimum payload requirement")
+            _assert("Vehicle Capability" in exploration_text, "exploration inspector must expose generic vehicle capability requirements")
             _assert("RP/日" in exploration_text, "exploration inspector must expose application-projected RP rate")
             _assert("軌道環境が必要" in exploration_text, "exploration inspector must expose site environment requirements")
             _assert("Operation:" in exploration_text, "exploration inspector must expose required operations")

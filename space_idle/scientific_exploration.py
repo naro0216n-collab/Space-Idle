@@ -32,6 +32,8 @@ class ScientificExplorationDefinition:
     destination_requirements: SiteRequirements = SiteRequirements()
     return_to_origin: bool = False
     required_units: int = 1
+    minimum_payload_t: float = 0.0
+    required_vehicle_capabilities: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.mission_duration_days <= 0:
@@ -44,6 +46,8 @@ class ScientificExplorationDefinition:
             raise ValueError("scientific exploration consumables must be non-negative")
         if self.required_units <= 0:
             raise ValueError("scientific exploration required units must be positive")
+        if self.minimum_payload_t < 0:
+            raise ValueError("scientific exploration minimum payload must be non-negative")
 
     @property
     def points_per_day(self) -> float:
@@ -128,6 +132,8 @@ class ScientificExplorationService:
                 route,
                 activity_days=definition.duration_days,
                 return_to_origin=definition.return_to_origin,
+                minimum_payload_t=definition.minimum_payload_t,
+                required_vehicle_capabilities=definition.required_vehicle_capabilities,
                 day=day,
             )
         )

@@ -12,7 +12,7 @@ def project_vehicles(projector):
             str(definition.id), definition.display_name, vehicle_concept(definition),
             definition.dry_mass_t, definition.payload_t, definition.endurance_days, definition.propellant_capacity_t,
             None if definition.propellant_resource_id is None else str(definition.propellant_resource_id),
-            tuple(sorted(capability.operation_type for capability in definition.performance.operation_capabilities)),
+            tuple(sorted(definition.generic_capabilities)),
             tuple((req.operation_type, req.location.value, req.capability_id) for req in definition.operation_support_requirements),
             definition.production_capability_id, definition.production_days, definition.production_cost_musd,
             tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.production_resources),

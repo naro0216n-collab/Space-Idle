@@ -122,6 +122,23 @@ def test_transport_endurance_is_profile_level_and_validated():
         validate_simulation_configuration(sim)
 
 
+def test_generic_vehicle_capabilities_are_intrinsic_and_unique():
+    app = build_game_application()
+    sim = app._simulation
+    vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
+    definition = sim.logistics.vehicle_defs[vehicle_id]
+
+    sim.logistics.vehicle_defs[vehicle_id] = replace(
+        definition,
+        performance=replace(
+            definition.performance,
+            generic_capabilities=("docking", "docking"),
+        ),
+    )
+    with pytest.raises(ConfigurationError, match="duplicate generic vehicle capability"):
+        validate_simulation_configuration(sim)
+
+
 def test_transport_endurance_applies_independently_of_operation_kind():
     from space_idle.logistics import PoweredAscentCapability, TransportPerformanceProfile
     from space_idle.shared import RouteId
