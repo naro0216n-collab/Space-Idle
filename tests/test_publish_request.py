@@ -9,8 +9,12 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "publish_request.py"
+
+pytestmark = pytest.mark.development
 
 
 def git(repo: Path, *args: str) -> str:

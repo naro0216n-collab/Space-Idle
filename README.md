@@ -1,6 +1,6 @@
-# 宇宙開発Idle Simulation / WebUI v0.6
+# 宇宙開発Idle Simulation / WebUI v0.5.1
 
-`v0.6` は、2026-09-12時点の Fleet / Transport Capacity 再設計を含むユーザー承認済み実装スナップショットです。開発初期段階では旧仕様・旧Saveとの後方互換を要件とせず、正準仕様に沿ったDomain境界とState所有を優先します。暫定的な価格、所要日数、Facility数、Vehicle数、攻略順をCore契約として固定しません。
+`v0.5.1` は、2026-09-12時点の Fleet / Transport Capacity 再設計を含むユーザー承認済み実装スナップショットです。開発初期段階では旧仕様・旧Saveとの後方互換を要件とせず、正準仕様に沿ったDomain境界とState所有を優先します。暫定的な価格、所要日数、Facility数、Vehicle数、攻略順をCore契約として固定しません。
 
 ## 正準文書
 
@@ -12,7 +12,7 @@
 
 READMEは実装状況の要約です。仕様判断では上記`docs`を優先します。
 
-## v0.6 実装スナップショット
+## v0.5.1 実装スナップショット
 
 現在のSimulation Coreには、少なくとも以下の基盤があります。
 
