@@ -51,6 +51,7 @@ class LogisticsStateProjectorMixin:
                     snapshot.free_units,
                     snapshot.transport_units,
                     snapshot.exploration_units,
+                    snapshot.other_reserved_units,
                     snapshot.relocating_units,
                     snapshot.releasing_units,
                 )

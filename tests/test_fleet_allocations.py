@@ -45,6 +45,89 @@ def test_fleet_free_is_derived_from_exclusive_commitments():
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 1
 
 
+def test_adding_fleet_units_immediately_refills_existing_transport_target():
+    sim = _fleet_sim(1)
+    lg = sim.logistics
+    allocation_id = lg.create_transport_allocation(
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        ids.LEO,
+        ids.LUNAR_ORBIT,
+        target_units=2,
+        day=sim.day,
+    )
+    assert lg.transport_allocations[allocation_id].active_units == 1
+
+    lg.add_fleet_units(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO, day=sim.day
+    )
+
+    assert lg.transport_allocations[allocation_id].active_units == 2
+    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 0
+
+
+def test_releasing_fleet_reservation_immediately_refills_transport_target():
+    sim = _fleet_sim(3)
+    lg = sim.logistics
+    reservation_id = EntityId("reservation.special")
+    lg.reserve_fleet_units(
+        reservation_id,
+        EntityId("mission.special"),
+        FleetReservationKind.SPECIAL_MISSION,
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        ids.LEO,
+        1,
+    )
+    allocation_id = lg.create_transport_allocation(
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        ids.LEO,
+        ids.LUNAR_ORBIT,
+        target_units=3,
+        day=sim.day,
+    )
+    assert lg.transport_allocations[allocation_id].active_units == 2
+
+    lg.release_fleet_reservation(reservation_id, day=sim.day)
+
+    assert lg.transport_allocations[allocation_id].active_units == 3
+    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 0
+
+
+def test_fleet_query_exposes_other_exclusive_reservations_in_pool_balance():
+    app = build_game_application()
+    sim = app._simulation
+    lg = sim.logistics
+    lg.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).total_units = 2
+    reservation_id = EntityId("reservation.special.query")
+    lg.reserve_fleet_units(
+        reservation_id,
+        EntityId("mission.special.query"),
+        FleetReservationKind.SPECIAL_MISSION,
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        ids.LEO,
+        1,
+    )
+
+    row = next(
+        item
+        for item in app.query(GetFleet()).pools
+        if item.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+        and item.location_id == str(ids.LEO)
+    )
+
+    assert row.total_units == 2
+    assert row.free_units == 1
+    assert row.other_reserved_units == 1
+    assert (
+        row.free_units
+        + row.transport_units
+        + row.exploration_units
+        + row.other_reserved_units
+        + row.relocating_units
+        + row.releasing_units
+        == row.total_units
+    )
+
+
 def test_fleet_free_read_does_not_materialize_an_empty_pool():
     sim = build_base_simulation()
     lg = sim.logistics

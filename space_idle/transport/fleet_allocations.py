@@ -72,7 +72,12 @@ class FleetAllocationMixin:
         return pool
 
     def add_fleet_units(
-        self, vehicle_definition_id: DefinitionId, count: int, location_id: SpatialNodeId
+        self,
+        vehicle_definition_id: DefinitionId,
+        count: int,
+        location_id: SpatialNodeId,
+        *,
+        day: int = 0,
     ) -> None:
         if vehicle_definition_id not in self.vehicle_defs:
             raise KeyError(vehicle_definition_id)
@@ -84,6 +89,10 @@ class FleetAllocationMixin:
             return
         pool = self.fleet_pool(vehicle_definition_id, location_id)
         pool.total_units += count
+        # Fleet owns fulfillment. Any transition that creates free units must
+        # immediately offer them to existing Transport Allocation targets instead
+        # of requiring the producing/owning Domain to know reconciliation rules.
+        self.reconcile_fleet_allocations(day)
 
     def _allocation_units_at(
         self, vehicle_definition_id: DefinitionId, location_id: SpatialNodeId
@@ -264,10 +273,15 @@ class FleetAllocationMixin:
             units,
         )
 
-    def release_fleet_reservation(self, reservation_id: EntityId) -> None:
+    def release_fleet_reservation(
+        self, reservation_id: EntityId, *, day: int = 0
+    ) -> None:
         if reservation_id not in self.fleet_reservations:
             raise KeyError(reservation_id)
         del self.fleet_reservations[reservation_id]
+        # Releasing an exclusive use creates free Fleet. Fulfillment is part of
+        # this Fleet-domain state transition, not a responsibility of the caller.
+        self.reconcile_fleet_allocations(day)
 
     def complete_fleet_reservation(
         self,
@@ -1129,15 +1143,6 @@ class FleetAllocationMixin:
                 delta = min(target_active - allocation.active_units, free)
                 allocation.active_units += delta
                 free -= delta
-
-    def current_transport_capacity_snapshot(
-        self, allocation_id: EntityId, *, day: int = 0
-    ) -> TransportCapacitySnapshot:
-        """Project capacity using the most recently committed Logistics usage."""
-        used = getattr(self, "_last_allocation_usage", {}).get(
-            allocation_id, DirectionalCapacity()
-        )
-        return self.transport_capacity_snapshot(allocation_id, day=day, used=used)
 
     def transport_capacity_snapshot(
         self,

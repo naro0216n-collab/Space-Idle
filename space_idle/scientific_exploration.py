@@ -255,7 +255,6 @@ class ScientificExplorationService:
         state.vehicle_definition_id = vehicle_definition_id
         state.reserved_units = definition.required_units
         state.phase = ScientificExplorationPhase.ACTIVE
-        self.logistics.reconcile_fleet_allocations(day)
 
     def unassign_fleet(self, definition_id: DefinitionId, *, day: int = 0) -> None:
         state = self.campaigns[definition_id]
@@ -266,11 +265,10 @@ class ScientificExplorationService:
         if not self.can_unassign_fleet(definition_id):
             raise ValueError("started scientific exploration cannot release its Fleet")
         reservation_id = EntityId(f"scientific_exploration:{definition_id}")
-        self.logistics.release_fleet_reservation(reservation_id)
+        self.logistics.release_fleet_reservation(reservation_id, day=day)
         state.vehicle_definition_id = None
         state.reserved_units = 0
         state.phase = ScientificExplorationPhase.AWAITING_FLEET
-        self.logistics.reconcile_fleet_allocations(day)
 
     @staticmethod
     def _resource_demand_id(definition_id: DefinitionId, resource_id: DefinitionId) -> EntityId:

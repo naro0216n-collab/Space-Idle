@@ -311,10 +311,11 @@ class VehicleProductionMixin:
             key=lambda row: str(row.id),
         )
         for state in completed:
-            self.add_fleet_units(state.vehicle_definition_id, 1, state.location_id)
+            self.add_fleet_units(
+                state.vehicle_definition_id, 1, state.location_id, day=day
+            )
             state.phase = VehicleProductionPhase.COMPLETE
             state.completed_units = 1
-            self.reconcile_fleet_allocations(day)
 
     def vehicle_production_blockers(
         self,

@@ -171,8 +171,19 @@ def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_pa
     relocation_id = sim.logistics.relocate_fleet(
         ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LEO, ids.LUNAR_ORBIT, day=sim.day
     )
-    before_plan = sim.logistics.derive_transport_service_plan(EntityId(allocation_id), sim.day)
-    before_nominal = sim.logistics.transport_capacity_snapshot(EntityId(allocation_id), day=sim.day).nominal
+    allocation_entity_id = EntityId(allocation_id)
+    lane_entity_id = EntityId(lane_id)
+    before_plan = sim.logistics.derive_transport_service_plan(allocation_entity_id, sim.day)
+    before_capacity = sim.logistics.current_transport_capacity_snapshot(
+        allocation_entity_id, day=sim.day
+    )
+    before_lane = next(
+        row
+        for row in sim.logistics.lane_snapshot((demand,), day=sim.day).lanes
+        if row.lane_id == lane_entity_id
+    )
+    assert before_capacity.used.forward_t_per_day == 0.5
+    assert before_lane.used_t == 0.5
 
     path = tmp_path / "fleet-state.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -185,10 +196,22 @@ def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_pa
     loaded, _ = load_game(path, build_game_application)
     assert capture_state(loaded._simulation) == capture_state(sim)
     assert relocation_id in loaded._simulation.logistics.fleet_relocations
-    after_plan = loaded._simulation.logistics.derive_transport_service_plan(EntityId(allocation_id), loaded._simulation.day)
-    after_nominal = loaded._simulation.logistics.transport_capacity_snapshot(EntityId(allocation_id), day=loaded._simulation.day).nominal
+    after_plan = loaded._simulation.logistics.derive_transport_service_plan(
+        allocation_entity_id, loaded._simulation.day
+    )
+    after_capacity = loaded._simulation.logistics.current_transport_capacity_snapshot(
+        allocation_entity_id, day=loaded._simulation.day
+    )
+    after_lane = next(
+        row
+        for row in loaded._simulation.logistics.lane_snapshot(
+            (demand,), day=loaded._simulation.day
+        ).lanes
+        if row.lane_id == lane_entity_id
+    )
     assert after_plan == before_plan
-    assert after_nominal == before_nominal
+    assert after_capacity == before_capacity
+    assert after_lane == before_lane
 
 
 def test_save_load_preserves_vehicle_production_progress_and_completed_fleet_unit(tmp_path):

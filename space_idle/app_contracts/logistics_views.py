@@ -60,6 +60,7 @@ class FleetPoolRow:
     free_units: int
     transport_units: int
     exploration_units: int
+    other_reserved_units: int
     relocating_units: int
     releasing_units: int
 

@@ -6,7 +6,14 @@ import heapq
 from ..resource_demand import ResourceDemand
 from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .lanes import DemandSupplyOptions, LaneRuntimeMetrics, LogisticsLaneSnapshot
-from .models import CargoFlowBatch, CargoFlowStatus, DirectionalCapacity, LogisticsLane, PathPolicy
+from .models import (
+    CargoFlowBatch,
+    CargoFlowStatus,
+    DirectionalCapacity,
+    LogisticsLane,
+    PathPolicy,
+    TransportCapacitySnapshot,
+)
 
 
 @dataclass(frozen=True)
@@ -355,6 +362,55 @@ class SteadyLogisticsMixin:
                 hi = mid
         return lo
 
+    def _latest_completed_transport_day(self, day: int) -> int:
+        """Resolve the dispatch day represented by current decision projections.
+
+        Normal Simulation queries occur after the day counter advances, so the
+        last completed transport tick is ``day - 1``. Domain-level tests and
+        tools may execute Logistics directly without advancing the Simulation
+        clock; a Cargo Flow dispatched on ``day`` is then authoritative evidence
+        that this transport tick has already executed.
+        """
+        if any(flow.departure_day == day for flow in self.cargo_flows.values()):
+            return day
+        return day - 1
+
+    def _derived_allocation_usage(
+        self, allocation_id: EntityId, day: int
+    ) -> DirectionalCapacity:
+        """Rebuild Used capacity from authoritative Cargo Flow state."""
+        departure_day = self._latest_completed_transport_day(day)
+        forward_key = f"allocation:{allocation_id}:forward"
+        reverse_key = f"allocation:{allocation_id}:reverse"
+        forward = 0.0
+        reverse = 0.0
+        for flow in self.cargo_flows.values():
+            if flow.departure_day != departure_day:
+                continue
+            if forward_key in flow.service_ids:
+                forward += flow.amount_t
+            if reverse_key in flow.service_ids:
+                reverse += flow.amount_t
+        return DirectionalCapacity(forward, reverse)
+
+    def current_transport_capacity_snapshot(
+        self, allocation_id: EntityId, *, day: int = 0
+    ) -> TransportCapacitySnapshot:
+        """Project current capacity with Used re-derived from Cargo Flows."""
+        return self.transport_capacity_snapshot(
+            allocation_id,
+            day=day,
+            used=self._derived_allocation_usage(allocation_id, day),
+        )
+
+    def _derived_lane_usage(self, lane_id: EntityId, day: int) -> float:
+        departure_day = self._latest_completed_transport_day(day)
+        return sum(
+            flow.amount_t
+            for flow in self.cargo_flows.values()
+            if flow.departure_day == departure_day and flow.lane_id == lane_id
+        )
+
     def _progress_cargo_arrivals(self, day: int) -> None:
         for flow_id in sorted(tuple(self.cargo_flows), key=str):
             flow = self.cargo_flows[flow_id]
@@ -395,28 +451,11 @@ class SteadyLogisticsMixin:
         used: dict[EntityId, DirectionalCapacity] = {}
         operational_reserved: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
         funds_budget = self.account.funds_musd
-        lane_metrics: dict[EntityId, LaneRuntimeMetrics] = {}
-
         for lane in sorted(self.lanes.values(), key=self._lane_execution_key):
-            blockers: list[str] = []
             if lane.paused:
-                blockers.append("manual_pause")
-                lane_metrics[lane.id] = LaneRuntimeMetrics(lane.id, 0.0, 0.0, 0.0, tuple(blockers))
                 continue
             lane_capacity = self._lane_transport_capacity(lane, day, edges, remaining)
             if lane_capacity <= 1e-12:
-                try:
-                    self.lane_service_path(lane, day, self._edges_with_remaining(edges, remaining))
-                except ValueError as exc:
-                    blockers.append(f"transport_capacity:{exc}")
-                else:
-                    blockers.append("transport_capacity")
-                queued = sum(
-                    max(0.0, demand.amount_t - pipeline.get(demand.id, 0.0))
-                    for demand in demand_rows
-                    if self._lane_accepts_demand(lane, demand)
-                )
-                lane_metrics[lane.id] = LaneRuntimeMetrics(lane.id, 0.0, 0.0, queued, tuple(blockers))
                 continue
 
             used_lane = 0.0
@@ -497,15 +536,6 @@ class SteadyLogisticsMixin:
                         day + sum(edge.latency_days for edge in path),
                     )
 
-            queued = sum(
-                max(0.0, demand.amount_t - pipeline.get(demand.id, 0.0))
-                for demand in demand_rows
-                if self._lane_accepts_demand(lane, demand)
-            )
-            lane_metrics[lane.id] = LaneRuntimeMetrics(
-                lane.id, lane_capacity, used_lane, queued, tuple(blockers)
-            )
-
         # Consume operational resources only after Lane usage is known. These
         # amounts came from tick-start budgets, so same-tick arrivals cannot fund
         # this tick's Transport Capacity.
@@ -520,22 +550,15 @@ class SteadyLogisticsMixin:
         for allocation_id, directional in used.items():
             if directional.forward_t_per_day > 1e-12 or directional.reverse_t_per_day > 1e-12:
                 self.transport_allocations[allocation_id].last_operated_day = day
-        self._last_allocation_usage = dict(used)
-        self._last_lane_metrics = lane_metrics
         self._progress_cargo_arrivals(day)
 
     def lane_snapshot(
         self, demands: tuple[ResourceDemand, ...], day: int = 0
     ) -> LogisticsLaneSnapshot:
         pipeline = self._flow_pipeline_by_demand({demand.id for demand in demands})
-        metrics = getattr(self, "_last_lane_metrics", {})
         rows: list[LaneRuntimeMetrics] = []
         edges = self._service_edges(day)
         for lane in sorted(self.lanes.values(), key=lambda row: str(row.id)):
-            cached = metrics.get(lane.id)
-            if cached is not None:
-                rows.append(cached)
-                continue
             blockers: list[str] = []
             try:
                 remaining = {edge.key: edge.capacity_t_per_day for edge in edges}
@@ -553,7 +576,15 @@ class SteadyLogisticsMixin:
                 for demand in demands
                 if self._lane_accepts_demand(lane, demand)
             )
-            rows.append(LaneRuntimeMetrics(lane.id, effective, 0.0, queued, tuple(blockers)))
+            rows.append(
+                LaneRuntimeMetrics(
+                    lane.id,
+                    effective,
+                    self._derived_lane_usage(lane.id, day),
+                    queued,
+                    tuple(blockers),
+                )
+            )
         return LogisticsLaneSnapshot(
             tuple(sorted(pipeline.items(), key=lambda row: str(row[0]))),
             tuple(rows),
