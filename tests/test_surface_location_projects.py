@@ -184,6 +184,22 @@ def test_surface_cell_development_changes_territory_only_after_project_completio
     assert ids.EARTH_CELL_COASTAL in sim.graph.locations[ids.EARTH].developed_cell_ids
 
 
+def test_founding_resource_shortage_reports_logistics_lane_blocker():
+    app = build_game_application()
+    sim = app._simulation
+    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    _survey_cell_to_l2(sim, cell)
+    project_id = app.execute(_found_command("No Supply Lane", cell)).created_id
+    assert project_id is not None
+
+    row = next(
+        item for item in app.query(GetProjects(str(ids.LUNAR_ORBIT))).items
+        if item.id == project_id
+    )
+    assert any(code == "import_lane" for code, _detail in row.blockers)
+    assert not any(code == "resource_shortage" for code, _detail in row.blockers)
+
+
 def test_founding_requires_orbital_survey_and_does_not_create_target_inventory_before_arrival():
     app = build_game_application()
     sim = app._simulation
@@ -296,12 +312,27 @@ def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_
     assert project_id is not None
     app.execute(AdvanceTime(1))
     project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)
-    staged = sim.founding._staged_payload_t(project, ids.CONSTRUCTION_EQUIPMENT)
+    staged = sim.founding.staged_payload_t(project.id, ids.CONSTRUCTION_EQUIPMENT)
     assert staged == pytest.approx(partial)
     assert not project.inputs_consumed
 
+    project_row = next(
+        row for row in app.query(GetProjects(str(ids.LUNAR_ORBIT))).items
+        if row.id == project_id
+    )
+    resource_row = next(
+        row for row in project_row.resources
+        if row.resource_id == str(ids.CONSTRUCTION_EQUIPMENT)
+    )
+    requirement = next(
+        row for row in sim.founding.project_resource_requirements(project.id)
+        if row.resource_id == ids.CONSTRUCTION_EQUIPMENT
+    )
+    assert resource_row.committed_t == pytest.approx(partial)
+    assert resource_row.shortage_t == pytest.approx(requirement.amount_t - partial)
+
     app.execute(AdvanceTime(3))
-    assert sim.founding._staged_payload_t(project, ids.CONSTRUCTION_EQUIPMENT) == pytest.approx(staged)
+    assert sim.founding.staged_payload_t(project.id, ids.CONSTRUCTION_EQUIPMENT) == pytest.approx(staged)
     stock_before_cancel = sim.inventory.amount(ids.LUNAR_ORBIT, ids.CONSTRUCTION_EQUIPMENT)
     app.execute(CancelFounding(project_id))
     assert sim.inventory.amount(ids.LUNAR_ORBIT, ids.CONSTRUCTION_EQUIPMENT) == pytest.approx(
@@ -336,6 +367,16 @@ def test_surface_map_exposes_founding_package_vehicle_and_blockers():
     assert option.payload_t > 0
     assert option.payload_t_per_unit <= 6.0
     assert option.required_units == 1
+    displayed_resources = dict(option.resources)
+    expected_resources = {
+        str(row.resource_id): row.amount_t
+        for row in app._simulation.founding.resource_requirements_for(
+            ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE,
+            ids.REUSABLE_SURFACE_CARGO_LANDER,
+        )
+    }
+    assert displayed_resources == expected_resources
+    assert str(ids.PROPELLANT) in displayed_resources
     assert any(code == "survey_knowledge" for code, _detail in option.blockers)
 
 
@@ -364,3 +405,53 @@ def test_active_founding_save_load_preserves_identity_and_future_transition(tmp_
     assert generated in app._simulation.graph.locations
     assert generated in loaded._simulation.graph.locations
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
+
+
+def test_deploying_founding_save_load_completes_exactly_once(tmp_path):
+    app = build_game_application()
+    sim = app._simulation
+    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    _survey_cell_to_l2(sim, cell)
+    package = _stage_founding_resources(sim)
+    project_id = app.execute(_found_command("Persisted Deployment", cell)).created_id
+    assert project_id is not None
+
+    app.execute(AdvanceTime(3))
+    project = next(p for p in sim.founding.projects.values() if str(p.id) == project_id)
+    assert project.status.value == "deploying"
+    assert project.new_location_id not in sim.graph.locations
+    project_row = next(
+        row for row in app.query(GetProjects(str(ids.LUNAR_ORBIT))).items
+        if row.id == project_id
+    )
+    assert project_row.resources
+    assert all(row.shortage_t == pytest.approx(0.0) for row in project_row.resources)
+    assert all(row.committed_t == pytest.approx(row.required_t) for row in project_row.resources)
+
+    path = tmp_path / "deploying-founding.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application)
+    loaded_sim = loaded._simulation
+    loaded_project = loaded_sim.founding.projects[project.id]
+    assert loaded_project.status.value == "deploying"
+    assert loaded_project.new_location_id not in loaded_sim.graph.locations
+
+    loaded.execute(AdvanceTime(3))
+    assert loaded_project.status.value == "complete"
+    location_id = loaded_project.new_location_id
+    assert location_id in loaded_sim.graph.locations
+    facilities = loaded_sim.facilities.all_at(location_id)
+    assert len(facilities) == len(package.deployed_facilities)
+    assert {row.definition_id for row in facilities} == {
+        row.facility_def_id for row in package.deployed_facilities
+    }
+    orbit_routes = [
+        route for route_id, route in loaded_sim.logistics.routes.items()
+        if str(route_id).startswith(DERIVED_SURFACE_ORBIT_ROUTE_PREFIX)
+        and location_id in {route.origin_id, route.destination_id}
+    ]
+    assert len(orbit_routes) == 2
+
+    loaded.execute(AdvanceTime(10))
+    assert loaded_project.status.value == "complete"
+    assert len(loaded_sim.facilities.all_at(location_id)) == len(package.deployed_facilities)

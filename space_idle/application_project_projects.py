@@ -50,13 +50,13 @@ class ProjectProjectorMixin:
             active_project_id,
         )
 
-    def _project_external_supply_blocker(self, demand) -> tuple[str, str]:
-        """Translate Logistics demand state into a project-facing blocker.
+    def _external_supply_blocker(self, demand) -> tuple[str, str]:
+        """Translate Logistics demand state into an owning-project blocker.
 
-        Construction owns the need and sourcing policy; Logistics owns whether
-        the residual off-site demand has a usable lane, source stock and active
-        pipeline. The Application layer combines those contracts for the UI
-        without making Construction inspect Logistics state directly.
+        Finite project domains own their resource need and sourcing preference;
+        Logistics owns whether residual off-site demand has a usable lane, source
+        stock and active pipeline.  The Application layer combines those public
+        contracts without making either domain inspect the other's state.
         """
         sim = self._simulation
         resource_id = str(demand.resource_id)
@@ -75,33 +75,44 @@ class ProjectProjectorMixin:
             return ("import_stock", resource_id)
         return ("import_transit", resource_id)
 
-    def _project_external_demands(self) -> dict[str, object]:
+    def _external_demands(self, owner_kind: str) -> dict[str, object]:
         return {
             str(demand.id): demand
             for demand in self._simulation.resource_demands()
-            if demand.owner_kind == "project"
+            if demand.owner_kind == owner_kind
         }
 
-    def _project_blockers(self, project, power, external_demands=None) -> tuple[tuple[str, str], ...]:
-        sim = self._simulation
-        demands = self._project_external_demands() if external_demands is None else external_demands
-        blockers: list[tuple[str, str]] = []
-        for blocker in sim.projects.blockers(project.id, sim.day, power):
+    def _resource_blockers(
+        self, blockers, *, owner_kind: str, owner_id: str, demands: dict[str, object]
+    ) -> tuple[tuple[str, str], ...]:
+        rows: list[tuple[str, str]] = []
+        for blocker in blockers:
             if blocker.code != "resource_shortage":
-                blockers.append((blocker.code, blocker.detail))
+                rows.append((blocker.code, blocker.detail))
                 continue
-            demand_id = f"demand.project:{project.id}:{blocker.detail}"
+            demand_id = f"demand.{owner_kind}:{owner_id}:{blocker.detail}"
             demand = demands.get(demand_id)
-            blockers.append(
-                self._project_external_supply_blocker(demand)
+            rows.append(
+                self._external_supply_blocker(demand)
                 if demand is not None
                 else (blocker.code, blocker.detail)
             )
-        return tuple(blockers)
+        return tuple(rows)
+
+    def _project_blockers(self, project, power, external_demands=None) -> tuple[tuple[str, str], ...]:
+        sim = self._simulation
+        demands = self._external_demands("project") if external_demands is None else external_demands
+        return self._resource_blockers(
+            sim.projects.blockers(project.id, sim.day, power),
+            owner_kind="project",
+            owner_id=str(project.id),
+            demands=demands,
+        )
 
     def _project_rows(self, location_id: SpatialNodeId | None) -> tuple[ProjectRow, ...]:
         sim = self._simulation
-        external_demands = self._project_external_demands()
+        external_demands = self._external_demands("project")
+        founding_demands = self._external_demands("founding")
         rows = []
         for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id)):
             if location_id is not None and project.location_id != location_id:
@@ -174,20 +185,24 @@ class ProjectProjectorMixin:
                 if location_id is not None and project.staging_node_id != location_id:
                     continue
                 package = sim.founding.packages[project.founding_package_id]
-                resources = []
-                required = sim.founding._required_resources(project)
-                for resource_id, amount in sorted(required.items(), key=lambda row: str(row[0])):
-                    reserved = sim.inventory.reserved_for(
-                        sim.founding.demand_id(project.id, resource_id),
-                        project.staging_node_id, resource_id,
-                    ) if not project.inputs_consumed else 0.0
-                    resources.append(ProjectResourceRow(
-                        str(resource_id), amount, reserved,
-                        amount if project.inputs_consumed else 0.0,
-                        0.0 if project.inputs_consumed else max(0.0, amount - reserved),
-                        None, None,
-                    ))
-                blockers = tuple((b.code, b.detail) for b in sim.founding.blockers(project.id, sim.day))
+                resources = [
+                    ProjectResourceRow(
+                        str(status.resource_id),
+                        status.required_t,
+                        status.reserved_t,
+                        status.committed_t,
+                        status.shortage_t,
+                        None,
+                        None,
+                    )
+                    for status in sim.founding.project_resource_status(project.id)
+                ]
+                blockers = self._resource_blockers(
+                    sim.founding.blockers(project.id, sim.day),
+                    owner_kind="founding",
+                    owner_id=str(project.id),
+                    demands=founding_demands,
+                )
                 rows.append(ProjectRow(
                     str(project.id), "location_founding_deployment", str(project.staging_node_id),
                     None, None, None, project.display_name, project.status.value, project.paused,

@@ -113,9 +113,11 @@ def validate_runtime(sim: Any) -> None:
         reservation_id = service.fleet_reservation_id(project_id)
         payload_owner_id = service.payload_owner_id(project_id)
         if package is not None:
-            required = service._required_resources(p)
+            required = service.project_resource_requirements(project_id)
             fully_staged = True
-            for resource_id, amount in required.items():
+            for requirement in required:
+                resource_id = requirement.resource_id
+                amount = requirement.amount_t
                 staged = sim.inventory.staged_for(
                     payload_owner_id, p.staging_node_id, resource_id
                 )

@@ -130,7 +130,10 @@ class SurfaceProjectorMixin:
                             foundation_rows.append(SurfaceCellFoundationOption(
                                 str(staging_id), str(package.id), package.display_name, str(vehicle.id), vehicle.display_name,
                                 package.preparation_work, package.transit_days, package.payload_t, package.payload_t_per_unit,
-                                package.required_units, tuple((str(req.resource_id), req.amount_t) for req in package.payload_resources),
+                                package.required_units, tuple(
+                                    (str(req.resource_id), req.amount_t)
+                                    for req in sim.founding.resource_requirements_for(package.id, vehicle.id)
+                                ),
                                 tuple((failure.code, failure.detail) for failure in failures),
                                 None if active_founding is None else str(active_founding.id),
                                 tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(staging_id)),
