@@ -237,7 +237,14 @@
     })();
     try{return await state.syncInFlight;}finally{state.syncInFlight=null;}
   }
-  async function loadLocation(locationId){if(!locationId)return;state.locationId=locationId;state.inspector=null;await loadUiSnapshot({preserveInteraction:false});}
+  async function loadLocation(locationId){
+    if(!locationId)return;
+    const pending=state.syncInFlight;
+    if(pending){try{await pending;}catch{}}
+    state.locationId=locationId;
+    state.inspector=null;
+    await loadUiSnapshot({preserveInteraction:false});
+  }
   function setActiveView(view){
     state.activeView=view;
     $$('.view-button').forEach((b)=>b.classList.toggle('is-active',b.dataset.view===view));
