@@ -79,12 +79,20 @@ git diff --check
 通常publishは次の順序に固定する。
 
 1. ローカル変更を整合した単位としてcommitし、working treeをcleanにする。
-2. `scripts/publish_request.py`で、前回publish済みtreeから現在HEAD treeまでのbinary diffを固定長chunkと小さなmanifestへ生成する。
+2. `scripts/publish_request.py`で、前回publish済みtreeから現在HEAD treeまでのbinary diffをgzip+Base64化し、ChatGPTのtool間搬送を含むConnector経路で完全性を保って転送できる上限サイズの少数chunkと小さなmanifestへ生成する。標準chunk上限は8 KiBで、差分サイズに応じてchunk数だけが増減する。`prepare`は生成直後にchunk/diff digestと一時Git indexでのtarget tree再現を自己検証し、完全なrequestだけを成功として返す。
 3. publish直前にremote対象branch HEADを一度だけ確認し、manifestの `base-sha` と一致することを確認する。不一致ならrequestを送らず差分を調査する。
-4. GitHub Connectorで `publish` branchの `.publish/chunks/` に必要chunkを更新し、最後に `.publish/request.patch` manifestを更新する。chunk更新だけではGatewayを起動しない。
-5. Publish Gatewayは各chunk digest、request digest、remote base SHA、patch適用後のGit tree SHAを検証し、すべて一致した場合だけ通常のnon-force pushで対象branchを更新する。
-6. Gateway成功後は対象branchのremote commit/treeを確認し、ローカルpublish stateへ記録する。
+4. GitHub Connectorでは `publish_request.py connector-plan` が生成する最少call計画を使う。標準8 KiB chunkはGateway側の検証・再送単位として維持するが、Connector送信はchunk数で固定分割しない。`publish` branchのbase commit/treeを計画時に一度だけ与え、全chunk本文とmanifestを `.publish/chunks/*` / `.publish/request.patch` として既存publish treeへ直接接続する単一 `create_tree(content=...)` requestをまず生成する。call予算判定は計画packet全体ではなく、実際にConnectorへ渡す `action_args` のcompact JSON bytesで行う。標準96 KiB内ならこの1回でtransport root treeを完成させる。超過時だけ最少数の独立upload groupへ自動分割して並列materializeし、最終root tree作成時にローカル算出済みblob OIDを直接参照する。独立したchunks-tree assembly callは通常工程に置かない。GitHub object lookupとPublish Gatewayがchunks tree OID、各chunk SHA-256、payload SHA-256、bundle commit/tree/parentを検証するため、upload返却SHAの転記・個別照合callも行わない。root tree作成後はtransport commitを1回作成し、`publish` refを1回だけnon-force更新してGatewayを起動する。Contents APIはGit Data APIが利用不能な場合だけfallbackとする。
+5. Publish Gatewayはchunks subtreeのGit OID、各chunk digest、request digest、remote base SHA、patch適用後のGit tree SHAを検証し、すべて一致した場合だけ通常のnon-force pushで対象branchを更新する。push直後にもremote refとremote commit treeを再取得し、published commit SHAとmanifest target treeへ一致することをGateway自身が確認する。
+6. Gatewayは検証済みのrequest ID、base commit、target tree、chunks tree OID、published commit/treeを小さなreceiptとして `publish` branchへ記録する。ローカルではそのreceiptとmanifestを `publish_request.py record` に渡し、全SHA関係を機械検証した場合だけ次回publish stateを更新する。SHA文字列を人手で見比べない。
 7. Gatewayは対象branch更新後にFast CIを `workflow_dispatch` し、実ブラウザ・clean install・次回用Git bundle artifactを検証する。
+
+複数の未publish commitがある場合は、まずtransport planを確認する。これはローカル履歴を書き換えず、全体を1 requestにまとめた場合と各local checkpointを順次publishした場合の転送量を比較する。
+
+```bash
+python scripts/publish_request.py plan --target-ref HEAD
+```
+
+通常は責務として成立しているlocal commit境界をそのまま順次publishする。小さい連続commitを1 requestへまとめることもできるが、transport都合でrebase/reset/squashして履歴を作り直さない。
 
 request生成例:
 
@@ -95,25 +103,50 @@ python scripts/publish_request.py prepare \
   --output /tmp/space-idle-publish.patch
 ```
 
+`prepare`は通常自動検証する。転送前の生成物を改めて診断する場合は同じ検証を独立実行できる。
+
+```bash
+python scripts/publish_request.py verify \
+  --manifest /tmp/space-idle-publish.patch
+```
+
+Connector向け送信packetは次で生成する。`publish` branchのbase commit/treeを与える通常経路では、全payloadがcall予算内なら `transport-root-tree.json` が全chunk本文とmanifestを含む唯一の大容量 `create_tree` callとなる。超過時だけ `upload-group-*.json` が生成され、互いに独立しているため並列送信できる。group uploadはblob objectをmaterializeするためだけに使い、その返却tree SHAは次工程へ渡さない。最後の `transport-root-tree.json` はローカル算出済みblob OIDを参照し、chunks subtreeとmanifestをpublish treeへ直接接続する。
+
+```bash
+python scripts/publish_request.py connector-plan \
+  --manifest /tmp/space-idle-publish.patch \
+  --github-repository naro0216n-collab/Space-Idle \
+  --publish-base-commit <current-publish-head> \
+  --publish-base-tree <current-publish-tree> \
+  --target-remote-head <current-target-head>
+
+# single-create-tree-publish: transport-root-tree.json を1回実行する。
+# parallel-upload-then-create-tree-publish: upload-group-*.json を並列実行後、
+#   transport-root-tree.json を1回実行する。
+# 正常系ではchunks-tree assembly、upload返却SHAの受け渡し、個別verify callを行わない。
+```
+
+`connector-plan` に現在の `publish` branch commit/treeと、直前に取得したtarget branch HEADを与える。helperはtarget HEADがmanifestの `base-sha` と一致することを機械確認してから、通常publishに必要な大容量送信を `transport-root-tree.json` へ集約する。全payloadが収まる場合、GitHub callは target branch HEAD確認1回、publish branch HEAD/tree取得1回、root tree作成、transport commit作成、publish ref更新の計5回となる。返されたroot tree SHAをtransport commitへ、そのcommit SHAをref更新へ渡す2つの依存だけが残り、chunk/tree SHAをチャット側で中継しない。計画生成のために段階ごと `connector-publish-step` を呼び直す必要もない。
+
 複数の整合したローカルcommitが未publishでも、`--target-ref`で古いcommitから順番にpublishし、対応する`--local-ref`でrecordする。publish都合でrebase/resetして履歴を組み直さない。
 
-Gateway成功後:
+Gateway成功後は `.publish/receipts/<request-id>.json` を取得し、そのreceiptを使って次回基点を記録する。
 
 ```bash
 python scripts/publish_request.py record \
-  --remote-commit <published-remote-commit> \
-  --remote-tree <published-tree> \
+  --manifest /tmp/space-idle-publish.patch \
+  --receipt /tmp/publish-receipt.json \
   --local-ref HEAD
 ```
 
-manifestにはtarget branch、remote base commit SHA、最終Git tree SHA、diff全体と各chunkのSHA-256、commit messageを含める。gzip+Base64化したbinary diff本体は固定長chunkへ分離する。manifestを最後に更新することで、不完全なchunk転送では対象branchを更新しない。
+manifestにはtarget branch、remote base commit SHA、最終Git tree SHA、diff全体と各chunkのSHA-256、chunks subtreeの期待Git OID、commit message、転送サイズ情報を含める。chunkファイルはBase64本文そのものを正準bytesとし、末尾改行や空白を付加しない。generator、chunk blob OID、最終chunks tree OID、Gateway digest検証は同一bytesを扱い、transport途中の改行正規化に依存しない。gzip+Base64化したbinary diffまたはGit bundle本体は標準8 KiB chunkへ分離するが、これはConnector call数を決める単位ではない。`connector-plan` は実際にGitHub actionへ渡す `action_args` だけをcompact JSONへシリアライズしてbytesを測定し、標準96 KiBの `--connector-call-budget-bytes` 内へ可能な限りpayloadを集約する。全chunkとmanifestがpublish root作成callへ収まれば1 call、超過時だけ最少数の独立groupへ自動分割する。chunk sizeはGateway側の検証・再送単位、call budgetはConnector 1呼出し全体の実測上限として別々に扱う。gzip/bundleは決定論的に生成し、同じbase/tree/messageから再prepareした場合にpayload chunkが変化しないようにする。
 
-変更ファイル全文、個別blob登録、個別blob SHA照合は通常publishでは行わない。Git tree SHA一致を最終内容の同一性判定とする。
+変更ファイル全文の再取得や個別blob SHAの目視照合は通常publishでは行わない。prepareがchunks subtree Git OIDを算出し、Gatewayがremote subtree OIDと各SHA-256を検証するため、transport完全性は機械検証する。最終内容の同一性はtarget Git tree SHAで判定する。
 
 ### Publish failure handling
 
 - remote HEAD不一致: publishしない。remote変更を調査し、必要なら新しいartifactから再同期する。
-- chunkまたはrequest SHA不一致: Gatewayは適用前に失敗する。該当chunkだけ再転送し、manifestのrequest-idを更新して再検証する。
+- chunk blob、chunk subtree、chunkまたはrequest SHA不一致: 期待OIDを参照するGitHub tree作成またはGatewayが失敗し、target branchは更新されない。まず `publish_request.py verify` でローカル生成物を再検証する。正常系では返却SHAを目視比較せず、失敗したupload groupだけを再送する。
 - patch適用失敗: base不一致またはrequest破損として扱い、ゲーム実装を転送都合へ合わせて変更しない。
 - target tree不一致: Gatewayはcommit前に失敗する。ローカルrequest生成または転送破損を調査する。
 - target branch push競合: forceしない。remote HEADを再確認する。
@@ -121,7 +154,7 @@ manifestにはtarget branch、remote base commit SHA、最終Git tree SHA、diff
 
 native `git push` が利用できる実行環境では、それを第一選択としPublish Gatewayを経由しない。GraphQL等で同等のexact-tree・expected-head付き原子的publishがConnectorへ将来露出した場合は、Gatewayより単純なら置き換える。
 
-`create_tree(content=...)` はGatewayが利用不能な場合のfallbackとする。個別 `create_blob`、Contents APIによる実装ファイルの逐次commitは通常工程にしない。
+ゲーム実装ファイルを直接逐次反映する `create_tree(content=...)` はGatewayが利用不能な場合のfallbackとする。通常Gateway transportの `create_tree(content=...)` は圧縮済みchunkだけをまとめてGit object化するために使い、ゲーム実装ファイルを直接逐次更新する用途とは区別する。Contents APIによる実装ファイルの逐次commitは通常工程にしない。
 
 ## CI
 
