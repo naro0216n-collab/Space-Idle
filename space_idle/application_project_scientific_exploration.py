@@ -40,8 +40,7 @@ class ScientificExplorationProjectorMixin:
             for vehicle_definition in sorted(
                 sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)
             ):
-                pool = sim.logistics.fleet_pool(vehicle_definition.id, definition.origin_id)
-                free_units = sim.logistics.fleet_free_units(
+                fleet = sim.logistics.fleet_pool_snapshot(
                     vehicle_definition.id, definition.origin_id
                 )
                 option_blockers = service.fleet_failures(
@@ -54,8 +53,8 @@ class ScientificExplorationProjectorMixin:
                         vehicle_definition_id=str(vehicle_definition.id),
                         display_name=vehicle_definition.display_name,
                         location_id=str(definition.origin_id),
-                        total_units=pool.total_units,
-                        free_units=free_units,
+                        total_units=fleet.total_units,
+                        free_units=fleet.free_units,
                         required_units=definition.required_units,
                         blockers=option_blockers,
                         can_assign=service.can_assign_fleet(

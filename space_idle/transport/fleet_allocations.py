@@ -146,7 +146,8 @@ class FleetAllocationMixin:
     def fleet_pool_snapshot(
         self, vehicle_definition_id: DefinitionId, location_id: SpatialNodeId
     ) -> FleetPoolSnapshot:
-        pool = self.fleet_pool(vehicle_definition_id, location_id)
+        pool = self.fleet_pools.get(self._pool_key(vehicle_definition_id, location_id))
+        total_units = 0 if pool is None else pool.total_units
         transport_units = self._allocation_units_at(vehicle_definition_id, location_id)
         exploration_units = sum(
             reservation.units
@@ -159,7 +160,7 @@ class FleetAllocationMixin:
         relocating_units = self._relocating_units_from(vehicle_definition_id, location_id)
         releasing_units = self._releasing_units_at(vehicle_definition_id, location_id)
         return FleetPoolSnapshot(
-            vehicle_definition_id, location_id, pool.total_units,
+            vehicle_definition_id, location_id, total_units,
             self.fleet_free_units(vehicle_definition_id, location_id),
             transport_units, exploration_units, max(0, reserved_units - exploration_units),
             relocating_units, releasing_units,

@@ -61,6 +61,18 @@ def test_vehicle_definition_identity_is_consistent_across_catalog_fleet_and_rout
                 assert mode.vehicle_definition_id in definitions
 
 
+def test_fleet_decision_queries_do_not_materialize_empty_pools():
+    app = build_game_application()
+    sim = app._simulation
+    before = dict(sim.logistics.fleet_pools)
+
+    app.query(GetRoutes(include_modes=True))
+    app.query(GetTransportAllocationOptions(str(ids.LEO), str(ids.LUNAR_ORBIT)))
+    app.query(GetScientificExplorations())
+
+    assert sim.logistics.fleet_pools == before
+
+
 def test_transport_allocation_projection_exposes_target_fulfillment_and_derived_capacity():
     app = build_game_application()
     allocation_id = app.execute(CreateTransportAllocation(

@@ -54,6 +54,19 @@ def test_fleet_free_read_does_not_materialize_an_empty_pool():
     assert lg.fleet_pools == before
 
 
+def test_fleet_snapshot_read_does_not_materialize_an_empty_pool():
+    sim = build_base_simulation()
+    lg = sim.logistics
+    before = dict(lg.fleet_pools)
+
+    snapshot = lg.fleet_pool_snapshot(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.SOUTH_POLAR_RIDGE
+    )
+    assert snapshot.total_units == 0
+    assert snapshot.free_units == 0
+    assert lg.fleet_pools == before
+
+
 def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():
     sim = _fleet_sim(3)
     lg = sim.logistics
