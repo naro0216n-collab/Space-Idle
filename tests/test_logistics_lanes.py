@@ -52,9 +52,12 @@ def _advance_logistics(sim, day, demands):
     funds = sim.external_economy.allocate(plan.spending_requests, day)
     authorized = sim.logistics.authorize_capacity_logistics(plan, funds, day)
     allocations = allocate_resource_claims(authorized.claims, sim.inventory)
+    services = _transport_service_allocations(sim, day, authorized)
+    execution = sim.logistics.allocate_capacity_logistics_execution(
+        day, authorized, allocations, services
+    )
     sim.logistics.advance_capacity_logistics(
-        day, authorized, allocations, funds,
-        _transport_service_allocations(sim, day, authorized),
+        day, authorized, funds, execution,
     )
     return authorized, allocations
 
@@ -295,12 +298,13 @@ def test_available_capacity_uses_shared_propellant_allocation_without_changing_r
     plan = sim.logistics.authorize_capacity_logistics(raw, funds, sim.day)
     resources = allocate_resource_claims(plan.claims, sim.inventory)
     services = _transport_service_allocations(sim, sim.day, plan)
+    execution = sim.logistics.allocate_capacity_logistics_execution(
+        sim.day, plan, resources, services
+    )
     constrained = sim.logistics.current_transport_capacity_snapshot(
         allocation_id,
         day=sim.day,
-        logistics_plan=plan,
-        resource_allocations=resources,
-        service_allocations=services,
+        execution_allocation=execution,
     )
 
     assert constrained.available.forward_t_per_day == 0
@@ -492,9 +496,12 @@ def test_dispatch_source_claim_competes_with_higher_priority_local_use():
     funds = sim.external_economy.allocate(plan.spending_requests, sim.day)
     plan = sim.logistics.authorize_capacity_logistics(plan, funds, sim.day)
     allocations = allocate_resource_claims(plan.claims + (local_claim,), sim.inventory)
+    services = _transport_service_allocations(sim, sim.day, plan)
+    execution = sim.logistics.allocate_capacity_logistics_execution(
+        sim.day, plan, allocations, services
+    )
     sim.logistics.advance_capacity_logistics(
-        sim.day, plan, allocations, funds,
-        _transport_service_allocations(sim, sim.day, plan),
+        sim.day, plan, funds, execution,
     )
 
     assert allocations.allocated(local_claim.id) == pytest.approx(1.0)

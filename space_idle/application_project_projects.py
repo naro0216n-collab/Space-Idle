@@ -54,7 +54,9 @@ class ProjectProjectorMixin:
             active_project_id,
         )
 
-    def _external_supply_blocker(self, demand) -> tuple[str, str]:
+    def _external_supply_blocker(
+        self, demand, execution_allocation=None
+    ) -> tuple[str, str]:
         """Translate Logistics demand state into an owning-project blocker.
 
         Finite project domains own their resource need and sourcing preference;
@@ -67,7 +69,11 @@ class ProjectProjectorMixin:
         if sim.logistics.demand_remaining_t(demand) <= 1e-9:
             return ("import_transit", resource_id)
 
-        options = sim.logistics.demand_supply_options(demand, sim.day)
+        options = sim.logistics.demand_supply_options(
+            demand,
+            sim.day,
+            execution_allocation=execution_allocation,
+        )
         if not options.eligible_lane_ids:
             return ("import_lane", resource_id)
         if not options.operational_lane_ids:
@@ -79,15 +85,24 @@ class ProjectProjectorMixin:
             return ("import_stock", resource_id)
         return ("import_transit", resource_id)
 
-    def _external_demands(self, owner_kind: str) -> dict[str, object]:
+    def _external_demands(self, owner_kind: str, demands=None) -> dict[str, object]:
         return {
             str(demand.id): demand
-            for demand in self._simulation.resource_demands()
+            for demand in (
+                self._simulation.resource_demands()
+                if demands is None else demands
+            )
             if demand.owner_kind == owner_kind
         }
 
     def _resource_blockers(
-        self, blockers, *, owner_kind: str, owner_id: str, demands: dict[str, object]
+        self,
+        blockers,
+        *,
+        owner_kind: str,
+        owner_id: str,
+        demands: dict[str, object],
+        execution_allocation=None,
     ) -> tuple[tuple[str, str], ...]:
         rows: list[tuple[str, str]] = []
         for blocker in blockers:
@@ -97,13 +112,15 @@ class ProjectProjectorMixin:
             demand_id = f"demand.{owner_kind}:{owner_id}:{blocker.detail}"
             demand = demands.get(demand_id)
             rows.append(
-                self._external_supply_blocker(demand)
+                self._external_supply_blocker(demand, execution_allocation)
                 if demand is not None
                 else (blocker.code, blocker.detail)
             )
         return tuple(rows)
 
-    def _project_blockers(self, project, power, external_demands=None) -> tuple[tuple[str, str], ...]:
+    def _project_blockers(
+        self, project, power, external_demands=None, execution_allocation=None
+    ) -> tuple[tuple[str, str], ...]:
         sim = self._simulation
         demands = self._external_demands("project") if external_demands is None else external_demands
         return self._resource_blockers(
@@ -111,13 +128,18 @@ class ProjectProjectorMixin:
             owner_kind="project",
             owner_id=str(project.id),
             demands=demands,
+            execution_allocation=execution_allocation,
         )
 
     def _project_rows(self, location_id: SpatialNodeId | None) -> tuple[ProjectRow, ...]:
         sim = self._simulation
-        external_demands = self._external_demands("project")
-        founding_demands = self._external_demands("founding")
         decision = sim.tick_decision_projection()
+        external_demands = self._external_demands(
+            "project", decision.plan.external_demands
+        )
+        founding_demands = self._external_demands(
+            "founding", decision.plan.external_demands
+        )
         powers = decision.allocations.power_by_location
         rows = []
         for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id)):
@@ -126,7 +148,12 @@ class ProjectProjectorMixin:
             recipe = sim.projects.recipe_for_project(project)
             facility_definition_id = sim.projects.target_facility_definition_id(project)
             project_power = powers[project.operational_node_id]
-            blockers = self._project_blockers(project, project_power, external_demands)
+            blockers = self._project_blockers(
+                project,
+                project_power,
+                external_demands,
+                decision.allocations.transport,
+            )
             resources = []
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
@@ -208,6 +235,7 @@ class ProjectProjectorMixin:
                     owner_kind="founding",
                     owner_id=str(project.id),
                     demands=founding_demands,
+                    execution_allocation=decision.allocations.transport,
                 )
                 rows.append(ProjectRow(
                     id=str(project.id),

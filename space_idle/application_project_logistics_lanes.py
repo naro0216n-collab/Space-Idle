@@ -4,7 +4,9 @@ from .application_views import LogisticsLaneRow, LogisticsLanesView, ResourceDem
 
 
 class LogisticsLaneProjectorMixin:
-    def _demand_rows(self, demands=None, snapshot=None) -> tuple[ResourceDemandRow, ...]:
+    def _demand_rows(
+        self, demands=None, snapshot=None, execution_allocation=None
+    ) -> tuple[ResourceDemandRow, ...]:
         sim = self._simulation
         resolutions = sim.resource_demand_resolutions()
         external_demands = tuple(
@@ -12,7 +14,11 @@ class LogisticsLaneProjectorMixin:
             if (demand := resolution.external_demand()) is not None
         ) if demands is None else tuple(demands)
         lane_snapshot = (
-            sim.logistics.lane_snapshot(external_demands, sim.day)
+            sim.logistics.lane_snapshot(
+                external_demands,
+                sim.day,
+                execution_allocation=execution_allocation,
+            )
             if snapshot is None else snapshot
         )
         pipeline = dict(lane_snapshot.demand_pipeline_t)
@@ -38,7 +44,11 @@ class LogisticsLaneProjectorMixin:
             demand = resolution.demand
             pipeline_t = pipeline.get(demand.id, 0.0)
             remaining_t = max(0.0, resolution.external_required_t - pipeline_t)
-            options = sim.logistics.demand_supply_options(demand, sim.day)
+            options = sim.logistics.demand_supply_options(
+                demand,
+                sim.day,
+                execution_allocation=execution_allocation,
+            )
             rate = demand.recurring_rate_t_per_day
             runway = None if rate is None else runway_by_key.get(
                 (demand.destination_id, demand.resource_id), 0.0
@@ -100,12 +110,22 @@ class LogisticsLaneProjectorMixin:
             ))
         return tuple(rows)
 
-    def _lane_rows(self, demands=None, snapshot=None) -> tuple[LogisticsLaneRow, ...]:
+    def _lane_rows(
+        self, demands=None, snapshot=None, decision=None
+    ) -> tuple[LogisticsLaneRow, ...]:
         sim = self._simulation
+        decision = sim.tick_decision_projection() if decision is None else decision
         demand_rows = sim.resource_demands() if demands is None else tuple(demands)
-        lane_snapshot = sim.logistics.lane_snapshot(demand_rows, sim.day) if snapshot is None else snapshot
+        lane_snapshot = (
+            sim.logistics.lane_snapshot(
+                demand_rows,
+                sim.day,
+                execution_allocation=decision.allocations.transport,
+            )
+            if snapshot is None else snapshot
+        )
         metrics = {row.lane_id: row for row in lane_snapshot.lanes}
-        _requests, funds = sim.external_funds_projection()
+        funds = decision.allocations.funds
         funds_blockers: dict[str, list[str]] = {}
         factor_codes = {
             "spending_cap": "external_spending_cap",
@@ -139,9 +159,16 @@ class LogisticsLaneProjectorMixin:
 
     def _logistics_lanes_view(self) -> LogisticsLanesView:
         sim = self._simulation
-        demands = sim.resource_demands()
-        snapshot = sim.logistics.lane_snapshot(demands, sim.day)
+        decision = sim.tick_decision_projection()
+        demands = decision.plan.external_demands
+        snapshot = sim.logistics.lane_snapshot(
+            demands,
+            sim.day,
+            execution_allocation=decision.allocations.transport,
+        )
         return LogisticsLanesView(
-            self._lane_rows(demands, snapshot),
-            self._demand_rows(demands, snapshot),
+            self._lane_rows(demands, snapshot, decision),
+            self._demand_rows(
+                demands, snapshot, decision.allocations.transport
+            ),
         )

@@ -198,9 +198,12 @@ def test_fleet_allocation_exploration_relocation_and_cargo_flow_roundtrip(tmp_pa
         logistics_plan, funds, sim.day
     )
     allocations = allocate_resource_claims(logistics_plan.claims, sim.inventory)
+    services = _transport_service_allocations(sim, sim.day, logistics_plan)
+    execution = sim.logistics.allocate_capacity_logistics_execution(
+        sim.day, logistics_plan, allocations, services
+    )
     sim.logistics.advance_capacity_logistics(
-        sim.day, logistics_plan, allocations, funds,
-        _transport_service_allocations(sim, sim.day, logistics_plan),
+        sim.day, logistics_plan, funds, execution,
     )
     assert sim.logistics.cargo_flows
 

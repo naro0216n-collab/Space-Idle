@@ -60,9 +60,12 @@ def test_owned_transport_is_physical_while_external_transport_requires_policy_an
         funds = sim.external_economy.allocate(raw.spending_requests, sim.day)
         plan = sim.logistics.authorize_capacity_logistics(raw, funds, sim.day)
         resources = allocate_resource_claims(plan.claims, sim.inventory)
+        services = _transport_service_allocations(sim, sim.day, plan)
+        execution = sim.logistics.allocate_capacity_logistics_execution(
+            sim.day, plan, resources, services
+        )
         sim.logistics.advance_capacity_logistics(
-            sim.day, plan, resources, funds,
-            _transport_service_allocations(sim, sim.day, plan),
+            sim.day, plan, funds, execution,
         )
 
     owned = build_game_application()

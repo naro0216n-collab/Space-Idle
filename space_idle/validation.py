@@ -31,6 +31,10 @@ def validate_simulation_configuration(sim: Simulation) -> None:
         service_capacity_dependency_order(ctx.known_service_types, dependencies)
     except ValueError as exc:
         raise ConfigurationError(str(exc)) from exc
+    try:
+        sim.tick_allocation_order(ctx.known_service_types)
+    except ValueError as exc:
+        raise ConfigurationError(str(exc)) from exc
 
 
 def validate_runtime_state(sim: Simulation) -> None:

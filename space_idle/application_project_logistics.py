@@ -13,8 +13,13 @@ class LogisticsProjectorMixin(
 ):
     def _logistics_view(self) -> LogisticsView:
         sim = self._simulation
-        demands = sim.resource_demands()
-        snapshot = sim.logistics.lane_snapshot(demands, sim.day)
+        decision = sim.tick_decision_projection()
+        demands = decision.plan.external_demands
+        snapshot = sim.logistics.lane_snapshot(
+            demands,
+            sim.day,
+            execution_allocation=decision.allocations.transport,
+        )
         return LogisticsView(
             routes=self._route_rows(),
             fleet_pools=self._fleet_pool_rows(),
@@ -24,8 +29,10 @@ class LogisticsProjectorMixin(
             vehicle_production_options=self._vehicle_production_option_rows(),
             vehicle_production=self._vehicle_production_rows(),
             cargo_flows=self._cargo_flow_rows(),
-            lanes=self._lane_rows(demands, snapshot),
-            demands=self._demand_rows(demands, snapshot),
+            lanes=self._lane_rows(demands, snapshot, decision),
+            demands=self._demand_rows(
+                demands, snapshot, decision.allocations.transport
+            ),
         )
 
     def _logistics_summary_view(self) -> LogisticsSummaryView:
@@ -34,10 +41,17 @@ class LogisticsProjectorMixin(
         pools = self._fleet_pool_rows()
         allocations = self._transport_allocation_rows()
         flows = self._cargo_flow_rows()
-        demands = sim.resource_demands()
-        snapshot = sim.logistics.lane_snapshot(demands, sim.day)
-        lanes = self._lane_rows(demands, snapshot)
-        demand_rows = self._demand_rows(demands, snapshot)
+        decision = sim.tick_decision_projection()
+        demands = decision.plan.external_demands
+        snapshot = sim.logistics.lane_snapshot(
+            demands,
+            sim.day,
+            execution_allocation=decision.allocations.transport,
+        )
+        lanes = self._lane_rows(demands, snapshot, decision)
+        demand_rows = self._demand_rows(
+            demands, snapshot, decision.allocations.transport
+        )
         return LogisticsSummaryView(
             route_count=len(routes),
             usable_route_count=sum(1 for row in routes if row.service_feasible_now),

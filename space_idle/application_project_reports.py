@@ -47,10 +47,7 @@ class ApplicationReportProjectorMixin:
         resource_allocations = decision.allocations.resources
         service_allocations = decision.allocations.services
         logistics_execution = sim.logistics.capacity_logistics_execution_projection(
-            sim.day,
-            decision.allocations.logistics,
-            resource_allocations,
-            service_allocations,
+            decision.allocations.transport
         )
 
         production: dict[object, float] = defaultdict(float)
@@ -417,9 +414,14 @@ class ApplicationReportProjectorMixin:
                     definition_id=str(state.vehicle_definition_id), resource_id=resource_id,
                 ))
 
-        demands = sim.resource_demands()
-        lane_snapshot = sim.logistics.lane_snapshot(demands, sim.day)
-        for lane in self._lane_rows(demands, lane_snapshot):
+        decision = sim.tick_decision_projection()
+        demands = decision.plan.external_demands
+        lane_snapshot = sim.logistics.lane_snapshot(
+            demands,
+            sim.day,
+            execution_allocation=decision.allocations.transport,
+        )
+        for lane in self._lane_rows(demands, lane_snapshot, decision):
             if location_filter is not None and location_filter not in {
                 lane.source_id, lane.destination_id
             }:
@@ -430,7 +432,9 @@ class ApplicationReportProjectorMixin:
                     operational_node_id=location_filter, entity_id=lane.id,
                 ))
 
-        for demand in self._demand_rows(demands, lane_snapshot):
+        for demand in self._demand_rows(
+            demands, lane_snapshot, decision.allocations.transport
+        ):
             if location_filter is not None and location_filter != demand.destination_id:
                 continue
             if demand.owner_kind == "project" or demand.remaining_t <= 1e-9:

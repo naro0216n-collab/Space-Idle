@@ -74,6 +74,29 @@ class LogisticsExecutionProjection:
     operational_resource_use: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
 
 
+@dataclass(frozen=True)
+class LogisticsExecutionAllocation:
+    """Final same-tick Transport/Logistics allocation result.
+
+    This transient object is resolved after Funds, Resource and Service
+    allocations. Execution and Application queries consume this same result;
+    neither may reinterpret upstream scarcity independently.
+    """
+
+    executable_dispatches: tuple[tuple[_PlannedDispatch, float], ...]
+    used_by_allocation: tuple[tuple[EntityId, DirectionalCapacity], ...]
+    operational_resource_use_by_allocation: tuple[
+        tuple[EntityId, SpatialNodeId, DefinitionId, float], ...
+    ]
+    operation_factors: tuple[tuple[EntityId, float, tuple[str, ...]], ...]
+
+    def factor(self, allocation_id: EntityId) -> tuple[float, tuple[str, ...]]:
+        for row_id, factor, limiting in self.operation_factors:
+            if row_id == allocation_id:
+                return factor, limiting
+        return 1.0, ()
+
+
 class SteadyLogisticsMixin:
     """Shared sustained-capacity allocation and Cargo Flow execution.
 
@@ -687,33 +710,17 @@ class SteadyLogisticsMixin:
         allocation_id: EntityId,
         *,
         day: int = 0,
-        logistics_plan: LogisticsResourcePlan | None = None,
-        resource_allocations: ResourceAllocationPlan | None = None,
-        service_allocations: ServiceCapacityAllocationPlan | None = None,
+        execution_allocation: LogisticsExecutionAllocation | None = None,
     ) -> TransportCapacitySnapshot:
-        """Project current capacity from physical state and shared allocations."""
+        """Project capacity from physical state and the resolved Transport node."""
         snapshot = self.transport_capacity_snapshot(
             allocation_id,
             day=day,
             used=self._derived_allocation_usage(allocation_id, day),
         )
-        provided = (
-            logistics_plan is not None,
-            resource_allocations is not None,
-            service_allocations is not None,
-        )
-        if not any(provided):
+        if execution_allocation is None:
             return snapshot
-        if not all(provided):
-            raise ValueError(
-                "transport allocation projection requires logistics, resource, and service allocations"
-            )
-        assert logistics_plan is not None
-        assert resource_allocations is not None
-        assert service_allocations is not None
-        factor, allocation_limits = self._transport_operation_allocation_factor(
-            allocation_id, logistics_plan, resource_allocations, service_allocations, day
-        )
+        factor, allocation_limits = execution_allocation.factor(allocation_id)
         available = DirectionalCapacity(
             snapshot.available.forward_t_per_day * factor,
             snapshot.available.reverse_t_per_day * factor,
@@ -852,30 +859,33 @@ class SteadyLogisticsMixin:
         factor = min(ratios) if ratios else 1.0
         return max(0.0, min(1.0, factor)), tuple(dict.fromkeys(limiting))
 
-    def _project_capacity_logistics_execution(
+    def allocate_capacity_logistics_execution(
         self,
         day: int,
         plan: LogisticsResourcePlan,
         allocations: ResourceAllocationPlan,
         service_allocations: ServiceCapacityAllocationPlan,
-    ) -> tuple[
-        tuple[tuple[_PlannedDispatch, float], ...],
-        dict[EntityId, DirectionalCapacity],
-        dict[tuple[EntityId, SpatialNodeId, DefinitionId], float],
-    ]:
-        """Resolve executable dispatch and operation-resource use without mutation.
+    ) -> LogisticsExecutionAllocation:
+        """Resolve the final Transport/Logistics allocation without mutation.
 
-        This is the single interpretation of an authorized LogisticsResourcePlan.
-        Queries use it to observe the same Resource-allocation limits that execution
-        will apply; Domain execution then consumes exactly this projection.
+        Upstream Funds authorization has already shaped ``plan``. Resource and
+        Service allocation results are interpreted exactly once here. The
+        returned object is then shared by queries and movement execution.
         """
         operation_factor: dict[EntityId, float] = {}
-        for allocation_id, _directional in plan.planned_usage:
-            operation_factor[allocation_id], _limiting = (
-                self._transport_operation_allocation_factor(
-                    allocation_id, plan, allocations, service_allocations, day
-                )
+        operation_limits: dict[EntityId, tuple[str, ...]] = {}
+        # Capacity queries must observe upstream Service scarcity even when no
+        # cargo happens to be scheduled for this allocation in the current
+        # tick. Resource and turnaround ratios below remain demand-shaped by
+        # ``plan``; location-wide upstream services such as surface
+        # distribution are authoritative for the allocation regardless of
+        # current cargo demand.
+        for allocation_id in sorted(self.transport_allocations, key=str):
+            factor, limiting = self._transport_operation_allocation_factor(
+                allocation_id, plan, allocations, service_allocations, day
             )
+            operation_factor[allocation_id] = factor
+            operation_limits[allocation_id] = limiting
 
         cargo_budget: dict[EntityId, float] = {}
         for claim in plan.claims:
@@ -907,18 +917,28 @@ class SteadyLogisticsMixin:
             used = self._allocation_used_after(used, row.path, amount)
 
         operational = self._operational_resource_totals_by_allocation(used, day)
-        return tuple(executable), used, operational
+        return LogisticsExecutionAllocation(
+            tuple(executable),
+            tuple(sorted(used.items(), key=lambda row: str(row[0]))),
+            tuple(
+                (allocation_id, location_id, resource_id, amount)
+                for (allocation_id, location_id, resource_id), amount in sorted(
+                    operational.items(),
+                    key=lambda row: (
+                        str(row[0][0]), str(row[0][1]), str(row[0][2])
+                    ),
+                )
+                if amount > 1e-12
+            ),
+            tuple(
+                (allocation_id, operation_factor[allocation_id], operation_limits[allocation_id])
+                for allocation_id in sorted(operation_factor, key=str)
+            ),
+        )
 
     def capacity_logistics_execution_projection(
-        self,
-        day: int,
-        plan: LogisticsResourcePlan,
-        allocations: ResourceAllocationPlan,
-        service_allocations: ServiceCapacityAllocationPlan,
+        self, allocation: LogisticsExecutionAllocation
     ) -> LogisticsExecutionProjection:
-        executable, _used, operational = self._project_capacity_logistics_execution(
-            day, plan, allocations, service_allocations
-        )
         dispatches = tuple(
             LogisticsDispatchProjection(
                 row.lane_id,
@@ -928,17 +948,12 @@ class SteadyLogisticsMixin:
                 self.lanes[row.lane_id].destination_id,
                 amount,
             )
-            for row, amount in executable
+            for row, amount in allocation.executable_dispatches
         )
         resource_use = tuple(
             (location_id, resource_id, amount)
-            for (_allocation_id, location_id, resource_id), amount in sorted(
-                operational.items(),
-                key=lambda item: (
-                    str(item[0][1]), str(item[0][2]), str(item[0][0])
-                ),
-            )
-            if amount > 1e-12
+            for _allocation_id, location_id, resource_id, amount
+            in allocation.operational_resource_use_by_allocation
         )
         return LogisticsExecutionProjection(dispatches, resource_use)
 
@@ -946,17 +961,13 @@ class SteadyLogisticsMixin:
         self,
         day: int,
         plan: LogisticsResourcePlan,
-        allocations: ResourceAllocationPlan,
         funds: FundsAllocationPlan,
-        service_allocations: ServiceCapacityAllocationPlan,
+        execution: LogisticsExecutionAllocation,
     ) -> tuple[DomainActivity, ...]:
-        """Execute only transport work authorized by shared allocations."""
-        executable, used, operational = self._project_capacity_logistics_execution(
-            day, plan, allocations, service_allocations
-        )
+        """Execute exactly the already-resolved Transport allocation."""
         activities: list[DomainActivity] = []
         requests_by_id = {request.id: request for request in plan.spending_requests}
-        for row, amount in executable:
+        for row, amount in execution.executable_dispatches:
             lane = self.lanes[row.lane_id]
             demand = row.demand
             self.inventory.consume_allocated(lane.source_id, demand.resource_id, amount)
@@ -968,18 +979,20 @@ class SteadyLogisticsMixin:
                     request = requests_by_id[request_id]
                     actual_cost = request.requested_musd * execution_factor
                     if actual_cost > authorization.authorized_musd + 1e-8:
-                        raise RuntimeError("external transport spend exceeded funds authorization")
+                        raise RuntimeError(
+                            "external transport spend exceeded funds authorization"
+                        )
                     self.external_economy.spend_authorized(
-                        authorization,
-                        actual_cost,
-                        day,
+                        authorization, actual_cost, day
                     )
 
             self._cargo_flow_counter += 1
             flow_id = EntityId(f"cargo.flow.{self._cargo_flow_counter}")
-            activities.append(DomainActivity(
-                "transport", amount, "logistics_lane", row.lane_id, lane.source_id
-            ))
+            activities.append(
+                DomainActivity(
+                    "transport", amount, "logistics_lane", row.lane_id, lane.source_id
+                )
+            )
             self.cargo_flows[flow_id] = CargoFlowBatch(
                 flow_id,
                 demand.resource_id,
@@ -997,23 +1010,16 @@ class SteadyLogisticsMixin:
                 day + sum(edge.latency_days for edge in row.path),
             )
 
-        for (allocation_id, location_id, resource_id), amount in sorted(
-            operational.items(),
-            key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2])),
+        for allocation_id, location_id, resource_id, amount in (
+            execution.operational_resource_use_by_allocation
         ):
-            if amount <= 1e-12:
-                continue
-            claim_id = self._operation_claim_id(allocation_id, location_id, resource_id)
-            try:
-                allocated = allocations.allocated(claim_id)
-            except KeyError:
-                allocated = 0.0
-            if amount > allocated + 1e-8:
-                raise RuntimeError("transport operation exceeded allocated resource")
             self.inventory.consume_allocated(location_id, resource_id, amount)
 
-        for allocation_id, directional in used.items():
-            if directional.forward_t_per_day > 1e-12 or directional.reverse_t_per_day > 1e-12:
+        for allocation_id, directional in execution.used_by_allocation:
+            if (
+                directional.forward_t_per_day > 1e-12
+                or directional.reverse_t_per_day > 1e-12
+            ):
                 self.transport_allocations[allocation_id].last_operated_day = day
         return tuple(activities)
 
@@ -1039,12 +1045,39 @@ class SteadyLogisticsMixin:
             for service_id in sorted(denied, key=str)
         )
 
+    def _service_edges_for_execution_allocation(
+        self,
+        day: int,
+        execution_allocation: LogisticsExecutionAllocation | None,
+    ) -> tuple[_ServiceEdge, ...]:
+        edges = self._service_edges(day)
+        if execution_allocation is None:
+            return edges
+        return tuple(
+            edge
+            if edge.allocation_id is None
+            else replace(
+                edge,
+                capacity_t_per_day=(
+                    edge.capacity_t_per_day
+                    * execution_allocation.factor(edge.allocation_id)[0]
+                ),
+            )
+            for edge in edges
+        )
+
     def lane_snapshot(
-        self, demands: tuple[ResourceDemand, ...], day: int = 0
+        self,
+        demands: tuple[ResourceDemand, ...],
+        day: int = 0,
+        *,
+        execution_allocation: LogisticsExecutionAllocation | None = None,
     ) -> LogisticsLaneSnapshot:
         pipeline = self._flow_pipeline_by_demand({demand.id for demand in demands})
         rows: list[LaneRuntimeMetrics] = []
-        edges = self._service_edges(day)
+        edges = self._service_edges_for_execution_allocation(
+            day, execution_allocation
+        )
         for lane in sorted(self.lanes.values(), key=lambda row: str(row.id)):
             blockers: list[str] = []
             try:
@@ -1087,9 +1120,15 @@ class SteadyLogisticsMixin:
         )
 
     def demand_supply_options(
-        self, demand: ResourceDemand, day: int = 0
+        self,
+        demand: ResourceDemand,
+        day: int = 0,
+        *,
+        execution_allocation: LogisticsExecutionAllocation | None = None,
     ) -> DemandSupplyOptions:
-        edges = self._service_edges(day)
+        edges = self._service_edges_for_execution_allocation(
+            day, execution_allocation
+        )
         eligible = tuple(
             lane for lane in sorted(self.lanes.values(), key=lambda row: str(row.id))
             if self._lane_accepts_demand(lane, demand)

@@ -485,8 +485,12 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     funds = sim.external_economy.allocate(plan.spending_requests, 0)
     plan = lg.authorize_capacity_logistics(plan, funds, 0)
     allocations = allocate_resource_claims(plan.claims, sim.inventory)
+    services = _transport_service_allocations(sim, 0, plan)
+    execution = lg.allocate_capacity_logistics_execution(
+        0, plan, allocations, services
+    )
     lg.advance_capacity_logistics(
-        0, plan, allocations, funds, _transport_service_allocations(sim, 0, plan)
+        0, plan, funds, execution
     )
     flow = next(
         row for row in lg.cargo_flows.values()
@@ -866,12 +870,13 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
     logistics_plan = lg.authorize_capacity_logistics(raw, funds, 0)
     resources = allocate_resource_claims(logistics_plan.claims, sim.inventory)
     services = _transport_service_allocations(sim, 0, logistics_plan)
+    execution = lg.allocate_capacity_logistics_execution(
+        0, logistics_plan, resources, services
+    )
     available = lg.current_transport_capacity_snapshot(
         allocation_id,
         day=0,
-        logistics_plan=logistics_plan,
-        resource_allocations=resources,
-        service_allocations=services,
+        execution_allocation=execution,
     )
     assert available.available.forward_t_per_day == pytest.approx(
         available.nominal.forward_t_per_day / 2.0

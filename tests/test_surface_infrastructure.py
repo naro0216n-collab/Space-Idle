@@ -3,7 +3,14 @@ from __future__ import annotations
 import pytest
 import json
 
-from space_idle import AdvanceTime, DevelopSurfaceCell, GetOperationalNode, GetProjects, build_game_application
+from space_idle import (
+    AdvanceTime,
+    DevelopSurfaceCell,
+    GetLogisticsLanes,
+    GetOperationalNode,
+    GetProjects,
+    build_game_application,
+)
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
 from space_idle.surface_infrastructure import SURFACE_DISTRIBUTION_SERVICE
@@ -297,7 +304,8 @@ def test_surface_gateway_handling_service_uses_location_surface_infrastructure()
 
 def test_remote_surface_route_available_capacity_uses_location_surface_infrastructure():
     from space_idle.shared import SpatialNodeId
-    sim = build_game_application()._simulation
+    app = build_game_application()
+    sim = app._simulation
     a = SpatialNodeId("test.location.infrastructure.a")
     b = SpatialNodeId("test.location.infrastructure.b")
     sim.graph.found_location(a, "A", ids.MOON, ids.MOON_CELL_SOUTH_POLAR_RIDGE)
@@ -323,9 +331,15 @@ def test_remote_surface_route_available_capacity_uses_location_surface_infrastru
     decision = sim.tick_decision_projection()
     constrained = sim.logistics.current_transport_capacity_snapshot(
         allocation_id, day=sim.day,
-        logistics_plan=decision.allocations.logistics,
-        resource_allocations=decision.allocations.resources,
-        service_allocations=decision.allocations.services,
+        execution_allocation=decision.allocations.transport,
     )
     assert 0.0 < constrained.available.forward_t_per_day < constrained.nominal.forward_t_per_day
     assert any(factor.startswith("surface_infrastructure:") for factor in constrained.limiting_factors)
+
+    lane_id = sim.logistics.create_lane(a, b, 1.0, 100)
+    lane = next(
+        row for row in app.query(GetLogisticsLanes()).items if row.id == str(lane_id)
+    )
+    assert lane.effective_capacity_t_per_day == pytest.approx(
+        constrained.available.forward_t_per_day
+    )

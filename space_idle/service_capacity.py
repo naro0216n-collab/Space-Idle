@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Mapping
 
+from .allocation_graph import AllocationDependency, allocation_dependency_order
 from .shared import EntityId, SpatialNodeId
 
 
@@ -159,40 +160,14 @@ def service_capacity_dependency_order(
 ) -> tuple[str, ...]:
     """Return a deterministic upstream-first order and reject cycles."""
 
-    nodes = set(service_types)
-    edges = tuple(dependencies)
-    for edge in edges:
-        nodes.add(edge.service_type)
-        nodes.add(edge.upstream_service_type)
-
-    downstream: dict[str, set[str]] = {node: set() for node in nodes}
-    indegree: dict[str, int] = {node: 0 for node in nodes}
-    seen: set[tuple[str, str]] = set()
-    for edge in edges:
-        key = (edge.upstream_service_type, edge.service_type)
-        if key in seen:
-            continue
-        seen.add(key)
-        downstream[edge.upstream_service_type].add(edge.service_type)
-        indegree[edge.service_type] += 1
-
-    ready = sorted(node for node, count in indegree.items() if count == 0)
-    ordered: list[str] = []
-    while ready:
-        node = ready.pop(0)
-        ordered.append(node)
-        for dependent in sorted(downstream[node]):
-            indegree[dependent] -= 1
-            if indegree[dependent] == 0:
-                ready.append(dependent)
-                ready.sort()
-
-    if len(ordered) != len(nodes):
-        cyclic = tuple(sorted(node for node, count in indegree.items() if count > 0))
-        raise ValueError(
-            "service capacity dependency cycle: " + " -> ".join(cyclic)
-        )
-    return tuple(ordered)
+    return allocation_dependency_order(
+        service_types,
+        (
+            AllocationDependency(edge.service_type, edge.upstream_service_type)
+            for edge in dependencies
+        ),
+        cycle_label="service capacity dependency cycle",
+    )
 
 
 def merge_service_capacity_plans(

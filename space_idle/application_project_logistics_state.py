@@ -113,9 +113,7 @@ class LogisticsStateProjectorMixin:
             snapshot = sim.logistics.current_transport_capacity_snapshot(
                 allocation.id,
                 day=sim.day,
-                logistics_plan=decision.allocations.logistics,
-                resource_allocations=decision.allocations.resources,
-                service_allocations=decision.allocations.services,
+                execution_allocation=decision.allocations.transport,
             )
             rows.append(
                 TransportAllocationRow(

@@ -222,9 +222,12 @@ def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
     row = next(item for item in plan.dispatches if item.lane_id == lane_id)
     assert row.amount_t == pytest.approx(0.1)
     resources = allocate_resource_claims(plan.claims, sim.inventory)
+    services = _transport_service_allocations(sim, sim.day, plan)
+    execution = sim.logistics.allocate_capacity_logistics_execution(
+        sim.day, plan, resources, services
+    )
     before = sim.external_economy.account.funds_musd
     sim.logistics.advance_capacity_logistics(
-            sim.day, plan, resources, funds,
-            _transport_service_allocations(sim, sim.day, plan),
+            sim.day, plan, funds, execution,
         )
     assert before - sim.external_economy.account.funds_musd == pytest.approx(0.9)

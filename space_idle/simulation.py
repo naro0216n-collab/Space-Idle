@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
+from .allocation_graph import AllocationDependency, allocation_dependency_order
 from .contracts import ContractService
 from .construction.models import CONSTRUCTION_SERVICE_TYPE
 from .domain import DomainExtension
@@ -31,14 +32,14 @@ from .resource_demand import (
     resolve_local_resource_supply,
     ResourceDemandResolution,
 )
-from .shared import SpatialNodeId
+from .shared import EntityId, SpatialNodeId
 from .spatial import EnvironmentResolver, SpatialGraph
 from .storage import StorageService
 from .surface_infrastructure import SurfaceInfrastructureService
 from .technology import TechnologyState
 from .survey import ExtractionService, SurveyService
 from .scientific_exploration import ScientificExplorationService
-from .transport.steady_logistics import LogisticsResourcePlan
+from .transport.steady_logistics import LogisticsExecutionAllocation, LogisticsResourcePlan
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,20 @@ class TickAllocations:
     resources: ResourceAllocationPlan
     power_by_location: dict[SpatialNodeId, PowerSnapshot]
     services: ServiceCapacityAllocationPlan
+    transport: LogisticsExecutionAllocation
+
+
+ALLOCATION_FUNDS = "funds"
+ALLOCATION_LOGISTICS = "logistics_authorization"
+ALLOCATION_RESOURCES = "resources"
+ALLOCATION_MAINTENANCE = "maintenance"
+ALLOCATION_POWER = "power"
+ALLOCATION_TRANSPORT = "transport"
+SERVICE_NODE_PREFIX = "service:"
+
+
+def _service_allocation_node(service_type: str) -> str:
+    return SERVICE_NODE_PREFIX + service_type
 
 
 @dataclass(frozen=True)
@@ -392,27 +407,9 @@ class Simulation:
             ),
         )
 
-    def _allocate_tick_services(
-        self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot],
-        requests: tuple[ServiceCapacityRequest, ...] | None = None,
-    ) -> ServiceCapacityAllocationPlan:
-        requests = self._service_capacity_requests() if requests is None else requests
-        if self.surface_infrastructure is not None:
-            request_ids = {request.id for request in requests}
-            upstream = tuple(
-                self.surface_infrastructure.service_request(location_id)
-                for location_id in sorted(self.graph.locations, key=str)
-                if self.surface_infrastructure.service_request_id(location_id) not in request_ids
-            )
-            requests = requests + upstream
-
-        locations = tuple(
-            sorted(
-                self._active_locations() | set(self.graph.operational_node_ids()),
-                key=str,
-            )
-        )
+    def _service_allocation_types(
+        self, requests: tuple[ServiceCapacityRequest, ...]
+    ) -> tuple[str, ...]:
         service_types = {request.service_type for request in requests}
         service_types.update(self.facilities.service_types())
         service_types.add(CONSTRUCTION_SERVICE_TYPE)
@@ -427,55 +424,101 @@ class Simulation:
             )
         if self.survey is not None:
             service_types.add(self.survey.SERVICE_TYPE)
+        if self.surface_infrastructure is not None:
+            service_types.add(self.surface_infrastructure.service_type)
+        service_types.update(
+            definition.turnaround_service_type
+            for definition in self.logistics.vehicle_defs.values()
+            if definition.turnaround_service_type is not None
+        )
+        return tuple(sorted(service_types))
+
+    def _allocate_service_stage(
+        self,
+        service_type: str,
+        *,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        requests: tuple[ServiceCapacityRequest, ...],
+        resolved_plan: ServiceCapacityAllocationPlan,
+        dependencies: tuple[ServiceCapacityDependency, ...],
+    ) -> ServiceCapacityAllocationPlan:
+        locations = tuple(
+            sorted(
+                self._active_locations() | set(self.graph.operational_node_ids()),
+                key=str,
+            )
+        )
+        stage_requests = tuple(
+            request for request in requests if request.service_type == service_type
+        )
+        nominal: dict[tuple[SpatialNodeId, str], float] = {}
+        enabled: dict[tuple[SpatialNodeId, str], float] = {}
+        limiting: dict[tuple[SpatialNodeId, str], tuple[str, ...]] = {}
+        requested_locations = {request.operational_node_id for request in stage_requests}
+        for location_id in locations:
+            power = power_by_location[location_id]
+            provider_factors = self._service_provider_factors(
+                location_id, service_type, resolved_plan, dependencies
+            )
+            nominal_rate, enabled_rate = self._service_supply_at(
+                location_id, service_type, power, provider_factors
+            )
+            if (
+                nominal_rate <= 1e-12
+                and enabled_rate <= 1e-12
+                and location_id not in requested_locations
+            ):
+                continue
+            key = (location_id, service_type)
+            nominal[key] = nominal_rate
+            enabled[key] = enabled_rate
+            factors: list[str] = []
+            if nominal_rate <= 1e-12:
+                if any(
+                    request.operational_node_id == location_id
+                    and request.requested_rate > 1e-12
+                    for request in stage_requests
+                ):
+                    factors.append("provider_absent")
+            elif enabled_rate + 1e-9 < nominal_rate:
+                factors.append("provider_dependency")
+            limiting[key] = tuple(factors)
+        return allocate_service_capacity(
+            stage_requests,
+            nominal_supply=nominal,
+            enabled_supply=enabled,
+            limiting_factors=limiting,
+        )
+
+    def _allocate_tick_services(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        requests: tuple[ServiceCapacityRequest, ...] | None = None,
+    ) -> ServiceCapacityAllocationPlan:
+        """Standalone Service projection; normal ticks use the full DAG."""
+        requests = self._service_capacity_requests() if requests is None else requests
+        if self.surface_infrastructure is not None:
+            request_ids = {request.id for request in requests}
+            upstream = tuple(
+                self.surface_infrastructure.service_request(location_id)
+                for location_id in sorted(self.graph.locations, key=str)
+                if self.surface_infrastructure.service_request_id(location_id)
+                not in request_ids
+            )
+            requests = requests + upstream
+
+        service_types = self._service_allocation_types(requests)
         dependencies = self.service_capacity_dependencies()
         order = service_capacity_dependency_order(service_types, dependencies)
-
         plans: list[ServiceCapacityAllocationPlan] = []
         for service_type in order:
-            resolved_plan = merge_service_capacity_plans(plans)
-            stage_requests = tuple(
-                request for request in requests if request.service_type == service_type
-            )
-            nominal: dict[tuple[SpatialNodeId, str], float] = {}
-            enabled: dict[tuple[SpatialNodeId, str], float] = {}
-            limiting: dict[tuple[SpatialNodeId, str], tuple[str, ...]] = {}
-            requested_locations = {
-                request.operational_node_id for request in stage_requests
-            }
-            for location_id in locations:
-                power = power_by_location[location_id]
-                provider_factors = self._service_provider_factors(
-                    location_id, service_type, resolved_plan, dependencies
-                )
-                nominal_rate, enabled_rate = self._service_supply_at(
-                    location_id, service_type, power, provider_factors
-                )
-                if (
-                    nominal_rate <= 1e-12
-                    and enabled_rate <= 1e-12
-                    and location_id not in requested_locations
-                ):
-                    continue
-                key = (location_id, service_type)
-                nominal[key] = nominal_rate
-                enabled[key] = enabled_rate
-                factors: list[str] = []
-                if nominal_rate <= 1e-12:
-                    if any(
-                        request.operational_node_id == location_id
-                        and request.requested_rate > 1e-12
-                        for request in stage_requests
-                    ):
-                        factors.append("provider_absent")
-                elif enabled_rate + 1e-9 < nominal_rate:
-                    factors.append("provider_dependency")
-                limiting[key] = tuple(factors)
             plans.append(
-                allocate_service_capacity(
-                    stage_requests,
-                    nominal_supply=nominal,
-                    enabled_supply=enabled,
-                    limiting_factors=limiting,
+                self._allocate_service_stage(
+                    service_type,
+                    power_by_location=power_by_location,
+                    requests=requests,
+                    resolved_plan=merge_service_capacity_plans(plans),
+                    dependencies=dependencies,
                 )
             )
         return merge_service_capacity_plans(plans)
@@ -492,17 +535,9 @@ class Simulation:
         return TickDecisionProjection(snapshot, intents, plan, allocations)
 
     def external_funds_projection(self) -> tuple[tuple[FundsRequest, ...], FundsAllocationPlan]:
-        """Project current External Service spending requests and authorization."""
-        external_demands = tuple(
-            demand
-            for resolution in resolve_local_resource_supply(
-                self._gross_resource_demands(), self.inventory
-            )
-            if (demand := resolution.external_demand()) is not None
-        )
-        logistics_plan = self.logistics.plan_capacity_logistics(self.day, external_demands)
-        requests = logistics_plan.spending_requests
-        return requests, self.external_economy.allocate(requests, self.day)
+        """Expose Funds requests and authorization from the shared tick DAG."""
+        decision = self.tick_decision_projection()
+        return decision.plan.logistics.spending_requests, decision.allocations.funds
 
     def resource_allocation_projection(self) -> ResourceAllocationPlan:
         """Derive the current shared Resource allocation without mutating state."""
@@ -583,43 +618,194 @@ class Simulation:
         )
         return TickPlan(external_demands, logistics_plan)
 
+    def _complete_service_requests(
+        self, requests: tuple[ServiceCapacityRequest, ...]
+    ) -> tuple[ServiceCapacityRequest, ...]:
+        rows = requests
+        if self.surface_infrastructure is not None:
+            request_ids = {request.id for request in rows}
+            rows += tuple(
+                self.surface_infrastructure.service_request(location_id)
+                for location_id in sorted(self.graph.locations, key=str)
+                if self.surface_infrastructure.service_request_id(location_id)
+                not in request_ids
+            )
+        seen: set[object] = set()
+        for request in rows:
+            if request.id in seen:
+                raise RuntimeError(f"duplicate service capacity request id: {request.id}")
+            seen.add(request.id)
+        return rows
+
+    def tick_allocation_dependencies(
+        self, service_types: tuple[str, ...] | set[str]
+    ) -> tuple[AllocationDependency, ...]:
+        """Return the explicit same-tick cross-Domain allocation DAG."""
+        service_types = tuple(sorted(set(service_types)))
+        dependencies: list[AllocationDependency] = [
+            AllocationDependency(ALLOCATION_LOGISTICS, ALLOCATION_FUNDS),
+            AllocationDependency(ALLOCATION_RESOURCES, ALLOCATION_LOGISTICS),
+            AllocationDependency(ALLOCATION_MAINTENANCE, ALLOCATION_RESOURCES),
+            AllocationDependency(ALLOCATION_POWER, ALLOCATION_MAINTENANCE),
+            AllocationDependency(ALLOCATION_TRANSPORT, ALLOCATION_FUNDS),
+            AllocationDependency(ALLOCATION_TRANSPORT, ALLOCATION_LOGISTICS),
+            AllocationDependency(ALLOCATION_TRANSPORT, ALLOCATION_RESOURCES),
+        ]
+        for service_type in service_types:
+            node = _service_allocation_node(service_type)
+            dependencies.append(AllocationDependency(node, ALLOCATION_POWER))
+            dependencies.append(AllocationDependency(node, ALLOCATION_LOGISTICS))
+            dependencies.append(AllocationDependency(ALLOCATION_TRANSPORT, node))
+        for edge in self.service_capacity_dependencies():
+            dependencies.append(
+                AllocationDependency(
+                    _service_allocation_node(edge.service_type),
+                    _service_allocation_node(edge.upstream_service_type),
+                )
+            )
+        return tuple(dependencies)
+
+    def tick_allocation_order(
+        self, service_types: tuple[str, ...] | set[str]
+    ) -> tuple[str, ...]:
+        nodes = {
+            ALLOCATION_FUNDS,
+            ALLOCATION_LOGISTICS,
+            ALLOCATION_RESOURCES,
+            ALLOCATION_MAINTENANCE,
+            ALLOCATION_POWER,
+            ALLOCATION_TRANSPORT,
+            *(_service_allocation_node(row) for row in service_types),
+        }
+        return allocation_dependency_order(
+            nodes,
+            self.tick_allocation_dependencies(service_types),
+            cycle_label="tick allocation dependency cycle",
+        )
+
     def _allocate_tick(
         self,
         snapshot: TickPhysicalSnapshot,
         intents: TickIntents,
         plan: TickPlan,
     ) -> TickAllocations:
-        funds = self.external_economy.allocate(plan.logistics.spending_requests, self.day)
-        authorized_logistics = self.logistics.authorize_capacity_logistics(
-            plan.logistics, funds, self.day
-        )
-        resources = self._allocate_tick_resources(
-            authorized_logistics.claims,
-            domain_claims=intents.resource_claims,
-        )
-        maintenance_factors = (
-            self.maintenance.satisfaction_projection(resources)
-            if self.maintenance is not None
-            else {facility.id: 1.0 for facility in self.facilities.facilities.values()}
-        )
-        power_by_location = {
-            location_id: self.power.resolve_snapshot(
-                snapshot.power_inputs_by_location[location_id], maintenance_factors
-            )
-            for location_id in snapshot.ordered_locations
-        }
-        transport_requests = self.logistics.transport_service_capacity_requests(
-            self.day, authorized_logistics.planned_usage
-        )
-        service_requests = intents.service_requests + transport_requests
-        seen: set[object] = set()
-        for request in service_requests:
-            if request.id in seen:
-                raise RuntimeError(f"duplicate service capacity request id: {request.id}")
-            seen.add(request.id)
-        services = self._allocate_tick_services(power_by_location, service_requests)
+        """Resolve one tick through the explicit cross-Domain allocation DAG."""
+        service_types = self._service_allocation_types(intents.service_requests)
+        order = self.tick_allocation_order(service_types)
+        service_dependencies = self.service_capacity_dependencies()
+
+        funds: FundsAllocationPlan | None = None
+        authorized_logistics: LogisticsResourcePlan | None = None
+        resources: ResourceAllocationPlan | None = None
+        maintenance_factors: dict[EntityId, float] | None = None
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None
+        service_requests: tuple[ServiceCapacityRequest, ...] | None = None
+        service_plans: list[ServiceCapacityAllocationPlan] = []
+        transport: LogisticsExecutionAllocation | None = None
+
+        for node in order:
+            if node == ALLOCATION_FUNDS:
+                funds = self.external_economy.allocate(
+                    plan.logistics.spending_requests, self.day
+                )
+                continue
+            if node == ALLOCATION_LOGISTICS:
+                if funds is None:
+                    raise RuntimeError("allocation graph resolved logistics before funds")
+                authorized_logistics = self.logistics.authorize_capacity_logistics(
+                    plan.logistics, funds, self.day
+                )
+                transport_requests = self.logistics.transport_service_capacity_requests(
+                    self.day, authorized_logistics.planned_usage
+                )
+                service_requests = self._complete_service_requests(
+                    intents.service_requests + transport_requests
+                )
+                continue
+            if node == ALLOCATION_RESOURCES:
+                if authorized_logistics is None:
+                    raise RuntimeError(
+                        "allocation graph resolved resources before logistics authorization"
+                    )
+                resources = self._allocate_tick_resources(
+                    authorized_logistics.claims, domain_claims=intents.resource_claims
+                )
+                continue
+            if node == ALLOCATION_MAINTENANCE:
+                if resources is None:
+                    raise RuntimeError(
+                        "allocation graph resolved maintenance before resources"
+                    )
+                maintenance_factors = (
+                    self.maintenance.satisfaction_projection(resources)
+                    if self.maintenance is not None
+                    else {
+                        facility.id: 1.0
+                        for facility in self.facilities.facilities.values()
+                    }
+                )
+                continue
+            if node == ALLOCATION_POWER:
+                if maintenance_factors is None:
+                    raise RuntimeError(
+                        "allocation graph resolved power before maintenance"
+                    )
+                power_by_location = {
+                    location_id: self.power.resolve_snapshot(
+                        snapshot.power_inputs_by_location[location_id],
+                        maintenance_factors,
+                    )
+                    for location_id in snapshot.ordered_locations
+                }
+                continue
+            if node.startswith(SERVICE_NODE_PREFIX):
+                if power_by_location is None or service_requests is None:
+                    raise RuntimeError(
+                        "allocation graph resolved service before its upstream allocations"
+                    )
+                service_type = node[len(SERVICE_NODE_PREFIX):]
+                service_plans.append(
+                    self._allocate_service_stage(
+                        service_type,
+                        power_by_location=power_by_location,
+                        requests=service_requests,
+                        resolved_plan=merge_service_capacity_plans(service_plans),
+                        dependencies=service_dependencies,
+                    )
+                )
+                continue
+            if node == ALLOCATION_TRANSPORT:
+                if (
+                    funds is None
+                    or authorized_logistics is None
+                    or resources is None
+                ):
+                    raise RuntimeError(
+                        "allocation graph resolved transport before upstream allocations"
+                    )
+                services = merge_service_capacity_plans(service_plans)
+                transport = self.logistics.allocate_capacity_logistics_execution(
+                    self.day, authorized_logistics, resources, services
+                )
+                continue
+            raise RuntimeError(f"unknown allocation graph node: {node}")
+
+        if (
+            funds is None
+            or authorized_logistics is None
+            or resources is None
+            or power_by_location is None
+            or transport is None
+        ):
+            raise RuntimeError("allocation graph did not resolve all required nodes")
+        services = merge_service_capacity_plans(service_plans)
         return TickAllocations(
-            funds, authorized_logistics, resources, power_by_location, services
+            funds,
+            authorized_logistics,
+            resources,
+            power_by_location,
+            services,
+            transport,
         )
 
     def _execute_tick_domains(
@@ -693,9 +879,8 @@ class Simulation:
         return self.logistics.advance_capacity_logistics(
             self.day,
             allocations.logistics,
-            allocations.resources,
             allocations.funds,
-            allocations.services,
+            allocations.transport,
         )
 
     def _settle_tick_state_transitions(self, allocations: TickAllocations) -> None:
