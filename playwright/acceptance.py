@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from space_idle import build_game_application
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
+from space_idle.simulation import OfflineProgressPolicy
 
 try:
     from playwright.sync_api import sync_playwright
@@ -97,6 +98,7 @@ def _browser_document(server_origin: str) -> str:
     index = _http_request(server_origin, "/")["body"]
     css = _http_request(server_origin, "/app.css")["body"]
     js = _http_request(server_origin, "/app.js")["body"]
+    time_js = _http_request(server_origin, "/time_control.js")["body"]
     bridge = r"""
 <script>
 window.fetch = async function(input, init = {}) {
@@ -109,6 +111,7 @@ window.fetch = async function(input, init = {}) {
 """
     index = index.replace('<link rel="stylesheet" href="/app.css">', f'<style>{css}</style>')
     index = index.replace('<script src="/app.js" defer></script>', bridge + f'<script>{js}</script>')
+    index = index.replace('<script src="/time_control.js" defer></script>', f'<script>{time_js}</script>')
     return index
 
 
@@ -137,6 +140,7 @@ def run() -> dict[str, object]:
     runtime = GameRuntime(
         factory=build_game_application,
         save_dir=Path(temp_dir.name) / "saves",
+        offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=0.5),
     )
     server = create_server(
         runtime,
@@ -202,14 +206,41 @@ def run() -> dict[str, object]:
             viewport_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(viewport_metrics["scroll"] <= viewport_metrics["w"], "1194px landscape must not horizontally overflow")
             _assert(_visible_button_min_height(page) >= 44, "visible touch controls must be at least 44 CSS px high")
+
+            _assert(page.locator("#timePauseButton").is_visible(), "automatic clock must expose pause control")
+            _assert(page.locator('[data-time-speed="1"]').is_visible(), "1x speed control must be visible")
+            _assert(page.locator('[data-time-speed="4"]').is_visible(), "4x speed control must be visible")
+            _assert(page.locator('[data-time-speed="16"]').is_visible(), "16x speed control must be visible")
+            _assert(page.get_by_role("button", name="+1日").count() == 0, "manual day-jump control must be removed")
+
             day_before = int(page.locator("#dayValue").inner_text().replace(",", ""))
-            rev_before = int(page.locator("#revisionValue").inner_text())
-            page.get_by_role("button", name="+1日").click()
             page.wait_for_function(
-                "([d,r]) => Number(document.querySelector('#dayValue').textContent.replaceAll(',','')) > d && Number(document.querySelector('#revisionValue').textContent) > r",
-                arg=[day_before, rev_before],
-                timeout=15000,
+                "d => Number(document.querySelector('#dayValue').textContent.replaceAll(',','')) > d",
+                arg=day_before,
+                timeout=10000,
             )
+            running_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
+
+            page.locator("#timePauseButton").click()
+            page.wait_for_function(
+                "() => document.querySelector('#timeState').textContent.includes('停止中')",
+                timeout=10000,
+            )
+            paused_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
+            page.wait_for_timeout(1200)
+            _assert(
+                int(page.locator("#dayValue").inner_text().replace(",", "")) == paused_day,
+                "paused automatic clock must not advance",
+            )
+
+            page.locator('[data-time-speed="4"]').click()
+            page.locator("#timePauseButton").click()
+            page.wait_for_function(
+                "d => Number(document.querySelector('#dayValue').textContent.replaceAll(',','')) > d",
+                arg=paused_day,
+                timeout=10000,
+            )
+            rev_after = int(page.locator("#revisionValue").inner_text())
             page.screenshot(path=ARTIFACTS / "operations_landscape_1194x834.png", full_page=True)
 
             page.set_viewport_size({"width": 1180, "height": 820})
@@ -313,9 +344,9 @@ def run() -> dict[str, object]:
                 "route_count": route_buttons.count(),
                 "issue_titles_checked": len(issue_titles),
                 "day_before": day_before,
+                "day_running": running_day,
                 "day_after": int(page.locator("#dayValue").inner_text().replace(",", "")),
-                "revision_before": rev_before,
-                "revision_after": int(page.locator("#revisionValue").inner_text()),
+                "revision_after": rev_after,
                 "console_errors": list(console_errors),
                 "page_errors": list(page_errors),
                 "request_failures": list(request_failures),
