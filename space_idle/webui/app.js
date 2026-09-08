@@ -221,7 +221,9 @@
   }
 
   async function beginMutation() {
-    if (state.busy) return false;
+    while (state.busy) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     state.busy = true;
     document.body.classList.add('is-busy');
     const pending = state.syncInFlight;
@@ -612,7 +614,7 @@
     state.cargoContractId=contract?.id||null;
     $('#cargoDialogTitle').textContent=contract?'契約貨物の輸送計画':'資源輸送を設定';
     $('#cargoSubmitButton').textContent=contract?'契約輸送を開始':'輸送登録';
-    for(const id of ['cargoSource','cargoDestination','cargoResource','cargoAmount']) $("#"+id).disabled=Boolean(contract);
+    for(const id of ['cargoSource','cargoDestination','cargoResource','cargoAmount']) $('#'+id).disabled=Boolean(contract);
     if(contract){
       $('#cargoSource').value=contract.source_id; $('#cargoDestination').value=contract.destination_id;
       $('#cargoResource').value=contract.resource_id; $('#cargoAmount').value=contract.cargo_t;
