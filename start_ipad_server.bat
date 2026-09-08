@@ -1,15 +1,16 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Space Idle v0.4.4 - iPad Server
+title Space Idle v0.4.5 - iPad Server
 echo ============================================================
-echo  Space Idle v0.4.4 - iPad LAN development server
+echo  Space Idle v0.4.5 - iPad LAN development server
 echo ============================================================
 echo.
 echo PC LAN IPv4 candidates:
 ipconfig | findstr /R /C:"IPv4"
 echo.
 echo Start URL: http://^<PC-LAN-IPv4^>:8765/
+echo Simulation advances automatically; pause and speed are controlled in WebUI.
 echo Keep this window open while using the iPad.
 echo Windows Firewall may ask for permission on the first launch.
 echo.
