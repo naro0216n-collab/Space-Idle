@@ -60,7 +60,14 @@ class FacilityBook:
     facilities: dict[EntityId, FacilityState] = field(default_factory=dict)
     _counter: int = 0
 
-    def install(self, definition_id: DefinitionId, location_id: SpatialNodeId, *, power_priority: int | None = None, level: int = 1) -> EntityId:
+    def install(
+        self,
+        definition_id: DefinitionId,
+        location_id: SpatialNodeId,
+        *,
+        power_priority: int | None = None,
+        level: int = 1,
+    ) -> EntityId:
         if definition_id not in self.definitions:
             raise KeyError(definition_id)
         if location_id not in self.environment.graph.nodes:
@@ -69,8 +76,19 @@ class FacilityBook:
             raise ValueError("facility level must be positive")
         self._counter += 1
         entity_id = EntityId(f"facility.{self._counter}")
-        self.facilities[entity_id] = FacilityState(entity_id, definition_id, location_id, False, power_priority, level)
+        self.facilities[entity_id] = FacilityState(
+            entity_id, definition_id, location_id, False, power_priority, level
+        )
         return entity_id
+
+    def upgrade_to(self, facility_id: EntityId, target_level: int) -> None:
+        """Apply one completed level transition without assigning generic level effects."""
+        facility = self.facilities[facility_id]
+        if target_level != facility.level + 1:
+            raise ValueError(
+                f"facility level transition must be sequential: {facility.level} -> {target_level}"
+            )
+        facility.level = target_level
 
     def pause(self, facility_id: EntityId) -> None:
         self.facilities[facility_id].paused = True
