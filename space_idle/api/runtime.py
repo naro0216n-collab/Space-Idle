@@ -41,7 +41,9 @@ class GameRuntime:
     timers are never part of simulation correctness.
 
     Pause and speed are runtime clock controls. The deterministic Simulation Core
-    still advances only through its normal time-progress path.
+    still advances only through its normal time-progress path. ``revision`` is an
+    optimistic-concurrency token for explicit player/session mutations; passive
+    clock ticks deliberately do not invalidate a just-issued player command.
     """
 
     def __init__(
@@ -69,15 +71,10 @@ class GameRuntime:
         self._last_clock = now
         if self._offline_policy is None or elapsed <= 0.0 or self._time_paused:
             return None
-        result = self._app.advance_offline(
+        return self._app.advance_offline(
             elapsed * self._time_speed_multiplier,
             self._offline_policy,
         )
-        # Fractional carry is intentionally not a visible revision: normal UI
-        # query results only change once one or more simulation days advance.
-        if result.advanced_days > 0:
-            self._revision += 1
-        return result
 
     @property
     def revision(self) -> int:
