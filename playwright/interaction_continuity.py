@@ -9,6 +9,7 @@ import time
 from space_idle import build_game_application
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.simulation import OfflineProgressPolicy
+from space_idle.version import VERSION
 
 try:
     from playwright.sync_api import sync_playwright
@@ -61,6 +62,7 @@ def run() -> None:
             page = context.new_page()
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
+            assert page.locator("#appVersion").inner_text() == f"v{VERSION}", "UI version diverged from declared package version"
 
             page.locator('[data-tab="research"]').click()
             first_research = page.locator('#operationsTabContent [data-inspect="research"]').first
