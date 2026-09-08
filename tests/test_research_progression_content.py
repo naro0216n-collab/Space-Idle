@@ -118,4 +118,4 @@ def test_research_names_describe_technology_and_facility_function_not_abstract_t
     for definition in research.values():
         name = definition.display_name.lower()
         assert "tier" not in name
-        assert "月面" not in name or "月面" not in name.replace("月面", "")
+        assert "月面" not in name
