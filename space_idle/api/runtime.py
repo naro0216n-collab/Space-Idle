@@ -35,15 +35,14 @@ class RevisionConflict(RuntimeError):
 class GameRuntime:
     """Own one authoritative GameApplication session for browser clients.
 
-    Mutations are serialized under one lock. When a wall-clock progress policy is
-    configured, elapsed real time is lazily caught up before interactions. This
-    keeps the server authoritative even when Safari/PWA is suspended: browser
-    timers are never part of simulation correctness.
+    Wall-clock progress is lazily caught up before interactions, so browser
+    timers are never part of simulation correctness. Pause and speed are runtime
+    clock controls; the deterministic Core still advances through its normal
+    time-progress path.
 
-    Pause and speed are runtime clock controls. The deterministic Simulation Core
-    still advances only through its normal time-progress path. ``revision`` is an
-    optimistic-concurrency token for explicit player/session mutations; passive
-    clock ticks deliberately do not invalidate a just-issued player command.
+    ``revision`` tracks every visible state change for ETags. A separate explicit
+    mutation boundary prevents passive clock ticks from turning normal player
+    commands into spurious optimistic-concurrency conflicts.
     """
 
     def __init__(
@@ -61,6 +60,7 @@ class GameRuntime:
         self._lock = RLock()
         self._app = factory()
         self._revision = 0
+        self._last_explicit_mutation_revision = 0
         self._last_clock = clock()
         self._time_paused = False
         self._time_speed_multiplier = 1.0
@@ -71,10 +71,13 @@ class GameRuntime:
         self._last_clock = now
         if self._offline_policy is None or elapsed <= 0.0 or self._time_paused:
             return None
-        return self._app.advance_offline(
+        result = self._app.advance_offline(
             elapsed * self._time_speed_multiplier,
             self._offline_policy,
         )
+        if result.advanced_days > 0:
+            self._revision += 1
+        return result
 
     @property
     def revision(self) -> int:
@@ -114,7 +117,6 @@ class GameRuntime:
         paused: bool | None = None,
         speed_multiplier: float | None = None,
     ) -> RuntimeResult:
-        """Apply player-facing runtime clock controls without bypassing Core time rules."""
         if paused is None and speed_multiplier is None:
             raise ValueError("paused or speed_multiplier is required")
         if paused is not None and not isinstance(paused, bool):
@@ -127,8 +129,6 @@ class GameRuntime:
                 raise ValueError("speed_multiplier must be greater than 0 and at most 64")
 
         with self._lock:
-            # Credit elapsed time using the previous control state first, so a
-            # pause/speed change has a clean temporal boundary.
             self._sync_clock_locked()
             changed = False
             if paused is not None and paused != self._time_paused:
@@ -139,6 +139,7 @@ class GameRuntime:
                 changed = True
             if changed:
                 self._revision += 1
+                self._last_explicit_mutation_revision = self._revision
             return RuntimeResult(self._revision, self._metadata_locked())
 
     def query(self, query: Query) -> RuntimeResult:
@@ -149,10 +150,16 @@ class GameRuntime:
     def execute(self, command: Command, *, expected_revision: int | None = None) -> RuntimeResult:
         with self._lock:
             self._sync_clock_locked()
-            if expected_revision is not None and expected_revision != self._revision:
-                raise RevisionConflict(expected_revision, self._revision)
+            if expected_revision is not None:
+                conflict = (
+                    expected_revision > self._revision
+                    or self._last_explicit_mutation_revision > expected_revision
+                )
+                if conflict:
+                    raise RevisionConflict(expected_revision, self._revision)
             result = self._app.execute(command)
             self._revision += 1
+            self._last_explicit_mutation_revision = self._revision
             return RuntimeResult(self._revision, result)
 
     def new_game(self) -> RuntimeResult:
@@ -162,6 +169,7 @@ class GameRuntime:
             self._time_paused = False
             self._time_speed_multiplier = 1.0
             self._revision += 1
+            self._last_explicit_mutation_revision = self._revision
             return RuntimeResult(self._revision, self._metadata_locked())
 
     def _slot_path(self, slot: str) -> Path:
@@ -186,6 +194,7 @@ class GameRuntime:
             self._app = app
             self._last_clock = self._clock()
             self._revision += 1
+            self._last_explicit_mutation_revision = self._revision
             return RuntimeResult(self._revision, {
                 "slot": slot,
                 "loaded": True,
