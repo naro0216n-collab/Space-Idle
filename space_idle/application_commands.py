@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import TypeAlias
 from .app_contracts.common import ApplicationError, CommandResult
 from .app_contracts.construction import (
-    PlanBuild, CancelBuild, PauseBuild, ResumeBuild, SetProjectPriority,
+    PlanBuild, PlanFacilityUpgrade, CancelBuild, PauseBuild, ResumeBuild, SetProjectPriority,
     SetProjectSourcingPolicy, SetConstructionWeight, SetProjectImportSource,
     SetProjectImportTransport, SetProjectLocalFraction, SetProjectLocalMaterial,
 )
@@ -24,7 +24,7 @@ from .app_contracts.queries import (
 )
 
 Command: TypeAlias = (
-    PlanBuild | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
+    PlanBuild | PlanFacilityUpgrade | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
     SetProjectSourcingPolicy | SetConstructionWeight | SetProjectImportSource |
     SetProjectImportTransport | SetProjectLocalFraction | SetProjectLocalMaterial |
     PauseFacility | ResumeFacility | SetFacilityProcess | SetPowerPriority |
