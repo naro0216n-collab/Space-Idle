@@ -11,26 +11,61 @@ def build_construction_recipes() -> dict:
         ids.ORBITAL_LOGISTICS_NODE: ConstructionRecipe(
             ids.ORBITAL_LOGISTICS_NODE,
             (req._structure_component(3.0), req._machinery_component(2.0), req._electronics_component(1.0)),
-            0.0, SiteRequirements(), frozenset({ids.TECH_ORBITAL_OPERATIONS}), True,
+            0.0, SiteRequirements(),
+            frozenset({ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS}),
+            True,
         ),
-        ids.ROBOTIC_SURVEY_PACKAGE: req._surface_recipe(ids.ROBOTIC_SURVEY_PACKAGE, 2.0, 3.0, 1.5, 0.0, technologies=frozenset({ids.TECH_LUNAR_PROSPECTING}), capabilities=frozenset(), self_deploying=True),
+        ids.ROBOTIC_SURVEY_PACKAGE: req._surface_recipe(
+            ids.ROBOTIC_SURVEY_PACKAGE, 2.0, 3.0, 1.5, 0.0,
+            technologies=frozenset({ids.TECH_LUNAR_PROSPECTING}), capabilities=frozenset(), self_deploying=True,
+        ),
         ids.SURFACE_POWER_GRID: req._surface_recipe(ids.SURFACE_POWER_GRID, 12, 5, 2, 45),
         ids.INDUSTRIAL_POWER_BLOCK: req._surface_recipe(ids.INDUSTRIAL_POWER_BLOCK, 14, 9, 3, 60),
         ids.CONSTRUCTION_YARD: req._surface_recipe(ids.CONSTRUCTION_YARD, 10, 6, 2, 50),
-        ids.VOLATILE_EXTRACTOR: req._surface_recipe(ids.VOLATILE_EXTRACTOR, 4, 4, 1, 25, technologies=frozenset({ids.TECH_VOLATILE_ISRU})),
-        ids.REGOLITH_HARVESTER: req._surface_recipe(ids.REGOLITH_HARVESTER, 4, 5, 1, 28, technologies=frozenset({ids.TECH_LUNAR_MATERIALS})),
+        ids.VOLATILE_EXTRACTOR: req._surface_recipe(
+            ids.VOLATILE_EXTRACTOR, 4, 4, 1, 25,
+            technologies=frozenset({ids.TECH_VOLATILE_ISRU}),
+        ),
+        ids.REGOLITH_HARVESTER: req._surface_recipe(
+            ids.REGOLITH_HARVESTER, 4, 5, 1, 28,
+            technologies=frozenset({ids.TECH_REGOLITH_EXCAVATION}),
+        ),
         ids.WATER_STORAGE: req._surface_recipe(ids.WATER_STORAGE, 2.5, 1, 0.2, 12),
         ids.CRYOGENIC_STORAGE: req._surface_recipe(ids.CRYOGENIC_STORAGE, 3, 2, 0.8, 22),
         ids.BULK_STORAGE: req._surface_recipe(ids.BULK_STORAGE, 2, 1, 0.1, 10),
         ids.CARGO_WAREHOUSE: req._surface_recipe(ids.CARGO_WAREHOUSE, 3, 1, 0.2, 14),
-        ids.ELECTROLYSIS_PLANT: req._surface_recipe(ids.ELECTROLYSIS_PLANT, 3, 3, 1.2, 28, technologies=frozenset({ids.TECH_PROPELLANT_HANDLING})),
-        ids.PROPELLANT_PLANT: req._surface_recipe(ids.PROPELLANT_PLANT, 3, 3, 1, 30, technologies=frozenset({ids.TECH_PROPELLANT_HANDLING})),
-        ids.REGOLITH_SINTERING: req._surface_recipe(ids.REGOLITH_SINTERING, 8, 6, 2, 55, technologies=frozenset({ids.TECH_LUNAR_MATERIALS})),
-        ids.ORE_PROCESSING: req._surface_recipe(ids.ORE_PROCESSING, 10, 7, 2, 60, technologies=frozenset({ids.TECH_LUNAR_MATERIALS})),
-        ids.METALLURGY: req._surface_recipe(ids.METALLURGY, 12, 8, 3, 70, technologies=frozenset({ids.TECH_LUNAR_MATERIALS})),
-        ids.FABRICATION_WORKSHOP: req._surface_recipe(ids.FABRICATION_WORKSHOP, 8, 8, 4, 65, technologies=frozenset({ids.TECH_LUNAR_MATERIALS})),
-        ids.MACHINE_SHOP: req._surface_recipe(ids.MACHINE_SHOP, 10, 10, 5, 80, technologies=frozenset({ids.TECH_LUNAR_MATERIALS})),
-        ids.HEAVY_EQUIPMENT_ASSEMBLY: req._surface_recipe(ids.HEAVY_EQUIPMENT_ASSEMBLY, 14, 14, 6, 100, technologies=frozenset({ids.TECH_LUNAR_MATERIALS})),
+        ids.ELECTROLYSIS_PLANT: req._surface_recipe(
+            ids.ELECTROLYSIS_PLANT, 3, 3, 1.2, 28,
+            technologies=frozenset({ids.TECH_INDUSTRIAL_ELECTROLYSIS}),
+        ),
+        ids.PROPELLANT_PLANT: req._surface_recipe(
+            ids.PROPELLANT_PLANT, 3, 3, 1, 30,
+            technologies=frozenset({ids.TECH_PROPELLANT_HANDLING}),
+        ),
+        ids.REGOLITH_SINTERING: req._surface_recipe(
+            ids.REGOLITH_SINTERING, 8, 6, 2, 55,
+            technologies=frozenset({ids.TECH_LUNAR_MATERIALS}),
+        ),
+        ids.ORE_PROCESSING: req._surface_recipe(
+            ids.ORE_PROCESSING, 10, 7, 2, 60,
+            technologies=frozenset({ids.TECH_ORE_BENEFICIATION}),
+        ),
+        ids.METALLURGY: req._surface_recipe(
+            ids.METALLURGY, 12, 8, 3, 70,
+            technologies=frozenset({ids.TECH_HIGH_TEMPERATURE_METALLURGY}),
+        ),
+        ids.FABRICATION_WORKSHOP: req._surface_recipe(
+            ids.FABRICATION_WORKSHOP, 8, 8, 4, 65,
+            technologies=frozenset({ids.TECH_STRUCTURAL_FABRICATION}),
+        ),
+        ids.MACHINE_SHOP: req._surface_recipe(
+            ids.MACHINE_SHOP, 10, 10, 5, 80,
+            technologies=frozenset({ids.TECH_PRECISION_MACHINING}),
+        ),
+        ids.HEAVY_EQUIPMENT_ASSEMBLY: req._surface_recipe(
+            ids.HEAVY_EQUIPMENT_ASSEMBLY, 14, 14, 6, 100,
+            technologies=frozenset({ids.TECH_HEAVY_EQUIPMENT_ASSEMBLY}),
+        ),
     }
 
 
