@@ -115,7 +115,7 @@
     const text = response.status === 304 ? '' : await response.text();
     const payload = text ? JSON.parse(text) : null;
     const rev = response.headers.get('X-Space-Idle-Revision');
-    if (rev !== null) state.revision = Number(rev);
+    if (rev !== null) state.revision = Math.max(state.revision ?? 0, Number(rev));
     if (!response.ok) {
       const err = new Error(payload?.error?.message || `${response.status} ${response.statusText}`);
       err.code = payload?.error?.code;
@@ -123,7 +123,7 @@
       err.details = payload?.error?.details;
       throw err;
     }
-    if (payload?.revision !== undefined) state.revision = payload.revision;
+    if (payload?.revision !== undefined) state.revision = Math.max(state.revision ?? 0, Number(payload.revision));
     return payload?.data ?? payload;
   }
 
@@ -220,10 +220,24 @@
     }
   }
 
-  async function command(type, payload = {}) {
-    if (state.busy) return;
+  async function beginMutation() {
+    if (state.busy) return false;
     state.busy = true;
     document.body.classList.add('is-busy');
+    const pending = state.syncInFlight;
+    if (pending) {
+      try { await pending; } catch {}
+    }
+    return true;
+  }
+
+  function endMutation() {
+    state.busy = false;
+    document.body.classList.remove('is-busy');
+  }
+
+  async function command(type, payload = {}) {
+    if (!await beginMutation()) return;
     try {
       const headers = {};
       if (state.revision !== null) headers['If-Match'] = `"rev-${state.revision}"`;
@@ -239,16 +253,20 @@
       }
       throw err;
     } finally {
-      state.busy = false;
-      document.body.classList.remove('is-busy');
+      endMutation();
     }
   }
 
   async function setTimeControl(payload) {
-    const session = await api('/api/v1/time-control', {method:'POST', body:JSON.stringify(payload)});
-    state.session = session;
-    renderHeader();
-    await loadUiSnapshot();
+    if (!await beginMutation()) return;
+    try {
+      const session = await api('/api/v1/time-control', {method:'POST', body:JSON.stringify(payload)});
+      state.session = session;
+      renderHeader();
+      await loadUiSnapshot();
+    } finally {
+      endMutation();
+    }
   }
 
   async function initialLoad() {
@@ -642,8 +660,8 @@
   $('#cargoDestination').addEventListener('change',()=>loadCargoPlans().catch((e)=>banner(e.message,'error')));
   $('#cargoPolicy').addEventListener('change',()=>loadCargoPlans().catch((e)=>banner(e.message,'error')));
   $('#cargoPlan').addEventListener('change',renderCargoLegChoices);
-  $('#saveButton').addEventListener('click',async()=>{try{await api('/api/v1/session/save',{method:'POST',body:JSON.stringify({slot:'manual'})});banner('manual スロットへ保存しました');}catch(e){banner(e.message,'error');}});
-  $('#loadButton').addEventListener('click',async()=>{try{await api('/api/v1/session/load',{method:'POST',body:JSON.stringify({slot:'manual',apply_offline:true})});await loadUiSnapshot({preserveInteraction:false});banner('manual スロットを読み込みました');}catch(e){banner(e.message,'error');}});
+  $('#saveButton').addEventListener('click',async()=>{if(!await beginMutation())return;try{await api('/api/v1/session/save',{method:'POST',body:JSON.stringify({slot:'manual'})});banner('manual スロットへ保存しました');}catch(e){banner(e.message,'error');}finally{endMutation();}});
+  $('#loadButton').addEventListener('click',async()=>{if(!await beginMutation())return;try{await api('/api/v1/session/load',{method:'POST',body:JSON.stringify({slot:'manual',apply_offline:true})});await loadUiSnapshot({preserveInteraction:false});banner('manual スロットを読み込みました');}catch(e){banner(e.message,'error');}finally{endMutation();}});
   $('#cargoCloseButton').addEventListener('click',()=>$('#cargoDialog').close());
   $('#cargoCancelButton').addEventListener('click',()=>$('#cargoDialog').close());
   $('#cargoForm').addEventListener('submit',async(event)=>{
