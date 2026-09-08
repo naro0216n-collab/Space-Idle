@@ -9,7 +9,7 @@ from .application import GameApplication
 from .simulation import OfflineProgressPolicy, OfflineProgressResult, Simulation
 from .validation import ConfigurationError, validate_runtime_state
 
-SAVE_SCHEMA_VERSION = 17
+SAVE_SCHEMA_VERSION = 18
 
 
 class SaveFormatError(ValueError):
