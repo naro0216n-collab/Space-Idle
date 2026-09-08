@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from ..projects import ConstructionProviderSpec, ConstructionRecipe, ConstructionResourceProviderSpec
+from ..projects import (
+    ConstructionProviderSpec,
+    ConstructionRecipe,
+    ConstructionResourceProviderSpec,
+    FacilityUpgradeRecipe,
+)
 from ..site import SiteRequirements
 from . import base_ids as ids
 from . import base_requirements as req
@@ -67,6 +72,36 @@ def build_construction_recipes() -> dict:
             technologies=frozenset({ids.TECH_HEAVY_EQUIPMENT_ASSEMBLY}),
         ),
     }
+
+
+def build_facility_upgrade_recipes() -> dict:
+    recipes = (
+        FacilityUpgradeRecipe(
+            ids.EARTH_RESEARCH_LAB,
+            2,
+            (
+                req._structure_component(1.5),
+                req._machinery_component(2.0),
+                req._electronics_component(1.2),
+            ),
+            20.0,
+            SiteRequirements(),
+            frozenset({ids.TECH_ORBITAL_OPERATIONS}),
+        ),
+        FacilityUpgradeRecipe(
+            ids.EARTH_RESEARCH_LAB,
+            3,
+            (
+                req._structure_component(2.5),
+                req._machinery_component(3.0),
+                req._electronics_component(2.0),
+            ),
+            35.0,
+            SiteRequirements(),
+            frozenset({ids.TECH_CISLUNAR_LOGISTICS}),
+        ),
+    )
+    return {(recipe.facility_def_id, recipe.target_level): recipe for recipe in recipes}
 
 
 def build_construction_providers() -> dict:
