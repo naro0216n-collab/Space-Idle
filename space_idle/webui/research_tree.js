@@ -87,6 +87,14 @@
   }
 
   function render(items, capacityPointsPerDay) {
+    const existingScroller = document.getElementById('researchTreeScroll');
+    if (existingScroller) {
+      scrollLeft = existingScroller.scrollLeft;
+      scrollTop = existingScroller.scrollTop;
+    }
+    const restoreLeft = scrollLeft;
+    const restoreTop = scrollTop;
+
     if (!items.length) {
       return '<section class="card"><div class="card-heading"><h3>技術ツリー</h3></div><div class="research-tree-empty">研究定義なし</div></section>';
     }
@@ -127,8 +135,8 @@
     requestAnimationFrame(() => {
       const scroller = document.getElementById('researchTreeScroll');
       if (scroller) {
-        scroller.scrollLeft = scrollLeft;
-        scroller.scrollTop = scrollTop;
+        scroller.scrollLeft = restoreLeft;
+        scroller.scrollTop = restoreTop;
       }
     });
 

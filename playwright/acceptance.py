@@ -226,6 +226,10 @@ def run() -> dict[str, object]:
                 "() => document.querySelector('#timeState').textContent.includes('停止中')",
                 timeout=10000,
             )
+            page.wait_for_function(
+                "() => !document.body.classList.contains('is-busy')",
+                timeout=10000,
+            )
             paused_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
             page.wait_for_timeout(1200)
             _assert(
@@ -234,6 +238,10 @@ def run() -> dict[str, object]:
             )
 
             page.locator('[data-time-speed="4"]').click()
+            page.wait_for_function(
+                "() => !document.body.classList.contains('is-busy')",
+                timeout=10000,
+            )
             page.locator("#timePauseButton").click()
             page.wait_for_function(
                 "d => Number(document.querySelector('#dayValue').textContent.replaceAll(',','')) > d",

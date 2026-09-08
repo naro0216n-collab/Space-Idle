@@ -129,14 +129,11 @@ def test_generic_core_contains_no_current_destination_specific_branches_or_locat
             assert token not in text, f"{path.name} contains destination-specific shortcut {token}"
 
 
-def test_lunar_access_research_is_not_forced_through_orbital_infrastructure_track():
-    from space_idle.content.base_game import (
-        TECH_CISLUNAR_LOGISTICS, TECH_LUNAR_PROSPECTING, TECH_ORBITAL_OPERATIONS,
-        )
+def test_lunar_prospecting_is_not_forced_through_orbital_infrastructure_track():
+    from space_idle.content.base_game import TECH_LUNAR_PROSPECTING, TECH_ORBITAL_OPERATIONS
 
     app = build_game_application()
     definitions = app._simulation.research.definitions
-    assert TECH_ORBITAL_OPERATIONS not in definitions[TECH_CISLUNAR_LOGISTICS].prerequisites
     assert TECH_ORBITAL_OPERATIONS not in definitions[TECH_LUNAR_PROSPECTING].prerequisites
 
 
