@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from space_idle import GetRoutes, GetWorld, build_game_application
+from space_idle import AdvanceTime, GetRoutes, GetWorld, build_game_application
 from space_idle.api import GameRuntime
 from space_idle.content.base_game import (
     TECH_CISLUNAR_LOGISTICS,
@@ -10,7 +10,7 @@ from space_idle.shared import RouteId
 from space_idle.simulation import OfflineProgressPolicy
 
 
-def test_runtime_clock_supports_speed_pause_and_resume_without_passive_revision_churn(tmp_path):
+def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ticks(tmp_path):
     now = [100.0]
     runtime = GameRuntime(
         factory=build_game_application,
@@ -25,8 +25,15 @@ def test_runtime_clock_supports_speed_pause_and_resume_without_passive_revision_
     runtime.set_time_control(speed_multiplier=4.0)
     assert runtime.revision == 1
     now[0] += 5.0
-    assert runtime.query(GetWorld()).data.day == 2
-    assert runtime.revision == 1
+    clock_result = runtime.query(GetWorld())
+    assert clock_result.data.day == 2
+    assert clock_result.revision == 2
+
+    # Revision 1 is stale only because the automatic clock advanced. It remains
+    # valid for optimistic command concurrency because no other explicit player
+    # mutation occurred in between.
+    accepted = runtime.execute(AdvanceTime(0), expected_revision=1)
+    assert accepted.revision == 3
 
     runtime.set_time_control(paused=True)
     paused_revision = runtime.revision
@@ -38,7 +45,7 @@ def test_runtime_clock_supports_speed_pause_and_resume_without_passive_revision_
     resumed_revision = runtime.revision
     now[0] += 10.0
     assert runtime.query(GetWorld()).data.day == 3
-    assert runtime.revision == resumed_revision
+    assert runtime.revision == resumed_revision + 1
 
 
 def test_route_reachability_is_not_directly_gated_by_research_completion():
