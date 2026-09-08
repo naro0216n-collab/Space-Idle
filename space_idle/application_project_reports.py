@@ -74,7 +74,8 @@ class ApplicationReportProjectorMixin:
                 for factor in snap.limiting_factors:
                     issues.append(self._issue(
                         factor, factor, category="industry", source="industry",
-                        location_id=loc, entity_id=str(facility.id), definition_id=str(facility.definition_id), impact="limited",
+                        location_id=loc, entity_id=str(facility.id),
+                        definition_id=str(facility.definition_id), impact="limited",
                     ))
 
         if sim.extraction is not None:
@@ -85,7 +86,8 @@ class ApplicationReportProjectorMixin:
                     issues.append(self._issue(
                         factor, factor, category="extraction", source="extraction",
                         location_id=loc, entity_id=str(snap.facility_id),
-                        definition_id=str(snap.facility_def_id), resource_id=str(snap.output_resource_id), impact="limited",
+                        definition_id=str(snap.facility_def_id),
+                        resource_id=str(snap.output_resource_id), impact="limited",
                     ))
 
         for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id)):
@@ -112,7 +114,9 @@ class ApplicationReportProjectorMixin:
         sim = self._simulation
         issues: list[IssueRow] = []
         for route in sorted(sim.logistics.routes.values(), key=lambda row: str(row.id)):
-            if location_filter is not None and location_filter not in {str(route.origin_id), str(route.destination_id)}:
+            if location_filter is not None and location_filter not in {
+                str(route.origin_id), str(route.destination_id)
+            }:
                 continue
             for blocker in sim.logistics.route_operational_failures(route.id, sim.day):
                 issues.append(self._issue(
@@ -122,30 +126,58 @@ class ApplicationReportProjectorMixin:
         for state in sorted(sim.logistics.vehicles.values(), key=lambda row: str(row.id)):
             state_location = None if state.location_id is None else str(state.location_id)
             if location_filter is not None and state_location != location_filter and (
-                state.transit_destination_id is None or str(state.transit_destination_id) != location_filter
+                state.transit_destination_id is None
+                or str(state.transit_destination_id) != location_filter
             ):
                 continue
             for blocker in sim.logistics.vehicle_blockers(state.id, sim.day):
                 issues.append(self._issue(
                     blocker, blocker, category="logistics", source="vehicle",
-                    location_id=state_location, entity_id=str(state.id), definition_id=str(state.definition_id),
+                    location_id=state_location, entity_id=str(state.id),
+                    definition_id=str(state.definition_id),
                 ))
         for order in sorted(sim.logistics.orders.values(), key=lambda row: str(row.id)):
-            if location_filter is not None and location_filter not in {str(order.source_id), str(order.destination_id)}:
+            if location_filter is not None and location_filter not in {
+                str(order.source_id), str(order.destination_id)
+            }:
                 continue
             for blocker in sim.logistics.order_blockers(order.id, sim.day):
                 issues.append(self._issue(
                     blocker, blocker, category="logistics", source="cargo_order",
-                    location_id=location_filter, entity_id=str(order.id), resource_id=str(order.resource_id),
+                    location_id=location_filter, entity_id=str(order.id),
+                    resource_id=str(order.resource_id),
                 ))
-        for rule in sorted(sim.logistics.recurring_rules.values(), key=lambda row: str(row.id)):
-            if location_filter is not None and location_filter not in {str(rule.source_id), str(rule.destination_id)}:
+        for lane in sorted(sim.logistics.lanes.values(), key=lambda row: str(row.id)):
+            if location_filter is not None and location_filter not in {
+                str(lane.source_id), str(lane.destination_id)
+            }:
                 continue
-            for blocker in sim.logistics.recurring_rule_blockers(rule.id, sim.day):
+            for blocker in sim.logistics.lane_blockers(lane.id, sim.day):
                 issues.append(self._issue(
-                    blocker, blocker, category="logistics", source="logistics_rule",
-                    location_id=location_filter, entity_id=str(rule.id), resource_id=str(rule.resource_id),
+                    blocker, blocker, category="logistics", source="logistics_lane",
+                    location_id=location_filter, entity_id=str(lane.id),
                 ))
+
+        demands = sim.resource_demands()
+        for demand in demands:
+            if location_filter is not None and location_filter != str(demand.destination_id):
+                continue
+            remaining = sim.logistics.demand_remaining_t(demand)
+            if remaining <= 1e-9:
+                continue
+            matching = [
+                lane for lane in sim.logistics.lanes.values()
+                if sim.logistics._lane_accepts_demand(lane, demand)
+            ]
+            if matching:
+                continue
+            issues.append(self._issue(
+                "demand_unassigned",
+                f"未割当需要 {remaining:g} t",
+                category="logistics", source="resource_demand",
+                location_id=str(demand.destination_id), entity_id=str(demand.id),
+                resource_id=str(demand.resource_id), impact="limited",
+            ))
         return tuple(issues)
 
     def _progression_issues(self, location_filter: str | None) -> tuple[IssueRow, ...]:
@@ -252,8 +284,13 @@ class ApplicationReportProjectorMixin:
             elif status in {"arrival_waiting", "waypoint_wait"} and route.destination_id == location_id:
                 arrival_waiting[order.resource_id] += mission.amount_t
 
-        resource_ids = set(production) | set(consumption) | set(outbound_waiting) | set(outbound_transit) | set(inbound_transit) | set(arrival_waiting)
-        resource_ids.update(resource_id for (loc, resource_id) in sim.inventory.stock if loc == location_id)
+        resource_ids = (
+            set(production) | set(consumption) | set(outbound_waiting) |
+            set(outbound_transit) | set(inbound_transit) | set(arrival_waiting)
+        )
+        resource_ids.update(
+            resource_id for (loc, resource_id) in sim.inventory.stock if loc == location_id
+        )
         rows: list[ResourceFlowRow] = []
         for resource_id in sorted(resource_ids, key=str):
             definition = self._catalog.resources.get(resource_id)
@@ -271,7 +308,10 @@ class ApplicationReportProjectorMixin:
                 inbound_transit[resource_id], arrival_waiting[resource_id],
             ))
 
-        utilization = 1.0 if power.demand_mw <= 1e-12 else min(1.0, power.allocated_mw / power.demand_mw)
+        utilization = (
+            1.0 if power.demand_mw <= 1e-12
+            else min(1.0, power.allocated_mw / power.demand_mw)
+        )
         return FlowReportView(
             str(location_id), sim.day, power.generation_mw, power.demand_mw,
             power.allocated_mw, utilization,
