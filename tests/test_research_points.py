@@ -50,12 +50,23 @@ def test_research_points_generate_and_clip_at_current_storage_capacity():
 
 def test_capacity_drop_preserves_stored_points_and_overcap_blocks_generation():
     app = build_game_application()
-    app.execute(AdvanceTime(2))
-    before = app.query(GetResearch())
-    provider = before.providers[0]
-    assert before.stored_points > 0
 
-    app.execute(PauseFacility(provider.facility_id))
+    # Fill whatever aggregate capacity the current provider set supplies. The
+    # invariant must hold regardless of how many research assets contribute.
+    for _ in range(5000):
+        current = app.query(GetResearch())
+        if current.storage_capacity_points - current.stored_points <= 1e-9:
+            break
+        app.execute(AdvanceTime(1))
+    else:
+        raise AssertionError("research storage never filled")
+
+    before = app.query(GetResearch())
+    provider_ids = tuple(row.facility_id for row in before.providers)
+    assert provider_ids and before.stored_points > 0
+
+    for facility_id in provider_ids:
+        app.execute(PauseFacility(facility_id))
     paused = app.query(GetResearch())
     assert paused.stored_points == before.stored_points
     assert paused.storage_capacity_points < before.storage_capacity_points
@@ -66,11 +77,12 @@ def test_capacity_drop_preserves_stored_points_and_overcap_blocks_generation():
     still_paused = app.query(GetResearch())
     assert still_paused.stored_points == paused.stored_points
 
-    app.execute(ResumeFacility(provider.facility_id))
-    app.execute(AdvanceTime(1))
+    for facility_id in provider_ids:
+        app.execute(ResumeFacility(facility_id))
     resumed = app.query(GetResearch())
     assert resumed.storage_capacity_points > paused.storage_capacity_points
-    assert resumed.stored_points > paused.stored_points
+    assert resumed.generation_points_per_day > 0
+    assert resumed.stored_points == paused.stored_points
 
 
 def test_research_start_consumes_full_cost_atomically_and_skips_theory_phase():
@@ -130,7 +142,11 @@ def test_research_provider_level_behavior_comes_from_provider_content():
     app = build_game_application()
     sim = app._simulation
     view = app.query(GetResearch())
-    row = view.providers[0]
+    row = next(
+        item
+        for item in view.providers
+        if len(sim.research.providers[DefinitionId(item.facility_definition_id)].levels) > 1
+    )
     facility_id = next(fid for fid in sim.facilities.facilities if str(fid) == row.facility_id)
     facility = sim.facilities.facilities[facility_id]
     provider = sim.research.providers[facility.definition_id]
