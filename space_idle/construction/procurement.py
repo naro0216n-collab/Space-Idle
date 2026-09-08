@@ -1,10 +1,41 @@
 from __future__ import annotations
 
+from ..resource_demand import ResourceDemand
 from ..shared import EntityId
 from .models import ProjectStatus
 
 
 class ConstructionProcurementMixin:
+    def resource_demands(self, day: int) -> tuple[ResourceDemand, ...]:
+        demands: list[ResourceDemand] = []
+        for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
+            if project.paused or project.status in {
+                ProjectStatus.COMPLETE,
+                ProjectStatus.CANCELLED,
+                ProjectStatus.READY,
+                ProjectStatus.BUILDING,
+            }:
+                continue
+            recipe = self._recipe_for_project(project)
+            for component in recipe.components:
+                state = project.components[component.component_id]
+                if state.import_committed_t is None or state.import_committed_t <= 1e-9:
+                    continue
+                missing = max(0.0, state.import_committed_t - state.reserved_import_t)
+                if missing <= 1e-9 or project.import_source_id is None:
+                    continue
+                demands.append(ResourceDemand(
+                    EntityId(f"demand.project:{project.id}:{component.component_id}"),
+                    "project",
+                    EntityId(str(project.id)),
+                    project.location_id,
+                    component.import_resource_id,
+                    missing,
+                    project.priority,
+                    project.import_source_id,
+                ))
+        return tuple(demands)
+
     def advance_procurement(self, day: int) -> None:
         ordered = sorted(self.projects.values(), key=lambda project: (-project.priority, str(project.id)))
         for project in ordered:
@@ -40,13 +71,10 @@ class ConstructionProcurementMixin:
             all_ready = True
             for component in recipe.components:
                 state = project.components[component.component_id]
-                local_res, desired_local = self._selected_local_target(
-                    project, component, day
-                )
+                local_res, desired_local = self._selected_local_target(project, component, day)
                 if state.import_committed_t is None:
                     state.local_target_t = desired_local
 
-                    # First reserve the selected substitute up to the sourcing-policy target.
                     if local_res is not None and state.reserved_local_t + 1e-9 < desired_local:
                         need = desired_local - state.reserved_local_t
                         reserved = self.inventory.reserve(
@@ -54,19 +82,13 @@ class ConstructionProcurementMixin:
                         )
                         if reserved > 0:
                             if state.reserved_local_resource_id not in (None, local_res):
-                                raise RuntimeError(
-                                    "local substitution resource changed after reservation"
-                                )
+                                raise RuntimeError("local substitution resource changed after reservation")
                             state.reserved_local_resource_id = local_res
                         state.reserved_local_t += reserved
 
-                    # Standard components that are already at the project site are
-                    # immediately usable. Transport is only for the residual demand.
                     primary_need = max(
                         0.0,
-                        component.amount_t
-                        - state.reserved_local_t
-                        - state.reserved_primary_t,
+                        component.amount_t - state.reserved_local_t - state.reserved_primary_t,
                     )
                     if primary_need > 1e-9:
                         state.reserved_primary_t += self.inventory.reserve(
@@ -82,37 +104,10 @@ class ConstructionProcurementMixin:
                     if fully_covered:
                         state.import_committed_t = 0.0
                     elif local_met or waited >= wait_limit:
-                        import_amount = max(0.0, component.amount_t - covered_on_site)
-                        state.import_committed_t = import_amount
-                        if import_amount > 1e-9:
-                            if project.import_source_id is None:
-                                state.import_committed_t = None
-                                all_ready = False
-                                continue
-                            if not self.logistics.can_submit(
-                                project.import_source_id,
-                                project.location_id,
-                                component.import_resource_id,
-                                import_amount,
-                                day,
-                                project.import_path,
-                                project.import_mode_by_route,
-                            ):
-                                state.import_committed_t = None
-                                all_ready = False
-                                continue
-                            state.import_order_id = self.logistics.submit_order(
-                                project.import_source_id,
-                                project.location_id,
-                                component.import_resource_id,
-                                import_amount,
-                                project.priority,
-                                "project",
-                                EntityId(project.id),
-                                day=day,
-                                path=project.import_path,
-                                mode_by_route=project.import_mode_by_route,
-                            )
+                        if project.import_source_id is None:
+                            all_ready = False
+                            continue
+                        state.import_committed_t = max(0.0, component.amount_t - covered_on_site)
                     else:
                         all_ready = False
                         continue
