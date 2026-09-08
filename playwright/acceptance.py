@@ -142,6 +142,25 @@ def run() -> dict[str, object]:
         save_dir=Path(temp_dir.name) / "saves",
         offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=0.5),
     )
+    # The browser test is about the upgrade decision surface and command path,
+    # not about replaying the research progression. Prepare whichever initial
+    # facility currently has a content-defined next upgrade by satisfying that
+    # recipe's prerequisite technologies. No balance value or technology ID is
+    # hard-coded into the acceptance fixture.
+    fixture_sim = runtime._app._simulation
+    upgrade_fixture = next(
+        (
+            (facility, recipe)
+            for facility in sorted(fixture_sim.facilities.facilities.values(), key=lambda row: str(row.id))
+            if (recipe := fixture_sim.projects.next_upgrade_recipe(facility.id)) is not None
+        ),
+        None,
+    )
+    if upgrade_fixture is None:
+        raise AssertionError("base game must expose at least one facility upgrade for browser acceptance")
+    _fixture_facility, fixture_recipe = upgrade_fixture
+    fixture_sim.technology.completed.update(fixture_recipe.prerequisite_technologies)
+
     server = create_server(
         runtime,
         ApiServerConfig(host="127.0.0.1", port=0),
