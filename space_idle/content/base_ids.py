@@ -67,13 +67,21 @@ PROCESS_METALLURGY = DefinitionId("base.process.metallurgy")
 PROCESS_BASIC_MACHINING = DefinitionId("base.process.basic_machining")
 PROCESS_HEAVY_EQUIPMENT = DefinitionId("base.process.heavy_equipment_assembly")
 
-# Research definitions can describe the current Earth-to-Moon progression, while
-# the base game remains one continuous content namespace.
+# Research IDs identify engineering/science subjects. Several legacy ID strings
+# remain stable internally during the current content iteration, but each
+# research definition has one concrete technical scope and a bounded outcome.
 TECH_ORBITAL_OPERATIONS = DefinitionId("base.tech.orbital_operations")
 TECH_CISLUNAR_LOGISTICS = DefinitionId("base.tech.cislunar_logistics")
 TECH_LUNAR_PROSPECTING = DefinitionId("base.tech.lunar_prospecting")
 TECH_VOLATILE_ISRU = DefinitionId("base.tech.volatile_isru")
+TECH_REGOLITH_EXCAVATION = DefinitionId("base.tech.regolith_excavation_granulometry")
 TECH_LUNAR_MATERIALS = DefinitionId("base.tech.lunar_materials")
+TECH_ORE_BENEFICIATION = DefinitionId("base.tech.vacuum_mineral_beneficiation")
+TECH_HIGH_TEMPERATURE_METALLURGY = DefinitionId("base.tech.high_temperature_oxide_metallurgy")
+TECH_STRUCTURAL_FABRICATION = DefinitionId("base.tech.vacuum_structural_fabrication")
+TECH_PRECISION_MACHINING = DefinitionId("base.tech.low_gravity_precision_machining")
+TECH_HEAVY_EQUIPMENT_ASSEMBLY = DefinitionId("base.tech.modular_heavy_equipment_assembly")
+TECH_INDUSTRIAL_ELECTROLYSIS = DefinitionId("base.tech.industrial_water_electrolysis")
 TECH_PROPELLANT_HANDLING = DefinitionId("base.tech.propellant_handling")
 
 # Transport assets are reusable physical assets. Route eligibility is derived
