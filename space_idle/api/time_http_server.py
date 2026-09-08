@@ -27,12 +27,6 @@ from .runtime import GameRuntime
 class TimeControlledRequestHandler(SpaceIdleRequestHandler):
     """HTTP adapter for runtime-owned clock controls and coherent UI snapshots."""
 
-    def _serve_webui(self, path: str) -> bool:
-        if path == "/time_control.css":
-            self._write_static(self._webui_root() / "time_control.css", "text/css; charset=utf-8")
-            return True
-        return super()._serve_webui(path)
-
     def _handle_get(self) -> None:
         parsed = urlsplit(self.path)
         path = parsed.path.rstrip("/") or "/"
