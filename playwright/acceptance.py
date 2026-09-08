@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -10,8 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
+from urllib.parse import urlsplit
 
 try:
     from playwright.sync_api import sync_playwright
@@ -33,42 +33,61 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait_for_server(url: str, timeout: float = 12.0) -> None:
+def _connection(origin: str, timeout: float) -> http.client.HTTPConnection:
+    parsed = urlsplit(origin)
+    if parsed.scheme != "http" or not parsed.hostname:
+        raise ValueError(f"E2E local server must use http origin, got {origin!r}")
+    return http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=timeout)
+
+
+def _wait_for_server(url: str, timeout: float = 12.0, process: subprocess.Popen[str] | None = None) -> None:
+    parsed = urlsplit(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    path = parsed.path or "/"
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
     while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            output = process.stdout.read() if process.stdout is not None else ""
+            raise RuntimeError(
+                f"development server exited with code {process.returncode} before readiness; output={output!r}"
+            )
+        conn = _connection(origin, 1.0)
         try:
-            with urllib.request.urlopen(url, timeout=1.0) as response:
-                if response.status == 200:
-                    return
+            conn.request("GET", path, headers={"Connection": "close"})
+            response = conn.getresponse()
+            response.read()
+            if response.status == 200:
+                return
         except Exception as exc:  # noqa: BLE001 - startup probe
             last_error = exc
+        finally:
+            conn.close()
         time.sleep(0.1)
-    raise RuntimeError(f"development server did not become ready: {last_error}")
+    state = "running" if process is not None and process.poll() is None else "unknown"
+    raise RuntimeError(f"development server did not become ready (process={state}): {last_error}")
 
 
 def _http_request(server_origin: str, path: str, method: str = "GET", headers: dict[str, str] | None = None, body: str | None = None) -> dict[str, object]:
-    target = server_origin + path
     forwarded = {}
     for key, value in (headers or {}).items():
         if key.lower() not in {"host", "content-length", "connection", "accept-encoding"}:
             forwarded[key] = value
     forwarded["Accept-Encoding"] = "identity"
     data = body.encode("utf-8") if body is not None else None
-    req = urllib.request.Request(target, data=data, method=method, headers=forwarded)
+    conn = _connection(server_origin, 15.0)
     try:
-        with urllib.request.urlopen(req, timeout=15.0) as response:
-            raw = response.read()
-            status = response.status
-            response_headers = response.headers
-    except urllib.error.HTTPError as exc:
-        raw = exc.read()
-        status = exc.code
-        response_headers = exc.headers
+        conn.request(method, path, body=data, headers=forwarded)
+        response = conn.getresponse()
+        raw = response.read()
+        status = response.status
+        response_headers = response.getheaders()
+    finally:
+        conn.close()
     allowed = {"content-type", "cache-control", "etag", "x-space-idle-revision", "access-control-allow-origin", "vary"}
     return {
         "status": status,
-        "headers": {key: value for key, value in response_headers.items() if key.lower() in allowed},
+        "headers": {key: value for key, value in response_headers if key.lower() in allowed},
         "body": raw.decode("utf-8"),
     }
 
@@ -134,7 +153,7 @@ def run() -> dict[str, object]:
     request_failures: list[str] = []
     results: dict[str, object] = {}
     try:
-        _wait_for_server(f"{server_origin}/api/v1/health")
+        _wait_for_server(f"{server_origin}/api/v1/health", process=server)
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
         with sync_playwright() as p:
             browser_type = getattr(p, browser_name)
@@ -175,7 +194,6 @@ def run() -> dict[str, object]:
                 page.goto(server_origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
 
-            # A: operations console is exclusive and complete at the landscape reference viewport.
             _assert(page.locator("#operationsView").is_visible(), "operations view should be visible by default")
             _assert(not page.locator("#logisticsView").is_visible(), "logistics view must not coexist with operations")
             _assert(page.locator(".location-button").count() > 0, "at least one spatial node must be rendered")
@@ -192,13 +210,11 @@ def run() -> dict[str, object]:
             )
             page.screenshot(path=ARTIFACTS / "operations_landscape_1194x834.png", full_page=True)
 
-            # A second common full-size iPad landscape width must also fit without a special compact layout.
             page.set_viewport_size({"width": 1180, "height": 820})
             page.wait_for_timeout(100)
             standard_ipad_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(standard_ipad_metrics["scroll"] <= standard_ipad_metrics["w"], "1180px full-size iPad landscape must not horizontally overflow")
 
-            # B: logistics network is a separate view, route selection loads detail from the real API.
             page.get_by_role("button", name="物流ネットワーク").click()
             standard_logistics_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(standard_logistics_metrics["scroll"] <= standard_logistics_metrics["w"], "1180px full-size iPad logistics must not horizontally overflow")
@@ -208,7 +224,6 @@ def run() -> dict[str, object]:
             _assert(not page.locator("#operationsView").is_visible(), "operations view must be hidden after switch")
             route_buttons = page.locator(".route-button")
             _assert(route_buttons.count() > 0, "at least one route must be rendered")
-            # Prefer a currently blocked route so the user-facing issue translation is exercised.
             blocked = page.locator(".route-button", has=page.locator(".badge", has_text="未解禁"))
             (blocked.first if blocked.count() else route_buttons.first).click()
             page.locator("#routeInspectorContent .route-mode-card").first.wait_for(timeout=10000)
@@ -219,7 +234,6 @@ def run() -> dict[str, object]:
             _assert(all("technology:" not in text for text in issue_titles), "raw blocker prefixes must not leak into blocker titles")
             page.screenshot(path=ARTIFACTS / "logistics_landscape_1194x834.png", full_page=True)
 
-            # Portrait intentionally preserves the landscape information architecture and horizontal scroll.
             page.get_by_role("button", name="拠点運用").click()
             page.set_viewport_size({"width": 834, "height": 1194})
             page.wait_for_timeout(100)
