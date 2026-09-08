@@ -21,8 +21,10 @@ except ImportError as exc:  # pragma: no cover - developer environment guard
     ) from exc
 
 ROOT = Path(__file__).resolve().parents[1]
-ARTIFACTS = ROOT / "playwright" / "artifacts"
+ARTIFACTS = Path(os.environ.get("SPACE_IDLE_ARTIFACTS", ROOT / "playwright" / "artifacts")).resolve()
 FAKE_ORIGIN = "https://space-idle.test"
+SUPPORTED_BROWSERS = {"chromium", "webkit"}
+SUPPORTED_TRANSPORTS = {"direct", "bridge"}
 
 
 def _free_port() -> int:
@@ -104,6 +106,13 @@ def _visible_button_min_height(page) -> float:
 
 
 def run() -> dict[str, object]:
+    browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
+    transport = os.environ.get("SPACE_IDLE_E2E_TRANSPORT", "direct").strip().lower()
+    if browser_name not in SUPPORTED_BROWSERS:
+        raise ValueError(f"unsupported browser {browser_name!r}; expected one of {sorted(SUPPORTED_BROWSERS)}")
+    if transport not in SUPPORTED_TRANSPORTS:
+        raise ValueError(f"unsupported transport {transport!r}; expected one of {sorted(SUPPORTED_TRANSPORTS)}")
+
     port = _free_port()
     server_origin = f"http://127.0.0.1:{port}"
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-e2e-")
@@ -128,17 +137,21 @@ def run() -> dict[str, object]:
         _wait_for_server(f"{server_origin}/api/v1/health")
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
         with sync_playwright() as p:
-            chromium = os.environ.get("SPACE_IDLE_CHROMIUM") or shutil.which("chromium") or shutil.which("google-chrome")
-            browser = p.chromium.launch(
-                executable_path=chromium,
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
+            browser_type = getattr(p, browser_name)
+            launch_kwargs: dict[str, object] = {"headless": True}
+            if browser_name == "chromium":
+                chromium = os.environ.get("SPACE_IDLE_CHROMIUM") or shutil.which("chromium") or shutil.which("google-chrome")
+                if chromium:
+                    launch_kwargs["executable_path"] = chromium
+                launch_kwargs["args"] = ["--no-sandbox", "--disable-dev-shm-usage"]
+            browser = browser_type.launch(**launch_kwargs)
             context = browser.new_context(
                 viewport={"width": 1194, "height": 834},
                 screen={"width": 1194, "height": 834},
                 has_touch=True,
-                device_scale_factor=1,
+                device_scale_factor=2,
+                locale="ja-JP",
+                timezone_id="Asia/Tokyo",
                 user_agent=(
                     "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) "
                     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 "
@@ -149,14 +162,17 @@ def run() -> dict[str, object]:
             page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
             page.on("pageerror", lambda exc: page_errors.append(str(exc)))
             page.on("requestfailed", lambda req: request_failures.append(f"{req.method} {req.url}: {req.failure}"))
-            page.expose_function("__spaceIdleHttp", lambda request: _http_request(
-                server_origin,
-                request.get("path", "/"),
-                request.get("method", "GET"),
-                request.get("headers") or {},
-                request.get("body"),
-            ))
-            page.set_content(_browser_document(server_origin), wait_until="load", timeout=30000)
+            if transport == "bridge":
+                page.expose_function("__spaceIdleHttp", lambda request: _http_request(
+                    server_origin,
+                    request.get("path", "/"),
+                    request.get("method", "GET"),
+                    request.get("headers") or {},
+                    request.get("body"),
+                ))
+                page.set_content(_browser_document(server_origin), wait_until="load", timeout=30000)
+            else:
+                page.goto(server_origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
 
             # A: operations console is exclusive and complete at the landscape reference viewport.
@@ -245,6 +261,9 @@ def run() -> dict[str, object]:
             _assert(portrait_logistics["left0"] < portrait_logistics["left1"] < portrait_logistics["left2"], "portrait logistics must preserve route/network/inspector order")
 
             results = {
+                "browser": browser_name,
+                "transport": transport,
+                "device_scale_factor": 2,
                 "landscape_viewport": viewport_metrics,
                 "standard_ipad_landscape": standard_ipad_metrics,
                 "standard_ipad_logistics": standard_logistics_metrics,
