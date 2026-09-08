@@ -1,6 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+
+@dataclass(frozen=True)
+class ResearchSiteOptionRow:
+    location_id: str
+    blockers: tuple[tuple[str, str], ...]
+
+
 @dataclass(frozen=True)
 class ResearchRow:
     id: str
@@ -14,18 +21,22 @@ class ResearchRow:
     allocation_weight: float
     prototype_resources: tuple[tuple[str, float], ...]
     prototype_location_id: str | None
+    prototype_sites: tuple[ResearchSiteOptionRow, ...]
     demonstration_done_days: int
     demonstration_required_days: int
     demonstration_location_id: str | None
+    demonstration_sites: tuple[ResearchSiteOptionRow, ...]
     demonstration_blockers: tuple[tuple[str, str], ...]
     prototype_blockers: tuple[tuple[str, str], ...]
     theory_blockers: tuple[tuple[str, str], ...]
     prerequisites: tuple[str, ...]
 
+
 @dataclass(frozen=True)
 class ResearchView:
     capacity_points_per_day: float
     items: tuple[ResearchRow, ...]
+
 
 @dataclass(frozen=True)
 class SurveyRow:
@@ -44,9 +55,11 @@ class SurveyRow:
     capacity_points_per_day: float
     blockers: tuple[str, ...]
 
+
 @dataclass(frozen=True)
 class SurveysView:
     items: tuple[SurveyRow, ...]
+
 
 @dataclass(frozen=True)
 class ContractRow:
@@ -64,6 +77,7 @@ class ContractRow:
     cargo_order_id: str | None
     target_location_id: str | None
     blockers: tuple[str, ...]
+
 
 @dataclass(frozen=True)
 class ContractsView:

@@ -9,6 +9,7 @@
   <link rel="icon" href="data:,">
   <title>宇宙開発 Idle — 開発UI</title>
   <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/time_control.css">
 </head>
 <body>
   <div id="app" class="app-shell" aria-busy="true">
@@ -28,9 +29,11 @@
         <div class="connection-state" id="connectionState"><span class="dot"></span><span>接続中</span></div>
       </div>
       <div class="time-controls" aria-label="時間進行">
-        <button type="button" data-advance="1">+1日</button>
-        <button type="button" data-advance="7">+7日</button>
-        <button type="button" data-advance="30">+30日</button>
+        <button type="button" id="timePauseButton" aria-label="一時停止" aria-pressed="false">⏸ 一時停止</button>
+        <button type="button" data-time-speed="1" aria-label="進行速度1倍" aria-pressed="true">1×</button>
+        <button type="button" data-time-speed="4" aria-label="進行速度4倍" aria-pressed="false">4×</button>
+        <button type="button" data-time-speed="16" aria-label="進行速度16倍" aria-pressed="false">16×</button>
+        <span id="timeState" hidden>自動進行 · 1×</span>
       </div>
       <div class="session-actions">
         <button type="button" id="saveButton">保存</button>
@@ -124,7 +127,7 @@
             <div id="vehicleTable" class="table-wrap"></div>
           </section>
           <section class="card">
-            <div class="card-heading"><h3>貨物</h3><span id="cargoCountBadge" class="badge"></span></div>
+            <div class="card-heading"><h3>資源輸送</h3><span id="cargoCountBadge" class="badge"></span></div>
             <div id="cargoTable" class="table-wrap"></div>
           </section>
         </div>
@@ -146,7 +149,7 @@
     <dialog id="cargoDialog" class="modal-dialog">
       <form method="dialog" id="cargoForm">
         <div class="dialog-heading">
-          <div><div class="eyebrow">NEW CARGO ORDER</div><h2>貨物輸送を設定</h2></div>
+          <div><div class="eyebrow">TRANSPORT PLAN</div><h2 id="cargoDialogTitle">資源輸送を設定</h2></div>
           <button type="button" class="icon-button" id="cargoCloseButton">×</button>
         </div>
         <label>出発地<select id="cargoSource" required></select></label>
@@ -157,9 +160,11 @@
           <label>優先度<input id="cargoPriority" type="number" min="0" max="100" step="1" value="50" required></label>
         </div>
         <label>経路方針<select id="cargoPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
+        <label>輸送計画<select id="cargoPlan" required></select></label>
+        <div id="cargoLegChoices" class="card-body"></div>
         <div class="dialog-actions">
           <button type="button" class="secondary" id="cargoCancelButton">取消</button>
-          <button type="submit" class="primary">輸送登録</button>
+          <button type="submit" class="primary" id="cargoSubmitButton">輸送登録</button>
         </div>
       </form>
     </dialog>

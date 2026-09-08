@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
@@ -33,16 +34,11 @@ class RevisionConflict(RuntimeError):
 
 
 class GameRuntime:
-    """Own one authoritative GameApplication session for browser clients.
+    """Own one authoritative GameApplication session and its wall-clock mapping.
 
-    Wall-clock progress is lazily caught up before interactions, so browser
-    timers are never part of simulation correctness. Pause and speed are runtime
-    clock controls; the deterministic Core still advances through its normal
-    time-progress path.
-
-    ``revision`` tracks every visible state change for ETags. A separate explicit
-    mutation boundary prevents passive clock ticks from turning normal player
-    commands into spurious optimistic-concurrency conflicts.
+    The Simulation remains deterministic and knows only game time. This runtime is
+    the single owner of pause/speed/wall-clock conversion. Browser clients query
+    snapshots; they never drive simulation correctness with their own timers.
     """
 
     def __init__(
@@ -110,6 +106,20 @@ class GameRuntime:
         with self._lock:
             self._sync_clock_locked()
             return self._metadata_locked()
+
+    def snapshot(self, queries: Mapping[str, Query]) -> RuntimeResult:
+        """Read several projections at one authoritative simulation instant.
+
+        A UI refresh must not observe research at day N, logistics at day N+1 and
+        inventory at day N+2 merely because separate HTTP requests each advanced
+        the lazy wall clock. The clock is synchronized once, then every projection
+        is read while the runtime lock is held.
+        """
+        with self._lock:
+            self._sync_clock_locked()
+            data: dict[str, object] = {"session": self._metadata_locked()}
+            data.update({name: self._app.query(query) for name, query in queries.items()})
+            return RuntimeResult(self._revision, data)
 
     def set_time_control(
         self,

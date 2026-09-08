@@ -4,12 +4,39 @@ from dataclasses import fields, is_dataclass
 from typing import Mapping
 
 from .application_views import ContractRow, ContractsView, ResearchRow, ResearchView, SurveyRow, SurveysView
+from .app_contracts.progression_views import ResearchSiteOptionRow
 from .contracts import CapabilityContractTemplate, CargoContractTemplate
 from .shared import ContractId, DefinitionId, EntityId, ProjectId, RouteId, SpatialNodeId
 from .site import evaluate_site_requirements
 
 
 class ProgressionProjectorMixin:
+    def _research_site_options(self, definition, *, demonstration: bool) -> tuple[ResearchSiteOptionRow, ...]:
+        sim = self._simulation
+        if sim.research is None:
+            return ()
+        rows: list[ResearchSiteOptionRow] = []
+        for node in sorted(sim.graph.nodes.values(), key=lambda row: str(row.id)):
+            if demonstration:
+                failures = [
+                    (failure.code, failure.detail)
+                    for failure in sim.research.demonstration_failures(definition.id, node.id, sim.day)
+                ]
+            else:
+                failures = [
+                    (failure.code, failure.detail)
+                    for failure in sim.research.prototype_failures(definition.id, node.id, sim.day)
+                ]
+                for resource_id, required in sorted(definition.prototype_resources.items(), key=lambda row: str(row[0])):
+                    available = sim.inventory.available(node.id, resource_id)
+                    if available + 1e-9 < required:
+                        failures.append((
+                            "prototype_resource",
+                            f"{resource_id}: {available:g}/{required:g} t",
+                        ))
+            rows.append(ResearchSiteOptionRow(str(node.id), tuple(failures)))
+        return tuple(rows)
+
     def _research_view(self) -> ResearchView:
         sim = self._simulation
         if sim.research is None:
@@ -23,52 +50,59 @@ class ProgressionProjectorMixin:
         rows = []
         for definition in sorted(sim.research.definitions.values(), key=lambda d: str(d.id)):
             state = sim.research.active.get(definition.id)
-            if definition.id in sim.research.completed:
+            complete = definition.id in sim.research.completed
+            if complete:
                 status = "complete"
             elif state is None:
                 status = "available" if sim.research.can_start(definition.id) else "locked"
             else:
-                status = state.status
+                status = state.status.value
+
             demonstration_location_id = None if state is None or state.demonstration_location_id is None else str(state.demonstration_location_id)
             demonstration_blockers: tuple[tuple[str, str], ...] = ()
-            if state is not None and state.status == "demonstration":
+            if state is not None and state.status.value == "demonstration":
                 if state.paused:
                     demonstration_blockers = (("manual_pause", "研究が手動停止中"),)
                 if state.demonstration_location_id is None:
-                    demonstration_blockers = demonstration_blockers + (("demonstration_site", "実証地点が未選択"),)
+                    demonstration_blockers += (("demonstration_site", "実証地点を選択してください"),)
                 else:
-                    demonstration_blockers = demonstration_blockers + tuple(
+                    demonstration_blockers += tuple(
                         (f.code, f.detail)
                         for f in sim.research.demonstration_failures(definition.id, state.demonstration_location_id, sim.day)
                     )
+
             prototype_blockers: tuple[tuple[str, str], ...] = ()
-            if state is not None and state.status == "prototype":
+            if state is not None and state.status.value == "prototype":
                 if state.paused:
                     prototype_blockers = (("manual_pause", "研究が手動停止中"),)
-                if state.prototype_location_id is None:
-                    prototype_blockers = prototype_blockers + (("prototype_site", "試作地点が未選択"),)
-                else:
-                    prototype_blockers = prototype_blockers + tuple(
-                        (f.code, f.detail)
-                        for f in sim.research.prototype_failures(definition.id, state.prototype_location_id, sim.day)
-                    )
+                prototype_blockers += (("prototype_site", "試作地点を選択して試作を実施してください"),)
+
             theory_blockers: tuple[tuple[str, str], ...] = ()
             if state is not None and state.paused:
                 theory_blockers = (("manual_pause", "研究が手動停止中"),)
             if status == "theory" and sim.research.theory_capacity_for(definition.id, power_by_location, sim.day) <= 1e-12:
-                theory_blockers = theory_blockers + ((
+                theory_blockers += ((
                     "research_site",
                     "研究設備と必要な環境・能力条件を同一地点で満たせない",
                 ),)
+
             eligible_capacity = sim.research.theory_capacity_for(definition.id, power_by_location, sim.day)
+            theory_done = definition.theory_points if complete else (0.0 if state is None else state.theory_done)
+            demonstration_done = definition.demonstration_days if complete else (0 if state is None else state.demonstration_done_days)
+            prototype_sites = self._research_site_options(definition, demonstration=False) if status == "prototype" else ()
+            demonstration_sites = self._research_site_options(definition, demonstration=True) if status == "demonstration" else ()
             rows.append(ResearchRow(
-                str(definition.id), definition.display_name, status, False if state is None else state.paused, sim.research.can_start(definition.id),
-                0.0 if state is None else state.theory_done, definition.theory_points, eligible_capacity,
+                str(definition.id), definition.display_name, status,
+                False if state is None else state.paused,
+                sim.research.can_start(definition.id),
+                theory_done, definition.theory_points, eligible_capacity,
                 0.0 if state is None else state.allocation_weight,
                 tuple((str(k), v) for k, v in sorted(definition.prototype_resources.items(), key=lambda x: str(x[0]))),
                 None if state is None or state.prototype_location_id is None else str(state.prototype_location_id),
-                0 if state is None else state.demonstration_done_days, definition.demonstration_days,
-                demonstration_location_id, demonstration_blockers, prototype_blockers, theory_blockers,
+                prototype_sites,
+                demonstration_done, definition.demonstration_days,
+                demonstration_location_id, demonstration_sites,
+                demonstration_blockers, prototype_blockers, theory_blockers,
                 tuple(sorted(str(x) for x in definition.prerequisites)),
             ))
         return ResearchView(capacity, tuple(rows))

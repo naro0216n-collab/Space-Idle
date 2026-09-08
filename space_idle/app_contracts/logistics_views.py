@@ -56,6 +56,8 @@ class VehicleRow:
 @dataclass(frozen=True)
 class CargoOrderRow:
     id: str
+    owner_kind: str
+    owner_id: str
     source_id: str
     destination_id: str
     resource_id: str
@@ -65,6 +67,7 @@ class CargoOrderRow:
     path: tuple[str, ...]
     route_modes: tuple[tuple[str, str], ...]
     path_policy: str
+    status: str
     waiting_t: float
     in_transit_t: float
     arrival_waiting_t: float

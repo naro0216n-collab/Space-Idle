@@ -1,71 +1,74 @@
 from __future__ import annotations
 
 import ssl
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
+from ..application_commands import (
+    GetBottlenecks,
+    GetBuildOptions,
+    GetCargoOrders,
+    GetContracts,
+    GetFlowReport,
+    GetLocation,
+    GetLogisticsSummary,
+    GetProjects,
+    GetResearch,
+    GetRoutes,
+    GetSurveys,
+    GetTransportMissions,
+    GetVehicles,
+    GetWorld,
+)
 from .codec import ApiPayloadError
 from .http_server import ApiServerConfig, SpaceIdleHTTPServer, SpaceIdleRequestHandler
 from .runtime import GameRuntime
 
 
-_OLD_TIME_CONTROLS = '''      <div class="time-controls" aria-label="時間進行">
-        <button type="button" data-advance="1">+1日</button>
-        <button type="button" data-advance="7">+7日</button>
-        <button type="button" data-advance="30">+30日</button>
-      </div>'''
-_NEW_TIME_CONTROLS = '''      <div class="time-controls" aria-label="時間進行">
-        <button type="button" id="timePauseButton" aria-label="一時停止" aria-pressed="false">⏸ 一時停止</button>
-        <button type="button" data-time-speed="1" aria-label="進行速度1倍" aria-pressed="true">1×</button>
-        <button type="button" data-time-speed="4" aria-label="進行速度4倍" aria-pressed="false">4×</button>
-        <button type="button" data-time-speed="16" aria-label="進行速度16倍" aria-pressed="false">16×</button>
-        <span id="timeState" hidden>自動進行 · 1×</span>
-      </div>'''
-
-
 class TimeControlledRequestHandler(SpaceIdleRequestHandler):
-    """HTTP adapter extension for player-facing simulation clock controls."""
-
-    def _write_time_controlled_index(self) -> None:
-        path = self._webui_root() / "index.html"
-        try:
-            html = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            self._error(404, "not_found", "asset not found")
-            return
-        if _OLD_TIME_CONTROLS not in html:
-            raise RuntimeError("WebUI time-control composition point not found")
-        html = html.replace(_OLD_TIME_CONTROLS, _NEW_TIME_CONTROLS, 1)
-        html = html.replace(
-            '  <link rel="stylesheet" href="/app.css">\n',
-            '  <link rel="stylesheet" href="/app.css">\n  <link rel="stylesheet" href="/time_control.css">\n',
-            1,
-        )
-        html = html.replace(
-            '  <script src="/app.js" defer></script>\n',
-            '  <script src="/app.js" defer></script>\n  <script src="/time_control.js" defer></script>\n',
-            1,
-        )
-        body = html.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "same-origin")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    """HTTP adapter for runtime-owned clock controls and coherent UI snapshots."""
 
     def _serve_webui(self, path: str) -> bool:
-        if path in {"/", "/index.html"}:
-            self._write_time_controlled_index()
-            return True
         if path == "/time_control.css":
             self._write_static(self._webui_root() / "time_control.css", "text/css; charset=utf-8")
             return True
-        if path == "/time_control.js":
-            self._write_static(self._webui_root() / "time_control.js", "text/javascript; charset=utf-8")
-            return True
         return super()._serve_webui(path)
+
+    def _handle_get(self) -> None:
+        parsed = urlsplit(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        if path != "/api/v1/ui-state":
+            super()._handle_get()
+            return
+
+        params = parse_qs(parsed.query, keep_blank_values=False)
+        location_values = params.get("location_id", [])
+        if len(location_values) > 1:
+            raise ApiPayloadError("location_id must appear once")
+        location_id = location_values[0] if location_values else None
+
+        queries = {
+            "world": GetWorld(),
+            "global_issues": GetBottlenecks(),
+            "research": GetResearch(),
+            "contracts": GetContracts(),
+            "logistics_summary": GetLogisticsSummary(),
+            "routes": GetRoutes(include_modes=True),
+            "vehicles": GetVehicles(),
+            "orders": GetCargoOrders(),
+            "missions": GetTransportMissions(),
+        }
+        if location_id:
+            queries.update({
+                "location": GetLocation(location_id),
+                "flow": GetFlowReport(location_id),
+                "projects": GetProjects(location_id),
+                "build_options": GetBuildOptions(location_id),
+                "bottlenecks": GetBottlenecks(location_id),
+                "surveys": GetSurveys(location_id),
+            })
+
+        result = self.server.runtime.snapshot(queries)
+        self._result(result, etag=f'"rev-{result.revision}"')
 
     def _handle_post(self) -> None:
         path = urlsplit(self.path).path.rstrip("/") or "/"

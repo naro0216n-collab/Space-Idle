@@ -129,16 +129,29 @@ class LogisticsProjectorMixin:
         orders: list[CargoOrderRow] = []
         for order in sorted(sim.logistics.orders.values(), key=lambda row: str(row.id)):
             waiting = sum(mass for (oid, _), mass in sim.logistics.waiting.items() if oid == order.id)
-            transit = sum(mission.amount_t for mission in sim.logistics.missions.values() if mission.order_id == order.id)
-            arrival_waiting = sum(
-                mission.amount_t for mission in sim.logistics.missions.values()
-                if mission.order_id == order.id and getattr(mission.status, "value", mission.status) in {"arrival_waiting", "waypoint_wait"}
+            order_missions = [mission for mission in sim.logistics.missions.values() if mission.order_id == order.id]
+            transit = sum(
+                mission.amount_t for mission in order_missions
+                if getattr(mission.status, "value", mission.status) == "in_transit"
             )
+            arrival_waiting = sum(
+                mission.amount_t for mission in order_missions
+                if getattr(mission.status, "value", mission.status) in {"arrival_waiting", "waypoint_wait"}
+            )
+            if sim.logistics.order_complete(order.id):
+                status = "complete"
+            elif arrival_waiting > 1e-12:
+                status = "arrival_waiting"
+            elif transit > 1e-12:
+                status = "in_transit"
+            else:
+                status = "waiting"
             orders.append(CargoOrderRow(
-                str(order.id), str(order.source_id), str(order.destination_id), str(order.resource_id),
+                str(order.id), order.owner_kind, str(order.owner_id),
+                str(order.source_id), str(order.destination_id), str(order.resource_id),
                 order.amount_t, order.delivered_t, order.priority, tuple(str(x) for x in order.path),
                 tuple((str(route_id), mode_id) for route_id, mode_id in sorted(order.mode_by_route.items(), key=lambda row: str(row[0]))),
-                order.path_policy.value, waiting, transit, arrival_waiting,
+                order.path_policy.value, status, waiting, transit, arrival_waiting,
                 sim.logistics.order_blockers(order.id, sim.day),
             ))
         return tuple(orders)
@@ -211,6 +224,7 @@ class LogisticsProjectorMixin:
 
         sim = self._simulation
         options: list[TransportPathOptionRow] = []
+        seen: set[tuple[tuple[str, ...], tuple[tuple[str, str], ...]]] = set()
         for policy in PathPolicy:
             try:
                 path = sim.logistics.find_path(source_id, destination_id, sim.day, policy)
@@ -219,10 +233,15 @@ class LogisticsProjectorMixin:
             mode_plan = sim.logistics._automatic_mode_plan(path, sim.day, policy)
             if mode_plan is None:
                 continue
+            route_modes = tuple((str(route_id), mode_plan[route_id]) for route_id in path)
+            identity = (tuple(str(route_id) for route_id in path), route_modes)
+            if identity in seen:
+                continue
+            seen.add(identity)
             options.append(TransportPathOptionRow(
                 policy.value,
                 tuple(str(route_id) for route_id in path),
-                tuple((str(route_id), mode_plan[route_id]) for route_id in path),
+                route_modes,
                 sum(sim.logistics.route_mode_transit_days(route_id, mode_plan[route_id], sim.day) for route_id in path),
                 sum(sim.logistics._mode_cost_musd_per_t(route_id, mode_plan[route_id]) for route_id in path),
                 sum(sim.logistics._mode_propellant_t_per_cargo_t(route_id, mode_plan[route_id]) for route_id in path),

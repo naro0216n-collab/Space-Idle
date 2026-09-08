@@ -68,8 +68,13 @@ def run() -> None:
             first_research = page.locator('#operationsTabContent [data-inspect="research"]').first
             first_research.wait_for(timeout=10000)
             first_research.click()
-            inspector_title = page.locator("#inspectorTitle").inner_text()
+            start_button = page.get_by_role("button", name="研究開始")
+            if start_button.count() and start_button.is_visible():
+                start_button.click()
+                page.locator("#researchWeightInput").wait_for(timeout=10000)
 
+            inspector_title = page.locator("#inspectorTitle").inner_text()
+            progress_before = first_research.inner_text()
             weight = page.locator("#researchWeightInput")
             weight.wait_for(timeout=10000)
             weight.fill("3.7")
@@ -89,6 +94,9 @@ def run() -> None:
             assert weight.input_value() == "3.7", "automatic progress overwrote an in-progress input"
             active_id = page.evaluate("() => document.activeElement?.id || ''")
             assert active_id == "researchWeightInput", "automatic progress stole input focus"
+
+            progress_after = page.locator('#operationsTabContent [data-inspect="research"]').first.inner_text()
+            assert progress_after != progress_before, "automatic progress did not refresh visible research state"
 
             context.close()
             browser.close()

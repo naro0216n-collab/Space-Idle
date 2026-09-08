@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+from space_idle import GetResearch, GetWorld, build_game_application
+from space_idle.api import GameRuntime
+from space_idle.content import base_ids as ids
+from space_idle.logistics import PathPolicy
+from space_idle.research import ResearchPhase
+from space_idle.shared import EntityId, RouteId
+from space_idle.simulation import OfflineProgressPolicy
+
+
+def test_theory_completion_transitions_to_visible_prototype_and_can_complete():
+    app = build_game_application()
+    sim = app._simulation
+    assert sim.research is not None
+
+    sim.research.start(ids.TECH_ORBITAL_OPERATIONS)
+    sim.advance_days(20)
+
+    state = sim.research.active[ids.TECH_ORBITAL_OPERATIONS]
+    assert state.theory_done >= sim.research.definitions[ids.TECH_ORBITAL_OPERATIONS].theory_points
+    assert state.status is ResearchPhase.PROTOTYPE
+    assert ids.TECH_ORBITAL_OPERATIONS not in sim.research.completed
+
+    view = app.query(GetResearch())
+    row = next(item for item in view.items if item.id == str(ids.TECH_ORBITAL_OPERATIONS))
+    assert row.status == "prototype"
+    earth = next(site for site in row.prototype_sites if site.location_id == str(ids.EARTH))
+    assert not earth.blockers
+
+    sim.research.fund_prototype(ids.TECH_ORBITAL_OPERATIONS, ids.EARTH, sim.day)
+    assert ids.TECH_ORBITAL_OPERATIONS in sim.research.completed
+    assert ids.TECH_ORBITAL_OPERATIONS not in sim.research.active
+
+    completed_row = next(item for item in app.query(GetResearch()).items if item.id == str(ids.TECH_ORBITAL_OPERATIONS))
+    assert completed_row.status == "complete"
+    assert completed_row.theory_done == completed_row.theory_required
+
+
+def test_direct_earth_to_south_pole_cargo_actually_dispatches_and_arrives():
+    app = build_game_application()
+    sim = app._simulation
+    route_id = RouteId("base.route.earth_ridge_direct")
+    service_mode = str(ids.DIRECT_LUNAR_SERVICE)
+
+    order_id = sim.logistics.submit_order(
+        ids.EARTH,
+        ids.SOUTH_POLAR_RIDGE,
+        ids.STRUCTURAL_COMPONENTS,
+        1.0,
+        50,
+        "player",
+        EntityId("player"),
+        day=sim.day,
+        path=(route_id,),
+        mode_by_route={route_id: service_mode},
+        path_policy=PathPolicy.FASTEST,
+    )
+    assert sim.logistics.waiting[(order_id, 0)] == 1.0
+
+    sim.advance_days(1)
+    assert any(mission.order_id == order_id for mission in sim.logistics.missions.values())
+    assert sim.logistics.waiting.get((order_id, 0), 0.0) < 1.0
+
+    sim.advance_days(20)
+    assert sim.logistics.order_complete(order_id)
+    assert sim.inventory.amount(ids.SOUTH_POLAR_RIDGE, ids.STRUCTURAL_COMPONENTS) >= 1.0 - 1e-9
+
+
+def test_runtime_snapshot_reads_all_projections_at_one_clock_sync(tmp_path):
+    now = [0.0]
+    runtime = GameRuntime(
+        factory=build_game_application,
+        save_dir=tmp_path,
+        offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0),
+        clock=lambda: now[0],
+    )
+    now[0] = 3.2
+    result = runtime.snapshot({"world": GetWorld(), "research": GetResearch()})
+    assert result.data["session"]["day"] == 3
+    assert result.data["world"].day == 3
+    assert result.revision == 1
