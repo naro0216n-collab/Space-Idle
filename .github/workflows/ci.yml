@@ -78,7 +78,7 @@ jobs:
             if (-not $listen) { throw 'Server is not listening on all IPv4 interfaces (0.0.0.0:8765).' }
 
             $root = Invoke-WebRequest 'http://127.0.0.1:8765/' -UseBasicParsing -TimeoutSec 5
-            if ($root.StatusCode -ne 200 -or $root.Content -notmatch 'Space Idle') { throw 'WebUI root did not load.' }
+            if ($root.StatusCode -ne 200 -or $root.Content -notmatch 'id="app"') { throw 'WebUI root did not load.' }
 
             $world = Invoke-RestMethod 'http://127.0.0.1:8765/api/v1/world' -TimeoutSec 5
             if ($null -eq $world.day) { throw 'World endpoint did not return simulation state.' }
