@@ -37,6 +37,32 @@ def test_theory_completion_transitions_to_visible_prototype_and_can_complete():
     assert completed_row.theory_done == completed_row.theory_required
 
 
+def test_research_definitions_have_granular_engineering_outcomes():
+    app = build_game_application()
+    sim = app._simulation
+    assert sim.research is not None
+    assert len(sim.research.definitions) >= 13
+
+    single_outcomes = {
+        ids.REGOLITH_HARVESTER: ids.TECH_REGOLITH_EXCAVATION,
+        ids.REGOLITH_SINTERING: ids.TECH_LUNAR_MATERIALS,
+        ids.ORE_PROCESSING: ids.TECH_ORE_BENEFICIATION,
+        ids.METALLURGY: ids.TECH_HIGH_TEMPERATURE_METALLURGY,
+        ids.FABRICATION_WORKSHOP: ids.TECH_STRUCTURAL_FABRICATION,
+        ids.MACHINE_SHOP: ids.TECH_PRECISION_MACHINING,
+        ids.HEAVY_EQUIPMENT_ASSEMBLY: ids.TECH_HEAVY_EQUIPMENT_ASSEMBLY,
+        ids.ELECTROLYSIS_PLANT: ids.TECH_INDUSTRIAL_ELECTROLYSIS,
+        ids.PROPELLANT_PLANT: ids.TECH_PROPELLANT_HANDLING,
+    }
+    for facility_id, technology_id in single_outcomes.items():
+        assert sim.projects.recipes[facility_id].prerequisite_technologies == frozenset({technology_id})
+
+    assert sim.projects.recipes[ids.ORBITAL_LOGISTICS_NODE].prerequisite_technologies == frozenset({
+        ids.TECH_ORBITAL_OPERATIONS,
+        ids.TECH_CISLUNAR_LOGISTICS,
+    })
+
+
 def test_direct_earth_to_south_pole_cargo_actually_dispatches_and_arrives():
     app = build_game_application()
     sim = app._simulation
