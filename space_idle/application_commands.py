@@ -8,7 +8,7 @@ from .app_contracts.construction import (
 )
 from .app_contracts.operations import PauseFacility, ResumeFacility, SetFacilityProcess, SetPowerPriority, AdvanceTime
 from .app_contracts.progression import (
-    StartResearch, PauseResearch, ResumeResearch, SetResearchAllocation,
+    StartResearch, PauseResearch, ResumeResearch,
     FundResearchPrototype, SetResearchDemonstrationSite, StartSurvey,
     PauseSurvey, ResumeSurvey, SetSurveyAllocation,
 )
@@ -28,7 +28,7 @@ Command: TypeAlias = (
     SetProjectSourcingPolicy | SetConstructionWeight | SetProjectImportSource |
     SetProjectImportTransport | SetProjectLocalFraction | SetProjectLocalMaterial |
     PauseFacility | ResumeFacility | SetFacilityProcess | SetPowerPriority |
-    StartResearch | PauseResearch | ResumeResearch | SetResearchAllocation |
+    StartResearch | PauseResearch | ResumeResearch |
     FundResearchPrototype | SetResearchDemonstrationSite | StartSurvey | PauseSurvey |
     ResumeSurvey | SetSurveyAllocation | DispatchVehicle | RefuelVehicle | ProduceVehicle |
     SubmitCargo | CreateLogisticsRule | PauseLogisticsRule | ResumeLogisticsRule |

@@ -9,17 +9,25 @@ from space_idle.shared import EntityId, RouteId
 from space_idle.simulation import OfflineProgressPolicy
 
 
-def test_theory_completion_transitions_to_visible_prototype_and_can_complete():
+def test_full_research_point_payment_transitions_directly_to_visible_prototype_and_can_complete():
     app = build_game_application()
     sim = app._simulation
     assert sim.research is not None
 
-    sim.research.start(ids.TECH_ORBITAL_OPERATIONS)
-    sim.advance_days(20)
+    for _ in range(2000):
+        if sim.research.can_start(ids.TECH_ORBITAL_OPERATIONS, day=sim.day):
+            break
+        sim.advance_days(1)
+    else:
+        raise AssertionError("research never became startable")
+
+    definition = sim.research.definitions[ids.TECH_ORBITAL_OPERATIONS]
+    points_before = sim.research.stored_points
+    sim.research.start(ids.TECH_ORBITAL_OPERATIONS, day=sim.day)
 
     state = sim.research.active[ids.TECH_ORBITAL_OPERATIONS]
-    assert state.theory_done >= sim.research.definitions[ids.TECH_ORBITAL_OPERATIONS].theory_points
     assert state.status is ResearchPhase.PROTOTYPE
+    assert sim.research.stored_points == points_before - definition.research_point_cost
     assert ids.TECH_ORBITAL_OPERATIONS not in sim.research.completed
 
     view = app.query(GetResearch())
@@ -34,7 +42,6 @@ def test_theory_completion_transitions_to_visible_prototype_and_can_complete():
 
     completed_row = next(item for item in app.query(GetResearch()).items if item.id == str(ids.TECH_ORBITAL_OPERATIONS))
     assert completed_row.status == "complete"
-    assert completed_row.theory_done == completed_row.theory_required
 
 
 def test_research_definitions_have_granular_engineering_outcomes():

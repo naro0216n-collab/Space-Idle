@@ -69,9 +69,6 @@ class LocationProjectorMixin:
 
     def _environment_rows(self, location_id: SpatialNodeId) -> tuple[EnvironmentFacetRow, ...]:
         sim = self._simulation
-        # Facet types are discovered from content rather than hard-coded into the
-        # application boundary. New peer facets therefore become query-visible
-        # without adding destination-specific branches.
         facet_types = {facet_type for (_node_id, facet_type) in sim.environment.static.facets}
         rows: list[EnvironmentFacetRow] = []
         for facet_type in sorted(facet_types, key=lambda t: getattr(t, "facet_key", t.__name__)):
@@ -99,7 +96,7 @@ class LocationProjectorMixin:
             activation_failures = sim.facilities.activation_failures(f, sim.day)
             active_and_compatible = not activation_failures
             facilities.append(FacilityRow(
-                str(f.id), str(f.definition_id), definition.display_name, f.paused, active_and_compatible,
+                str(f.id), str(f.definition_id), definition.display_name, f.level, f.paused, active_and_compatible,
                 tuple(activation_failures), f.power_priority, tuple(sorted((x.id, x.rated_capacity) for x in definition.capability_supplies)),
                 power.utilization_by_facility.get(f.id, 0.0 if not active_and_compatible else 1.0),
             ))
@@ -108,9 +105,6 @@ class LocationProjectorMixin:
             snap.facility_id: snap
             for snap in sim.industry.snapshots(location_id, sim.facilities, sim.inventory, power, sim.day)
         }
-        # Process controls remain visible even when a facility is disabled, its
-        # environment is temporarily invalid, or a multi-recipe facility has no
-        # recipe selected yet. Query consumers never need to infer hidden state.
         for facility in sorted(sim.facilities.all_at(location_id), key=lambda f: str(f.id)):
             compatible = tuple(sorted(sim.industry.compatible_processes(facility.definition_id), key=lambda p: str(p.id)))
             if not compatible:

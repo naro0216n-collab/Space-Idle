@@ -9,16 +9,26 @@ class ResearchSiteOptionRow:
 
 
 @dataclass(frozen=True)
+class ResearchProviderRow:
+    facility_id: str
+    facility_definition_id: str
+    location_id: str
+    tier: int
+    level: int
+    generation_points_per_day: float
+    storage_capacity_points: float
+    blockers: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
 class ResearchRow:
     id: str
     display_name: str
     status: str
     paused: bool
     can_start: bool
-    theory_done: float
-    theory_required: float
-    eligible_capacity_points_per_day: float
-    allocation_weight: float
+    research_point_cost: float
+    start_blockers: tuple[tuple[str, str], ...]
     prototype_resources: tuple[tuple[str, float], ...]
     prototype_location_id: str | None
     prototype_sites: tuple[ResearchSiteOptionRow, ...]
@@ -28,13 +38,16 @@ class ResearchRow:
     demonstration_sites: tuple[ResearchSiteOptionRow, ...]
     demonstration_blockers: tuple[tuple[str, str], ...]
     prototype_blockers: tuple[tuple[str, str], ...]
-    theory_blockers: tuple[tuple[str, str], ...]
     prerequisites: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class ResearchView:
-    capacity_points_per_day: float
+    stored_points: float
+    storage_capacity_points: float
+    generation_points_per_day: float
+    over_capacity: bool
+    providers: tuple[ResearchProviderRow, ...]
     items: tuple[ResearchRow, ...]
 
 

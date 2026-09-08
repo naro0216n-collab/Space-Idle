@@ -50,7 +50,17 @@ def _research_row(app, research_id):
     return next(row for row in app.query(GetResearch()).items if row.id == str(research_id))
 
 
-def _complete_research(app, research_id, demonstration_site=None, max_days=1000):
+def _wait_until_research_startable(app, research_id, max_days=2000):
+    for _ in range(max_days + 1):
+        row = _research_row(app, research_id)
+        if row.can_start:
+            return row
+        app.execute(AdvanceTime(1))
+    raise AssertionError(f"research never became startable: {research_id}")
+
+
+def _complete_research(app, research_id, demonstration_site=None, max_days=2000):
+    _wait_until_research_startable(app, research_id, max_days=max_days)
     app.execute(StartResearch(str(research_id)))
     for _ in range(max_days):
         row = _research_row(app, research_id)
@@ -286,46 +296,48 @@ def test_manual_pause_resume_controls_preserve_configuration_and_halt_autonomous
 
     app = build_game_application()
 
-    # Research itself can be paused without destroying allocation or progress.
-    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS)))
-    app.execute(PauseResearch(str(TECH_ORBITAL_OPERATIONS)))
-    before = _research_row(app, TECH_ORBITAL_OPERATIONS)
-    app.execute(AdvanceTime(3))
-    paused = _research_row(app, TECH_ORBITAL_OPERATIONS)
-    assert paused.paused and paused.theory_done == before.theory_done
-    app.execute(ResumeResearch(str(TECH_ORBITAL_OPERATIONS)))
-    app.execute(AdvanceTime(1))
-    resumed = _research_row(app, TECH_ORBITAL_OPERATIONS)
-    assert not resumed.paused and resumed.theory_done > paused.theory_done
-
-    # Pausing the provider facility removes its delivered service, while its
-    # configured process/priority state remains attached to the facility.
+    # The research provider owns RP generation/storage. Pausing the facility
+    # preserves stored points while removing current generation and capacity.
+    app.execute(AdvanceTime(2))
+    research_before_pause = app.query(GetResearch())
     lab = next(
         row for row in app.query(GetLocation(str(EARTH))).facilities
         if row.definition_id == str(EARTH_RESEARCH_LAB)
     )
     app.execute(PauseFacility(lab.id))
-    stopped = app.query(GetLocation(str(EARTH)))
-    stopped_lab = next(row for row in stopped.facilities if row.id == lab.id)
-    research_before = _research_row(app, TECH_ORBITAL_OPERATIONS).theory_done
+    stopped_lab = next(
+        row for row in app.query(GetLocation(str(EARTH))).facilities
+        if row.id == lab.id
+    )
+    stopped_research = app.query(GetResearch())
     assert stopped_lab.paused and ("manual_pause", "設備が手動停止中") in stopped_lab.activation_blockers
+    assert stopped_research.stored_points == research_before_pause.stored_points
+    assert stopped_research.generation_points_per_day == 0
+    assert stopped_research.storage_capacity_points <= research_before_pause.storage_capacity_points
     app.execute(AdvanceTime(3))
-    assert _research_row(app, TECH_ORBITAL_OPERATIONS).theory_done == research_before
+    assert app.query(GetResearch()).stored_points == stopped_research.stored_points
     app.execute(ResumeFacility(lab.id))
     app.execute(AdvanceTime(1))
-    assert _research_row(app, TECH_ORBITAL_OPERATIONS).theory_done > research_before
+    assert app.query(GetResearch()).stored_points > stopped_research.stored_points
 
-    # Finish the already-active research, then verify that construction pause
-    # preserves the same project rather than cancelling/recreating it.
-    for _ in range(1000):
-        row = _research_row(app, TECH_ORBITAL_OPERATIONS)
-        if row.status == "complete":
-            break
-        if row.status == "prototype":
-            app.execute(FundResearchPrototype(str(TECH_ORBITAL_OPERATIONS), str(EARTH)))
-        app.execute(AdvanceTime(1))
-    else:
-        raise AssertionError("active research did not complete")
+    # Research pause applies to an already-funded physical phase. It does not
+    # recreate Theory progress or refund the RP payment.
+    _wait_until_research_startable(app, TECH_ORBITAL_OPERATIONS)
+    points_before_start = app.query(GetResearch()).stored_points
+    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS)))
+    started = _research_row(app, TECH_ORBITAL_OPERATIONS)
+    points_after_start = app.query(GetResearch()).stored_points
+    assert started.status == "prototype"
+    assert points_after_start < points_before_start
+    app.execute(PauseResearch(str(TECH_ORBITAL_OPERATIONS)))
+    app.execute(AdvanceTime(3))
+    paused = _research_row(app, TECH_ORBITAL_OPERATIONS)
+    assert paused.paused and paused.status == "prototype"
+    app.execute(ResumeResearch(str(TECH_ORBITAL_OPERATIONS)))
+    resumed = _research_row(app, TECH_ORBITAL_OPERATIONS)
+    assert not resumed.paused and resumed.status == "prototype"
+    app.execute(FundResearchPrototype(str(TECH_ORBITAL_OPERATIONS), str(EARTH)))
+    assert _research_row(app, TECH_ORBITAL_OPERATIONS).status == "complete"
     _complete_research(app, TECH_CISLUNAR_LOGISTICS)
 
     # Construction pause stops procurement/construction state advancement and

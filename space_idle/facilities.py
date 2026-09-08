@@ -20,7 +20,6 @@ class CapabilitySupply:
     This supply only expresses whether enough infrastructure/service capacity
     exists to satisfy generic prerequisites.
     """
-
     id: str
     rated_capacity: float = 1.0
 
@@ -47,6 +46,11 @@ class FacilityState:
     location_id: SpatialNodeId
     paused: bool = False
     power_priority: int | None = None
+    level: int = 1
+
+    def __post_init__(self) -> None:
+        if self.level < 1:
+            raise ValueError("facility level must be positive")
 
 
 @dataclass
@@ -56,14 +60,16 @@ class FacilityBook:
     facilities: dict[EntityId, FacilityState] = field(default_factory=dict)
     _counter: int = 0
 
-    def install(self, definition_id: DefinitionId, location_id: SpatialNodeId, *, power_priority: int | None = None) -> EntityId:
+    def install(self, definition_id: DefinitionId, location_id: SpatialNodeId, *, power_priority: int | None = None, level: int = 1) -> EntityId:
         if definition_id not in self.definitions:
             raise KeyError(definition_id)
         if location_id not in self.environment.graph.nodes:
             raise KeyError(location_id)
+        if level < 1:
+            raise ValueError("facility level must be positive")
         self._counter += 1
         entity_id = EntityId(f"facility.{self._counter}")
-        self.facilities[entity_id] = FacilityState(entity_id, definition_id, location_id, False, power_priority)
+        self.facilities[entity_id] = FacilityState(entity_id, definition_id, location_id, False, power_priority, level)
         return entity_id
 
     def pause(self, facility_id: EntityId) -> None:
@@ -100,7 +106,6 @@ class FacilityBook:
         return tuple(failures)
 
     def is_active_and_compatible(self, facility: FacilityState, day: int) -> bool:
-        """Not manually paused and environmentally compatible; power is evaluated separately."""
         return not self.activation_failures(facility, day)
 
     def active_compatible_at(self, location_id: SpatialNodeId, day: int) -> list[FacilityState]:
@@ -110,35 +115,17 @@ class FacilityBook:
         total = 0.0
         for facility in facilities:
             definition = self.definitions[facility.definition_id]
-            total += sum(
-                supply.rated_capacity
-                for supply in definition.capability_supplies
-                if supply.id == capability_id
-            )
+            total += sum(supply.rated_capacity for supply in definition.capability_supplies if supply.id == capability_id)
         return total
 
     def infrastructure_capability_capacity_at(self, location_id: SpatialNodeId, capability_id: str, day: int = 0) -> float:
-        """Rated installed capacity that is physically compatible with the site.
-
-        Manual enable/disable and current power allocation do not erase installed
-        infrastructure. This is the correct view for prerequisites such as
-        "a machine shop exists at this site".
-        """
         facilities = [f for f in self.all_at(location_id) if self.is_environmentally_compatible(f, day)]
         return self._capacity_from_facilities(facilities, capability_id)
 
     def active_capability_capacity_at(self, location_id: SpatialNodeId, capability_id: str, day: int = 0) -> float:
-        facilities = self.active_compatible_at(location_id, day)
-        return self._capacity_from_facilities(facilities, capability_id)
+        return self._capacity_from_facilities(self.active_compatible_at(location_id, day), capability_id)
 
-    def available_capability_capacity_at(
-        self,
-        location_id: SpatialNodeId,
-        capability_id: str,
-        power: PowerSnapshot,
-        day: int = 0,
-    ) -> float:
-        """Currently delivered generic service capacity after power allocation."""
+    def available_capability_capacity_at(self, location_id: SpatialNodeId, capability_id: str, power: PowerSnapshot, day: int = 0) -> float:
         total = 0.0
         for facility in self.active_compatible_at(location_id, day):
             definition = self.definitions[facility.definition_id]
@@ -149,8 +136,4 @@ class FacilityBook:
         return total
 
     def capability_ids(self) -> set[str]:
-        return {
-            supply.id
-            for definition in self.definitions.values()
-            for supply in definition.capability_supplies
-        }
+        return {supply.id for definition in self.definitions.values() for supply in definition.capability_supplies}

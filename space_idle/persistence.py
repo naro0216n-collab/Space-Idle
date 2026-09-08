@@ -9,39 +9,29 @@ from .application import GameApplication
 from .simulation import OfflineProgressPolicy, OfflineProgressResult, Simulation
 from .validation import ConfigurationError, validate_runtime_state
 
-SAVE_SCHEMA_VERSION = 16
+SAVE_SCHEMA_VERSION = 17
 
 
 class SaveFormatError(ValueError):
     pass
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         raise ValueError("datetime must be timezone-aware")
     return value.astimezone(timezone.utc)
 
-
 def capture_state(sim: Simulation) -> dict[str, Any]:
-    """Capture mutable state through domain-owned codecs."""
-    state: dict[str, Any] = {
-        "day": sim.day,
-        "pending_offline_game_days": sim.pending_offline_game_days,
-        "account": {"funds_musd": sim.account.funds_musd, "passive_income_musd_per_day": sim.account.passive_income_musd_per_day},
-    }
+    state: dict[str, Any] = {"day": sim.day, "pending_offline_game_days": sim.pending_offline_game_days, "account": {"funds_musd": sim.account.funds_musd, "passive_income_musd_per_day": sim.account.passive_income_musd_per_day}}
     for extension in sim.domain_extensions:
         codec = extension.state_codec
         if codec is not None:
             state[codec.key] = codec.capture(sim)
     return state
 
-
 def restore_state(sim: Simulation, state: dict[str, Any]) -> None:
-    """Restore mutable state through the same domain codec registry."""
     sim.day = int(state["day"])
     sim.pending_offline_game_days = float(state.get("pending_offline_game_days", 0.0))
     sim.account.funds_musd = float(state["account"]["funds_musd"])
@@ -56,13 +46,7 @@ def make_save_document(app: GameApplication, *, saved_at: datetime | None = None
     timestamp = _as_utc(saved_at or _utc_now())
     sim = app._simulation
     validate_runtime_state(sim)
-    return {
-        "schema_version": SAVE_SCHEMA_VERSION,
-        "content_id": app.content_id,
-        "saved_at_utc": timestamp.isoformat(),
-        "state": capture_state(sim),
-    }
-
+    return {"schema_version": SAVE_SCHEMA_VERSION, "content_id": app.content_id, "saved_at_utc": timestamp.isoformat(), "state": capture_state(sim)}
 
 def save_game(app: GameApplication, path: str | Path, *, saved_at: datetime | None = None) -> None:
     destination = Path(path)
@@ -72,14 +56,7 @@ def save_game(app: GameApplication, path: str | Path, *, saved_at: datetime | No
     temp.write_text(json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")), encoding="utf-8")
     temp.replace(destination)
 
-
-def load_game(
-    path: str | Path,
-    factory: Callable[[], GameApplication],
-    *,
-    now: datetime | None = None,
-    offline_policy: OfflineProgressPolicy | None = None,
-) -> tuple[GameApplication, OfflineProgressResult | None]:
+def load_game(path: str | Path, factory: Callable[[], GameApplication], *, now: datetime | None = None, offline_policy: OfflineProgressPolicy | None = None) -> tuple[GameApplication, OfflineProgressResult | None]:
     try:
         document = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -88,20 +65,16 @@ def load_game(
         raise SaveFormatError("save document must be an object")
     if document.get("schema_version") != SAVE_SCHEMA_VERSION:
         raise SaveFormatError(f"unsupported save schema: {document.get('schema_version')}")
-
     app = factory()
     sim = app._simulation
     if document.get("content_id") != app.content_id:
-        raise SaveFormatError(
-            f"save content {document.get('content_id')!r} does not match current content {app.content_id!r}"
-        )
+        raise SaveFormatError(f"save content {document.get('content_id')!r} does not match current content {app.content_id!r}")
     try:
         restore_state(sim, document["state"])
         validate_runtime_state(sim)
         saved_at_value = document["saved_at_utc"]
     except (KeyError, TypeError, ValueError, ConfigurationError) as exc:
         raise SaveFormatError("save state is malformed") from exc
-
     result = None
     if offline_policy is not None:
         try:

@@ -1,42 +1,75 @@
 from __future__ import annotations
 
-from .facilities import FacilityBook
-from .inventory import InventoryBook
-from .power import PowerService, PowerSnapshot
+from .power import PowerSnapshot
 from .shared import DefinitionId, SpatialNodeId
 from .site import SiteRequirementFailure, evaluate_site_requirements
-from .research_models import ResearchDefinition, ResearchProviderSpec, ResearchPhase, ResearchState
+from .research_models import ResearchPhase, ResearchState
 
 
 class ResearchWorkflowMixin:
-    def can_start(self, research_id: DefinitionId) -> bool:
+    @staticmethod
+    def _has_site_requirements(requirements) -> bool:
+        return bool(requirements.environment or requirements.capability_requirements)
+
+    def start_blockers(
+        self,
+        research_id: DefinitionId,
+        *,
+        day: int = 0,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+    ) -> tuple[tuple[str, str], ...]:
         definition = self.definitions[research_id]
-        return research_id not in self.completed and research_id not in self.active and definition.prerequisites.issubset(self.completed)
+        blockers: list[tuple[str, str]] = []
+        if research_id in self.completed:
+            blockers.append(("already_complete", "研究は完了済み"))
+        if research_id in self.active:
+            blockers.append(("already_active", "研究は進行中"))
+        missing = sorted(definition.prerequisites - self.completed, key=str)
+        if missing:
+            blockers.append(("prerequisite", ",".join(str(item) for item in missing)))
 
-    def start(self, research_id: DefinitionId, *, allocation_weight: float = 1.0) -> None:
-        if allocation_weight < 0:
-            raise ValueError("allocation weight must be non-negative")
-        if not self.can_start(research_id):
-            raise ValueError("research prerequisites not met or already active")
-        state = ResearchState(research_id, allocation_weight=allocation_weight)
-        self.active[research_id] = state
-        if self.definitions[research_id].theory_points <= 1e-12:
-            self._finish_theory_phase(state)
+        capacity = self.storage_capacity(power_by_location, day)
+        if capacity + 1e-9 < definition.research_point_cost:
+            blockers.append(
+                (
+                    "rp_storage_capacity",
+                    f"Research Point貯蔵容量不足: {capacity:g}/{definition.research_point_cost:g}",
+                )
+            )
+        if self.stored_points + 1e-9 < definition.research_point_cost:
+            blockers.append(
+                (
+                    "research_points",
+                    f"Research Point不足: {self.stored_points:g}/{definition.research_point_cost:g}",
+                )
+            )
+        return tuple(blockers)
 
-    def _finish_theory_phase(self, state: ResearchState) -> None:
-        definition = self.definitions[state.definition_id]
-        state.theory_done = max(state.theory_done, definition.theory_points)
-        if definition.prototype_resources:
-            state.status = ResearchPhase.PROTOTYPE
+    def can_start(
+        self,
+        research_id: DefinitionId,
+        *,
+        day: int = 0,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+    ) -> bool:
+        return not self.start_blockers(research_id, day=day, power_by_location=power_by_location)
+
+    def start(self, research_id: DefinitionId, *, day: int = 0) -> None:
+        blockers = self.start_blockers(research_id, day=day)
+        if blockers:
+            raise ValueError("; ".join(detail for _code, detail in blockers))
+        definition = self.definitions[research_id]
+        self.stored_points = max(0.0, self.stored_points - definition.research_point_cost)
+        requires_prototype = bool(
+            definition.prototype_resources
+            or self._has_site_requirements(definition.prototype_site_requirements)
+        )
+        if requires_prototype:
+            self.active[research_id] = ResearchState(research_id, ResearchPhase.PROTOTYPE)
         elif definition.demonstration_days > 0:
-            state.status = ResearchPhase.DEMONSTRATION
+            self.active[research_id] = ResearchState(research_id, ResearchPhase.DEMONSTRATION)
         else:
-            self._complete(state.definition_id)
-
-    def set_allocation_weight(self, research_id: DefinitionId, weight: float) -> None:
-        if weight < 0:
-            raise ValueError("allocation weight must be non-negative")
-        self.active[research_id].allocation_weight = weight
+            self.completed.add(research_id)
 
     def pause(self, research_id: DefinitionId) -> None:
         self.active[research_id].paused = True
@@ -45,7 +78,10 @@ class ResearchWorkflowMixin:
         self.active[research_id].paused = False
 
     def prototype_failures(
-        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0,
+        self,
+        research_id: DefinitionId,
+        location_id: SpatialNodeId,
+        day: int = 0,
         power: PowerSnapshot | None = None,
     ) -> tuple[SiteRequirementFailure, ...]:
         if location_id not in self.facilities.environment.graph.nodes:
@@ -54,7 +90,11 @@ class ResearchWorkflowMixin:
         snapshot = power if power is not None else self.power.snapshot(location_id, self.facilities, day)
         return evaluate_site_requirements(
             definition.prototype_site_requirements,
-            location_id, day, self.facilities.environment, self.facilities, snapshot,
+            location_id,
+            day,
+            self.facilities.environment,
+            self.facilities,
+            snapshot,
         )
 
     def fund_prototype(self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0) -> None:
@@ -64,9 +104,13 @@ class ResearchWorkflowMixin:
         definition = self.definitions[research_id]
         if state.status != ResearchPhase.PROTOTYPE:
             raise ValueError("research is not awaiting a prototype")
+        if state.paused:
+            raise ValueError("research is paused")
         failures = self.prototype_failures(research_id, location_id, day)
         if failures:
-            raise ValueError("prototype site requirements not met: " + "; ".join(f.detail for f in failures))
+            raise ValueError(
+                "prototype site requirements not met: " + "; ".join(f.detail for f in failures)
+            )
         for resource_id, amount in definition.prototype_resources.items():
             if self.inventory.available(location_id, resource_id) + 1e-9 < amount:
                 raise ValueError(f"prototype resource shortfall: {resource_id}")
@@ -76,20 +120,27 @@ class ResearchWorkflowMixin:
         state.prototype_location_id = location_id
         if definition.demonstration_days > 0:
             state.status = ResearchPhase.DEMONSTRATION
-            # Reuse the prototype site only if it currently satisfies both its
-            # physical and delivered-service requirements.
             if not self.demonstration_failures(research_id, location_id, day):
                 state.demonstration_location_id = location_id
         else:
             self._complete(research_id)
 
-    def set_demonstration_site(self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0) -> None:
+    def set_demonstration_site(
+        self,
+        research_id: DefinitionId,
+        location_id: SpatialNodeId,
+        day: int = 0,
+    ) -> None:
         state = self.active[research_id]
         if state.status != ResearchPhase.DEMONSTRATION:
             raise ValueError("research is not awaiting demonstration")
+        if state.paused:
+            raise ValueError("research is paused")
         failures = self.demonstration_failures(research_id, location_id, day)
         if failures:
-            raise ValueError("demonstration site requirements not met: " + "; ".join(f.detail for f in failures))
+            raise ValueError(
+                "demonstration site requirements not met: " + "; ".join(f.detail for f in failures)
+            )
         state.demonstration_location_id = location_id
         state.demonstration_done_days = 0
 

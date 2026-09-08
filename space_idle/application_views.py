@@ -24,7 +24,7 @@ from .app_contracts.logistics_reports import (
     LogisticsRulesView, TransportMissionsView,
 )
 from .app_contracts.progression_views import (
-    ResearchRow, ResearchView, SurveyRow, SurveysView, ContractRow, ContractsView,
+    ResearchProviderRow, ResearchRow, ResearchView, SurveyRow, SurveysView, ContractRow, ContractsView,
 )
 from .app_contracts.ui_reports import IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView
 
@@ -47,5 +47,5 @@ __all__ = [
     "RouteModeRow", "RouteRow", "VehicleRow", "CargoOrderRow", "LogisticsRuleRow", "TransportMissionRow", "LogisticsView", "TransportPathOptionRow", "TransportPlansView",
     "LogisticsSummaryView", "RoutesView", "VehiclesView", "CargoOrdersView", "LogisticsRulesView", "TransportMissionsView",
     "IssueRow", "ResourceFlowRow", "FlowReportView", "BottlenecksView",
-    "ResearchRow", "ResearchView", "SurveyRow", "SurveysView", "ContractRow", "ContractsView", "QueryResult",
+    "ResearchProviderRow", "ResearchRow", "ResearchView", "SurveyRow", "SurveysView", "ContractRow", "ContractsView", "QueryResult",
 ]

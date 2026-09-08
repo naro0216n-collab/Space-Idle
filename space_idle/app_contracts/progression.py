@@ -3,14 +3,11 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class StartResearch:
-    research_id: str; allocation_weight: float = 1.0
+    research_id: str
 @dataclass(frozen=True)
 class PauseResearch: research_id: str
 @dataclass(frozen=True)
 class ResumeResearch: research_id: str
-@dataclass(frozen=True)
-class SetResearchAllocation:
-    research_id: str; weight: float
 @dataclass(frozen=True)
 class FundResearchPrototype:
     research_id: str; location_id: str

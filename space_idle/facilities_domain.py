@@ -9,30 +9,19 @@ from .shared import DefinitionId, EntityId, SpatialNodeId
 
 
 def capture_facilities(sim: Any) -> dict[str, Any]:
-    return {
-        "counter": sim.facilities._counter,
-        "items": [
-            {
-                "id": str(f.id), "definition_id": str(f.definition_id), "location_id": str(f.location_id),
-                "paused": f.paused, "power_priority": f.power_priority,
-            }
-            for f in sorted(sim.facilities.facilities.values(), key=lambda row: str(row.id))
-        ],
-    }
+    return {"counter": sim.facilities._counter, "items": [{"id": str(f.id), "definition_id": str(f.definition_id), "location_id": str(f.location_id), "paused": f.paused, "power_priority": f.power_priority, "level": f.level} for f in sorted(sim.facilities.facilities.values(), key=lambda row: str(row.id))]}
 
 
 def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
     sim.facilities.facilities.clear()
     for row in data["items"]:
         fid = EntityId(row["id"])
-        sim.facilities.facilities[fid] = FacilityState(
-            fid, DefinitionId(row["definition_id"]), SpatialNodeId(row["location_id"]),
-            bool(row["paused"]), row["power_priority"],
-        )
+        sim.facilities.facilities[fid] = FacilityState(fid, DefinitionId(row["definition_id"]), SpatialNodeId(row["location_id"]), bool(row["paused"]), row["power_priority"], int(row["level"]))
     sim.facilities._counter = int(data["counter"])
 
 
 STATE_CODEC = StateCodec("facilities", capture_facilities, restore_facilities)
+
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     nodes = ctx.nodes
     facility_defs = ctx.facility_defs
@@ -52,6 +41,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     for facility in sim.facilities.facilities.values():
         _require(facility.definition_id in facility_defs, f"facility references unknown definition: {facility.id}")
         _require(facility.location_id in nodes, f"facility references unknown location: {facility.id}")
+        _require(facility.level >= 1, f"facility has invalid level: {facility.id}")
     for definition_id, spec in sim.power.specs.items():
         _require(definition_id in facility_defs, f"power spec references unknown facility: {definition_id}")
         _require(spec.load_mw >= 0, f"negative power load: {definition_id}")
@@ -71,9 +61,10 @@ def validate_runtime(sim: Any) -> None:
         _require(facility_id == facility.id, f"facility state key mismatch: {facility_id}")
         _require(facility.definition_id in sim.facilities.definitions, f"facility state has unknown definition: {facility_id}")
         _require(facility.location_id in sim.graph.nodes, f"facility state has unknown location: {facility_id}")
+        _require(facility.level >= 1, f"facility state has invalid level: {facility_id}")
+        if sim.research is not None and facility.definition_id in sim.research.providers:
+            provider = sim.research.providers[facility.definition_id]
+            _require(any(level.level == facility.level for level in provider.levels), f"research provider does not define facility level: {facility_id}/{facility.level}")
 
 
-DOMAIN_EXTENSION = DomainExtension(
-    "facilities", state_codec=STATE_CODEC,
-    configuration_validator=validate_configuration, runtime_validator=validate_runtime,
-)
+DOMAIN_EXTENSION = DomainExtension("facilities", state_codec=STATE_CODEC, configuration_validator=validate_configuration, runtime_validator=validate_runtime)

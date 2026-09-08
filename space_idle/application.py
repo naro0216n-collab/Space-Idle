@@ -11,7 +11,7 @@ from .application_commands import (
     ResumeLogisticsRule, ResumeResearch, ResumeSurvey, SetConstructionWeight,
     SetFacilityProcess, SetPowerPriority, SetProjectImportSource,
     SetProjectImportTransport, SetProjectLocalFraction, SetProjectLocalMaterial,
-    SetProjectPriority, SetProjectSourcingPolicy, SetResearchAllocation,
+    SetProjectPriority, SetProjectSourcingPolicy,
     SetResearchDemonstrationSite, SetSurveyAllocation, StartResearch, StartSurvey,
     SubmitCargo,
 )
@@ -31,5 +31,4 @@ class GameApplication(ApplicationCommandMixin, ApplicationQueryMixin):
         return self._simulation.content_id
 
     def advance_offline(self, elapsed_real_seconds: float, policy: OfflineProgressPolicy) -> OfflineProgressResult:
-        """Lifecycle operation for server/offline catch-up using normal simulation days."""
         return self._simulation.advance_offline(elapsed_real_seconds, policy)

@@ -6,48 +6,77 @@ from enum import Enum
 from .shared import DefinitionId, SpatialNodeId
 from .site import SiteRequirements
 
+
 @dataclass(frozen=True)
 class ResearchDefinition:
     id: DefinitionId
     display_name: str
-    theory_points: float
+    research_point_cost: float
     prerequisites: frozenset[DefinitionId] = frozenset()
-    theory_site_requirements: SiteRequirements = SiteRequirements()
     prototype_resources: dict[DefinitionId, float] = field(default_factory=dict)
     prototype_site_requirements: SiteRequirements = SiteRequirements()
     demonstration_days: int = 0
     demonstration_site_requirements: SiteRequirements = SiteRequirements()
 
     def __post_init__(self) -> None:
-        if self.theory_points < 0:
-            raise ValueError("research theory points must be non-negative")
+        if self.research_point_cost < 0:
+            raise ValueError("research point cost must be non-negative")
         if self.demonstration_days < 0:
             raise ValueError("research demonstration days must be non-negative")
         if any(amount < 0 for amount in self.prototype_resources.values()):
             raise ValueError("prototype resource amounts must be non-negative")
 
+
+@dataclass(frozen=True)
+class ResearchProviderLevelSpec:
+    level: int
+    generation_points_per_day: float
+    storage_capacity_points: float
+
+    def __post_init__(self) -> None:
+        if self.level < 1:
+            raise ValueError("research provider level must be positive")
+        if self.generation_points_per_day < 0:
+            raise ValueError("research provider generation must be non-negative")
+        if self.storage_capacity_points < 0:
+            raise ValueError("research provider storage must be non-negative")
+
+
 @dataclass(frozen=True)
 class ResearchProviderSpec:
     facility_def_id: DefinitionId
-    points_per_day: float
+    tier: int
+    levels: tuple[ResearchProviderLevelSpec, ...]
 
     def __post_init__(self) -> None:
-        if self.points_per_day < 0:
-            raise ValueError("research provider rate must be non-negative")
+        if self.tier < 1:
+            raise ValueError("research provider tier must be positive")
+        if not self.levels:
+            raise ValueError("research provider must define at least one level")
+        seen: set[int] = set()
+        for level in self.levels:
+            if level.level in seen:
+                raise ValueError(f"duplicate research provider level: {level.level}")
+            seen.add(level.level)
+
+    def level_spec(self, level: int) -> ResearchProviderLevelSpec:
+        for spec in self.levels:
+            if spec.level == level:
+                return spec
+        raise ValueError(f"research provider does not define level {level}")
+
 
 class ResearchPhase(str, Enum):
-    THEORY = "theory"
     PROTOTYPE = "prototype"
     DEMONSTRATION = "demonstration"
     COMPLETE = "complete"
 
+
 @dataclass
 class ResearchState:
     definition_id: DefinitionId
-    status: ResearchPhase = ResearchPhase.THEORY
-    theory_done: float = 0.0
+    status: ResearchPhase
     demonstration_done_days: int = 0
-    allocation_weight: float = 1.0
     paused: bool = False
     prototype_location_id: SpatialNodeId | None = None
     demonstration_location_id: SpatialNodeId | None = None

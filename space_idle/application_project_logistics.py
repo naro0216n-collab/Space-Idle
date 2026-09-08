@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
 from typing import Mapping
 
+from .application_transport_support import vehicle_concept
 from .application_views import (
     CargoOrderRow, CargoOrdersView, LogisticsRuleRow, LogisticsRulesView,
     LogisticsSummaryView, LogisticsView, RouteModeRow, RouteRow, RoutesView,
@@ -63,7 +63,7 @@ class LogisticsProjectorMixin:
                         cost = vehicle.operating_cost_musd_per_cargo_t
                         propellant_resource_id = None if vehicle.propellant_resource_id is None else str(vehicle.propellant_resource_id)
                         full_load_propellant = vehicle.propellant_t(route, vehicle.max_cargo_for_route(route))
-                        kind = self._vehicle_concept(vehicle)
+                        kind = vehicle_concept(vehicle)
                         display_name = vehicle.display_name
                     mode_blockers = sim.logistics.route_operational_failures(route.id, sim.day, mode_id)
                     mode_rows.append(RouteModeRow(
@@ -97,7 +97,7 @@ class LogisticsProjectorMixin:
             definition = sim.logistics.vehicle_defs[state.definition_id]
             capability_names = tuple(sorted(capability.operation_type for capability in definition.performance.operation_capabilities))
             vehicles.append(VehicleRow(
-                str(state.id), str(definition.id), definition.display_name, self._vehicle_concept(definition),
+                str(state.id), str(definition.id), definition.display_name, vehicle_concept(definition),
                 None if state.location_id is None else str(state.location_id), state.status, state.available_day,
                 definition.payload_t, definition.dry_mass_t, state.propellant_t, definition.propellant_capacity_t,
                 None if definition.propellant_resource_id is None else str(definition.propellant_resource_id),

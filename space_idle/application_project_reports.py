@@ -151,11 +151,14 @@ class ApplicationReportProjectorMixin:
         issues: list[IssueRow] = []
         research = self._research_view()
         for row in research.items:
-            groups = (
-                ("research_theory", row.theory_blockers, None),
-                ("research_prototype", row.prototype_blockers, row.prototype_location_id),
-                ("research_demonstration", row.demonstration_blockers, row.demonstration_location_id),
-            )
+            groups: list[tuple[str, tuple[tuple[str, str], ...], str | None]] = []
+            if row.status in {"available", "locked"}:
+                groups.append(("research_start", row.start_blockers, None))
+            elif row.status == "prototype":
+                groups.append(("research_prototype", row.prototype_blockers, row.prototype_location_id))
+            elif row.status == "demonstration":
+                groups.append(("research_demonstration", row.demonstration_blockers, row.demonstration_location_id))
+
             for source, blockers, selected_location in groups:
                 if location_filter is not None and selected_location != location_filter:
                     continue
@@ -198,8 +201,6 @@ class ApplicationReportProjectorMixin:
         issues.extend(self._global_logistics_issues(location_filter))
         issues.extend(self._progression_issues(location_filter))
 
-        # A single root cause can surface through several calculations. Keep the
-        # first stable occurrence so UI consumers do not need to deduplicate.
         unique: list[IssueRow] = []
         seen: set[tuple] = set()
         for issue in issues:

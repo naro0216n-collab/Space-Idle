@@ -8,6 +8,7 @@ from space_idle import (
     CreateLogisticsRule,
     DispatchVehicle,
     GetLocation,
+    GetResearch,
     GetWorld,
     PauseBuild,
     PauseFacility,
@@ -40,8 +41,18 @@ from space_idle.simulation import OfflineProgressPolicy
 from space_idle.shared import RouteId
 
 
+def _advance_until_research_startable(app, research_id, max_days=2000):
+    for _ in range(max_days + 1):
+        row = next(item for item in app.query(GetResearch()).items if item.id == str(research_id))
+        if row.can_start:
+            return
+        app.execute(AdvanceTime(1))
+    raise AssertionError(f"research never became startable: {research_id}")
+
+
 def _make_nontrivial_state():
     app = build_game_application()
+    _advance_until_research_startable(app, TECH_ORBITAL_OPERATIONS)
     app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS)))
     project_id = app.execute(PlanBuild(
         str(LEO), str(ORBITAL_LOGISTICS_NODE), sourcing_policy="import_now", import_source_id=str(EARTH)
@@ -55,6 +66,11 @@ def _make_nontrivial_state():
         row.id for row in app.query(GetLocation(str(EARTH))).facilities
         if row.definition_id == str(EARTH_RESEARCH_LAB)
     )
+    lab_state = next(
+        row for row in app._simulation.facilities.facilities.values()
+        if str(row.id) == lab_id
+    )
+    lab_state.level = 2
     app.execute(PauseFacility(lab_id))
     app.execute(PauseResearch(str(TECH_ORBITAL_OPERATIONS)))
     app.execute(PauseBuild(project_id))
@@ -64,8 +80,6 @@ def _make_nontrivial_state():
         if state.definition_id == REUSABLE_ORBITAL_CARGO_TUG
     )
     tug_def = app._simulation.logistics.vehicle_defs[tug_state.definition_id]
-    # Refueling is an actual infrastructure service in v0.4.2, not a symbolic
-    # route permission. Install a provider explicitly for this persistence state.
     app._simulation.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
     app._simulation.inventory.add(LEO, PROPELLANT, tug_def.propellant_capacity_t)
     app.execute(RefuelVehicle(str(tug_state.id), tug_def.propellant_capacity_t / 2.0))
@@ -80,6 +94,20 @@ def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
     loaded, offline = load_game(path, build_game_application)
     assert offline is None
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
+
+    original_research = app.query(GetResearch())
+    loaded_research = loaded.query(GetResearch())
+    assert loaded_research.stored_points == original_research.stored_points
+    assert loaded_research.items == original_research.items
+    original_lab = next(
+        row for row in app._simulation.facilities.facilities.values()
+        if row.definition_id == EARTH_RESEARCH_LAB
+    )
+    loaded_lab = next(
+        row for row in loaded._simulation.facilities.facilities.values()
+        if row.definition_id == EARTH_RESEARCH_LAB
+    )
+    assert loaded_lab.level == original_lab.level == 2
 
     app.execute(AdvanceTime(7))
     loaded.execute(AdvanceTime(7))
@@ -161,8 +189,6 @@ def test_save_load_preserves_vehicle_production_progress(tmp_path):
     loaded, _ = load_game(path, build_game_application)
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
-    # Remaining production time is mutable state. Advancing both simulations
-    # through the same normal path must complete the same vehicle on the same day.
     days = max(1, original.available_day - app._simulation.day)
     app.execute(AdvanceTime(days))
     loaded.execute(AdvanceTime(days))
@@ -211,8 +237,6 @@ def test_save_load_and_offline_preserve_maintenance_wait(tmp_path):
     loaded, _ = load_game(path, build_game_application)
     assert capture_state(loaded._simulation) == capture_state(sim)
 
-    # Missing servicing infrastructure remains a blocker during offline time;
-    # offline progression must not silently complete turnaround.
     offline, _ = load_game(
         path, build_game_application,
         now=saved_at + timedelta(seconds=policy.real_seconds_per_game_day * 3),

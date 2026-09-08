@@ -30,6 +30,7 @@ class FacilityRow:
     id: str
     definition_id: str
     display_name: str
+    level: int
     paused: bool
     active_and_site_compatible: bool
     activation_blockers: tuple[tuple[str, str], ...]

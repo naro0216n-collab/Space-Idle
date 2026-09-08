@@ -60,9 +60,8 @@ class ProcessDefinitionRow:
 class ResearchDefinitionRow:
     id: str
     display_name: str
-    theory_points: float
+    research_point_cost: float
     prerequisites: tuple[str, ...]
-    theory_site_requirements: SiteRequirementsDefinitionRow
     prototype_resources: tuple[tuple[str, float], ...]
     prototype_site_requirements: SiteRequirementsDefinitionRow
     demonstration_days: int

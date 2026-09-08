@@ -1,54 +1,62 @@
 from __future__ import annotations
 
-from .facilities import FacilityBook
-from .inventory import InventoryBook
-from .power import PowerService, PowerSnapshot
-from .shared import DefinitionId, SpatialNodeId
-from .site import SiteRequirementFailure, evaluate_site_requirements
-from .research_models import ResearchDefinition, ResearchProviderSpec, ResearchPhase, ResearchState
+from .power import PowerSnapshot
+from .shared import SpatialNodeId
 
 
 class ResearchCapacityMixin:
-    def _provider_capacity(self, facility_id, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int) -> float:
+    def _power_by_location(self, day: int) -> dict[SpatialNodeId, PowerSnapshot]:
+        locations = {
+            facility.location_id
+            for facility in self.facilities.facilities.values()
+            if facility.definition_id in self.providers
+        }
+        return {
+            location_id: self.power.snapshot(location_id, self.facilities, day)
+            for location_id in sorted(locations, key=str)
+        }
+
+    def _provider_factor(self, facility_id, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int) -> float:
         facility = self.facilities.facilities[facility_id]
         if not self.facilities.is_active_and_compatible(facility, day):
-            return 0.0
-        provider = self.providers.get(facility.definition_id)
-        if provider is None:
             return 0.0
         snapshot = power_by_location.get(facility.location_id)
         if snapshot is None:
             snapshot = self.power.snapshot(facility.location_id, self.facilities, day)
-        factor = max(0.0, min(1.0, snapshot.utilization_by_facility.get(facility.id, 1.0)))
-        return provider.points_per_day * factor
+        return max(0.0, min(1.0, snapshot.utilization_by_facility.get(facility.id, 1.0)))
 
-    def _provider_can_support(
-        self, facility_id, definition: ResearchDefinition, power: PowerSnapshot, day: int
-    ) -> bool:
+    def _provider_level_spec(self, facility_id):
         facility = self.facilities.facilities[facility_id]
-        return not evaluate_site_requirements(
-            definition.theory_site_requirements,
-            facility.location_id, day, self.facilities.environment, self.facilities, power,
-        )
+        provider = self.providers.get(facility.definition_id)
+        return None if provider is None else provider.level_spec(facility.level)
 
-    def research_capacity(self, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int) -> float:
+    def provider_generation(self, facility_id, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int) -> float:
+        spec = self._provider_level_spec(facility_id)
+        if spec is None:
+            return 0.0
+        return spec.generation_points_per_day * self._provider_factor(facility_id, power_by_location, day)
+
+    def provider_storage_capacity(self, facility_id, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int) -> float:
+        spec = self._provider_level_spec(facility_id)
+        if spec is None:
+            return 0.0
+        return spec.storage_capacity_points * self._provider_factor(facility_id, power_by_location, day)
+
+    def generation_rate(self, power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None, day: int = 0) -> float:
+        snapshots = self._power_by_location(day) if power_by_location is None else power_by_location
         return sum(
-            self._provider_capacity(facility.id, power_by_location, day)
+            self.provider_generation(facility.id, snapshots, day)
             for facility in self.facilities.facilities.values()
             if facility.definition_id in self.providers
         )
 
-    def theory_capacity_for(
-        self, research_id: DefinitionId, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int
-    ) -> float:
-        definition = self.definitions[research_id]
-        total = 0.0
-        for facility in self.facilities.facilities.values():
-            if facility.definition_id not in self.providers:
-                continue
-            snapshot = power_by_location.get(facility.location_id)
-            if snapshot is None:
-                snapshot = self.power.snapshot(facility.location_id, self.facilities, day)
-            if self._provider_can_support(facility.id, definition, snapshot, day):
-                total += self._provider_capacity(facility.id, power_by_location, day)
-        return total
+    def storage_capacity(self, power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None, day: int = 0) -> float:
+        snapshots = self._power_by_location(day) if power_by_location is None else power_by_location
+        return sum(
+            self.provider_storage_capacity(facility.id, snapshots, day)
+            for facility in self.facilities.facilities.values()
+            if facility.definition_id in self.providers
+        )
+
+    def is_over_capacity(self, power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None, day: int = 0) -> bool:
+        return self.stored_points > self.storage_capacity(power_by_location, day) + 1e-9
