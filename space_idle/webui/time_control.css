@@ -1,0 +1,27 @@
+.topbar {
+  grid-template-columns: 180px 270px minmax(310px, 1fr) auto auto;
+  gap: 10px;
+}
+
+.session-strip {
+  gap: 14px;
+}
+
+.time-controls {
+  align-items: center;
+}
+
+.time-controls button {
+  min-width: 44px;
+  padding: 0 8px;
+}
+
+.time-controls #timePauseButton {
+  min-width: 70px;
+}
+
+.time-controls button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: #17324a;
+  color: #dff5ff;
+}
