@@ -72,15 +72,31 @@ class CargoOrderRow:
     in_transit_t: float
     arrival_waiting_t: float
     blockers: tuple[str, ...]
+    lane_id: str | None = None
+    demand_id: str | None = None
 
 @dataclass(frozen=True)
-class LogisticsRuleRow:
+class ResourceDemandRow:
+    id: str
+    owner_kind: str
+    owner_id: str
+    source_id: str | None
+    destination_id: str
+    resource_id: str
+    requested_t: float
+    pipeline_t: float
+    remaining_t: float
+    priority: int
+
+@dataclass(frozen=True)
+class LogisticsLaneRow:
     id: str
     source_id: str
     destination_id: str
-    resource_id: str
-    target_stock_t: float
-    batch_t: float
+    requested_capacity_t_per_day: float
+    effective_capacity_t_per_day: float
+    used_t: float
+    queued_t: float
     priority: int
     path: tuple[str, ...] | None
     route_modes: tuple[tuple[str, str], ...]
@@ -110,7 +126,8 @@ class LogisticsView:
     vehicles: tuple[VehicleRow, ...]
     missions: tuple[TransportMissionRow, ...]
     orders: tuple[CargoOrderRow, ...]
-    rules: tuple[LogisticsRuleRow, ...]
+    lanes: tuple[LogisticsLaneRow, ...]
+    demands: tuple[ResourceDemandRow, ...]
 
 @dataclass(frozen=True)
 class TransportPathOptionRow:
