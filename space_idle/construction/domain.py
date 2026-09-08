@@ -33,7 +33,9 @@ def _restore_target(data: dict[str, Any]):
     if kind == "new_facility":
         return NewFacilityTarget(DefinitionId(data["facility_def_id"]))
     if kind == "facility_upgrade":
-        return FacilityUpgradeTarget(EntityId(data["facility_id"]), int(data["target_level"]))
+        return FacilityUpgradeTarget(
+            EntityId(data["facility_id"]), int(data["target_level"])
+        )
     raise ValueError(f"unknown construction target kind: {kind}")
 
 
@@ -47,11 +49,17 @@ def capture_projects(sim: Any) -> dict[str, Any]:
                 "location_id": str(project.location_id),
                 "priority": project.priority,
                 "sourcing_policy": project.sourcing_policy,
-                "import_source_id": None if project.import_source_id is None else str(project.import_source_id),
-                "import_path": None if project.import_path is None else [str(x) for x in project.import_path],
+                "import_source_id": (
+                    None if project.import_source_id is None else str(project.import_source_id)
+                ),
+                "import_path": (
+                    None if project.import_path is None else [str(x) for x in project.import_path]
+                ),
                 "import_mode_by_route": {
-                    str(k): v
-                    for k, v in sorted(project.import_mode_by_route.items(), key=lambda row: str(row[0]))
+                    str(key): value
+                    for key, value in sorted(
+                        project.import_mode_by_route.items(), key=lambda row: str(row[0])
+                    )
                 },
                 "status": project.status.value,
                 "procurement_started_day": project.procurement_started_day,
@@ -59,29 +67,48 @@ def capture_projects(sim: Any) -> dict[str, Any]:
                 "construction_weight": project.construction_weight,
                 "paused": project.paused,
                 "pause_started_day": project.pause_started_day,
-                "completed_facility_id": None if project.completed_facility_id is None else str(project.completed_facility_id),
+                "completed_facility_id": (
+                    None
+                    if project.completed_facility_id is None
+                    else str(project.completed_facility_id)
+                ),
                 "local_fraction_targets": dict(sorted(project.local_fraction_targets.items())),
                 "local_resource_choices": {
-                    k: str(v) for k, v in sorted(project.local_resource_choices.items())
+                    key: str(value)
+                    for key, value in sorted(project.local_resource_choices.items())
                 },
                 "materials_committed": project.materials_committed,
                 "components": [
                     {
                         "component_id": component_id,
                         "reserved_local_t": component.reserved_local_t,
-                        "reserved_local_resource_id": None if component.reserved_local_resource_id is None else str(component.reserved_local_resource_id),
+                        "reserved_local_resource_id": (
+                            None
+                            if component.reserved_local_resource_id is None
+                            else str(component.reserved_local_resource_id)
+                        ),
+                        "reserved_primary_t": component.reserved_primary_t,
                         "reserved_import_t": component.reserved_import_t,
                         "committed_local_t": component.committed_local_t,
-                        "committed_local_resource_id": None if component.committed_local_resource_id is None else str(component.committed_local_resource_id),
+                        "committed_local_resource_id": (
+                            None
+                            if component.committed_local_resource_id is None
+                            else str(component.committed_local_resource_id)
+                        ),
+                        "committed_primary_t": component.committed_primary_t,
                         "committed_import_t": component.committed_import_t,
                         "local_target_t": component.local_target_t,
                         "import_committed_t": component.import_committed_t,
-                        "import_order_id": None if component.import_order_id is None else str(component.import_order_id),
+                        "import_order_id": (
+                            None if component.import_order_id is None else str(component.import_order_id)
+                        ),
                     }
                     for component_id, component in sorted(project.components.items())
                 ],
             }
-            for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id))
+            for project in sorted(
+                sim.projects.projects.values(), key=lambda row: str(row.id)
+            )
         ],
     }
 
@@ -94,42 +121,85 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
         components: dict[str, ProjectComponentState] = {}
         for component in row["components"]:
             components[component["component_id"]] = ProjectComponentState(
-                float(component["reserved_local_t"]),
-                None if component["reserved_local_resource_id"] is None else DefinitionId(component["reserved_local_resource_id"]),
-                float(component["reserved_import_t"]),
-                float(component["committed_local_t"]),
-                None if component["committed_local_resource_id"] is None else DefinitionId(component["committed_local_resource_id"]),
-                float(component["committed_import_t"]),
-                float(component["local_target_t"]),
-                None if component["import_committed_t"] is None else float(component["import_committed_t"]),
-                None if component["import_order_id"] is None else CargoOrderId(component["import_order_id"]),
+                reserved_local_t=float(component["reserved_local_t"]),
+                reserved_local_resource_id=(
+                    None
+                    if component["reserved_local_resource_id"] is None
+                    else DefinitionId(component["reserved_local_resource_id"])
+                ),
+                reserved_primary_t=float(component["reserved_primary_t"]),
+                reserved_import_t=float(component["reserved_import_t"]),
+                committed_local_t=float(component["committed_local_t"]),
+                committed_local_resource_id=(
+                    None
+                    if component["committed_local_resource_id"] is None
+                    else DefinitionId(component["committed_local_resource_id"])
+                ),
+                committed_primary_t=float(component["committed_primary_t"]),
+                committed_import_t=float(component["committed_import_t"]),
+                local_target_t=float(component["local_target_t"]),
+                import_committed_t=(
+                    None
+                    if component["import_committed_t"] is None
+                    else float(component["import_committed_t"])
+                ),
+                import_order_id=(
+                    None
+                    if component["import_order_id"] is None
+                    else CargoOrderId(component["import_order_id"])
+                ),
             )
         sim.projects.projects[project_id] = ConstructionProject(
-            project_id,
-            _restore_target(row["target"]),
-            SpatialNodeId(row["location_id"]),
-            int(row["priority"]),
-            row["sourcing_policy"],
-            None if row["import_source_id"] is None else SpatialNodeId(row["import_source_id"]),
-            None if row.get("import_path") is None else tuple(RouteId(x) for x in row["import_path"]),
-            {RouteId(k): v for k, v in row.get("import_mode_by_route", {}).items()},
-            ProjectStatus(row["status"]),
-            row["procurement_started_day"],
-            float(row["construction_done"]),
-            float(row["construction_weight"]),
-            bool(row["paused"]),
-            None if row["pause_started_day"] is None else int(row["pause_started_day"]),
-            components,
-            {k: float(v) for k, v in row.get("local_fraction_targets", {}).items()},
-            {k: DefinitionId(v) for k, v in row.get("local_resource_choices", {}).items()},
-            bool(row["materials_committed"]),
-            None if row["completed_facility_id"] is None else EntityId(row["completed_facility_id"]),
+            id=project_id,
+            target=_restore_target(row["target"]),
+            location_id=SpatialNodeId(row["location_id"]),
+            priority=int(row["priority"]),
+            sourcing_policy=row["sourcing_policy"],
+            import_source_id=(
+                None
+                if row["import_source_id"] is None
+                else SpatialNodeId(row["import_source_id"])
+            ),
+            import_path=(
+                None
+                if row.get("import_path") is None
+                else tuple(RouteId(value) for value in row["import_path"])
+            ),
+            import_mode_by_route={
+                RouteId(key): value
+                for key, value in row.get("import_mode_by_route", {}).items()
+            },
+            status=ProjectStatus(row["status"]),
+            procurement_started_day=row["procurement_started_day"],
+            construction_done=float(row["construction_done"]),
+            construction_weight=float(row["construction_weight"]),
+            paused=bool(row["paused"]),
+            pause_started_day=(
+                None if row["pause_started_day"] is None else int(row["pause_started_day"])
+            ),
+            components=components,
+            local_fraction_targets={
+                key: float(value)
+                for key, value in row.get("local_fraction_targets", {}).items()
+            },
+            local_resource_choices={
+                key: DefinitionId(value)
+                for key, value in row.get("local_resource_choices", {}).items()
+            },
+            materials_committed=bool(row["materials_committed"]),
+            completed_facility_id=(
+                None
+                if row["completed_facility_id"] is None
+                else EntityId(row["completed_facility_id"])
+            ),
         )
 
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:
     result: set[DefinitionId] = set(sim.projects.construction_resource_providers)
-    for recipe in tuple(sim.projects.recipes.values()) + tuple(sim.projects.upgrade_recipes.values()):
+    for recipe in tuple(sim.projects.recipes.values()) + tuple(
+        sim.projects.upgrade_recipes.values()
+    ):
         for component in recipe.components:
             result.add(component.import_resource_id)
             result.update(tier.local_resource_id for tier in component.local_tiers)
@@ -140,7 +210,10 @@ STATE_CODEC = StateCodec("projects", capture_projects, restore_projects)
 
 
 def _validate_recipe(recipe, owner: str, ctx: ValidationContext) -> None:
-    _require(recipe.facility_def_id in ctx.facility_defs, f"construction recipe references unknown facility: {owner}")
+    _require(
+        recipe.facility_def_id in ctx.facility_defs,
+        f"construction recipe references unknown facility: {owner}",
+    )
     _require(recipe.construction_work >= 0, f"negative construction work: {owner}")
     _require(
         recipe.prerequisite_technologies.issubset(ctx.known_technologies),
@@ -149,12 +222,21 @@ def _validate_recipe(recipe, owner: str, ctx: ValidationContext) -> None:
     _validate_site_requirements(recipe.site_requirements, ctx.known_capabilities, owner)
     component_ids: set[str] = set()
     for component in recipe.components:
-        _require(component.component_id not in component_ids, f"duplicate build component: {owner}/{component.component_id}")
+        _require(
+            component.component_id not in component_ids,
+            f"duplicate build component: {owner}/{component.component_id}",
+        )
         component_ids.add(component.component_id)
-        _require(component.amount_t >= 0, f"negative component mass: {owner}/{component.component_id}")
+        _require(
+            component.amount_t >= 0,
+            f"negative component mass: {owner}/{component.component_id}",
+        )
         seen_local_resources: set[object] = set()
         for tier in component.local_tiers:
-            _require(0 <= tier.max_fraction <= 1, f"local substitution outside 0..1: {owner}/{component.component_id}")
+            _require(
+                0 <= tier.max_fraction <= 1,
+                f"local substitution outside 0..1: {owner}/{component.component_id}",
+            )
             _require(
                 tier.local_resource_id not in seen_local_resources,
                 f"duplicate local substitution resource: {owner}/{component.component_id}/{tier.local_resource_id}",
@@ -164,7 +246,10 @@ def _validate_recipe(recipe, owner: str, ctx: ValidationContext) -> None:
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     for facility_id, recipe in sim.projects.recipes.items():
-        _require(facility_id == recipe.facility_def_id, f"construction recipe key mismatch: {facility_id}")
+        _require(
+            facility_id == recipe.facility_def_id,
+            f"construction recipe key mismatch: {facility_id}",
+        )
         _validate_recipe(recipe, f"construction:{facility_id}", ctx)
 
     seen_upgrade_targets: set[tuple[DefinitionId, int]] = set()
@@ -172,13 +257,24 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         expected = (recipe.facility_def_id, recipe.target_level)
         _require(key == expected, f"upgrade recipe key mismatch: {key}")
         _require(recipe.target_level >= 2, f"invalid upgrade target level: {expected}")
-        _require(not recipe.self_deploying, f"facility upgrade cannot self-deploy: {expected}")
-        _require(expected not in seen_upgrade_targets, f"duplicate facility upgrade recipe: {expected}")
+        _require(
+            not recipe.self_deploying,
+            f"facility upgrade cannot self-deploy: {expected}",
+        )
+        _require(
+            expected not in seen_upgrade_targets,
+            f"duplicate facility upgrade recipe: {expected}",
+        )
         seen_upgrade_targets.add(expected)
-        _validate_recipe(recipe, f"construction_upgrade:{recipe.facility_def_id}:L{recipe.target_level}", ctx)
+        _validate_recipe(
+            recipe,
+            f"construction_upgrade:{recipe.facility_def_id}:L{recipe.target_level}",
+            ctx,
+        )
 
     _require(
-        set(sim.projects.sourcing_wait_days) == {"import_now", "mixed", "local_priority"},
+        set(sim.projects.sourcing_wait_days)
+        == {"import_now", "mixed", "local_priority"},
         "invalid sourcing policy configuration",
     )
     _require(
@@ -186,128 +282,292 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         "negative sourcing wait period",
     )
     for definition_id, spec in sim.projects.construction_providers.items():
-        _require(definition_id == spec.facility_def_id, f"construction provider key mismatch: {definition_id}")
-        _require(definition_id in ctx.facility_defs, f"construction provider references unknown facility: {definition_id}")
-        _require(spec.work_per_day >= 0, f"negative construction capacity: {definition_id}")
+        _require(
+            definition_id == spec.facility_def_id,
+            f"construction provider key mismatch: {definition_id}",
+        )
+        _require(
+            definition_id in ctx.facility_defs,
+            f"construction provider references unknown facility: {definition_id}",
+        )
+        _require(
+            spec.work_per_day >= 0,
+            f"negative construction capacity: {definition_id}",
+        )
     for resource_id, spec in sim.projects.construction_resource_providers.items():
-        _require(resource_id == spec.resource_id, f"construction resource provider key mismatch: {resource_id}")
-        _require(spec.work_per_t_per_day >= 0, f"negative construction resource productivity: {spec.resource_id}")
+        _require(
+            resource_id == spec.resource_id,
+            f"construction resource provider key mismatch: {resource_id}",
+        )
+        _require(
+            spec.work_per_t_per_day >= 0,
+            f"negative construction resource productivity: {spec.resource_id}",
+        )
 
 
 def validate_runtime(sim: Any) -> None:
     active_upgrade_targets: set[EntityId] = set()
     for project_id, project in sim.projects.projects.items():
-        _require(project.location_id in sim.graph.nodes, f"project references unknown location: {project_id}")
+        _require(
+            project.location_id in sim.graph.nodes,
+            f"project references unknown location: {project_id}",
+        )
 
         if isinstance(project.target, NewFacilityTarget):
-            _require(project.target.facility_def_id in sim.projects.recipes, f"project references unknown build recipe: {project_id}")
+            _require(
+                project.target.facility_def_id in sim.projects.recipes,
+                f"project references unknown build recipe: {project_id}",
+            )
             recipe = sim.projects.recipes[project.target.facility_def_id]
         else:
-            _require(project.target.facility_id in sim.facilities.facilities, f"upgrade project references unknown facility: {project_id}")
+            _require(
+                project.target.facility_id in sim.facilities.facilities,
+                f"upgrade project references unknown facility: {project_id}",
+            )
             facility = sim.facilities.facilities[project.target.facility_id]
-            _require(facility.location_id == project.location_id, f"upgrade project location mismatch: {project_id}")
+            _require(
+                facility.location_id == project.location_id,
+                f"upgrade project location mismatch: {project_id}",
+            )
             key = (facility.definition_id, project.target.target_level)
-            _require(key in sim.projects.upgrade_recipes, f"upgrade project references unknown recipe: {project_id}")
+            _require(
+                key in sim.projects.upgrade_recipes,
+                f"upgrade project references unknown recipe: {project_id}",
+            )
             recipe = sim.projects.upgrade_recipes[key]
             if project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
-                _require(project.target.facility_id not in active_upgrade_targets, f"duplicate active facility upgrade: {project.target.facility_id}")
+                _require(
+                    project.target.facility_id not in active_upgrade_targets,
+                    f"duplicate active facility upgrade: {project.target.facility_id}",
+                )
                 active_upgrade_targets.add(project.target.facility_id)
-                _require(facility.level == project.target.target_level - 1, f"active upgrade target level mismatch: {project_id}")
+                _require(
+                    facility.level == project.target.target_level - 1,
+                    f"active upgrade target level mismatch: {project_id}",
+                )
             if project.status is ProjectStatus.COMPLETE:
-                _require(facility.level == project.target.target_level, f"completed upgrade did not apply target level: {project_id}")
+                _require(
+                    facility.level == project.target.target_level,
+                    f"completed upgrade did not apply target level: {project_id}",
+                )
 
         if project.import_path is None:
-            _require(not project.import_mode_by_route, f"automatic project import path retains explicit modes: {project_id}")
+            _require(
+                not project.import_mode_by_route,
+                f"automatic project import path retains explicit modes: {project_id}",
+            )
         else:
-            _require(project.import_source_id is not None, f"explicit project import path lacks source: {project_id}")
-            sim.logistics.validate_path_structure(project.import_source_id, project.location_id, project.import_path)
-            sim.logistics.validate_mode_selection(project.import_path, project.import_mode_by_route)
+            _require(
+                project.import_source_id is not None,
+                f"explicit project import path lacks source: {project_id}",
+            )
+            sim.logistics.validate_path_structure(
+                project.import_source_id, project.location_id, project.import_path
+            )
+            sim.logistics.validate_mode_selection(
+                project.import_path, project.import_mode_by_route
+            )
 
         _require(
             -1e-9 <= project.construction_done <= recipe.construction_work + 1e-8,
             f"invalid construction progress: {project_id}",
         )
-        _require(project.construction_weight >= 0, f"negative construction allocation: {project_id}")
-        _require(not project.paused or project.pause_started_day is not None, f"paused project missing pause day: {project_id}")
-        _require(project.paused or project.pause_started_day is None, f"active project retains pause day: {project_id}")
+        _require(
+            project.construction_weight >= 0,
+            f"negative construction allocation: {project_id}",
+        )
+        _require(
+            not project.paused or project.pause_started_day is not None,
+            f"paused project missing pause day: {project_id}",
+        )
+        _require(
+            project.paused or project.pause_started_day is None,
+            f"active project retains pause day: {project_id}",
+        )
 
         if project.materials_committed:
             _require(
-                project.status in {ProjectStatus.BUILDING, ProjectStatus.COMPLETE, ProjectStatus.CANCELLED},
+                project.status
+                in {ProjectStatus.BUILDING, ProjectStatus.COMPLETE, ProjectStatus.CANCELLED},
                 f"materials committed before construction: {project_id}",
             )
             _require(
-                not any(owner == EntityId(project.id) for owner, _loc, _res in sim.inventory.reserved),
+                not any(
+                    owner == EntityId(project.id)
+                    for owner, _location, _resource in sim.inventory.reserved
+                ),
                 f"committed project retains inventory reservation: {project_id}",
             )
 
         if project.status is ProjectStatus.COMPLETE:
-            _require(project.completed_facility_id in sim.facilities.facilities, f"complete project lacks affected facility: {project_id}")
+            _require(
+                project.completed_facility_id in sim.facilities.facilities,
+                f"complete project lacks affected facility: {project_id}",
+            )
             completed = sim.facilities.facilities[project.completed_facility_id]
-            _require(completed.location_id == project.location_id, f"completed facility location mismatch: {project_id}")
-            _require(completed.definition_id == recipe.facility_def_id, f"completed facility definition mismatch: {project_id}")
+            _require(
+                completed.location_id == project.location_id,
+                f"completed facility location mismatch: {project_id}",
+            )
+            _require(
+                completed.definition_id == recipe.facility_def_id,
+                f"completed facility definition mismatch: {project_id}",
+            )
             if isinstance(project.target, FacilityUpgradeTarget):
-                _require(project.completed_facility_id == project.target.facility_id, f"upgrade completed wrong facility: {project_id}")
+                _require(
+                    project.completed_facility_id == project.target.facility_id,
+                    f"upgrade completed wrong facility: {project_id}",
+                )
         else:
-            _require(project.completed_facility_id is None, f"incomplete project has completed facility: {project_id}")
+            _require(
+                project.completed_facility_id is None,
+                f"incomplete project has completed facility: {project_id}",
+            )
 
         expected_components = {component.component_id for component in recipe.components}
-        _require(set(project.components) == expected_components, f"project component state mismatch: {project_id}")
-        _require(set(project.local_resource_choices).issubset(expected_components), f"project local material choice references unknown component: {project_id}")
+        _require(
+            set(project.components) == expected_components,
+            f"project component state mismatch: {project_id}",
+        )
+        _require(
+            set(project.local_resource_choices).issubset(expected_components),
+            f"project local material choice references unknown component: {project_id}",
+        )
         for component_id, resource_id in project.local_resource_choices.items():
-            requirement = next(c for c in recipe.components if c.component_id == component_id)
+            requirement = next(
+                component
+                for component in recipe.components
+                if component.component_id == component_id
+            )
             _require(
-                resource_id in {tier.local_resource_id for tier in requirement.local_tiers},
+                resource_id
+                in {tier.local_resource_id for tier in requirement.local_tiers},
                 f"invalid project local material choice: {project_id}/{component_id}/{resource_id}",
             )
 
         expected_reservations: dict[object, float] = {}
         for component_id, state in project.components.items():
-            requirement = next(c for c in recipe.components if c.component_id == component_id)
-            _require(state.reserved_local_t >= -1e-9, f"negative local reservation: {project_id}/{component_id}")
-            _require(state.reserved_import_t >= -1e-9, f"negative import reservation: {project_id}/{component_id}")
-            _require(state.committed_local_t >= -1e-9, f"negative committed local material: {project_id}/{component_id}")
-            _require(state.committed_import_t >= -1e-9, f"negative committed imported material: {project_id}/{component_id}")
-            _require(state.local_target_t >= -1e-9, f"negative local target: {project_id}/{component_id}")
+            requirement = next(
+                component
+                for component in recipe.components
+                if component.component_id == component_id
+            )
             _require(
-                state.reserved_local_t + state.reserved_import_t + state.committed_local_t + state.committed_import_t
-                <= requirement.amount_t + 1e-8,
+                state.reserved_local_t >= -1e-9,
+                f"negative local reservation: {project_id}/{component_id}",
+            )
+            _require(
+                state.reserved_primary_t >= -1e-9,
+                f"negative onsite primary reservation: {project_id}/{component_id}",
+            )
+            _require(
+                state.reserved_import_t >= -1e-9,
+                f"negative import reservation: {project_id}/{component_id}",
+            )
+            _require(
+                state.committed_local_t >= -1e-9,
+                f"negative committed local material: {project_id}/{component_id}",
+            )
+            _require(
+                state.committed_primary_t >= -1e-9,
+                f"negative committed onsite primary material: {project_id}/{component_id}",
+            )
+            _require(
+                state.committed_import_t >= -1e-9,
+                f"negative committed imported material: {project_id}/{component_id}",
+            )
+            _require(
+                state.local_target_t >= -1e-9,
+                f"negative local target: {project_id}/{component_id}",
+            )
+            total_allocated = (
+                state.reserved_local_t
+                + state.reserved_primary_t
+                + state.reserved_import_t
+                + state.committed_local_t
+                + state.committed_primary_t
+                + state.committed_import_t
+            )
+            _require(
+                total_allocated <= requirement.amount_t + 1e-8,
                 f"project component allocation exceeds requirement: {project_id}/{component_id}",
             )
             if state.import_committed_t is not None:
-                _require(state.import_committed_t >= -1e-9, f"negative import commitment: {project_id}/{component_id}")
+                _require(
+                    state.import_committed_t >= -1e-9,
+                    f"negative import commitment: {project_id}/{component_id}",
+                )
             if state.import_order_id is not None:
                 _require(
-                    state.import_committed_t is not None and state.import_committed_t > 1e-9,
+                    state.import_committed_t is not None
+                    and state.import_committed_t > 1e-9,
                     f"project import order lacks commitment: {project_id}/{component_id}",
                 )
-                _require(state.import_order_id in sim.logistics.orders, f"project references unknown import order: {project_id}/{component_id}")
-                order = sim.logistics.orders[state.import_order_id]
-                _require(project.import_source_id is not None, f"project import order lacks source: {project_id}/{component_id}")
-                _require(order.owner_kind == "project" and order.owner_id == EntityId(project.id), f"project import order owner mismatch: {project_id}/{component_id}")
                 _require(
-                    order.source_id == project.import_source_id and order.destination_id == project.location_id,
+                    state.import_order_id in sim.logistics.orders,
+                    f"project references unknown import order: {project_id}/{component_id}",
+                )
+                order = sim.logistics.orders[state.import_order_id]
+                _require(
+                    project.import_source_id is not None,
+                    f"project import order lacks source: {project_id}/{component_id}",
+                )
+                _require(
+                    order.owner_kind == "project"
+                    and order.owner_id == EntityId(project.id),
+                    f"project import order owner mismatch: {project_id}/{component_id}",
+                )
+                _require(
+                    order.source_id == project.import_source_id
+                    and order.destination_id == project.location_id,
                     f"project import order endpoint mismatch: {project_id}/{component_id}",
                 )
-                _require(order.resource_id == requirement.import_resource_id, f"project import order resource mismatch: {project_id}/{component_id}")
-                _require(abs(order.amount_t - state.import_committed_t) <= 1e-7, f"project import order amount mismatch: {project_id}/{component_id}")
+                _require(
+                    order.resource_id == requirement.import_resource_id,
+                    f"project import order resource mismatch: {project_id}/{component_id}",
+                )
+                _require(
+                    abs(order.amount_t - state.import_committed_t) <= 1e-7,
+                    f"project import order amount mismatch: {project_id}/{component_id}",
+                )
                 if project.import_path is not None:
-                    _require(order.path == project.import_path, f"project import order path mismatch: {project_id}/{component_id}")
-                    _require(order.mode_by_route == project.import_mode_by_route, f"project import order transport mode mismatch: {project_id}/{component_id}")
+                    _require(
+                        order.path == project.import_path,
+                        f"project import order path mismatch: {project_id}/{component_id}",
+                    )
+                    _require(
+                        order.mode_by_route == project.import_mode_by_route,
+                        f"project import order transport mode mismatch: {project_id}/{component_id}",
+                    )
             if not project.materials_committed and project.status is not ProjectStatus.CANCELLED:
                 if state.reserved_local_t > 1e-12:
-                    _require(state.reserved_local_resource_id is not None, f"local reservation lacks resource: {project_id}/{component_id}")
-                    expected_reservations[state.reserved_local_resource_id] = expected_reservations.get(state.reserved_local_resource_id, 0.0) + state.reserved_local_t
-                if state.reserved_import_t > 1e-12:
-                    expected_reservations[requirement.import_resource_id] = expected_reservations.get(requirement.import_resource_id, 0.0) + state.reserved_import_t
+                    _require(
+                        state.reserved_local_resource_id is not None,
+                        f"local reservation lacks resource: {project_id}/{component_id}",
+                    )
+                    expected_reservations[state.reserved_local_resource_id] = (
+                        expected_reservations.get(state.reserved_local_resource_id, 0.0)
+                        + state.reserved_local_t
+                    )
+                primary_reserved = state.reserved_primary_t + state.reserved_import_t
+                if primary_reserved > 1e-12:
+                    expected_reservations[requirement.import_resource_id] = (
+                        expected_reservations.get(requirement.import_resource_id, 0.0)
+                        + primary_reserved
+                    )
 
         owner = EntityId(project.id)
         actual_reservations = {
             resource_id: amount
             for (reservation_owner, location_id, resource_id), amount in sim.inventory.reserved.items()
-            if reservation_owner == owner and location_id == project.location_id and amount > 1e-12
+            if reservation_owner == owner
+            and location_id == project.location_id
+            and amount > 1e-12
         }
-        _require(set(actual_reservations) == set(expected_reservations), f"project reservation resources mismatch: {project_id}")
+        _require(
+            set(actual_reservations) == set(expected_reservations),
+            f"project reservation resources mismatch: {project_id}",
+        )
         for resource_id, expected in expected_reservations.items():
             _require(
                 abs(actual_reservations.get(resource_id, 0.0) - expected) <= 1e-7,
