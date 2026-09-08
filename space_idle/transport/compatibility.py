@@ -13,11 +13,14 @@ from .operations import OperationEvaluationContext
 
 class TransportCompatibilityMixin:
     def route_failures(self, route_id: RouteId, day: int = 0) -> tuple[str, ...]:
+        """Return endpoint/site blockers intrinsic to the route itself.
+
+        Research IDs are deliberately not route gates. Whether a destination can
+        actually be reached is derived from endpoint requirements plus a real
+        vehicle/service performance profile and its operational support.
+        """
         route = self.routes[route_id]
         failures: list[str] = []
-        missing = route.required_technologies - self.unlocked_technologies
-        if missing:
-            failures.append("technology:" + ",".join(sorted(map(str, missing))))
         for prefix, location_id, requirements in (
             ("origin", route.origin_id, route.origin_requirements),
             ("destination", route.destination_id, route.destination_requirements),
