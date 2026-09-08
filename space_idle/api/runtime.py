@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 import re
 from threading import RLock
@@ -34,10 +35,13 @@ class RevisionConflict(RuntimeError):
 class GameRuntime:
     """Own one authoritative GameApplication session for browser clients.
 
-    Mutations are serialized under one lock. When an offline/real-time policy is
-    configured, elapsed wall time is lazily caught up before interactions. This
-    means iPad Safari/PWA suspension cannot stall game time merely because the
-    client stopped running JavaScript timers.
+    Mutations are serialized under one lock. When a wall-clock progress policy is
+    configured, elapsed real time is lazily caught up before interactions. This
+    keeps the server authoritative even when Safari/PWA is suspended: browser
+    timers are never part of simulation correctness.
+
+    Pause and speed are runtime clock controls. The deterministic Simulation Core
+    still advances only through its normal time-progress path.
     """
 
     def __init__(
@@ -56,16 +60,19 @@ class GameRuntime:
         self._app = factory()
         self._revision = 0
         self._last_clock = clock()
+        self._time_paused = False
+        self._time_speed_multiplier = 1.0
 
     def _sync_clock_locked(self) -> OfflineProgressResult | None:
-        if self._offline_policy is None:
-            return None
         now = self._clock()
         elapsed = max(0.0, now - self._last_clock)
         self._last_clock = now
-        if elapsed <= 0.0:
+        if self._offline_policy is None or elapsed <= 0.0 or self._time_paused:
             return None
-        result = self._app.advance_offline(elapsed, self._offline_policy)
+        result = self._app.advance_offline(
+            elapsed * self._time_speed_multiplier,
+            self._offline_policy,
+        )
         # Fractional carry is intentionally not a visible revision: normal UI
         # query results only change once one or more simulation days advance.
         if result.advanced_days > 0:
@@ -89,13 +96,53 @@ class GameRuntime:
             "app_version": VERSION,
             "content_id": self._app.content_id,
             "day": world.day,
+            "automatic_progress_enabled": self._offline_policy is not None,
             "offline_progress_enabled": self._offline_policy is not None,
+            "time_paused": self._time_paused,
+            "time_speed_multiplier": self._time_speed_multiplier,
+            "real_seconds_per_game_day": (
+                None if self._offline_policy is None
+                else self._offline_policy.real_seconds_per_game_day
+            ),
         }
 
     def metadata(self) -> dict[str, object]:
         with self._lock:
             self._sync_clock_locked()
             return self._metadata_locked()
+
+    def set_time_control(
+        self,
+        *,
+        paused: bool | None = None,
+        speed_multiplier: float | None = None,
+    ) -> RuntimeResult:
+        """Apply player-facing runtime clock controls without bypassing Core time rules."""
+        if paused is None and speed_multiplier is None:
+            raise ValueError("paused or speed_multiplier is required")
+        if paused is not None and not isinstance(paused, bool):
+            raise ValueError("paused must be boolean")
+        if speed_multiplier is not None:
+            if isinstance(speed_multiplier, bool) or not isinstance(speed_multiplier, (int, float)):
+                raise ValueError("speed_multiplier must be a number")
+            speed_multiplier = float(speed_multiplier)
+            if not isfinite(speed_multiplier) or speed_multiplier <= 0.0 or speed_multiplier > 64.0:
+                raise ValueError("speed_multiplier must be greater than 0 and at most 64")
+
+        with self._lock:
+            # Credit elapsed time using the previous control state first, so a
+            # pause/speed change has a clean temporal boundary.
+            self._sync_clock_locked()
+            changed = False
+            if paused is not None and paused != self._time_paused:
+                self._time_paused = paused
+                changed = True
+            if speed_multiplier is not None and speed_multiplier != self._time_speed_multiplier:
+                self._time_speed_multiplier = speed_multiplier
+                changed = True
+            if changed:
+                self._revision += 1
+            return RuntimeResult(self._revision, self._metadata_locked())
 
     def query(self, query: Query) -> RuntimeResult:
         with self._lock:
@@ -115,6 +162,8 @@ class GameRuntime:
         with self._lock:
             self._app = self._factory()
             self._last_clock = self._clock()
+            self._time_paused = False
+            self._time_speed_multiplier = 1.0
             self._revision += 1
             return RuntimeResult(self._revision, self._metadata_locked())
 
@@ -135,7 +184,7 @@ class GameRuntime:
             path = self._slot_path(slot)
             if not path.is_file():
                 raise FileNotFoundError(path)
-            policy = self._offline_policy if apply_offline else None
+            policy = self._offline_policy if apply_offline and not self._time_paused else None
             app, offline_result = load_game(path, self._factory, offline_policy=policy)
             self._app = app
             self._last_clock = self._clock()
