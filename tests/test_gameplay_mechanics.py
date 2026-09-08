@@ -35,6 +35,7 @@ from space_idle.content.base_game import (
     SURFACE_POWER_GRID,
     SOUTH_POLAR_RIDGE,
     TECH_CISLUNAR_LOGISTICS,
+    TECH_INDUSTRIAL_ELECTROLYSIS,
     TECH_LUNAR_PROSPECTING,
     TECH_ORBITAL_OPERATIONS,
     TECH_PROPELLANT_HANDLING,
@@ -79,10 +80,10 @@ def _advance_until_complete(app, project_ids, max_days=2000):
 
 def _establish_cislunar_access(app):
     _complete_research(app, TECH_ORBITAL_OPERATIONS)
+    _complete_research(app, TECH_CISLUNAR_LOGISTICS)
     node = app.execute(PlanBuild(str(LEO), str(ORBITAL_LOGISTICS_NODE), priority=100, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id
     assert node is not None
     _advance_until_complete(app, [node])
-    _complete_research(app, TECH_CISLUNAR_LOGISTICS, LEO)
     route = next(r for r in app.query(GetLogistics()).routes if r.id == "base.route.leo_lunar_orbit")
     assert route.available
 
@@ -212,19 +213,18 @@ def test_launch_vehicle_and_spacecraft_have_distinct_state_transitions():
 def test_lunar_propellant_changes_usable_export_logistics():
     app = build_game_application()
     _establish_survey_and_isru(app)
-    _complete_research(app, TECH_PROPELLANT_HANDLING, POLAR_COLD_TRAP)
+    _complete_research(app, TECH_INDUSTRIAL_ELECTROLYSIS, POLAR_COLD_TRAP)
 
     grid = app.execute(PlanBuild(str(POLAR_COLD_TRAP), str(SURFACE_POWER_GRID), priority=110, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id
-    assert grid
-    _advance_until_complete(app, [grid])
+    cryogenic = app.execute(PlanBuild(str(POLAR_COLD_TRAP), str(CRYOGENIC_STORAGE), priority=100, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id
+    electrolysis = app.execute(PlanBuild(str(POLAR_COLD_TRAP), str(ELECTROLYSIS_PLANT), priority=95, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id
+    assert grid and cryogenic and electrolysis
+    _advance_until_complete(app, [grid, cryogenic, electrolysis])
 
-    projects = [
-        app.execute(PlanBuild(str(POLAR_COLD_TRAP), str(CRYOGENIC_STORAGE), priority=100, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id,
-        app.execute(PlanBuild(str(POLAR_COLD_TRAP), str(ELECTROLYSIS_PLANT), priority=95, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id,
-        app.execute(PlanBuild(str(POLAR_COLD_TRAP), str(PROPELLANT_PLANT), priority=90, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id,
-    ]
-    assert all(projects)
-    _advance_until_complete(app, [x for x in projects if x])
+    _complete_research(app, TECH_PROPELLANT_HANDLING, POLAR_COLD_TRAP)
+    propellant_plant = app.execute(PlanBuild(str(POLAR_COLD_TRAP), str(PROPELLANT_PLANT), priority=90, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id
+    assert propellant_plant
+    _advance_until_complete(app, [propellant_plant])
     app.execute(AdvanceTime(20))
     produced = _inventory_row(app, POLAR_COLD_TRAP, PROPELLANT).amount
     assert produced > 0
@@ -258,7 +258,7 @@ def test_lunar_propellant_changes_usable_export_logistics():
 def test_query_exposes_physical_bottleneck_without_prescribing_a_solution():
     app = build_game_application()
     _establish_survey_and_isru(app)
-    _complete_research(app, TECH_PROPELLANT_HANDLING, POLAR_COLD_TRAP)
+    _complete_research(app, TECH_INDUSTRIAL_ELECTROLYSIS, POLAR_COLD_TRAP)
     electrolysis = app.execute(PlanBuild(str(POLAR_COLD_TRAP), str(ELECTROLYSIS_PLANT), priority=100, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id
     assert electrolysis
     _advance_until_complete(app, [electrolysis])
@@ -326,6 +326,7 @@ def test_manual_pause_resume_controls_preserve_configuration_and_halt_autonomous
         app.execute(AdvanceTime(1))
     else:
         raise AssertionError("active research did not complete")
+    _complete_research(app, TECH_CISLUNAR_LOGISTICS)
 
     # Construction pause stops procurement/construction state advancement and
     # resume continues the same project rather than recreating it.
@@ -420,15 +421,13 @@ def test_vehicle_eligibility_is_derived_from_physical_ascent_capability_not_conc
     assert vehicle.location_id == str(LEO)
 
 
-
-def test_end_to_end_lunar_shipment_does_not_require_leo_as_player_or_inventory_staging_point():
+def test_end_to_end_lunar_shipment_does_not_require_leo_or_research_gate():
     app = build_game_application()
 
-    # Unlock the physical/operational knowledge needed for a lunar delivery,
-    # but deliberately do not build any LEO infrastructure.  The progression
-    # diagram is not a mandatory sequence of player logistics commands.
-    _complete_research(app, TECH_CISLUNAR_LOGISTICS)
-    _complete_research(app, TECH_LUNAR_PROSPECTING)
+    # No technology is completed and no LEO infrastructure is built. If an
+    # external service satisfies the physical operations, the destination is
+    # reachable without using research as a route-unlock switch.
+    assert not app._simulation.technology.completed
     assert not app.query(GetLocation(str(LEO))).facilities
 
     order_id = app.execute(SubmitCargo(
