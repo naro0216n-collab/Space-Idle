@@ -81,7 +81,7 @@ jobs:
             if ($root.StatusCode -ne 200 -or $root.Content -notmatch 'id="app"') { throw 'WebUI root did not load.' }
 
             $world = Invoke-RestMethod 'http://127.0.0.1:8765/api/v1/world' -TimeoutSec 5
-            if ($null -eq $world.day) { throw 'World endpoint did not return simulation state.' }
+            if ($null -eq $world.data.day) { throw 'World endpoint did not return simulation state.' }
 
             $lan = Get-NetIPAddress -AddressFamily IPv4 |
               Where-Object { $_.IPAddress -notlike '127.*' -and $_.AddressState -eq 'Preferred' } |
@@ -110,6 +110,8 @@ jobs:
         env:
           SPACE_IDLE_BROWSER: chromium
           SPACE_IDLE_E2E_TRANSPORT: direct
+          NO_PROXY: 127.0.0.1,localhost
+          no_proxy: 127.0.0.1,localhost
         run: python playwright/acceptance.py
 
   webkit-e2e:
@@ -130,4 +132,6 @@ jobs:
         env:
           SPACE_IDLE_BROWSER: webkit
           SPACE_IDLE_E2E_TRANSPORT: direct
+          NO_PROXY: 127.0.0.1,localhost
+          no_proxy: 127.0.0.1,localhost
         run: python playwright/acceptance.py
