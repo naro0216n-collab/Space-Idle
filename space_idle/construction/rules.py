@@ -1,19 +1,49 @@
 from __future__ import annotations
 
 from ..power import PowerSnapshot
-from ..shared import DefinitionId, SpatialNodeId
+from ..shared import DefinitionId, EntityId, SpatialNodeId
 from ..site import SiteRequirements, evaluate_site_requirements
-from .models import BuildComponentRequirement, BuildProject
+from .models import (
+    BuildComponentRequirement,
+    ConstructionProject,
+    ConstructionRecipe,
+    FacilityUpgradeRecipe,
+    FacilityUpgradeTarget,
+    NewFacilityTarget,
+    ProjectRecipe,
+)
 
 
 class ConstructionRulesMixin:
-    def _selected_local_target(self, project: BuildProject, component: BuildComponentRequirement, day: int) -> tuple[DefinitionId | None, float]:
+    def _target_facility_def_id(self, project: ConstructionProject) -> DefinitionId:
+        target = project.target
+        if isinstance(target, NewFacilityTarget):
+            return target.facility_def_id
+        facility = self.facilities.facilities.get(target.facility_id)
+        if facility is None:
+            raise KeyError(target.facility_id)
+        return facility.definition_id
+
+    def _recipe_for_project(self, project: ConstructionProject) -> ProjectRecipe:
+        target = project.target
+        if isinstance(target, NewFacilityTarget):
+            return self.recipes[target.facility_def_id]
+        facility = self.facilities.facilities.get(target.facility_id)
+        if facility is None:
+            raise KeyError(target.facility_id)
+        return self.upgrade_recipes[(facility.definition_id, target.target_level)]
+
+    def next_upgrade_recipe(self, facility_id: EntityId) -> FacilityUpgradeRecipe | None:
+        facility = self.facilities.facilities[facility_id]
+        return self.upgrade_recipes.get((facility.definition_id, facility.level + 1))
+
+    def _selected_local_target(
+        self, project: ConstructionProject, component: BuildComponentRequirement, day: int
+    ) -> tuple[DefinitionId | None, float]:
         if project.sourcing_policy == "import_now":
             return None, 0.0
         state = project.components[component.component_id]
         eligible = list(component.local_tiers)
-        # Once material has actually been reserved, keep that material choice
-        # stable until the player explicitly replans sourcing.
         if state.reserved_local_resource_id is not None:
             same_resource = [tier for tier in eligible if tier.local_resource_id == state.reserved_local_resource_id]
             if not same_resource:
@@ -26,10 +56,7 @@ class ConstructionRulesMixin:
             if explicit_resource is not None:
                 selected = next(tier for tier in eligible if tier.local_resource_id == explicit_resource)
             else:
-                # Automatic sourcing policies may choose a material, but the
-                # player can override this per component. Prefer stock that can
-                # satisfy the greatest share before considering substitution grade.
-                def score(tier: LocalSubstitutionTier) -> tuple[float, float, str]:
+                def score(tier) -> tuple[float, float, str]:
                     available = self.inventory.available(project.location_id, tier.local_resource_id)
                     stocked_fraction = min(tier.max_fraction, available / component.amount_t) if component.amount_t > 1e-12 else tier.max_fraction
                     return stocked_fraction, tier.max_fraction, str(tier.local_resource_id)
@@ -38,20 +65,14 @@ class ConstructionRulesMixin:
         fraction = min(selected.max_fraction, max(0.0, requested))
         return selected.local_resource_id, component.amount_t * fraction
 
-    def site_failures(
-        self, facility_def_id: DefinitionId, location_id: SpatialNodeId, day: int = 0,
+    def _site_failures_for_recipe(
+        self,
+        recipe: ProjectRecipe,
+        location_id: SpatialNodeId,
+        day: int = 0,
         power: PowerSnapshot | None = None,
-        ):
-        """Evaluate one authoritative site model for construction.
-
-        A facility definition owns its intrinsic installation environment.
-        Construction recipes add project-specific technology/infrastructure
-        prerequisites. Operating environment is evaluated separately after the
-        facility exists, so a currently inoperable facility may still be built
-        in anticipation of later environmental change.
-        """
-        recipe = self.recipes[facility_def_id]
-        definition = self.facilities.definitions[facility_def_id]
+    ):
+        definition = self.facilities.definitions[recipe.facility_def_id]
         snapshot = power if power is not None else self.power.snapshot(location_id, self.facilities, day)
         failures = list(evaluate_site_requirements(
             SiteRequirements(environment=definition.installation_environment),
@@ -60,9 +81,32 @@ class ConstructionRulesMixin:
         failures.extend(evaluate_site_requirements(
             recipe.site_requirements, location_id, day, self.facilities.environment, self.facilities, snapshot,
         ))
-        # A condition may intentionally be shared by operation and construction
-        # prerequisites. Do not expose duplicate blockers to the application.
         return tuple(dict.fromkeys(failures))
+
+    def site_failures(
+        self,
+        facility_def_id: DefinitionId,
+        location_id: SpatialNodeId,
+        day: int = 0,
+        power: PowerSnapshot | None = None,
+    ):
+        return self._site_failures_for_recipe(self.recipes[facility_def_id], location_id, day, power)
+
+    def upgrade_site_failures(
+        self,
+        facility_id: EntityId,
+        target_level: int,
+        day: int = 0,
+        power: PowerSnapshot | None = None,
+    ):
+        facility = self.facilities.facilities[facility_id]
+        recipe = self.upgrade_recipes[(facility.definition_id, target_level)]
+        return self._site_failures_for_recipe(recipe, facility.location_id, day, power)
+
+    def project_site_failures(
+        self, project: ConstructionProject, day: int = 0, power: PowerSnapshot | None = None
+    ):
+        return self._site_failures_for_recipe(self._recipe_for_project(project), project.location_id, day, power)
 
     def construction_capacity_at(self, location_id: SpatialNodeId, power: PowerSnapshot, day: int) -> float:
         capacity = 0.0
@@ -75,4 +119,3 @@ class ConstructionRulesMixin:
         for resource_id, spec in self.construction_resource_providers.items():
             capacity += self.inventory.available(location_id, resource_id) * spec.work_per_t_per_day
         return capacity
-
