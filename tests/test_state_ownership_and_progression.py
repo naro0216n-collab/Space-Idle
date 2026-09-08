@@ -36,7 +36,8 @@ def test_full_research_point_payment_transitions_directly_to_visible_prototype_a
     earth = next(site for site in row.prototype_sites if site.location_id == str(ids.EARTH))
     assert not earth.blockers
 
-    sim.research.fund_prototype(ids.TECH_ORBITAL_OPERATIONS, ids.EARTH, sim.day)
+    sim.research.set_prototype_site(ids.TECH_ORBITAL_OPERATIONS, ids.EARTH, sim.day)
+    sim.research.fund_prototype(ids.TECH_ORBITAL_OPERATIONS, sim.day)
     assert ids.TECH_ORBITAL_OPERATIONS in sim.research.completed
     assert ids.TECH_ORBITAL_OPERATIONS not in sim.research.active
 
