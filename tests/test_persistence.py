@@ -5,14 +5,14 @@ from datetime import datetime, timedelta, timezone
 from space_idle import (
     build_game_application,
     AdvanceTime,
-    CreateLogisticsRule,
+    CreateLogisticsLane,
     DispatchVehicle,
     GetLocation,
     GetResearch,
     GetWorld,
     PauseBuild,
     PauseFacility,
-    PauseLogisticsRule,
+    PauseLogisticsLane,
     PauseResearch,
     PlanBuild,
     ProduceVehicle,
@@ -34,7 +34,6 @@ from space_idle.content.base_game import (
     TECH_CISLUNAR_LOGISTICS,
     TECH_LUNAR_PROSPECTING,
     TECH_ORBITAL_OPERATIONS,
-    WATER,
 )
 from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.simulation import OfflineProgressPolicy
@@ -55,13 +54,14 @@ def _make_nontrivial_state():
     _advance_until_research_startable(app, TECH_ORBITAL_OPERATIONS)
     app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS)))
     project_id = app.execute(PlanBuild(
-        str(LEO), str(ORBITAL_LOGISTICS_NODE), sourcing_policy="import_now", import_source_id=str(EARTH)
+        str(LEO), str(ORBITAL_LOGISTICS_NODE),
+        sourcing_policy="import_now", import_source_id=str(EARTH),
     )).created_id
-    rule_id = app.execute(CreateLogisticsRule(
-        str(EARTH), str(LEO), str(WATER), target_stock_t=1.0, batch_t=1.0
+    lane_id = app.execute(CreateLogisticsLane(
+        str(EARTH), str(LEO), requested_capacity_t_per_day=1.0
     )).created_id
     app.execute(AdvanceTime(1))
-    assert project_id is not None and rule_id is not None
+    assert project_id is not None and lane_id is not None
     lab_id = next(
         row.id for row in app.query(GetLocation(str(EARTH))).facilities
         if row.definition_id == str(EARTH_RESEARCH_LAB)
@@ -74,7 +74,7 @@ def _make_nontrivial_state():
     app.execute(PauseFacility(lab_id))
     app.execute(PauseResearch(str(TECH_ORBITAL_OPERATIONS)))
     app.execute(PauseBuild(project_id))
-    app.execute(PauseLogisticsRule(rule_id))
+    app.execute(PauseLogisticsLane(lane_id))
     tug_state = next(
         state for state in app._simulation.logistics.vehicles.values()
         if state.definition_id == REUSABLE_ORBITAL_CARGO_TUG
