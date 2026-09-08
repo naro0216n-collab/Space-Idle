@@ -224,7 +224,6 @@ class LogisticsProjectorMixin:
 
         sim = self._simulation
         options: list[TransportPathOptionRow] = []
-        seen: set[tuple[tuple[str, ...], tuple[tuple[str, str], ...]]] = set()
         for policy in PathPolicy:
             try:
                 path = sim.logistics.find_path(source_id, destination_id, sim.day, policy)
@@ -233,15 +232,10 @@ class LogisticsProjectorMixin:
             mode_plan = sim.logistics._automatic_mode_plan(path, sim.day, policy)
             if mode_plan is None:
                 continue
-            route_modes = tuple((str(route_id), mode_plan[route_id]) for route_id in path)
-            identity = (tuple(str(route_id) for route_id in path), route_modes)
-            if identity in seen:
-                continue
-            seen.add(identity)
             options.append(TransportPathOptionRow(
                 policy.value,
                 tuple(str(route_id) for route_id in path),
-                route_modes,
+                tuple((str(route_id), mode_plan[route_id]) for route_id in path),
                 sum(sim.logistics.route_mode_transit_days(route_id, mode_plan[route_id], sim.day) for route_id in path),
                 sum(sim.logistics._mode_cost_musd_per_t(route_id, mode_plan[route_id]) for route_id in path),
                 sum(sim.logistics._mode_propellant_t_per_cargo_t(route_id, mode_plan[route_id]) for route_id in path),
