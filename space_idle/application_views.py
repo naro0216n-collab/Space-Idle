@@ -8,8 +8,8 @@ from .app_contracts.catalog_views import (
     CatalogView, LocationSummary, WorldView,
 )
 from .app_contracts.project_views import (
-    ProjectComponentRow, BuildComponentOption, BuildOptionRow, BuildOptionsView,
-    ProjectRow, ProjectsView,
+    ProjectComponentRow, BuildComponentOption, BuildOptionRow, FacilityUpgradeOption,
+    BuildOptionsView, ProjectRow, ProjectsView,
 )
 from .app_contracts.location_views import (
     InventoryRow, StorageRow, FacilityRow, CapabilityRow, IndustryRow,
@@ -41,11 +41,13 @@ __all__ = [
     "OperationCapabilityDefinitionRow", "ResourceDefinitionRow", "FacilityDefinitionRow",
     "ProcessDefinitionRow", "ResearchDefinitionRow", "VehicleDefinitionRow", "RouteDefinitionRow",
     "TransportServiceDefinitionRow", "CelestialBodyDefinitionRow", "LocationDefinitionRow",
-    "CatalogView", "LocationSummary", "WorldView",
-    "ProjectComponentRow", "BuildComponentOption", "BuildOptionRow", "BuildOptionsView", "ProjectRow", "ProjectsView",
-    "InventoryRow", "StorageRow", "FacilityRow", "CapabilityRow", "IndustryRow", "EnvironmentFacetRow", "ExtractionRow", "LocationView",
-    "RouteModeRow", "RouteRow", "VehicleRow", "CargoOrderRow", "LogisticsRuleRow", "TransportMissionRow", "LogisticsView", "TransportPathOptionRow", "TransportPlansView",
-    "LogisticsSummaryView", "RoutesView", "VehiclesView", "CargoOrdersView", "LogisticsRulesView", "TransportMissionsView",
-    "IssueRow", "ResourceFlowRow", "FlowReportView", "BottlenecksView",
-    "ResearchProviderRow", "ResearchRow", "ResearchView", "SurveyRow", "SurveysView", "ContractRow", "ContractsView", "QueryResult",
+    "CatalogView", "LocationSummary", "WorldView", "ProjectComponentRow", "BuildComponentOption",
+    "BuildOptionRow", "FacilityUpgradeOption", "BuildOptionsView", "ProjectRow", "ProjectsView",
+    "InventoryRow", "StorageRow", "FacilityRow", "CapabilityRow", "IndustryRow", "EnvironmentFacetRow",
+    "ExtractionRow", "LocationView", "RouteModeRow", "RouteRow", "VehicleRow", "CargoOrderRow",
+    "LogisticsRuleRow", "TransportMissionRow", "LogisticsView", "TransportPathOptionRow", "TransportPlansView",
+    "LogisticsSummaryView", "RoutesView", "VehiclesView", "CargoOrdersView", "LogisticsRulesView",
+    "TransportMissionsView", "IssueRow", "ResourceFlowRow", "FlowReportView", "BottlenecksView",
+    "ResearchProviderRow", "ResearchRow", "ResearchView", "SurveyRow", "SurveysView", "ContractRow",
+    "ContractsView", "QueryResult",
 ]
