@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, TypeAlias
 
-from ..shared import CargoOrderId, DefinitionId, EntityId, ProjectId, RouteId, SpatialNodeId
+from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId
 from ..site import SiteRequirements
 
 SourcingPolicy = Literal["import_now", "mixed", "local_priority"]
@@ -63,7 +63,7 @@ class FacilityUpgradeRecipe:
         if self.target_level < 2:
             raise ValueError("facility upgrade target level must be at least 2")
         if self.self_deploying:
-            raise ValueError("facility upgrades cannot be self-deploying")
+            raise ValueError("facility upgrades cannot self-deploy")
 
 
 ProjectRecipe: TypeAlias = ConstructionRecipe | FacilityUpgradeRecipe
@@ -101,11 +101,8 @@ class ConstructionResourceProviderSpec:
 
 @dataclass
 class ProjectComponentState:
-    # Substitutes are content-selected alternatives to the standard component.
     reserved_local_t: float = 0.0
     reserved_local_resource_id: DefinitionId | None = None
-    # Standard components already present at the construction site are neither
-    # substitutions nor imports and are tracked separately.
     reserved_primary_t: float = 0.0
     reserved_import_t: float = 0.0
     committed_local_t: float = 0.0
@@ -114,7 +111,6 @@ class ProjectComponentState:
     committed_import_t: float = 0.0
     local_target_t: float = 0.0
     import_committed_t: float | None = None
-    import_order_id: CargoOrderId | None = None
 
 
 @dataclass
@@ -125,8 +121,6 @@ class ConstructionProject:
     priority: int
     sourcing_policy: SourcingPolicy
     import_source_id: SpatialNodeId | None
-    import_path: tuple[RouteId, ...] | None = None
-    import_mode_by_route: dict[RouteId, str] = field(default_factory=dict)
     status: ProjectStatus = ProjectStatus.PLANNED
     procurement_started_day: int | None = None
     construction_done: float = 0.0
