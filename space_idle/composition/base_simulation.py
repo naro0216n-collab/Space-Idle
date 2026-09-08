@@ -30,11 +30,10 @@ from ..content.base_initial_state import configure_initial_inventory
 from ..content.base_power import build_power_specs
 from ..content.base_progression import (
     build_extraction_specs,
-    build_research_definitions,
-    build_research_providers,
     build_survey_providers,
     build_survey_targets,
 )
+from ..content.base_research import build_research_definitions, build_research_providers
 from ..content.base_spatial import build_spatial_model
 from ..content.base_storage import build_storage_provider_specs
 from ..content.base_transport import (
