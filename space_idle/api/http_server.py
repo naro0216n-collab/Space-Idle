@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCargoOrders,
-    GetCatalog, GetContracts, GetFlowReport, GetLocation, GetLogisticsRules,
+    GetCatalog, GetContracts, GetFlowReport, GetLocation, GetLogisticsLanes,
     GetLogisticsSummary, GetProjects, GetResearch, GetRoutes, GetSurveys,
     GetTransportMissions, GetTransportPlans, GetVehicles, GetWorld,
 )
@@ -46,7 +46,6 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, format: str, *args: object) -> None:
-        # Keep the development server useful without emitting request bodies.
         super().log_message(format, *args)
 
     def _cors_headers(self) -> dict[str, str]:
@@ -193,7 +192,11 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             if catalog
             else f'"rev-{result.revision}"'
         )
-        self._result(result, etag=etag, cache_control="private, max-age=3600" if catalog else "no-cache")
+        self._result(
+            result,
+            etag=etag,
+            cache_control="private, max-age=3600" if catalog else "no-cache",
+        )
 
     def _if_match_revision(self) -> int | None:
         value = self.headers.get("If-Match")
@@ -283,13 +286,15 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             self._query_result(GetRoutes(route_id=route_id, include_modes=True))
             return
         if path == "/api/v1/logistics/vehicles":
-            self._query_result(GetVehicles(location_id=_one(params, "location_id"), status=_one(params, "status")))
+            self._query_result(GetVehicles(
+                location_id=_one(params, "location_id"), status=_one(params, "status")
+            ))
             return
         if path == "/api/v1/logistics/orders":
             self._query_result(GetCargoOrders())
             return
-        if path == "/api/v1/logistics/rules":
-            self._query_result(GetLogisticsRules())
+        if path == "/api/v1/logistics/lanes":
+            self._query_result(GetLogisticsLanes())
             return
         if path == "/api/v1/logistics/missions":
             self._query_result(GetTransportMissions())
@@ -336,9 +341,14 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             self._handle_post()
         except RevisionConflict as exc:
             self._error(
-                HTTPStatus.CONFLICT, "revision_conflict", str(exc),
+                HTTPStatus.CONFLICT,
+                "revision_conflict",
+                str(exc),
                 revision=exc.current_revision,
-                details={"expected_revision": exc.expected_revision, "current_revision": exc.current_revision},
+                details={
+                    "expected_revision": exc.expected_revision,
+                    "current_revision": exc.current_revision,
+                },
             )
         except ApplicationError as exc:
             status = HTTPStatus.NOT_FOUND if exc.code == "not_found" else HTTPStatus.BAD_REQUEST
@@ -411,10 +421,15 @@ def _bool(params: dict[str, list[str]], key: str, default: bool) -> bool:
     raise ApiPayloadError(f"{key} must be boolean")
 
 
-def create_server(runtime: GameRuntime, config: ApiServerConfig = ApiServerConfig()) -> SpaceIdleHTTPServer:
+def create_server(
+    runtime: GameRuntime, config: ApiServerConfig = ApiServerConfig()
+) -> SpaceIdleHTTPServer:
     if bool(config.tls_certfile) != bool(config.tls_keyfile):
         raise ValueError("tls_certfile and tls_keyfile must be provided together")
-    server = SpaceIdleHTTPServer((config.host, config.port), SpaceIdleRequestHandler, runtime=runtime, config=config)
+    server = SpaceIdleHTTPServer(
+        (config.host, config.port), SpaceIdleRequestHandler,
+        runtime=runtime, config=config,
+    )
     if config.tls_certfile is not None and config.tls_keyfile is not None:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(config.tls_certfile, config.tls_keyfile)
