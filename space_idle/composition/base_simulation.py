@@ -23,7 +23,7 @@ from ..content.base_construction import (
     build_facility_upgrade_recipes,
     sourcing_wait_days,
 )
-from ..content.base_contracts import build_contract_templates, initial_contract_offers
+from ..content.base_contracts import build_contract_templates
 from ..content.base_facilities import build_facility_definitions, initial_facility_placements
 from ..content.base_industry import build_process_specs
 from ..content.base_initial_state import configure_initial_inventory
@@ -55,7 +55,10 @@ def build_base_simulation() -> Simulation:
     inventory = InventoryBook()
     configure_initial_inventory(inventory)
 
-    account = AccountState(1800.0, 65.0 / 30.0)
+    # Money remains an auxiliary settlement balance for explicitly financial
+    # boundaries such as commercial transport. Base-game growth is not funded
+    # by passive income or automatically offered contracts.
+    account = AccountState(1800.0)
     technology = TechnologyState()
     power = PowerService(build_power_specs(), environment)
 
@@ -93,9 +96,9 @@ def build_base_simulation() -> Simulation:
     survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities)
     extraction = ExtractionService(build_extraction_specs(), survey)
 
+    # Keep the Contract Domain composed and available for future events,
+    # collaboration, or scenario content. Base Game starts with no offers.
     contracts = ContractService(build_contract_templates(), facilities, logistics, power, account)
-    for template_id in initial_contract_offers():
-        contracts.offer(template_id, 0)
 
     sim = Simulation(
         0, account, graph, environment, inventory, facilities, power, storage,
