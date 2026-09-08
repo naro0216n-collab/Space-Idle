@@ -1,9 +1,9 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Space Idle v0.4.5 - iPad Server
+title Space Idle v0.4.4 - iPad Server
 echo ============================================================
-echo  Space Idle v0.4.5 - iPad LAN development server
+echo  Space Idle v0.4.4 - iPad LAN development server
 echo ============================================================
 echo.
 echo PC LAN IPv4 candidates:
