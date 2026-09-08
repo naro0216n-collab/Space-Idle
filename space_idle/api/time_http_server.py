@@ -10,6 +10,7 @@ from ..application_commands import (
     GetContracts,
     GetFlowReport,
     GetLocation,
+    GetLogisticsLanes,
     GetLogisticsSummary,
     GetProjects,
     GetResearch,
@@ -49,6 +50,7 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             "routes": GetRoutes(include_modes=True),
             "vehicles": GetVehicles(),
             "orders": GetCargoOrders(),
+            "lanes": GetLogisticsLanes(),
             "missions": GetTransportMissions(),
         }
         if location_id:
