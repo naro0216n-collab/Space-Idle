@@ -16,12 +16,13 @@ from .app_contracts.location_views import (
     EnvironmentFacetRow, ExtractionRow, LocationView,
 )
 from .app_contracts.logistics_views import (
-    RouteModeRow, RouteRow, VehicleRow, CargoOrderRow, LogisticsRuleRow,
-    TransportMissionRow, LogisticsView, TransportPathOptionRow, TransportPlansView,
+    RouteModeRow, RouteRow, VehicleRow, CargoOrderRow, ResourceDemandRow,
+    LogisticsLaneRow, TransportMissionRow, LogisticsView, TransportPathOptionRow,
+    TransportPlansView,
 )
 from .app_contracts.logistics_reports import (
     LogisticsSummaryView, RoutesView, VehiclesView, CargoOrdersView,
-    LogisticsRulesView, TransportMissionsView,
+    LogisticsLanesView, TransportMissionsView,
 )
 from .app_contracts.progression_views import (
     ResearchProviderRow, ResearchRow, ResearchView, SurveyRow, SurveysView, ContractRow, ContractsView,
@@ -31,7 +32,7 @@ from .app_contracts.ui_reports import IssueRow, ResourceFlowRow, FlowReportView,
 QueryResult: TypeAlias = (
     CatalogView | WorldView | LocationView | FlowReportView | BottlenecksView |
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
-    RoutesView | VehiclesView | CargoOrdersView | LogisticsRulesView |
+    RoutesView | VehiclesView | CargoOrdersView | LogisticsLanesView |
     TransportMissionsView | TransportPlansView | ResearchView | SurveysView |
     ContractsView
 )
@@ -45,9 +46,10 @@ __all__ = [
     "BuildOptionRow", "FacilityUpgradeOption", "BuildOptionsView", "ProjectRow", "ProjectsView",
     "InventoryRow", "StorageRow", "FacilityRow", "CapabilityRow", "IndustryRow", "EnvironmentFacetRow",
     "ExtractionRow", "LocationView", "RouteModeRow", "RouteRow", "VehicleRow", "CargoOrderRow",
-    "LogisticsRuleRow", "TransportMissionRow", "LogisticsView", "TransportPathOptionRow", "TransportPlansView",
-    "LogisticsSummaryView", "RoutesView", "VehiclesView", "CargoOrdersView", "LogisticsRulesView",
-    "TransportMissionsView", "IssueRow", "ResourceFlowRow", "FlowReportView", "BottlenecksView",
+    "ResourceDemandRow", "LogisticsLaneRow", "TransportMissionRow", "LogisticsView",
+    "TransportPathOptionRow", "TransportPlansView", "LogisticsSummaryView", "RoutesView",
+    "VehiclesView", "CargoOrdersView", "LogisticsLanesView", "TransportMissionsView",
+    "IssueRow", "ResourceFlowRow", "FlowReportView", "BottlenecksView",
     "ResearchProviderRow", "ResearchRow", "ResearchView", "SurveyRow", "SurveysView", "ContractRow",
     "ContractsView", "QueryResult",
 ]
