@@ -15,7 +15,7 @@ class ProjectComponentRow:
     committed_primary_t: float
     committed_import_t: float
     import_committed_t: float | None
-    import_order_id: str | None
+    import_demand_id: str | None
     local_fraction_target: float | None
     selected_local_resource_id: str | None
     local_resource_selection_explicit: bool
@@ -71,8 +71,6 @@ class ProjectRow:
     priority: int
     sourcing_policy: str
     import_source_id: str | None
-    import_path: tuple[str, ...] | None
-    import_route_modes: tuple[tuple[str, str], ...]
     construction_done: float
     construction_required: float
     construction_weight: float
