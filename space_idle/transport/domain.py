@@ -3,13 +3,17 @@ from __future__ import annotations
 from typing import Any
 
 from ..domain import DomainExtension, StateCodec
-from ..validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
+from ..validation_support import (
+    ValidationContext,
+    require as _require,
+    validate_site_requirements as _validate_site_requirements,
+)
 from ..shared import CargoOrderId, DefinitionId, EntityId, RouteId, SpatialNodeId
 from .models import (
     CargoOrder,
+    LogisticsLane,
     MissionStatus,
     PathPolicy,
-    RecurringCargoRule,
     TransportMissionState,
     VehicleDisposition,
     VehicleState,
@@ -22,58 +26,90 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
     lg = sim.logistics
     return {
         "counter": lg._counter,
-        "rule_counter": lg._rule_counter,
+        "lane_counter": lg._lane_counter,
         "vehicle_counter": lg._vehicle_counter,
         "mission_counter": lg._mission_counter,
         "vehicles": [
             {
-                "id": str(s.id), "definition_id": str(s.definition_id),
+                "id": str(s.id),
+                "definition_id": str(s.definition_id),
                 "location_id": None if s.location_id is None else str(s.location_id),
-                "status": s.status.value, "available_day": s.available_day,
+                "status": s.status.value,
+                "available_day": s.available_day,
                 "transit_destination_id": None if s.transit_destination_id is None else str(s.transit_destination_id),
                 "propellant_t": s.propellant_t,
             }
-            for s in sorted(lg.vehicles.values(), key=lambda r: str(r.id))
+            for s in sorted(lg.vehicles.values(), key=lambda row: str(row.id))
         ],
         "vehicle_transit": [
-            {"vehicle_id": str(r.vehicle_id), "route_id": str(r.route_id), "arrival_day": r.arrival_day, "used_for_mission": r.used_for_mission}
-            for r in sorted(lg.vehicle_transit, key=lambda r: (r.arrival_day, str(r.vehicle_id)))
-        ],
-        "recurring_rules": [
             {
-                "id": str(r.id), "source_id": str(r.source_id), "destination_id": str(r.destination_id),
-                "resource_id": str(r.resource_id), "target_stock_t": r.target_stock_t, "batch_t": r.batch_t,
-                "priority": r.priority, "path": None if r.path is None else [str(x) for x in r.path],
-                "mode_by_route": {str(route_id): mode_id for route_id, mode_id in sorted(r.mode_by_route.items(), key=lambda row: str(row[0]))},
-                "path_policy": r.path_policy.value, "paused": r.paused,
+                "vehicle_id": str(r.vehicle_id),
+                "route_id": str(r.route_id),
+                "arrival_day": r.arrival_day,
+                "used_for_mission": r.used_for_mission,
             }
-            for r in sorted(lg.recurring_rules.values(), key=lambda row: str(row.id))
+            for r in sorted(lg.vehicle_transit, key=lambda row: (row.arrival_day, str(row.vehicle_id)))
+        ],
+        "lanes": [
+            {
+                "id": str(lane.id),
+                "source_id": str(lane.source_id),
+                "destination_id": str(lane.destination_id),
+                "requested_capacity_t_per_day": lane.requested_capacity_t_per_day,
+                "priority": lane.priority,
+                "path": None if lane.path is None else [str(route_id) for route_id in lane.path],
+                "mode_by_route": {
+                    str(route_id): mode_id
+                    for route_id, mode_id in sorted(lane.mode_by_route.items(), key=lambda row: str(row[0]))
+                },
+                "path_policy": lane.path_policy.value,
+                "paused": lane.paused,
+            }
+            for lane in sorted(lg.lanes.values(), key=lambda row: str(row.id))
         ],
         "orders": [
             {
-                "id": str(o.id), "source_id": str(o.source_id), "destination_id": str(o.destination_id),
-                "resource_id": str(o.resource_id), "amount_t": o.amount_t, "priority": o.priority,
-                "owner_kind": o.owner_kind, "owner_id": str(o.owner_id), "path": [str(x) for x in o.path],
-                "mode_by_route": {str(route_id): mode_id for route_id, mode_id in sorted(o.mode_by_route.items(), key=lambda row: str(row[0]))},
-                "path_policy": o.path_policy.value, "delivered_t": o.delivered_t,
+                "id": str(order.id),
+                "source_id": str(order.source_id),
+                "destination_id": str(order.destination_id),
+                "resource_id": str(order.resource_id),
+                "amount_t": order.amount_t,
+                "priority": order.priority,
+                "owner_kind": order.owner_kind,
+                "owner_id": str(order.owner_id),
+                "path": [str(route_id) for route_id in order.path],
+                "mode_by_route": {
+                    str(route_id): mode_id
+                    for route_id, mode_id in sorted(order.mode_by_route.items(), key=lambda row: str(row[0]))
+                },
+                "path_policy": order.path_policy.value,
+                "delivered_t": order.delivered_t,
+                "created_day": order.created_day,
+                "lane_id": None if order.lane_id is None else str(order.lane_id),
+                "demand_id": None if order.demand_id is None else str(order.demand_id),
             }
-            for o in sorted(lg.orders.values(), key=lambda row: str(row.id))
+            for order in sorted(lg.orders.values(), key=lambda row: str(row.id))
         ],
         "waiting": [
-            {"order_id": str(oid), "leg_index": leg, "amount_t": amount}
-            for (oid, leg), amount in sorted(lg.waiting.items(), key=lambda x: (str(x[0][0]), x[0][1]))
+            {"order_id": str(order_id), "leg_index": leg, "amount_t": amount}
+            for (order_id, leg), amount in sorted(lg.waiting.items(), key=lambda row: (str(row[0][0]), row[0][1]))
         ],
         "missions": [
             {
-                "id": str(m.id), "order_id": str(m.order_id), "leg_index": m.leg_index,
-                "amount_t": m.amount_t, "mode_id": m.mode_id,
-                "departure_day": m.departure_day, "arrival_day": m.arrival_day,
-                "vehicle_id": None if m.vehicle_id is None else str(m.vehicle_id),
-                "vehicle_disposition": m.vehicle_disposition.value, "status": m.status.value,
-                "onboard": m.onboard,
-                "handoff_vehicle_id": None if m.handoff_vehicle_id is None else str(m.handoff_vehicle_id),
+                "id": str(mission.id),
+                "order_id": str(mission.order_id),
+                "leg_index": mission.leg_index,
+                "amount_t": mission.amount_t,
+                "mode_id": mission.mode_id,
+                "departure_day": mission.departure_day,
+                "arrival_day": mission.arrival_day,
+                "vehicle_id": None if mission.vehicle_id is None else str(mission.vehicle_id),
+                "vehicle_disposition": mission.vehicle_disposition.value,
+                "status": mission.status.value,
+                "onboard": mission.onboard,
+                "handoff_vehicle_id": None if mission.handoff_vehicle_id is None else str(mission.handoff_vehicle_id),
             }
-            for m in sorted(lg.missions.values(), key=lambda row: str(row.id))
+            for mission in sorted(lg.missions.values(), key=lambda row: str(row.id))
         ],
     }
 
@@ -81,56 +117,84 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
 def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
     lg = sim.logistics
     lg._counter = int(data["counter"])
-    lg._rule_counter = int(data.get("rule_counter", 0))
+    lg._lane_counter = int(data.get("lane_counter", 0))
     lg._vehicle_counter = int(data.get("vehicle_counter", 0))
     lg._mission_counter = int(data.get("mission_counter", 0))
-    lg.recurring_rules = {
-        EntityId(r["id"]): RecurringCargoRule(
-            EntityId(r["id"]), SpatialNodeId(r["source_id"]), SpatialNodeId(r["destination_id"]),
-            DefinitionId(r["resource_id"]), float(r["target_stock_t"]), float(r["batch_t"]), int(r["priority"]),
-            None if r["path"] is None else tuple(RouteId(x) for x in r["path"]),
-            {RouteId(k): v for k, v in r.get("mode_by_route", {}).items()},
-            PathPolicy(r.get("path_policy", "fastest")), bool(r["paused"]),
+    lg.lanes = {
+        EntityId(row["id"]): LogisticsLane(
+            EntityId(row["id"]),
+            SpatialNodeId(row["source_id"]),
+            SpatialNodeId(row["destination_id"]),
+            float(row["requested_capacity_t_per_day"]),
+            int(row["priority"]),
+            None if row["path"] is None else tuple(RouteId(value) for value in row["path"]),
+            {RouteId(key): value for key, value in row.get("mode_by_route", {}).items()},
+            PathPolicy(row.get("path_policy", "fastest")),
+            bool(row["paused"]),
         )
-        for r in data.get("recurring_rules", [])
+        for row in data.get("lanes", [])
     }
     lg.vehicles = {
-        EntityId(r["id"]): VehicleState(
-            EntityId(r["id"]), DefinitionId(r["definition_id"]),
-            None if r["location_id"] is None else SpatialNodeId(r["location_id"]),
-            VehicleStatus(r["status"]), int(r["available_day"]),
-            None if r.get("transit_destination_id") is None else SpatialNodeId(r["transit_destination_id"]),
-            float(r.get("propellant_t", 0.0)),
+        EntityId(row["id"]): VehicleState(
+            EntityId(row["id"]),
+            DefinitionId(row["definition_id"]),
+            None if row["location_id"] is None else SpatialNodeId(row["location_id"]),
+            VehicleStatus(row["status"]),
+            int(row["available_day"]),
+            None if row.get("transit_destination_id") is None else SpatialNodeId(row["transit_destination_id"]),
+            float(row.get("propellant_t", 0.0)),
         )
-        for r in data.get("vehicles", [])
+        for row in data.get("vehicles", [])
     }
     lg.vehicle_transit = [
-        VehicleTransit(EntityId(r["vehicle_id"]), RouteId(r["route_id"]), int(r["arrival_day"]), bool(r.get("used_for_mission", True)))
-        for r in data.get("vehicle_transit", [])
+        VehicleTransit(
+            EntityId(row["vehicle_id"]),
+            RouteId(row["route_id"]),
+            int(row["arrival_day"]),
+            bool(row.get("used_for_mission", True)),
+        )
+        for row in data.get("vehicle_transit", [])
     ]
     lg.orders = {}
-    for r in data["orders"]:
-        oid = CargoOrderId(r["id"])
-        lg.orders[oid] = CargoOrder(
-            oid, SpatialNodeId(r["source_id"]), SpatialNodeId(r["destination_id"]), DefinitionId(r["resource_id"]),
-            float(r["amount_t"]), int(r["priority"]), r["owner_kind"], EntityId(r["owner_id"]),
-            tuple(RouteId(x) for x in r["path"]), {RouteId(k): v for k, v in r.get("mode_by_route", {}).items()},
-            PathPolicy(r.get("path_policy", "fastest")), float(r["delivered_t"]),
+    for row in data.get("orders", []):
+        order_id = CargoOrderId(row["id"])
+        lg.orders[order_id] = CargoOrder(
+            order_id,
+            SpatialNodeId(row["source_id"]),
+            SpatialNodeId(row["destination_id"]),
+            DefinitionId(row["resource_id"]),
+            float(row["amount_t"]),
+            int(row["priority"]),
+            row["owner_kind"],
+            EntityId(row["owner_id"]),
+            tuple(RouteId(value) for value in row["path"]),
+            {RouteId(key): value for key, value in row.get("mode_by_route", {}).items()},
+            PathPolicy(row.get("path_policy", "fastest")),
+            float(row["delivered_t"]),
+            int(row.get("created_day", 0)),
+            None if row.get("lane_id") is None else EntityId(row["lane_id"]),
+            None if row.get("demand_id") is None else EntityId(row["demand_id"]),
         )
     lg.waiting = {
-        (CargoOrderId(r["order_id"]), int(r["leg_index"])): float(r["amount_t"])
-        for r in data["waiting"]
+        (CargoOrderId(row["order_id"]), int(row["leg_index"])): float(row["amount_t"])
+        for row in data.get("waiting", [])
     }
     lg.missions = {
-        EntityId(r["id"]): TransportMissionState(
-            EntityId(r["id"]), CargoOrderId(r["order_id"]), int(r["leg_index"]), float(r["amount_t"]),
-            str(r["mode_id"]), int(r["departure_day"]), int(r["arrival_day"]),
-            None if r.get("vehicle_id") is None else EntityId(r["vehicle_id"]),
-            VehicleDisposition(r.get("vehicle_disposition", "destination")),
-            MissionStatus(r.get("status", "in_transit")), bool(r.get("onboard", True)),
-            None if r.get("handoff_vehicle_id") is None else EntityId(r["handoff_vehicle_id"]),
+        EntityId(row["id"]): TransportMissionState(
+            EntityId(row["id"]),
+            CargoOrderId(row["order_id"]),
+            int(row["leg_index"]),
+            float(row["amount_t"]),
+            str(row["mode_id"]),
+            int(row["departure_day"]),
+            int(row["arrival_day"]),
+            None if row.get("vehicle_id") is None else EntityId(row["vehicle_id"]),
+            VehicleDisposition(row.get("vehicle_disposition", "destination")),
+            MissionStatus(row.get("status", "in_transit")),
+            bool(row.get("onboard", True)),
+            None if row.get("handoff_vehicle_id") is None else EntityId(row["handoff_vehicle_id"]),
         )
-        for r in data.get("missions", [])
+        for row in data.get("missions", [])
     }
 
 
@@ -145,7 +209,6 @@ def referenced_resources(sim: Any) -> set[DefinitionId]:
     return result
 
 
-
 def _validate_transport_profile(sim: Any, profile, known_capabilities: set[str], label: str) -> None:
     _require(profile.dry_mass_t >= 0, f"negative transport dry mass: {label}")
     _require(profile.payload_t > 0, f"non-positive transport payload: {label}")
@@ -158,19 +221,25 @@ def _validate_transport_profile(sim: Any, profile, known_capabilities: set[str],
     operation_types = [capability.operation_type for capability in profile.operation_capabilities]
     _require(len(operation_types) == len(set(operation_types)), f"duplicate transport operation capability: {label}")
     for capability in profile.operation_capabilities:
-        _require(sim.logistics.operation_registry.supports(capability.operation_type),
-                 f"unregistered transport operation capability: {label}/{capability.operation_type}")
+        _require(
+            sim.logistics.operation_registry.supports(capability.operation_type),
+            f"unregistered transport operation capability: {label}/{capability.operation_type}",
+        )
         for field_name, value in vars(capability).items():
             if field_name == "operation_type":
                 continue
             if isinstance(value, (int, float)):
                 _require(value >= 0, f"negative transport capability {capability.operation_type}.{field_name}: {label}")
-    for req in profile.operation_support_requirements:
-        _require(req.capability_id, f"empty transport operation support capability: {label}")
-        _require(req.capability_id in known_capabilities,
-                 f"transport operation support references unknown capability: {label}/{req.capability_id}")
-        _require(req.operation_type in operation_types,
-                 f"transport operation support has no matching vehicle capability: {label}/{req.operation_type}")
+    for requirement in profile.operation_support_requirements:
+        _require(requirement.capability_id, f"empty transport operation support capability: {label}")
+        _require(
+            requirement.capability_id in known_capabilities,
+            f"transport operation support references unknown capability: {label}/{requirement.capability_id}",
+        )
+        _require(
+            requirement.operation_type in operation_types,
+            f"transport operation support has no matching vehicle capability: {label}/{requirement.operation_type}",
+        )
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
@@ -183,8 +252,10 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(route.transit_days >= 0, f"negative route transit time: {route_id}")
         _require(route.delta_v_km_s >= 0, f"negative route delta-v: {route_id}")
         for operation in route.operations:
-            _require(sim.logistics.operation_registry.supports(operation.operation_type),
-                     f"route references unregistered transport operation: {route_id}/{operation.operation_type}")
+            _require(
+                sim.logistics.operation_registry.supports(operation.operation_type),
+                f"route references unregistered transport operation: {route_id}/{operation.operation_type}",
+            )
         _validate_site_requirements(route.origin_requirements, known_capabilities, f"route:{route_id}:origin")
         _validate_site_requirements(route.destination_requirements, known_capabilities, f"route:{route_id}:destination")
     for service_id, service in sim.logistics.external_services.items():
@@ -200,18 +271,16 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _validate_transport_profile(sim, vehicle.performance, known_capabilities, f"vehicle:{vehicle_id}")
         _require(vehicle.maintenance.turnaround_days >= 0, f"negative vehicle turnaround: {vehicle_id}")
         _require(vehicle.maintenance.cost_musd >= 0, f"negative vehicle turnaround cost: {vehicle_id}")
-        _require(all(amount >= 0 for _resource_id, amount in vehicle.maintenance.resources), f"negative vehicle turnaround resource: {vehicle_id}")
+        _require(all(amount >= 0 for _resource, amount in vehicle.maintenance.resources), f"negative vehicle turnaround resource: {vehicle_id}")
         _require(vehicle.production.days >= 0, f"negative vehicle production time: {vehicle_id}")
         _require(vehicle.production.cost_musd >= 0, f"negative vehicle production cost: {vehicle_id}")
-        _require(all(amount >= 0 for _resource_id, amount in vehicle.production.resources), f"negative vehicle production resource: {vehicle_id}")
+        _require(all(amount >= 0 for _resource, amount in vehicle.production.resources), f"negative vehicle production resource: {vehicle_id}")
         _require(vehicle.economics.operating_cost_musd_per_mission >= 0, f"negative vehicle mission cost: {vehicle_id}")
         _require(vehicle.economics.operating_cost_musd_per_cargo_t >= 0, f"negative vehicle cargo cost: {vehicle_id}")
         if vehicle.maintenance.capability_id is not None:
-            _require(vehicle.maintenance.capability_id in known_capabilities,
-                     f"vehicle turnaround references unknown capability: {vehicle_id}/{vehicle.maintenance.capability_id}")
+            _require(vehicle.maintenance.capability_id in known_capabilities, f"vehicle turnaround references unknown capability: {vehicle_id}/{vehicle.maintenance.capability_id}")
         if vehicle.production.capability_id is not None:
-            _require(vehicle.production.capability_id in known_capabilities,
-                     f"vehicle production references unknown capability: {vehicle_id}/{vehicle.production.capability_id}")
+            _require(vehicle.production.capability_id in known_capabilities, f"vehicle production references unknown capability: {vehicle_id}/{vehicle.production.capability_id}")
     for route_id in sim.logistics.routes:
         external_service_exists = any(
             service.capacity_t_per_day > 1e-12 and not sim.logistics.service_route_failures(route_id, service.id, 0)
@@ -221,14 +290,14 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             not sim.logistics.vehicle_route_physical_failures(route_id, vehicle_id, 0)
             for vehicle_id in sim.logistics.vehicle_defs
         )
-        _require(external_service_exists or compatible_vehicle_exists,
-                 f"route has no physically compatible transport mode: {route_id}")
+        _require(external_service_exists or compatible_vehicle_exists, f"route has no physically compatible transport mode: {route_id}")
 
 
 def validate_runtime(sim: Any) -> None:
-    for vehicle_id, state in sim.logistics.vehicles.items():
+    lg = sim.logistics
+    for vehicle_id, state in lg.vehicles.items():
         _require(vehicle_id == state.id, f"vehicle state key mismatch: {vehicle_id}")
-        _require(state.definition_id in sim.logistics.vehicle_defs, f"vehicle references unknown definition: {vehicle_id}")
+        _require(state.definition_id in lg.vehicle_defs, f"vehicle references unknown definition: {vehicle_id}")
         _require(isinstance(state.status, VehicleStatus), f"invalid vehicle status: {vehicle_id}/{state.status}")
         if state.status is VehicleStatus.TRANSIT:
             _require(state.location_id is None, f"transit vehicle still has a location: {vehicle_id}")
@@ -239,76 +308,55 @@ def validate_runtime(sim: Any) -> None:
         else:
             _require(state.location_id in sim.graph.nodes, f"vehicle references unknown location: {vehicle_id}")
             _require(state.transit_destination_id is None, f"stationary vehicle retains transit destination: {vehicle_id}")
-        definition = sim.logistics.vehicle_defs[state.definition_id]
+        definition = lg.vehicle_defs[state.definition_id]
         _require(state.propellant_t >= -1e-9, f"negative onboard propellant: {vehicle_id}")
-        _require(state.propellant_t <= definition.performance.propellant_capacity_t + 1e-9,
-                 f"onboard propellant exceeds tank capacity: {vehicle_id}")
-    for movement in sim.logistics.vehicle_transit:
-        _require(movement.vehicle_id in sim.logistics.vehicles, f"vehicle transit references unknown vehicle: {movement.vehicle_id}")
-        _require(movement.route_id in sim.logistics.routes, f"vehicle transit references unknown route: {movement.route_id}")
-    for rule_id, rule in sim.logistics.recurring_rules.items():
-        _require(rule_id == rule.id, f"logistics rule key mismatch: {rule_id}")
-        _require(rule.source_id in sim.graph.nodes and rule.destination_id in sim.graph.nodes, f"logistics rule references unknown location: {rule_id}")
-        _require(rule.source_id != rule.destination_id, f"logistics rule has identical endpoints: {rule_id}")
-        _require(rule.target_stock_t >= 0 and rule.batch_t > 0, f"invalid logistics rule quantities: {rule_id}")
-        if rule.path is not None:
-            sim.logistics.validate_path_structure(rule.source_id, rule.destination_id, rule.path)
-            sim.logistics.validate_mode_selection(rule.path, rule.mode_by_route)
+        _require(state.propellant_t <= definition.performance.propellant_capacity_t + 1e-9, f"onboard propellant exceeds tank capacity: {vehicle_id}")
+    for movement in lg.vehicle_transit:
+        _require(movement.vehicle_id in lg.vehicles, f"vehicle transit references unknown vehicle: {movement.vehicle_id}")
+        _require(movement.route_id in lg.routes, f"vehicle transit references unknown route: {movement.route_id}")
+    for lane_id, lane in lg.lanes.items():
+        _require(lane_id == lane.id, f"lane key mismatch: {lane_id}")
+        _require(lane.source_id in sim.graph.nodes and lane.destination_id in sim.graph.nodes, f"lane references unknown endpoint: {lane_id}")
+        _require(lane.source_id != lane.destination_id, f"lane loops to same location: {lane_id}")
+        _require(lane.requested_capacity_t_per_day > 0, f"lane has non-positive requested capacity: {lane_id}")
+        if lane.path is None:
+            _require(not lane.mode_by_route, f"automatic lane retains explicit modes: {lane_id}")
         else:
-            _require(not rule.mode_by_route, f"dynamic-path logistics rule retains explicit route modes: {rule_id}")
-    for (order_id, leg_index), amount in sim.logistics.waiting.items():
-        _require(order_id in sim.logistics.orders, f"waiting cargo references unknown order: {order_id}")
-        order = sim.logistics.orders[order_id]
-        _require(0 <= leg_index < len(order.path), f"waiting cargo has invalid leg: {order_id}/{leg_index}")
-        _require(amount >= -1e-9, f"negative waiting cargo: {order_id}/{leg_index}")
-    for mission_id, mission in sim.logistics.missions.items():
-        _require(mission_id == mission.id, f"transport mission key mismatch: {mission_id}")
-        _require(isinstance(mission.status, MissionStatus), f"invalid transport mission status: {mission_id}/{mission.status}")
-        _require(mission.order_id in sim.logistics.orders, f"transport mission references unknown order: {mission.order_id}")
-        order = sim.logistics.orders[mission.order_id]
-        _require(0 <= mission.leg_index < len(order.path), f"transport mission has invalid leg: {mission.order_id}/{mission.leg_index}")
-        _require(mission.amount_t > 0, f"non-positive transport mission: {mission.order_id}")
-        _require(DefinitionId(mission.mode_id) in sim.logistics.vehicle_defs or sim.logistics._service_for_mode(mission.mode_id) is not None,
-                 f"transport mission has invalid transport mode: {mission.order_id}/{mission.mode_id}")
-        if mission.vehicle_id is not None:
-            _require(mission.vehicle_id in sim.logistics.vehicles, f"transport mission references unknown vehicle: {mission.order_id}/{mission.vehicle_id}")
-        if mission.handoff_vehicle_id is not None:
-            _require(mission.handoff_vehicle_id in sim.logistics.vehicles,
-                     f"transport mission references unknown handoff vehicle: {mission.order_id}/{mission.handoff_vehicle_id}")
-            _require(mission.handoff_vehicle_id != mission.vehicle_id,
-                     f"transport mission handoff vehicle equals carrier: {mission.order_id}/{mission.handoff_vehicle_id}")
-            handoff_state = sim.logistics.vehicles[mission.handoff_vehicle_id]
-            _require(handoff_state.status is VehicleStatus.TRANSIT,
-                     f"handoff vehicle is not in transit with mission: {mission.order_id}/{mission.handoff_vehicle_id}")
-            _require(handoff_state.location_id is None,
-                     f"handoff vehicle retains a location while carried: {mission.order_id}/{mission.handoff_vehicle_id}")
-    expected_external_occupancy: dict[tuple[EntityId, object, object], float] = {}
-    for (order_id, leg_index), amount in sim.logistics.waiting.items():
-        order = sim.logistics.orders[order_id]
-        route = sim.logistics.routes[order.path[leg_index]]
-        owner = sim.logistics._waiting_owner(order_id, leg_index)
-        key = (owner, route.origin_id, order.resource_id)
-        expected_external_occupancy[key] = expected_external_occupancy.get(key, 0.0) + amount
-    actual_external_occupancy = {key: amount for key, amount in sim.inventory.external_occupancy.items() if amount > 1e-12}
-    _require(set(actual_external_occupancy) == set(expected_external_occupancy),
-             "logistics staging storage occupancy keys do not match waiting cargo")
-    for key, expected in expected_external_occupancy.items():
-        _require(abs(actual_external_occupancy.get(key, 0.0) - expected) <= 1e-7,
-                 f"logistics staging storage occupancy mismatch: {key}")
-    for order_id, order in sim.logistics.orders.items():
+            lg.validate_path_structure(lane.source_id, lane.destination_id, lane.path)
+            lg.validate_mode_selection(lane.path, lane.mode_by_route)
+    for order_id, order in lg.orders.items():
         _require(order_id == order.id, f"cargo order key mismatch: {order_id}")
-        _require(order.source_id in sim.graph.nodes and order.destination_id in sim.graph.nodes, f"cargo order references unknown location: {order_id}")
-        _require(order.source_id != order.destination_id, f"cargo order has identical endpoints: {order_id}")
-        _require(order.amount_t > 0, f"non-positive cargo order: {order_id}")
-        _require(-1e-9 <= order.delivered_t <= order.amount_t + 1e-8, f"invalid delivered cargo: {order_id}")
-        sim.logistics.validate_path_structure(order.source_id, order.destination_id, order.path)
-        sim.logistics.validate_mode_selection(order.path, order.mode_by_route)
-        waiting = sum(amount for (oid, _leg), amount in sim.logistics.waiting.items() if oid == order_id)
-        transit = sum(batch.amount_t for batch in sim.logistics.in_transit if batch.order_id == order_id)
-        _require(waiting >= -1e-9 and transit >= -1e-9, f"negative cargo bucket: {order_id}")
-        _require(abs(order.delivered_t + waiting + transit - order.amount_t) <= 1e-7,
-                 f"cargo mass accounting mismatch: {order_id}")
+        _require(order.source_id in sim.graph.nodes and order.destination_id in sim.graph.nodes, f"cargo order references unknown endpoint: {order_id}")
+        _require(order.amount_t > 0, f"cargo order has non-positive amount: {order_id}")
+        _require(-1e-9 <= order.delivered_t <= order.amount_t + 1e-9, f"invalid cargo delivery progress: {order_id}")
+        _require(order.created_day >= 0, f"cargo order has negative creation day: {order_id}")
+        if order.lane_id is not None:
+            _require(order.lane_id in lg.lanes, f"cargo order references unknown lane: {order_id}/{order.lane_id}")
+            _require(order.demand_id is not None, f"lane cargo order lacks demand id: {order_id}")
+        lg.validate_path_structure(order.source_id, order.destination_id, order.path)
+        lg.validate_mode_selection(order.path, order.mode_by_route)
+    for (order_id, leg_index), amount in lg.waiting.items():
+        _require(order_id in lg.orders, f"waiting cargo references unknown order: {order_id}")
+        _require(0 <= leg_index < len(lg.orders[order_id].path), f"waiting cargo has invalid leg: {order_id}/{leg_index}")
+        _require(amount >= -1e-9, f"negative waiting cargo: {order_id}/{leg_index}")
+    for mission_id, mission in lg.missions.items():
+        _require(mission_id == mission.id, f"mission key mismatch: {mission_id}")
+        _require(mission.order_id in lg.orders, f"mission references unknown order: {mission_id}")
+        order = lg.orders[mission.order_id]
+        _require(0 <= mission.leg_index < len(order.path), f"mission has invalid leg index: {mission_id}")
+        _require(mission.amount_t > 0, f"mission has non-positive mass: {mission_id}")
+        _require(mission.arrival_day >= mission.departure_day, f"mission arrives before departure: {mission_id}")
+        if mission.vehicle_id is not None:
+            _require(mission.vehicle_id in lg.vehicles, f"mission references unknown vehicle: {mission_id}")
+        if mission.handoff_vehicle_id is not None:
+            _require(mission.handoff_vehicle_id in lg.vehicles, f"mission references unknown handoff vehicle: {mission_id}")
 
 
 STATE_CODEC = StateCodec("logistics", capture_logistics, restore_logistics)
-DOMAIN_EXTENSION = DomainExtension("transport", state_codec=STATE_CODEC, configuration_validator=validate_configuration, runtime_validator=validate_runtime, referenced_resources=referenced_resources)
+DOMAIN_EXTENSION = DomainExtension(
+    "logistics",
+    state_codec=STATE_CODEC,
+    configuration_validator=validate_configuration,
+    runtime_validator=validate_runtime,
+    referenced_resources=referenced_resources,
+)
