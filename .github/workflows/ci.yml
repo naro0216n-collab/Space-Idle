@@ -111,7 +111,6 @@ jobs:
           SPACE_IDLE_BROWSER: chromium
           SPACE_IDLE_E2E_TRANSPORT: direct
           NO_PROXY: 127.0.0.1,localhost
-          no_proxy: 127.0.0.1,localhost
         run: python playwright/acceptance.py
 
   webkit-e2e:
@@ -133,5 +132,4 @@ jobs:
           SPACE_IDLE_BROWSER: webkit
           SPACE_IDLE_E2E_TRANSPORT: direct
           NO_PROXY: 127.0.0.1,localhost
-          no_proxy: 127.0.0.1,localhost
         run: python playwright/acceptance.py
