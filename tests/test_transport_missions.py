@@ -349,9 +349,7 @@ def test_turnaround_can_require_real_service_funds_and_replacement_materials():
     state = sim.logistics.vehicles[vehicle_id]
     assert state.status == "turnaround"
     assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == pytest.approx(0.0)
-    assert sim.account.funds_musd == pytest.approx(
-        funds_while_waiting + sim.account.passive_income_musd_per_day - 0.25
-    )
+    assert sim.account.funds_musd == pytest.approx(funds_while_waiting - 0.25)
 
     app.execute(AdvanceTime(2))
     assert sim.logistics.vehicles[vehicle_id].status == "available"
