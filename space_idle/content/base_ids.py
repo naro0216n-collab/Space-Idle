@@ -34,6 +34,12 @@ NEARSIDE_MARE = SpatialNodeId("base.node.nearside_mare")
 # Facilities. IDs and display names describe function, not placement.
 # ---------------------------------------------------------------------------
 EARTH_RESEARCH_LAB = DefinitionId("base.facility.research_laboratory")
+EARTH_OBSERVATION_SATELLITE = DefinitionId("base.facility.earth_observation_satellite")
+MICROGRAVITY_EXPERIMENT_PLATFORM = DefinitionId("base.facility.microgravity_experiment_platform")
+CREWED_ORBITAL_LABORATORY = DefinitionId("base.facility.crewed_orbital_laboratory")
+ROBOTIC_GEOLOGY_STATION = DefinitionId("base.facility.robotic_geology_station")
+SAMPLE_ANALYSIS_LABORATORY = DefinitionId("base.facility.sample_analysis_laboratory")
+VACUUM_REGOLITH_PROCESS_LABORATORY = DefinitionId("base.facility.vacuum_regolith_process_laboratory")
 GRID_POWER_SUPPLY = DefinitionId("base.facility.grid_power_supply")
 ORBITAL_LOGISTICS_NODE = DefinitionId("base.facility.orbital_logistics_node")
 EARTH_LAUNCH_SUPPORT = DefinitionId("base.facility.earth_launch_support")
@@ -67,12 +73,17 @@ PROCESS_METALLURGY = DefinitionId("base.process.metallurgy")
 PROCESS_BASIC_MACHINING = DefinitionId("base.process.basic_machining")
 PROCESS_HEAVY_EQUIPMENT = DefinitionId("base.process.heavy_equipment_assembly")
 
-# Research IDs identify engineering/science subjects. Several legacy ID strings
-# remain stable internally during the current content iteration, but each
-# research definition has one concrete technical scope and a bounded outcome.
+# Research IDs identify concrete engineering/science subjects. Progression is
+# based on technical difficulty and experimental infrastructure rather than a
+# location-labelled technology tier.
 TECH_ORBITAL_OPERATIONS = DefinitionId("base.tech.orbital_operations")
+TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS = DefinitionId("base.tech.microgravity_experiment_systems")
 TECH_CISLUNAR_LOGISTICS = DefinitionId("base.tech.cislunar_logistics")
+TECH_CREWED_ORBITAL_RESEARCH = DefinitionId("base.tech.crewed_orbital_research_systems")
 TECH_LUNAR_PROSPECTING = DefinitionId("base.tech.lunar_prospecting")
+TECH_ROBOTIC_FIELD_GEOLOGY = DefinitionId("base.tech.robotic_field_geology")
+TECH_SAMPLE_ANALYSIS_SYSTEMS = DefinitionId("base.tech.surface_sample_analysis")
+TECH_VACUUM_REGOLITH_PROCESS_RESEARCH = DefinitionId("base.tech.vacuum_regolith_process_control")
 TECH_VOLATILE_ISRU = DefinitionId("base.tech.volatile_isru")
 TECH_REGOLITH_EXCAVATION = DefinitionId("base.tech.regolith_excavation_granulometry")
 TECH_LUNAR_MATERIALS = DefinitionId("base.tech.lunar_materials")
