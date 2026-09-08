@@ -196,7 +196,6 @@
 
   async function loadUiSnapshot({preserveInteraction = true} = {}) {
     if (state.syncInFlight) return state.syncInFlight;
-    const interaction = preserveInteraction ? captureInteraction() : null;
     state.syncInFlight = (async () => {
       const suffix = state.locationId ? `?location_id=${encodeURIComponent(state.locationId)}` : '';
       const data = await api(`/api/v1/ui-state${suffix}`);
@@ -208,6 +207,7 @@
           applyUiSnapshot(nested);
         }
       }
+      const interaction = preserveInteraction ? captureInteraction() : null;
       renderAll();
       restoreInteraction(interaction);
       setConnection('ok', 'PC Server');
