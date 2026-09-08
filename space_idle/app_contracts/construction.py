@@ -62,13 +62,6 @@ class SetProjectImportSource:
 
 
 @dataclass(frozen=True)
-class SetProjectImportTransport:
-    project_id: str
-    path: tuple[str, ...] | None = None
-    route_modes: tuple[tuple[str, str], ...] = ()
-
-
-@dataclass(frozen=True)
 class SetProjectLocalFraction:
     project_id: str
     component_id: str
