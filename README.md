@@ -1,4 +1,4 @@
-# 宇宙開発Idle Simulation / WebUI v0.4.4
+# 宇宙開発Idle Simulation / WebUI v0.4.5
 
 ゲーム性評価段階のSimulation Coreです。現段階では旧仕様・旧セーブとの後方互換を要件とせず、ゲームモデルとして妥当な構造への破壊的変更を優先します。数値は評価用の仮値であり、テストも個別の価格・所要日数・生産量を固定することを目的にしません。
 
@@ -121,7 +121,7 @@ Simulationの日次処理順はゲームルールそのものなので、汎用�
 
 ## UI向けDefinition / Report
 
-`v0.4.4` では開発用WebUIをApplication境界だけで実装できるよう、UI契約を拡張しています。Core/Domain内部オブジェクトをUIへ公開しません。
+`v0.4.5` では開発用WebUIをApplication境界だけで実装できるよう、UI契約を拡張しています。Core/Domain内部オブジェクトをUIへ公開しません。
 
 `GetCatalog` は従来のResource / Facility / Vehicle / CelestialBody / Locationに加え、以下の静的Definitionを返します。
 
@@ -142,7 +142,7 @@ Simulationの日次処理順はゲームルールそのものなので、汎用�
 
 ## 開発用WebUI（iPad）
 
-`v0.4.4` はAPI Server自身がWebUIを同一Originで配信します。PC側でServerを一つ起動し、同一LAN上のiPad SafariからPCのIPv4アドレスを開きます。API専用URLではなくルートURLを使用します。
+`v0.4.5` はAPI Server自身がWebUIを同一Originで配信します。PC側でServerを一つ起動し、同一LAN上のiPad SafariからPCのIPv4アドレスを開きます。API専用URLではなくルートURLを使用します。
 
 ```text
 http://<PCのLAN IPv4>:8765/
@@ -167,7 +167,7 @@ Safariのhoverを前提にせず、主要操作は44px以上のタッチ領域�
 
 ## Development API Server
 
-`v0.4.4` では `GameRuntime` とHTTP API Adapterを追加しています。HTTP層はゲームルールを持たず、JSONをApplication Command/Queryへ変換するだけです。`GameRuntime` が一つの正準 `GameApplication` セッションを所有し、複数HTTP requestからのCommand / Save / Load / New Gameをロック下で直列化します。
+`v0.4.5` では `GameRuntime` とHTTP API Adapterを追加しています。HTTP層はゲームルールを持たず、JSONをApplication Command/Queryへ変換するだけです。`GameRuntime` が一つの正準 `GameApplication` セッションを所有し、複数HTTP requestからのCommand / Save / Load / New Gameをロック下で直列化します。
 
 起動例：
 
