@@ -9,7 +9,7 @@ from .application import GameApplication
 from .simulation import OfflineProgressPolicy, OfflineProgressResult, Simulation
 from .validation import ConfigurationError, validate_runtime_state
 
-SAVE_SCHEMA_VERSION = 18
+SAVE_SCHEMA_VERSION = 19
 
 
 class SaveFormatError(ValueError):
@@ -24,7 +24,7 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 def capture_state(sim: Simulation) -> dict[str, Any]:
-    state: dict[str, Any] = {"day": sim.day, "pending_offline_game_days": sim.pending_offline_game_days, "account": {"funds_musd": sim.account.funds_musd, "passive_income_musd_per_day": sim.account.passive_income_musd_per_day}}
+    state: dict[str, Any] = {"day": sim.day, "pending_offline_game_days": sim.pending_offline_game_days, "account": {"funds_musd": sim.account.funds_musd}}
     for extension in sim.domain_extensions:
         codec = extension.state_codec
         if codec is not None:
@@ -35,7 +35,6 @@ def restore_state(sim: Simulation, state: dict[str, Any]) -> None:
     sim.day = int(state["day"])
     sim.pending_offline_game_days = float(state.get("pending_offline_game_days", 0.0))
     sim.account.funds_musd = float(state["account"]["funds_musd"])
-    sim.account.passive_income_musd_per_day = float(state["account"]["passive_income_musd_per_day"])
     for extension in sim.domain_extensions:
         codec = extension.state_codec
         if codec is not None:
