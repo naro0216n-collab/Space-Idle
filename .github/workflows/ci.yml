@@ -114,7 +114,9 @@ jobs:
           SPACE_IDLE_BROWSER: chromium
           SPACE_IDLE_E2E_TRANSPORT: direct
           NO_PROXY: 127.0.0.1,localhost
-        run: python playwright/acceptance.py
+        run: |
+          python playwright/acceptance.py
+          python playwright/interaction_continuity.py
 
   webkit-e2e:
     name: macOS WebKit / direct HTTP E2E
@@ -135,4 +137,6 @@ jobs:
           SPACE_IDLE_BROWSER: webkit
           SPACE_IDLE_E2E_TRANSPORT: direct
           NO_PROXY: 127.0.0.1,localhost
-        run: python playwright/acceptance.py
+        run: |
+          python playwright/acceptance.py
+          python playwright/interaction_continuity.py
