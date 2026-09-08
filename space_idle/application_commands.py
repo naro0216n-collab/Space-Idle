@@ -4,11 +4,11 @@ from .app_contracts.common import ApplicationError, CommandResult
 from .app_contracts.construction import (
     PlanBuild, PlanFacilityUpgrade, CancelBuild, PauseBuild, ResumeBuild, SetProjectPriority,
     SetProjectSourcingPolicy, SetConstructionWeight, SetProjectImportSource,
-    SetProjectImportTransport, SetProjectLocalFraction, SetProjectLocalMaterial,
+    SetProjectLocalFraction, SetProjectLocalMaterial,
 )
 from .app_contracts.operations import PauseFacility, ResumeFacility, SetFacilityProcess, SetPowerPriority, AdvanceTime
 from .app_contracts.progression import (
-    StartResearch, PauseResearch, ResumeResearch,
+    StartResearch, PauseResearch, ResumeResearch, SetResearchPrototypeSite,
     FundResearchPrototype, SetResearchDemonstrationSite, StartSurvey,
     PauseSurvey, ResumeSurvey, SetSurveyAllocation,
 )
@@ -26,9 +26,9 @@ from .app_contracts.queries import (
 Command: TypeAlias = (
     PlanBuild | PlanFacilityUpgrade | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
     SetProjectSourcingPolicy | SetConstructionWeight | SetProjectImportSource |
-    SetProjectImportTransport | SetProjectLocalFraction | SetProjectLocalMaterial |
+    SetProjectLocalFraction | SetProjectLocalMaterial |
     PauseFacility | ResumeFacility | SetFacilityProcess | SetPowerPriority |
-    StartResearch | PauseResearch | ResumeResearch |
+    StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
     FundResearchPrototype | SetResearchDemonstrationSite | StartSurvey | PauseSurvey |
     ResumeSurvey | SetSurveyAllocation | DispatchVehicle | RefuelVehicle | ProduceVehicle |
     SubmitCargo | CreateLogisticsLane | PauseLogisticsLane | ResumeLogisticsLane |
