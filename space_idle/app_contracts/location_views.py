@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from .project_views import ProjectRow
+from .project_views import FacilityUpgradeOption, ProjectRow
+
 
 @dataclass(frozen=True)
 class InventoryRow:
@@ -15,6 +16,7 @@ class InventoryRow:
     service_capacity: float | None
     free_capacity: float | None
 
+
 @dataclass(frozen=True)
 class StorageRow:
     storage_class: str
@@ -24,6 +26,7 @@ class StorageRow:
     service_capacity_t: float
     free_service_t: float
     unserviced_occupied_t: float
+
 
 @dataclass(frozen=True)
 class FacilityRow:
@@ -37,6 +40,11 @@ class FacilityRow:
     power_priority: int | None
     capabilities: tuple[tuple[str, float], ...]
     power_utilization: float
+    research_tier: int | None
+    research_generation_points_per_day: float
+    research_storage_capacity_points: float
+    next_upgrade: FacilityUpgradeOption | None
+
 
 @dataclass(frozen=True)
 class CapabilityRow:
@@ -44,6 +52,7 @@ class CapabilityRow:
     infrastructure_capacity: float
     active_capacity: float
     available_capacity: float
+
 
 @dataclass(frozen=True)
 class IndustryRow:
@@ -58,10 +67,12 @@ class IndustryRow:
     input_rates_per_day: tuple[tuple[str, float], ...]
     output_rates_per_day: tuple[tuple[str, float], ...]
 
+
 @dataclass(frozen=True)
 class EnvironmentFacetRow:
     key: str
     values: tuple[tuple[str, object], ...]
+
 
 @dataclass(frozen=True)
 class ExtractionRow:
@@ -73,6 +84,7 @@ class ExtractionRow:
     scale: float
     output_t_per_day: float
     limiting_factors: tuple[str, ...]
+
 
 @dataclass(frozen=True)
 class LocationView:
