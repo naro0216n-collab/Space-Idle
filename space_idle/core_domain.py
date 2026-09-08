@@ -12,7 +12,6 @@ def validate_core_configuration(sim: Any, ctx: ValidationContext) -> None:
     _require(sim.facilities.environment is sim.environment, "facility/environment resolver mismatch")
     _require(sim.power.environment is sim.environment, "power/environment resolver mismatch")
     _require(sim.account.funds_musd >= 0, "negative initial account funds")
-    _require(sim.account.passive_income_musd_per_day >= 0, "negative passive income")
     for node_id, node in nodes.items():
         _require(node_id == node.id, f"spatial node key mismatch: {node_id}")
         _require(node.parent_id is None or node.parent_id in nodes, f"spatial node has unknown parent: {node_id}")
