@@ -20,6 +20,7 @@ from ..content.base_construction import (
     build_construction_providers,
     build_construction_recipes,
     build_construction_resource_providers,
+    build_facility_upgrade_recipes,
     sourcing_wait_days,
 )
 from ..content.base_contracts import build_contract_templates, initial_contract_offers
@@ -72,6 +73,7 @@ def build_base_simulation() -> Simulation:
 
     projects = ProjectService(
         recipes=build_construction_recipes(),
+        upgrade_recipes=build_facility_upgrade_recipes(),
         construction_providers=build_construction_providers(),
         inventory=inventory,
         facilities=facilities,
