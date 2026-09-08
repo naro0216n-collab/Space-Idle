@@ -101,7 +101,6 @@ class RouteDef:
     transit_days: int
     operations: tuple[TransportOperationRequirement, ...]
     display_name: str | None = None
-    required_technologies: frozenset[DefinitionId] = frozenset()
     origin_requirements: SiteRequirements = SiteRequirements()
     destination_requirements: SiteRequirements = SiteRequirements()
 

@@ -176,14 +176,12 @@ def _validate_transport_profile(sim: Any, profile, known_capabilities: set[str],
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     nodes = ctx.nodes
     known_capabilities = ctx.known_capabilities
-    known_technologies = ctx.known_technologies
     for route_id, route in sim.logistics.routes.items():
         _require(route_id == route.id, f"route definition key mismatch: {route_id}")
         _require(route.origin_id in nodes and route.destination_id in nodes, f"route references unknown location: {route_id}")
         _require(route.origin_id != route.destination_id, f"route loops to same location: {route_id}")
         _require(route.transit_days >= 0, f"negative route transit time: {route_id}")
         _require(route.delta_v_km_s >= 0, f"negative route delta-v: {route_id}")
-        _require(route.required_technologies.issubset(known_technologies), f"route references unknown technology: {route_id}")
         for operation in route.operations:
             _require(sim.logistics.operation_registry.supports(operation.operation_type),
                      f"route references unregistered transport operation: {route_id}/{operation.operation_type}")

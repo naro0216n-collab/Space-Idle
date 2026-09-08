@@ -33,13 +33,13 @@ def build_route_definitions() -> dict:
         RouteId("base.route.leo_lunar_orbit"): RouteDef(
             id=RouteId("base.route.leo_lunar_orbit"), origin_id=ids.LEO, destination_id=ids.LUNAR_ORBIT, transit_days=5,
             operations=(TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),),
-            display_name="低軌道→月周回軌道", required_technologies=frozenset({ids.TECH_CISLUNAR_LOGISTICS}),
+            display_name="低軌道→月周回軌道",
             origin_requirements=req.ORBIT_SITE, destination_requirements=req.ORBIT_SITE,
         ),
         RouteId("base.route.lunar_orbit_leo"): RouteDef(
             id=RouteId("base.route.lunar_orbit_leo"), origin_id=ids.LUNAR_ORBIT, destination_id=ids.LEO, transit_days=5,
             operations=(TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),),
-            display_name="月周回軌道→低軌道", required_technologies=frozenset({ids.TECH_CISLUNAR_LOGISTICS}),
+            display_name="月周回軌道→低軌道",
             origin_requirements=req.ORBIT_SITE, destination_requirements=req.ORBIT_SITE,
         ),
     }
@@ -51,13 +51,13 @@ def build_route_definitions() -> dict:
         routes[RouteId(f"base.route.lunar_orbit_{suffix}")] = RouteDef(
             id=RouteId(f"base.route.lunar_orbit_{suffix}"), origin_id=ids.LUNAR_ORBIT, destination_id=surface, transit_days=3,
             operations=(TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),),
-            display_name=f"月周回軌道→{label}", required_technologies=frozenset({ids.TECH_LUNAR_PROSPECTING}),
+            display_name=f"月周回軌道→{label}",
             origin_requirements=req.ORBIT_SITE, destination_requirements=req.SURFACE_SITE,
         )
         routes[RouteId(f"base.route.{suffix}_lunar_orbit")] = RouteDef(
             id=RouteId(f"base.route.{suffix}_lunar_orbit"), origin_id=surface, destination_id=ids.LUNAR_ORBIT, transit_days=3,
             operations=(TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 1.9),),
-            display_name=f"{label}→月周回軌道", required_technologies=frozenset({ids.TECH_LUNAR_PROSPECTING}),
+            display_name=f"{label}→月周回軌道",
             origin_requirements=req.SURFACE_SITE, destination_requirements=req.ORBIT_SITE,
         )
         routes[RouteId(f"base.route.leo_{suffix}")] = RouteDef(
@@ -67,7 +67,6 @@ def build_route_definitions() -> dict:
                 TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),
             ),
             display_name=f"低軌道→{label}直行",
-            required_technologies=frozenset({ids.TECH_CISLUNAR_LOGISTICS, ids.TECH_LUNAR_PROSPECTING}),
             origin_requirements=req.ORBIT_SITE, destination_requirements=req.SURFACE_SITE,
         )
         routes[RouteId(f"base.route.{suffix}_leo")] = RouteDef(
@@ -77,7 +76,6 @@ def build_route_definitions() -> dict:
                 TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),
             ),
             display_name=f"{label}→低軌道直行",
-            required_technologies=frozenset({ids.TECH_CISLUNAR_LOGISTICS, ids.TECH_LUNAR_PROSPECTING}),
             origin_requirements=req.SURFACE_SITE, destination_requirements=req.ORBIT_SITE,
         )
         routes[RouteId(f"base.route.earth_{suffix}_direct")] = RouteDef(
@@ -88,7 +86,6 @@ def build_route_definitions() -> dict:
                 TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),
             ),
             display_name=f"地球地表→{label}直行ミッション",
-            required_technologies=frozenset({ids.TECH_CISLUNAR_LOGISTICS, ids.TECH_LUNAR_PROSPECTING}),
             origin_requirements=req.SURFACE_SITE, destination_requirements=req.SURFACE_SITE,
         )
     return routes
