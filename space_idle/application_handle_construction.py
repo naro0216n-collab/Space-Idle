@@ -10,13 +10,12 @@ from .application_commands import (
     ResumeBuild,
     SetConstructionWeight,
     SetProjectImportSource,
-    SetProjectImportTransport,
     SetProjectLocalFraction,
     SetProjectLocalMaterial,
     SetProjectPriority,
     SetProjectSourcingPolicy,
 )
-from .shared import DefinitionId, EntityId, ProjectId, RouteId
+from .shared import DefinitionId, EntityId, ProjectId
 
 
 class ConstructionCommandHandlerMixin:
@@ -71,13 +70,6 @@ class ConstructionCommandHandlerMixin:
             sim.projects.set_import_source(
                 ProjectId(command.project_id),
                 None if command.location_id is None else self._require_location(command.location_id),
-            )
-            return CommandResult()
-        if isinstance(command, SetProjectImportTransport):
-            sim.projects.set_import_transport(
-                ProjectId(command.project_id),
-                None if command.path is None else tuple(RouteId(x) for x in command.path),
-                self._route_mode_map(command.route_modes),
             )
             return CommandResult()
         if isinstance(command, SetProjectLocalFraction):
