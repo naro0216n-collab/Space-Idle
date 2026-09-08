@@ -9,8 +9,10 @@ class ProjectComponentRow:
     import_resource_id: str
     local_target_t: float
     reserved_local_t: float
+    reserved_primary_t: float
     reserved_import_t: float
     committed_local_t: float
+    committed_primary_t: float
     committed_import_t: float
     import_committed_t: float | None
     import_order_id: str | None
