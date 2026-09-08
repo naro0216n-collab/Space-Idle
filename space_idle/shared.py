@@ -16,8 +16,9 @@ ContractId = NewType("ContractId", str)
 
 @dataclass
 class AccountState:
+    """Auxiliary monetary balance used by explicitly financial domain boundaries."""
+
     funds_musd: float
-    passive_income_musd_per_day: float = 0.0
 
     def can_spend(self, amount: float) -> bool:
         if amount < -1e-9:
