@@ -3,7 +3,7 @@ from __future__ import annotations
 from .application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCargoOrders,
     GetCatalog, GetContracts, GetFlowReport, GetLocation, GetLogistics,
-    GetLogisticsRules, GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
+    GetLogisticsLanes, GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
     GetSurveys, GetTransportMissions, GetTransportPlans, GetVehicles, GetWorld,
     Query,
 )
@@ -55,16 +55,21 @@ class ApplicationQueryRouterMixin:
             return self._vehicles_view(query)
         if isinstance(query, GetCargoOrders):
             return self._cargo_orders_view()
-        if isinstance(query, GetLogisticsRules):
-            return self._logistics_rules_view()
+        if isinstance(query, GetLogisticsLanes):
+            return self._logistics_lanes_view()
         if isinstance(query, GetTransportMissions):
             return self._transport_missions_view()
         if isinstance(query, GetTransportPlans):
-            return self._transport_plans_view(self._require_location(query.source_id), self._require_location(query.destination_id))
+            return self._transport_plans_view(
+                self._require_location(query.source_id),
+                self._require_location(query.destination_id),
+            )
         if isinstance(query, GetResearch):
             return self._research_view()
         if isinstance(query, GetSurveys):
-            return self._surveys_view(None if query.location_id is None else self._require_location(query.location_id))
+            return self._surveys_view(
+                None if query.location_id is None else self._require_location(query.location_id)
+            )
         if isinstance(query, GetContracts):
             return self._contracts_view()
         raise TypeError(f"unsupported query: {type(query).__name__}")
