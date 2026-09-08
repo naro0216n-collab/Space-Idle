@@ -70,11 +70,6 @@ def run() -> None:
             assert page.locator("#researchTree .research-node").count() >= 13, "research UI did not render the engineering technology tree"
             assert page.locator("#researchTree .research-tree-link").count() > 0, "research dependencies were not rendered as tree links"
 
-            scroller = page.locator("#researchTreeScroll")
-            page.evaluate("el => { el.scrollLeft = 180; el.dispatchEvent(new Event('scroll')); }", scroller.element_handle())
-            initial_tree_scroll = page.evaluate("el => el.scrollLeft", scroller.element_handle())
-            assert initial_tree_scroll > 0, "research tree was not horizontally navigable"
-
             first_research = page.locator('#researchTree [data-inspect="research"][data-id="base.tech.orbital_operations"]')
             first_research.wait_for(timeout=10000)
             first_research.click()
@@ -89,6 +84,11 @@ def run() -> None:
             weight.wait_for(timeout=10000)
             weight.fill("3.7")
             weight.focus()
+
+            scroller = page.locator("#researchTreeScroll")
+            page.evaluate("el => { el.scrollLeft = 180; el.dispatchEvent(new Event('scroll')); }", scroller.element_handle())
+            initial_tree_scroll = page.evaluate("el => el.scrollLeft", scroller.element_handle())
+            assert initial_tree_scroll > 0, "research tree was not horizontally navigable"
 
             start_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
             page.wait_for_function(
