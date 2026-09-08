@@ -19,12 +19,12 @@ from .transport.models import (
     CargoOrder,
     ExternalTransportServiceDef,
     LandingCapability,
+    LogisticsLane,
     MissionStatus,
     OperationSupportLocation,
     OperationSupportRequirement,
     PathPolicy,
     PoweredAscentCapability,
-    RecurringCargoRule,
     RouteDef,
     SpaceflightCapability,
     TransportMissionState,
@@ -68,9 +68,9 @@ class LogisticsService(
     waiting: dict[tuple[CargoOrderId, int], float] = field(default_factory=dict)
     missions: dict[EntityId, TransportMissionState] = field(default_factory=dict)
     vehicle_transit: list[VehicleTransit] = field(default_factory=list)
-    recurring_rules: dict[EntityId, RecurringCargoRule] = field(default_factory=dict)
+    lanes: dict[EntityId, LogisticsLane] = field(default_factory=dict)
     _counter: int = 0
-    _rule_counter: int = 0
+    _lane_counter: int = 0
     _vehicle_counter: int = 0
     _mission_counter: int = 0
 
@@ -85,11 +85,11 @@ class LogisticsService(
 __all__ = [
     "ATMOSPHERIC_ENTRY", "LANDING", "POWERED_ASCENT", "SPACEFLIGHT",
     "AtmosphericEntryCapability", "CargoOrder", "ExternalTransportServiceDef",
-    "LandingCapability", "LogisticsService", "MissionStatus", "OperationSupportLocation",
-    "OperationSupportRequirement", "PathPolicy", "PoweredAscentCapability",
-    "RecurringCargoRule", "RouteDef", "SpaceflightCapability", "TransportMissionState",
-    "TransportMode", "TransportOperationKind", "TransportOperationRequirement",
-    "TransportPerformanceProfile", "VehicleDef", "VehicleDisposition", "VehicleEconomicsSpec",
-    "VehicleMaintenanceSpec", "VehicleProductionSpec", "VehicleState", "VehicleStatus",
-    "VehicleTransit",
+    "LandingCapability", "LogisticsLane", "LogisticsService", "MissionStatus",
+    "OperationSupportLocation", "OperationSupportRequirement", "PathPolicy",
+    "PoweredAscentCapability", "RouteDef", "SpaceflightCapability",
+    "TransportMissionState", "TransportMode", "TransportOperationKind",
+    "TransportOperationRequirement", "TransportPerformanceProfile", "VehicleDef",
+    "VehicleDisposition", "VehicleEconomicsSpec", "VehicleMaintenanceSpec",
+    "VehicleProductionSpec", "VehicleState", "VehicleStatus", "VehicleTransit",
 ]
