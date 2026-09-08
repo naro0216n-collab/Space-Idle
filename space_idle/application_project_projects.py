@@ -88,6 +88,14 @@ class ProjectProjectorMixin:
                     project, requirement, sim.day
                 )
                 explicit_local = project.local_resource_choices.get(requirement.component_id)
+                import_demand_id = None
+                if (
+                    project.import_source_id is not None
+                    and (state.import_committed_t or 0.0) > state.reserved_import_t + 1e-9
+                ):
+                    import_demand_id = (
+                        f"demand.project:{project.id}:{requirement.component_id}"
+                    )
                 components.append(
                     ProjectComponentRow(
                         requirement.component_id,
@@ -101,7 +109,7 @@ class ProjectProjectorMixin:
                         state.committed_primary_t,
                         state.committed_import_t,
                         state.import_committed_t,
-                        None if state.import_order_id is None else str(state.import_order_id),
+                        import_demand_id,
                         project.local_fraction_targets.get(requirement.component_id),
                         None if selected_local is None else str(selected_local),
                         explicit_local is not None,
@@ -130,13 +138,6 @@ class ProjectProjectorMixin:
                     project.priority,
                     project.sourcing_policy,
                     None if project.import_source_id is None else str(project.import_source_id),
-                    None if project.import_path is None else tuple(str(x) for x in project.import_path),
-                    tuple(
-                        (str(route_id), mode_id)
-                        for route_id, mode_id in sorted(
-                            project.import_mode_by_route.items(), key=lambda row: str(row[0])
-                        )
-                    ),
                     project.construction_done,
                     recipe.construction_work,
                     project.construction_weight,
