@@ -7,7 +7,7 @@ from .application_commands import (
     GetLogistics, GetLogisticsSummary, GetRoutes, GetVehicles, GetCargoOrders, GetLogisticsRules, GetTransportMissions,
     GetProjects, GetResearch, GetSurveys, GetTransportPlans, GetWorld,
     PauseBuild, PauseFacility, PauseLogisticsRule, PauseResearch, PauseSurvey,
-    PlanBuild, ProduceVehicle, RefuelVehicle, ResumeBuild, ResumeFacility,
+    PlanBuild, PlanFacilityUpgrade, ProduceVehicle, RefuelVehicle, ResumeBuild, ResumeFacility,
     ResumeLogisticsRule, ResumeResearch, ResumeSurvey, SetConstructionWeight,
     SetFacilityProcess, SetPowerPriority, SetProjectImportSource,
     SetProjectImportTransport, SetProjectLocalFraction, SetProjectLocalMaterial,
