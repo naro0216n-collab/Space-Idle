@@ -46,10 +46,7 @@ class CatalogWorldProjectorMixin:
                 None if node.body_id is None else str(node.body_id),
                 node.kind.value, facility_count, active_projects,
             ))
-        return WorldView(
-            sim.content_id, sim.day, sim.account.funds_musd,
-            sim.account.passive_income_musd_per_day, tuple(locations),
-        )
+        return WorldView(sim.content_id, sim.day, sim.account.funds_musd, tuple(locations))
 
     def _resource_name(self, resource_id: DefinitionId) -> str:
         definition = self._catalog.resources.get(resource_id)
