@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Runtime state
+saves/
+*.save
+*.sqlite3
+
+# Playwright / test artifacts
+playwright/artifacts/
+test-results/
+playwright-report/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local environment
+.env
+.env.*
+!.env.example

@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+from ..facilities import FacilityDef
+from . import base_ids as ids
+from . import base_requirements as req
+
+
+def build_facility_definitions() -> dict:
+    surface = req.SURFACE_ENV
+    orbit = req.ORBIT_ENV
+    return {
+        ids.EARTH_RESEARCH_LAB: FacilityDef(ids.EARTH_RESEARCH_LAB, "研究所", req._capabilities("research_lab"), surface, surface),
+        ids.GRID_POWER_SUPPLY: FacilityDef(ids.GRID_POWER_SUPPLY, "外部電力網接続", req._capabilities("grid_power"), surface, surface),
+        ids.ORBITAL_LOGISTICS_NODE: FacilityDef(ids.ORBITAL_LOGISTICS_NODE, "軌道物流・整備ノード", req._capabilities("cargo_transfer", "vehicle_refueling", "spacecraft_servicing"), orbit, orbit),
+        ids.EARTH_LAUNCH_SUPPORT: FacilityDef(ids.EARTH_LAUNCH_SUPPORT, "打上げ・回収整備設備", req._capabilities("cargo_transfer", "vehicle_refueling", "launch_vehicle_servicing", "launch_operations"), surface, surface),
+        ids.VEHICLE_ASSEMBLY_FACILITY: FacilityDef(ids.VEHICLE_ASSEMBLY_FACILITY, "宇宙輸送機製造・組立設備", req._capabilities("vehicle_assembly"), surface, surface),
+        ids.ROBOTIC_SURVEY_PACKAGE: FacilityDef(ids.ROBOTIC_SURVEY_PACKAGE, "ロボット探査・初期建設パッケージ", req._capabilities("surface_survey", "base_construction", "robotic_operations", "spacecraft_servicing"), surface, surface),
+        ids.SURFACE_POWER_GRID: FacilityDef(ids.SURFACE_POWER_GRID, "地表太陽光発電・配電設備", req._capabilities("power_grid"), surface, surface),
+        ids.INDUSTRIAL_POWER_BLOCK: FacilityDef(ids.INDUSTRIAL_POWER_BLOCK, "核分裂電源ユニット", req._capabilities("industrial_power"), surface, surface),
+        ids.CONSTRUCTION_YARD: FacilityDef(ids.CONSTRUCTION_YARD, "建設ヤード", req._capabilities("construction_yard"), surface, surface),
+        ids.VOLATILE_EXTRACTOR: FacilityDef(ids.VOLATILE_EXTRACTOR, "揮発性物質抽出設備", req._capabilities("water_extraction"), surface, req.COLD_VOLATILE_SURFACE_ENV),
+        ids.REGOLITH_HARVESTER: FacilityDef(ids.REGOLITH_HARVESTER, "レゴリス採掘設備", req._capabilities("regolith_excavation"), surface, surface),
+        ids.WATER_STORAGE: FacilityDef(ids.WATER_STORAGE, "水貯蔵タンク", req._capabilities("water_storage"), surface, surface),
+        ids.CRYOGENIC_STORAGE: FacilityDef(ids.CRYOGENIC_STORAGE, "極低温貯蔵設備", req._capabilities("cryogenic_storage", "vehicle_refueling"), surface, surface),
+        ids.BULK_STORAGE: FacilityDef(ids.BULK_STORAGE, "バルク原料置場", req._capabilities("bulk_storage"), surface, surface),
+        ids.CARGO_WAREHOUSE: FacilityDef(ids.CARGO_WAREHOUSE, "一般貨物倉庫", req._capabilities("cargo_storage"), surface, surface),
+        ids.ELECTROLYSIS_PLANT: FacilityDef(ids.ELECTROLYSIS_PLANT, "工業電解設備", req._capabilities("industrial_electrolysis"), surface, surface),
+        ids.PROPELLANT_PLANT: FacilityDef(ids.PROPELLANT_PLANT, "推進剤調製設備", req._capabilities("propellant_production"), surface, surface),
+        ids.REGOLITH_SINTERING: FacilityDef(ids.REGOLITH_SINTERING, "レゴリス焼結設備", req._capabilities("sintering"), surface, surface),
+        ids.ORE_PROCESSING: FacilityDef(ids.ORE_PROCESSING, "鉱石処理設備", req._capabilities("ore_processing"), surface, surface),
+        ids.METALLURGY: FacilityDef(ids.METALLURGY, "金属精錬設備", req._capabilities("metallurgy"), surface, surface),
+        ids.FABRICATION_WORKSHOP: FacilityDef(ids.FABRICATION_WORKSHOP, "構造材加工工場", req._capabilities("structural_fabrication"), surface, surface),
+        ids.MACHINE_SHOP: FacilityDef(ids.MACHINE_SHOP, "機械工場", req._capabilities("basic_machine_shop"), surface, surface),
+        ids.HEAVY_EQUIPMENT_ASSEMBLY: FacilityDef(ids.HEAVY_EQUIPMENT_ASSEMBLY, "重機組立設備", req._capabilities("heavy_equipment_assembly"), surface, surface),
+    }
+
+
+def initial_facility_placements() -> tuple[tuple, ...]:
+    return (
+        (ids.EARTH_RESEARCH_LAB, ids.EARTH),
+        (ids.GRID_POWER_SUPPLY, ids.EARTH),
+        (ids.EARTH_LAUNCH_SUPPORT, ids.EARTH),
+        (ids.VEHICLE_ASSEMBLY_FACILITY, ids.EARTH),
+    )

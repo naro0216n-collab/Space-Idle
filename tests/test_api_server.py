@@ -1,0 +1,214 @@
+from __future__ import annotations
+
+import gzip
+import http.client
+import json
+from threading import Thread
+
+from space_idle import build_game_application
+from space_idle.api import ApiServerConfig, GameRuntime, create_server
+from space_idle.application_commands import (
+    GetCatalog, GetFlowReport, GetLogisticsSummary, GetRoutes, GetWorld,
+)
+from space_idle.api.codec import to_jsonable
+
+
+def _request(port: int, method: str, path: str, body=None, headers=None):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    raw = None if body is None else json.dumps(body).encode("utf-8")
+    request_headers = dict(headers or {})
+    if raw is not None:
+        request_headers.setdefault("Content-Type", "application/json")
+        request_headers.setdefault("Content-Length", str(len(raw)))
+    conn.request(method, path, body=raw, headers=request_headers)
+    response = conn.getresponse()
+    data = response.read()
+    response_headers = dict(response.getheaders())
+    conn.close()
+    if response_headers.get("Content-Encoding") == "gzip":
+        data = gzip.decompress(data)
+    parsed = None if not data else json.loads(data.decode("utf-8"))
+    return response.status, response_headers, parsed
+
+
+def test_ui_reports_and_split_logistics_queries_are_json_safe():
+    from space_idle import build_game_application
+
+    app = build_game_application()
+    catalog = app.query(GetCatalog())
+    assert catalog.processes
+    assert catalog.research
+    assert catalog.routes
+    assert catalog.transport_services
+    assert to_jsonable(catalog)
+
+    flow = app.query(GetFlowReport("base.node.earth_surface"))
+    assert flow.location_id == "base.node.earth_surface"
+    assert isinstance(to_jsonable(flow)["issues"], list)
+
+    summary = app.query(GetLogisticsSummary())
+    assert summary.route_count > 0
+    compact_routes = app.query(GetRoutes(include_modes=False))
+    assert compact_routes.items and all(not route.modes for route in compact_routes.items)
+    one_route = app.query(GetRoutes(route_id="base.route.earth_leo", include_modes=True))
+    assert len(one_route.items) == 1 and one_route.items[0].modes
+
+
+def test_http_api_revision_etag_gzip_command_and_save_load(tmp_path):
+    runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
+    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0, cors_origins=("*",), gzip_min_bytes=200))
+    port = server.server_address[1]
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, headers, payload = _request(port, "GET", "/api/v1/catalog", headers={"Accept-Encoding": "gzip"})
+        assert status == 200
+        assert headers.get("Content-Encoding") == "gzip"
+        assert payload["ok"] is True
+        etag = headers["ETag"]
+
+        status, _, payload = _request(port, "GET", "/api/v1/catalog", headers={"If-None-Match": etag})
+        assert status == 304 and payload is None
+
+        status, _, payload = _request(port, "POST", "/api/v1/commands", {"type": "AdvanceTime", "payload": {"days": 2}})
+        assert status == 200 and payload["revision"] == 1
+
+        status, _, payload = _request(port, "GET", "/api/v1/world")
+        assert status == 200 and payload["data"]["day"] == 2
+
+        status, _, payload = _request(port, "GET", "/api/v1/logistics/routes?include_modes=false")
+        assert status == 200 and payload["data"]["items"]
+        assert all(not row["modes"] for row in payload["data"]["items"])
+
+        status, _, payload = _request(port, "POST", "/api/v1/session/save", {"slot": "ipad-test"})
+        assert status == 200 and payload["data"]["saved"] is True
+
+        _request(port, "POST", "/api/v1/commands", {"type": "AdvanceTime", "payload": {"days": 3}})
+        status, _, payload = _request(port, "POST", "/api/v1/session/load", {"slot": "ipad-test", "apply_offline": False})
+        assert status == 200 and payload["data"]["loaded"] is True
+        status, _, payload = _request(port, "GET", "/api/v1/world")
+        assert payload["data"]["day"] == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_api_cors_preflight_for_ipad_dev_client(tmp_path):
+    runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
+    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0, cors_origins=("*",)))
+    port = server.server_address[1]
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, headers, _ = _request(
+            port, "OPTIONS", "/api/v1/commands",
+            headers={
+                "Origin": "http://192.168.1.10:5173",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert status == 204
+        assert headers.get("Access-Control-Allow-Origin") == "*"
+        assert "POST" in headers.get("Access-Control-Allow-Methods", "")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_runtime_catches_up_elapsed_time_without_ipad_client_timer(tmp_path):
+    from space_idle.simulation import OfflineProgressPolicy
+
+    now = [100.0]
+    runtime = GameRuntime(
+        factory=build_game_application,
+        save_dir=tmp_path,
+        offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=10.0),
+        clock=lambda: now[0],
+    )
+    assert runtime.metadata()["day"] == 0
+    assert runtime.revision == 0
+
+    # Simulate Safari/PWA suspension: no requests for 25 real seconds.
+    now[0] += 25.0
+    result = runtime.query(GetWorld())
+    assert result.data.day == 2
+    assert result.revision == 1
+
+    # No further elapsed time means repeated queries do not churn revisions.
+    again = runtime.query(GetWorld())
+    assert again.data.day == 2
+    assert again.revision == 1
+
+
+def test_http_api_rejects_stale_command_revision(tmp_path):
+    runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
+    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0, cors_origins=("*",)))
+    port = server.server_address[1]
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, _, payload = _request(
+            port, "POST", "/api/v1/commands",
+            {"type": "AdvanceTime", "payload": {"days": 1}},
+            headers={"If-Match": '"rev-0"'},
+        )
+        assert status == 200 and payload["revision"] == 1
+
+        status, headers, payload = _request(
+            port, "POST", "/api/v1/commands",
+            {"type": "AdvanceTime", "payload": {"days": 1}},
+            headers={"If-Match": '"rev-0"'},
+        )
+        assert status == 409
+        assert payload["error"]["code"] == "revision_conflict"
+        assert payload["error"]["details"]["current_revision"] == 1
+        assert headers.get("X-Space-Idle-Revision") == "1"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_development_webui_is_served_from_same_origin(tmp_path):
+    runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
+    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
+    port = server.server_address[1]
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/")
+        response = conn.getresponse()
+        html = response.read().decode("utf-8")
+        headers = dict(response.getheaders())
+        conn.close()
+        assert response.status == 200
+        assert headers["Content-Type"].startswith("text/html")
+        assert "拠点運用" in html
+        assert "物流ネットワーク" in html
+        assert 'id="operationsView"' in html
+        assert 'id="logisticsView"' in html
+
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/app.css")
+        response = conn.getresponse()
+        css = response.read().decode("utf-8")
+        conn.close()
+        assert response.status == 200
+        assert "--design-min-width: 1180px" in css
+        assert "horizontally scrollable" in css
+
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/app.js")
+        response = conn.getresponse()
+        js = response.read().decode("utf-8")
+        conn.close()
+        assert response.status == 200
+        assert "SubmitCargo" in js
+        assert "If-Match" in js
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
