@@ -16,17 +16,30 @@ class ConstructionExecutionMixin:
                 if state.reserved_local_resource_id is None:
                     raise RuntimeError("lost local resource type")
                 self.inventory.consume_reserved(
-                    EntityId(project.id), project.location_id,
-                    state.reserved_local_resource_id, state.reserved_local_t,
+                    EntityId(project.id),
+                    project.location_id,
+                    state.reserved_local_resource_id,
+                    state.reserved_local_t,
                 )
                 state.committed_local_t = state.reserved_local_t
                 state.committed_local_resource_id = state.reserved_local_resource_id
                 state.reserved_local_t = 0.0
                 state.reserved_local_resource_id = None
+            if state.reserved_primary_t > 1e-9:
+                self.inventory.consume_reserved(
+                    EntityId(project.id),
+                    project.location_id,
+                    component.import_resource_id,
+                    state.reserved_primary_t,
+                )
+                state.committed_primary_t = state.reserved_primary_t
+                state.reserved_primary_t = 0.0
             if state.reserved_import_t > 1e-9:
                 self.inventory.consume_reserved(
-                    EntityId(project.id), project.location_id,
-                    component.import_resource_id, state.reserved_import_t,
+                    EntityId(project.id),
+                    project.location_id,
+                    component.import_resource_id,
+                    state.reserved_import_t,
                 )
                 state.committed_import_t = state.reserved_import_t
                 state.reserved_import_t = 0.0
@@ -63,7 +76,8 @@ class ConstructionExecutionMixin:
                 if not self._target_ready_for_execution(project):
                     continue
                 if self.project_site_failures(
-                    project, day,
+                    project,
+                    day,
                     power_by_location.get(
                         project.location_id,
                         self.power.snapshot(project.location_id, self.facilities, day),
@@ -99,19 +113,25 @@ class ConstructionExecutionMixin:
             capacity = self.construction_capacity_at(location_id, power, day)
             if capacity <= 1e-12:
                 continue
-            active = [project for project in candidates if project.construction_weight > 1e-12]
+            active = [
+                project for project in candidates if project.construction_weight > 1e-12
+            ]
             remaining_capacity = capacity
             while active and remaining_capacity > 1e-12:
                 total_weight = sum(project.construction_weight for project in active)
                 if total_weight <= 1e-12:
                     break
                 allocations = {
-                    project.id: remaining_capacity * project.construction_weight / total_weight
+                    project.id: remaining_capacity
+                    * project.construction_weight
+                    / total_weight
                     for project in active
                 }
                 used = 0.0
                 completed: list[ConstructionProject] = []
-                for project in sorted(active, key=lambda row: (-row.priority, str(row.id))):
+                for project in sorted(
+                    active, key=lambda row: (-row.priority, str(row.id))
+                ):
                     recipe = self._recipe_for_project(project)
                     remaining_work = max(
                         0.0, recipe.construction_work - project.construction_done
