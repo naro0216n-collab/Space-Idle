@@ -6,7 +6,8 @@ import socket
 
 from ..bootstrap import build_game_application
 from ..simulation import OfflineProgressPolicy
-from .http_server import ApiServerConfig, create_server
+from .http_server import ApiServerConfig
+from .time_http_server import create_server
 from .runtime import GameRuntime
 
 
