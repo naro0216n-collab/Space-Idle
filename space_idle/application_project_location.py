@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
-from typing import Mapping
 
-from .application_views import CapabilityRow, EnvironmentFacetRow, ExtractionRow, FacilityRow, IndustryRow, InventoryRow, LocationView, StorageRow
-from .contracts import CapabilityContractTemplate, CargoContractTemplate
-from .shared import ContractId, DefinitionId, EntityId, ProjectId, RouteId, SpatialNodeId
-from .site import evaluate_site_requirements
+from .application_views import (
+    CapabilityRow,
+    EnvironmentFacetRow,
+    ExtractionRow,
+    FacilityRow,
+    IndustryRow,
+    InventoryRow,
+    LocationView,
+    StorageRow,
+)
+from .shared import SpatialNodeId
 
 
 class LocationProjectorMixin:
@@ -49,116 +55,233 @@ class LocationProjectorMixin:
         } | {
             key for key in sim.inventory.storage_service_capacity_t if key[0] == location_id
         }
-        for loc, storage_class in sorted(keys, key=lambda x: (str(x[0]), x[1])):
+        for loc, storage_class in sorted(keys, key=lambda row: (str(row[0]), row[1])):
             physical = sim.inventory.storage_capacity_t.get((loc, storage_class), 0.0)
             service = sim.inventory.storage_service_capacity_t.get((loc, storage_class), 0.0)
             stock = sum(
-                amount for (stock_loc, resource_id), amount in sim.inventory.stock.items()
-                if stock_loc == location_id and sim.inventory.resource_storage_class.get(resource_id) == storage_class
+                amount
+                for (stock_loc, resource_id), amount in sim.inventory.stock.items()
+                if stock_loc == location_id
+                and sim.inventory.resource_storage_class.get(resource_id) == storage_class
             )
             staging = sum(
-                amount for (_owner, occ_loc, resource_id), amount in sim.inventory.external_occupancy.items()
-                if occ_loc == location_id and sim.inventory.resource_storage_class.get(resource_id) == storage_class
+                amount
+                for (_owner, occ_loc, resource_id), amount in sim.inventory.external_occupancy.items()
+                if occ_loc == location_id
+                and sim.inventory.resource_storage_class.get(resource_id) == storage_class
             )
             occupied = stock + staging
-            rows.append(StorageRow(
-                storage_class, stock, staging, physical, service,
-                max(0.0, service - occupied), max(0.0, occupied - service),
-            ))
+            rows.append(
+                StorageRow(
+                    storage_class,
+                    stock,
+                    staging,
+                    physical,
+                    service,
+                    max(0.0, service - occupied),
+                    max(0.0, occupied - service),
+                )
+            )
         return tuple(rows)
 
     def _environment_rows(self, location_id: SpatialNodeId) -> tuple[EnvironmentFacetRow, ...]:
         sim = self._simulation
         facet_types = {facet_type for (_node_id, facet_type) in sim.environment.static.facets}
         rows: list[EnvironmentFacetRow] = []
-        for facet_type in sorted(facet_types, key=lambda t: getattr(t, "facet_key", t.__name__)):
+        for facet_type in sorted(
+            facet_types, key=lambda value: getattr(value, "facet_key", value.__name__)
+        ):
             facet = sim.environment.get(location_id, facet_type, sim.day)
             if facet is None:
                 continue
             if is_dataclass(facet):
-                values = tuple((f.name, self._transport_value(getattr(facet, f.name))) for f in fields(facet))
+                values = tuple(
+                    (field.name, self._transport_value(getattr(facet, field.name)))
+                    for field in fields(facet)
+                )
             else:
                 values = tuple(
-                    (k, self._transport_value(v))
-                    for k, v in sorted(vars(facet).items())
-                    if not k.startswith("_")
+                    (key, self._transport_value(value))
+                    for key, value in sorted(vars(facet).items())
+                    if not key.startswith("_")
                 )
-            rows.append(EnvironmentFacetRow(getattr(facet_type, "facet_key", facet_type.__name__), values))
+            rows.append(
+                EnvironmentFacetRow(
+                    getattr(facet_type, "facet_key", facet_type.__name__), values
+                )
+            )
         return tuple(rows)
 
     def _location_view(self, location_id: SpatialNodeId) -> LocationView:
         sim = self._simulation
         node = sim.graph.nodes[location_id]
         power = sim.power.snapshot(location_id, sim.facilities, sim.day)
+        research_power = {location_id: power}
+
         facilities = []
-        for f in sorted((x for x in sim.facilities.facilities.values() if x.location_id == location_id), key=lambda x: str(x.id)):
-            definition = sim.facilities.definitions[f.definition_id]
-            activation_failures = sim.facilities.activation_failures(f, sim.day)
+        for facility in sorted(
+            (row for row in sim.facilities.facilities.values() if row.location_id == location_id),
+            key=lambda row: str(row.id),
+        ):
+            definition = sim.facilities.definitions[facility.definition_id]
+            activation_failures = sim.facilities.activation_failures(facility, sim.day)
             active_and_compatible = not activation_failures
-            facilities.append(FacilityRow(
-                str(f.id), str(f.definition_id), definition.display_name, f.level, f.paused, active_and_compatible,
-                tuple(activation_failures), f.power_priority, tuple(sorted((x.id, x.rated_capacity) for x in definition.capability_supplies)),
-                power.utilization_by_facility.get(f.id, 0.0 if not active_and_compatible else 1.0),
-            ))
+            research_provider = (
+                None
+                if sim.research is None
+                else sim.research.providers.get(facility.definition_id)
+            )
+            if research_provider is None:
+                research_tier = None
+                research_generation = 0.0
+                research_storage = 0.0
+            else:
+                research_tier = research_provider.tier
+                research_generation = sim.research.provider_generation(
+                    facility.id, research_power, sim.day
+                )
+                research_storage = sim.research.provider_storage_capacity(
+                    facility.id, research_power, sim.day
+                )
+            facilities.append(
+                FacilityRow(
+                    str(facility.id),
+                    str(facility.definition_id),
+                    definition.display_name,
+                    facility.level,
+                    facility.paused,
+                    active_and_compatible,
+                    tuple(activation_failures),
+                    facility.power_priority,
+                    tuple(
+                        sorted(
+                            (supply.id, supply.rated_capacity)
+                            for supply in definition.capability_supplies
+                        )
+                    ),
+                    power.utilization_by_facility.get(
+                        facility.id, 0.0 if not active_and_compatible else 1.0
+                    ),
+                    research_tier,
+                    research_generation,
+                    research_storage,
+                    self._facility_upgrade_option(facility, power),
+                )
+            )
+
         industry = []
         snapshots = {
             snap.facility_id: snap
-            for snap in sim.industry.snapshots(location_id, sim.facilities, sim.inventory, power, sim.day)
+            for snap in sim.industry.snapshots(
+                location_id, sim.facilities, sim.inventory, power, sim.day
+            )
         }
-        for facility in sorted(sim.facilities.all_at(location_id), key=lambda f: str(f.id)):
-            compatible = tuple(sorted(sim.industry.compatible_processes(facility.definition_id), key=lambda p: str(p.id)))
+        for facility in sorted(sim.facilities.all_at(location_id), key=lambda row: str(row.id)):
+            compatible = tuple(
+                sorted(
+                    sim.industry.compatible_processes(facility.definition_id),
+                    key=lambda process: str(process.id),
+                )
+            )
             if not compatible:
                 continue
             definition = sim.facilities.definitions[facility.definition_id]
-            options = tuple((str(p.id), p.display_name) for p in compatible)
+            options = tuple((str(process.id), process.display_name) for process in compatible)
             snap = snapshots.get(facility.id)
             process = None if snap is None else sim.industry.processes[snap.process_id]
             if snap is not None:
                 limiting = snap.limiting_factors
                 scale = snap.scale
-                inputs = tuple((str(k), v) for k, v in sorted(snap.input_rates_per_day.items(), key=lambda x: str(x[0])))
-                outputs = tuple((str(k), v) for k, v in sorted(snap.output_rates_per_day.items(), key=lambda x: str(x[0])))
+                inputs = tuple(
+                    (str(key), value)
+                    for key, value in sorted(
+                        snap.input_rates_per_day.items(), key=lambda row: str(row[0])
+                    )
+                )
+                outputs = tuple(
+                    (str(key), value)
+                    for key, value in sorted(
+                        snap.output_rates_per_day.items(), key=lambda row: str(row[0])
+                    )
+                )
             else:
                 failures = sim.facilities.activation_failures(facility, sim.day)
-                if failures:
-                    limiting = tuple(f"facility:{code}" for code, _detail in failures)
-                else:
-                    limiting = ("process:unselected",)
+                limiting = (
+                    tuple(f"facility:{code}" for code, _detail in failures)
+                    if failures
+                    else ("process:unselected",)
+                )
                 scale = 0.0
                 inputs = ()
                 outputs = ()
-            industry.append(IndustryRow(
-                str(facility.id), str(facility.definition_id), definition.display_name,
-                None if process is None else str(process.id),
-                None if process is None else process.display_name,
-                options, scale, limiting, inputs, outputs,
-            ))
+            industry.append(
+                IndustryRow(
+                    str(facility.id),
+                    str(facility.definition_id),
+                    definition.display_name,
+                    None if process is None else str(process.id),
+                    None if process is None else process.display_name,
+                    options,
+                    scale,
+                    limiting,
+                    inputs,
+                    outputs,
+                )
+            )
 
         extraction: list[ExtractionRow] = []
         if sim.extraction is not None:
-            for snap in sim.extraction.snapshots(location_id, sim.facilities, sim.inventory, power, sim.day):
+            for snap in sim.extraction.snapshots(
+                location_id, sim.facilities, sim.inventory, power, sim.day
+            ):
                 definition = sim.facilities.definitions[snap.facility_def_id]
-                extraction.append(ExtractionRow(
-                    str(snap.facility_id), str(snap.facility_def_id), definition.display_name,
-                    str(snap.output_resource_id), self._resource_name(snap.output_resource_id),
-                    snap.scale, snap.output_t_per_day, snap.limiting_factors,
-                ))
+                extraction.append(
+                    ExtractionRow(
+                        str(snap.facility_id),
+                        str(snap.facility_def_id),
+                        definition.display_name,
+                        str(snap.output_resource_id),
+                        self._resource_name(snap.output_resource_id),
+                        snap.scale,
+                        snap.output_t_per_day,
+                        snap.limiting_factors,
+                    )
+                )
 
         capability_rows = tuple(
             CapabilityRow(
                 capability_id,
-                sim.facilities.infrastructure_capability_capacity_at(location_id, capability_id, sim.day),
-                sim.facilities.active_capability_capacity_at(location_id, capability_id, sim.day),
-                sim.facilities.available_capability_capacity_at(location_id, capability_id, power, sim.day),
+                sim.facilities.infrastructure_capability_capacity_at(
+                    location_id, capability_id, sim.day
+                ),
+                sim.facilities.active_capability_capacity_at(
+                    location_id, capability_id, sim.day
+                ),
+                sim.facilities.available_capability_capacity_at(
+                    location_id, capability_id, power, sim.day
+                ),
             )
             for capability_id in sorted(sim.facilities.capability_ids())
-            if sim.facilities.infrastructure_capability_capacity_at(location_id, capability_id, sim.day) > 1e-9
+            if sim.facilities.infrastructure_capability_capacity_at(
+                location_id, capability_id, sim.day
+            )
+            > 1e-9
         )
 
         return LocationView(
-            str(location_id), node.display_name, sim.day, self._environment_rows(location_id),
-            power.generation_mw, power.demand_mw, power.allocated_mw,
+            str(location_id),
+            node.display_name,
+            sim.day,
+            self._environment_rows(location_id),
+            power.generation_mw,
+            power.demand_mw,
+            power.allocated_mw,
             sim.projects.construction_capacity_at(location_id, power, sim.day),
-            capability_rows, self._inventory_rows(location_id), self._storage_rows(location_id), tuple(facilities), tuple(industry),
-            tuple(extraction), self._project_rows(location_id),
+            capability_rows,
+            self._inventory_rows(location_id),
+            self._storage_rows(location_id),
+            tuple(facilities),
+            tuple(industry),
+            tuple(extraction),
+            self._project_rows(location_id),
         )
