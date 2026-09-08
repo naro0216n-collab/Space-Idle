@@ -65,7 +65,17 @@ def run() -> None:
             assert page.locator("#appVersion").inner_text() == f"v{VERSION}", "UI version diverged from declared package version"
 
             page.locator('[data-tab="research"]').click()
-            first_research = page.locator('#operationsTabContent [data-inspect="research"]').first
+            tree = page.locator("#researchTree")
+            tree.wait_for(timeout=10000)
+            assert page.locator("#researchTree .research-node").count() >= 13, "research UI did not render the engineering technology tree"
+            assert page.locator("#researchTree .research-tree-link").count() > 0, "research dependencies were not rendered as tree links"
+
+            scroller = page.locator("#researchTreeScroll")
+            page.evaluate("el => { el.scrollLeft = 180; el.dispatchEvent(new Event('scroll')); }", scroller.element_handle())
+            initial_tree_scroll = page.evaluate("el => el.scrollLeft", scroller.element_handle())
+            assert initial_tree_scroll > 0, "research tree was not horizontally navigable"
+
+            first_research = page.locator('#researchTree [data-inspect="research"][data-id="base.tech.orbital_operations"]')
             first_research.wait_for(timeout=10000)
             first_research.click()
             start_button = page.get_by_role("button", name="研究開始")
@@ -95,8 +105,10 @@ def run() -> None:
             active_id = page.evaluate("() => document.activeElement?.id || ''")
             assert active_id == "researchWeightInput", "automatic progress stole input focus"
 
-            progress_after = page.locator('#operationsTabContent [data-inspect="research"]').first.inner_text()
+            progress_after = first_research.inner_text()
             assert progress_after != progress_before, "automatic progress did not refresh visible research state"
+            tree_scroll_after = page.evaluate("el => el.scrollLeft", page.locator("#researchTreeScroll").element_handle())
+            assert tree_scroll_after >= initial_tree_scroll - 2, "automatic progress reset the research tree navigation position"
 
             context.close()
             browser.close()
