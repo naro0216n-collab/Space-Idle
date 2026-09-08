@@ -32,7 +32,7 @@ class GetVehicles:
 @dataclass(frozen=True)
 class GetCargoOrders: pass
 @dataclass(frozen=True)
-class GetLogisticsRules: pass
+class GetLogisticsLanes: pass
 @dataclass(frozen=True)
 class GetTransportMissions: pass
 @dataclass(frozen=True)
