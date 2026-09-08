@@ -21,11 +21,14 @@ from space_idle import (
 from space_idle.content.base_game import (
     REUSABLE_ORBITAL_CARGO_TUG,
     CRYOGENIC_STORAGE,
+    CREWED_ORBITAL_LABORATORY,
     EARTH,
     ELECTROLYSIS_PLANT,
     INDUSTRIAL_POWER_BLOCK,
     LEO,
+    MICROGRAVITY_EXPERIMENT_PLATFORM,
     REUSABLE_SURFACE_CARGO_LANDER,
+    ROBOTIC_GEOLOGY_STATION,
     LUNAR_ORBIT,
     ORBITAL_LOGISTICS_NODE,
     POLAR_COLD_TRAP,
@@ -35,10 +38,13 @@ from space_idle.content.base_game import (
     SURFACE_POWER_GRID,
     SOUTH_POLAR_RIDGE,
     TECH_CISLUNAR_LOGISTICS,
+    TECH_CREWED_ORBITAL_RESEARCH,
     TECH_INDUSTRIAL_ELECTROLYSIS,
     TECH_LUNAR_PROSPECTING,
+    TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS,
     TECH_ORBITAL_OPERATIONS,
     TECH_PROPELLANT_HANDLING,
+    TECH_ROBOTIC_FIELD_GEOLOGY,
     TECH_VOLATILE_ISRU,
     VOLATILE_EXTRACTOR,
     WATER,
@@ -60,6 +66,8 @@ def _wait_until_research_startable(app, research_id, max_days=2000):
 
 
 def _complete_research(app, research_id, demonstration_site=None, max_days=2000):
+    if _research_row(app, research_id).status == "complete":
+        return
     _wait_until_research_startable(app, research_id, max_days=max_days)
     app.execute(StartResearch(str(research_id)))
     for _ in range(max_days):
@@ -88,19 +96,42 @@ def _advance_until_complete(app, project_ids, max_days=2000):
     raise AssertionError("projects did not complete")
 
 
+def _build_facility_if_absent(app, location_id, facility_definition_id):
+    if any(
+        row.definition_id == str(facility_definition_id)
+        for row in app.query(GetLocation(str(location_id))).facilities
+    ):
+        return
+    project_id = app.execute(PlanBuild(
+        str(location_id), str(facility_definition_id), priority=100,
+        sourcing_policy="import_now", import_source_id=str(EARTH),
+    )).created_id
+    assert project_id is not None
+    _advance_until_complete(app, [project_id])
+
+
+def _establish_orbital_research_capacity(app):
+    # Research capacity is itself part of progression: the initial laboratory
+    # and observation satellite can fund the first orbital experiment system,
+    # whose platform then provides enough RP capacity for larger orbital work.
+    _complete_research(app, TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS)
+    _build_facility_if_absent(app, LEO, MICROGRAVITY_EXPERIMENT_PLATFORM)
+    _complete_research(app, TECH_CISLUNAR_LOGISTICS)
+    _complete_research(app, TECH_CREWED_ORBITAL_RESEARCH, LEO)
+    _build_facility_if_absent(app, LEO, CREWED_ORBITAL_LABORATORY)
+
+
 def _establish_cislunar_access(app):
     _complete_research(app, TECH_ORBITAL_OPERATIONS)
-    _complete_research(app, TECH_CISLUNAR_LOGISTICS)
-    node = app.execute(PlanBuild(str(LEO), str(ORBITAL_LOGISTICS_NODE), priority=100, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id
-    assert node is not None
-    _advance_until_complete(app, [node])
+    _establish_orbital_research_capacity(app)
+    _build_facility_if_absent(app, LEO, ORBITAL_LOGISTICS_NODE)
     route = next(r for r in app.query(GetLogistics()).routes if r.id == "base.route.leo_lunar_orbit")
     assert route.available
 
 
 def _establish_survey_and_isru(app):
     _establish_cislunar_access(app)
-    _complete_research(app, TECH_LUNAR_PROSPECTING)
+    _complete_research(app, TECH_LUNAR_PROSPECTING, LEO)
     survey_pkg = app.execute(PlanBuild(str(POLAR_COLD_TRAP), str(ROBOTIC_SURVEY_PACKAGE), priority=100, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id
     assert survey_pkg is not None
     _advance_until_complete(app, [survey_pkg])
@@ -112,6 +143,12 @@ def _establish_survey_and_isru(app):
         app.execute(AdvanceTime(1))
     else:
         raise AssertionError("survey did not reach extraction-grade knowledge")
+
+    # Field geology is both a better survey instrument and a research asset.
+    # Building it expands the RP ceiling for later industrial research instead
+    # of granting that capacity as an abstract progression bonus.
+    _complete_research(app, TECH_ROBOTIC_FIELD_GEOLOGY, POLAR_COLD_TRAP)
+    _build_facility_if_absent(app, POLAR_COLD_TRAP, ROBOTIC_GEOLOGY_STATION)
     _complete_research(app, TECH_VOLATILE_ISRU, POLAR_COLD_TRAP)
     power = app.execute(PlanBuild(str(POLAR_COLD_TRAP), str(INDUSTRIAL_POWER_BLOCK), priority=105, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id
     extractor = app.execute(PlanBuild(str(POLAR_COLD_TRAP), str(VOLATILE_EXTRACTOR), priority=100, sourcing_policy="import_now", import_source_id=str(EARTH))).created_id
@@ -296,14 +333,15 @@ def test_manual_pause_resume_controls_preserve_configuration_and_halt_autonomous
 
     app = build_game_application()
 
-    # The research provider owns RP generation/storage. Pausing the facility
-    # preserves stored points while removing current generation and capacity.
+    # Pausing one provider removes only that asset's contribution. Other research
+    # assets continue operating, and stored RP is never deleted by the capacity drop.
     app.execute(AdvanceTime(2))
     research_before_pause = app.query(GetResearch())
     lab = next(
         row for row in app.query(GetLocation(str(EARTH))).facilities
         if row.definition_id == str(EARTH_RESEARCH_LAB)
     )
+    lab_provider = next(row for row in research_before_pause.providers if row.facility_id == lab.id)
     app.execute(PauseFacility(lab.id))
     stopped_lab = next(
         row for row in app.query(GetLocation(str(EARTH))).facilities
@@ -312,13 +350,19 @@ def test_manual_pause_resume_controls_preserve_configuration_and_halt_autonomous
     stopped_research = app.query(GetResearch())
     assert stopped_lab.paused and ("manual_pause", "設備が手動停止中") in stopped_lab.activation_blockers
     assert stopped_research.stored_points == research_before_pause.stored_points
-    assert stopped_research.generation_points_per_day == 0
-    assert stopped_research.storage_capacity_points <= research_before_pause.storage_capacity_points
+    assert stopped_research.generation_points_per_day < research_before_pause.generation_points_per_day
+    assert stopped_research.storage_capacity_points < research_before_pause.storage_capacity_points
+    assert stopped_research.generation_points_per_day <= research_before_pause.generation_points_per_day - lab_provider.generation_points_per_day + 1e-9
     app.execute(AdvanceTime(3))
-    assert app.query(GetResearch()).stored_points == stopped_research.stored_points
+    progressed_without_lab = app.query(GetResearch())
+    assert progressed_without_lab.stored_points >= stopped_research.stored_points
+    if stopped_research.generation_points_per_day > 1e-9:
+        assert progressed_without_lab.stored_points > stopped_research.stored_points
     app.execute(ResumeFacility(lab.id))
+    resumed_research = app.query(GetResearch())
+    assert resumed_research.generation_points_per_day > stopped_research.generation_points_per_day
     app.execute(AdvanceTime(1))
-    assert app.query(GetResearch()).stored_points > stopped_research.stored_points
+    assert app.query(GetResearch()).stored_points > progressed_without_lab.stored_points
 
     # Research pause applies to an already-funded physical phase. It does not
     # recreate Theory progress or refund the RP payment.
@@ -338,7 +382,7 @@ def test_manual_pause_resume_controls_preserve_configuration_and_halt_autonomous
     assert not resumed.paused and resumed.status == "prototype"
     app.execute(FundResearchPrototype(str(TECH_ORBITAL_OPERATIONS), str(EARTH)))
     assert _research_row(app, TECH_ORBITAL_OPERATIONS).status == "complete"
-    _complete_research(app, TECH_CISLUNAR_LOGISTICS)
+    _establish_orbital_research_capacity(app)
 
     # Construction pause stops procurement/construction state advancement and
     # resume continues the same project rather than recreating it.
@@ -376,7 +420,7 @@ def test_manual_pause_resume_controls_preserve_configuration_and_halt_autonomous
     # Survey allocation is preserved while paused and resumes from the same progress.
     app2 = build_game_application()
     _establish_cislunar_access(app2)
-    _complete_research(app2, TECH_LUNAR_PROSPECTING)
+    _complete_research(app2, TECH_LUNAR_PROSPECTING, LEO)
     survey_pkg = app2.execute(PlanBuild(
         str(POLAR_COLD_TRAP), str(ROBOTIC_SURVEY_PACKAGE), priority=100,
         sourcing_policy="import_now", import_source_id=str(EARTH)
@@ -436,11 +480,14 @@ def test_vehicle_eligibility_is_derived_from_physical_ascent_capability_not_conc
 def test_end_to_end_lunar_shipment_does_not_require_leo_or_research_gate():
     app = build_game_application()
 
-    # No technology is completed and no LEO infrastructure is built. If an
-    # external service satisfies the physical operations, the destination is
-    # reachable without using research as a route-unlock switch.
+    # Research assets may already operate in LEO, but direct external transport
+    # must not require a logistics node or a research unlock when its physical
+    # service can satisfy the whole mission independently.
     assert not app._simulation.technology.completed
-    assert not app.query(GetLocation(str(LEO))).facilities
+    assert all(
+        row.definition_id != str(ORBITAL_LOGISTICS_NODE)
+        for row in app.query(GetLocation(str(LEO))).facilities
+    )
 
     order_id = app.execute(SubmitCargo(
         str(EARTH), str(SOUTH_POLAR_RIDGE), str(WATER), 1.0, 100
