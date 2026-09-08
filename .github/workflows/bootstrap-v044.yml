@@ -44,8 +44,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cp .github/workflows/bootstrap-v044.yml /tmp/bootstrap-v044.yml
+          rm -f /tmp/space-idle-v044/.github/workflows/ci.yml
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -a /tmp/space-idle-v044/. .
+          mkdir -p .github/workflows
+          cp /tmp/bootstrap-v044.yml .github/workflows/bootstrap-v044.yml
           chmod +x start_ipad_server.sh
 
       - name: Commit development tree
