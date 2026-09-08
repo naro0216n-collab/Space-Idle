@@ -11,7 +11,6 @@ from .base_ids import (
     CONSTRUCTION_EQUIPMENT,
     REGOLITH,
     METAL_FEEDSTOCK,
-    CONTRACT_PAYLOAD,
     WATER,
     OXYGEN,
     HYDROGEN,
