@@ -237,6 +237,42 @@ def run() -> dict[str, object]:
                 "paused automatic clock must not advance",
             )
 
+            # Facility upgrades are ordinary construction projects. Verify the
+            # decision surface and command path while the clock is paused so the
+            # project cannot consume materials before we inspect it.
+            page.locator('[data-tab="facilities"]').click()
+            facility_rows = page.locator('tr[data-inspect="facility"]')
+            upgrade_button = None
+            for index in range(facility_rows.count()):
+                facility_rows.nth(index).click()
+                candidate = page.locator('#inspectorContent [data-upgrade]')
+                if candidate.count():
+                    upgrade_button = candidate.first
+                    break
+            _assert(upgrade_button is not None, "at least one initial facility must expose a defined next upgrade")
+            _assert(upgrade_button.is_visible(), "facility inspector must show the upgrade action")
+            _assert(upgrade_button.is_enabled(), "unblocked facility upgrade action must be enabled")
+            _assert("必要工数" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose construction work")
+            _assert("必要部材" in page.locator("#inspectorContent").inner_text() or "標準材" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose material requirements")
+            upgrade_button.click()
+            page.wait_for_function(
+                "() => !document.body.classList.contains('is-busy')",
+                timeout=10000,
+            )
+            page.locator('[data-tab="construction"]').click()
+            upgrade_rows = page.locator('tr[data-inspect="project"]', has_text="Upgrade")
+            _assert(upgrade_rows.count() > 0, "upgrade command must create a construction project visible in the project list")
+            upgrade_rows.first.click()
+            _assert("Facility Upgrade" in page.locator("#inspectorContent").inner_text(), "project inspector must retain typed upgrade target information")
+            cancel_upgrade = page.locator('#inspectorContent [data-command="CancelBuild"]')
+            _assert(cancel_upgrade.is_enabled(), "planned upgrade project must use ordinary construction cancellation")
+            cancel_upgrade.click()
+            page.wait_for_function(
+                "() => !document.body.classList.contains('is-busy')",
+                timeout=10000,
+            )
+            page.locator('[data-tab="overview"]').click()
+
             page.locator('[data-time-speed="4"]').click()
             page.wait_for_function(
                 "() => !document.body.classList.contains('is-busy')",
@@ -344,6 +380,7 @@ def run() -> dict[str, object]:
                 "transport": transport,
                 "server": "in_process_http",
                 "device_scale_factor": 2,
+                "facility_upgrade_ui": True,
                 "landscape_viewport": viewport_metrics,
                 "standard_ipad_landscape": standard_ipad_metrics,
                 "standard_ipad_logistics": standard_logistics_metrics,
