@@ -3,7 +3,7 @@ from __future__ import annotations
 from .application_commands import (
     Command, CommandResult, FundResearchPrototype, PauseResearch, PauseSurvey,
     ResumeResearch, ResumeSurvey, SetResearchDemonstrationSite,
-    SetSurveyAllocation, StartResearch, StartSurvey,
+    SetResearchPrototypeSite, SetSurveyAllocation, StartResearch, StartSurvey,
 )
 from .shared import DefinitionId
 
@@ -11,7 +11,10 @@ from .shared import DefinitionId
 class ProgressionCommandHandlerMixin:
     def _handle_progression_command(self, command: Command):
         sim = self._simulation
-        if isinstance(command, (StartResearch, PauseResearch, ResumeResearch, FundResearchPrototype, SetResearchDemonstrationSite)):
+        if isinstance(command, (
+            StartResearch, PauseResearch, ResumeResearch, SetResearchPrototypeSite,
+            FundResearchPrototype, SetResearchDemonstrationSite,
+        )):
             if sim.research is None:
                 raise RuntimeError("research is not configured")
             rid = DefinitionId(command.research_id)
@@ -21,8 +24,10 @@ class ProgressionCommandHandlerMixin:
                 sim.research.pause(rid)
             elif isinstance(command, ResumeResearch):
                 sim.research.resume(rid)
+            elif isinstance(command, SetResearchPrototypeSite):
+                sim.research.set_prototype_site(rid, self._require_location(command.location_id), sim.day)
             elif isinstance(command, FundResearchPrototype):
-                sim.research.fund_prototype(rid, self._require_location(command.location_id), sim.day)
+                sim.research.fund_prototype(rid, sim.day)
             else:
                 sim.research.set_demonstration_site(rid, self._require_location(command.location_id), sim.day)
             return CommandResult()
