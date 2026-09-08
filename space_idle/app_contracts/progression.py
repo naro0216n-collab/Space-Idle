@@ -9,8 +9,11 @@ class PauseResearch: research_id: str
 @dataclass(frozen=True)
 class ResumeResearch: research_id: str
 @dataclass(frozen=True)
-class FundResearchPrototype:
+class SetResearchPrototypeSite:
     research_id: str; location_id: str
+@dataclass(frozen=True)
+class FundResearchPrototype:
+    research_id: str
 @dataclass(frozen=True)
 class SetResearchDemonstrationSite:
     research_id: str; location_id: str
