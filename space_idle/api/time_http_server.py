@@ -35,7 +35,6 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
         if _OLD_TIME_CONTROLS not in html:
             raise RuntimeError("WebUI time-control composition point not found")
         html = html.replace(_OLD_TIME_CONTROLS, _NEW_TIME_CONTROLS, 1)
-        html = html.replace("v0.4.4", "v0.4.5")
         html = html.replace(
             '  <link rel="stylesheet" href="/app.css">\n',
             '  <link rel="stylesheet" href="/app.css">\n  <link rel="stylesheet" href="/time_control.css">\n',
