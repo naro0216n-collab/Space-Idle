@@ -27,6 +27,7 @@ def _discover_lan_ip() -> str | None:
     finally:
         sock.close()
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Space Idle development API server")
     parser.add_argument("--host", default="0.0.0.0", help="listen address; 0.0.0.0 allows iPad access on the LAN")
@@ -38,13 +39,15 @@ def main() -> None:
     )
     parser.add_argument("--tls-cert", default=None, help="PEM certificate for HTTPS (recommended when the iPad WebUI uses HTTPS/PWA)")
     parser.add_argument("--tls-key", default=None, help="PEM private key matching --tls-cert")
-    parser.add_argument("--offline-seconds-per-day", type=float, default=None)
+    parser.add_argument(
+        "--seconds-per-game-day", "--offline-seconds-per-day",
+        dest="seconds_per_game_day", type=float, default=1.0,
+        help="real seconds per game day at 1x speed (default: 1.0)",
+    )
     parser.add_argument("--offline-max-days", type=int, default=None)
     args = parser.parse_args()
 
-    policy = None
-    if args.offline_seconds_per_day is not None:
-        policy = OfflineProgressPolicy(args.offline_seconds_per_day, args.offline_max_days)
+    policy = OfflineProgressPolicy(args.seconds_per_game_day, args.offline_max_days)
     runtime = GameRuntime(factory=build_game_application, save_dir=Path(args.save_dir), offline_policy=policy)
     config = ApiServerConfig(
         host=args.host,
@@ -57,6 +60,7 @@ def main() -> None:
     host, port = server.server_address[:2]
     scheme = "https" if args.tls_cert else "http"
     print(f"Space Idle WebUI + API listening on {scheme}://{host}:{port}/")
+    print(f"Simulation clock: automatic, {args.seconds_per_game_day:g} real second(s) per game day at 1x")
     if args.host in {"0.0.0.0", "::"}:
         lan_ip = _discover_lan_ip()
         if lan_ip:
