@@ -57,11 +57,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Start shipped Windows launcher and probe server
+      - name: Start update launcher and probe server
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $server = Start-Process -FilePath 'cmd.exe' -ArgumentList '/d','/c','start_ipad_server.bat' -WorkingDirectory $PWD -PassThru -WindowStyle Hidden
+          git fetch --depth=1 origin develop:refs/remotes/origin/develop
+          git checkout -B ci-launcher-test
+          git branch --set-upstream-to=origin/develop ci-launcher-test
+          $server = Start-Process -FilePath 'cmd.exe' -ArgumentList '/d','/c','update_and_start_ipad_server.bat' -WorkingDirectory $PWD -PassThru -WindowStyle Hidden
           try {
             $ready = $false
             for ($i = 0; $i -lt 80; $i++) {
