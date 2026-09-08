@@ -13,5 +13,9 @@ space-idle-api = "space_idle.api.__main__:main"
 pythonpath = ["."]
 testpaths = ["tests"]
 
+[tool.setuptools.packages.find]
+include = ["space_idle*"]
+exclude = ["tests*", "playwright*"]
+
 [tool.setuptools.package-data]
 space_idle = ["webui/*.html", "webui/*.css", "webui/*.js"]
