@@ -15,7 +15,6 @@ from ..logistics import (
     TransportPerformanceProfile,
     VehicleDef,
     VehicleDisposition,
-    VehicleEconomicsSpec,
     VehicleMaintenanceSpec,
     VehicleProductionSpec,
 )
@@ -117,6 +116,13 @@ def build_external_transport_services() -> dict:
 
 
 def build_vehicle_definitions() -> dict:
+    """Owned base-game fleets are physical assets, not recurring money sinks.
+
+    Their operation is constrained by vehicle performance, propellant, support
+    infrastructure, turnaround time, production capacity, and material inputs.
+    Monetary settlement remains on ExternalTransportServiceDef for commercial
+    services and may still be used by other optional content.
+    """
     return {
         ids.REUSABLE_LAUNCH_VEHICLE: VehicleDef(
             id=ids.REUSABLE_LAUNCH_VEHICLE,
@@ -129,9 +135,11 @@ def build_vehicle_definitions() -> dict:
                 operation_support_requirements=(OperationSupportRequirement(TransportOperationKind.POWERED_ASCENT, OperationSupportLocation.ORIGIN, "launch_operations"),),
                 default_disposition=VehicleDisposition.RETURN_TO_ORIGIN,
             ),
-            economics=VehicleEconomicsSpec(5.0, 0.2),
-            production=VehicleProductionSpec("vehicle_assembly", 10.0, 35.0, ((ids.STRUCTURAL_COMPONENTS, 20.0), (ids.MACHINERY, 8.0), (ids.PRECISION_ELECTRONICS, 2.0))),
-            maintenance=VehicleMaintenanceSpec("launch_vehicle_servicing", 5.0, 0.0, ()),
+            production=VehicleProductionSpec(
+                capability_id="vehicle_assembly", days=10.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 20.0), (ids.MACHINERY, 8.0), (ids.PRECISION_ELECTRONICS, 2.0)),
+            ),
+            maintenance=VehicleMaintenanceSpec(capability_id="launch_vehicle_servicing", turnaround_days=5.0),
         ),
         ids.REUSABLE_ORBITAL_CARGO_TUG: VehicleDef(
             id=ids.REUSABLE_ORBITAL_CARGO_TUG,
@@ -143,9 +151,11 @@ def build_vehicle_definitions() -> dict:
                 operation_capabilities=(SpaceflightCapability(5.0, 60),),
                 default_disposition=VehicleDisposition.DESTINATION,
             ),
-            economics=VehicleEconomicsSpec(0.6, 0.08),
-            production=VehicleProductionSpec("vehicle_assembly", 4.0, 10.0, ((ids.STRUCTURAL_COMPONENTS, 4.0), (ids.MACHINERY, 2.0), (ids.PRECISION_ELECTRONICS, 1.0))),
-            maintenance=VehicleMaintenanceSpec("spacecraft_servicing", 1.0, 0.0, ()),
+            production=VehicleProductionSpec(
+                capability_id="vehicle_assembly", days=4.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 4.0), (ids.MACHINERY, 2.0), (ids.PRECISION_ELECTRONICS, 1.0)),
+            ),
+            maintenance=VehicleMaintenanceSpec(capability_id="spacecraft_servicing", turnaround_days=1.0),
         ),
         ids.REUSABLE_SURFACE_CARGO_LANDER: VehicleDef(
             id=ids.REUSABLE_SURFACE_CARGO_LANDER,
@@ -157,9 +167,11 @@ def build_vehicle_definitions() -> dict:
                 operation_capabilities=(SpaceflightCapability(5.0, 30), PoweredAscentCapability(2.1, 2.0, 1000.0), LandingCapability(2.1, 2.0, 1000.0)),
                 default_disposition=VehicleDisposition.DESTINATION,
             ),
-            economics=VehicleEconomicsSpec(0.4, 0.05),
-            production=VehicleProductionSpec("vehicle_assembly", 3.0, 8.0, ((ids.STRUCTURAL_COMPONENTS, 2.5), (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 0.8))),
-            maintenance=VehicleMaintenanceSpec("spacecraft_servicing", 1.0, 0.0, ()),
+            production=VehicleProductionSpec(
+                capability_id="vehicle_assembly", days=3.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 2.5), (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 0.8)),
+            ),
+            maintenance=VehicleMaintenanceSpec(capability_id="spacecraft_servicing", turnaround_days=1.0),
         ),
     }
 
