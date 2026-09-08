@@ -303,4 +303,4 @@ python playwright/acceptance.py
 
 ## GitHub開発環境
 
-以後の開発はGitHubリポジトリの`main`を正準ソースとし、配布zipからの派生編集は行いません。ローカルセットアップ、CI、Playwright受入試験、iPad用Server起動手順は [`DEVELOPMENT.md`](DEVELOPMENT.md) を参照してください。
+GitHubリポジトリの`main`をユーザー承認済みの正準ブランチ、`develop`を通常開発・統合・プレイテスト用の常設ブランチとします。`develop`から`main`への統合とバージョン表記変更は、ユーザーの明示的承認後にのみ行います。ローカルセットアップ、CI、Playwright受入試験、iPad用Server起動手順は [`DEVELOPMENT.md`](DEVELOPMENT.md) を参照してください。
