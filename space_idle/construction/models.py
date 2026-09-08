@@ -101,11 +101,16 @@ class ConstructionResourceProviderSpec:
 
 @dataclass
 class ProjectComponentState:
+    # Substitutes are content-selected alternatives to the standard component.
     reserved_local_t: float = 0.0
     reserved_local_resource_id: DefinitionId | None = None
+    # Standard components already present at the construction site are neither
+    # substitutions nor imports and are tracked separately.
+    reserved_primary_t: float = 0.0
     reserved_import_t: float = 0.0
     committed_local_t: float = 0.0
     committed_local_resource_id: DefinitionId | None = None
+    committed_primary_t: float = 0.0
     committed_import_t: float = 0.0
     local_target_t: float = 0.0
     import_committed_t: float | None = None
