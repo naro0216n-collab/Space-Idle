@@ -1,0 +1,60 @@
+name: Bootstrap v0.4.4 source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bootstrap-v044.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bootstrap branch state
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f space-idle-v0.4.4-source.zip
+          actual="$(sha256sum space-idle-v0.4.4-source.zip | awk '{print $1}')"
+          expected="62549f9209fd7cf6700dc1d58baa8afd83aa561479c4d26b8a5c9a3076622c16"
+          test "$actual" = "$expected"
+
+      - name: Expand v0.4.4 source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/space-idle-v044
+          mkdir -p /tmp/space-idle-v044
+          unzip -q space-idle-v0.4.4-source.zip -d /tmp/space-idle-v044
+          test -f /tmp/space-idle-v044/pyproject.toml
+          test -f /tmp/space-idle-v044/README.md
+          test -d /tmp/space-idle-v044/space_idle
+          test -d /tmp/space-idle-v044/tests
+          test -d /tmp/space-idle-v044/playwright
+
+      - name: Replace repository tree with extracted source
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a /tmp/space-idle-v044/. .
+          chmod +x start_ipad_server.sh
+
+      - name: Commit development tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Initialize Space Idle v0.4.4 development tree"
+          git push origin HEAD:main
