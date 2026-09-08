@@ -13,7 +13,7 @@ from space_idle.content.base_game import (
     TECH_ORBITAL_OPERATIONS,
 )
 from space_idle.resource_demand import ResourceDemand
-from space_idle.shared import DefinitionId, EntityId
+from space_idle.shared import EntityId
 
 
 def _demand(amount_t: float, *, demand_id: str = "demand.test") -> ResourceDemand:
@@ -44,7 +44,6 @@ def test_lane_is_resource_agnostic_and_requested_capacity_limits_daily_order_cre
     assert sum(order.amount_t for order in lane_orders) == pytest.approx(1.0)
     assert all(order.demand_id == demand.id for order in lane_orders)
 
-    # Re-running allocation in the same day cannot exceed requested lane capacity.
     sim.logistics.advance_automation(sim.day, (demand,))
     same_day = [
         order for order in sim.logistics.orders.values()
@@ -74,13 +73,17 @@ def test_one_demand_is_not_duplicated_across_multiple_matching_lanes():
         if order.demand_id == demand.id and order.lane_id in {first, second}
     ]
     assert sum(order.amount_t for order in automatic) == pytest.approx(demand.amount_t)
-    assert sim.logistics._demand_pipeline_remaining(demand.id) == pytest.approx(demand.amount_t)
+    assert sim.logistics.demand_pipeline_t(demand.id) == pytest.approx(demand.amount_t)
 
 
-def test_construction_declares_import_demand_and_waits_for_a_matching_lane():
+def _unlock_orbital_logistics(sim) -> None:
+    sim.technology.completed.update({TECH_ORBITAL_OPERATIONS, TECH_CISLUNAR_LOGISTICS})
+
+
+def test_construction_declares_source_constrained_import_demand_and_waits_for_matching_lane():
     app = build_game_application()
     sim = app._simulation
-    sim.technology.completed.update({TECH_ORBITAL_OPERATIONS, TECH_CISLUNAR_LOGISTICS})
+    _unlock_orbital_logistics(sim)
     project_id = sim.projects.plan_build(
         ORBITAL_LOGISTICS_NODE,
         LEO,
@@ -105,6 +108,36 @@ def test_construction_declares_import_demand_and_waits_for_a_matching_lane():
     assert generated
     assert all(order.owner_kind == "project" for order in generated)
     assert all(order.demand_id is not None for order in generated)
+
+
+def test_construction_without_source_constraint_allows_lane_to_choose_supply_source():
+    app = build_game_application()
+    sim = app._simulation
+    _unlock_orbital_logistics(sim)
+    project_id = sim.projects.plan_build(
+        ORBITAL_LOGISTICS_NODE,
+        LEO,
+        50,
+        "import_now",
+        day=sim.day,
+        import_source_id=None,
+    )
+
+    sim.projects.advance_procurement(sim.day)
+    demands = sim.projects.resource_demands(sim.day)
+    assert demands
+    assert all(demand.destination_id == LEO for demand in demands)
+    assert all(demand.source_id is None for demand in demands)
+    assert "import_lane" in {blocker.code for blocker in sim.projects.blockers(project_id, sim.day)}
+
+    lane_id = sim.logistics.create_lane(EARTH, LEO, 100.0, 100)
+    sim.logistics.advance_automation(sim.day, demands)
+    generated = [
+        order for order in sim.logistics.orders.values()
+        if order.owner_id == EntityId(project_id) and order.lane_id == lane_id
+    ]
+    assert generated
+    assert all(order.source_id == EARTH and order.destination_id == LEO for order in generated)
 
 
 def test_selected_research_prototype_site_declares_material_demand_until_stock_arrives():

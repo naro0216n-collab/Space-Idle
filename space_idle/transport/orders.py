@@ -115,7 +115,8 @@ class TransportOrderMixin:
             if order.lane_id == lane_id and order.created_day == day
         )
 
-    def _demand_pipeline_remaining(self, demand_id: EntityId) -> float:
+    def demand_pipeline_t(self, demand_id: EntityId) -> float:
+        """Return undelivered material already assigned to physical cargo orders."""
         return sum(
             max(0.0, order.amount_t - order.delivered_t)
             for order in self.orders.values()
@@ -123,7 +124,7 @@ class TransportOrderMixin:
         )
 
     def demand_remaining_t(self, demand: ResourceDemand) -> float:
-        return max(0.0, demand.amount_t - self._demand_pipeline_remaining(demand.id))
+        return max(0.0, demand.amount_t - self.demand_pipeline_t(demand.id))
 
     @staticmethod
     def _lane_accepts_demand(lane: LogisticsLane, demand: ResourceDemand) -> bool:

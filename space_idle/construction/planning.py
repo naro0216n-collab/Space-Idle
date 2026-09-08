@@ -238,6 +238,14 @@ class ConstructionPlanningMixin:
         project.paused = False
         project.pause_started_day = None
 
+    def _matching_import_lanes(self, project: ConstructionProject):
+        return tuple(
+            lane
+            for lane in self.logistics.lanes.values()
+            if lane.destination_id == project.location_id
+            and (project.import_source_id is None or lane.source_id == project.import_source_id)
+        )
+
     def _import_lane_blocker(
         self,
         project: ConstructionProject,
@@ -245,13 +253,7 @@ class ConstructionPlanningMixin:
         state,
         day: int,
     ) -> ProjectBlocker | None:
-        if project.import_source_id is None:
-            return ProjectBlocker("import_source", component.component_id)
-        lanes = [
-            lane for lane in self.logistics.lanes.values()
-            if lane.source_id == project.import_source_id
-            and lane.destination_id == project.location_id
-        ]
+        lanes = self._matching_import_lanes(project)
         if not lanes:
             return ProjectBlocker("import_lane", component.component_id)
         if all(self.logistics.lane_effective_capacity_t_per_day(lane.id, day) <= 1e-12 for lane in lanes):
@@ -264,7 +266,10 @@ class ConstructionPlanningMixin:
                 "import_lane_blocked",
                 component.component_id + (":" + ";".join(dict.fromkeys(details)) if details else ""),
             )
-        if self.inventory.available(project.import_source_id, component.import_resource_id) <= 1e-12:
+        if all(
+            self.inventory.available(lane.source_id, component.import_resource_id) <= 1e-12
+            for lane in lanes
+        ):
             return ProjectBlocker("import_stock", component.component_id)
         if state.reserved_import_t + 1e-9 < (state.import_committed_t or 0.0):
             return ProjectBlocker("import_transit", component.component_id)
@@ -318,14 +323,7 @@ class ConstructionPlanningMixin:
                 if local_shortfall > 1e-9 and waited < wait_limit:
                     blockers.append(ProjectBlocker("local_supply_wait", component.component_id))
                     continue
-                if project.import_source_id is None:
-                    blockers.append(ProjectBlocker("import_source", component.component_id))
-                    continue
-                if not any(
-                    lane.source_id == project.import_source_id
-                    and lane.destination_id == project.location_id
-                    for lane in self.logistics.lanes.values()
-                ):
+                if not self._matching_import_lanes(project):
                     blockers.append(ProjectBlocker("import_lane", component.component_id))
         if (
             project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}

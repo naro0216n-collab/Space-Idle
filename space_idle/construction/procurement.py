@@ -22,7 +22,7 @@ class ConstructionProcurementMixin:
                 if state.import_committed_t is None or state.import_committed_t <= 1e-9:
                     continue
                 missing = max(0.0, state.import_committed_t - state.reserved_import_t)
-                if missing <= 1e-9 or project.import_source_id is None:
+                if missing <= 1e-9:
                     continue
                 demands.append(ResourceDemand(
                     EntityId(f"demand.project:{project.id}:{component.component_id}"),
@@ -104,9 +104,6 @@ class ConstructionProcurementMixin:
                     if fully_covered:
                         state.import_committed_t = 0.0
                     elif local_met or waited >= wait_limit:
-                        if project.import_source_id is None:
-                            all_ready = False
-                            continue
                         state.import_committed_t = max(0.0, component.amount_t - covered_on_site)
                     else:
                         all_ready = False
