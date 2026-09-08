@@ -1,6 +1,6 @@
 # Development
 
-GitHub の `main` ブランチを開発上の正準ソースとする。配布用 zip はスナップショットであり、以後の変更元にはしない。
+GitHub の `main` をユーザー承認済みの正準ブランチ、`develop` を通常開発・統合・プレイテスト用の常設ブランチとする。配布用 zip はスナップショットであり、以後の変更元にはしない。
 
 ## Requirements
 
@@ -43,18 +43,21 @@ Windowsでは `start_ipad_server.bat`、macOS/Linuxでは `start_ipad_server.sh`
 http://<PC LAN IPv4>:8765/
 ```
 
+通常起動ではシミュレーション時間が自動進行する。WebUIから一時停止と速度変更を行う。Coreの決定論テストでは引き続き明示的な時間進行APIを利用できる。
+
 WebUIは通常サイズiPadの横持ちを基準とし、iPad mini向け最適化は行わない。縦持ちでは横持ち用レイアウトを維持する。
 
 ## Git workflow
 
-- `main`: 統合済み・テスト通過状態
-- 変更は目的別ブランチで行い、可能な限りPRで`main`へ統合する
+- `main`: ユーザーが明示的に承認した正準状態。CIやレビュー結果だけを理由に`develop`から自動統合しない
+- `develop`: 通常開発・統合・プレイテストを継続する常設ブランチ
+- 一時ブランチ: `develop`から独立した検証・レビューが必要な作業だけに使用する。同一目的の修正では既存ブランチを継続利用し、統合後は削除する
 - ゲーム性評価段階では旧仕様・旧Save互換を目的化しない
 - テストは暫定バランス値より不変条件・状態遷移・境界整合性を優先する
 
 ## GitHub validation
 
-GitHub Actionsを、チャット実行環境固有のネットワーク・ブラウザ制約から独立した再現可能な外部検証環境として使用する。`main`とPRでは以下を並列実行する。
+GitHub Actionsを、チャット実行環境固有のネットワーク・ブラウザ制約から独立した再現可能な外部検証環境として使用する。`develop`、`main`、`main`向けPRでは以下を並列実行する。
 
 - Ubuntu / Python 3.11: unit・architecture tests
 - Ubuntu clean install: repository外からimportと`space-idle-api` entry pointを検証
