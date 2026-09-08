@@ -109,8 +109,6 @@ class Simulation:
         if days < 0:
             raise ValueError("days must be non-negative")
         for _ in range(days):
-            self.account.earn(self.account.passive_income_musd_per_day)
-
             locations = {facility.location_id for facility in self.facilities.facilities.values()}
             locations.update(project.location_id for project in self.projects.projects.values())
             if self.survey is not None:
