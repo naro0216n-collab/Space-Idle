@@ -38,9 +38,17 @@ class ConstructionPlanningMixin:
 
         self._counter += 1
         pid = ProjectId(f"project.{self._counter}")
-        components = {component.component_id: ProjectComponentState() for component in recipe.components}
+        components = {
+            component.component_id: ProjectComponentState()
+            for component in recipe.components
+        }
         self.projects[pid] = ConstructionProject(
-            pid, target, location_id, priority, sourcing_policy, import_source_id,
+            pid,
+            target,
+            location_id,
+            priority,
+            sourcing_policy,
+            import_source_id,
             components=components,
         )
         return pid
@@ -57,7 +65,11 @@ class ConstructionPlanningMixin:
         if facility_def_id not in self.recipes:
             raise KeyError(facility_def_id)
         return self._create_project(
-            NewFacilityTarget(facility_def_id), location_id, priority, sourcing_policy, import_source_id,
+            NewFacilityTarget(facility_def_id),
+            location_id,
+            priority,
+            sourcing_policy,
+            import_source_id,
         )
 
     def plan_upgrade(
@@ -96,12 +108,17 @@ class ConstructionPlanningMixin:
         project = self.projects[project_id]
         if project.status not in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}:
             raise ValueError("sourcing policy can only change before construction readiness")
-        if any((c.import_committed_t or 0.0) > 1e-9 or c.import_order_id is not None for c in project.components.values()):
+        if any(
+            (state.import_committed_t or 0.0) > 1e-9 or state.import_order_id is not None
+            for state in project.components.values()
+        ):
             raise ValueError("sourcing policy cannot change after import commitment")
         self.inventory.release_reservation(EntityId(project.id))
         for state in project.components.values():
             state.reserved_local_t = 0.0
             state.reserved_local_resource_id = None
+            state.reserved_primary_t = 0.0
+            state.reserved_import_t = 0.0
             state.local_target_t = 0.0
         project.sourcing_policy = sourcing_policy
         project.procurement_started_day = None
@@ -118,12 +135,17 @@ class ConstructionPlanningMixin:
             raise KeyError(location_id)
         if project.status not in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}:
             raise ValueError("import source can only change before construction readiness")
-        if any((c.import_committed_t or 0.0) > 1e-9 or c.import_order_id is not None for c in project.components.values()):
+        if any(
+            (state.import_committed_t or 0.0) > 1e-9 or state.import_order_id is not None
+            for state in project.components.values()
+        ):
             raise ValueError("import source cannot change after import commitment")
         if project.import_path is not None:
             if location_id is None:
                 raise ValueError("cannot clear import source while an explicit import path is selected")
-            self.logistics.validate_path_structure(location_id, project.location_id, project.import_path)
+            self.logistics.validate_path_structure(
+                location_id, project.location_id, project.import_path
+            )
         project.import_source_id = location_id
 
     def set_import_transport(
@@ -135,7 +157,10 @@ class ConstructionPlanningMixin:
         project = self.projects[project_id]
         if project.status not in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}:
             raise ValueError("import transport can only change before construction readiness")
-        if any((c.import_committed_t or 0.0) > 1e-9 or c.import_order_id is not None for c in project.components.values()):
+        if any(
+            (state.import_committed_t or 0.0) > 1e-9 or state.import_order_id is not None
+            for state in project.components.values()
+        ):
             raise ValueError("import transport cannot change after import commitment")
         selected_modes = {} if mode_by_route is None else dict(mode_by_route)
         if path is None:
@@ -144,13 +169,19 @@ class ConstructionPlanningMixin:
         else:
             if project.import_source_id is None:
                 raise ValueError("import source must be selected before an explicit import path")
-            self.logistics.validate_path_structure(project.import_source_id, project.location_id, path)
-            self.logistics.validate_mode_selection(path, selected_modes, require_capacity=False)
+            self.logistics.validate_path_structure(
+                project.import_source_id, project.location_id, path
+            )
+            self.logistics.validate_mode_selection(path, selected_modes)
         project.import_path = path
         project.import_mode_by_route = selected_modes
 
     def set_local_resource_choice(
-        self, project_id: ProjectId, component_id: str, resource_id: DefinitionId | None, day: int = 0
+        self,
+        project_id: ProjectId,
+        component_id: str,
+        resource_id: DefinitionId | None,
+        day: int = 0,
     ) -> None:
         project = self.projects[project_id]
         if project.status not in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}:
@@ -160,14 +191,23 @@ class ConstructionPlanningMixin:
         state = project.components[component_id]
         if (state.import_committed_t or 0.0) > 1e-9 or state.import_order_id is not None:
             raise ValueError("local material cannot change after import commitment")
-        component = next(c for c in self._recipe_for_project(project).components if c.component_id == component_id)
-        if resource_id is not None and resource_id not in {tier.local_resource_id for tier in component.local_tiers}:
+        component = next(
+            component
+            for component in self._recipe_for_project(project).components
+            if component.component_id == component_id
+        )
+        if resource_id is not None and resource_id not in {
+            tier.local_resource_id for tier in component.local_tiers
+        }:
             raise ValueError("resource is not a valid local substitution for this component")
         if state.reserved_local_t > 1e-12:
             if state.reserved_local_resource_id is None:
                 raise RuntimeError("local reservation lacks resource type")
             self.inventory.release_reserved_amount(
-                EntityId(project.id), project.location_id, state.reserved_local_resource_id, state.reserved_local_t
+                EntityId(project.id),
+                project.location_id,
+                state.reserved_local_resource_id,
+                state.reserved_local_t,
             )
             state.reserved_local_t = 0.0
             state.reserved_local_resource_id = None
@@ -179,7 +219,11 @@ class ConstructionPlanningMixin:
         state.local_target_t = desired_local
 
     def set_local_fraction_target(
-        self, project_id: ProjectId, component_id: str, fraction: float, day: int = 0
+        self,
+        project_id: ProjectId,
+        component_id: str,
+        fraction: float,
+        day: int = 0,
     ) -> None:
         if not 0.0 <= fraction <= 1.0:
             raise ValueError("local fraction must be between 0 and 1")
@@ -192,12 +236,22 @@ class ConstructionPlanningMixin:
         if (state.import_committed_t or 0.0) > 1e-9 or state.import_order_id is not None:
             raise ValueError("local sourcing target cannot change after import commitment")
         project.local_fraction_targets[component_id] = fraction
-        component = next(c for c in self._recipe_for_project(project).components if c.component_id == component_id)
+        component = next(
+            component
+            for component in self._recipe_for_project(project).components
+            if component.component_id == component_id
+        )
         _resource, desired_local = self._selected_local_target(project, component, day)
-        if state.reserved_local_t > desired_local + 1e-9 and state.reserved_local_resource_id is not None:
+        if (
+            state.reserved_local_t > desired_local + 1e-9
+            and state.reserved_local_resource_id is not None
+        ):
             release = state.reserved_local_t - desired_local
             self.inventory.release_reserved_amount(
-                EntityId(project.id), project.location_id, state.reserved_local_resource_id, release
+                EntityId(project.id),
+                project.location_id,
+                state.reserved_local_resource_id,
+                release,
             )
             state.reserved_local_t = desired_local
         state.local_target_t = desired_local
@@ -211,6 +265,7 @@ class ConstructionPlanningMixin:
             for state in project.components.values():
                 state.reserved_local_t = 0.0
                 state.reserved_local_resource_id = None
+                state.reserved_primary_t = 0.0
                 state.reserved_import_t = 0.0
         project.status = ProjectStatus.CANCELLED
         project.paused = False
@@ -237,7 +292,10 @@ class ConstructionPlanningMixin:
         project.pause_started_day = None
 
     def blockers(
-        self, project_id: ProjectId, day: int = 0, power: PowerSnapshot | None = None
+        self,
+        project_id: ProjectId,
+        day: int = 0,
+        power: PowerSnapshot | None = None,
     ) -> tuple[ProjectBlocker, ...]:
         project = self.projects[project_id]
         if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
@@ -249,84 +307,155 @@ class ConstructionPlanningMixin:
         if isinstance(project.target, FacilityUpgradeTarget):
             facility = self.facilities.facilities.get(project.target.facility_id)
             if facility is None:
-                blockers.append(ProjectBlocker("upgrade_target_missing", str(project.target.facility_id)))
+                blockers.append(
+                    ProjectBlocker("upgrade_target_missing", str(project.target.facility_id))
+                )
             elif facility.location_id != project.location_id:
-                blockers.append(ProjectBlocker("upgrade_target_location", str(project.target.facility_id)))
+                blockers.append(
+                    ProjectBlocker("upgrade_target_location", str(project.target.facility_id))
+                )
             elif facility.level != project.target.target_level - 1:
-                blockers.append(ProjectBlocker(
-                    "upgrade_level_conflict",
-                    f"current={facility.level}, target={project.target.target_level}",
-                ))
+                blockers.append(
+                    ProjectBlocker(
+                        "upgrade_level_conflict",
+                        f"current={facility.level}, target={project.target.target_level}",
+                    )
+                )
         missing_tech = recipe.prerequisite_technologies - self.unlocked_technologies
         if missing_tech:
-            blockers.append(ProjectBlocker("technology", ",".join(sorted(map(str, missing_tech)))))
-        site_power = power if power is not None else self.power.snapshot(project.location_id, self.facilities, day)
+            blockers.append(
+                ProjectBlocker("technology", ",".join(sorted(map(str, missing_tech))))
+            )
+        site_power = (
+            power
+            if power is not None
+            else self.power.snapshot(project.location_id, self.facilities, day)
+        )
         for failure in self.project_site_failures(project, day, site_power):
             blockers.append(ProjectBlocker(failure.code, failure.detail))
         if project.status == ProjectStatus.PROCURING:
-            waited = 0 if project.procurement_started_day is None else day - project.procurement_started_day
+            waited = (
+                0
+                if project.procurement_started_day is None
+                else day - project.procurement_started_day
+            )
             wait_limit = self.sourcing_wait_days[project.sourcing_policy]
             for component in recipe.components:
                 state = project.components[component.component_id]
                 if state.import_committed_t is not None:
                     if state.reserved_import_t + 1e-9 < state.import_committed_t:
-                        blockers.append(ProjectBlocker("import_transit", component.component_id))
+                        blockers.append(
+                            ProjectBlocker("import_transit", component.component_id)
+                        )
                     continue
 
-                _local_resource, desired_local = self._selected_local_target(project, component, day)
+                _local_resource, desired_local = self._selected_local_target(
+                    project, component, day
+                )
+                covered_on_site = state.reserved_local_t + state.reserved_primary_t
+                if covered_on_site + 1e-9 >= component.amount_t:
+                    continue
                 local_shortfall = max(0.0, desired_local - state.reserved_local_t)
                 if local_shortfall > 1e-9 and waited < wait_limit:
-                    blockers.append(ProjectBlocker("local_supply_wait", component.component_id))
+                    blockers.append(
+                        ProjectBlocker("local_supply_wait", component.component_id)
+                    )
                     continue
 
-                import_amount = max(0.0, component.amount_t - state.reserved_local_t)
+                import_amount = max(0.0, component.amount_t - covered_on_site)
                 if import_amount <= 1e-9:
                     continue
                 if project.import_source_id is None:
                     blockers.append(ProjectBlocker("import_source", component.component_id))
                     continue
-                if self.inventory.available(project.import_source_id, component.import_resource_id) + 1e-9 < import_amount:
+                if (
+                    self.inventory.available(
+                        project.import_source_id, component.import_resource_id
+                    )
+                    + 1e-9
+                    < import_amount
+                ):
                     blockers.append(ProjectBlocker("import_stock", component.component_id))
                     continue
                 if not self.logistics.can_submit(
-                    project.import_source_id, project.location_id, component.import_resource_id, import_amount, day,
-                    project.import_path, project.import_mode_by_route,
+                    project.import_source_id,
+                    project.location_id,
+                    component.import_resource_id,
+                    import_amount,
+                    day,
+                    project.import_path,
+                    project.import_mode_by_route,
                 ):
                     if project.import_path is None:
                         blockers.append(ProjectBlocker("import_route", component.component_id))
                     else:
                         detailed: list[str] = []
                         try:
-                            self.logistics.validate_path_structure(project.import_source_id, project.location_id, project.import_path)
-                            self.logistics.validate_mode_selection(project.import_path, project.import_mode_by_route, require_capacity=False)
+                            self.logistics.validate_path_structure(
+                                project.import_source_id,
+                                project.location_id,
+                                project.import_path,
+                            )
+                            self.logistics.validate_mode_selection(
+                                project.import_path, project.import_mode_by_route, day=day
+                            )
                             for route_id in project.import_path:
                                 mode_id = project.import_mode_by_route.get(route_id)
                                 detailed.extend(
                                     f"{route_id}:{reason}"
-                                    for reason in self.logistics.route_operational_failures(route_id, day, mode_id)
+                                    for reason in self.logistics.route_operational_failures(
+                                        route_id, day, mode_id
+                                    )
                                 )
                         except (KeyError, ValueError) as exc:
                             detailed.append(str(exc))
-                        blockers.append(ProjectBlocker(
-                            "import_transport",
-                            component.component_id + (":" + ";".join(dict.fromkeys(detailed)) if detailed else ""),
-                        ))
+                        blockers.append(
+                            ProjectBlocker(
+                                "import_transport",
+                                component.component_id
+                                + (
+                                    ":" + ";".join(dict.fromkeys(detailed))
+                                    if detailed
+                                    else ""
+                                ),
+                            )
+                        )
 
-        if project.status in {ProjectStatus.READY, ProjectStatus.BUILDING} and not recipe.self_deploying and recipe.construction_work > 0:
+        if (
+            project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}
+            and not recipe.self_deploying
+            and recipe.construction_work > 0
+        ):
             if project.construction_weight <= 1e-12:
-                blockers.append(ProjectBlocker("construction_allocation", "construction weight is zero"))
+                blockers.append(
+                    ProjectBlocker(
+                        "construction_allocation", "construction weight is zero"
+                    )
+                )
             if power is not None:
                 if self.construction_capacity_at(project.location_id, power, day) <= 1e-12:
-                    blockers.append(ProjectBlocker("construction_capacity", "no usable construction flow"))
+                    blockers.append(
+                        ProjectBlocker(
+                            "construction_capacity", "no usable construction flow"
+                        )
+                    )
             else:
                 providers = [
-                    facility for facility in self.facilities.active_compatible_at(project.location_id, day)
+                    facility
+                    for facility in self.facilities.active_compatible_at(
+                        project.location_id, day
+                    )
                     if facility.definition_id in self.construction_providers
                 ]
                 resource_capacity = any(
-                    self.inventory.available(project.location_id, resource_id) > 1e-12 and spec.work_per_t_per_day > 0
+                    self.inventory.available(project.location_id, resource_id) > 1e-12
+                    and spec.work_per_t_per_day > 0
                     for resource_id, spec in self.construction_resource_providers.items()
                 )
                 if not providers and not resource_capacity:
-                    blockers.append(ProjectBlocker("construction_capacity", "no construction provider"))
+                    blockers.append(
+                        ProjectBlocker(
+                            "construction_capacity", "no construction provider"
+                        )
+                    )
         return tuple(blockers)
