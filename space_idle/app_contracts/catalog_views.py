@@ -161,5 +161,4 @@ class WorldView:
     content_id: str
     day: int
     funds_musd: float
-    passive_income_musd_per_day: float
     locations: tuple[LocationSummary, ...]
