@@ -117,6 +117,7 @@ jobs:
         run: |
           python playwright/acceptance.py
           python playwright/interaction_continuity.py
+          python playwright/logistics_ui.py
 
   webkit-e2e:
     name: macOS WebKit / direct HTTP E2E
@@ -140,3 +141,4 @@ jobs:
         run: |
           python playwright/acceptance.py
           python playwright/interaction_continuity.py
+          python playwright/logistics_ui.py
