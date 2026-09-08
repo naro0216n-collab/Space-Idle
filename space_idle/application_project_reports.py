@@ -91,10 +91,11 @@ class ApplicationReportProjectorMixin:
         for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id)):
             if project.location_id != location_id:
                 continue
+            definition_id = str(sim.projects._target_facility_def_id(project))
             for blocker in sim.projects.blockers(project.id, sim.day, power):
                 issues.append(self._issue(
                     blocker.code, blocker.detail, category="construction", source="project",
-                    location_id=loc, entity_id=str(project.id), definition_id=str(project.facility_def_id),
+                    location_id=loc, entity_id=str(project.id), definition_id=definition_id,
                 ))
 
         for row in self._storage_rows(location_id):
