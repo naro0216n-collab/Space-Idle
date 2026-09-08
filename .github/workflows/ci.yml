@@ -2,7 +2,7 @@ name: Fast CI
 
 on:
   push:
-    branches: [develop, temp]
+    branches: [develop]
   workflow_dispatch:
 
 permissions:
