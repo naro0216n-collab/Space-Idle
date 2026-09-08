@@ -86,7 +86,7 @@ def test_cross_cutting_state_and_validation_are_owned_by_registered_domains():
     assert len(names) == len(set(names))
     assert {
         "core", "spatial", "technology", "facilities", "inventory", "storage",
-        "production", "transport", "construction", "contracts", "research",
+        "production", "logistics", "construction", "contracts", "research",
         "survey", "extraction",
     }.issubset(names)
 
@@ -161,7 +161,6 @@ def test_layer_dependency_direction_is_enforced():
         parts = rel.parts
         name = rel.name
 
-        # Layer-specific modules are checked by their own rules below.
         if parts[0] in {"content", "composition", "app_contracts", "api"}:
             continue
         if name == "bootstrap.py" or name == "persistence.py" or name.startswith("application"):
@@ -171,7 +170,6 @@ def test_layer_dependency_direction_is_enforced():
         offenders = sorted(target for target in targets if target.startswith(forbidden_outer))
         assert not offenders, f"{rel} imports outer layer(s): {offenders}"
 
-    # Content is definition-only: it can depend on domain types, never application/bootstrap/persistence.
     for path in (PACKAGE / "content").glob("*.py"):
         targets = _module_import_targets(path)
         offenders = sorted(
@@ -180,7 +178,6 @@ def test_layer_dependency_direction_is_enforced():
         )
         assert not offenders, f"{path.relative_to(PACKAGE)} imports outer layer(s): {offenders}"
 
-    # Composition may wire content and domain, but cannot depend on application/bootstrap/persistence.
     for path in (PACKAGE / "composition").glob("*.py"):
         targets = _module_import_targets(path)
         offenders = sorted(
@@ -189,7 +186,6 @@ def test_layer_dependency_direction_is_enforced():
         )
         assert not offenders, f"{path.relative_to(PACKAGE)} imports outer layer(s): {offenders}"
 
-    # Application contracts/handlers/projectors may depend on domain types but not concrete content/composition.
     application_files = list(PACKAGE.glob("application*.py")) + list((PACKAGE / "app_contracts").glob("*.py"))
     for path in application_files:
         targets = _module_import_targets(path)
@@ -199,9 +195,6 @@ def test_layer_dependency_direction_is_enforced():
         )
         assert not offenders, f"{path.relative_to(PACKAGE)} imports concrete composition/content: {offenders}"
 
-    # HTTP/runtime adapters are outer-layer code. Only the executable composition
-    # entrypoint may select concrete base content/bootstrap. Reusable API modules
-    # must remain content/scenario agnostic.
     for path in (PACKAGE / "api").glob("*.py"):
         if path.name in {"__init__.py", "__main__.py"}:
             continue
@@ -249,18 +242,22 @@ def test_transport_operation_extension_does_not_require_central_enum_change():
     assert registry.evaluate(requirement, TestCapability(1.0), context) == ("limit",)
 
 
-def test_create_logistics_rule_preserves_path_policy_across_application_boundary():
-    from space_idle import CreateLogisticsRule, GetLogistics, build_game_application
+def test_create_logistics_lane_preserves_resource_agnostic_path_policy_across_application_boundary():
+    from space_idle import CreateLogisticsLane, GetLogistics, build_game_application
 
     app = build_game_application()
-    result = app.execute(CreateLogisticsRule(
+    result = app.execute(CreateLogisticsLane(
         source_id="base.node.earth_surface",
         destination_id="base.node.low_earth_orbit",
-        resource_id="base.resource.machinery",
-        target_stock_t=1.0,
-        batch_t=0.25,
+        requested_capacity_t_per_day=0.25,
         path_policy="lowest_cost",
     ))
     assert result.created_id is not None
-    row = next(rule for rule in app.query(GetLogistics()).rules if rule.id == result.created_id)
+    row = next(lane for lane in app.query(GetLogistics()).lanes if lane.id == result.created_id)
     assert row.path_policy == "lowest_cost"
+    lane = app._simulation.logistics.lanes[next(
+        lane_id for lane_id in app._simulation.logistics.lanes if str(lane_id) == result.created_id
+    )]
+    assert not hasattr(lane, "resource_id")
+    assert not hasattr(lane, "target_stock_t")
+    assert not hasattr(lane, "batch_t")
