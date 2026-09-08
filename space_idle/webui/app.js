@@ -408,12 +408,10 @@
   }
 
   function renderResearchTab() {
-    const rows = (state.research?.items || []).map((r) => {
-      const [done, required, label] = researchProgress(r);
-      const progress = required ? done / required : (r.status === 'complete' ? 1 : 0);
-      return `<tr class="selectable" data-inspect="research" data-id="${esc(r.id)}"><td><div class="cell-main">${esc(r.display_name)}</div><div class="cell-sub">${esc(stateLabels[r.status] || r.status)}</div></td><td><div>${esc(label)} ${fmt(done)}/${fmt(required)}</div><div class="progress-track"><div class="progress-bar" style="width:${Math.max(0,Math.min(100,progress*100))}%"></div></div></td><td>${r.status === 'complete' ? '—' : fmt(r.allocation_weight,2)}</td><td>${fmt(r.eligible_capacity_points_per_day,2)}</td><td>${researchBlockers(r).length}</td></tr>`;
-    }).join('');
-    return `<section class="card"><div class="card-heading"><h3>研究開発</h3><span class="badge">研究能力 ${fmt(state.research?.capacity_points_per_day,2)}/日</span></div><div class="table-wrap"><table><thead><tr><th>技術</th><th>現在段階</th><th>配分</th><th>適格能力</th><th>blocker</th></tr></thead><tbody>${rows || '<tr><td colspan="5">研究定義なし</td></tr>'}</tbody></table></div></section>`;
+    if (!window.SpaceIdleResearchTree) {
+      return '<section class="card"><div class="card-heading"><h3>技術ツリー</h3></div><div class="empty-state">技術ツリー描画機構を読み込めませんでした。</div></section>';
+    }
+    return window.SpaceIdleResearchTree.render(state.research?.items || [], state.research?.capacity_points_per_day);
   }
 
   function renderSurveyTab() {
