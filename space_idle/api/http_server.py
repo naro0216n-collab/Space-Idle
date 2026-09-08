@@ -91,17 +91,29 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
         return Path(__file__).resolve().parent.parent / "webui"
 
     def _serve_webui(self, path: str) -> bool:
-        assets = {
-            "/": ("index.html", "text/html; charset=utf-8"),
-            "/index.html": ("index.html", "text/html; charset=utf-8"),
-            "/app.css": ("app.css", "text/css; charset=utf-8"),
-            "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+        content_types = {
+            ".html": "text/html; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+            ".js": "text/javascript; charset=utf-8",
         }
-        asset = assets.get(path)
-        if asset is None:
+        relative = "index.html" if path == "/" else unquote(path).lstrip("/")
+        if not relative:
             return False
-        filename, content_type = asset
-        self._write_static(self._webui_root() / filename, content_type)
+
+        root = self._webui_root().resolve()
+        candidate = (root / relative).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return False
+
+        content_type = content_types.get(candidate.suffix.lower())
+        if content_type is None:
+            return False
+        if not candidate.is_file():
+            self._error(HTTPStatus.NOT_FOUND, "not_found", "asset not found")
+            return True
+        self._write_static(candidate, content_type)
         return True
 
     def _write_json(
