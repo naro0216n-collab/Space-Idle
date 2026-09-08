@@ -14,11 +14,11 @@ _OLD_TIME_CONTROLS = '''      <div class="time-controls" aria-label="時間進�
         <button type="button" data-advance="30">+30日</button>
       </div>'''
 _NEW_TIME_CONTROLS = '''      <div class="time-controls" aria-label="時間進行">
-        <button type="button" id="timePauseButton" aria-pressed="false">⏸ 一時停止</button>
-        <button type="button" data-time-speed="1" aria-pressed="true">1×</button>
-        <button type="button" data-time-speed="4" aria-pressed="false">4×</button>
-        <button type="button" data-time-speed="16" aria-pressed="false">16×</button>
-        <span id="timeState">自動進行 · 1×</span>
+        <button type="button" id="timePauseButton" aria-label="一時停止" aria-pressed="false">⏸ 一時停止</button>
+        <button type="button" data-time-speed="1" aria-label="進行速度1倍" aria-pressed="true">1×</button>
+        <button type="button" data-time-speed="4" aria-label="進行速度4倍" aria-pressed="false">4×</button>
+        <button type="button" data-time-speed="16" aria-label="進行速度16倍" aria-pressed="false">16×</button>
+        <span id="timeState" hidden>自動進行 · 1×</span>
       </div>'''
 
 
@@ -37,6 +37,11 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
         html = html.replace(_OLD_TIME_CONTROLS, _NEW_TIME_CONTROLS, 1)
         html = html.replace("v0.4.4", "v0.4.5")
         html = html.replace(
+            '  <link rel="stylesheet" href="/app.css">\n',
+            '  <link rel="stylesheet" href="/app.css">\n  <link rel="stylesheet" href="/time_control.css">\n',
+            1,
+        )
+        html = html.replace(
             '  <script src="/app.js" defer></script>\n',
             '  <script src="/app.js" defer></script>\n  <script src="/time_control.js" defer></script>\n',
             1,
@@ -54,6 +59,9 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
     def _serve_webui(self, path: str) -> bool:
         if path in {"/", "/index.html"}:
             self._write_time_controlled_index()
+            return True
+        if path == "/time_control.css":
+            self._write_static(self._webui_root() / "time_control.css", "text/css; charset=utf-8")
             return True
         if path == "/time_control.js":
             self._write_static(self._webui_root() / "time_control.js", "text/javascript; charset=utf-8")
