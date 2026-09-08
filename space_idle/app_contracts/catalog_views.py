@@ -100,7 +100,6 @@ class RouteDefinitionRow:
     transit_days: int
     delta_v_km_s: float
     operations: tuple[tuple[str, float], ...]
-    required_technologies: tuple[str, ...]
     origin_requirements: SiteRequirementsDefinitionRow
     destination_requirements: SiteRequirementsDefinitionRow
 

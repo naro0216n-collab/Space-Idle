@@ -145,7 +145,6 @@ class CatalogWorldProjectorMixin:
                 str(route.id), route.display_name or str(route.id), str(route.origin_id), str(route.destination_id),
                 route.transit_days, route.delta_v_km_s,
                 tuple((operation.operation_type, operation.delta_v_km_s) for operation in route.operations),
-                tuple(sorted(str(item) for item in route.required_technologies)),
                 self._site_requirements_definition(route.origin_requirements),
                 self._site_requirements_definition(route.destination_requirements),
             )
