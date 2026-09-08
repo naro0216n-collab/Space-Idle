@@ -201,8 +201,6 @@ class VehicleDef:
     production: VehicleProductionSpec = VehicleProductionSpec()
     maintenance: VehicleMaintenanceSpec = VehicleMaintenanceSpec()
 
-    # Read-only forwarding properties retain ergonomic call sites while keeping
-    # ownership of each concern explicit in the model.
     @property
     def dry_mass_t(self) -> float: return self.performance.dry_mass_t
     @property
@@ -249,8 +247,6 @@ class VehicleDef:
     def max_cargo_for_route(self, route: RouteDef) -> float:
         return self.performance.max_cargo_for_route(route)
 
-    # Built-in convenience properties are descriptive only and do not close the
-    # operation set.
     @property
     def powered_ascent(self): return self.capability_for(POWERED_ASCENT)
     @property
@@ -314,21 +310,28 @@ class CargoOrder:
     mode_by_route: dict[RouteId, str] = field(default_factory=dict)
     path_policy: PathPolicy = PathPolicy.FASTEST
     delivered_t: float = 0.0
+    created_day: int = 0
+    lane_id: EntityId | None = None
+    demand_id: EntityId | None = None
 
 
 @dataclass
-class RecurringCargoRule:
+class LogisticsLane:
     id: EntityId
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
-    resource_id: DefinitionId
-    target_stock_t: float
-    batch_t: float
+    requested_capacity_t_per_day: float
     priority: int
     path: tuple[RouteId, ...] | None = None
     mode_by_route: dict[RouteId, str] = field(default_factory=dict)
     path_policy: PathPolicy = PathPolicy.FASTEST
     paused: bool = False
+
+    def __post_init__(self) -> None:
+        if self.source_id == self.destination_id:
+            raise ValueError("logistics lane endpoints must differ")
+        if self.requested_capacity_t_per_day <= 0:
+            raise ValueError("logistics lane requested capacity must be positive")
 
 
 @dataclass(frozen=True)
