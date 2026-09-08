@@ -10,34 +10,34 @@ from . import base_requirements as req
 def build_research_definitions() -> dict:
     return {
         ids.TECH_ORBITAL_OPERATIONS: ResearchDefinition(
-            ids.TECH_ORBITAL_OPERATIONS, "軌道上運用標準化", 80.0,
+            ids.TECH_ORBITAL_OPERATIONS, "自律ランデブー・標準ドッキング運用", 80.0,
             prototype_site_requirements=SiteRequirements(capability_requirements=req._available_requirements("research_lab")),
             prototype_resources={ids.PRECISION_ELECTRONICS: 0.5},
         ),
         ids.TECH_CISLUNAR_LOGISTICS: ResearchDefinition(
-            ids.TECH_CISLUNAR_LOGISTICS, "月圏物流運用", 120.0, frozenset(),
+            ids.TECH_CISLUNAR_LOGISTICS, "軌道上推進剤移送・長期航法", 120.0, frozenset(),
             prototype_site_requirements=SiteRequirements(capability_requirements=req._available_requirements("research_lab")),
             prototype_resources={ids.MACHINERY: 1.0, ids.PRECISION_ELECTRONICS: 0.5},
         ),
         ids.TECH_LUNAR_PROSPECTING: ResearchDefinition(
-            ids.TECH_LUNAR_PROSPECTING, "月資源精密探査", 100.0, frozenset(),
+            ids.TECH_LUNAR_PROSPECTING, "中性子分光・多波長鉱物マッピング", 100.0, frozenset(),
             prototype_site_requirements=SiteRequirements(capability_requirements=req._available_requirements("research_lab")),
             prototype_resources={ids.PRECISION_ELECTRONICS: 1.0},
         ),
         ids.TECH_VOLATILE_ISRU: ResearchDefinition(
-            ids.TECH_VOLATILE_ISRU, "低温揮発性物質抽出", 150.0, frozenset({ids.TECH_LUNAR_PROSPECTING}),
+            ids.TECH_VOLATILE_ISRU, "低温揮発性物質加熱抽出", 150.0, frozenset({ids.TECH_LUNAR_PROSPECTING}),
             prototype_site_requirements=SiteRequirements(capability_requirements=req._available_requirements("research_lab")),
             prototype_resources={ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.8},
             demonstration_days=20,
             demonstration_site_requirements=SiteRequirements(req.COLD_VOLATILE_SURFACE_ENV, req._available_requirements("surface_survey")),
         ),
         ids.TECH_LUNAR_MATERIALS: ResearchDefinition(
-            ids.TECH_LUNAR_MATERIALS, "低重力真空環境材料プロセス", 180.0, frozenset({ids.TECH_LUNAR_PROSPECTING}),
+            ids.TECH_LUNAR_MATERIALS, "真空焼結・溶融レゴリス材料処理", 180.0, frozenset({ids.TECH_LUNAR_PROSPECTING}),
             prototype_site_requirements=SiteRequirements(capability_requirements=req._available_requirements("research_lab")),
             prototype_resources={ids.MACHINERY: 2.5, ids.PRECISION_ELECTRONICS: 0.5},
         ),
         ids.TECH_PROPELLANT_HANDLING: ResearchDefinition(
-            ids.TECH_PROPELLANT_HANDLING, "現地推進剤製造・取扱", 170.0, frozenset({ids.TECH_VOLATILE_ISRU}),
+            ids.TECH_PROPELLANT_HANDLING, "水電解・極低温推進剤取扱", 170.0, frozenset({ids.TECH_VOLATILE_ISRU}),
             prototype_site_requirements=SiteRequirements(capability_requirements=req._available_requirements("research_lab")),
             prototype_resources={ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 1.0},
             demonstration_days=15,
