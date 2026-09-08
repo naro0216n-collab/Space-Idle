@@ -31,6 +31,17 @@ def _request(port: int, method: str, path: str, body=None, headers=None):
     return response.status, response_headers, parsed
 
 
+def _raw_request(port: int, path: str):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("GET", path)
+    response = conn.getresponse()
+    data = response.read()
+    headers = dict(response.getheaders())
+    status = response.status
+    conn.close()
+    return status, headers, data
+
+
 def test_ui_reports_and_split_logistics_queries_are_json_safe():
     from space_idle import build_game_application
 
@@ -178,36 +189,50 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/")
-        response = conn.getresponse()
-        html = response.read().decode("utf-8")
-        headers = dict(response.getheaders())
-        conn.close()
-        assert response.status == 200
+        status, headers, body = _raw_request(port, "/")
+        html = body.decode("utf-8")
+        assert status == 200
         assert headers["Content-Type"].startswith("text/html")
         assert "拠点運用" in html
         assert "物流ネットワーク" in html
         assert 'id="operationsView"' in html
         assert 'id="logisticsView"' in html
+        assert 'href="/research_tree.css"' in html
+        assert 'src="/research_tree.js"' in html
 
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/app.css")
-        response = conn.getresponse()
-        css = response.read().decode("utf-8")
-        conn.close()
-        assert response.status == 200
+        status, headers, body = _raw_request(port, "/app.css")
+        css = body.decode("utf-8")
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/css")
         assert "--design-min-width: 1180px" in css
         assert "horizontally scrollable" in css
 
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/app.js")
-        response = conn.getresponse()
-        js = response.read().decode("utf-8")
-        conn.close()
-        assert response.status == 200
+        status, headers, body = _raw_request(port, "/app.js")
+        js = body.decode("utf-8")
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/javascript")
         assert "SubmitCargo" in js
         assert "If-Match" in js
+        assert "SpaceIdleResearchTree.render" in js
+
+        status, headers, body = _raw_request(port, "/research_tree.css")
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/css")
+        assert b"research-tree-stage" in body
+
+        status, headers, body = _raw_request(port, "/research_tree.js")
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/javascript")
+        assert b"SpaceIdleResearchTree" in body
+
+        status, headers, body = _raw_request(port, "/time_control.css")
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/css")
+
+        # Static-file serving is confined to the WebUI root and supported
+        # browser asset types; encoded traversal must not expose repository files.
+        status, _, _ = _raw_request(port, "/%2e%2e/%2e%2e/README.md")
+        assert status == 404
     finally:
         server.shutdown()
         server.server_close()
