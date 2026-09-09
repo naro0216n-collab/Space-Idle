@@ -43,8 +43,6 @@ def _raw_request(port: int, path: str):
 
 
 def test_ui_reports_and_split_logistics_queries_are_json_safe():
-    from space_idle import build_game_application
-
     app = build_game_application()
     catalog = app.query(GetCatalog())
     assert catalog.processes
@@ -141,13 +139,11 @@ def test_runtime_catches_up_elapsed_time_without_ipad_client_timer(tmp_path):
     assert runtime.metadata()["day"] == 0
     assert runtime.revision == 0
 
-    # Simulate Safari/PWA suspension: no requests for 25 real seconds.
     now[0] += 25.0
     result = runtime.query(GetWorld())
     assert result.data.day == 2
     assert result.revision == 1
 
-    # No further elapsed time means repeated queries do not churn revisions.
     again = runtime.query(GetWorld())
     assert again.data.day == 2
     assert again.revision == 1
@@ -199,6 +195,8 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert 'id="logisticsView"' in html
         assert 'href="/research_tree.css"' in html
         assert 'src="/research_tree.js"' in html
+        assert 'src="/operations_ui.js"' in html
+        assert 'src="/logistics_ui.js"' in html
 
         status, headers, body = _raw_request(port, "/app.css")
         css = body.decode("utf-8")
@@ -208,12 +206,24 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert "horizontally scrollable" in css
 
         status, headers, body = _raw_request(port, "/app.js")
-        js = body.decode("utf-8")
+        app_js = body.decode("utf-8")
         assert status == 200
         assert headers["Content-Type"].startswith("text/javascript")
-        assert "SubmitCargo" in js
-        assert "If-Match" in js
-        assert "SpaceIdleResearchTree.render" in js
+        assert "If-Match" in app_js
+
+        status, headers, body = _raw_request(port, "/operations_ui.js")
+        operations_js = body.decode("utf-8")
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/javascript")
+        assert "SpaceIdleResearchTree.render" in operations_js
+        assert "FundResearchPrototype" in operations_js
+
+        status, headers, body = _raw_request(port, "/logistics_ui.js")
+        logistics_js = body.decode("utf-8")
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/javascript")
+        assert "SubmitCargo" in logistics_js
+        assert "CreateLogisticsLane" in logistics_js
 
         status, headers, body = _raw_request(port, "/research_tree.css")
         assert status == 200
@@ -229,8 +239,6 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert status == 200
         assert headers["Content-Type"].startswith("text/css")
 
-        # Static-file serving is confined to the WebUI root and supported
-        # browser asset types; encoded traversal must not expose repository files.
         status, _, _ = _raw_request(port, "/%2e%2e/%2e%2e/README.md")
         assert status == 404
     finally:

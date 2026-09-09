@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .application_projection_support import ApplicationProjectionSupportMixin
 from .application_query_router import ApplicationQueryRouterMixin
 from .application_project_catalog import CatalogWorldProjectorMixin
 from .application_project_location import LocationProjectorMixin
@@ -10,6 +11,7 @@ from .application_project_reports import ApplicationReportProjectorMixin
 
 
 class ApplicationQueryMixin(
+    ApplicationProjectionSupportMixin,
     ApplicationQueryRouterMixin,
     CatalogWorldProjectorMixin,
     LocationProjectorMixin,
