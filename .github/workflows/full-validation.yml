@@ -27,12 +27,15 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -U pip pytest
       - name: Run tests
-        run: pytest -q --ignore=tests/test_gameplay_mechanics.py
+        run: >-
+          pytest -q
+          --ignore=tests/test_gameplay_mechanics.py
+          --ignore=tests/test_gameplay_checkpoint_shards.py
 
-  gameplay:
-    name: Gameplay integration
+  gameplay-orbital-checkpoint:
+    name: Gameplay checkpoint / orbital
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -40,8 +43,98 @@ jobs:
           python-version: '3.11'
       - name: Install test dependencies
         run: python -m pip install -U pip pytest
-      - name: Run application gameplay integration tests
-        run: pytest -q tests/test_gameplay_mechanics.py
+      - name: Build orbital and cislunar checkpoints
+        run: python tests/gameplay_checkpoint_builder.py orbital "$RUNNER_TEMP/gameplay-checkpoints"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gameplay-orbital-checkpoints
+          path: ${{ runner.temp }}/gameplay-checkpoints
+          retention-days: 1
+
+  gameplay-survey-checkpoint:
+    name: Gameplay checkpoint / lunar survey
+    needs: gameplay-orbital-checkpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install -U pip pytest
+      - uses: actions/download-artifact@v4
+        with:
+          name: gameplay-orbital-checkpoints
+          path: ${{ runner.temp }}/gameplay-input
+      - name: Build survey-ready checkpoint
+        run: >-
+          python tests/gameplay_checkpoint_builder.py survey
+          "$RUNNER_TEMP/gameplay-checkpoints"
+          --input-dir "$RUNNER_TEMP/gameplay-input"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gameplay-survey-checkpoints
+          path: ${{ runner.temp }}/gameplay-checkpoints
+          retention-days: 1
+
+  gameplay-isru-checkpoint:
+    name: Gameplay checkpoint / ISRU
+    needs: gameplay-survey-checkpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install -U pip pytest
+      - uses: actions/download-artifact@v4
+        with:
+          name: gameplay-survey-checkpoints
+          path: ${{ runner.temp }}/gameplay-input
+      - name: Build and verify ISRU checkpoint
+        run: >-
+          python tests/gameplay_checkpoint_builder.py isru
+          "$RUNNER_TEMP/gameplay-checkpoints"
+          --input-dir "$RUNNER_TEMP/gameplay-input"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gameplay-checkpoints
+          path: ${{ runner.temp }}/gameplay-checkpoints
+          retention-days: 1
+
+  gameplay-shards:
+    name: Gameplay / ${{ matrix.name }}
+    needs: gameplay-isru-checkpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: storage-construction
+            filter: storage_capacity or parallel_construction
+          - name: transport-propellant
+            filter: vehicle_state_transitions or lunar_propellant_export
+          - name: controls-bottlenecks
+            filter: pause_resume or physical_bottleneck_projection
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install -U pip pytest
+      - uses: actions/download-artifact@v4
+        with:
+          name: gameplay-checkpoints
+          path: ${{ runner.temp }}/gameplay-checkpoints
+      - name: Run checkpoint-backed gameplay shard
+        env:
+          SPACE_IDLE_GAMEPLAY_CHECKPOINT_DIR: ${{ runner.temp }}/gameplay-checkpoints
+        run: pytest -q tests/test_gameplay_checkpoint_shards.py -k "${{ matrix.filter }}"
 
   package-smoke:
     name: Clean package install
