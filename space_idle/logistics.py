@@ -44,6 +44,7 @@ from .transport.models import (
 from .transport.operations import OperationEvaluatorRegistry, build_default_operation_registry
 from .transport.orders import TransportOrderMixin
 from .transport.planning import TransportPlanningMixin
+from .transport.query import TransportPathPlan, TransportQueryMixin
 
 
 @dataclass
@@ -51,6 +52,7 @@ class LogisticsService(
     TransportCompatibilityMixin,
     FleetManagementMixin,
     TransportPlanningMixin,
+    TransportQueryMixin,
     TransportOrderMixin,
     TransportExecutionMixin,
 ):
@@ -89,7 +91,7 @@ __all__ = [
     "OperationSupportLocation", "OperationSupportRequirement", "PathPolicy",
     "PoweredAscentCapability", "RouteDef", "SpaceflightCapability",
     "TransportMissionState", "TransportMode", "TransportOperationKind",
-    "TransportOperationRequirement", "TransportPerformanceProfile", "VehicleDef",
-    "VehicleDisposition", "VehicleEconomicsSpec", "VehicleMaintenanceSpec",
+    "TransportOperationRequirement", "TransportPathPlan", "TransportPerformanceProfile",
+    "VehicleDef", "VehicleDisposition", "VehicleEconomicsSpec", "VehicleMaintenanceSpec",
     "VehicleProductionSpec", "VehicleState", "VehicleStatus", "VehicleTransit",
 ]

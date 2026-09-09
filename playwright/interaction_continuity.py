@@ -27,7 +27,7 @@ def _wait_for_server(origin: str, timeout: float = 10.0) -> None:
             with urllib.request.urlopen(f"{origin}/api/v1/health", timeout=1.0) as response:
                 if response.status == 200:
                     return
-        except Exception as exc:  # noqa: BLE001 - startup probe
+        except Exception as exc:  # noqa: BLE001
             last_error = exc
         time.sleep(0.1)
     raise RuntimeError(f"server did not become ready: {last_error}")
@@ -53,64 +53,59 @@ def run() -> None:
         _wait_for_server(origin)
         with sync_playwright() as p:
             browser = getattr(p, browser_name).launch(headless=True)
-            context = browser.new_context(
-                viewport={"width": 1194, "height": 834},
-                has_touch=True,
-                locale="ja-JP",
-                timezone_id="Asia/Tokyo",
-            )
-            page = context.new_page()
+            page = browser.new_page(viewport={"width": 1194, "height": 834})
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
-            assert page.locator("#appVersion").inner_text() == f"v{VERSION}", "UI version diverged from declared package version"
+            assert page.locator("#appVersion").inner_text() == f"v{VERSION}"
 
+            # Verify research-tree selection and navigation survive automatic
+            # snapshots without relying on the removed Theory allocation control.
             page.locator('[data-tab="research"]').click()
             tree = page.locator("#researchTree")
             tree.wait_for(timeout=10000)
-            assert page.locator("#researchTree .research-node").count() >= 13, "research UI did not render the engineering technology tree"
-            assert page.locator("#researchTree .research-tree-link").count() > 0, "research dependencies were not rendered as tree links"
-
-            first_research = page.locator('#researchTree [data-inspect="research"][data-id="base.tech.orbital_operations"]')
-            first_research.wait_for(timeout=10000)
+            assert page.locator("#researchTree .research-node").count() >= 13
+            assert page.locator("#researchTree .research-tree-link").count() > 0
+            first_research = page.locator('#researchTree [data-inspect="research"]').first
             first_research.click()
-            start_button = page.get_by_role("button", name="研究開始")
-            if start_button.count() and start_button.is_visible():
-                start_button.click()
-                page.locator("#researchWeightInput").wait_for(timeout=10000)
-
-            inspector_title = page.locator("#inspectorTitle").inner_text()
-            progress_before = first_research.inner_text()
-            weight = page.locator("#researchWeightInput")
-            weight.wait_for(timeout=10000)
-            weight.fill("3.7")
-            weight.focus()
-
+            research_title = page.locator("#inspectorTitle").inner_text()
             scroller = page.locator("#researchTreeScroll")
             page.evaluate("el => { el.scrollLeft = 180; el.dispatchEvent(new Event('scroll')); }", scroller.element_handle())
             initial_tree_scroll = page.evaluate("el => el.scrollLeft", scroller.element_handle())
-            assert initial_tree_scroll > 0, "research tree was not horizontally navigable"
+            assert initial_tree_scroll > 0
 
+            start_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
+            page.wait_for_function(
+                "d => Number(document.querySelector('#dayValue').textContent.replaceAll(',','')) >= d + 2",
+                arg=start_day,
+                timeout=10000,
+            )
+            assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "research"
+            assert page.locator("#inspectorTitle").inner_text() == research_title
+            assert page.locator("#researchTree .research-node.is-selected").count() == 1
+            tree_scroll_after = page.evaluate("el => el.scrollLeft", page.locator("#researchTreeScroll").element_handle())
+            assert tree_scroll_after >= initial_tree_scroll - 2
+
+            # A live editable control must keep its unsaved value and focus while
+            # the authoritative clock refreshes the surrounding projection.
+            page.locator('[data-tab="facilities"]').click()
+            first_facility = page.locator('tr[data-inspect="facility"]').first
+            first_facility.click()
+            inspector_title = page.locator("#inspectorTitle").inner_text()
+            priority = page.locator("#facilityPriorityInput")
+            priority.wait_for(timeout=10000)
+            priority.fill("37")
+            priority.focus()
             start_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
             page.wait_for_function(
                 "d => Number(document.querySelector('#dayValue').textContent.replaceAll(',','')) >= d + 3",
                 arg=start_day,
                 timeout=10000,
             )
-
-            active_tab = page.locator(".tab-button.is-active")
-            assert active_tab.get_attribute("data-tab") == "research", "automatic progress changed the active tab"
-            assert page.locator("#inspectorTitle").inner_text() == inspector_title, "automatic progress cleared inspector selection"
-            assert weight.is_visible(), "automatic progress removed the active inspector form"
-            assert weight.input_value() == "3.7", "automatic progress overwrote an in-progress input"
-            active_id = page.evaluate("() => document.activeElement?.id || ''")
-            assert active_id == "researchWeightInput", "automatic progress stole input focus"
-
-            progress_after = first_research.inner_text()
-            assert progress_after != progress_before, "automatic progress did not refresh visible research state"
-            tree_scroll_after = page.evaluate("el => el.scrollLeft", page.locator("#researchTreeScroll").element_handle())
-            assert tree_scroll_after >= initial_tree_scroll - 2, "automatic progress reset the research tree navigation position"
-
-            context.close()
+            assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "facilities"
+            assert page.locator("#inspectorTitle").inner_text() == inspector_title
+            assert priority.is_visible()
+            assert priority.input_value() == "37"
+            assert page.evaluate("() => document.activeElement?.id || ''") == "facilityPriorityInput"
             browser.close()
     finally:
         server.shutdown()
