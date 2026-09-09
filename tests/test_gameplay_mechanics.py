@@ -1,44 +1,51 @@
 from __future__ import annotations
 
+from math import ceil
+
+import pytest
+
 from space_idle import (
-    build_game_application,
     AdvanceTime,
     CreateLogisticsLane,
     DispatchVehicle,
-    RefuelVehicle,
     FundResearchPrototype,
+    GetCargoOrders,
     GetLocation,
-    GetLogistics,
+    GetLogisticsLanes,
     GetProjects,
     GetResearch,
+    GetRoutes,
     GetSurveys,
+    GetVehicles,
     PlanBuild,
+    RefuelVehicle,
     SetConstructionWeight,
     SetResearchDemonstrationSite,
     SetResearchPrototypeSite,
     StartResearch,
     StartSurvey,
     SubmitCargo,
+    build_game_application,
 )
 from space_idle.content.base_game import (
-    REUSABLE_ORBITAL_CARGO_TUG,
     CRYOGENIC_STORAGE,
     CREWED_ORBITAL_LABORATORY,
     EARTH,
     ELECTROLYSIS_PLANT,
     INDUSTRIAL_POWER_BLOCK,
     LEO,
-    MICROGRAVITY_EXPERIMENT_PLATFORM,
-    REUSABLE_SURFACE_CARGO_LANDER,
-    ROBOTIC_GEOLOGY_STATION,
     LUNAR_ORBIT,
+    MICROGRAVITY_EXPERIMENT_PLATFORM,
     ORBITAL_LOGISTICS_NODE,
     POLAR_COLD_TRAP,
     PROPELLANT,
     PROPELLANT_PLANT,
+    REUSABLE_ORBITAL_CARGO_TUG,
+    REUSABLE_SURFACE_CARGO_LANDER,
+    ROBOTIC_GEOLOGY_STATION,
     ROBOTIC_SURVEY_PACKAGE,
-    SURFACE_POWER_GRID,
     SOUTH_POLAR_RIDGE,
+    SURFACE_POWER_GRID,
     TECH_CISLUNAR_LOGISTICS,
     TECH_CREWED_ORBITAL_RESEARCH,
     TECH_INDUSTRIAL_ELECTROLYSIS,
@@ -52,6 +59,7 @@ from space_idle.content.base_game import (
     WATER,
     WATER_STORAGE,
 )
+from space_idle.persistence import capture_state, restore_state
 
 
 def _research_row(app, research_id):
@@ -59,11 +67,26 @@ def _research_row(app, research_id):
 
 
 def _wait_until_research_startable(app, research_id, max_days=2000):
-    for _ in range(max_days + 1):
-        row = _research_row(app, research_id)
+    elapsed = 0
+    while elapsed <= max_days:
+        view = app.query(GetResearch())
+        row = next(item for item in view.items if item.id == str(research_id))
         if row.can_start:
             return row
-        app.execute(AdvanceTime(1))
+        non_time_blockers = [code for code, _detail in row.start_blockers if code != "research_points"]
+        if non_time_blockers:
+            raise AssertionError(
+                f"research cannot become startable by waiting: {research_id}: {non_time_blockers}"
+            )
+        if view.generation_points_per_day <= 1e-12:
+            raise AssertionError(f"research has no RP generation: {research_id}")
+        gap = max(0.0, row.research_point_cost - view.stored_points)
+        step = max(1, ceil(max(0.0, gap - 1e-9) / view.generation_points_per_day))
+        step = min(step, max_days - elapsed)
+        if step <= 0:
+            break
+        app.execute(AdvanceTime(step))
+        elapsed += step
     raise AssertionError(f"research never became startable: {research_id}")
 
 
@@ -72,7 +95,7 @@ def _ensure_lane(app, source_id, destination_id, capacity_t_per_day=50.0):
         return None
     existing = next(
         (
-            lane for lane in app.query(GetLogistics()).lanes
+            lane for lane in app.query(GetLogisticsLanes()).items
             if lane.source_id == str(source_id) and lane.destination_id == str(destination_id)
         ),
         None,
@@ -91,7 +114,8 @@ def _complete_research(app, research_id, demonstration_site=None, max_days=2000)
         return
     _wait_until_research_startable(app, research_id, max_days=max_days)
     app.execute(StartResearch(str(research_id)))
-    for _ in range(max_days):
+    elapsed = 0
+    while elapsed <= max_days:
         row = _research_row(app, research_id)
         if row.status == "complete":
             return
@@ -100,17 +124,32 @@ def _complete_research(app, research_id, demonstration_site=None, max_days=2000)
                 site = next((candidate for candidate in row.prototype_sites if not candidate.blockers), None)
                 if site is None:
                     app.execute(AdvanceTime(1))
+                    elapsed += 1
                     continue
                 _ensure_lane(app, EARTH, site.location_id)
                 app.execute(SetResearchPrototypeSite(str(research_id), site.location_id))
                 row = _research_row(app, research_id)
             if not row.prototype_blockers:
                 app.execute(FundResearchPrototype(str(research_id)))
-        elif row.status == "demonstration" and row.demonstration_location_id is None:
-            if demonstration_site is None:
-                raise AssertionError(f"research requires a demonstration site: {research_id}")
-            app.execute(SetResearchDemonstrationSite(str(research_id), str(demonstration_site)))
-        app.execute(AdvanceTime(1))
+                continue
+            step = min(3, max_days - elapsed)
+        elif row.status == "demonstration":
+            if row.demonstration_location_id is None:
+                if demonstration_site is None:
+                    raise AssertionError(f"research requires a demonstration site: {research_id}")
+                app.execute(SetResearchDemonstrationSite(str(research_id), str(demonstration_site)))
+                row = _research_row(app, research_id)
+            if row.demonstration_blockers:
+                step = 1
+            else:
+                step = max(1, row.demonstration_required_days - row.demonstration_done_days)
+                step = min(step, max_days - elapsed)
+        else:
+            raise AssertionError(f"unexpected research state: {research_id}: {row.status}")
+        if step <= 0:
+            break
+        app.execute(AdvanceTime(step))
+        elapsed += step
     raise AssertionError(f"research did not complete: {research_id}")
 
 
@@ -119,10 +158,16 @@ def _project_row(app, project_id):
 
 
 def _advance_until_complete(app, project_ids, max_days=2000):
-    for _ in range(max_days):
-        if all(_project_row(app, pid).status == "complete" for pid in project_ids):
+    elapsed = 0
+    while elapsed <= max_days:
+        rows = [_project_row(app, pid) for pid in project_ids]
+        if all(row.status == "complete" for row in rows):
             return
-        app.execute(AdvanceTime(1))
+        step = min(5, max_days - elapsed)
+        if step <= 0:
+            break
+        app.execute(AdvanceTime(step))
+        elapsed += step
     raise AssertionError("projects did not complete")
 
 
@@ -150,16 +195,38 @@ def _establish_orbital_research_capacity(app):
     _build_facility_if_absent(app, LEO, CREWED_ORBITAL_LABORATORY)
 
 
-def _establish_cislunar_access(app):
+def _inventory_row(app, location_id, resource_id):
+    location = app.query(GetLocation(str(location_id)))
+    return next(row for row in location.inventory if row.resource_id == str(resource_id))
+
+
+def _app_from_checkpoint(state):
+    app = build_game_application()
+    restore_state(app._simulation, state)
+    return app
+
+
+@pytest.fixture(scope="module")
+def orbital_research_checkpoint():
+    app = build_game_application()
+    assert not app.query(GetLocation(str(POLAR_COLD_TRAP))).facilities
     _complete_research(app, TECH_ORBITAL_OPERATIONS)
     _establish_orbital_research_capacity(app)
+    return capture_state(app._simulation)
+
+
+@pytest.fixture(scope="module")
+def cislunar_checkpoint(orbital_research_checkpoint):
+    app = _app_from_checkpoint(orbital_research_checkpoint)
     _build_facility_if_absent(app, LEO, ORBITAL_LOGISTICS_NODE)
-    route = next(r for r in app.query(GetLogistics()).routes if r.id == "base.route.leo_lunar_orbit")
+    route = app.query(GetRoutes(route_id="base.route.leo_lunar_orbit", include_modes=False)).items[0]
     assert route.available
+    return capture_state(app._simulation)
 
 
-def _establish_survey_and_isru(app):
-    _establish_cislunar_access(app)
+@pytest.fixture(scope="module")
+def survey_ready_checkpoint(cislunar_checkpoint):
+    app = _app_from_checkpoint(cislunar_checkpoint)
     _complete_research(app, TECH_LUNAR_PROSPECTING, LEO)
     _ensure_lane(app, EARTH, POLAR_COLD_TRAP)
     survey_pkg = app.execute(PlanBuild(
@@ -168,15 +235,21 @@ def _establish_survey_and_isru(app):
     )).created_id
     assert survey_pkg is not None
     _advance_until_complete(app, [survey_pkg])
+    return capture_state(app._simulation)
+
+
+@pytest.fixture(scope="module")
+def isru_checkpoint(survey_ready_checkpoint):
+    app = _app_from_checkpoint(survey_ready_checkpoint)
     app.execute(StartSurvey(str(POLAR_COLD_TRAP), str(WATER)))
-    for _ in range(2000):
+    for _ in range(400):
         row = next(
             x for x in app.query(GetSurveys(str(POLAR_COLD_TRAP))).items
             if x.resource_id == str(WATER)
         )
         if row.knowledge_level >= 3:
             break
-        app.execute(AdvanceTime(1))
+        app.execute(AdvanceTime(5))
     else:
         raise AssertionError("survey did not reach extraction-grade knowledge")
 
@@ -197,43 +270,36 @@ def _establish_survey_and_isru(app):
     )).created_id
     assert power and extractor and tank
     _advance_until_complete(app, [power, extractor, tank])
+    return capture_state(app._simulation)
 
 
-def _inventory_row(app, location_id, resource_id):
-    location = app.query(GetLocation(str(location_id)))
-    return next(row for row in location.inventory if row.resource_id == str(resource_id))
-
-
-def test_research_survey_and_isru_form_a_playable_dependency_chain_through_application_api():
-    app = build_game_application()
-    assert not app.query(GetLocation(str(POLAR_COLD_TRAP))).facilities
-
-    _establish_survey_and_isru(app)
+def test_research_survey_and_isru_form_a_playable_dependency_chain_through_application_api(isru_checkpoint):
+    app = _app_from_checkpoint(isru_checkpoint)
     before = _inventory_row(app, POLAR_COLD_TRAP, WATER).amount
     app.execute(AdvanceTime(10))
     after = _inventory_row(app, POLAR_COLD_TRAP, WATER).amount
     assert after > before
 
 
-def test_storage_capacity_stops_output_without_creating_or_destroying_capacity():
-    app = build_game_application()
-    _establish_survey_and_isru(app)
-    for _ in range(5000):
-        row = _inventory_row(app, POLAR_COLD_TRAP, WATER)
-        if row.free_capacity is not None and row.free_capacity <= 1e-9:
-            break
-        app.execute(AdvanceTime(1))
+def test_storage_capacity_stops_output_without_creating_or_destroying_capacity(isru_checkpoint):
+    app = _app_from_checkpoint(isru_checkpoint)
+    location = app.query(GetLocation(str(POLAR_COLD_TRAP)))
+    water = next(row for row in location.inventory if row.resource_id == str(WATER))
+    output = sum(row.output_t_per_day for row in location.extraction if row.output_resource_id == str(WATER))
+    assert water.free_capacity is not None and output > 0
+    days_to_fill = max(1, ceil(water.free_capacity / output) + 1)
+    app.execute(AdvanceTime(days_to_fill))
     full = _inventory_row(app, POLAR_COLD_TRAP, WATER)
     assert full.physical_capacity is not None and full.amount <= full.physical_capacity + 1e-9
     assert full.service_capacity is not None and full.service_capacity <= full.physical_capacity + 1e-9
+    assert full.free_capacity is not None and full.free_capacity <= 1e-9
     app.execute(AdvanceTime(20))
     later = _inventory_row(app, POLAR_COLD_TRAP, WATER)
     assert later.amount == full.amount
 
 
-def test_construction_capacity_is_allocatable_between_parallel_projects():
-    app = build_game_application()
-    _establish_survey_and_isru(app)
+def test_construction_capacity_is_allocatable_between_parallel_projects(isru_checkpoint):
+    app = _app_from_checkpoint(isru_checkpoint)
     p1 = app.execute(PlanBuild(
         str(POLAR_COLD_TRAP), str(CRYOGENIC_STORAGE), priority=100,
         sourcing_policy="import_now", import_source_id=str(EARTH)
@@ -245,8 +311,8 @@ def test_construction_capacity_is_allocatable_between_parallel_projects():
     assert p1 and p2
     app.execute(SetConstructionWeight(p1, 3.0))
     app.execute(SetConstructionWeight(p2, 1.0))
-    for _ in range(300):
-        app.execute(AdvanceTime(1))
+    for _ in range(150):
+        app.execute(AdvanceTime(2))
         a, b = _project_row(app, p1), _project_row(app, p2)
         if a.status == "building" and b.status == "building":
             assert a.construction_done > 0 and b.construction_done > 0
@@ -255,67 +321,59 @@ def test_construction_capacity_is_allocatable_between_parallel_projects():
     raise AssertionError("projects never shared construction flow")
 
 
-def test_launch_vehicle_and_spacecraft_have_distinct_state_transitions():
+def test_launch_vehicle_and_spacecraft_have_distinct_state_transitions(cislunar_checkpoint):
     app = build_game_application()
     sim = app._simulation
 
     launch_route = "base.route.earth_leo"
-    launch_vehicle = next(
-        v for v in app.query(GetLogistics()).vehicles if v.concept == "launch_vehicle"
-    )
+    launch_vehicle = next(v for v in app.query(GetVehicles()).items if v.concept == "launch_vehicle")
     order = app.execute(SubmitCargo(
         str(EARTH), str(LEO), str(WATER), 1.0, 100, (launch_route,),
         ((launch_route, launch_vehicle.definition_id),),
     )).created_id
     assert order
     app.execute(AdvanceTime(1))
-    launch_vehicle = next(
-        v for v in app.query(GetLogistics()).vehicles if v.id == launch_vehicle.id
-    )
+    launch_vehicle = next(v for v in app.query(GetVehicles()).items if v.id == launch_vehicle.id)
     assert launch_vehicle.location_id == str(EARTH) and launch_vehicle.status == "transit_return"
     app.execute(AdvanceTime(1))
-    launch_vehicle = next(
-        v for v in app.query(GetLogistics()).vehicles if v.id == launch_vehicle.id
-    )
+    launch_vehicle = next(v for v in app.query(GetVehicles()).items if v.id == launch_vehicle.id)
     assert launch_vehicle.location_id == str(EARTH) and launch_vehicle.status == "turnaround"
 
     app.execute(AdvanceTime(max(0, launch_vehicle.available_day - app._simulation.day)))
     ground_tug_id = sim.logistics.add_vehicle(REUSABLE_ORBITAL_CARGO_TUG, EARTH)
-    launch_vehicle = next(
-        v for v in app.query(GetLogistics()).vehicles if v.id == launch_vehicle.id
-    )
+    launch_vehicle = next(v for v in app.query(GetVehicles()).items if v.id == launch_vehicle.id)
     app.execute(DispatchVehicle(str(ground_tug_id), launch_route, launch_vehicle.id))
-    carried = next(v for v in app.query(GetLogistics()).vehicles if v.id == str(ground_tug_id))
-    carrier = next(v for v in app.query(GetLogistics()).vehicles if v.id == launch_vehicle.id)
+    carried = next(v for v in app.query(GetVehicles()).items if v.id == str(ground_tug_id))
+    carrier = next(v for v in app.query(GetVehicles()).items if v.id == launch_vehicle.id)
     assert carried.status == "transit" and carried.location_id is None
     assert carrier.location_id == str(EARTH) and carrier.status == "transit_return"
     app.execute(AdvanceTime(2))
-    carried = next(v for v in app.query(GetLogistics()).vehicles if v.id == str(ground_tug_id))
+    carried = next(v for v in app.query(GetVehicles()).items if v.id == str(ground_tug_id))
     assert carried.location_id == str(LEO) and carried.status == "available"
 
-    _establish_cislunar_access(app)
-    sim.inventory.add(LEO, PROPELLANT, 20.0)
+    lunar_app = _app_from_checkpoint(cislunar_checkpoint)
+    lunar_sim = lunar_app._simulation
+    lunar_sim.inventory.add(LEO, PROPELLANT, 20.0)
     lander = next(
-        v for v in app.query(GetLogistics()).vehicles
+        v for v in lunar_app.query(GetVehicles()).items
         if v.definition_id == str(REUSABLE_SURFACE_CARGO_LANDER)
     )
-    app.execute(RefuelVehicle(lander.id))
-    fueled = next(v for v in app.query(GetLogistics()).vehicles if v.id == lander.id)
+    lunar_app.execute(RefuelVehicle(lander.id))
+    fueled = next(v for v in lunar_app.query(GetVehicles()).items if v.id == lander.id)
     assert fueled.propellant_t == fueled.propellant_capacity_t > 0
-    app.execute(DispatchVehicle(lander.id, "base.route.leo_lunar_orbit"))
-    app.execute(AdvanceTime(1))
-    moving = next(v for v in app.query(GetLogistics()).vehicles if v.id == lander.id)
+    lunar_app.execute(DispatchVehicle(lander.id, "base.route.leo_lunar_orbit"))
+    lunar_app.execute(AdvanceTime(1))
+    moving = next(v for v in lunar_app.query(GetVehicles()).items if v.id == lander.id)
     assert moving.location_id is None and moving.status == "transit"
     assert moving.transit_destination_id == str(LUNAR_ORBIT)
     assert 0 <= moving.propellant_t < moving.propellant_capacity_t
-    app.execute(AdvanceTime(5))
-    arrived = next(v for v in app.query(GetLogistics()).vehicles if v.id == lander.id)
+    lunar_app.execute(AdvanceTime(5))
+    arrived = next(v for v in lunar_app.query(GetVehicles()).items if v.id == lander.id)
     assert arrived.location_id == str(LUNAR_ORBIT)
 
 
-def test_lunar_propellant_changes_usable_export_logistics():
-    app = build_game_application()
-    _establish_survey_and_isru(app)
+def test_lunar_propellant_changes_usable_export_logistics(isru_checkpoint):
+    app = _app_from_checkpoint(isru_checkpoint)
     _complete_research(app, TECH_INDUSTRIAL_ELECTROLYSIS, POLAR_COLD_TRAP)
 
     grid = app.execute(PlanBuild(
@@ -347,12 +405,12 @@ def test_lunar_propellant_changes_usable_export_logistics():
     sim = app._simulation
     sim.inventory.add(LEO, PROPELLANT, 20.0)
     lander = next(
-        v for v in app.query(GetLogistics()).vehicles
+        v for v in app.query(GetVehicles()).items
         if v.definition_id == str(REUSABLE_SURFACE_CARGO_LANDER)
     )
     app.execute(DispatchVehicle(lander.id, "base.route.leo_cold_trap"))
     app.execute(AdvanceTime(8))
-    lander = next(v for v in app.query(GetLogistics()).vehicles if v.id == lander.id)
+    lander = next(v for v in app.query(GetVehicles()).items if v.id == lander.id)
     assert lander.location_id == str(POLAR_COLD_TRAP) and lander.status == "available"
 
     return_route = "base.route.cold_trap_lunar_orbit"
@@ -361,19 +419,18 @@ def test_lunar_propellant_changes_usable_export_logistics():
         (return_route,), ((return_route, str(REUSABLE_SURFACE_CARGO_LANDER)),),
     )).created_id
     assert order
-    for _ in range(10000):
-        order_row = next(o for o in app.query(GetLogistics()).orders if o.id == order)
+    for _ in range(1000):
+        order_row = next(o for o in app.query(GetCargoOrders()).items if o.id == order)
         if order_row.delivered_t + 1e-9 >= order_row.amount_t:
             break
-        app.execute(AdvanceTime(1))
+        app.execute(AdvanceTime(3))
     else:
         raise AssertionError("propellant export did not complete")
     assert _inventory_row(app, LUNAR_ORBIT, PROPELLANT).amount > 0
 
 
-def test_query_exposes_physical_bottleneck_without_prescribing_a_solution():
-    app = build_game_application()
-    _establish_survey_and_isru(app)
+def test_query_exposes_physical_bottleneck_without_prescribing_a_solution(isru_checkpoint):
+    app = _app_from_checkpoint(isru_checkpoint)
     _complete_research(app, TECH_INDUSTRIAL_ELECTROLYSIS, POLAR_COLD_TRAP)
     electrolysis = app.execute(PlanBuild(
         str(POLAR_COLD_TRAP), str(ELECTROLYSIS_PLANT), priority=100,
@@ -390,9 +447,10 @@ def test_query_exposes_physical_bottleneck_without_prescribing_a_solution():
     assert row.limiting_factors
 
 
-def test_manual_pause_resume_controls_preserve_configuration_and_halt_autonomous_progress():
+def test_manual_pause_resume_controls_preserve_configuration_and_halt_autonomous_progress(
+    orbital_research_checkpoint, survey_ready_checkpoint
+):
     from space_idle import (
-        CreateLogisticsLane,
         PauseBuild,
         PauseFacility,
         PauseLogisticsLane,
@@ -407,28 +465,22 @@ def test_manual_pause_resume_controls_preserve_configuration_and_halt_autonomous
     from space_idle.content.base_game import EARTH_RESEARCH_LAB
 
     app = build_game_application()
-
     app.execute(AdvanceTime(2))
     research_before_pause = app.query(GetResearch())
     lab = next(
         row for row in app.query(GetLocation(str(EARTH))).facilities
         if row.definition_id == str(EARTH_RESEARCH_LAB)
     )
-    lab_provider = next(
-        row for row in research_before_pause.providers if row.facility_id == lab.id
-    )
+    lab_provider = next(row for row in research_before_pause.providers if row.facility_id == lab.id)
     app.execute(PauseFacility(lab.id))
-    stopped_lab = next(
-        row for row in app.query(GetLocation(str(EARTH))).facilities if row.id == lab.id
-    )
+    stopped_lab = next(row for row in app.query(GetLocation(str(EARTH))).facilities if row.id == lab.id)
     stopped_research = app.query(GetResearch())
     assert stopped_lab.paused and ("manual_pause", "設備が手動停止中") in stopped_lab.activation_blockers
     assert stopped_research.stored_points == research_before_pause.stored_points
     assert stopped_research.generation_points_per_day < research_before_pause.generation_points_per_day
     assert stopped_research.storage_capacity_points < research_before_pause.storage_capacity_points
     assert stopped_research.generation_points_per_day <= (
-        research_before_pause.generation_points_per_day
-        - lab_provider.generation_points_per_day + 1e-9
+        research_before_pause.generation_points_per_day - lab_provider.generation_points_per_day + 1e-9
     )
     app.execute(AdvanceTime(3))
     progressed_without_lab = app.query(GetResearch())
@@ -458,74 +510,63 @@ def test_manual_pause_resume_controls_preserve_configuration_and_halt_autonomous
     app.execute(SetResearchPrototypeSite(str(TECH_ORBITAL_OPERATIONS), str(EARTH)))
     app.execute(FundResearchPrototype(str(TECH_ORBITAL_OPERATIONS)))
     assert _research_row(app, TECH_ORBITAL_OPERATIONS).status == "complete"
-    _establish_orbital_research_capacity(app)
 
-    project_id = app.execute(PlanBuild(
+    project_app = _app_from_checkpoint(orbital_research_checkpoint)
+    project_id = project_app.execute(PlanBuild(
         str(LEO), str(ORBITAL_LOGISTICS_NODE),
         sourcing_policy="import_now", import_source_id=str(EARTH)
     )).created_id
     assert project_id is not None
-    app.execute(PauseBuild(project_id))
-    project_before = _project_row(app, project_id)
-    app.execute(AdvanceTime(3))
-    project_paused = _project_row(app, project_id)
+    project_app.execute(PauseBuild(project_id))
+    project_before = _project_row(project_app, project_id)
+    project_app.execute(AdvanceTime(3))
+    project_paused = _project_row(project_app, project_id)
     assert project_paused.paused
     assert project_paused.status == project_before.status
     assert project_paused.construction_done == project_before.construction_done
     assert any(code == "manual_pause" for code, _ in project_paused.blockers)
-    app.execute(ResumeBuild(project_id))
-    app.execute(AdvanceTime(1))
-    assert not _project_row(app, project_id).paused
+    project_app.execute(ResumeBuild(project_id))
+    project_app.execute(AdvanceTime(1))
+    assert not _project_row(project_app, project_id).paused
 
-    app3 = build_game_application()
-    app3._simulation.technology.completed.update(
-        {TECH_ORBITAL_OPERATIONS, TECH_CISLUNAR_LOGISTICS}
-    )
-    lane_id = app3.execute(CreateLogisticsLane(
+    lane_app = build_game_application()
+    lane_app._simulation.technology.completed.update({TECH_ORBITAL_OPERATIONS, TECH_CISLUNAR_LOGISTICS})
+    lane_id = lane_app.execute(CreateLogisticsLane(
         str(EARTH), str(LEO), requested_capacity_t_per_day=5.0
     )).created_id
-    demand_project = app3.execute(PlanBuild(
+    demand_project = lane_app.execute(PlanBuild(
         str(LEO), str(ORBITAL_LOGISTICS_NODE), priority=100,
         sourcing_policy="import_now", import_source_id=str(EARTH)
     )).created_id
     assert lane_id is not None and demand_project is not None
-    app3.execute(PauseLogisticsLane(lane_id))
-    orders_before = len(app3.query(GetLogistics()).orders)
-    app3.execute(AdvanceTime(2))
-    lane = next(row for row in app3.query(GetLogistics()).lanes if row.id == lane_id)
-    assert lane.paused and len(app3.query(GetLogistics()).orders) == orders_before
-    app3.execute(ResumeLogisticsLane(lane_id))
-    app3.execute(AdvanceTime(1))
-    lane = next(row for row in app3.query(GetLogistics()).lanes if row.id == lane_id)
+    lane_app.execute(PauseLogisticsLane(lane_id))
+    orders_before = len(lane_app.query(GetCargoOrders()).items)
+    lane_app.execute(AdvanceTime(2))
+    lane = next(row for row in lane_app.query(GetLogisticsLanes()).items if row.id == lane_id)
+    assert lane.paused and len(lane_app.query(GetCargoOrders()).items) == orders_before
+    lane_app.execute(ResumeLogisticsLane(lane_id))
+    lane_app.execute(AdvanceTime(1))
+    lane = next(row for row in lane_app.query(GetLogisticsLanes()).items if row.id == lane_id)
     assert not lane.paused
-    assert len(app3.query(GetLogistics()).orders) > orders_before
+    assert len(lane_app.query(GetCargoOrders()).items) > orders_before
 
-    app2 = build_game_application()
-    _establish_cislunar_access(app2)
-    _complete_research(app2, TECH_LUNAR_PROSPECTING, LEO)
-    _ensure_lane(app2, EARTH, POLAR_COLD_TRAP)
-    survey_pkg = app2.execute(PlanBuild(
-        str(POLAR_COLD_TRAP), str(ROBOTIC_SURVEY_PACKAGE), priority=100,
-        sourcing_policy="import_now", import_source_id=str(EARTH)
-    )).created_id
-    assert survey_pkg is not None
-    _advance_until_complete(app2, [survey_pkg])
-    app2.execute(StartSurvey(str(POLAR_COLD_TRAP), str(WATER)))
-    app2.execute(PauseSurvey(str(POLAR_COLD_TRAP), str(WATER)))
+    survey_app = _app_from_checkpoint(survey_ready_checkpoint)
+    survey_app.execute(StartSurvey(str(POLAR_COLD_TRAP), str(WATER)))
+    survey_app.execute(PauseSurvey(str(POLAR_COLD_TRAP), str(WATER)))
     survey_before = next(
-        x for x in app2.query(GetSurveys(str(POLAR_COLD_TRAP))).items
+        x for x in survey_app.query(GetSurveys(str(POLAR_COLD_TRAP))).items
         if x.resource_id == str(WATER)
     )
-    app2.execute(AdvanceTime(3))
+    survey_app.execute(AdvanceTime(3))
     survey_paused = next(
-        x for x in app2.query(GetSurveys(str(POLAR_COLD_TRAP))).items
+        x for x in survey_app.query(GetSurveys(str(POLAR_COLD_TRAP))).items
         if x.resource_id == str(WATER)
     )
     assert survey_paused.paused and survey_paused.progress == survey_before.progress
-    app2.execute(ResumeSurvey(str(POLAR_COLD_TRAP), str(WATER)))
-    app2.execute(AdvanceTime(1))
+    survey_app.execute(ResumeSurvey(str(POLAR_COLD_TRAP), str(WATER)))
+    survey_app.execute(AdvanceTime(1))
     survey_resumed = next(
-        x for x in app2.query(GetSurveys(str(POLAR_COLD_TRAP))).items
+        x for x in survey_app.query(GetSurveys(str(POLAR_COLD_TRAP))).items
         if x.resource_id == str(WATER)
     )
     assert not survey_resumed.paused and survey_resumed.progress > survey_paused.progress
@@ -543,10 +584,8 @@ def test_vehicle_eligibility_is_derived_from_physical_ascent_capability_not_conc
     route_id = RouteId("base.route.earth_leo")
     route = sim.logistics.routes[route_id]
 
-    route_view = next(row for row in app.query(GetLogistics()).routes if row.id == str(route_id))
-    lander_mode = next(
-        mode for mode in route_view.modes if mode.id == str(REUSABLE_SURFACE_CARGO_LANDER)
-    )
+    route_view = app.query(GetRoutes(route_id=str(route_id), include_modes=True)).items[0]
+    lander_mode = next(mode for mode in route_view.modes if mode.id == str(REUSABLE_SURFACE_CARGO_LANDER))
     assert not lander_mode.usable_now
     assert any("operation:powered_ascent" in blocker for blocker in lander_mode.blockers)
 
@@ -558,9 +597,7 @@ def test_vehicle_eligibility_is_derived_from_physical_ascent_capability_not_conc
         performance=TransportPerformanceProfile(
             dry_mass_t=10.0, payload_t=2.0,
             operation_capabilities=(
-                PoweredAscentCapability(
-                    route.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0
-                ),
+                PoweredAscentCapability(route.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0),
             ),
             default_disposition=VehicleDisposition.DESTINATION,
         ),
@@ -574,7 +611,7 @@ def test_vehicle_eligibility_is_derived_from_physical_ascent_capability_not_conc
     )).created_id
     assert order_id
     app.execute(AdvanceTime(2))
-    vehicle = next(v for v in app.query(GetLogistics()).vehicles if v.id == str(vehicle_id))
+    vehicle = next(v for v in app.query(GetVehicles()).items if v.id == str(vehicle_id))
     assert vehicle.location_id == str(LEO)
 
 
@@ -592,8 +629,8 @@ def test_end_to_end_lunar_shipment_does_not_require_leo_or_research_gate():
     )).created_id
     assert order_id is not None
 
-    order = next(row for row in app.query(GetLogistics()).orders if row.id == order_id)
-    routes = {row.id: row for row in app.query(GetLogistics()).routes}
+    order = next(row for row in app.query(GetCargoOrders()).items if row.id == order_id)
+    routes = {row.id: row for row in app.query(GetRoutes(include_modes=False)).items}
     assert order.path
     assert routes[order.path[0]].origin_id == str(EARTH)
     assert routes[order.path[-1]].destination_id == str(SOUTH_POLAR_RIDGE)
