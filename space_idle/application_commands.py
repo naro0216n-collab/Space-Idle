@@ -14,7 +14,7 @@ from .app_contracts.progression import (
 )
 from .app_contracts.transport import (
     DispatchVehicle, RefuelVehicle, ProduceVehicle, SubmitCargo, CreateLogisticsLane,
-    PauseLogisticsLane, ResumeLogisticsLane, DeleteLogisticsLane,
+    UpdateLogisticsLane, PauseLogisticsLane, ResumeLogisticsLane, DeleteLogisticsLane,
 )
 from .app_contracts.contracts import AcceptContract, DispatchContractCargo, DeclineContract
 from .app_contracts.queries import (
@@ -31,8 +31,9 @@ Command: TypeAlias = (
     StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
     FundResearchPrototype | SetResearchDemonstrationSite | StartSurvey | PauseSurvey |
     ResumeSurvey | SetSurveyAllocation | DispatchVehicle | RefuelVehicle | ProduceVehicle |
-    SubmitCargo | CreateLogisticsLane | PauseLogisticsLane | ResumeLogisticsLane |
-    DeleteLogisticsLane | AcceptContract | DispatchContractCargo | DeclineContract | AdvanceTime
+    SubmitCargo | CreateLogisticsLane | UpdateLogisticsLane | PauseLogisticsLane |
+    ResumeLogisticsLane | DeleteLogisticsLane | AcceptContract | DispatchContractCargo |
+    DeclineContract | AdvanceTime
 )
 Query: TypeAlias = GetCatalog | GetWorld | GetLocation | GetFlowReport | GetBottlenecks | GetProjects | GetBuildOptions | GetLogistics | GetLogisticsSummary | GetRoutes | GetVehicles | GetCargoOrders | GetLogisticsLanes | GetTransportMissions | GetTransportPlans | GetResearch | GetSurveys | GetContracts
 

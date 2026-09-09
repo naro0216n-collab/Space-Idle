@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from space_idle import (
+    CreateLogisticsLane,
     GetBottlenecks,
     GetBuildOptions,
     GetCargoOrders,
@@ -9,6 +10,7 @@ from space_idle import (
     GetFlowReport,
     GetLocation,
     GetLogistics,
+    GetLogisticsLanes,
     GetLogisticsSummary,
     GetProjects,
     GetResearch,
@@ -17,10 +19,13 @@ from space_idle import (
     GetTransportMissions,
     GetVehicles,
     GetWorld,
+    PauseLogisticsLane,
+    UpdateLogisticsLane,
     build_game_application,
 )
 from space_idle.api import GameRuntime
 from space_idle.api.codec import to_jsonable
+from space_idle.content.base_game import EARTH, LEO
 
 
 def test_vehicle_concept_is_consistent_across_catalog_and_runtime_projections():
@@ -37,6 +42,27 @@ def test_vehicle_concept_is_consistent_across_catalog_and_runtime_projections():
         for mode in route.modes:
             if mode.vehicle_definition_id is not None:
                 assert mode.kind == catalog_concepts[mode.vehicle_definition_id]
+
+
+def test_lane_capacity_and_priority_can_be_updated_without_replacing_lane():
+    app = build_game_application()
+    lane_id = app.execute(CreateLogisticsLane(str(EARTH), str(LEO), 1.0, priority=40)).created_id
+    assert lane_id is not None
+    app.execute(PauseLogisticsLane(lane_id))
+
+    before = next(row for row in app.query(GetLogisticsLanes()).items if row.id == lane_id)
+    app.execute(UpdateLogisticsLane(lane_id, 3.5, priority=80))
+    after = next(row for row in app.query(GetLogisticsLanes()).items if row.id == lane_id)
+
+    assert after.id == before.id
+    assert after.source_id == before.source_id
+    assert after.destination_id == before.destination_id
+    assert after.path == before.path
+    assert after.route_modes == before.route_modes
+    assert after.path_policy == before.path_policy
+    assert after.paused is True
+    assert after.requested_capacity_t_per_day == 3.5
+    assert after.priority == 80
 
 
 def test_ui_snapshot_is_json_safe_at_application_boundary(tmp_path):

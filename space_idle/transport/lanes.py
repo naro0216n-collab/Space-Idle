@@ -50,6 +50,15 @@ class TransportLaneMixin:
         )
         return lane_id
 
+    def update_lane(
+        self, lane_id: EntityId, requested_capacity_t_per_day: float, priority: int
+    ) -> None:
+        if requested_capacity_t_per_day <= 0:
+            raise ValueError("logistics lane requested capacity must be positive")
+        lane = self.lanes[lane_id]
+        lane.requested_capacity_t_per_day = requested_capacity_t_per_day
+        lane.priority = priority
+
     def pause_lane(self, lane_id: EntityId) -> None:
         self.lanes[lane_id].paused = True
 

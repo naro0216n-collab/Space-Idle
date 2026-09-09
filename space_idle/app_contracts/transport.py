@@ -48,6 +48,13 @@ class CreateLogisticsLane:
 
 
 @dataclass(frozen=True)
+class UpdateLogisticsLane:
+    lane_id: str
+    requested_capacity_t_per_day: float
+    priority: int
+
+
+@dataclass(frozen=True)
 class PauseLogisticsLane:
     lane_id: str
 

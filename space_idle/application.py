@@ -14,7 +14,7 @@ from .application_commands import (
     SetProjectImportSource, SetProjectLocalFraction, SetProjectLocalMaterial,
     SetProjectPriority, SetProjectSourcingPolicy, SetResearchPrototypeSite,
     SetResearchDemonstrationSite, SetSurveyAllocation, StartResearch, StartSurvey,
-    SubmitCargo,
+    SubmitCargo, UpdateLogisticsLane,
 )
 from .application_command_handlers import ApplicationCommandMixin
 from .application_query_projectors import ApplicationQueryMixin
