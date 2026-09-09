@@ -7,6 +7,7 @@ from .inventory import InventoryBook
 from .power import PowerService
 from .shared import AccountState, CargoOrderId, DefinitionId, EntityId, RouteId
 from .technology import TechnologyState
+from .transport.capacity import TransportCapacityMixin, TransportPlanCapacity
 from .transport.compatibility import TransportCompatibilityMixin
 from .transport.execution import TransportExecutionMixin
 from .transport.fleet import FleetManagementMixin
@@ -53,6 +54,7 @@ class LogisticsService(
     TransportCompatibilityMixin,
     FleetManagementMixin,
     TransportPlanningMixin,
+    TransportCapacityMixin,
     TransportQueryMixin,
     TransportOrderMixin,
     TransportLaneMixin,
@@ -94,6 +96,7 @@ __all__ = [
     "OperationSupportRequirement", "PathPolicy", "PoweredAscentCapability", "RouteDef",
     "SpaceflightCapability", "TransportMissionState", "TransportMode", "TransportOperationKind",
     "TransportOperationRequirement", "TransportPathPlan", "TransportPerformanceProfile",
-    "VehicleDef", "VehicleDisposition", "VehicleEconomicsSpec", "VehicleMaintenanceSpec",
-    "VehicleProductionSpec", "VehicleState", "VehicleStatus", "VehicleTransit",
+    "TransportPlanCapacity", "VehicleDef", "VehicleDisposition", "VehicleEconomicsSpec",
+    "VehicleMaintenanceSpec", "VehicleProductionSpec", "VehicleState", "VehicleStatus",
+    "VehicleTransit",
 ]

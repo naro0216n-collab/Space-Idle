@@ -6,14 +6,18 @@ from space_idle import build_game_application
 from space_idle.content.base_game import (
     EARTH,
     LEO,
+    LUNAR_ORBIT,
     MACHINERY,
     ORBITAL_LOGISTICS_NODE,
     PRECISION_ELECTRONICS,
+    PROPELLANT,
+    REUSABLE_LAUNCH_VEHICLE,
+    REUSABLE_ORBITAL_CARGO_TUG,
     TECH_CISLUNAR_LOGISTICS,
     TECH_ORBITAL_OPERATIONS,
 )
 from space_idle.resource_demand import ResourceDemand
-from space_idle.shared import EntityId
+from space_idle.shared import EntityId, RouteId
 
 
 def _demand(amount_t: float, *, demand_id: str = "demand.test") -> ResourceDemand:
@@ -159,3 +163,68 @@ def test_selected_research_prototype_site_declares_material_demand_until_stock_a
     assert demand.source_id is None
     with pytest.raises(ValueError, match="prototype resource shortfall"):
         sim.research.fund_prototype(TECH_ORBITAL_OPERATIONS, sim.day)
+
+
+def test_lane_effective_capacity_tracks_dispatchable_propellant_not_nominal_payload():
+    app = build_game_application()
+    sim = app._simulation
+    route_id = RouteId("base.route.earth_leo")
+    mode_by_route = {route_id: str(REUSABLE_LAUNCH_VEHICLE)}
+    lane_id = sim.logistics.create_lane(
+        EARTH,
+        LEO,
+        20.0,
+        100,
+        path=(route_id,),
+        mode_by_route=mode_by_route,
+    )
+    unconstrained = sim.logistics.lane_effective_capacity_t_per_day(lane_id, sim.day)
+    assert unconstrained > 0
+
+    available_propellant = sim.inventory.available(EARTH, PROPELLANT)
+    assert sim.inventory.take_unreserved(EARTH, PROPELLANT, available_propellant)
+    vehicle = sim.logistics.vehicle_defs[REUSABLE_LAUNCH_VEHICLE]
+    route = sim.logistics.routes[route_id]
+    minimum_propellant = vehicle.propellant_t(route, 0.0)
+    sim.inventory.add(EARTH, PROPELLANT, minimum_propellant * 1.1)
+
+    constrained = sim.logistics.lane_effective_capacity_t_per_day(lane_id, sim.day)
+    assert 0 < constrained < unconstrained
+
+    demand = _demand(20.0, demand_id="demand.propellant-limited")
+    sim.logistics.advance_automation(sim.day, (demand,))
+    generated = [order for order in sim.logistics.orders.values() if order.lane_id == lane_id]
+    assert generated
+    assert sum(order.amount_t for order in generated) <= constrained + 1e-6
+
+
+def test_lane_end_to_end_capacity_stops_when_transfer_segment_has_no_current_vehicle():
+    app = build_game_application()
+    sim = app._simulation
+    earth_leo = RouteId("base.route.earth_leo")
+    leo_lunar = RouteId("base.route.leo_lunar_orbit")
+
+    # Cargo transfer makes these two independent physical segments. The first
+    # segment remains dispatchable, while removing the onward tug must collapse
+    # the lane's end-to-end effective capacity instead of reporting only leg 1.
+    sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
+    for state in sim.logistics.vehicles.values():
+        if state.definition_id == REUSABLE_ORBITAL_CARGO_TUG:
+            state.location_id = EARTH
+
+    lane_id = sim.logistics.create_lane(
+        EARTH,
+        LUNAR_ORBIT,
+        10.0,
+        100,
+        path=(earth_leo, leo_lunar),
+        mode_by_route={
+            earth_leo: str(REUSABLE_LAUNCH_VEHICLE),
+            leo_lunar: str(REUSABLE_ORBITAL_CARGO_TUG),
+        },
+    )
+    assert sim.logistics.route_dispatch_capacity_t(
+        earth_leo, sim.day, str(REUSABLE_LAUNCH_VEHICLE)
+    ) > 0
+    assert sim.logistics.lane_effective_capacity_t_per_day(lane_id, sim.day) == 0
+    assert sim.logistics.lane_blockers(lane_id, sim.day)

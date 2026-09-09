@@ -66,13 +66,12 @@ class TransportLaneMixin:
             self.find_path(lane.source_id, lane.destination_id, day, lane.path_policy)
             if lane.path is None else lane.path
         )
-        selected_modes = dict(lane.mode_by_route)
-        if lane.path is None:
-            automatic = self._automatic_mode_plan(selected_path, day, lane.path_policy)
-            if automatic is None:
-                raise ValueError("lane has no executable automatic transport plan")
-            selected_modes = automatic
-        self.validate_path(lane.source_id, lane.destination_id, selected_path, day, selected_modes)
+        selected_modes = self.resolved_transport_modes(
+            selected_path, lane.mode_by_route, day, lane.path_policy
+        )
+        self.validate_path(
+            lane.source_id, lane.destination_id, selected_path, day, selected_modes
+        )
         return selected_path, selected_modes
 
     def _lanes_with_waiting_missions(self) -> set[EntityId]:
@@ -90,7 +89,13 @@ class TransportLaneMixin:
         lane: LogisticsLane,
         day: int,
         waiting_lanes: set[EntityId] | None = None,
-    ) -> tuple[tuple[RouteId, ...], dict[RouteId, str], tuple[str, ...], float]:
+    ) -> tuple[
+        tuple[RouteId, ...],
+        dict[RouteId, str],
+        tuple[str, ...],
+        float,
+        tuple[float, ...],
+    ]:
         blockers: list[str] = []
         if lane.paused:
             blockers.append("manual_pause")
@@ -100,25 +105,18 @@ class TransportLaneMixin:
             path, modes = self._lane_path_modes(lane, day)
         except (KeyError, ValueError):
             blockers.append("route_unavailable")
-            return (), {}, tuple(dict.fromkeys(blockers)), 0.0
-        if path:
-            first = path[0]
-            blockers.extend(
-                f"route:{first}:{reason}"
-                for reason in self.route_operational_failures(first, day, modes.get(first))
-            )
+            return (), {}, tuple(dict.fromkeys(blockers)), 0.0, ()
+
+        plan = self.transport_plan_capacity(path, modes, day)
+        blockers.extend(plan.blockers)
         blockers_tuple = tuple(dict.fromkeys(blockers))
         if blockers_tuple or not path:
-            return path, modes, blockers_tuple, 0.0
-        first = path[0]
+            return path, modes, blockers_tuple, 0.0, ()
         effective = max(
             0.0,
-            min(
-                lane.requested_capacity_t_per_day,
-                self.route_dispatch_capacity_t(first, day, modes.get(first)),
-            ),
+            min(lane.requested_capacity_t_per_day, plan.capacity_t),
         )
-        return path, modes, blockers_tuple, effective
+        return path, modes, blockers_tuple, effective, plan.dispatch_chunks_t
 
     def lane_blockers(self, lane_id: EntityId, day: int = 0) -> tuple[str, ...]:
         lane = self.lanes[lane_id]
@@ -173,7 +171,9 @@ class TransportLaneMixin:
         waiting_lanes = self._lanes_with_waiting_missions()
         lane_rows: list[LaneRuntimeMetrics] = []
         for lane in sorted(self.lanes.values(), key=lambda row: str(row.id)):
-            _path, _modes, blockers, effective = self._lane_runtime(lane, day, waiting_lanes)
+            _path, _modes, blockers, effective, _chunks = self._lane_runtime(
+                lane, day, waiting_lanes
+            )
             queued = sum(
                 max(0.0, demand.amount_t - pipeline[demand.id])
                 for demand in demand_rows
@@ -191,6 +191,27 @@ class TransportLaneMixin:
             tuple(lane_rows),
         )
 
+    def _source_reservations_for_day(
+        self, day: int
+    ) -> tuple[dict[tuple[str, str], int], dict[str, float]]:
+        owned: dict[tuple[str, str], int] = {}
+        external: dict[str, float] = {}
+        for order in self.orders.values():
+            if order.created_day != day or not order.path:
+                continue
+            first_route = order.path[0]
+            mode_id = order.mode_by_route.get(first_route)
+            if mode_id is None:
+                continue
+            service = self._service_for_mode(mode_id)
+            if service is not None:
+                external[mode_id] = external.get(mode_id, 0.0) + order.amount_t
+                continue
+            origin_id = str(self.routes[first_route].origin_id)
+            key = (origin_id, mode_id)
+            owned[key] = owned.get(key, 0) + 1
+        return owned, external
+
     def advance_automation(self, day: int, demands: Iterable[ResourceDemand] = ()) -> None:
         demand_rows = tuple(sorted(demands, key=lambda row: (-row.priority, str(row.id))))
         if not demand_rows or not self.lanes:
@@ -201,42 +222,80 @@ class TransportLaneMixin:
             if order.lane_id is not None and order.created_day == day:
                 used_by_lane[order.lane_id] = used_by_lane.get(order.lane_id, 0.0) + order.amount_t
         waiting_lanes = self._lanes_with_waiting_missions()
+        owned_reservations, external_reservations = self._source_reservations_for_day(day)
 
         for lane in sorted(self.lanes.values(), key=lambda row: (-row.priority, str(row.id))):
             if lane.paused or lane.id in waiting_lanes:
                 continue
-            path, modes, blockers, effective = self._lane_runtime(lane, day, waiting_lanes)
-            if blockers or not path:
+            path, modes, blockers, effective, source_chunks = self._lane_runtime(
+                lane, day, waiting_lanes
+            )
+            if blockers or not path or effective <= 1e-9:
                 continue
-            remaining_capacity = max(0.0, effective - used_by_lane.get(lane.id, 0.0))
-            if remaining_capacity <= 1e-9:
+
+            first_route = path[0]
+            first_mode = modes[first_route]
+            service = self._service_for_mode(first_mode)
+            chunks = list(source_chunks)
+            if service is not None:
+                reserved_t = external_reservations.get(first_mode, 0.0)
+                if chunks:
+                    chunks[0] = max(0.0, chunks[0] - reserved_t)
+            else:
+                key = (str(self.routes[first_route].origin_id), first_mode)
+                reserved_count = owned_reservations.get(key, 0)
+                chunks = chunks[reserved_count:]
+
+            remaining_capacity = max(
+                0.0, effective - used_by_lane.get(lane.id, 0.0)
+            )
+            if remaining_capacity <= 1e-9 or not chunks:
                 continue
+
             for demand in demand_rows:
-                if remaining_capacity <= 1e-9:
+                if remaining_capacity <= 1e-9 or not chunks:
                     break
                 if not self._lane_accepts_demand(lane, demand):
                     continue
                 gap = max(0.0, demand.amount_t - pipeline_by_demand[demand.id])
                 if gap <= 1e-9:
                     continue
-                amount = min(
-                    gap,
-                    remaining_capacity,
-                    self.inventory.available(lane.source_id, demand.resource_id),
-                )
-                if amount <= 1e-9:
-                    continue
-                if not self.can_submit(
-                    lane.source_id, lane.destination_id, demand.resource_id, amount,
-                    day, path, modes, lane.path_policy,
-                ):
-                    continue
-                self.submit_order(
-                    lane.source_id, lane.destination_id, demand.resource_id, amount,
-                    max(lane.priority, demand.priority), demand.owner_kind, demand.owner_id,
-                    day=day, path=path, mode_by_route=modes, path_policy=lane.path_policy,
-                    lane_id=lane.id, demand_id=demand.id,
-                )
-                pipeline_by_demand[demand.id] += amount
-                used_by_lane[lane.id] = used_by_lane.get(lane.id, 0.0) + amount
-                remaining_capacity -= amount
+
+                while gap > 1e-9 and remaining_capacity > 1e-9 and chunks:
+                    dispatch_capacity = chunks[0]
+                    if dispatch_capacity <= 1e-9:
+                        chunks.pop(0)
+                        continue
+                    amount = min(
+                        gap,
+                        remaining_capacity,
+                        dispatch_capacity,
+                        self.inventory.available(lane.source_id, demand.resource_id),
+                    )
+                    if amount <= 1e-9:
+                        break
+                    if not self.can_submit(
+                        lane.source_id, lane.destination_id, demand.resource_id, amount,
+                        day, path, modes, lane.path_policy,
+                    ):
+                        break
+                    self.submit_order(
+                        lane.source_id, lane.destination_id, demand.resource_id, amount,
+                        max(lane.priority, demand.priority), demand.owner_kind, demand.owner_id,
+                        day=day, path=path, mode_by_route=modes, path_policy=lane.path_policy,
+                        lane_id=lane.id, demand_id=demand.id,
+                    )
+                    pipeline_by_demand[demand.id] += amount
+                    used_by_lane[lane.id] = used_by_lane.get(lane.id, 0.0) + amount
+                    remaining_capacity -= amount
+                    gap -= amount
+
+                    if service is not None:
+                        chunks[0] = max(0.0, dispatch_capacity - amount)
+                        external_reservations[first_mode] = (
+                            external_reservations.get(first_mode, 0.0) + amount
+                        )
+                    else:
+                        chunks.pop(0)
+                        key = (str(self.routes[first_route].origin_id), first_mode)
+                        owned_reservations[key] = owned_reservations.get(key, 0) + 1
