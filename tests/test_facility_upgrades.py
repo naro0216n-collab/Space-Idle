@@ -80,7 +80,6 @@ def test_facility_upgrade_is_a_resource_backed_construction_project():
     assert facility.level == 1
     assert not planned.materials_committed
 
-    # Pausing uses the same project state machine and cannot mutate the facility level.
     app.execute(PauseBuild(project_id))
     app.execute(AdvanceTime(3))
     paused = _project(app, project_id)
@@ -102,12 +101,10 @@ def test_facility_upgrade_is_a_resource_backed_construction_project():
     assert completed.completed_facility_id == before_row.id
     assert facility.level == 2
 
-    # Existing standard components at the construction site are consumed directly;
-    # they are not routed through a fake same-location logistics order.
     for requirement, component in zip(recipe.components, completed.components, strict=True):
         assert component.committed_primary_t >= requirement.amount_t - 1e-9
         assert component.committed_import_t <= 1e-9
-        assert component.import_order_id is None
+        assert component.import_demand_id is None
         after = app._simulation.inventory.amount(
             facility.location_id, requirement.import_resource_id
         )

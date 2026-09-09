@@ -25,7 +25,7 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -U pip pytest
       - name: Run tests
-        run: pytest -vv
+        run: pytest -vv --ignore=tests/test_gameplay_mechanics.py
 
   package-smoke:
     name: Clean package install

@@ -12,23 +12,28 @@ class LogisticsProjectorMixin(
     LogisticsLaneProjectorMixin,
 ):
     def _logistics_view(self) -> LogisticsView:
-        demands = self._simulation.resource_demands()
+        sim = self._simulation
+        demands = sim.resource_demands()
+        snapshot = sim.logistics.lane_snapshot(demands, sim.day)
         return LogisticsView(
             self._route_rows(),
             self._vehicle_rows(),
             self._mission_rows(),
             self._order_rows(),
-            self._lane_rows(demands),
-            self._demand_rows(demands),
+            self._lane_rows(demands, snapshot),
+            self._demand_rows(demands, snapshot),
         )
 
     def _logistics_summary_view(self) -> LogisticsSummaryView:
+        sim = self._simulation
         routes = self._route_rows(include_modes=False)
         vehicles = self._vehicle_rows()
         missions = self._mission_rows()
         orders = self._order_rows()
-        demands = self._simulation.resource_demands()
-        lanes = self._lane_rows(demands)
+        demands = sim.resource_demands()
+        snapshot = sim.logistics.lane_snapshot(demands, sim.day)
+        lanes = self._lane_rows(demands, snapshot)
+        demand_rows = self._demand_rows(demands, snapshot)
         return LogisticsSummaryView(
             route_count=len(routes),
             usable_route_count=sum(1 for row in routes if row.usable_now),
@@ -43,10 +48,7 @@ class LogisticsProjectorMixin(
             lane_count=len(lanes),
             paused_lane_count=sum(1 for row in lanes if row.paused),
             demand_count=len(demands),
-            queued_demand_t=sum(
-                self._simulation.logistics.demand_remaining_t(demand)
-                for demand in demands
-            ),
+            queued_demand_t=sum(row.remaining_t for row in demand_rows),
             waiting_t=sum(row.waiting_t for row in orders),
             in_transit_t=sum(row.in_transit_t for row in orders),
             arrival_waiting_t=sum(row.arrival_waiting_t for row in orders),

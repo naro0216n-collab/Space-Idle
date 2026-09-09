@@ -5,11 +5,12 @@ from dataclasses import dataclass, field
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .power import PowerService
-from .shared import AccountState, CargoOrderId, DefinitionId, EntityId, RouteId, SpatialNodeId
+from .shared import AccountState, CargoOrderId, DefinitionId, EntityId, RouteId
 from .technology import TechnologyState
 from .transport.compatibility import TransportCompatibilityMixin
 from .transport.execution import TransportExecutionMixin
 from .transport.fleet import FleetManagementMixin
+from .transport.lanes import LaneRuntimeMetrics, LogisticsLaneSnapshot, TransportLaneMixin
 from .transport.models import (
     ATMOSPHERIC_ENTRY,
     LANDING,
@@ -54,6 +55,7 @@ class LogisticsService(
     TransportPlanningMixin,
     TransportQueryMixin,
     TransportOrderMixin,
+    TransportLaneMixin,
     TransportExecutionMixin,
 ):
     routes: dict[RouteId, RouteDef]
@@ -87,10 +89,10 @@ class LogisticsService(
 __all__ = [
     "ATMOSPHERIC_ENTRY", "LANDING", "POWERED_ASCENT", "SPACEFLIGHT",
     "AtmosphericEntryCapability", "CargoOrder", "ExternalTransportServiceDef",
-    "LandingCapability", "LogisticsLane", "LogisticsService", "MissionStatus",
-    "OperationSupportLocation", "OperationSupportRequirement", "PathPolicy",
-    "PoweredAscentCapability", "RouteDef", "SpaceflightCapability",
-    "TransportMissionState", "TransportMode", "TransportOperationKind",
+    "LandingCapability", "LaneRuntimeMetrics", "LogisticsLane", "LogisticsLaneSnapshot",
+    "LogisticsService", "MissionStatus", "OperationSupportLocation",
+    "OperationSupportRequirement", "PathPolicy", "PoweredAscentCapability", "RouteDef",
+    "SpaceflightCapability", "TransportMissionState", "TransportMode", "TransportOperationKind",
     "TransportOperationRequirement", "TransportPathPlan", "TransportPerformanceProfile",
     "VehicleDef", "VehicleDisposition", "VehicleEconomicsSpec", "VehicleMaintenanceSpec",
     "VehicleProductionSpec", "VehicleState", "VehicleStatus", "VehicleTransit",
