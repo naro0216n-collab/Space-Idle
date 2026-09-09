@@ -15,10 +15,7 @@
 <body>
   <div id="app" class="app-shell" aria-busy="true">
     <header class="topbar">
-      <div class="brand-block">
-        <div class="brand">宇宙開発 Idle</div>
-        <div class="version" id="appVersion">v0.4.5</div>
-      </div>
+      <div class="brand-block"><div class="brand">宇宙開発 Idle</div><div class="version" id="appVersion">v0.4.5</div></div>
       <nav class="view-switch" aria-label="表示切替">
         <button class="view-button is-active" data-view="operations" type="button">拠点運用</button>
         <button class="view-button" data-view="logistics" type="button">物流ネットワーク</button>
@@ -36,39 +33,20 @@
         <button type="button" data-time-speed="16" aria-label="進行速度16倍" aria-pressed="false">16×</button>
         <span id="timeState" hidden>自動進行 · 1×</span>
       </div>
-      <div class="session-actions">
-        <button type="button" id="saveButton">保存</button>
-        <button type="button" id="loadButton">読込</button>
-      </div>
+      <div class="session-actions"><button type="button" id="saveButton">保存</button><button type="button" id="loadButton">読込</button></div>
     </header>
 
     <div id="statusBanner" class="status-banner" hidden></div>
 
     <main id="operationsView" class="view-root operations-view">
       <aside class="panel location-panel">
-        <div class="panel-heading">
-          <div>
-            <div class="eyebrow">SPATIAL NODES</div>
-            <h2>拠点</h2>
-          </div>
-          <button class="icon-button" id="refreshButton" type="button" aria-label="再読込">↻</button>
-        </div>
+        <div class="panel-heading"><div><div class="eyebrow">SPATIAL NODES</div><h2>拠点</h2></div><button class="icon-button" id="refreshButton" type="button" aria-label="再読込">↻</button></div>
         <div id="locationList" class="location-list"></div>
-        <div class="panel-section compact">
-          <div class="section-title">全体ボトルネック</div>
-          <div id="globalIssues" class="issue-stack"></div>
-        </div>
+        <div class="panel-section compact"><div class="section-title">全体ボトルネック</div><div id="globalIssues" class="issue-stack"></div></div>
       </aside>
 
       <section class="workspace operations-workspace">
-        <div class="workspace-heading">
-          <div>
-            <div class="eyebrow" id="locationKind">LOCATION</div>
-            <h1 id="locationTitle">拠点を読み込み中</h1>
-          </div>
-          <div class="headline-metrics" id="headlineMetrics"></div>
-        </div>
-
+        <div class="workspace-heading"><div><div class="eyebrow" id="locationKind">LOCATION</div><h1 id="locationTitle">拠点を読み込み中</h1></div><div class="headline-metrics" id="headlineMetrics"></div></div>
         <div class="tabbar" role="tablist" aria-label="拠点情報">
           <button type="button" class="tab-button is-active" data-tab="overview">概要</button>
           <button type="button" class="tab-button" data-tab="facilities">設備</button>
@@ -77,99 +55,65 @@
           <button type="button" class="tab-button" data-tab="research">研究</button>
           <button type="button" class="tab-button" data-tab="survey">探査</button>
         </div>
-
         <div id="operationsTabContent" class="tab-content"></div>
       </section>
 
       <aside class="panel inspector-panel">
-        <div class="panel-heading">
-          <div>
-            <div class="eyebrow">INSPECTOR</div>
-            <h2 id="inspectorTitle">選択項目</h2>
-          </div>
-        </div>
-        <div id="inspectorContent" class="inspector-content">
-          <div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div>
-        </div>
+        <div class="panel-heading"><div><div class="eyebrow">INSPECTOR</div><h2 id="inspectorTitle">選択項目</h2></div></div>
+        <div id="inspectorContent" class="inspector-content"><div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div></div>
       </aside>
     </main>
 
     <main id="logisticsView" class="view-root logistics-view" hidden>
       <aside class="panel logistics-list-panel">
-        <div class="panel-heading">
-          <div>
-            <div class="eyebrow">ROUTES</div>
-            <h2>輸送路</h2>
-          </div>
-        </div>
-        <div class="filter-row">
-          <select id="routeOriginFilter" aria-label="出発地"></select>
-          <select id="routeDestinationFilter" aria-label="到着地"></select>
-        </div>
+        <div class="panel-heading"><div><div class="eyebrow">ROUTES</div><h2>輸送路</h2></div></div>
+        <div class="filter-row"><select id="routeOriginFilter" aria-label="出発地"></select><select id="routeDestinationFilter" aria-label="到着地"></select></div>
         <div id="routeList" class="route-list"></div>
       </aside>
 
       <section class="workspace logistics-workspace">
-        <div class="workspace-heading logistics-heading">
-          <div>
-            <div class="eyebrow">LOGISTICS NETWORK</div>
-            <h1>物流ネットワーク</h1>
-          </div>
-          <div id="logisticsSummary" class="headline-metrics"></div>
-        </div>
-        <div class="network-stage" id="networkStage">
-          <svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg>
-          <div id="networkNodes" class="network-nodes"></div>
-        </div>
+        <div class="workspace-heading logistics-heading"><div><div class="eyebrow">LOGISTICS NETWORK</div><h1>物流ネットワーク</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
+        <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
         <div class="logistics-bottom-grid">
-          <section class="card">
-            <div class="card-heading"><h3>輸送資産</h3><span id="vehicleCountBadge" class="badge"></span></div>
-            <div id="vehicleTable" class="table-wrap"></div>
-          </section>
-          <section class="card">
-            <div class="card-heading"><h3>資源輸送</h3><span id="cargoCountBadge" class="badge"></span></div>
-            <div id="cargoTable" class="table-wrap"></div>
-          </section>
+          <section class="card"><div class="card-heading"><h3>物流Lane</h3><span id="laneCountBadge" class="badge"></span></div><div id="laneTable" class="table-wrap"></div></section>
+          <section class="card"><div class="card-heading"><h3>Resource Demand</h3><span id="demandCountBadge" class="badge"></span></div><div id="demandTable" class="table-wrap"></div></section>
+          <section class="card"><div class="card-heading"><h3>輸送資産</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
+          <section class="card"><div class="card-heading"><h3>CargoOrder</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
         </div>
       </section>
 
       <aside class="panel inspector-panel logistics-inspector">
-        <div class="panel-heading">
-          <div>
-            <div class="eyebrow">ROUTE INSPECTOR</div>
-            <h2 id="routeInspectorTitle">輸送路を選択</h2>
-          </div>
-        </div>
-        <div id="routeInspectorContent" class="inspector-content">
-          <div class="empty-state">左の輸送路またはネットワーク上の接続を選択してください。</div>
-        </div>
+        <div class="panel-heading"><div><div class="eyebrow">ROUTE INSPECTOR</div><h2 id="routeInspectorTitle">輸送路を選択</h2></div></div>
+        <div id="routeInspectorContent" class="inspector-content"><div class="empty-state">左の輸送路またはネットワーク上の接続を選択してください。</div></div>
       </aside>
     </main>
 
+    <dialog id="laneDialog" class="modal-dialog">
+      <form method="dialog" id="laneForm">
+        <div class="dialog-heading"><div><div class="eyebrow">LOGISTICS LANE</div><h2>物流Laneを作成</h2></div><button type="button" class="icon-button" id="laneCloseButton">×</button></div>
+        <label>供給元<select id="laneSource" required></select></label>
+        <label>需要地<select id="laneDestination" required></select></label>
+        <div class="field-pair"><label>要求容量 (t/日)<input id="laneCapacity" type="number" min="0.01" step="0.01" value="1" required></label><label>優先度<input id="lanePriority" type="number" min="0" max="100" step="1" value="50" required></label></div>
+        <label>経路方針<select id="lanePolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
+        <div class="cell-sub">Laneは資源を指定しません。この供給元→需要地の容量を、建設・研究・産業が生成するResource Demandへ割り当てます。</div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="laneCancelButton">取消</button><button type="submit" class="primary">Lane作成</button></div>
+      </form>
+    </dialog>
+
     <dialog id="cargoDialog" class="modal-dialog">
       <form method="dialog" id="cargoForm">
-        <div class="dialog-heading">
-          <div><div class="eyebrow">TRANSPORT PLAN</div><h2 id="cargoDialogTitle">資源輸送を設定</h2></div>
-          <button type="button" class="icon-button" id="cargoCloseButton">×</button>
-        </div>
-        <label>出発地<select id="cargoSource" required></select></label>
-        <label>到着地<select id="cargoDestination" required></select></label>
-        <label>資源<select id="cargoResource" required></select></label>
-        <div class="field-pair">
-          <label>数量 (t)<input id="cargoAmount" type="number" min="0.01" step="0.01" value="1" required></label>
-          <label>優先度<input id="cargoPriority" type="number" min="0" max="100" step="1" value="50" required></label>
-        </div>
+        <div class="dialog-heading"><div><div class="eyebrow">TRANSPORT PLAN</div><h2 id="cargoDialogTitle">単発資源輸送</h2></div><button type="button" class="icon-button" id="cargoCloseButton">×</button></div>
+        <label>出発地<select id="cargoSource" required></select></label><label>到着地<select id="cargoDestination" required></select></label><label>資源<select id="cargoResource" required></select></label>
+        <div class="field-pair"><label>数量 (t)<input id="cargoAmount" type="number" min="0.01" step="0.01" value="1" required></label><label>優先度<input id="cargoPriority" type="number" min="0" max="100" step="1" value="50" required></label></div>
         <label>経路方針<select id="cargoPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
-        <label>輸送計画<select id="cargoPlan" required></select></label>
-        <div id="cargoLegChoices" class="card-body"></div>
-        <div class="dialog-actions">
-          <button type="button" class="secondary" id="cargoCancelButton">取消</button>
-          <button type="submit" class="primary" id="cargoSubmitButton">輸送登録</button>
-        </div>
+        <label>輸送計画<select id="cargoPlan" required></select></label><div id="cargoLegChoices" class="card-body"></div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="cargoCancelButton">取消</button><button type="submit" class="primary" id="cargoSubmitButton">輸送登録</button></div>
       </form>
     </dialog>
   </div>
   <script src="/research_tree.js" defer></script>
   <script src="/app.js" defer></script>
+  <script src="/operations_ui.js" defer></script>
+  <script src="/logistics_ui.js" defer></script>
 </body>
 </html>

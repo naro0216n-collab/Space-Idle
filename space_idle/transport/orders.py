@@ -27,15 +27,8 @@ class TransportOrderMixin:
         self._lane_counter += 1
         lane_id = EntityId(f"logistics.lane.{self._lane_counter}")
         self.lanes[lane_id] = LogisticsLane(
-            lane_id,
-            source_id,
-            destination_id,
-            requested_capacity_t_per_day,
-            priority,
-            path,
-            selected_modes,
-            path_policy,
-            False,
+            lane_id, source_id, destination_id, requested_capacity_t_per_day,
+            priority, path, selected_modes, path_policy, False,
         )
         return lane_id
 
@@ -53,8 +46,7 @@ class TransportOrderMixin:
     ) -> tuple[tuple[RouteId, ...], dict[RouteId, str]]:
         selected_path = (
             self.find_path(lane.source_id, lane.destination_id, day, lane.path_policy)
-            if lane.path is None
-            else lane.path
+            if lane.path is None else lane.path
         )
         selected_modes = dict(lane.mode_by_route)
         if lane.path is None:
@@ -65,21 +57,22 @@ class TransportOrderMixin:
         self.validate_path(lane.source_id, lane.destination_id, selected_path, day, selected_modes)
         return selected_path, selected_modes
 
+    def _lanes_with_waiting_missions(self) -> set[EntityId]:
+        blocked: set[EntityId] = set()
+        for mission in self.missions.values():
+            if mission.status not in {MissionStatus.ARRIVAL_WAITING, MissionStatus.WAYPOINT_WAIT}:
+                continue
+            order = self.orders.get(mission.order_id)
+            if order is not None and order.lane_id is not None and not self.order_complete(order.id):
+                blocked.add(order.lane_id)
+        return blocked
+
     def lane_blockers(self, lane_id: EntityId, day: int = 0) -> tuple[str, ...]:
         lane = self.lanes[lane_id]
         blockers: list[str] = []
         if lane.paused:
             blockers.append("manual_pause")
-        if any(
-            order.lane_id == lane.id
-            and not self.order_complete(order.id)
-            and any(
-                mission.order_id == order.id
-                and mission.status in {MissionStatus.ARRIVAL_WAITING, MissionStatus.WAYPOINT_WAIT}
-                for mission in self.missions.values()
-            )
-            for order in self.orders.values()
-        ):
+        if lane.id in self._lanes_with_waiting_missions():
             blockers.append("arrival_waiting")
         try:
             path, modes = self._lane_path_modes(lane, day)
@@ -110,8 +103,7 @@ class TransportOrderMixin:
 
     def lane_used_t(self, lane_id: EntityId, day: int) -> float:
         return sum(
-            order.amount_t
-            for order in self.orders.values()
+            order.amount_t for order in self.orders.values()
             if order.lane_id == lane_id and order.created_day == day
         )
 
@@ -128,73 +120,83 @@ class TransportOrderMixin:
 
     @staticmethod
     def _lane_accepts_demand(lane: LogisticsLane, demand: ResourceDemand) -> bool:
-        return (
-            lane.destination_id == demand.destination_id
-            and (demand.source_id is None or lane.source_id == demand.source_id)
+        return lane.destination_id == demand.destination_id and (
+            demand.source_id is None or lane.source_id == demand.source_id
         )
 
     def lane_queued_t(self, lane_id: EntityId, demands: Iterable[ResourceDemand]) -> float:
         lane = self.lanes[lane_id]
         return sum(
             self.demand_remaining_t(demand)
-            for demand in demands
-            if self._lane_accepts_demand(lane, demand)
+            for demand in demands if self._lane_accepts_demand(lane, demand)
         )
 
     def advance_automation(self, day: int, demands: Iterable[ResourceDemand] = ()) -> None:
+        """Allocate domain demand to player lanes without repeated history scans.
+
+        CargoOrder and Mission history are intentionally retained for observability.
+        Automation therefore builds the small amount of current-day derived state
+        once per tick instead of rescanning all history for every lane/demand pair.
+        """
         demand_rows = tuple(sorted(demands, key=lambda row: (-row.priority, str(row.id))))
+        if not demand_rows or not self.lanes:
+            return
+        demand_ids = {demand.id for demand in demand_rows}
+        pipeline_by_demand: dict[EntityId, float] = {demand_id: 0.0 for demand_id in demand_ids}
+        used_by_lane: dict[EntityId, float] = {}
+        for order in self.orders.values():
+            if order.lane_id is not None and order.created_day == day:
+                used_by_lane[order.lane_id] = used_by_lane.get(order.lane_id, 0.0) + order.amount_t
+            if order.demand_id in demand_ids and not self.order_complete(order.id):
+                pipeline_by_demand[order.demand_id] += max(0.0, order.amount_t - order.delivered_t)
+        waiting_lanes = self._lanes_with_waiting_missions()
+
         for lane in sorted(self.lanes.values(), key=lambda row: (-row.priority, str(row.id))):
-            if lane.paused:
-                continue
-            effective = self.lane_effective_capacity_t_per_day(lane.id, day)
-            remaining_capacity = max(0.0, effective - self.lane_used_t(lane.id, day))
-            if remaining_capacity <= 1e-9:
+            if lane.paused or lane.id in waiting_lanes:
                 continue
             try:
                 path, modes = self._lane_path_modes(lane, day)
             except (KeyError, ValueError):
+                continue
+            if not path:
+                continue
+            first = path[0]
+            if self.route_operational_failures(first, day, modes.get(first)):
+                continue
+            effective = max(
+                0.0,
+                min(
+                    lane.requested_capacity_t_per_day,
+                    self.route_dispatch_capacity_t(first, day, modes.get(first)),
+                ),
+            )
+            remaining_capacity = max(0.0, effective - used_by_lane.get(lane.id, 0.0))
+            if remaining_capacity <= 1e-9:
                 continue
             for demand in demand_rows:
                 if remaining_capacity <= 1e-9:
                     break
                 if not self._lane_accepts_demand(lane, demand):
                     continue
-                gap = self.demand_remaining_t(demand)
+                gap = max(0.0, demand.amount_t - pipeline_by_demand[demand.id])
                 if gap <= 1e-9:
                     continue
-                amount = min(
-                    gap,
-                    remaining_capacity,
-                    self.inventory.available(lane.source_id, demand.resource_id),
-                )
+                amount = min(gap, remaining_capacity, self.inventory.available(lane.source_id, demand.resource_id))
                 if amount <= 1e-9:
                     continue
                 if not self.can_submit(
-                    lane.source_id,
-                    lane.destination_id,
-                    demand.resource_id,
-                    amount,
-                    day,
-                    path,
-                    modes,
-                    lane.path_policy,
+                    lane.source_id, lane.destination_id, demand.resource_id, amount,
+                    day, path, modes, lane.path_policy,
                 ):
                     continue
                 self.submit_order(
-                    lane.source_id,
-                    lane.destination_id,
-                    demand.resource_id,
-                    amount,
-                    max(lane.priority, demand.priority),
-                    demand.owner_kind,
-                    demand.owner_id,
-                    day=day,
-                    path=path,
-                    mode_by_route=modes,
-                    path_policy=lane.path_policy,
-                    lane_id=lane.id,
-                    demand_id=demand.id,
+                    lane.source_id, lane.destination_id, demand.resource_id, amount,
+                    max(lane.priority, demand.priority), demand.owner_kind, demand.owner_id,
+                    day=day, path=path, mode_by_route=modes, path_policy=lane.path_policy,
+                    lane_id=lane.id, demand_id=demand.id,
                 )
+                pipeline_by_demand[demand.id] += amount
+                used_by_lane[lane.id] = used_by_lane.get(lane.id, 0.0) + amount
                 remaining_capacity -= amount
 
     def can_submit(
@@ -265,21 +267,9 @@ class TransportOrderMixin:
             self._counter -= 1
             raise ValueError(f"insufficient source stock: {resource_id}")
         self.orders[order_id] = CargoOrder(
-            order_id,
-            source_id,
-            destination_id,
-            resource_id,
-            amount_t,
-            priority,
-            owner_kind,
-            owner_id,
-            selected_path,
-            selected_modes,
-            path_policy,
-            0.0,
-            day,
-            lane_id,
-            demand_id,
+            order_id, source_id, destination_id, resource_id, amount_t, priority,
+            owner_kind, owner_id, selected_path, selected_modes, path_policy,
+            0.0, day, lane_id, demand_id,
         )
         self.waiting[(order_id, 0)] = amount_t
         return order_id
