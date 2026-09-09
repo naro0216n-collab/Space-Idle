@@ -228,33 +228,6 @@ class TransportExecutionMixin:
                     state.available_day = through_day
             self.vehicle_transit = remaining_vehicle_transit
 
-        def _pay_vehicle_mission(
-            self, state: VehicleState, vehicle: VehicleDef, route: RouteDef, cargo_t: float, day: int
-        ) -> bool:
-            cost = vehicle.operating_cost_musd_per_mission + cargo_t * vehicle.operating_cost_musd_per_cargo_t
-            required_propellant = vehicle.propellant_t(route, cargo_t)
-            if required_propellant > vehicle.propellant_capacity_t + 1e-9:
-                return False
-            needed = max(0.0, required_propellant - state.propellant_t)
-            if needed > 1e-12:
-                if vehicle.propellant_resource_id is None:
-                    return False
-                if state.location_id != route.origin_id:
-                    return False
-                if not self._has_available_capability(route.origin_id, "vehicle_refueling", day):
-                    return False
-                if self.inventory.available(route.origin_id, vehicle.propellant_resource_id) + 1e-12 < needed:
-                    return False
-            if not self.account.spend(cost):
-                return False
-            if needed > 1e-12:
-                if not self.inventory.take_unreserved(route.origin_id, vehicle.propellant_resource_id, needed):  # type: ignore[arg-type]
-                    self.account.earn(cost)
-                    return False
-                state.propellant_t += needed
-            state.propellant_t = max(0.0, state.propellant_t - required_propellant)
-            return True
-
         def _handoff_vehicle_for_leg(
             self, order: CargoOrder, leg_index: int, carrier_state: VehicleState, cargo_t: float, day: int
         ) -> VehicleState | None:

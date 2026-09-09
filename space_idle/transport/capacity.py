@@ -38,9 +38,10 @@ class _CapacityBudget:
 class TransportCapacityMixin:
     """Pure current-state capacity projection shared by lanes and transport UI.
 
-    This layer does not create orders or move vehicles. It projects the same
-    payload, propellant, funds, support-infrastructure, vehicle-state and
-    transfer-continuity constraints that execution must subsequently satisfy.
+    This layer does not create orders or move vehicles. It composes route/mode
+    compatibility with the same authoritative per-leg resource evaluator used by
+    mission execution, so displayed capacity cannot acquire a second fuel/cost
+    model of its own.
     """
 
     def _capacity_budget(
@@ -98,33 +99,28 @@ class TransportCapacityMixin:
             if payload_t > definition.max_cargo_for_route(route) + _EPS:
                 return None
 
-            required_propellant_t = definition.propellant_t(route, payload_t)
-            if required_propellant_t > definition.propellant_capacity_t + _EPS:
-                return None
-            if required_propellant_t > fuel_t + _EPS:
-                resource_id = definition.propellant_resource_id
-                if resource_id is None or not self._has_available_capability(
-                    route.origin_id, "vehicle_refueling", day
-                ):
-                    return None
-                needed_t = required_propellant_t - fuel_t
-                key = (route.origin_id, resource_id)
-                available_t = remaining.propellant_stock.get(
-                    key, self.inventory.available(route.origin_id, resource_id)
-                )
-                if available_t + _EPS < needed_t:
-                    return None
-                remaining.propellant_stock[key] = max(0.0, available_t - needed_t)
-                fuel_t += needed_t
-            fuel_t = max(0.0, fuel_t - required_propellant_t)
-
-            mission_cost = (
-                definition.operating_cost_musd_per_mission
-                + payload_t * definition.operating_cost_musd_per_cargo_t
+            resource_id = definition.propellant_resource_id
+            key = None if resource_id is None else (route.origin_id, resource_id)
+            available_stock = 0.0 if key is None else remaining.propellant_stock.get(
+                key, self.inventory.available(route.origin_id, resource_id)
             )
-            if remaining.funds_musd + _EPS < mission_cost:
+            plan = self._vehicle_leg_resource_plan(
+                state,
+                definition,
+                route,
+                payload_t,
+                day,
+                starting_propellant_t=fuel_t,
+                funds_musd=remaining.funds_musd,
+                propellant_stock_t=available_stock,
+                vehicle_at_origin=True,
+            )
+            if not plan.feasible:
                 return None
-            remaining.funds_musd = max(0.0, remaining.funds_musd - mission_cost)
+            remaining.funds_musd = max(0.0, remaining.funds_musd - plan.mission_cost_musd)
+            if key is not None and plan.refuel_t > _EPS:
+                remaining.propellant_stock[key] = max(0.0, available_stock - plan.refuel_t)
+            fuel_t = plan.ending_propellant_t
         return remaining
 
     def _vehicle_path_capacity_with_budget(
@@ -299,12 +295,7 @@ class TransportCapacityMixin:
         ):
             return 0.0, ()
         service = self.external_services[service_id]
-        already_dispatched = sum(
-            mission.amount_t
-            for mission in self.missions.values()
-            if mission.mode_id == str(service_id) and mission.departure_day == day
-        )
-        capacity = max(0.0, service.capacity_t_per_day - already_dispatched)
+        capacity = self._external_service_remaining_capacity(service_id, day)
         if service.cost_musd_per_t > _EPS:
             capacity = min(capacity, self.account.funds_musd / service.cost_musd_per_t)
         return (capacity, (capacity,)) if capacity > _EPS else (0.0, ())

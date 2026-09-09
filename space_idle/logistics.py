@@ -12,6 +12,7 @@ from .transport.compatibility import TransportCompatibilityMixin
 from .transport.execution import TransportExecutionMixin
 from .transport.fleet import FleetManagementMixin
 from .transport.lanes import LaneRuntimeMetrics, LogisticsLaneSnapshot, TransportLaneMixin
+from .transport.mission_resources import TransportMissionResourcesMixin, VehicleLegResourcePlan
 from .transport.models import (
     ATMOSPHERIC_ENTRY,
     LANDING,
@@ -54,6 +55,7 @@ class LogisticsService(
     TransportCompatibilityMixin,
     FleetManagementMixin,
     TransportPlanningMixin,
+    TransportMissionResourcesMixin,
     TransportCapacityMixin,
     TransportQueryMixin,
     TransportOrderMixin,
@@ -97,6 +99,6 @@ __all__ = [
     "SpaceflightCapability", "TransportMissionState", "TransportMode", "TransportOperationKind",
     "TransportOperationRequirement", "TransportPathPlan", "TransportPerformanceProfile",
     "TransportPlanCapacity", "VehicleDef", "VehicleDisposition", "VehicleEconomicsSpec",
-    "VehicleMaintenanceSpec", "VehicleProductionSpec", "VehicleState", "VehicleStatus",
-    "VehicleTransit",
+    "VehicleLegResourcePlan", "VehicleMaintenanceSpec", "VehicleProductionSpec", "VehicleState",
+    "VehicleStatus", "VehicleTransit",
 ]
