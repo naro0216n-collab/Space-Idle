@@ -8,10 +8,6 @@ from .research_models import ResearchPhase, ResearchState
 
 
 class ResearchWorkflowMixin:
-    @staticmethod
-    def _has_site_requirements(requirements) -> bool:
-        return bool(requirements.environment or requirements.capability_requirements)
-
     def start_blockers(
         self,
         research_id: DefinitionId,
@@ -57,13 +53,9 @@ class ResearchWorkflowMixin:
             raise ValueError("; ".join(detail for _code, detail in blockers))
         definition = self.definitions[research_id]
         self.stored_points = max(0.0, self.stored_points - definition.research_point_cost)
-        requires_prototype = bool(
-            definition.prototype_resources
-            or self._has_site_requirements(definition.prototype_site_requirements)
-        )
-        if requires_prototype:
+        if definition.prototype is not None:
             self.active[research_id] = ResearchState(research_id, ResearchPhase.PROTOTYPE)
-        elif definition.demonstration_days > 0:
+        elif definition.demonstration is not None:
             self.active[research_id] = ResearchState(research_id, ResearchPhase.DEMONSTRATION)
         else:
             self.completed.add(research_id)
@@ -84,9 +76,12 @@ class ResearchWorkflowMixin:
         if location_id not in self.facilities.environment.graph.nodes:
             raise KeyError(location_id)
         definition = self.definitions[research_id]
+        prototype = definition.prototype
+        if prototype is None:
+            raise ValueError("research has no prototype phase")
         snapshot = power if power is not None else self.power.snapshot(location_id, self.facilities, day)
         return evaluate_site_requirements(
-            definition.prototype_site_requirements,
+            prototype.site_requirements,
             location_id,
             day,
             self.facilities.environment,
@@ -120,9 +115,11 @@ class ResearchWorkflowMixin:
             location_id = state.prototype_location_id
             if location_id is None:
                 continue
-            definition = self.definitions[research_id]
+            prototype = self.definitions[research_id].prototype
+            if prototype is None:
+                raise RuntimeError(f"prototype state has no prototype definition: {research_id}")
             for resource_id, required_t in sorted(
-                definition.prototype_resources.items(), key=lambda row: str(row[0])
+                prototype.resources.items(), key=lambda row: str(row[0])
             ):
                 shortage = max(0.0, required_t - self.inventory.available(location_id, resource_id))
                 if shortage <= 1e-9:
@@ -142,7 +139,8 @@ class ResearchWorkflowMixin:
     def fund_prototype(self, research_id: DefinitionId, day: int = 0) -> None:
         state = self.active[research_id]
         definition = self.definitions[research_id]
-        if state.status != ResearchPhase.PROTOTYPE:
+        prototype = definition.prototype
+        if state.status != ResearchPhase.PROTOTYPE or prototype is None:
             raise ValueError("research is not awaiting a prototype")
         if state.paused:
             raise ValueError("research is paused")
@@ -154,13 +152,13 @@ class ResearchWorkflowMixin:
             raise ValueError(
                 "prototype site requirements not met: " + "; ".join(f.detail for f in failures)
             )
-        for resource_id, amount in definition.prototype_resources.items():
+        for resource_id, amount in prototype.resources.items():
             if self.inventory.available(location_id, resource_id) + 1e-9 < amount:
                 raise ValueError(f"prototype resource shortfall: {resource_id}")
-        for resource_id, amount in definition.prototype_resources.items():
+        for resource_id, amount in prototype.resources.items():
             if not self.inventory.take_unreserved(location_id, resource_id, amount):
                 raise RuntimeError("prototype accounting race")
-        if definition.demonstration_days > 0:
+        if definition.demonstration is not None:
             state.status = ResearchPhase.DEMONSTRATION
             if not self.demonstration_failures(research_id, location_id, day):
                 state.demonstration_location_id = location_id
@@ -194,9 +192,12 @@ class ResearchWorkflowMixin:
         power: PowerSnapshot | None = None,
     ) -> tuple[SiteRequirementFailure, ...]:
         definition = self.definitions[research_id]
+        demonstration = definition.demonstration
+        if demonstration is None:
+            raise ValueError("research has no demonstration phase")
         snapshot = power if power is not None else self.power.snapshot(location_id, self.facilities, day)
         return evaluate_site_requirements(
-            definition.demonstration_site_requirements,
+            demonstration.site_requirements,
             location_id,
             day,
             self.facilities.environment,

@@ -1,10 +1,30 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 from .shared import DefinitionId, SpatialNodeId
 from .site import SiteRequirements
+
+
+@dataclass(frozen=True)
+class ResearchPrototypeSpec:
+    resources: dict[DefinitionId, float]
+    site_requirements: SiteRequirements = SiteRequirements()
+
+    def __post_init__(self) -> None:
+        if any(amount < 0 for amount in self.resources.values()):
+            raise ValueError("prototype resource amounts must be non-negative")
+
+
+@dataclass(frozen=True)
+class ResearchDemonstrationSpec:
+    days: int
+    site_requirements: SiteRequirements = SiteRequirements()
+
+    def __post_init__(self) -> None:
+        if self.days <= 0:
+            raise ValueError("research demonstration duration must be positive")
 
 
 @dataclass(frozen=True)
@@ -13,18 +33,12 @@ class ResearchDefinition:
     display_name: str
     research_point_cost: float
     prerequisites: frozenset[DefinitionId] = frozenset()
-    prototype_resources: dict[DefinitionId, float] = field(default_factory=dict)
-    prototype_site_requirements: SiteRequirements = SiteRequirements()
-    demonstration_days: int = 0
-    demonstration_site_requirements: SiteRequirements = SiteRequirements()
+    prototype: ResearchPrototypeSpec | None = None
+    demonstration: ResearchDemonstrationSpec | None = None
 
     def __post_init__(self) -> None:
         if self.research_point_cost < 0:
             raise ValueError("research point cost must be non-negative")
-        if self.demonstration_days < 0:
-            raise ValueError("research demonstration days must be non-negative")
-        if any(amount < 0 for amount in self.prototype_resources.values()):
-            raise ValueError("prototype resource amounts must be non-negative")
 
 
 @dataclass(frozen=True)

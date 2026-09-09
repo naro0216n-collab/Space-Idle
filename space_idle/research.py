@@ -9,6 +9,8 @@ from .shared import DefinitionId
 from .technology import TechnologyState
 from .research_models import (
     ResearchDefinition,
+    ResearchPrototypeSpec,
+    ResearchDemonstrationSpec,
     ResearchProviderLevelSpec,
     ResearchProviderSpec,
     ResearchPhase,
@@ -40,6 +42,7 @@ class ResearchService(ResearchWorkflowMixin, ResearchCapacityMixin, ResearchExec
 
 
 __all__ = [
-    "ResearchDefinition", "ResearchProviderLevelSpec", "ResearchProviderSpec",
-    "ResearchPhase", "ResearchState", "ResearchService",
+    "ResearchDefinition", "ResearchPrototypeSpec", "ResearchDemonstrationSpec",
+    "ResearchProviderLevelSpec", "ResearchProviderSpec", "ResearchPhase",
+    "ResearchState", "ResearchService",
 ]

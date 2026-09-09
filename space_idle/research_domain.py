@@ -11,7 +11,20 @@ from .shared import DefinitionId, SpatialNodeId
 def capture_research(sim: Any) -> dict[str, Any]:
     if sim.research is None:
         return {"stored_points": 0.0, "active": []}
-    return {"stored_points": sim.research.stored_points, "active": [{"definition_id": str(r.definition_id), "status": r.status.value, "demonstration_done_days": r.demonstration_done_days, "paused": r.paused, "prototype_location_id": None if r.prototype_location_id is None else str(r.prototype_location_id), "demonstration_location_id": None if r.demonstration_location_id is None else str(r.demonstration_location_id)} for r in sorted(sim.research.active.values(), key=lambda row: str(row.definition_id))]}
+    return {
+        "stored_points": sim.research.stored_points,
+        "active": [
+            {
+                "definition_id": str(r.definition_id),
+                "status": r.status.value,
+                "demonstration_done_days": r.demonstration_done_days,
+                "paused": r.paused,
+                "prototype_location_id": None if r.prototype_location_id is None else str(r.prototype_location_id),
+                "demonstration_location_id": None if r.demonstration_location_id is None else str(r.demonstration_location_id),
+            }
+            for r in sorted(sim.research.active.values(), key=lambda row: str(row.definition_id))
+        ],
+    }
 
 
 def restore_research(sim: Any, data: dict[str, Any]) -> None:
@@ -21,18 +34,27 @@ def restore_research(sim: Any, data: dict[str, Any]) -> None:
     sim.research.active.clear()
     for r in data.get("active", []):
         rid = DefinitionId(r["definition_id"])
-        sim.research.active[rid] = ResearchState(rid, ResearchPhase(r["status"]), int(r["demonstration_done_days"]), bool(r["paused"]), None if r["prototype_location_id"] is None else SpatialNodeId(r["prototype_location_id"]), None if r.get("demonstration_location_id") is None else SpatialNodeId(r["demonstration_location_id"]))
+        sim.research.active[rid] = ResearchState(
+            rid,
+            ResearchPhase(r["status"]),
+            int(r["demonstration_done_days"]),
+            bool(r["paused"]),
+            None if r["prototype_location_id"] is None else SpatialNodeId(r["prototype_location_id"]),
+            None if r.get("demonstration_location_id") is None else SpatialNodeId(r["demonstration_location_id"]),
+        )
 
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:
     result: set[DefinitionId] = set()
     if sim.research is not None:
         for definition in sim.research.definitions.values():
-            result.update(definition.prototype_resources)
+            if definition.prototype is not None:
+                result.update(definition.prototype.resources)
     return result
 
 
 STATE_CODEC = StateCodec("research", capture_research, restore_research, True)
+
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     if sim.research is None:
@@ -45,12 +67,26 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(research.prerequisites.issubset(definitions), f"unknown research prerequisite: {research_id}")
         _require(research_id not in research.prerequisites, f"self research prerequisite: {research_id}")
         _require(research.research_point_cost >= 0, f"negative research point cost: {research_id}")
-        _require(research.demonstration_days >= 0, f"negative research demonstration duration: {research_id}")
-        _require(all(v >= 0 for v in research.prototype_resources.values()), f"negative prototype resource requirement: {research_id}")
-        _validate_site_requirements(research.prototype_site_requirements, known_capabilities, f"research:{research_id}:prototype")
-        _validate_site_requirements(research.demonstration_site_requirements, known_capabilities, f"research:{research_id}:demonstration")
+        if research.prototype is not None:
+            _require(
+                all(v >= 0 for v in research.prototype.resources.values()),
+                f"negative prototype resource requirement: {research_id}",
+            )
+            _validate_site_requirements(
+                research.prototype.site_requirements,
+                known_capabilities,
+                f"research:{research_id}:prototype",
+            )
+        if research.demonstration is not None:
+            _require(research.demonstration.days > 0, f"invalid research demonstration duration: {research_id}")
+            _validate_site_requirements(
+                research.demonstration.site_requirements,
+                known_capabilities,
+                f"research:{research_id}:demonstration",
+            )
     visiting: set[object] = set()
     visited: set[object] = set()
+
     def visit(node: object) -> None:
         if node in visited:
             return
@@ -60,6 +96,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             visit(dep)
         visiting.remove(node)
         visited.add(node)
+
     for research_id in definitions:
         visit(research_id)
     for definition_id, provider in sim.research.providers.items():
@@ -82,14 +119,36 @@ def validate_runtime(sim: Any) -> None:
     for research_id, state in sim.research.active.items():
         _require(research_id == state.definition_id, f"research state key mismatch: {research_id}")
         _require(research_id in sim.research.definitions, f"active unknown research: {research_id}")
-        _require(state.status in {ResearchPhase.PROTOTYPE, ResearchPhase.DEMONSTRATION}, f"invalid active research phase: {research_id}/{state.status}")
+        _require(
+            state.status in {ResearchPhase.PROTOTYPE, ResearchPhase.DEMONSTRATION},
+            f"invalid active research phase: {research_id}/{state.status}",
+        )
         definition = sim.research.definitions[research_id]
-        _require(0 <= state.demonstration_done_days <= definition.demonstration_days, f"invalid demonstration progress: {research_id}")
-        _require(state.prototype_location_id is None or state.prototype_location_id in sim.graph.nodes, f"research prototype references unknown location: {research_id}")
-        _require(state.demonstration_location_id is None or state.demonstration_location_id in sim.graph.nodes, f"research demonstration references unknown location: {research_id}")
         if state.status is ResearchPhase.PROTOTYPE:
+            _require(definition.prototype is not None, f"prototype state without prototype definition: {research_id}")
+            _require(state.demonstration_done_days == 0, f"prototype research has demonstration progress: {research_id}")
             _require(state.demonstration_location_id is None, f"prototype research retains demonstration site: {research_id}")
+        else:
+            _require(definition.demonstration is not None, f"demonstration state without demonstration definition: {research_id}")
+            _require(
+                0 <= state.demonstration_done_days <= definition.demonstration.days,
+                f"invalid demonstration progress: {research_id}",
+            )
+        _require(
+            state.prototype_location_id is None or state.prototype_location_id in sim.graph.nodes,
+            f"research prototype references unknown location: {research_id}",
+        )
+        _require(
+            state.demonstration_location_id is None or state.demonstration_location_id in sim.graph.nodes,
+            f"research demonstration references unknown location: {research_id}",
+        )
     _require(sim.research.completed.issubset(sim.research.definitions), "completed research contains unknown definition")
 
 
-DOMAIN_EXTENSION = DomainExtension("research", state_codec=STATE_CODEC, configuration_validator=validate_configuration, runtime_validator=validate_runtime, referenced_resources=referenced_resources)
+DOMAIN_EXTENSION = DomainExtension(
+    "research",
+    state_codec=STATE_CODEC,
+    configuration_validator=validate_configuration,
+    runtime_validator=validate_runtime,
+    referenced_resources=referenced_resources,
+)

@@ -86,6 +86,8 @@ class ResearchProgressionProjectorMixin:
             else:
                 status = state.status.value
 
+            prototype = definition.prototype
+            demonstration = definition.demonstration
             demonstration_location_id = (
                 None if state is None or state.demonstration_location_id is None
                 else str(state.demonstration_location_id)
@@ -117,8 +119,10 @@ class ResearchProgressionProjectorMixin:
                             definition.id, state.prototype_location_id, sim.day
                         )
                     )
+                    if prototype is None:
+                        raise RuntimeError(f"prototype state has no prototype definition: {definition.id}")
                     for resource_id, required in sorted(
-                        definition.prototype_resources.items(), key=lambda row: str(row[0])
+                        prototype.resources.items(), key=lambda row: str(row[0])
                     ):
                         available = sim.inventory.available(state.prototype_location_id, resource_id)
                         if available + 1e-9 < required:
@@ -127,8 +131,9 @@ class ResearchProgressionProjectorMixin:
                                 f"{resource_id}: {available:g}/{required:g} t",
                             ),)
 
+            demonstration_required = 0 if demonstration is None else demonstration.days
             demonstration_done = (
-                definition.demonstration_days
+                demonstration_required
                 if complete
                 else (0 if state is None else state.demonstration_done_days)
             )
@@ -140,6 +145,10 @@ class ResearchProgressionProjectorMixin:
                 self._research_site_options(definition, demonstration=True)
                 if status == "demonstration" else ()
             )
+            prototype_resources = () if prototype is None else tuple(
+                (str(resource_id), amount)
+                for resource_id, amount in sorted(prototype.resources.items(), key=lambda row: str(row[0]))
+            )
             rows.append(ResearchRow(
                 str(definition.id),
                 definition.display_name,
@@ -148,17 +157,12 @@ class ResearchProgressionProjectorMixin:
                 not start_blockers,
                 definition.research_point_cost,
                 start_blockers,
-                tuple(
-                    (str(resource_id), amount)
-                    for resource_id, amount in sorted(
-                        definition.prototype_resources.items(), key=lambda row: str(row[0])
-                    )
-                ),
+                prototype_resources,
                 None if state is None or state.prototype_location_id is None
                 else str(state.prototype_location_id),
                 prototype_sites,
                 demonstration_done,
-                definition.demonstration_days,
+                demonstration_required,
                 demonstration_location_id,
                 demonstration_sites,
                 demonstration_blockers,

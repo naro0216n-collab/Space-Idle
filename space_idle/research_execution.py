@@ -20,7 +20,9 @@ class ResearchExecutionMixin:
                 snapshot = self.power.snapshot(state.demonstration_location_id, self.facilities, day)
             if self.demonstration_failures(state.definition_id, state.demonstration_location_id, day, snapshot):
                 continue
-            definition = self.definitions[state.definition_id]
+            demonstration = self.definitions[state.definition_id].demonstration
+            if demonstration is None:
+                raise RuntimeError(f"demonstration state has no demonstration definition: {state.definition_id}")
             state.demonstration_done_days += 1
-            if state.demonstration_done_days >= definition.demonstration_days:
+            if state.demonstration_done_days >= demonstration.days:
                 self._complete(state.definition_id)

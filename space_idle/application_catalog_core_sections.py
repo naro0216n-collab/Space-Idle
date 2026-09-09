@@ -5,6 +5,7 @@ from .application_views import (
     CelestialBodyDefinitionRow, FacilityDefinitionRow, LocationDefinitionRow,
     ProcessDefinitionRow, ResearchDefinitionRow, ResourceDefinitionRow,
 )
+from .site import SiteRequirements
 
 
 def project_resources(projector):
@@ -45,17 +46,25 @@ def project_research(projector):
     sim = projector._simulation
     if sim.research is None:
         return ()
-    return tuple(
-        ResearchDefinitionRow(
-            str(definition.id), definition.display_name, definition.research_point_cost,
+    empty_site = SiteRequirements()
+    rows = []
+    for definition in sorted(sim.research.definitions.values(), key=lambda row: str(row.id)):
+        prototype = definition.prototype
+        demonstration = definition.demonstration
+        rows.append(ResearchDefinitionRow(
+            str(definition.id),
+            definition.display_name,
+            definition.research_point_cost,
             tuple(sorted(str(item) for item in definition.prerequisites)),
-            tuple((str(resource_id), amount) for resource_id, amount in sorted(definition.prototype_resources.items(), key=lambda item: str(item[0]))),
-            site_requirements_definition(definition.prototype_site_requirements),
-            definition.demonstration_days,
-            site_requirements_definition(definition.demonstration_site_requirements),
-        )
-        for definition in sorted(sim.research.definitions.values(), key=lambda row: str(row.id))
-    )
+            () if prototype is None else tuple(
+                (str(resource_id), amount)
+                for resource_id, amount in sorted(prototype.resources.items(), key=lambda item: str(item[0]))
+            ),
+            site_requirements_definition(empty_site if prototype is None else prototype.site_requirements),
+            0 if demonstration is None else demonstration.days,
+            site_requirements_definition(empty_site if demonstration is None else demonstration.site_requirements),
+        ))
+    return tuple(rows)
 
 
 def project_celestial_bodies(projector):
