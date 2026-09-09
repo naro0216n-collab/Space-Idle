@@ -66,7 +66,7 @@ def run() -> None:
 
             assert page.locator("#laneTable").is_visible()
             lane_headers = page.locator("#laneTable th").all_inner_texts()
-            for required in ("要求容量", "実効容量", "本日使用", "待ち需要", "状態"):
+            for required in ("要求容量", "優先度", "実効容量", "本日使用", "待ち需要", "状態"):
                 assert required in lane_headers, f"lane decision surface lacks {required}"
             demand_headers = page.locator("#demandTable th").all_inner_texts()
             for required in ("発生元", "資源", "要求", "輸送系内", "未充足"):
@@ -85,8 +85,26 @@ def run() -> None:
             page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
             page.locator("#laneTable tbody tr[data-lane-row]").first.wait_for(timeout=10000)
             row = page.locator("#laneTable tbody tr[data-lane-row]").first
+            assert "2 t/日" in row.inner_text()
+            assert "70" in row.inner_text()
+
+            row.get_by_role("button", name="設定").click()
+            page.locator("#laneDialog").wait_for(state="visible", timeout=10000)
+            assert page.locator("#laneSource").is_disabled()
+            assert page.locator("#laneDestination").is_disabled()
+            assert page.locator("#lanePolicy").is_disabled()
+            page.locator("#laneCapacity").fill("3")
+            page.locator("#lanePriority").fill("85")
+            page.get_by_role("button", name="設定を更新").click()
+            page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
+            page.wait_for_function(
+                "() => document.querySelector('#laneTable tbody tr[data-lane-row]')?.innerText.includes('3 t/日')",
+                timeout=10000,
+            )
+            row = page.locator("#laneTable tbody tr[data-lane-row]").first
             text = row.inner_text()
-            assert "2 t/日" in text
+            assert "3 t/日" in text
+            assert "85" in text
 
             row.get_by_role("button", name="停止").click()
             page.wait_for_function(

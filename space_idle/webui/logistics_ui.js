@@ -6,6 +6,7 @@
   const {state,$,$$,esc,fmt,locationName,resourceName,definitionName,operationName,stateLabels,issueHtml,metricHtml,api,command,banner}=A;
   let cargoPlans=null;
   let cargoContractId=null;
+  let editingLaneId=null;
 
   const ownerLabels={project:'建設',research:'研究',industry:'産業',player:'手動',contract:'契約'};
   const ownerLabel=(kind)=>ownerLabels[kind]||kind;
@@ -41,9 +42,9 @@
       const blocked=(lane.blockers||[]).length;
       const stateText=lane.paused?'停止':blocked?'阻害':'稼働';
       const stateClass=lane.paused||blocked?'warn':'ok';
-      return `<tr data-lane-row="${esc(lane.id)}"><td><div class="cell-main">${esc(locationName(lane.source_id))} → ${esc(locationName(lane.destination_id))}</div><div class="cell-sub">${esc(lane.id)} · ${esc(lane.path_policy)}</div></td><td>${fmt(lane.requested_capacity_t_per_day)} t/日</td><td>${fmt(lane.effective_capacity_t_per_day)} t/日</td><td>${fmt(lane.used_t)} t</td><td>${fmt(lane.queued_t)} t</td><td><span class="badge ${stateClass}">${stateText}</span><div class="cell-sub">${blocked?esc((lane.blockers||[]).map(A.userFacingText).join(' / ')):'blockerなし'}</div></td><td><div class="action-row"><button type="button" data-lane-toggle="${esc(lane.id)}" data-paused="${lane.paused?'1':'0'}">${lane.paused?'再開':'停止'}</button><button type="button" class="danger-button" data-lane-delete="${esc(lane.id)}">削除</button></div></td></tr>`;
+      return `<tr data-lane-row="${esc(lane.id)}"><td><div class="cell-main">${esc(locationName(lane.source_id))} → ${esc(locationName(lane.destination_id))}</div><div class="cell-sub">${esc(lane.id)} · ${esc(lane.path_policy)}</div></td><td>${fmt(lane.requested_capacity_t_per_day)} t/日</td><td>${lane.priority}</td><td>${fmt(lane.effective_capacity_t_per_day)} t/日</td><td>${fmt(lane.used_t)} t</td><td>${fmt(lane.queued_t)} t</td><td><span class="badge ${stateClass}">${stateText}</span><div class="cell-sub">${blocked?esc((lane.blockers||[]).map(A.userFacingText).join(' / ')):'blockerなし'}</div></td><td><div class="action-row"><button type="button" data-lane-edit="${esc(lane.id)}">設定</button><button type="button" data-lane-toggle="${esc(lane.id)}" data-paused="${lane.paused?'1':'0'}">${lane.paused?'再開':'停止'}</button><button type="button" class="danger-button" data-lane-delete="${esc(lane.id)}">削除</button></div></td></tr>`;
     }).join('');
-    $('#laneTable').innerHTML=`<div style="padding:8px"><button type="button" class="primary" id="newLaneButton">Laneを作成</button></div><table><thead><tr><th>Lane</th><th>要求容量</th><th>実効容量</th><th>本日使用</th><th>待ち需要</th><th>状態</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="7">Laneなし。Domain DemandはLaneが作成されるまで輸送Order化されません。</td></tr>'}</tbody></table>`;
+    $('#laneTable').innerHTML=`<div style="padding:8px"><button type="button" class="primary" id="newLaneButton">Laneを作成</button></div><table><thead><tr><th>Lane</th><th>要求容量</th><th>優先度</th><th>実効容量</th><th>本日使用</th><th>待ち需要</th><th>状態</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="8">Laneなし。Domain DemandはLaneが作成されるまで輸送Order化されません。</td></tr>'}</tbody></table>`;
   }
 
   function renderDemands(){
@@ -101,9 +102,21 @@
     if(contract){$('#cargoSource').value=contract.source_id;$('#cargoDestination').value=contract.destination_id;$('#cargoResource').value=contract.resource_id;$('#cargoAmount').value=contract.cargo_t;}else if(route){$('#cargoSource').value=route.origin_id;$('#cargoDestination').value=route.destination_id;}
     $('#cargoDialog').showModal();try{await loadCargoPlans();}catch(e){banner(e.message,'error');}
   }
-  function openLaneDialog(route=null){
+  function openLaneDialog(route=null,lane=null){
+    editingLaneId=lane?.id||null;
     populateLocationSelects();
-    if(route){$('#laneSource').value=route.origin_id;$('#laneDestination').value=route.destination_id;}
+    const editing=Boolean(lane);
+    $('#laneDialog h2').textContent=editing?'物流Laneを編集':'物流Laneを作成';
+    $('#laneForm button[type="submit"]').textContent=editing?'設定を更新':'Lane作成';
+    for(const id of ['laneSource','laneDestination','lanePolicy'])$('#'+id).disabled=editing;
+    if(lane){
+      $('#laneSource').value=lane.source_id;$('#laneDestination').value=lane.destination_id;
+      $('#laneCapacity').value=String(lane.requested_capacity_t_per_day);$('#lanePriority').value=String(lane.priority);
+      $('#lanePolicy').value=lane.path_policy;
+    }else{
+      $('#laneCapacity').value='1';$('#lanePriority').value='50';$('#lanePolicy').value='fastest';
+      if(route){$('#laneSource').value=route.origin_id;$('#laneDestination').value=route.destination_id;}
+    }
     $('#laneDialog').showModal();
   }
 
@@ -123,6 +136,7 @@
     if(event.target.closest('#routeLaneButton')){openLaneDialog((state.routes?.items||[]).find((x)=>x.id===state.selectedRouteId));return;}
     if(event.target.closest('#newCargoButton')){await openCargoDialog();return;}
     if(event.target.closest('#routeCargoButton')){await openCargoDialog((state.routes?.items||[]).find((x)=>x.id===state.selectedRouteId));return;}
+    const edit=event.target.closest('[data-lane-edit]');if(edit){const lane=(state.lanes?.items||[]).find((x)=>x.id===edit.dataset.laneEdit);if(lane)openLaneDialog(null,lane);return;}
     const toggle=event.target.closest('[data-lane-toggle]');if(toggle){try{await command(toggle.dataset.paused==='1'?'ResumeLogisticsLane':'PauseLogisticsLane',{lane_id:toggle.dataset.laneToggle});}catch{}return;}
     const del=event.target.closest('[data-lane-delete]');if(del){try{await command('DeleteLogisticsLane',{lane_id:del.dataset.laneDelete});}catch{}return;}
   });
@@ -131,8 +145,21 @@
     $('#routeOriginFilter').addEventListener('change',renderRouteList);$('#routeDestinationFilter').addEventListener('change',renderRouteList);
     $('#cargoSource').addEventListener('change',()=>loadCargoPlans().catch((e)=>banner(e.message,'error')));$('#cargoDestination').addEventListener('change',()=>loadCargoPlans().catch((e)=>banner(e.message,'error')));$('#cargoPolicy').addEventListener('change',()=>loadCargoPlans().catch((e)=>banner(e.message,'error')));$('#cargoPlan').addEventListener('change',renderCargoLegChoices);
     $('#cargoCloseButton').addEventListener('click',()=>$('#cargoDialog').close());$('#cargoCancelButton').addEventListener('click',()=>$('#cargoDialog').close());
-    $('#laneCloseButton').addEventListener('click',()=>$('#laneDialog').close());$('#laneCancelButton').addEventListener('click',()=>$('#laneDialog').close());
-    $('#laneForm').addEventListener('submit',async(event)=>{event.preventDefault();const source=$('#laneSource').value,destination=$('#laneDestination').value;if(source===destination){banner('Laneの出発地と到着地は異なる必要があります','error');return;}try{await command('CreateLogisticsLane',{source_id:source,destination_id:destination,requested_capacity_t_per_day:Number($('#laneCapacity').value),priority:Number($('#lanePriority').value),path:null,route_modes:[],path_policy:$('#lanePolicy').value});$('#laneDialog').close();banner('物流Laneを作成しました');}catch{}});
+    $('#laneCloseButton').addEventListener('click',()=>{editingLaneId=null;$('#laneDialog').close();});$('#laneCancelButton').addEventListener('click',()=>{editingLaneId=null;$('#laneDialog').close();});
+    $('#laneForm').addEventListener('submit',async(event)=>{
+      event.preventDefault();
+      const capacity=Number($('#laneCapacity').value),priority=Number($('#lanePriority').value);
+      try{
+        if(editingLaneId){
+          await command('UpdateLogisticsLane',{lane_id:editingLaneId,requested_capacity_t_per_day:capacity,priority});
+          editingLaneId=null;$('#laneDialog').close();banner('物流Lane設定を更新しました');return;
+        }
+        const source=$('#laneSource').value,destination=$('#laneDestination').value;
+        if(source===destination){banner('Laneの出発地と到着地は異なる必要があります','error');return;}
+        await command('CreateLogisticsLane',{source_id:source,destination_id:destination,requested_capacity_t_per_day:capacity,priority,path:null,route_modes:[],path_policy:$('#lanePolicy').value});
+        $('#laneDialog').close();banner('物流Laneを作成しました');
+      }catch{}
+    });
     $('#cargoForm').addEventListener('submit',async(event)=>{event.preventDefault();const options=cargoPlans?.options||[],plan=options[Number($('#cargoPlan').value||0)];if(!plan){banner('実行可能な輸送計画を選択してください','error');return;}const routeModes=$$('[data-cargo-route-mode]').map((sel)=>[sel.dataset.cargoRouteMode,sel.value]);try{if(cargoContractId)await command('DispatchContractCargo',{contract_id:cargoContractId,path:plan.path,route_modes:routeModes});else await command('SubmitCargo',{source_id:$('#cargoSource').value,destination_id:$('#cargoDestination').value,resource_id:$('#cargoResource').value,amount_t:Number($('#cargoAmount').value),priority:Number($('#cargoPriority').value),path:plan.path,route_modes:routeModes,path_policy:$('#cargoPolicy').value});$('#cargoDialog').close();cargoContractId=null;banner('単発輸送を登録しました');}catch{}});
   });
 
