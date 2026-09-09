@@ -70,7 +70,24 @@ def run() -> None:
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
             page.get_by_role("button", name="物流ネットワーク").click()
-            page.get_by_role("button", name="資源輸送を設定").click()
+
+            # Lane is the recurring player-facing logistics configuration. Verify
+            # that its resource-agnostic capacity controls are operable before
+            # exercising the separate one-off CargoOrder path below.
+            page.get_by_role("button", name="Laneを作成").click()
+            page.locator("#laneDialog").wait_for(state="visible", timeout=10000)
+            page.locator("#laneSource").select_option(EARTH)
+            page.locator("#laneDestination").select_option(LEO)
+            page.locator("#laneCapacity").fill("1")
+            page.get_by_role("button", name="Lane作成").click()
+            page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
+            lane_row = page.locator("[data-lane-row]").first
+            lane_row.wait_for(timeout=10000)
+            lane_text = lane_row.inner_text()
+            assert "1" in lane_text and "t/日" in lane_text, "lane UI did not expose configured capacity"
+            assert page.get_by_role("heading", name="Resource Demand").count() == 1
+
+            page.get_by_role("button", name="単発資源輸送").click()
             page.locator("#cargoDialog").wait_for(state="visible", timeout=10000)
 
             # Vehicle choice is part of the transport plan, not an implicit hidden
