@@ -33,6 +33,7 @@ jobs:
           import hashlib
           import os
           import re
+          import subprocess
           from pathlib import Path
 
           request_path = Path('.publish/request.patch')
@@ -70,6 +71,22 @@ jobs:
               raise SystemExit('invalid chunk count') from exc
           if not 1 <= chunk_count <= 256:
               raise SystemExit('invalid chunk count')
+
+          expected_chunks_tree = headers.get('chunks-tree-git-oid')
+          if expected_chunks_tree is not None:
+              object_format = subprocess.check_output(
+                  ['git', 'rev-parse', '--show-object-format'], text=True
+              ).strip()
+              oid_length = 40 if object_format == 'sha1' else 64 if object_format == 'sha256' else 0
+              if oid_length == 0 or not re.fullmatch(rf'[0-9a-f]{{{oid_length}}}', expected_chunks_tree):
+                  raise SystemExit('invalid chunks tree Git OID')
+              actual_chunks_tree = subprocess.check_output(
+                  ['git', 'rev-parse', 'HEAD:.publish/chunks'], text=True
+              ).strip()
+              if actual_chunks_tree != expected_chunks_tree:
+                  raise SystemExit(
+                      f'chunks tree mismatch: expected {expected_chunks_tree}, got {actual_chunks_tree}'
+                  )
 
           payload_parts = []
           for index in range(chunk_count):
