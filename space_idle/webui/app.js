@@ -100,18 +100,42 @@
     return payload?.data??payload;
   }
 
+  const interactionControl=(identity)=>{
+    if(!identity)return null;
+    if(identity.kind==='id')return document.getElementById(identity.value);
+    if(identity.kind==='draft')return $$('[data-draft-key]').find((control)=>control.dataset.draftKey===identity.value)||null;
+    return null;
+  };
+  const controlIdentity=(control)=>control?.id?{kind:'id',value:control.id}:control?.dataset?.draftKey?{kind:'draft',value:control.dataset.draftKey}:null;
   function captureInteraction(){
     const active=document.activeElement;
-    const control=active&&/^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)&&active.id?active:null;
+    const activeControl=active&&/^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)?active:null;
+    const identity=controlIdentity(activeControl);
+    const drafts=$$('[data-draft-key]').map((control)=>({
+      key:control.dataset.draftKey,
+      value:control.value,
+      baseline:control.defaultValue,
+    }));
     const scroll=document.scrollingElement;
-    return {control:control?{id:control.id,value:control.value,selectionStart:typeof control.selectionStart==='number'?control.selectionStart:null,selectionEnd:typeof control.selectionEnd==='number'?control.selectionEnd:null}:null,scrollLeft:scroll?.scrollLeft||0,scrollTop:scroll?.scrollTop||0};
+    return {
+      control:identity?{...identity,selectionStart:typeof activeControl.selectionStart==='number'?activeControl.selectionStart:null,selectionEnd:typeof activeControl.selectionEnd==='number'?activeControl.selectionEnd:null}:null,
+      drafts,
+      scrollLeft:scroll?.scrollLeft||0,
+      scrollTop:scroll?.scrollTop||0,
+    };
   }
   function restoreInteraction(snapshot){
     if(!snapshot)return;
+    for(const draft of snapshot.drafts||[]){
+      const control=interactionControl({kind:'draft',value:draft.key});
+      if(!control)continue;
+      const baseline=control.defaultValue;
+      if(baseline===draft.baseline||baseline===draft.value)control.value=draft.value;
+    }
     if(snapshot.control){
-      const control=document.getElementById(snapshot.control.id);
+      const control=interactionControl(snapshot.control);
       if(control&&/^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)){
-        control.value=snapshot.control.value; control.focus({preventScroll:true});
+        control.focus({preventScroll:true});
         if(snapshot.control.selectionStart!==null&&typeof control.setSelectionRange==='function'){
           try{control.setSelectionRange(snapshot.control.selectionStart,snapshot.control.selectionEnd);}catch{}
         }

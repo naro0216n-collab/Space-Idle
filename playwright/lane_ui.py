@@ -74,7 +74,12 @@ def run() -> None:
             ).filter(has=page.locator("button[data-produce-vehicle]:not([disabled])")).first
             production_option.wait_for(timeout=10000)
             production_option.locator("[data-production-priority-value]").fill("37")
+            page.wait_for_timeout(1200)
+            assert production_option.locator("[data-production-priority-value]").input_value() == "37"
             production_option.locator("[data-production-allocation-value]").fill("2.5")
+            page.wait_for_timeout(1200)
+            assert production_option.locator("[data-production-priority-value]").input_value() == "37"
+            assert float(production_option.locator("[data-production-allocation-value]").input_value()) == 2.5
             production_option.locator("button[data-produce-vehicle]").click()
             project_row = page.locator(
                 "#vehicleProductionTable [data-production-project-row]"
