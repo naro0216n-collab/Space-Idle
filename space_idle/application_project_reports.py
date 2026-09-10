@@ -304,6 +304,17 @@ class ApplicationReportProjectorMixin:
                 production[resource_id] += amount
             for resource_id, amount in snap.input_rates_per_day.items():
                 consumption[resource_id] += amount
+
+        # Facility maintenance is an ordinary recurring physical resource flow.
+        # Report the currently fulfilled consumption rate, while the full
+        # requirement remains visible through Facility maintenance demand/query.
+        for facility in sim.facilities.all_at(location_id):
+            factor = max(0.0, min(1.0, facility.maintenance_satisfaction))
+            for resource_id, amount in sim.facilities.maintenance_requirements_per_day(
+                facility.id
+            ).items():
+                consumption[resource_id] += amount * factor
+
         if sim.extraction is not None:
             for snap in sim.extraction.snapshots(location_id, sim.facilities, sim.inventory, power, sim.day):
                 production[snap.output_resource_id] += snap.output_t_per_day

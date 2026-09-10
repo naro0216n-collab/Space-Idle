@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle import GetLocation, GetLogistics, SetMaintenancePriority, build_game_application
+from space_idle import GetFlowReport, GetLocation, GetLogistics, SetMaintenancePriority, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.resource_demand import reconcile_local_resource_claims
 from space_idle.shared import EntityId
@@ -148,3 +148,34 @@ def test_maintenance_replenishment_plan_is_independent_of_transient_reservations
 
     assert baseline == after_reservation
     assert baseline[resource_id] == pytest.approx(daily)
+
+
+def test_flow_report_includes_current_facility_maintenance_consumption():
+    app = build_game_application()
+    sim = app._simulation
+    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+
+    expected = {}
+    for snap in sim.industry.snapshots(
+        ids.EARTH, sim.facilities, sim.inventory, power, sim.day
+    ):
+        for resource_id, amount in snap.input_rates_per_day.items():
+            expected[resource_id] = expected.get(resource_id, 0.0) + amount
+    for facility in sim.facilities.all_at(ids.EARTH):
+        factor = facility.maintenance_satisfaction
+        for resource_id, amount in sim.facilities.maintenance_requirements_per_day(
+            facility.id
+        ).items():
+            expected[resource_id] = expected.get(resource_id, 0.0) + amount * factor
+
+    flow = app.query(GetFlowReport(str(ids.EARTH)))
+    rows = {row.resource_id: row for row in flow.resources}
+    maintained = [resource_id for resource_id, amount in expected.items() if amount > 1e-12]
+    assert maintained
+    for resource_id in maintained:
+        assert rows[str(resource_id)].local_consumption_per_day == pytest.approx(
+            expected[resource_id]
+        )
+        assert rows[str(resource_id)].local_net_per_day == pytest.approx(
+            rows[str(resource_id)].local_production_per_day - expected[resource_id]
+        )
