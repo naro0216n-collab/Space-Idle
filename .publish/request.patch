@@ -1,0 +1,14 @@
+# version: 1
+# target-branch: temp
+# base-sha: e2e80e87efd91d30878ec54c3e75f3362847cba4
+# target-tree: e20b6ca8d8171471b2b5e74def053fbf3b8976f0
+# patch-sha256: ed367726e8f4f1fdc2e1b9bda43ddf2e8a388c2f86dda9aa5ff1c3bf16f3373f
+# message-b64: R2F0ZXdheSBwcm9iZSBvbiB0ZW1wCg==
+--- SPACE-IDLE PATCH ---
+diff --git a/__gateway_probe b/__gateway_probe
+new file mode 100644
+index 0000000..f197b35
+--- /dev/null
++++ b/__gateway_probe
+@@ -0,0 +1 @@
++gateway probe
