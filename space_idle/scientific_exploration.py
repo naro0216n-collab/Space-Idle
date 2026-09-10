@@ -297,14 +297,12 @@ class ScientificExplorationService:
                 )
                 if allocated + 1e-9 < amount_t:
                     blockers.append(f"resource:{resource_id}:{allocated:g}/{amount_t:g}")
-        vehicle = self.logistics.vehicles[state.vehicle_id]
-        vehicle_def = self.logistics.vehicle_defs[vehicle.definition_id]
         blockers.extend(
-            self.logistics.performance_route_failures(
-                definition.compatibility_route(),
-                vehicle_def.performance,
+            self._route_failures_for_vehicle(
+                definition,
+                state.vehicle_id,
                 day,
-                power_by_location=power_by_location,
+                power_by_location,
             )
         )
         snapshots = power_by_location or {}
@@ -324,13 +322,11 @@ class ScientificExplorationService:
             definition = self.definitions[definition_id]
             if not self._consume_inputs_if_ready(definition, state):
                 continue
-            vehicle = self.logistics.vehicles[state.vehicle_id]
-            vehicle_def = self.logistics.vehicle_defs[vehicle.definition_id]
-            if self.logistics.performance_route_failures(
-                definition.compatibility_route(),
-                vehicle_def.performance,
+            if self._route_failures_for_vehicle(
+                definition,
+                state.vehicle_id,
                 day,
-                power_by_location=power_by_location,
+                power_by_location,
             ):
                 continue
 
