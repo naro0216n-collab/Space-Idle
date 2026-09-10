@@ -100,6 +100,8 @@ class LogisticsStateProjectorMixin:
                 tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.production.resources),
                 state.priority,
                 state.allocation_weight,
+                sim.logistics.vehicle_production_priority_editable(state.id),
+                sim.logistics.vehicle_production_allocation_editable(state.id),
                 blockers,
                 None if state.completed_vehicle_id is None else str(state.completed_vehicle_id),
             ))

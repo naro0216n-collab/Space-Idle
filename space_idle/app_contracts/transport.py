@@ -22,6 +22,8 @@ class RefuelVehicle:
 class ProduceVehicle:
     vehicle_definition_id: str
     location_id: str
+    priority: int = 50
+    allocation_weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,13 @@ class PauseVehicleProduction:
 @dataclass(frozen=True)
 class ResumeVehicleProduction:
     production_id: str
+
+
+@dataclass(frozen=True)
+class SetVehicleProductionSettings:
+    production_id: str
+    priority: int | None = None
+    allocation_weight: float | None = None
 
 
 @dataclass(frozen=True)

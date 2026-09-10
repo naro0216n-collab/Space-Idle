@@ -83,6 +83,8 @@ class VehicleProductionRow:
     resources: tuple[tuple[str, float], ...]
     priority: int
     allocation_weight: float
+    priority_editable: bool
+    allocation_editable: bool
     blockers: tuple[str, ...]
     completed_vehicle_id: str | None
 

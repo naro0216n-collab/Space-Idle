@@ -18,7 +18,7 @@ from .app_contracts.progression import (
 )
 from .app_contracts.transport import (
     DispatchVehicle, RefuelVehicle, ProduceVehicle, PauseVehicleProduction,
-    ResumeVehicleProduction, SubmitCargo, CreateLogisticsLane,
+    ResumeVehicleProduction, SetVehicleProductionSettings, SubmitCargo, CreateLogisticsLane,
     UpdateLogisticsLane, PauseLogisticsLane, ResumeLogisticsLane, DeleteLogisticsLane,
 )
 from .app_contracts.contracts import AcceptContract, DispatchContractCargo, DeclineContract
@@ -38,7 +38,7 @@ Command: TypeAlias = (
     ResumeSurvey | SetSurveyAllocation | StartScientificExploration | PauseScientificExploration |
     ResumeScientificExploration | AssignExplorationVehicle | UnassignExplorationVehicle |
     DispatchVehicle | RefuelVehicle | ProduceVehicle | PauseVehicleProduction |
-    ResumeVehicleProduction | SubmitCargo | CreateLogisticsLane | UpdateLogisticsLane |
+    ResumeVehicleProduction | SetVehicleProductionSettings | SubmitCargo | CreateLogisticsLane | UpdateLogisticsLane |
     PauseLogisticsLane | ResumeLogisticsLane | DeleteLogisticsLane | AcceptContract |
     DispatchContractCargo | DeclineContract | AdvanceTime
 )

@@ -62,7 +62,37 @@ def run() -> None:
             page = browser.new_page(viewport={"width": 1194, "height": 834})
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
+            page.locator("#timePauseButton").click()
+            page.wait_for_function(
+                "() => document.querySelector('#timePauseButton')?.getAttribute('aria-pressed') === 'true'",
+                timeout=10000,
+            )
             page.get_by_role("button", name="物流ネットワーク").click()
+
+            production_option = page.locator(
+                "#vehicleProductionTable [data-production-option-row]"
+            ).filter(has=page.locator("button[data-produce-vehicle]:not([disabled])")).first
+            production_option.wait_for(timeout=10000)
+            production_option.locator("[data-production-priority-value]").fill("37")
+            production_option.locator("[data-production-allocation-value]").fill("2.5")
+            production_option.locator("button[data-produce-vehicle]").click()
+            project_row = page.locator(
+                "#vehicleProductionTable [data-production-project-row]"
+            ).first
+            project_row.wait_for(timeout=10000)
+            assert project_row.locator("[data-production-priority-value]").input_value() == "37"
+            assert float(project_row.locator("[data-production-allocation-value]").input_value()) == 2.5
+            project_row.locator("[data-production-priority-value]").fill("81")
+            project_row.locator("[data-production-allocation-value]").fill("3")
+            project_row.get_by_role("button", name="設定適用").click()
+            page.wait_for_function(
+                """() => {
+                  const row = document.querySelector('#vehicleProductionTable [data-production-project-row]');
+                  return row?.querySelector('[data-production-priority-value]')?.value === '81'
+                    && Number(row?.querySelector('[data-production-allocation-value]')?.value) === 3;
+                }""",
+                timeout=10000,
+            )
 
             assert page.locator("#laneTable").is_visible()
             lane_headers = page.locator("#laneTable th").all_inner_texts()

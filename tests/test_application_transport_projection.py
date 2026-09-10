@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from space_idle import (
+    AdvanceTime,
+    ApplicationError,
     CreateLogisticsLane,
     GetBottlenecks,
     GetBuildOptions,
@@ -21,10 +25,12 @@ from space_idle import (
     GetWorld,
     PauseLogisticsLane,
     PlanBuild,
+    ProduceVehicle,
     SetConstructionWeight,
     SetProjectImportSource,
     SetProjectPriority,
     SetProjectSourcingPolicy,
+    SetVehicleProductionSettings,
     UpdateLogisticsLane,
     build_game_application,
 )
@@ -69,6 +75,68 @@ def test_lane_capacity_and_priority_can_be_updated_without_replacing_lane():
     assert after.paused is True
     assert after.requested_capacity_t_per_day == 3.5
     assert after.priority == 80
+
+
+def test_vehicle_production_exposes_resource_priority_and_capability_allocation_controls():
+    app = build_game_application()
+
+    production_id = app.execute(
+        ProduceVehicle(
+            str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+            str(EARTH),
+            priority=37,
+            allocation_weight=2.5,
+        )
+    ).created_id
+    assert production_id is not None
+
+    row = next(
+        item for item in app.query(GetLogistics()).vehicle_production
+        if item.id == production_id
+    )
+    assert row.priority == 37
+    assert row.allocation_weight == pytest.approx(2.5)
+    assert row.priority_editable is True
+    assert row.allocation_editable is True
+    demands = tuple(
+        demand for demand in app.query(GetLogistics()).demands
+        if demand.owner_kind == "vehicle_production" and demand.owner_id == production_id
+    )
+    assert demands
+    assert {demand.priority for demand in demands} == {37}
+
+    app.execute(SetVehicleProductionSettings(
+        production_id,
+        priority=81,
+        allocation_weight=3.0,
+    ))
+    updated = next(
+        item for item in app.query(GetLogistics()).vehicle_production
+        if item.id == production_id
+    )
+    assert updated.priority == 81
+    assert updated.allocation_weight == pytest.approx(3.0)
+    assert {
+        demand.priority
+        for demand in app.query(GetLogistics()).demands
+        if demand.owner_kind == "vehicle_production" and demand.owner_id == production_id
+    } == {81}
+
+    app.execute(AdvanceTime(1))
+    building = next(
+        item for item in app.query(GetLogistics()).vehicle_production
+        if item.id == production_id
+    )
+    assert building.phase == "building"
+    assert building.priority_editable is False
+    assert building.allocation_editable is True
+    with pytest.raises(ApplicationError, match="priority can only change before inputs are consumed"):
+        app.execute(SetVehicleProductionSettings(production_id, priority=10))
+    app.execute(SetVehicleProductionSettings(production_id, allocation_weight=1.25))
+    assert next(
+        item for item in app.query(GetLogistics()).vehicle_production
+        if item.id == production_id
+    ).allocation_weight == pytest.approx(1.25)
 
 
 def test_ui_snapshot_is_json_safe_at_application_boundary(tmp_path):

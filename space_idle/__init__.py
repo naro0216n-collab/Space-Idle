@@ -6,7 +6,7 @@ from .bootstrap import build_game_application
 from .application import (
     AcceptContract, DispatchContractCargo, ApplicationError, AdvanceTime,
     DispatchVehicle, RefuelVehicle, ProduceVehicle, PauseVehicleProduction,
-    ResumeVehicleProduction, CancelBuild, PauseBuild, ResumeBuild,
+    ResumeVehicleProduction, SetVehicleProductionSettings, CancelBuild, PauseBuild, ResumeBuild,
     CreateLogisticsLane, DeleteLogisticsLane, DeclineContract,
     FundResearchPrototype, GameApplication, GetBuildOptions, GetCatalog,
     GetContracts, GetLocation, GetFlowReport, GetBottlenecks, GetLogistics,
@@ -38,7 +38,7 @@ __all__ = [
     "PauseScientificExploration", "ResumeScientificExploration",
     "AssignExplorationVehicle", "UnassignExplorationVehicle", "DispatchVehicle",
     "RefuelVehicle", "ProduceVehicle", "PauseVehicleProduction",
-    "ResumeVehicleProduction", "SubmitCargo", "CreateLogisticsLane",
+    "ResumeVehicleProduction", "SetVehicleProductionSettings", "SubmitCargo", "CreateLogisticsLane",
     "UpdateLogisticsLane", "PauseLogisticsLane", "ResumeLogisticsLane",
     "DeleteLogisticsLane", "AcceptContract", "DispatchContractCargo",
     "DeclineContract", "AdvanceTime", "GetCatalog", "GetWorld", "GetLocation",

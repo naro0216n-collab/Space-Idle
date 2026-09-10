@@ -98,6 +98,39 @@ class VehicleProductionMixin:
             raise ValueError("completed vehicle production cannot be resumed")
         state.paused = False
 
+    def vehicle_production_priority_editable(self, project_id: EntityId) -> bool:
+        return (
+            self.vehicle_production_projects[project_id].phase
+            is VehicleProductionPhase.AWAITING_INPUTS
+        )
+
+    def vehicle_production_allocation_editable(self, project_id: EntityId) -> bool:
+        return (
+            self.vehicle_production_projects[project_id].phase
+            is not VehicleProductionPhase.COMPLETE
+        )
+
+    def set_vehicle_production_settings(
+        self,
+        project_id: EntityId,
+        *,
+        priority: int | None = None,
+        allocation_weight: float | None = None,
+    ) -> None:
+        state = self.vehicle_production_projects[project_id]
+        if priority is not None:
+            if not self.vehicle_production_priority_editable(project_id):
+                raise ValueError(
+                    "vehicle production priority can only change before inputs are consumed"
+                )
+            state.priority = priority
+        if allocation_weight is not None:
+            if allocation_weight <= 0:
+                raise ValueError("vehicle production allocation weight must be positive")
+            if not self.vehicle_production_allocation_editable(project_id):
+                raise ValueError("completed vehicle production allocation cannot change")
+            state.allocation_weight = allocation_weight
+
     def vehicle_production_site_failures(
         self,
         vehicle_definition_id: DefinitionId,
