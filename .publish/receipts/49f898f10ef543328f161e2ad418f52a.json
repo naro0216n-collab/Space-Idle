@@ -1,0 +1,12 @@
+{
+  "base_commit": "28c60b13ddb09ac42e1e32de092fba70693d8a81",
+  "chunks_tree_git_oid": "75b0f3c82e4aa68c908b7f1e933a0817c2d9ce5c",
+  "published_commit": "ec8959e1b3bbd1b1b639617f4a71bec8a13acdf0",
+  "published_commit_object_b64": "dHJlZSBmNzU3Y2IyYzM2MTkwZWUzMDkzYzVlNzVhNDg5NTAzOWQ0YjE3NjhmCnBhcmVudCAyOGM2MGIxM2RkYjA5YWM0MmUxZTMyZGUwOTJmYmE3MDY5M2Q4YTgxCmF1dGhvciBzcGFjZS1pZGxlLXB1Ymxpc2gtZ2F0ZXdheSA8NDE4OTgyODIrZ2l0aHViLWFjdGlvbnNbYm90XUB1c2Vycy5ub3JlcGx5LmdpdGh1Yi5jb20+IDk0NjY4NDgwMCArMDAwMApjb21taXR0ZXIgc3BhY2UtaWRsZS1wdWJsaXNoLWdhdGV3YXkgPDQxODk4MjgyK2dpdGh1Yi1hY3Rpb25zW2JvdF1AdXNlcnMubm9yZXBseS5naXRodWIuY29tPiA5NDY2ODQ4MDAgKzAwMDAKCkd1YXJkIGxvY2F0aW9uLXNjb3BlZCBzbmFwc2hvdCBvd25lcnNoaXAK",
+  "published_tree": "f757cb2c36190ee3093c5e75a4895039d4b1768f",
+  "request_id": "49f898f10ef543328f161e2ad418f52a",
+  "request_version": 4,
+  "target_branch": "develop",
+  "target_tree": "f757cb2c36190ee3093c5e75a4895039d4b1768f",
+  "version": 2
+}
