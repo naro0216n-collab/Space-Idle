@@ -13,6 +13,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  source-artifact:
+    name: Source artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage tracked source snapshot
+        shell: bash
+        run: |
+          mkdir -p "${RUNNER_TEMP}/source"
+          git archive HEAD | tar -x -C "${RUNNER_TEMP}/source"
+          printf '%s\n' "${GITHUB_SHA}" > "${RUNNER_TEMP}/source/.source-commit"
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-snapshot
+          path: ${{ runner.temp }}/source
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
   unit:
     name: Unit / architecture
     runs-on: ubuntu-latest
