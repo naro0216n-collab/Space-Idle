@@ -1,0 +1,52 @@
+name: Validation Dispatch
+
+on:
+  push:
+    branches: [publish]
+    paths:
+      - '.publish/validation.request'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate request and dispatch workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          request='.publish/validation.request'
+          target_ref="$(sed -n 's/^target-ref: //p' "$request")"
+          expected_sha="$(sed -n 's/^expected-sha: //p' "$request")"
+          workflow="$(sed -n 's/^workflow: //p' "$request")"
+
+          case "$target_ref" in
+            develop|temp) ;;
+            *) echo "Unsupported target ref: $target_ref" >&2; exit 1 ;;
+          esac
+          if [ "$workflow" != 'full-validation.yml' ]; then
+            echo "Unsupported workflow: $workflow" >&2
+            exit 1
+          fi
+          if ! [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Invalid expected SHA' >&2
+            exit 1
+          fi
+
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${target_ref}" --jq '.object.sha')"
+          if [ "$current" != "$expected_sha" ]; then
+            echo "Target moved: expected $expected_sha, found $current" >&2
+            exit 1
+          fi
+
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" \
+            -f ref="$target_ref"
