@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: fast-ci-${{ github.ref }}
@@ -104,3 +105,37 @@ jobs:
         run: |
           python playwright/acceptance.py
           python playwright/lane_ui.py
+
+  report-status:
+    name: Report Fast CI status
+    if: always()
+    needs: [source-artifact, unit, package-smoke, chromium-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Publish aggregate commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RESULT: ${{ needs.source-artifact.result }}
+          UNIT_RESULT: ${{ needs.unit.result }}
+          PACKAGE_RESULT: ${{ needs.package-smoke.result }}
+          CHROMIUM_RESULT: ${{ needs.chromium-smoke.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state=success
+          description='Fast CI passed'
+          for result in "${SOURCE_RESULT}" "${UNIT_RESULT}" "${PACKAGE_RESULT}" "${CHROMIUM_RESULT}"; do
+            if [ "${result}" != 'success' ]; then
+              state=failure
+              description='Fast CI failed'
+              break
+            fi
+          done
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="${state}" \
+            -f context='Fast CI' \
+            -f description="${description}" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
