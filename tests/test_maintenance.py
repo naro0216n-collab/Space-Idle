@@ -4,7 +4,7 @@ import pytest
 
 from space_idle import GetLocation, GetLogistics, SetMaintenancePriority, build_game_application
 from space_idle.content import base_ids as ids
-from space_idle.resource_demand import reserve_local_resource_claims
+from space_idle.resource_demand import reconcile_local_resource_claims
 
 
 def _earth_facilities_with_maintenance(sim):
@@ -53,7 +53,7 @@ def test_maintenance_shortage_can_starve_lower_priority_facility_without_auto_re
     sim.inventory.stock[(ids.EARTH, common)] = high_req[common]
 
     demands = sim.maintenance.resource_demands(sim.day)
-    reserve_local_resource_claims(demands, sim.inventory)
+    reconcile_local_resource_claims(demands, sim.inventory)
     sim.maintenance.advance_day(sim.day)
 
     assert high.maintenance_satisfaction == pytest.approx(1.0)

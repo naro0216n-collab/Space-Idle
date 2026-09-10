@@ -6,7 +6,7 @@ from space_idle.inventory import InventoryBook
 from space_idle.resource_demand import (
     ResourceDemand,
     external_resource_demands,
-    reserve_local_resource_claims,
+    reconcile_local_resource_claims,
     resolve_local_resource_supply,
 )
 from space_idle.shared import DefinitionId, EntityId, SpatialNodeId
@@ -93,7 +93,7 @@ def test_immediate_claim_can_be_smaller_than_transport_replenishment_target():
     )
     construction = _demand("demand.construction", 8.0, 50)
 
-    resolutions = reserve_local_resource_claims((construction, maintenance), inventory)
+    resolutions = reconcile_local_resource_claims((construction, maintenance), inventory)
     by_id = {row.demand.id: row for row in resolutions}
 
     # Immediate claims are protected before buffer replenishment. The high
@@ -124,7 +124,7 @@ def test_equal_priority_immediate_claims_share_shortage_proportionally():
     first = _demand("demand.a", 2.0, 50)
     second = _demand("demand.b", 4.0, 50)
 
-    resolutions = reserve_local_resource_claims((second, first), inventory)
+    resolutions = reconcile_local_resource_claims((second, first), inventory)
     by_id = {row.demand.id: row for row in resolutions}
 
     assert by_id[first.id].local_supply_t == pytest.approx(1.0)
