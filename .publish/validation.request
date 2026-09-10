@@ -1,0 +1,4 @@
+target-ref: develop
+expected-sha: a7de0d1fcc118b253fb4e3c3a00b6f97f93c1711
+workflow: full-validation.yml
+nonce: 20260910T1105Z
