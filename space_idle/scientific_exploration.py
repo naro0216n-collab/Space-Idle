@@ -90,7 +90,7 @@ class ScientificExplorationService:
     def start(self, definition_id: DefinitionId, *, day: int = 0) -> None:
         if definition_id not in self.definitions:
             raise KeyError(definition_id)
-        if definition_id in self.campaigns:
+        if not self.can_start(definition_id):
             raise ValueError("scientific exploration campaign already started")
         self.campaigns[definition_id] = ScientificExplorationState(
             definition_id=definition_id,
@@ -163,6 +163,51 @@ class ScientificExplorationService:
         failures.extend(self._route_failures_for_vehicle(definition, vehicle_id, day))
         return tuple(failures)
 
+    def can_start(self, definition_id: DefinitionId) -> bool:
+        return definition_id in self.definitions and definition_id not in self.campaigns
+
+    def can_pause(self, definition_id: DefinitionId) -> bool:
+        state = self.campaigns.get(definition_id)
+        return (
+            state is not None
+            and state.phase is not ScientificExplorationPhase.COMPLETE
+            and not state.paused
+        )
+
+    def can_resume(self, definition_id: DefinitionId) -> bool:
+        state = self.campaigns.get(definition_id)
+        return (
+            state is not None
+            and state.phase is not ScientificExplorationPhase.COMPLETE
+            and state.paused
+        )
+
+    def can_assign_vehicle(
+        self,
+        definition_id: DefinitionId,
+        vehicle_id: EntityId,
+        *,
+        day: int = 0,
+    ) -> bool:
+        state = self.campaigns.get(definition_id)
+        if (
+            state is None
+            or state.phase is ScientificExplorationPhase.COMPLETE
+            or state.vehicle_id is not None
+        ):
+            return False
+        return not self.vehicle_failures(definition_id, vehicle_id, day=day)
+
+    def can_unassign_vehicle(self, definition_id: DefinitionId) -> bool:
+        state = self.campaigns.get(definition_id)
+        return (
+            state is not None
+            and state.phase is not ScientificExplorationPhase.COMPLETE
+            and state.vehicle_id is not None
+            and state.progress_days <= 1e-9
+            and not state.inputs_consumed
+        )
+
     def assign_vehicle(
         self,
         definition_id: DefinitionId,
@@ -193,10 +238,10 @@ class ScientificExplorationService:
         state = self.campaigns[definition_id]
         if state.phase is ScientificExplorationPhase.COMPLETE:
             raise ValueError("scientific exploration is complete")
-        if state.progress_days > 1e-9 or state.inputs_consumed:
-            raise ValueError("started scientific exploration cannot release its vehicle")
         if state.vehicle_id is None:
             return
+        if not self.can_unassign_vehicle(definition_id):
+            raise ValueError("started scientific exploration cannot release its vehicle")
         assignment_id = EntityId(f"scientific_exploration:{definition_id}")
         self.logistics.release_vehicle_assignment(
             state.vehicle_id,

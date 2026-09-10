@@ -62,6 +62,7 @@ class ScientificExplorationVehicleOptionRow:
     location_id: str | None
     status: str
     blockers: tuple[str, ...]
+    can_assign: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,10 +80,15 @@ class ScientificExplorationRow:
     duration_days: float
     progress_days: float
     research_points_total: float
+    research_points_per_day: float
     research_points_awarded: float
     consumable_resources: tuple[tuple[str, float], ...]
     assigned_vehicle_id: str | None
     blockers: tuple[str, ...]
+    can_start: bool
+    can_pause: bool
+    can_resume: bool
+    can_unassign: bool
     vehicle_options: tuple[ScientificExplorationVehicleOptionRow, ...]
 
 

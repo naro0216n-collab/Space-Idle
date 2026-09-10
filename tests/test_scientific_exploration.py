@@ -45,20 +45,37 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_vehicle_perform
 
     definition = sim.scientific_exploration.definitions[exploration_id]
     assert row.mission_duration_days == definition.mission_duration_days
+    assert row.research_points_per_day == pytest.approx(definition.points_per_day)
+    assert row.can_start is True
+    assert row.can_pause is False
+    assert row.can_resume is False
+    assert row.can_unassign is False
+    assert tug.can_assign is False  # Campaign must exist before assignment.
     assert tuple(item.description for item in row.origin_requirements.environment) == ("軌道環境が必要",)
     assert tuple(item.description for item in row.destination_requirements.environment) == ("軌道環境が必要",)
 
     app.execute(StartScientificExploration(str(exploration_id)))
+    started = next(item for item in app.query(GetScientificExplorations()).items if item.id == str(exploration_id))
+    started_tug = next(option for option in started.vehicle_options if option.vehicle_id == tug.vehicle_id)
+    assert started.can_start is False
+    assert started.can_pause is True
+    assert started.can_resume is False
+    assert started_tug.can_assign is True
     app.execute(AssignExplorationVehicle(str(exploration_id), tug.vehicle_id))
     assert sim.logistics.vehicles[next(v.id for v in sim.logistics.vehicles.values() if str(v.id) == tug.vehicle_id)].status.value == "assigned"
     vehicle_row = next(v for v in app.query(GetVehicles()).items if v.id == tug.vehicle_id)
     assert vehicle_row.assignment_kind == "scientific_exploration"
     assert vehicle_row.assignment_id == f"scientific_exploration:{exploration_id}"
+    assigned = next(item for item in app.query(GetScientificExplorations()).items if item.id == str(exploration_id))
+    assert assigned.can_unassign is True
+    assert not any(option.can_assign for option in assigned.vehicle_options)
 
     app.execute(AdvanceTime(1))
     state = sim.scientific_exploration.campaigns[exploration_id]
     assert state.progress_days > 0
     assert state.research_points_awarded > 0
+    progressed = next(item for item in app.query(GetScientificExplorations()).items if item.id == str(exploration_id))
+    assert progressed.can_unassign is False
     assert capture_state(sim)["survey"] == before_survey
 
 

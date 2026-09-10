@@ -39,31 +39,43 @@ class ScientificExplorationProgressionProjectorMixin:
                 if state is not None and state.vehicle_id == vehicle.id:
                     option_blockers = ()
                 vehicle_options.append(ScientificExplorationVehicleOptionRow(
-                    str(vehicle.id),
-                    str(vehicle.definition_id),
-                    vehicle_def.display_name,
-                    None if vehicle.location_id is None else str(vehicle.location_id),
-                    vehicle.status.value,
-                    option_blockers,
+                    vehicle_id=str(vehicle.id),
+                    vehicle_definition_id=str(vehicle.definition_id),
+                    display_name=vehicle_def.display_name,
+                    location_id=None if vehicle.location_id is None else str(vehicle.location_id),
+                    status=vehicle.status.value,
+                    blockers=option_blockers,
+                    can_assign=service.can_assign_vehicle(definition.id, vehicle.id, day=sim.day),
                 ))
             rows.append(ScientificExplorationRow(
-                str(definition.id),
-                definition.display_name,
-                status,
-                paused,
-                str(definition.origin_id),
-                str(definition.destination_id),
-                tuple((operation.operation_type, operation.delta_v_km_s) for operation in definition.operations),
-                definition.mission_duration_days,
-                site_requirements_definition(definition.origin_requirements),
-                site_requirements_definition(definition.destination_requirements),
-                definition.duration_days,
-                progress_days,
-                definition.research_points_total,
-                awarded,
-                tuple((str(resource_id), amount) for resource_id, amount in definition.consumable_resources),
-                assigned_vehicle_id,
-                blockers,
-                tuple(vehicle_options),
+                id=str(definition.id),
+                display_name=definition.display_name,
+                status=status,
+                paused=paused,
+                origin_id=str(definition.origin_id),
+                destination_id=str(definition.destination_id),
+                operations=tuple(
+                    (operation.operation_type, operation.delta_v_km_s)
+                    for operation in definition.operations
+                ),
+                mission_duration_days=definition.mission_duration_days,
+                origin_requirements=site_requirements_definition(definition.origin_requirements),
+                destination_requirements=site_requirements_definition(definition.destination_requirements),
+                duration_days=definition.duration_days,
+                progress_days=progress_days,
+                research_points_total=definition.research_points_total,
+                research_points_per_day=definition.points_per_day,
+                research_points_awarded=awarded,
+                consumable_resources=tuple(
+                    (str(resource_id), amount)
+                    for resource_id, amount in definition.consumable_resources
+                ),
+                assigned_vehicle_id=assigned_vehicle_id,
+                blockers=blockers,
+                can_start=service.can_start(definition.id),
+                can_pause=service.can_pause(definition.id),
+                can_resume=service.can_resume(definition.id),
+                can_unassign=service.can_unassign_vehicle(definition.id),
+                vehicle_options=tuple(vehicle_options),
             ))
         return ScientificExplorationsView(tuple(rows))
