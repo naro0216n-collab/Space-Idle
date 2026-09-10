@@ -9,6 +9,7 @@ on:
 permissions:
   contents: write
   actions: write
+  statuses: write
 
 concurrency:
   group: publish-gateway
@@ -122,7 +123,20 @@ jobs:
           git commit -F "${MESSAGE_FILE}"
           published_sha="$(git rev-parse HEAD)"
           git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "PUBLISHED_SHA=${published_sha}" >> "$GITHUB_ENV"
           echo "Published ${published_sha} to ${TARGET_BRANCH}"
+
+      - name: Mark Fast CI pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${PUBLISHED_SHA}" \
+            -f state=pending \
+            -f context='Fast CI' \
+            -f description='Fast CI queued'
 
       - name: Dispatch Fast CI for published branch
         env:
