@@ -7,6 +7,7 @@ from space_idle import (
     ApplicationError,
     AssignExplorationVehicle,
     GetScientificExplorations,
+    GetVehicles,
     StartScientificExploration,
     build_game_application,
 )
@@ -50,6 +51,9 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_vehicle_perform
     app.execute(StartScientificExploration(str(exploration_id)))
     app.execute(AssignExplorationVehicle(str(exploration_id), tug.vehicle_id))
     assert sim.logistics.vehicles[next(v.id for v in sim.logistics.vehicles.values() if str(v.id) == tug.vehicle_id)].status.value == "assigned"
+    vehicle_row = next(v for v in app.query(GetVehicles()).items if v.id == tug.vehicle_id)
+    assert vehicle_row.assignment_kind == "scientific_exploration"
+    assert vehicle_row.assignment_id == f"scientific_exploration:{exploration_id}"
 
     app.execute(AdvanceTime(1))
     state = sim.scientific_exploration.campaigns[exploration_id]

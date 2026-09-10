@@ -108,6 +108,9 @@ def run() -> None:
                 assert any(required in header for header in demand_headers), (
                     f"demand decision surface lacks {required}"
                 )
+            vehicle_headers = page.locator("#vehicleTable th").all_inner_texts()
+            for required in ("割当 / 移動先", "利用可能", "blocker"):
+                assert required in vehicle_headers, f"vehicle decision surface lacks {required}"
 
             page.get_by_role("button", name="Laneを作成").click()
             page.locator("#laneDialog").wait_for(state="visible", timeout=10000)

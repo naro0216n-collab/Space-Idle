@@ -64,8 +64,13 @@
 
   function renderVehicles(){
     const items=state.vehicles?.items||[];$('#vehicleCountBadge').textContent=`${items.length}機`;
-    const rows=items.map((v)=>`<tr><td><div class="cell-main">${esc(v.display_name)}</div><div class="cell-sub">${esc(v.id)}</div></td><td>${esc(locationName(v.location_id))}</td><td>${esc(stateLabels[v.status]||v.status)}</td><td>${fmt(v.propellant_t)}/${fmt(v.propellant_capacity_t)}</td><td>${fmt(v.payload_t)}t</td><td>${(v.blockers||[]).length}</td></tr>`).join('');
-    $('#vehicleTable').innerHTML=`<table><thead><tr><th>機体</th><th>現在地</th><th>状態</th><th>推進剤</th><th>Payload</th><th>blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="6">輸送資産なし</td></tr>'}</tbody></table>`;
+    const rows=items.map((v)=>{
+      const assignment=v.assignment_id?`${esc(ownerLabel(v.assignment_kind||'assigned'))}<div class="cell-sub">${esc(v.assignment_id)}</div>`:v.transit_destination_id?`移動先<div class="cell-sub">${esc(locationName(v.transit_destination_id))}</div>`:'—';
+      const available=v.status==='available'?'現在利用可':v.assignment_id?'割当中':`Day ${fmt(v.available_day,0)}`;
+      const blockers=v.blockers||[];
+      return `<tr><td><div class="cell-main">${esc(v.display_name)}</div><div class="cell-sub">${esc(v.id)}</div></td><td>${esc(locationName(v.location_id))}</td><td>${esc(stateLabels[v.status]||v.status)}</td><td>${assignment}</td><td>${esc(available)}</td><td>${fmt(v.propellant_t)}/${fmt(v.propellant_capacity_t)}</td><td>${fmt(v.payload_t)}t</td><td>${blockers.length}<div class="cell-sub">${blockers.slice(0,2).map(A.userFacingText).join(' / ')}</div></td></tr>`;
+    }).join('');
+    $('#vehicleTable').innerHTML=`<table><thead><tr><th>機体</th><th>現在地</th><th>状態</th><th>割当 / 移動先</th><th>利用可能</th><th>推進剤</th><th>Payload</th><th>blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="8">輸送資産なし</td></tr>'}</tbody></table>`;
   }
   function renderVehicleProduction(){
     const projects=state.logistics?.vehicle_production||[];
