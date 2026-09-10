@@ -118,7 +118,7 @@ Domain model
 
 ## 5. 開発中Contentの扱い
 
-施設、Vehicle、Research、Recipe、初期在庫、生産率、Lane容量、所要日数等は、ゲーム性評価中は変更される実験変数である。
+施設、Vehicle、Research、Recipe、初期在庫・Fleet配分、生産率、Route所要日数、暫定Transport / Lane設定等は、ゲーム性評価中は変更される実験変数である。
 
 これらを用いたGameplay結果から一般的な欠陥が見つかることはあるが、現在の数値や一つの攻略経路を成立させるためにCoreを最適化しない。
 

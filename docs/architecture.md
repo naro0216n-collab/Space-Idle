@@ -1,4 +1,4 @@
-# 宇宙開発Idleゲーム アーキテクチャ設計 v0.3.0
+# 宇宙開発Idleゲーム アーキテクチャ設計 v0.4.0
 
 ## 1. 文書の目的
 
@@ -52,8 +52,8 @@ Persistence / Validation
 - Process / Industry
 - Extraction / Deposit
 - Construction Project
-- Transport Operation、Route、Mission、Cargo
-- Vehicle Definition / State / Production / Maintenance
+- Transport Operation、Route、Transport Allocation、Transport Capacity、Cargo Flow、特殊Transport Mission
+- Vehicle Definition / Fleet State / Production / Maintenance / Relocation
 - Research Point、Research状態機械
 - Scientific Exploration Campaign
 - Resource Survey / Knowledge
@@ -109,7 +109,8 @@ Power Snapshot
 → Scientific Exploration / Resource Survey
 → Facility maintenance demand / fulfillment
 → Construction procurement
-→ Logistics lane allocation / Cargo progression
+→ Transport availability snapshot
+→ Logistics lane allocation / Cargo Flow dispatch and progression
 → Construction execution
 → Storage refresh
 → Contracts / events
@@ -143,9 +144,11 @@ FacilityState
   power_priority
 ```
 
-同様にVehicle、Transport Mission、Research、Scientific Exploration、Survey、Construction Recipe等でも「種類の定義」と「実際の案件・個体」を分ける。
+同様にVehicle、Transport Allocation、Research、Scientific Exploration、Survey、Construction Recipe等でもDefinitionと可変Stateを分ける。
 
-Vehicle Definitionは性能と製造・整備要件を持ち、Vehicle Stateは現在位置、推進剤、製造・整備状態、Mission / Exploration割当等を持つ。
+Vehicle Definitionは性能と製造・整備要件を持つ。通常運用するVehicleは同一Definition・所在地点ごとのFleet Stateとして数量管理し、輸送、Scientific Exploration、再配置、回収中等の排他的配分をFleet Domainが所有する。
+
+Transport Service PlanとTransport Capacityは、Fleet Allocation、Route、Vehicle性能、Resource、Infrastructureから導出する派生状態とし、Save上の独立した正本にしない。
 
 静的DefinitionはSaveへ複製しない。
 
@@ -153,7 +156,7 @@ Vehicle Definitionは性能と製造・整備要件を持ち、Vehicle Stateは�
 
 ## 5. Spatial / Environment / SiteRequirements
 
-Celestial Bodyと、Inventory・Facility・Vehicleが実際に存在するSpatial Nodeを分離する。
+Celestial Bodyと、Inventory・Facility・Fleetが実際に存在するSpatial Nodeを分離する。
 
 ```text
 Earth
@@ -284,7 +287,9 @@ PauseとCancelを分離する。
 
 ## 10. Logistics / Vehicleモデル
 
-### 10.1 Transport Operation
+TransportはVehicle / Fleetから輸送能力を供給し、Logisticsはその能力をResource Demandへ配分する。通常物流で個体Vehicle Missionを繰り返し生成せず、Fleet Allocationから定常Transport Capacityを導出する。
+
+### 10.1 Transport Operation / Route
 
 Route可否は用途名でなくOperation要件と実性能から判定する。
 
@@ -293,45 +298,82 @@ Route可否は用途名でなくOperation要件と実性能から判定する。
 - Landing
 - Atmospheric Entry
 
-必要に応じてDelta-v、Thrust、Mission Duration、Atmosphere、Gravity、Landing、Docking / Refueling Infrastructure等を使う。
+必要に応じてDelta-v、Thrust、Endurance、Atmosphere、Gravity、Landing、Docking / Refueling Infrastructure等を使う。Launch Vehicle / Spacecraft / Lander等の名称は表示に利用できるが、可否判定には使わない。
 
-### 10.2 Vehicle Definition / State
+研究技術IDをRouteの直接解除条件にせず、研究で解禁されたVehicle、推進、補給、Infrastructure等の実能力から到達可能性を決める。
 
-Vehicle Definitionは必要に応じて以下を持つ。
+### 10.2 Vehicle Definition / Fleet State
 
-- Dry Mass / Payload
-- Propellant Capacity / consumption model
-- Operation capabilities
-- Mission duration
-- Atmospheric / landing envelope
-- Docking / refueling compatibility
+Vehicle DefinitionはRoute適合と運用能力を導出する物理・運用性能を持ち、固定の`t/day`を持たない。必要に応じて以下を持つ。
+
+- Dry Mass / Payload Capacity
+- Propellant type / capacity / consumption model
+- Operation capabilities / environment envelope
+- Travel performance / Endurance
+- Docking / refueling等のinterface
+- minimum turnaround / servicing work / maintenance resources
 - Production Capability / duration / resources
-- Maintenance Capability / turnaround / resources
 
-Vehicle Stateは現在位置、推進剤、Production / Available / Transit / Turnaround等の状態、Cargo、Mission / Exploration割当を持つ。
+同じ性能モデルからRoute可否、運行cycle、方向別Payload、latency、推進剤需要、servicing需要を導出する。同一の物理制約をCapability上限とResource計算へ重複定義しない。
 
-Launch Vehicle / Spacecraft / Landerという名称は表示・説明には利用できるが、可否は性能照合で決める。
+通常運用のVehicleは個体IDではなく、Vehicle Definition × Location単位のFleet Stateとして管理する。Fleet Stateは少なくとも総数と、Transport Allocation、Scientific Exploration、relocation、releasing等への排他的配分を持つ。未配分数はそれらから導出する。
 
-### 10.3 Vehicle Production
+### 10.3 Vehicle Production / Fleet relocation
 
-ロケットや宇宙船は外部Serviceだけでなくプレイヤーが建造できる。対応Capability、2〜3種類程度の実Resource、時間を消費してProduction Stateへ入り、完了後に利用可能個体となる。
+ロケットや宇宙船は外部Serviceだけでなくプレイヤーが建造できる。対応Capability、2〜3種類程度の実Resource、時間を消費してProduction Stateへ入り、完了後は建造地点のFleetへ数量を追加する。
 
-ApplicationはVehicle Production Optionとして建造地点、必要Capability、必要Resource、期間、現在のblockerをQueryできるようにする。
+地点間のFleet再配置はaggregateなFleet Relocationとして時間を要する。Transport Allocationを減らしたFleetも必要な回収時間中はreleasingとして拘束し、即座に別地点のfree Fleetへ戻さない。
 
-### 10.4 Route / Mission / End-to-End
+ApplicationはVehicle Production Option、Fleet所在・総数・各用途配分、relocation / releasing、現在のblockerをQueryできるようにする。
 
-プレイヤーは原則として出発Nodeと最終目的Nodeを指定できる。経路未指定時は明示Policyに従い直行または複数Legを選択する。中継Nodeで同じCargoを再発送する追加Commandを要求しない。
+### 10.4 Transport Allocation / Transport Capacity
 
-LEOやLunar Orbitは実在するInventory / refueling / transfer / servicing Nodeだが必須進行ゲートではない。
+プレイヤーはVehicle type、輸送する拠点間関係、経路・運用Policy、Allocation priorityを指定してFleetを輸送へ配分する。Corridor / Transport Serviceを別の管理対象として作成させない。
 
-プレイヤーが明示したVehicle / Serviceが利用不能になった場合は別方式へ勝手にフォールバックせずblockerを返す。
+Transport Allocationは次のどちらか一方をauthoritative targetとして持つ。
 
-### 10.5 Logistics Lane
+- `UNITS`: 目標Fleet隻数を指定し、輸送能力を導出する。
+- `CAPACITY`: 方向別の目標定常capacityを指定し、Nominalな1隻当たり能力から必要隻数を導出する。
 
-定常物流の主要設計対象は品目別補充ルールではなく拠点間輸送能力、方式、優先度とする。
+両modeの値を同時に正本にしない。mode切替時は現在値から新modeの初期値を導出し、以後は新modeだけを保存する。CAPACITY modeのFleet必要数には一時的な燃料・整備不足を反映させず、不足を埋めるための自動増員を起こさない。
 
-Facility、Construction、Maintenance、Industry等はResource Demandを生成し、Laneが空き輸送能力へ個別Cargoを自動割当する。
+Fleet不足でtargetを満たせないAllocationは有効な設定として保持し、不足数をblockerとして返す。free Fleetが増えた場合はAllocation priorityに従って既存targetまで投入できる。同順位の結果を登録順に依存させない。
 
+Transport DomainはAllocationごとに、Cargo輸送後もFleetが反復運用可能な状態へ戻る経路を含むTransport Service Planを導出する。往復Route、Vehicle固有のrecovery、turnaround、refueling、servicingを一般モデルとして組み合わせ、機種名による特殊分岐を置かない。
+
+Service Planから方向別Transport Capacityを導出し、少なくとも次を区別する。
+
+- Target: CAPACITY modeで指定した目標
+- Nominal: Fleet数と通常運用条件から得られる設計能力
+- Available: 現在のResource / Infrastructure / servicing制約を反映した能力
+- Used: Logisticsが実際に利用した能力
+- Spare: Available - Used
+
+往復Serviceは同一cycleが両方向を担当するため、方向別capacityを加算してFleet負荷を二重計上しない。帰り荷がない場合は空荷回送を含め、帰り荷がある場合は同じ復路capacityを利用する。
+
+推進剤・servicing等の可変運用需要はAllocation最大値ではなく実際のService利用率から発生させる。Available Capacityはそのtick開始時点のResource / Infrastructure snapshotから決め、同tick中に到着したResourceで遡及的に増加させない。
+
+External Transport ServiceはFleet Allocationを持たず、同じTransport Capacity interfaceへ直接能力を供給できる。
+
+### 10.5 Logistics Lane / Cargo Flow
+
+定常物流の主要設計対象は品目別補充ルールではなく、拠点間輸送能力、方式、Fleet配分、Lane priorityとする。
+
+Facility、Construction、Maintenance、Industry等はResource Demandを生成する。Laneはrequested capacityとpriorityを持ち、Transport AllocationやExternal Serviceから生成された共有Transport Capacityへ需要を配分する。
+
+Transport Allocation targetは「どれだけ輸送能力を用意するか」、Lane requested capacityは「その能力をどれだけ物流需要へ利用するか」を表す。Lane需要からFleetを暗黙に増員しない。
+
+通常物流の実行は個体Vehicle MissionではなくCargo Flowとして表現する。利用したcapacityに応じてCargo Flow Batchを生成し、Service latency後に目的地Inventoryへ到着させる。輸送中Cargoは目的地Storageを事前予約せず、実到着時に入庫判定する。容量不足分はarrival waitingとしてLogisticsが保持する。
+
+### 10.6 End-to-End / Special Mission
+
+プレイヤーは原則として出発Nodeと最終目的Nodeを指定できる。経路未指定時は明示Policyに従ってTransport Capacity Network上のpathを選択し、中継Nodeごとの再発送Commandを要求しない。
+
+End-to-End能力は経路上の共有capacityと競合需要から決まる。同じFleetが途中NodeでCargoを引き渡さず連続運行できる場合は一つのTransport Serviceとして扱い、別Fleetへ引き渡す地点だけをLogistics上のhandoffとする。
+
+LEOやLunar OrbitはInventory / refueling / transfer / servicing Nodeとして利用できるが必須進行ゲートではない。プレイヤーが明示したVehicle / Service / pathが利用不能になった場合は、明示Policyがない限り別方式へ勝手にfallbackしない。
+
+有限・状況依存の特殊輸送はTransport Missionとして別途扱ってよい。通常のLane物流をMissionへ戻さない。
 ---
 
 ## 11. Research Point / Researchモデル
@@ -359,11 +401,11 @@ Research Definitionは必要に応じてTheory、Prototype、Demonstration、Ope
 
 ### 12.1 Scientific Exploration
 
-Scientific Exploration CampaignはVehicleを一定期間割り当て、科学観測・近接探査・有人活動等から有限量のResearch Pointを得る。
+Scientific Exploration Campaignは必要性能を満たすFleet unitを一定期間拘束し、科学観測・近接探査・有人活動等から有限量のResearch Pointを得る。
 
-Definitionは対象、必要Operation / Delta-v / Mission Duration、必要環境・Infrastructure、期間、RP報酬、消耗Resource等を持てる。
+Definitionは対象、必要Operation / Delta-v / Endurance、必要Payload / Capability、必要環境・Infrastructure、期間、RP報酬、消耗Resource等を持てる。
 
-割当中Vehicleは物流Missionや別Explorationへ二重割当できない。適合判定は「探査船」という用途タグではなく実性能から行う。
+Exploration DomainはFleetの所有状態を直接変更せず、Fleet Domainへ必要unit数の排他的reservationを要求する。拘束中unitはTransport Allocationや別Explorationへ利用できない。適合判定は「探査船」という用途タグではなく実性能から行い、Enduranceは往路・活動・必要な帰還を含むCampaign運用計画全体に対して判定する。
 
 同一Campaignから無限RPを生成しないことを基本とする。
 
@@ -395,11 +437,12 @@ Unknown
 - Build / Upgrade / Cancel / Pause / Resume
 - Construction priority / allocation / procurement route
 - Facility pause / resume / process / power priority
-- Vehicle produce / refuel / dispatch
+- Vehicle produce / Fleet relocate
+- Transport Allocation create / update / pause / resume / delete
 - Logistics Lane create / update / pause / resume / delete
-- Cargo / Transport Mission
+- Manual Cargo / special Transport Mission
 - Research start / pause / resume / prototype / demonstration
-- Scientific Exploration start / pause / resume / vehicle assignment
+- Scientific Exploration start / pause / resume / Fleet assignment
 - Resource Survey start / pause / resume / allocation
 - Contract / external event response
 
@@ -415,7 +458,7 @@ Unknown
 - Maintenance demand / fulfillment
 - Build Options / Projects
 - Vehicle Production Options
-- Logistics / Routes / Vehicles / Missions / Lanes
+- Logistics / Routes / Fleet / Transport Allocations / Transport Capacity / Cargo Flow / Lanes / special Missions
 - Research Point / Research
 - Scientific Exploration
 - Resource Survey
@@ -429,7 +472,7 @@ Query DTOはJSON化可能なimmutableデータとする。UI側が可否・維�
 
 SaveはApplication単位のversion付きSnapshotとする。静的Definitionは現在Contentから再構築し、可変Stateだけを復元する。
 
-保存対象にはFacility、Inventory、Project、Cargo、Vehicle Production / Position / Propellant / Maintenance / Assignment、Mission、Research、Exploration、Survey、Deposit remaining、Environment Overlay等を含める。
+保存対象にはFacility、Inventory、Project、Vehicle Production、Fleet数量と用途配分、Transport Allocation target、Fleet Relocation / Releasing、Cargo Flow / arrival waiting、特殊Mission、Research、Exploration、Survey、Deposit remaining、Environment Overlay等を含める。Transport Service Plan、Nominal / Available Transport Capacity等の派生状態は保存せず、Load後に再導出する。
 
 ゲーム性評価段階ではschema/content migrationを目的化しない。
 
@@ -447,15 +490,17 @@ Configuration Validation：
 - 負の容量・率・期間
 - Construction Recipeの不正Resource数・参照
 - Vehicle Production / Maintenance定義不整合
+- Transport Allocationの未定義Vehicle / Route / 不正control mode
 - Research / Exploration / Survey参照不整合
 
 Runtime Validation：
 
 - 在庫負値、予約超過
 - Cargo質量不整合
-- Vehicle位置とMission不整合
-- Vehicle Production / Turnaround状態不整合
-- Mission / Exploration二重割当
+- Fleet総数とTransport / Exploration / Relocation / Releasing配分の不整合
+- Transport AllocationのUNITS / CAPACITY二重正本
+- Transport Capacityの二重消費
+- Vehicle Production / Fleet Relocation状態不整合
 - Facility maintenance demand / fulfillment不整合
 - Research Point負値・容量処理不整合
 - 孤立Reservation / Entity参照
@@ -469,7 +514,12 @@ Runtime Validation：
 - 維持需要が累積建造投入量から決定論的に導出される
 - 維持不足がFacility能力へ一貫して反映される
 - Vehicle建造がCapability・Resource・時間を消費する
-- VehicleがMission / Explorationへ二重割当されない
+- Fleet unitがTransport / Exploration / Relocationへ二重割当されない
+- Transport AllocationのUNITS / CAPACITY targetが単一正本である
+- CAPACITY modeの必要Fleet数が一時的なResource不足で自動膨張しない
+- Nominal / Available / Used capacityが同じService Planから一貫して導出される
+- 複数Laneが共有Transport Capacityを二重消費しない
+- Cargo Flowの資源保存とlatencyが成立する
 - Operation適合が名称・用途タグに依存しない
 - Research Pointの生成・貯蔵不変条件
 - Pause / Resume
@@ -496,7 +546,7 @@ GameApplication
 Simulation Core
 ```
 
-UIは設備一覧・InspectorでProcess inputs / outputs、maintenance fulfillment、Vehicle production blocker等を安定配置で表示する。必要情報を隠してUIを簡略化しない。
+UIは設備一覧・InspectorでProcess inputs / outputs、maintenance fulfillment、Vehicle production blocker等を安定配置で表示する。Fleet / Transport UIでは所在・総数・用途配分、Allocation mode / target、必要・投入隻数、Nominal / Available / Used / Spare Capacity、運用Resource需要、blocker / limiting factorをApplication Queryから表示する。必要情報を隠してUIを簡略化しない。
 
 LLMはFAST PATHへ入れない。
 
@@ -533,6 +583,12 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 21. Vehicle建造はCapability・実Resource・時間を消費する通常の資産生産として扱う。
 22. Scientific ExplorationによるResearch Point獲得とResource SurveyによるKnowledge更新を分離する。
 23. Process inputs / outputs、維持状態、Vehicle建造条件等の意思決定情報をApplication QueryからUIへ明示する。
+24. 通常Vehicleは所在地点ごとのFleet数量として管理し、用途間の排他的配分をFleet Domainが所有する。
+25. Transport Service PlanとTransport CapacityはFleet Allocation等から導出し、独立した保存正本にしない。
+26. Transport AllocationのUNITS / CAPACITYは一方だけをauthoritative targetとする。
+27. LogisticsはFleet Stateを直接操作せず、Transportが供給する共有Capacityを消費する。
+28. 通常物流はCargo Flowとして扱い、個体Vehicle Missionを反復生成しない。
+29. Fleet Allocation解除・地点間再配置には回収・移動時間を持たせ、aggregate Fleetを瞬間移動させない。
 
 ---
 
@@ -548,9 +604,10 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 | `industry.py` / `production/` | Process inputs / outputs / production flow |
 | `construction/` / `projects.py` | Construction Recipe、Project、調達、能力配分 |
 | maintenance domain（導入対象） | Facility maintenance demand / fulfillment |
-| `transport/` / `logistics.py` | Operation、Route、Mission、Cargo、Vehicle、Lane、Vehicle production |
+| `transport/` | Operation、Route、Vehicle Definition、Fleet State、Vehicle production、Transport Allocation、派生Service Plan / Capacity、Fleet relocation |
+| `logistics.py` / logistics domain | Resource Demand、Lane、共有Capacity配分、Cargo Flow / pipeline、arrival waiting |
 | `research.py` | Research Point、Tier / Level、Research状態機械 |
-| exploration domain（導入対象） | Scientific Exploration Campaign / Vehicle assignment / RP reward |
+| exploration domain | Scientific Exploration Campaign / Fleet reservation / RP reward |
 | `survey.py` | Resource Knowledge、Survey Campaign、Extraction |
 | `simulation.py` | 時間進行・処理順序 |
 | `application*.py` | Command / Query / DTO |
@@ -559,7 +616,7 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 | `content/` | ゲーム固有Definition |
 | `composition/` | DomainとContentの配線 |
 
-0.5時点で未実装のmaintenance / exploration等は、この責務境界を崩さず次期developへ追加する。
+現行実装がこの責務境界と一致しない箇所は、旧Mission / 個体Vehicle経路を互換層として温存せず、変更単位ごとに新しいFleet / Capacity契約へ置換する。
 
 ---
 
@@ -567,7 +624,7 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 
 本作のCoreは、
 
-**「天体と地表・軌道等のSpatial Nodeを分離し、地点固有・用途固有の特殊ケースではなく、環境・設備・能力・Vehicle性能・Transport Operation・資源・物流・維持需要・研究点生成を一般化された条件として組み合わせ、静的Content Definitionと可変Stateを分離し、Application Command / Query境界を通して決定論的に進行するSimulation Core」**
+**「天体と地表・軌道等のSpatial Nodeを分離し、環境・設備・能力・Vehicle性能・Transport Operation・資源・物流・維持需要・研究点生成を一般化された条件として組み合わせる。VehicleはFleetとして用途配分し、Transport Allocationから定常Transport Capacityを導出し、Logisticsは共有CapacityをCargo Flowへ配分する。静的Content Definition、可変State、派生状態を分離し、Application Command / Query境界を通して決定論的に進行するSimulation Core」**
 
 として維持する。
 
