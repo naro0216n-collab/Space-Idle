@@ -64,6 +64,19 @@
     const f=state.location?.facilities?.find((x)=>x.id===id);if(!f)return false;
     const blockers=f.operating_blockers||f.activation_blockers||[],u=f.next_upgrade;
     const researchRows=f.research_tier==null?[]:[['Research Tier',fmt(f.research_tier,0)],['RP生成',`${fmt(f.research_generation_points_per_day,2)}/日`],['RP貯蔵',fmt(f.research_storage_capacity_points,1)]];
+    const industry=state.location?.industry?.find((row)=>row.facility_id===id);
+    const extraction=state.location?.extraction?.find((row)=>row.facility_id===id);
+    const rateCards=(rows)=>(rows||[]).map(([resourceId,rate])=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(resourceId))}</span><span>${fmt(rate,3)} t/日</span></div></div>`).join('')||'<div class="empty-state">なし</div>';
+    const limitingHtml=(rows)=>(rows||[]).length?`<div class="issue-stack">${rows.map((factor)=>`<div class="issue"><div class="issue-title">${esc(A.userFacingText(factor))}</div></div>`).join('')}</div>`:'<span class="badge ok">なし</span>';
+    let productionSection='';
+    if(industry){
+      const options=(industry.process_options||[]).map(([processId,name])=>`<span class="badge ${processId===industry.process_id?'ok':''}">${esc(name||definitionName(processId))}</span>`).join(' ')||'<span class="badge">候補なし</span>';
+      productionSection+=section('生産工程',kv([['Process',esc(industry.process_display_name||industry.process_id||'未選択')],['実効稼働率',pct(industry.scale)]])+`<div class="cell-sub">Process候補: ${options}</div><h4>投入/日</h4>${rateCards(industry.input_rates_per_day)}<h4>生産物/日</h4>${rateCards(industry.output_rates_per_day)}<h4>limiting factor</h4>${limitingHtml(industry.limiting_factors)}`);
+    }
+    if(extraction){
+      productionSection+=section('採掘',kv([['産出資源',esc(resourceName(extraction.output_resource_id))],['生産物/日',`${fmt(extraction.output_t_per_day,3)} t/日`],['実効稼働率',pct(extraction.scale)]])+`<h4>limiting factor</h4>${limitingHtml(extraction.limiting_factors)}`);
+    }
+    if(!productionSection)productionSection=section('生産・採掘','<div class="empty-state">この設備には現在の生産・採掘工程がありません。</div>');
     let upgradeSection='';
     if(u){
       const upgradeBlockers=[...(u.missing_technologies||[]).map((x)=>['technology',x]),...(u.site_blockers||[])];
@@ -73,7 +86,7 @@
     }else upgradeSection=section('次のUpgrade','<div class="empty-state">現在定義されている次LevelのUpgradeはありません。</div>');
     const investment=(f.invested_resources||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a)} t</div>`).join('')||'<div class="empty-state">投入履歴なし</div>';
     const maintenance=(f.maintenance_demand_per_day||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a,4)} t/日</div>`).join('')||'<div class="empty-state">維持資源要求なし</div>';
-    setInspector(f.display_name,section('状態',kv([['ID',esc(f.id)],['定義',esc(f.definition_id)],['Level',fmt(f.level,0)],['運転',f.paused?'手動停止':'稼働'],['電力利用率',pct(f.power_utilization)],['維持充足率',pct(f.maintenance_satisfaction)],['実効稼働率',pct(f.operational_utilization)],['電力優先度',esc(f.power_priority??'—')],['維持優先度',esc(f.maintenance_priority??50)],...researchRows]))+section('建造・Upgrade投入資源',investment)+section('維持資源需要',maintenance)+section('Blocker',blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'<div class="badge ok">なし</div>')+upgradeSection+section('運用操作',`<div class="action-stack"><button type="button" data-command="${f.paused?'ResumeFacility':'PauseFacility'}" data-facility-id="${esc(f.id)}">${f.paused?'設備を再開':'設備を停止'}</button><div class="form-row"><label>電力優先度<input id="facilityPriorityInput" type="number" step="1" value="${f.power_priority??50}"></label><button type="button" data-set-power-priority="${esc(f.id)}">電力優先を適用</button></div><div class="form-row"><label>維持優先度<input id="maintenancePriorityInput" type="number" step="1" value="${f.maintenance_priority??50}"></label><button type="button" data-set-maintenance-priority="${esc(f.id)}">維持優先を適用</button></div></div>`));
+    setInspector(f.display_name,section('状態',kv([['ID',esc(f.id)],['定義',esc(f.definition_id)],['Level',fmt(f.level,0)],['運転',f.paused?'手動停止':'稼働'],['電力利用率',pct(f.power_utilization)],['維持充足率',pct(f.maintenance_satisfaction)],['実効稼働率',pct(f.operational_utilization)],['電力優先度',esc(f.power_priority??'—')],['維持優先度',esc(f.maintenance_priority??50)],...researchRows]))+productionSection+section('建造・Upgrade投入資源',investment)+section('維持資源需要',maintenance)+section('Blocker',blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'<div class="badge ok">なし</div>')+upgradeSection+section('運用操作',`<div class="action-stack"><button type="button" data-command="${f.paused?'ResumeFacility':'PauseFacility'}" data-facility-id="${esc(f.id)}">${f.paused?'設備を再開':'設備を停止'}</button><div class="form-row"><label>電力優先度<input id="facilityPriorityInput" type="number" step="1" value="${f.power_priority??50}"></label><button type="button" data-set-power-priority="${esc(f.id)}">電力優先を適用</button></div><div class="form-row"><label>維持優先度<input id="maintenancePriorityInput" type="number" step="1" value="${f.maintenance_priority??50}"></label><button type="button" data-set-maintenance-priority="${esc(f.id)}">維持優先を適用</button></div></div>`));
     return true;
   }
   function renderResourceInspector(id){
