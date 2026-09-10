@@ -1,14 +1,14 @@
 # version: 1
 # target-branch: temp
-# base-sha: e2e80e87efd91d30878ec54c3e75f3362847cba4
-# target-tree: e20b6ca8d8171471b2b5e74def053fbf3b8976f0
-# patch-sha256: ed367726e8f4f1fdc2e1b9bda43ddf2e8a388c2f86dda9aa5ff1c3bf16f3373f
-# message-b64: R2F0ZXdheSBwcm9iZSBvbiB0ZW1wCg==
+# base-sha: 47adff9db1f9d7c2fef6261ef446139bb32a1be5
+# target-tree: 79134bbf8ce1a61eb205ac3e60412a02aafcd1ec
+# patch-sha256: ca0c9b2c67f809b2654ef1e719bda9a09248a39ddcbc11c62866ad1560dab4ab
+# message-b64: UmVtb3ZlIGdhdGV3YXkgcHJvYmUgZnJvbSB0ZW1wCg==
 --- SPACE-IDLE PATCH ---
 diff --git a/__gateway_probe b/__gateway_probe
-new file mode 100644
-index 0000000..f197b35
---- /dev/null
-+++ b/__gateway_probe
-@@ -0,0 +1 @@
-+gateway probe
+deleted file mode 100644
+index f197b35..0000000
+--- a/__gateway_probe
++++ /dev/null
+@@ -1 +0,0 @@
+-gateway probe
