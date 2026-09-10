@@ -6,14 +6,16 @@ from .application_commands import (
     FundResearchPrototype, GetBuildOptions, GetCatalog, GetContracts, GetLocation,
     GetFlowReport, GetBottlenecks, GetLogistics, GetLogisticsSummary, GetRoutes,
     GetVehicles, GetCargoOrders, GetLogisticsLanes, GetTransportMissions,
-    GetProjects, GetResearch, GetScientificExplorations, GetSurveys, GetTransportPlans, GetWorld,
-    PauseBuild, PauseFacility, PauseLogisticsLane, PauseResearch, PauseSurvey, PauseScientificExploration,
-    PlanBuild, PlanFacilityUpgrade, ProduceVehicle, PauseVehicleProduction, ResumeVehicleProduction, RefuelVehicle, ResumeBuild,
-    ResumeFacility, ResumeLogisticsLane, ResumeResearch, ResumeSurvey, ResumeScientificExploration,
-    SetConstructionWeight, SetFacilityProcess, SetPowerPriority, SetMaintenancePriority,
-    SetProjectImportSource,
+    GetProjects, GetResearch, GetScientificExplorations, GetSurveys, GetTransportPlans,
+    GetWorld, PauseBuild, PauseFacility, PauseLogisticsLane, PauseResearch,
+    PauseSurvey, PauseScientificExploration, PlanBuild, PlanFacilityUpgrade,
+    ProduceVehicle, PauseVehicleProduction, ResumeVehicleProduction, RefuelVehicle,
+    ResumeBuild, ResumeFacility, ResumeLogisticsLane, ResumeResearch, ResumeSurvey,
+    ResumeScientificExploration, SetConstructionWeight, SetFacilityProcess,
+    SetPowerPriority, SetMaintenancePriority, SetTimeControl, SetProjectImportSource,
     SetProjectPriority, SetProjectSourcingPolicy, SetResearchPrototypeSite,
-    SetResearchDemonstrationSite, SetSurveyAllocation, StartResearch, StartSurvey, StartScientificExploration, AssignExplorationVehicle, UnassignExplorationVehicle,
+    SetResearchDemonstrationSite, SetSurveyAllocation, StartResearch, StartSurvey,
+    StartScientificExploration, AssignExplorationVehicle, UnassignExplorationVehicle,
     SubmitCargo, UpdateLogisticsLane,
 )
 from .application_command_handlers import ApplicationCommandMixin
@@ -26,10 +28,20 @@ class GameApplication(ApplicationCommandMixin, ApplicationQueryMixin):
     def __init__(self, simulation: Simulation, catalog: GameCatalog):
         self._simulation = simulation
         self._catalog = catalog
+        self._time_paused = False
+        self._time_speed_multiplier = 1.0
 
     @property
     def content_id(self) -> str:
         return self._simulation.content_id
+
+    @property
+    def time_paused(self) -> bool:
+        return self._time_paused
+
+    @property
+    def time_speed_multiplier(self) -> float:
+        return self._time_speed_multiplier
 
     def advance_offline(
         self, elapsed_real_seconds: float, policy: OfflineProgressPolicy

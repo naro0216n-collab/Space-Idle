@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .application import GameApplication
+from .application_commands import ApplicationError, SetTimeControl
 from .domain import validate_extension_registry
 from .simulation import OfflineProgressPolicy, OfflineProgressResult
 
 
-SAVE_SCHEMA_VERSION = 23
+SAVE_SCHEMA_VERSION = 24
 
 
 class SaveFormatError(ValueError):
@@ -57,6 +58,30 @@ def restore_state(sim, data: dict[str, Any]) -> None:
     sim.refresh_resource_claims()
 
 
+def _application_state(app: GameApplication) -> dict[str, Any]:
+    return {
+        "time_paused": app.time_paused,
+        "time_speed_multiplier": app.time_speed_multiplier,
+    }
+
+
+def _restore_application_state(app: GameApplication, state: dict[str, Any]) -> None:
+    data = state.get("application")
+    if not isinstance(data, dict):
+        raise SaveFormatError("save state is missing application section")
+    if set(data) != {"time_paused", "time_speed_multiplier"}:
+        raise SaveFormatError("save application state has invalid fields")
+    try:
+        app.execute(
+            SetTimeControl(
+                paused=data["time_paused"],
+                speed_multiplier=data["time_speed_multiplier"],
+            )
+        )
+    except (ApplicationError, TypeError, ValueError) as exc:
+        raise SaveFormatError(f"invalid application time state: {exc}") from exc
+
+
 def save_game(
     app: GameApplication,
     path: str | Path,
@@ -66,11 +91,13 @@ def save_game(
     timestamp = saved_at or datetime.now(timezone.utc)
     if timestamp.tzinfo is None:
         raise ValueError("saved_at must be timezone-aware")
+    state = capture_state(app._simulation)
+    state["application"] = _application_state(app)
     envelope = SaveEnvelope(
         SAVE_SCHEMA_VERSION,
         app.content_id,
         timestamp.astimezone(timezone.utc).isoformat(),
-        capture_state(app._simulation),
+        state,
     )
     payload = {
         "schema_version": envelope.schema_version,
@@ -101,7 +128,10 @@ def _read_envelope(path: str | Path) -> SaveEnvelope:
     if not isinstance(raw["state"], dict):
         raise SaveFormatError("save state must be an object")
     return SaveEnvelope(
-        int(raw["schema_version"]), str(raw["content_id"]), str(raw["saved_at"]), raw["state"]
+        int(raw["schema_version"]),
+        str(raw["content_id"]),
+        str(raw["saved_at"]),
+        raw["state"],
     )
 
 
@@ -119,8 +149,9 @@ def load_game(
             f"save content mismatch: {envelope.content_id} != {app.content_id}"
         )
     restore_state(app._simulation, envelope.state)
+    _restore_application_state(app, envelope.state)
     offline_result = None
-    if now is not None and offline_policy is not None:
+    if now is not None and offline_policy is not None and not app.time_paused:
         current = now
         if current.tzinfo is None:
             raise ValueError("now must be timezone-aware")
@@ -130,6 +161,15 @@ def load_game(
             raise SaveFormatError("saved_at is not a valid ISO timestamp") from exc
         if saved.tzinfo is None:
             raise SaveFormatError("saved_at must include timezone")
-        elapsed = max(0.0, (current.astimezone(timezone.utc) - saved.astimezone(timezone.utc)).total_seconds())
-        offline_result = app._simulation.advance_offline(elapsed, offline_policy)
+        elapsed = max(
+            0.0,
+            (
+                current.astimezone(timezone.utc)
+                - saved.astimezone(timezone.utc)
+            ).total_seconds(),
+        )
+        offline_result = app.advance_offline(
+            elapsed * app.time_speed_multiplier,
+            offline_policy,
+        )
     return app, offline_result
