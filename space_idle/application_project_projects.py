@@ -56,9 +56,7 @@ class ProjectProjectorMixin:
         """
         sim = self._simulation
         resource_id = str(demand.resource_id)
-        pipeline_t = sim.logistics.demand_pipeline_t(demand.id)
-        remaining_t = max(0.0, demand.amount_t - pipeline_t)
-        if remaining_t <= 1e-9:
+        if sim.logistics.demand_remaining_t(demand) <= 1e-9:
             return ("import_transit", resource_id)
 
         options = sim.logistics.demand_supply_options(demand, sim.day)

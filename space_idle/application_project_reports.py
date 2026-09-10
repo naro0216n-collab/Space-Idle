@@ -187,11 +187,8 @@ class ApplicationReportProjectorMixin:
             remaining = sim.logistics.demand_remaining_t(demand)
             if remaining <= 1e-9:
                 continue
-            matching = [
-                lane for lane in sim.logistics.lanes.values()
-                if sim.logistics.lane_accepts_demand(lane, demand)
-            ]
-            if matching:
+            options = sim.logistics.demand_supply_options(demand, sim.day)
+            if options.eligible_lane_ids:
                 continue
             issues.append(self._issue(
                 "demand_unassigned",
