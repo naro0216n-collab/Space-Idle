@@ -42,6 +42,11 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_vehicle_perform
     assert any("spaceflight:unsupported" in blocker for blocker in launch_vehicle.blockers)
     assert tug.blockers == ()
 
+    definition = sim.scientific_exploration.definitions[exploration_id]
+    assert row.mission_duration_days == definition.mission_duration_days
+    assert tuple(item.description for item in row.origin_requirements.environment) == ("軌道環境が必要",)
+    assert tuple(item.description for item in row.destination_requirements.environment) == ("軌道環境が必要",)
+
     app.execute(StartScientificExploration(str(exploration_id)))
     app.execute(AssignExplorationVehicle(str(exploration_id), tug.vehicle_id))
     assert sim.logistics.vehicles[next(v.id for v in sim.logistics.vehicles.values() if str(v.id) == tug.vehicle_id)].status.value == "assigned"

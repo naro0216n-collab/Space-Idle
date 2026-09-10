@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .application_catalog_support import site_requirements_definition
 from .application_views import (
     ScientificExplorationRow,
     ScientificExplorationVehicleOptionRow,
@@ -54,6 +55,8 @@ class ScientificExplorationProgressionProjectorMixin:
                 str(definition.destination_id),
                 tuple((operation.operation_type, operation.delta_v_km_s) for operation in definition.operations),
                 definition.mission_duration_days,
+                site_requirements_definition(definition.origin_requirements),
+                site_requirements_definition(definition.destination_requirements),
                 definition.duration_days,
                 progress_days,
                 definition.research_points_total,

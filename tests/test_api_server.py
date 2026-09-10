@@ -116,7 +116,10 @@ def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path
         )
         assert status == 200
         data = payload["data"]
-        assert data["scientific_explorations"]["items"]
+        exploration = data["scientific_explorations"]["items"][0]
+        assert exploration["mission_duration_days"] > 0
+        assert exploration["origin_requirements"]["environment"]
+        assert exploration["destination_requirements"]["environment"]
         assert data["logistics"]["vehicle_production_options"]
         assert "vehicle_production" in data["logistics"]
     finally:

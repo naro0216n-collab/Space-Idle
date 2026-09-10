@@ -1,6 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+from .catalog_views import SiteRequirementsDefinitionRow
+
 
 @dataclass(frozen=True)
 class ResearchSiteOptionRow:
@@ -72,6 +74,8 @@ class ScientificExplorationRow:
     destination_id: str
     operations: tuple[tuple[str, float], ...]
     mission_duration_days: int
+    origin_requirements: SiteRequirementsDefinitionRow
+    destination_requirements: SiteRequirementsDefinitionRow
     duration_days: float
     progress_days: float
     research_points_total: float

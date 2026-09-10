@@ -325,6 +325,17 @@ def run() -> dict[str, object]:
             )
             page.locator('[data-tab="overview"]').click()
 
+            page.locator('[data-tab="scientific-exploration"]').click()
+            exploration_rows = page.locator('tr[data-inspect="scientific-exploration"]')
+            _assert(exploration_rows.count() > 0, "scientific exploration campaign must be visible")
+            exploration_rows.first.click()
+            exploration_text = page.locator("#inspectorContent").inner_text()
+            _assert("Mission移動時間" in exploration_text, "exploration inspector must expose mission duration")
+            _assert("軌道環境が必要" in exploration_text, "exploration inspector must expose site environment requirements")
+            _assert("Operation:" in exploration_text, "exploration inspector must expose required operations")
+            _assert("消耗資源:" in exploration_text, "exploration inspector must expose consumable resources")
+            page.locator('[data-tab="overview"]').click()
+
             page.locator('[data-time-speed="4"]').click()
             page.wait_for_function(
                 "() => !document.body.classList.contains('is-busy')",

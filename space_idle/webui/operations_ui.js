@@ -11,6 +11,11 @@
   const resourceCards=(resources)=>(resources||[]).map((r)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div></div>`).join('')||'<div class="empty-state">追加資源なし</div>';
   const sourcingPolicyLabels={import_now:'即時外部調達',mixed:'現地待機後に外部調達',local_priority:'現地調達を優先'};
   const sourcingPolicyName=(value)=>sourcingPolicyLabels[value]||value||'—';
+  const siteRequirementsHtml=(requirements)=>{
+    const env=(requirements?.environment||[]).map((row)=>`<div class="cell-sub">環境: ${esc(row.description||row.code)}</div>`).join('');
+    const caps=(requirements?.capabilities||[]).map((row)=>`<div class="cell-sub">${row.mode==='available'?'利用可能':'インフラ'}能力: ${esc(capabilityName(row.capability_id))} ${fmt(row.minimum_capacity)}</div>`).join('');
+    return env+caps||'<div class="cell-sub">追加条件なし</div>';
+  };
   function constructionPlanControls(prefix,{policyOptions=[],sourceOptions=[],selectedPolicy='mixed',selectedSource=null,disabled=false}={}){
     const policyRows=(policyOptions||[]).map((value)=>`<option value="${esc(value)}" ${value===selectedPolicy?'selected':''}>${esc(sourcingPolicyName(value))}</option>`).join('');
     const sourceRows=(sourceOptions||[]).map((value)=>`<option value="${esc(value)}" ${value===selectedSource?'selected':''}>${esc(locationName(value))}</option>`).join('');
@@ -53,7 +58,7 @@
       const rewardLeft=Math.max(0,Number(x.research_points_total||0)-Number(x.research_points_awarded||0));
       const blocked=(x.blockers||[]).length;
       const assigned=x.assigned_vehicle_id?definitionName((state.vehicles?.items||[]).find((v)=>v.id===x.assigned_vehicle_id)?.definition_id||x.assigned_vehicle_id):'未割当';
-      return `<tr class="selectable" data-inspect="scientific-exploration" data-id="${esc(x.id)}"><td><div class="cell-main">${esc(x.display_name)}</div><div class="cell-sub">${esc(locationName(x.origin_id))} → ${esc(locationName(x.destination_id))}</div></td><td>${esc(stateLabels[x.status]||x.status)}</td><td>${fmt(x.progress_days,1)}/${fmt(x.duration_days,1)}日</td><td>${fmt(x.research_points_awarded,1)}/${fmt(x.research_points_total,1)} RP<div class="cell-sub">残り ${fmt(rewardLeft,1)}</div></td><td>${esc(assigned)}</td><td>${blocked}</td></tr>`;
+      return `<tr class="selectable" data-inspect="scientific-exploration" data-id="${esc(x.id)}"><td><div class="cell-main">${esc(x.display_name)}</div><div class="cell-sub">${esc(locationName(x.origin_id))} → ${esc(locationName(x.destination_id))}</div></td><td>${esc(stateLabels[x.status]||x.status)}</td><td>${fmt(x.progress_days,1)}/${fmt(x.duration_days,1)}日<div class="cell-sub">Mission移動 ${fmt(x.mission_duration_days,0)}日</div></td><td>${fmt(x.research_points_awarded,1)}/${fmt(x.research_points_total,1)} RP<div class="cell-sub">残り ${fmt(rewardLeft,1)}</div></td><td>${esc(assigned)}</td><td>${blocked}</td></tr>`;
     }).join('');
     return `<section class="card"><div class="card-heading"><h3>Scientific Exploration</h3><span class="badge">${items.length}</span></div><div class="card-body"><div class="cell-sub">Vehicleを輸送へ使うか科学探査へ拘束するかを選択します。Campaign報酬は有限で、資源Surveyとは別状態です。</div></div><div class="table-wrap"><table><thead><tr><th>Campaign</th><th>状態</th><th>期間</th><th>Research Point</th><th>割当Vehicle</th><th>blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="6">Scientific Exploration候補なし</td></tr>'}</tbody></table></div></section>`;
   }
@@ -171,8 +176,8 @@
     if(x.status==='available')action=`<button type="button" class="primary" data-exploration-action="start" data-id="${esc(x.id)}">Campaign開始</button>`;
     else if(x.status!=='complete')action=`<button type="button" data-exploration-action="${x.paused?'resume':'pause'}" data-id="${esc(x.id)}">${x.paused?'再開':'停止'}</button>${x.assigned_vehicle_id&&Number(x.progress_days||0)<=1e-9?`<button type="button" data-exploration-unassign="${esc(x.id)}">Vehicle割当解除</button>`:''}`;
     setInspector(x.display_name,
-      section('Campaign',kv([['出発',esc(locationName(x.origin_id))],['対象/到着',esc(locationName(x.destination_id))],['所要期間',`${fmt(x.duration_days,1)}日`],['進捗',`${fmt(x.progress_days,1)}日`],['期待RP',fmt(x.research_points_total,1)],['獲得済RP',fmt(x.research_points_awarded,1)],['割当Vehicle',x.assigned_vehicle_id?esc(x.assigned_vehicle_id):'未割当']]))+
-      section('必要条件',`<div class="cell-sub">Operation: ${operations}</div><div class="cell-sub">消耗資源: ${inputs}</div>`)+
+      section('Campaign',kv([['出発',esc(locationName(x.origin_id))],['対象/到着',esc(locationName(x.destination_id))],['Mission移動時間',`${fmt(x.mission_duration_days,0)}日`],['Campaign所要期間',`${fmt(x.duration_days,1)}日`],['進捗',`${fmt(x.progress_days,1)}日`],['期待RP',fmt(x.research_points_total,1)],['RP/日',fmt(Number(x.research_points_total||0)/Number(x.duration_days||1),2)],['獲得済RP',fmt(x.research_points_awarded,1)],['割当Vehicle',x.assigned_vehicle_id?esc(x.assigned_vehicle_id):'未割当']]))+
+      section('必要条件',`<div class="cell-sub">Operation: ${operations}</div><div class="cell-sub">消耗資源: ${inputs}</div><h3>${esc(locationName(x.origin_id))} の地点条件</h3>${siteRequirementsHtml(x.origin_requirements)}<h3>${esc(locationName(x.destination_id))} の地点条件</h3>${siteRequirementsHtml(x.destination_requirements)}`)+
       section('現在のblocker',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['exploration',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+
       section('Vehicle適合性',vehicleRows)+
       section('操作',`<div class="action-stack">${action||'<span class="badge">操作なし</span>'}</div>`)
