@@ -115,3 +115,9 @@ def test_runtime_snapshot_reads_all_projections_at_one_clock_sync(tmp_path):
     assert result.data["session"]["day"] == 3
     assert result.data["world"].day == 3
     assert result.revision == 1
+
+
+def test_initial_known_deposits_are_seeded_through_survey_domain_contract():
+    app = build_game_application()
+    sim = app._simulation
+    assert sim.survey.is_complete(ids.EARTH, ids.WATER)

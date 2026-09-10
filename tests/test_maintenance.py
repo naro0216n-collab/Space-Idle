@@ -5,6 +5,7 @@ import pytest
 from space_idle import GetLocation, GetLogistics, SetMaintenancePriority, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.resource_demand import reconcile_local_resource_claims
+from space_idle.shared import EntityId
 
 
 def _earth_facilities_with_maintenance(sim):
@@ -85,3 +86,65 @@ def test_maintenance_runway_reports_actual_site_stock_not_one_day_planning_amoun
     assert row.requested_t == pytest.approx(daily)  # above the 15-day reorder point
     assert row.local_runway_days == pytest.approx(20.0)
     assert row.supply_state == "local_covered"
+
+
+def test_power_snapshot_freezes_maintenance_factor_for_the_whole_simulation_day():
+    app = build_game_application()
+    sim = app._simulation
+    facility = next(
+        row for row in sim.facilities.facilities.values()
+        if row.location_id == ids.EARTH
+        and sim.facilities.definitions[row.definition_id].capability_supplies
+    )
+    capability_id = sim.facilities.definitions[facility.definition_id].capability_supplies[0].id
+
+    facility.maintenance_satisfaction = 1.0
+    snapshot = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+    before = sim.facilities.available_capability_capacity_at(
+        ids.EARTH, capability_id, snapshot, sim.day
+    )
+    assert before > 0.0
+
+    # A maintenance result produced later in the same tick must not change the
+    # capability allocation already represented by the day's snapshot.
+    facility.maintenance_satisfaction = 0.0
+    same_day = sim.facilities.available_capability_capacity_at(
+        ids.EARTH, capability_id, snapshot, sim.day
+    )
+    next_snapshot = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+    after = sim.facilities.available_capability_capacity_at(
+        ids.EARTH, capability_id, next_snapshot, sim.day
+    )
+
+    assert same_day == pytest.approx(before)
+    assert after < before
+
+
+def test_maintenance_replenishment_plan_is_independent_of_transient_reservations():
+    app = build_game_application()
+    sim = app._simulation
+    facility = _earth_facilities_with_maintenance(sim)[0]
+    sim.facilities.facilities = {facility.id: facility}
+    requirements = sim.facilities.maintenance_requirements_per_day(facility.id)
+    resource_id, daily = next(iter(requirements.items()))
+
+    for rid, rate in requirements.items():
+        sim.inventory.stock[(facility.location_id, rid)] = rate * 20.0
+
+    baseline = {
+        demand.resource_id: demand.amount_t
+        for demand in sim.maintenance.resource_demands(sim.day)
+    }
+    sim.inventory.reserve(
+        EntityId('test.transient'),
+        facility.location_id,
+        resource_id,
+        daily * 10.0,
+    )
+    after_reservation = {
+        demand.resource_id: demand.amount_t
+        for demand in sim.maintenance.resource_demands(sim.day)
+    }
+
+    assert baseline == after_reservation
+    assert baseline[resource_id] == pytest.approx(daily)

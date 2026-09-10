@@ -180,9 +180,9 @@ def test_save_load_preserves_vehicle_production_progress(tmp_path):
     app = build_game_application()
     result = app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     assert result.created_id is not None
-    production_id = next(pid for pid in app._simulation.vehicle_production.projects if str(pid) == result.created_id)
+    production_id = next(pid for pid in app._simulation.logistics.vehicle_production_projects if str(pid) == result.created_id)
     app.execute(AdvanceTime(1))
-    original = app._simulation.vehicle_production.projects[production_id]
+    original = app._simulation.logistics.vehicle_production_projects[production_id]
     assert original.phase.value == "building"
     assert original.progress_days > 0
 
@@ -195,7 +195,7 @@ def test_save_load_preserves_vehicle_production_progress(tmp_path):
     app.execute(AdvanceTime(days))
     loaded.execute(AdvanceTime(days))
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
-    loaded_state = loaded._simulation.vehicle_production.projects[production_id]
+    loaded_state = loaded._simulation.logistics.vehicle_production_projects[production_id]
     assert loaded_state.phase.value == "complete"
     assert loaded_state.completed_vehicle_id in loaded._simulation.logistics.vehicles
 
@@ -250,3 +250,22 @@ def test_save_load_and_offline_preserve_maintenance_wait(tmp_path):
     direct.execute(AdvanceTime(3))
     assert capture_state(offline._simulation) == capture_state(direct._simulation)
     assert offline._simulation.logistics.vehicles[tug_id].status == "maintenance_wait"
+
+
+def test_resource_demand_reservations_are_derived_and_rebuilt_after_load(tmp_path):
+    app = build_game_application()
+    result = app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
+    assert result.created_id is not None
+    sim = app._simulation
+    assert sim.inventory.reserved
+    expected_reservations = dict(sim.inventory.reserved)
+
+    captured = capture_state(sim)
+    assert "reserved" not in captured["inventory"]
+
+    path = tmp_path / "derived-reservations.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application)
+
+    assert loaded._simulation.inventory.reserved == expected_reservations
+    assert capture_state(loaded._simulation) == captured

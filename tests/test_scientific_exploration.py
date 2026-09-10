@@ -44,7 +44,7 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_vehicle_perform
 
     app.execute(StartScientificExploration(str(exploration_id)))
     app.execute(AssignExplorationVehicle(str(exploration_id), tug.vehicle_id))
-    assert sim.logistics.vehicles[next(v.id for v in sim.logistics.vehicles.values() if str(v.id) == tug.vehicle_id)].status.value == "exploration"
+    assert sim.logistics.vehicles[next(v.id for v in sim.logistics.vehicles.values() if str(v.id) == tug.vehicle_id)].status.value == "assigned"
 
     app.execute(AdvanceTime(1))
     state = sim.scientific_exploration.campaigns[exploration_id]
@@ -94,3 +94,14 @@ def test_scientific_exploration_save_load_preserves_vehicle_assignment_and_futur
     app.execute(AdvanceTime(6))
     loaded.execute(AdvanceTime(6))
     assert capture_state(loaded._simulation) == capture_state(sim)
+
+
+def test_scientific_exploration_mission_duration_is_independent_of_campaign_duration():
+    app = build_game_application()
+    sim = app._simulation
+    definition = sim.scientific_exploration.definitions[ids.CISLUNAR_SCIENCE_EXPLORATION]
+
+    route = definition.compatibility_route()
+
+    assert route.transit_days == definition.mission_duration_days
+    assert definition.mission_duration_days != definition.duration_days

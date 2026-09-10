@@ -172,8 +172,8 @@ def test_vehicle_production_consumes_industrial_inputs_and_creates_owned_asset_o
 
     result = app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     assert result.created_id is not None
-    production_id = next(pid for pid in sim.vehicle_production.projects if str(pid) == result.created_id)
-    state = sim.vehicle_production.projects[production_id]
+    production_id = next(pid for pid in sim.logistics.vehicle_production_projects if str(pid) == result.created_id)
+    state = sim.logistics.vehicle_production_projects[production_id]
     assert len(sim.logistics.vehicles) == before
     assert state.phase.value == "awaiting_inputs"
 
@@ -474,8 +474,8 @@ def test_vehicle_production_progress_pauses_when_assembly_capability_is_unavaila
     app = build_game_application()
     sim = app._simulation
     result = app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
-    production_id = next(pid for pid in sim.vehicle_production.projects if str(pid) == result.created_id)
-    state = sim.vehicle_production.projects[production_id]
+    production_id = next(pid for pid in sim.logistics.vehicle_production_projects if str(pid) == result.created_id)
+    state = sim.logistics.vehicle_production_projects[production_id]
     factory_id = next(
         row.id for row in app.query(GetLocation(str(EARTH))).facilities
         if row.definition_id == str(VEHICLE_ASSEMBLY_FACILITY)

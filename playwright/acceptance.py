@@ -260,6 +260,13 @@ def run() -> dict[str, object]:
             # decision surface and command path while the clock is paused so the
             # project cannot consume materials before we inspect it.
             page.locator('[data-tab="facilities"]').click()
+            production_row = page.locator('tr[data-inspect="facility"]', has_text="基礎構造材工場")
+            _assert(production_row.count() == 1, "opening production facility must be visible")
+            production_row.click()
+            production_text = page.locator("#inspectorContent").inner_text()
+            _assert("生産物/日" in production_text, "facility inspector must expose configured production outputs")
+            _assert("高性能構造部材" in production_text, "facility inspector must name the produced resource")
+            _assert("投入/日" in production_text, "facility inspector must expose configured production inputs")
             facility_rows = page.locator('tr[data-inspect="facility"]')
             upgrade_button = None
             for index in range(facility_rows.count()):
@@ -272,7 +279,7 @@ def run() -> dict[str, object]:
             _assert(upgrade_button.is_visible(), "facility inspector must show the upgrade action")
             _assert(upgrade_button.is_enabled(), "unblocked facility upgrade action must be enabled")
             _assert("必要工数" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose construction work")
-            _assert("必要部材" in page.locator("#inspectorContent").inner_text() or "標準材" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose material requirements")
+            _assert("必要資源" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose physical resource requirements")
             upgrade_button.click()
             page.wait_for_function(
                 "() => !document.body.classList.contains('is-busy')",
