@@ -136,6 +136,23 @@ class ApplicationReportProjectorMixin:
                     location_id=state_location, entity_id=str(state.id),
                     definition_id=str(state.definition_id),
                 ))
+        for state in sorted(
+            sim.logistics.vehicle_production_projects.values(), key=lambda row: str(row.id)
+        ):
+            state_location = str(state.location_id)
+            if location_filter is not None and state_location != location_filter:
+                continue
+            for blocker in sim.logistics.vehicle_production_blockers(state.id, day=sim.day):
+                code, _, detail = blocker.partition(":")
+                resource_id = None
+                if code == "resource" and detail:
+                    resource_id = detail.partition(":")[0]
+                issues.append(self._issue(
+                    code, detail or blocker,
+                    category="vehicle_production", source="vehicle_production",
+                    location_id=state_location, entity_id=str(state.id),
+                    definition_id=str(state.vehicle_definition_id), resource_id=resource_id,
+                ))
         for order in sorted(sim.logistics.orders.values(), key=lambda row: str(row.id)):
             if location_filter is not None and location_filter not in {
                 str(order.source_id), str(order.destination_id)
@@ -200,6 +217,29 @@ class ApplicationReportProjectorMixin:
                         code, detail, category="research", source=source,
                         location_id=selected_location, definition_id=row.id,
                     ))
+
+        explorations = self._scientific_explorations_view()
+        for row in explorations.items:
+            if location_filter is not None and location_filter not in {
+                row.origin_id, row.destination_id
+            }:
+                continue
+            for blocker in row.blockers:
+                code, _, detail = blocker.partition(":")
+                resource_id = None
+                if code == "resource" and detail:
+                    resource_id = detail.partition(":")[0]
+                issue_location = row.origin_id
+                if code == "destination":
+                    issue_location = row.destination_id
+                elif location_filter is not None:
+                    issue_location = location_filter
+                issues.append(self._issue(
+                    code, detail or blocker,
+                    category="exploration", source="scientific_exploration",
+                    location_id=issue_location, definition_id=row.id,
+                    resource_id=resource_id,
+                ))
 
         surveys = self._surveys_view(None)
         for row in surveys.items:
