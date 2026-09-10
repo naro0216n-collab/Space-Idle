@@ -70,8 +70,9 @@
     const limitingHtml=(rows)=>(rows||[]).length?`<div class="issue-stack">${rows.map((factor)=>`<div class="issue"><div class="issue-title">${esc(A.userFacingText(factor))}</div></div>`).join('')}</div>`:'<span class="badge ok">なし</span>';
     let productionSection='';
     if(industry){
-      const options=(industry.process_options||[]).map(([processId,name])=>`<span class="badge ${processId===industry.process_id?'ok':''}">${esc(name||definitionName(processId))}</span>`).join(' ')||'<span class="badge">候補なし</span>';
-      productionSection+=section('生産工程',kv([['Process',esc(industry.process_display_name||industry.process_id||'未選択')],['実効稼働率',pct(industry.scale)]])+`<div class="cell-sub">Process候補: ${options}</div><h4>投入/日</h4>${rateCards(industry.input_rates_per_day)}<h4>生産物/日</h4>${rateCards(industry.output_rates_per_day)}<h4>limiting factor</h4>${limitingHtml(industry.limiting_factors)}`);
+      const processOptions=(industry.process_options||[]).map(([processId,name])=>`<option value="${esc(processId)}" ${processId===industry.process_id?'selected':''}>${esc(name||definitionName(processId))}</option>`).join('');
+      const processControl=`<div class="form-row"><label>Process<select id="facilityProcessSelect" ${processOptions?'':'disabled'}>${processOptions||'<option>候補なし</option>'}</select></label><button type="button" data-set-facility-process="${esc(f.id)}" ${processOptions?'':'disabled'}>Processを適用</button></div>`;
+      productionSection+=section('生産工程',kv([['現在Process',esc(industry.process_display_name||industry.process_id||'未選択')],['実効稼働率',pct(industry.scale)]])+processControl+`<h4>投入/日</h4>${rateCards(industry.input_rates_per_day)}<h4>生産物/日</h4>${rateCards(industry.output_rates_per_day)}<h4>limiting factor</h4>${limitingHtml(industry.limiting_factors)}`);
     }
     if(extraction){
       productionSection+=section('採掘',kv([['産出資源',esc(resourceName(extraction.output_resource_id))],['生産物/日',`${fmt(extraction.output_t_per_day,3)} t/日`],['実効稼働率',pct(extraction.scale)]])+`<h4>limiting factor</h4>${limitingHtml(extraction.limiting_factors)}`);
@@ -192,6 +193,7 @@
     const build=event.target.closest('[data-build]');if(build){try{await command('PlanBuild',{location_id:state.locationId,facility_id:build.dataset.build,priority:50,sourcing_policy:'mixed',import_source_id:null});banner('建設計画を作成しました');}catch{}return;}
     const upgrade=event.target.closest('[data-upgrade]');if(upgrade){try{const result=await command('PlanFacilityUpgrade',{facility_id:upgrade.dataset.upgrade,priority:50,sourcing_policy:'mixed',import_source_id:null});banner(`Upgrade案件 ${result?.created_id||''} を作成しました`);}catch{}return;}
     const cmd=event.target.closest('[data-command]');if(cmd){const payload={};if(cmd.dataset.facilityId)payload.facility_id=cmd.dataset.facilityId;if(cmd.dataset.projectId)payload.project_id=cmd.dataset.projectId;try{await command(cmd.dataset.command,payload);}catch{}return;}
+    const process=event.target.closest('[data-set-facility-process]');if(process){const select=$('#facilityProcessSelect');if(select?.value){try{await command('SetFacilityProcess',{facility_id:process.dataset.setFacilityProcess,process_id:select.value});banner('生産Processを更新しました');}catch{}}return;}
     const pp=event.target.closest('[data-set-power-priority]');if(pp){try{await command('SetPowerPriority',{facility_id:pp.dataset.setPowerPriority,priority:Number($('#facilityPriorityInput').value)});}catch{}return;}
     const mp=event.target.closest('[data-set-maintenance-priority]');if(mp){try{await command('SetMaintenancePriority',{facility_id:mp.dataset.setMaintenancePriority,priority:Number($('#maintenancePriorityInput').value)});}catch{}return;}
     const ra=event.target.closest('[data-research-action]');if(ra){const map={start:'StartResearch',pause:'PauseResearch',resume:'ResumeResearch'};try{await command(map[ra.dataset.researchAction],{research_id:ra.dataset.id});}catch{}return;}
