@@ -20,12 +20,18 @@ from space_idle import (
     GetVehicles,
     GetWorld,
     PauseLogisticsLane,
+    PlanBuild,
+    SetConstructionWeight,
+    SetProjectImportSource,
+    SetProjectPriority,
+    SetProjectSourcingPolicy,
     UpdateLogisticsLane,
     build_game_application,
 )
 from space_idle.api import GameRuntime
 from space_idle.api.codec import to_jsonable
 from space_idle.content.base_game import EARTH, LEO
+from space_idle.content import base_ids as ids
 
 
 def test_vehicle_concept_is_consistent_across_catalog_and_runtime_projections():
@@ -91,3 +97,44 @@ def test_ui_snapshot_is_json_safe_at_application_boundary(tmp_path):
 
     assert payload["session"]["day"] == payload["world"]["day"]
     assert payload["location"]["id"] == location_id
+
+
+def test_construction_queries_expose_authoritative_project_controls():
+    app = build_game_application()
+
+    build_options = app.query(GetBuildOptions(str(EARTH)))
+    assert set(build_options.sourcing_policy_options) == {"import_now", "mixed", "local_priority"}
+    assert str(EARTH) not in build_options.import_source_options
+    assert str(LEO) in build_options.import_source_options
+
+    project_id = app.execute(
+        PlanBuild(
+            str(EARTH),
+            str(ids.SURFACE_POWER_GRID),
+            priority=37,
+            sourcing_policy="local_priority",
+            import_source_id=str(LEO),
+        )
+    ).created_id
+    assert project_id is not None
+
+    row = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
+    assert row.settings_editable is True
+    assert row.sourcing_editable is True
+    assert row.priority == 37
+    assert row.construction_weight == 1.0
+    assert row.sourcing_policy == "local_priority"
+    assert row.import_source_id == str(LEO)
+    assert set(row.sourcing_policy_options) == set(build_options.sourcing_policy_options)
+    assert row.import_source_options == build_options.import_source_options
+
+    app.execute(SetProjectPriority(project_id, 81))
+    app.execute(SetConstructionWeight(project_id, 2.5))
+    app.execute(SetProjectSourcingPolicy(project_id, "import_now"))
+    app.execute(SetProjectImportSource(project_id, None))
+
+    updated = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
+    assert updated.priority == 81
+    assert updated.construction_weight == 2.5
+    assert updated.sourcing_policy == "import_now"
+    assert updated.import_source_id is None

@@ -480,11 +480,20 @@ def test_vehicle_production_progress_pauses_when_assembly_capability_is_unavaila
         row.id for row in app.query(GetLocation(str(EARTH))).facilities
         if row.definition_id == str(VEHICLE_ASSEMBLY_FACILITY)
     )
+    definition = sim.logistics.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG]
     app.execute(PauseFacility(factory_id))
     app.execute(AdvanceTime(2))
     assert state.progress_days == pytest.approx(0.0)
-    assert state.phase.value == "building"
+    assert state.phase.value == "awaiting_inputs"
+    demands = {
+        demand.resource_id: demand
+        for demand in sim.logistics.vehicle_production_resource_demands(sim.day)
+        if demand.owner_id == production_id
+    }
+    for resource_id, amount in definition.production.resources:
+        demand = demands[resource_id]
+        assert sim.inventory.reserved_for(demand.id, EARTH, resource_id) == pytest.approx(amount)
     app.execute(ResumeFacility(factory_id))
-    app.execute(AdvanceTime(int(sim.logistics.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production.days)))
+    app.execute(AdvanceTime(int(definition.production.days)))
     assert state.phase.value == "complete"
     assert state.completed_vehicle_id in sim.logistics.vehicles

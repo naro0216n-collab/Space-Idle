@@ -46,8 +46,58 @@ class ProjectProjectorMixin:
             active_project_id,
         )
 
+    def _project_external_supply_blocker(self, demand) -> tuple[str, str]:
+        """Translate Logistics demand state into a project-facing blocker.
+
+        Construction owns the need and sourcing policy; Logistics owns whether
+        the residual off-site demand has a usable lane, source stock and active
+        pipeline. The Application layer combines those contracts for the UI
+        without making Construction inspect Logistics state directly.
+        """
+        sim = self._simulation
+        resource_id = str(demand.resource_id)
+        if sim.logistics.demand_remaining_t(demand) <= 1e-9:
+            return ("import_transit", resource_id)
+
+        options = sim.logistics.demand_supply_options(demand, sim.day)
+        if not options.eligible_lane_ids:
+            return ("import_lane", resource_id)
+        if not options.operational_lane_ids:
+            detail = resource_id
+            if options.blockers:
+                detail += ":" + ";".join(options.blockers)
+            return ("import_lane_blocked", detail)
+        if not options.stocked_source_ids:
+            return ("import_stock", resource_id)
+        return ("import_transit", resource_id)
+
+    def _project_external_demands(self) -> dict[str, object]:
+        return {
+            str(demand.id): demand
+            for demand in self._simulation.resource_demands()
+            if demand.owner_kind == "project"
+        }
+
+    def _project_blockers(self, project, power, external_demands=None) -> tuple[tuple[str, str], ...]:
+        sim = self._simulation
+        demands = self._project_external_demands() if external_demands is None else external_demands
+        blockers: list[tuple[str, str]] = []
+        for blocker in sim.projects.blockers(project.id, sim.day, power):
+            if blocker.code != "resource_shortage":
+                blockers.append((blocker.code, blocker.detail))
+                continue
+            demand_id = f"demand.project:{project.id}:{blocker.detail}"
+            demand = demands.get(demand_id)
+            blockers.append(
+                self._project_external_supply_blocker(demand)
+                if demand is not None
+                else (blocker.code, blocker.detail)
+            )
+        return tuple(blockers)
+
     def _project_rows(self, location_id: SpatialNodeId | None) -> tuple[ProjectRow, ...]:
         sim = self._simulation
+        external_demands = self._project_external_demands()
         rows = []
         for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id)):
             if location_id is not None and project.location_id != location_id:
@@ -56,7 +106,7 @@ class ProjectProjectorMixin:
             facility_definition_id = sim.projects.target_facility_definition_id(project)
             definition = sim.facilities.definitions[facility_definition_id]
             project_power = sim.power.snapshot(project.location_id, sim.facilities, sim.day)
-            blockers = tuple((blocker.code, blocker.detail) for blocker in sim.projects.blockers(project.id, sim.day, project_power))
+            blockers = self._project_blockers(project, project_power, external_demands)
             resources = []
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
@@ -83,6 +133,10 @@ class ProjectProjectorMixin:
                 target_facility_id, target_level, definition.display_name, project.status, project.paused,
                 project.priority, project.sourcing_policy,
                 None if project.import_source_id is None else str(project.import_source_id),
+                sim.projects.settings_mutable(project.id),
+                sim.projects.sourcing_mutable(project.id),
+                tuple(sim.projects.sourcing_policy_options()),
+                tuple(str(source_id) for source_id in sim.projects.import_source_options(project.id)),
                 project.construction_done, recipe.construction_work, project.construction_weight,
                 project.materials_committed,
                 None if project.completed_facility_id is None else str(project.completed_facility_id),
@@ -105,4 +159,9 @@ class ProjectProjectorMixin:
                 tuple(sorted(str(technology) for technology in recipe.prerequisite_technologies - sim.projects.unlocked_technologies)),
                 tuple((failure.code, failure.detail) for failure in failures),
             ))
-        return BuildOptionsView(str(location_id), tuple(rows))
+        return BuildOptionsView(
+            str(location_id),
+            tuple(sim.projects.sourcing_policy_options()),
+            tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(location_id)),
+            tuple(rows),
+        )

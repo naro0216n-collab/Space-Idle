@@ -10,12 +10,11 @@ class ConstructionProcurementMixin:
     def resource_demands(self, day: int) -> tuple[ResourceDemand, ...]:
         demands: list[ResourceDemand] = []
         for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
-            if project.paused or project.status in {
-                ProjectStatus.COMPLETE,
-                ProjectStatus.CANCELLED,
-                ProjectStatus.READY,
-                ProjectStatus.BUILDING,
-            } or project.materials_committed:
+            if (
+                project.paused
+                or project.status not in {ProjectStatus.PROCURING, ProjectStatus.READY}
+                or project.materials_committed
+            ):
                 continue
             recipe = self._recipe_for_project(project)
             for requirement in recipe.resources:
@@ -76,18 +75,25 @@ class ConstructionProcurementMixin:
                     state.import_committed_t = max(0.0, requirement.amount_t - state.committed_t)
 
     def finalize_procurement(self, day: int) -> None:
-        """Commit only the shared allocation assigned to a fully supplied project."""
+        """Synchronize readiness with the shared allocation without consuming it.
+
+        READY means every required material is currently reserved for the project.
+        Physical consumption belongs to construction execution, so a project blocked
+        by capacity, allocation, or site conditions can remain READY without losing
+        material from Inventory.
+        """
         ordered = sorted(self.projects.values(), key=lambda project: (-project.priority, str(project.id)))
         for project in ordered:
-            if project.paused or project.status != ProjectStatus.PROCURING or project.materials_committed:
+            if (
+                project.paused
+                or project.status not in {ProjectStatus.PROCURING, ProjectStatus.READY}
+                or project.materials_committed
+            ):
                 continue
             recipe = self._recipe_for_project(project)
-            ready = True
-            for requirement in recipe.resources:
-                held = self._reserved_resource_t(project, requirement.resource_id)
-                if held + 1e-9 < requirement.amount_t:
-                    ready = False
-            if not ready:
-                continue
-            self._commit_materials(project)
-            project.status = ProjectStatus.READY
+            ready = all(
+                self._reserved_resource_t(project, requirement.resource_id) + 1e-9
+                >= requirement.amount_t
+                for requirement in recipe.resources
+            )
+            project.status = ProjectStatus.READY if ready else ProjectStatus.PROCURING

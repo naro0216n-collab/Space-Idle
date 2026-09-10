@@ -320,14 +320,13 @@ class ScientificExplorationService:
             if state.phase is not ScientificExplorationPhase.ACTIVE or state.paused or state.vehicle_id is None:
                 continue
             definition = self.definitions[definition_id]
-            if not self._consume_inputs_if_ready(definition, state):
-                continue
-            if self._route_failures_for_vehicle(
-                definition,
-                state.vehicle_id,
-                day,
-                power_by_location,
+            if self.blockers(
+                definition_id,
+                day=day,
+                power_by_location=power_by_location,
             ):
+                continue
+            if not self._consume_inputs_if_ready(definition, state):
                 continue
 
             remaining_days = max(0.0, definition.duration_days - state.progress_days)

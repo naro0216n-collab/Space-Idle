@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle import build_game_application
+from space_idle import GetBottlenecks, GetProjects, build_game_application
 from space_idle.content.base_game import (
     EARTH,
     LEO,
@@ -103,8 +103,16 @@ def test_construction_declares_source_constrained_import_demand_and_waits_for_ma
     assert all(demand.owner_kind == "project" for demand in demands)
     assert all(demand.source_id == EARTH and demand.destination_id == LEO for demand in demands)
     assert not [order for order in sim.logistics.orders.values() if order.owner_id == EntityId(project_id)]
-    blocker_codes = {blocker.code for blocker in sim.projects.blockers(project_id, sim.day)}
-    assert "import_lane" in blocker_codes
+    domain_blocker_codes = {blocker.code for blocker in sim.projects.blockers(project_id, sim.day)}
+    assert domain_blocker_codes == {"resource_shortage"}
+    project_row = next(row for row in app.query(GetProjects()).items if row.id == str(project_id))
+    assert "import_lane" in {code for code, _detail in project_row.blockers}
+    location_issues = [
+        issue for issue in app.query(GetBottlenecks(str(LEO))).items
+        if issue.entity_id == str(project_id)
+    ]
+    assert "import_lane" in {issue.code for issue in location_issues}
+    assert "resource_shortage" not in {issue.code for issue in location_issues}
 
     lane_id = sim.logistics.create_lane(EARTH, LEO, 100.0, 100)
     sim.logistics.advance_automation(sim.day, demands)
@@ -132,7 +140,9 @@ def test_construction_without_source_constraint_allows_lane_to_choose_supply_sou
     assert demands
     assert all(demand.destination_id == LEO for demand in demands)
     assert all(demand.source_id is None for demand in demands)
-    assert "import_lane" in {blocker.code for blocker in sim.projects.blockers(project_id, sim.day)}
+    assert {blocker.code for blocker in sim.projects.blockers(project_id, sim.day)} == {"resource_shortage"}
+    project_row = next(row for row in app.query(GetProjects()).items if row.id == str(project_id))
+    assert "import_lane" in {code for code, _detail in project_row.blockers}
 
     lane_id = sim.logistics.create_lane(EARTH, LEO, 100.0, 100)
     sim.logistics.advance_automation(sim.day, demands)

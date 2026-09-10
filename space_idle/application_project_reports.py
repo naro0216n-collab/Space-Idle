@@ -94,9 +94,9 @@ class ApplicationReportProjectorMixin:
             if project.location_id != location_id:
                 continue
             definition_id = str(sim.projects.target_facility_definition_id(project))
-            for blocker in sim.projects.blockers(project.id, sim.day, power):
+            for code, detail in self._project_blockers(project, power):
                 issues.append(self._issue(
-                    blocker.code, blocker.detail, category="construction", source="project",
+                    code, detail, category="construction", source="project",
                     location_id=loc, entity_id=str(project.id), definition_id=definition_id,
                 ))
 
@@ -179,14 +179,16 @@ class ApplicationReportProjectorMixin:
         for demand in demands:
             if location_filter is not None and location_filter != str(demand.destination_id):
                 continue
+            # Project-facing supply blockers are already composed from the same
+            # Logistics demand contract in _location_operational_issues. Do not
+            # surface the same missing lane twice under a generic demand issue.
+            if demand.owner_kind == "project":
+                continue
             remaining = sim.logistics.demand_remaining_t(demand)
             if remaining <= 1e-9:
                 continue
-            matching = [
-                lane for lane in sim.logistics.lanes.values()
-                if sim.logistics.lane_accepts_demand(lane, demand)
-            ]
-            if matching:
+            options = sim.logistics.demand_supply_options(demand, sim.day)
+            if options.eligible_lane_ids:
                 continue
             issues.append(self._issue(
                 "demand_unassigned",

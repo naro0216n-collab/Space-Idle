@@ -281,6 +281,14 @@ def _validate_transport_profile(sim: Any, profile, known_capabilities: set[str],
         )
 
 
+def _validate_unique_resources(resources, label: str) -> None:
+    resource_ids = [resource_id for resource_id, _amount in resources]
+    _require(
+        len(resource_ids) == len(set(resource_ids)),
+        f"duplicate vehicle resource input: {label}",
+    )
+
+
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     nodes = ctx.nodes
     known_capabilities = ctx.known_capabilities
@@ -311,9 +319,11 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(vehicle.maintenance.turnaround_days >= 0, f"negative vehicle turnaround: {vehicle_id}")
         _require(vehicle.maintenance.cost_musd >= 0, f"negative vehicle turnaround cost: {vehicle_id}")
         _require(all(amount >= 0 for _resource, amount in vehicle.maintenance.resources), f"negative vehicle turnaround resource: {vehicle_id}")
+        _validate_unique_resources(vehicle.maintenance.resources, f"maintenance:{vehicle_id}")
         _require(vehicle.production.days >= 0, f"negative vehicle production time: {vehicle_id}")
         _require(vehicle.production.cost_musd >= 0, f"negative vehicle production cost: {vehicle_id}")
         _require(all(amount >= 0 for _resource, amount in vehicle.production.resources), f"negative vehicle production resource: {vehicle_id}")
+        _validate_unique_resources(vehicle.production.resources, f"production:{vehicle_id}")
         _require(vehicle.economics.operating_cost_musd_per_mission >= 0, f"negative vehicle mission cost: {vehicle_id}")
         _require(vehicle.economics.operating_cost_musd_per_cargo_t >= 0, f"negative vehicle cargo cost: {vehicle_id}")
         if vehicle.maintenance.capability_id is not None:

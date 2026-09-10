@@ -63,6 +63,11 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(definition.duration_days > 0, f"scientific exploration has non-positive campaign duration: {definition_id}")
         _require(definition.research_points_total > 0, f"scientific exploration has non-positive RP reward: {definition_id}")
         _require(all(amount >= 0 for _resource, amount in definition.consumable_resources), f"scientific exploration has negative consumable: {definition_id}")
+        consumable_ids = [resource_id for resource_id, _amount in definition.consumable_resources]
+        _require(
+            len(consumable_ids) == len(set(consumable_ids)),
+            f"scientific exploration has duplicate consumable resource: {definition_id}",
+        )
         for operation in definition.operations:
             _require(sim.logistics.operation_registry.supports(operation.operation_type), f"scientific exploration references unknown operation: {definition_id}/{operation.operation_type}")
         validate_site_requirements(definition.origin_requirements, capabilities, f"scientific_exploration:{definition_id}:origin")
