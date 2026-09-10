@@ -1,4 +1,4 @@
-# 宇宙開発Idleゲーム デザイン案 v0.4.0
+# 宇宙開発Idleゲーム デザイン案 v0.5.0
 
 ## 1. 目的
 
@@ -145,7 +145,7 @@ Research Pointは通常の貨物Inventoryとは分離した知識資源として
 - 研究点生成
 - 研究点貯蔵
 
-能力はLocationへ固定値として付与するより、施設・資産から発生するフローとして扱う。「設備が存在すること」と「現在実際に供給可能な能力」を分離する。
+能力はLocationへ固定値として付与するより、施設・資産から発生するフローとして扱う。「設備が存在すること」と「現在実際に供給可能な能力」を分離する。輸送能力も同様に、Vehicle自体へ固定のt/dayを持たせず、Vehicle性能、Fleet配分、Route、補給・整備Infrastructureから定常運用として導出する。
 
 ---
 
@@ -251,22 +251,65 @@ Moon
 
 本作では、地表から軌道へ質量を投入するPowered Ascentと、軌道投入後のSpaceflight、Landing、Atmospheric Entry等を異なるOperationとして扱う。ただしLaunch Vehicle / Spacecraftという名称を排他的な可否ラベルにはしない。
 
-輸送可否は、機体のDry Mass、Payload、Propellant、Delta-v、Thrust、Mission Duration、Atmospheric / Landing Capability、Docking / Refueling Compatibility、Turnaround Requirementと、Route側のOperation要件・端点条件から決める。
+輸送可否と輸送性能は、機体のDry Mass、Payload、Propellant、推進性能、Operation Capability、Endurance、Atmospheric / Landing Capability、Docking / Refueling Compatibility、整備要求と、Route側のOperation要件・端点条件から決める。Vehicle自体に固定の輸送能力t/dayを持たせず、実際の輸送能力は使用Routeと運用条件から導出する。
 
 研究は新しい機体・推進・補給方式を解禁するが、航路そのものを技術IDで直接アンロックしない。
 
-### 9.1 拠点間物流レーン
+### 9.1 Fleet配分と輸送能力
 
-定常物流でプレイヤーが主に設計する対象は、品目ごとの補充ルールではなく拠点間輸送能力とする。
+プレイヤー保有Vehicleは通常物流では同型機・所在地点ごとのFleetとして扱い、輸送、Scientific Exploration、再配置等へ用途配分する。通常物流の主要判断は個々の便を発進させることではなく、どのVehicle Fleetをどの拠点間輸送へどれだけ投入するかとする。
+
+Fleetを輸送へ割り当てると、Route、Vehicle性能、往復・回収経路、Turnaround、補給・整備条件から反復可能なTransport Serviceを自動構成し、方向別の定常輸送能力を生成する。Transport Service / Corridor自体をプレイヤーが別途作成・管理する対象にはしない。
+
+Fleet Allocationは、次のどちらか一方を目標として設定できる。
+
+- Units：投入するFleet隻数を指定し、その隻数から輸送能力を導出する。
+- Capacity：必要な定常輸送能力を方向別に指定し、Vehicle性能と通常運用条件から必要隻数を導出する。
+
+Transport AllocationではVehicle type、拠点間関係、経路・運用Policyを明示する。性能・所要時間・推進剤消費等が実質的に異なる複数のTransport Service Planが成立する場合は候補を提示し、Coreが戦略上重要な方式を暗黙に最適化・切替しない。
+
+UnitsとCapacityを同時に正本とはしない。Capacity指定時の必要隻数はNominalな1隻当たり能力から決め、推進剤不足や整備不足等の一時的低下を埋めるためにFleetを自動増員しない。Fleet不足で目標隻数を満たせない場合は不足を表示し、新造・探査終了等で利用可能になったFleetを既存目標まで自動投入できる。
+
+限られたFleetを複数Transport Allocationが要求する場合はAllocation priorityで配分する。これはLane priorityとは分離し、前者はVehicle用途配分、後者は輸送能力の貨物需要への配分を表す。
+
+輸送能力は少なくとも以下を区別して表示する。
+
+- Target：Capacity指定時のプレイヤー目標
+- Nominal：Fleet数とTransport Serviceの通常運用から得られる能力
+- Available：現在の推進剤、整備、荷役、Infrastructure等を反映した利用可能能力
+- Used：物流Laneが実際に利用している能力
+- Spare：AvailableからUsedを引いた余剰能力
+
+推進剤・整備等の運用需要はFleetを割り当てただけで常に最大量を消費させず、実際のTransport Service利用率から発生させる。能力不足時はFleet不足、推進剤不足、整備能力不足、Infrastructure不足等のlimiting factorを区別して示す。
+
+### 9.2 拠点間物流Lane
+
+定常物流でプレイヤーが主に設計する対象は、品目ごとの補充ルールではなく拠点間の物流需要と、その需要を支える共有輸送能力とする。
 
 ```text
-Earth Surface → LEO       30 t/day
-LEO → Lunar Surface        8 t/day
+Transport Capacity
+Earth Surface → LEO        30 t/day
+LEO → Lunar Surface         8 t/day
+
+Lane Demand
+Earth Surface → Lunar Base  6 t/day
 ```
 
-施設・建設案件・維持需要・産業は必要資源からResource Demandを生成する。物流システムは有効なLaneの空き能力へ貨物を自動割当する。プレイヤーは接続、能力、輸送方式、優先度を設計する。
+施設・建設案件・維持需要・産業は必要資源からResource Demandを生成する。物流システムはLaneの要求量とpriorityに従って、Fleet Allocationや外部Transport Serviceから生じた共有Transport Capacityへ貨物を自動割当する。
 
-### 9.2 End-to-End輸送
+Transport AllocationのCapacityは「どれだけ輸送能力を用意するか」、Laneのrequested capacityは「その能力を物流需要へどれだけ利用するか」を表す。Lane需要からFleetを無条件に増員せず、輸送能力をどこまで増強するかはプレイヤー判断として残す。
+
+### 9.3 Transport Serviceと往復運用
+
+定常輸送能力を生成するTransport Serviceは、Cargoを目的地へ運ぶだけでなく、Fleet資産が同じ運用を反復可能な状態へ戻れることを要件とする。
+
+軌道間輸送船のようにVehicle自体が目的地へ移る場合は、逆方向Routeや回送を含めた往復cycleを自動構成する。再使用打上げ系のようにCargoの到着先とVehicleの回収先が異なる運用も、Vehicle固有のOperation / recovery性能から表現する。Powered Ascent等のOperation名そのものへ固定の帰還規則は持たせない。
+
+往復Serviceでは同一Fleetが往路・復路を担当するため、方向別Capacityを単純加算してFleet必要量を求めない。復路Cargoがない場合は空荷回送を含む定常運用とし、帰り荷がある場合は既存の復路能力を利用できる。
+
+Fleet Allocationを減らした場合、運用中Fleetを即座に別地点へ戻さず、必要な回収・再配置時間を経てFleet Poolへ戻す。地点間の恒久再配置もaggregateなFleet relocationとして時間を要する。
+
+### 9.4 End-to-End輸送とCargo Flow
 
 プレイヤーは出発地と最終目的地を指定でき、中継ノードごとの再発送操作を要求しない。
 
@@ -276,6 +319,10 @@ Earth Surface → LEO → Lunar Surface
 Earth Surface → LEO → Lunar Orbit → Lunar Surface
 ```
 
+Fleet Allocationや外部Serviceが生成した方向別Transport Capacityをネットワークとして扱い、End-to-End能力は経路上の共有capacityから決まる。同じVehicleが途中NodeでCargoを引き渡さず連続運行できる場合は一つのTransport Serviceとして扱え、別Fleetへ引き渡す地点だけが物流上のhandoffになる。
+
+通常物流では個々のVehicle Missionを反復生成せず、利用した定常capacityに応じてCargo Flowを発生させる。ただし輸送時間は保持し、出発したCargoはRoute / Serviceのlatencyを経て目的地へ到着する。
+
 LEOや月周回軌道は有力な補給・積替え・整備ノードだが、必須ゲートではない。
 
 到着先倉庫が満杯の場合、Cargoは物流側のarrival waitingに残る。輸送中から目的地倉庫を予約しない。
@@ -284,28 +331,25 @@ LEOや月周回軌道は有力な補給・積替え・整備ノードだが、�
 
 ## 10. ロケット・宇宙船の建造と保有
 
-ロケットや宇宙船は外部サービスだけでなく、プレイヤーが建造・保有できる物理資産とする。
+ロケットや宇宙船は外部サービスだけでなく、プレイヤーが建造・保有できる物理資産とする。通常運用では同型機と所在地点ごとのFleet数量として管理し、個体識別そのものを主要なゲーム操作にはしない。
 
-Vehicle Definitionは性能に加え、必要に応じて以下を持つ。
+Vehicle Definitionは固定のt/day能力ではなく、RouteとTransport Serviceに応じた輸送・探査適合性と運用効率を決める性能を持つ。必要に応じて以下を含む。
 
+- Dry Mass / Payload Capacity
+- Propellant種類・容量・消費モデル
+- Operation Capabilityと環境適合範囲
+- 移動性能・Endurance
+- Docking / Refueling等のInterface
+- 最小Turnaroundと整備work / 維持・交換資材
 - Production Capability
 - 建造期間
 - 2〜3種類程度の実Resource投入量
-- 整備Capability
-- Turnaround期間
-- 維持・交換資材
 
-Vehicle Assembly Facility等へ建造を指示すると、製造Capabilityと資源を消費してProduction状態へ入り、完了後に利用可能なVehicle Stateとなる。
+同じ性能要因からRoute可否、1cycle当たりPayload、所要時間、推進剤需要、整備需要を導出し、Fleet投入数から定常Transport Capacityへ変換する。用途名や機種名へ物流能力を直接結び付けない。
 
-UIでは機体一覧だけでなく、建造候補について以下を表示する。
+Vehicle Assembly Facility等へ建造を指示すると、製造Capabilityと資源を消費してProduction状態へ入り、完了後に建造地点の該当Fleetへ1隻追加される。
 
-- 機種
-- 建造可能地点
-- 必要Capability
-- 必要資源
-- 建造期間
-- 現在のblocker
-- 建造中機体と完成見込み
+UIでは建造候補に加えて、保有Fleetについて所在、総数、輸送配分、Scientific Exploration拘束、再配置・回収中、未配分数を確認できるようにする。Transport Allocationでは目標mode、目標値、必要隻数、実際の投入隻数、Nominal / Available / Used / Spare Capacity、運用資源需要、blocker / limiting factorを表示する。
 
 打上げヴィークル、軌道間輸送船、着陸船、統合型宇宙船等を用途名称だけで使用制限しない。実性能がOperation要件を満たすかで判定する。
 
@@ -315,28 +359,28 @@ UIでは機体一覧だけでなく、建造候補について以下を表示す
 
 資源Surveyとは別にScientific Exploration Campaignを導入する。
 
-Scientific Explorationは宇宙船等のVehicleを割り当て、一定期間の科学観測、近接探査、有人活動等を行うことでResearch Pointを得るシステムとする。
+Scientific Explorationは必要性能を満たすFleet unitを一定数割り当て、一定期間の科学観測、近接探査、有人活動等を行うことでResearch Pointを得るシステムとする。
 
 Campaignは必要に応じて以下を持つ。
 
 - 探査対象・科学目的
-- 必要Operation / Delta-v / Mission Duration
-- 必要環境・Infrastructure
+- 必要Operation / Delta-v / Endurance / Payload
+- 必要環境・Infrastructure / Capability
 - 所要期間
 - Research Point総量または生成率と上限
 - 消耗資源
 
-割当中Vehicleは物流Missionや別Campaignへ同時に使えない。適合判定は「探査船」タグではなくVehicle性能から行う。
+探査へ拘束されたFleet unitは輸送能力や別Campaignへ同時に割り当てられない。適合判定は「探査船」タグではなくVehicle性能から行う。物流とScientific Explorationは同じFleet資産を競合するため、輸送capacityを維持するか研究獲得へ回すかが明示的な資産配分判断になる。
 
 同じ科学探査を無期限に繰り返すだけで無限Research Pointを得る構造は避ける。基本は有限Campaignとし、継続観測型は明示的な逓減・上限・運用コストを持たせる。
 
 これにより、
 
-宇宙船を建造する  
-→ 輸送に使うか探査に割り当てるか選ぶ  
+宇宙船Fleetを建造する
+→ 輸送能力へ投入するか探査へ割り当てるか選ぶ
 → 探査でResearch Pointを得る  
 → 新技術を研究する  
-→ より高度な宇宙船・研究設備・探査手段を成立させる
+→ より高性能なFleet・研究設備・探査手段を成立させる
 
 という資産配分のループを作る。
 
@@ -444,7 +488,8 @@ Survey Campaignは地点・資源ごとのKnowledgeを更新する。完了Campa
 - 維持Resource Demandの生成
 - Research Point生成
 - 設定済み研究・Survey・Scientific Explorationの進行
-- 物流Lane上の貨物割当
+- Transport Allocation目標に対する利用可能Fleetの投入
+- 物流Lane上の共有Transport Capacityへの貨物割当
 - 建設進行
 - 保守
 - Offline Progress
@@ -455,8 +500,9 @@ Survey Campaignは地点・資源ごとのKnowledgeを更新する。完了Campa
 - 旧研究資産のLevelアップと新Tier資産建設の比較
 - 新規産業配置
 - 拠点間物流能力の増強
-- Vehicle建造と用途配分
-- 輸送方式・輸送資産の選択
+- Vehicle建造とFleet用途配分
+- Transport AllocationのUnits / Capacity目標とpriority
+- 輸送方式・輸送資産・経路Policyの選択
 - 新地域への進出
 - 発電方式
 - 技術経路
@@ -496,11 +542,12 @@ LLMはプレイヤーの主要判断を代行させない。
 - 建設計画・停止・再開・取消
 - 設備停止・再開・Levelアップ
 - Process選択・電力優先度
-- Vehicle建造・補給・配備
+- Vehicle建造・Fleet再配置
+- Transport Allocation設定・停止・再開
 - Logistics Lane設定
-- 手動Cargo / Transport Mission
+- 手動Cargo / 特殊Transport Mission
 - Research開始・停止・再開
-- Scientific Exploration開始・停止・Vehicle割当
+- Scientific Exploration開始・停止・Fleet unit割当
 - Resource Survey開始・停止・配分
 
 主要Query例：
@@ -511,7 +558,7 @@ LLMはプレイヤーの主要判断を代行させない。
 - Process投入・産出・稼働率・limiting factor
 - 建設候補・案件
 - Vehicle建造候補・必要資材・blocker
-- Vehicle / Mission / Logistics Lane
+- Fleet / Transport Allocation / Transport Capacity / Cargo Flow / Logistics Lane
 - Research Point生成量・保有量・上限
 - Research / Scientific Exploration / Survey
 - Bottleneck / blocker
@@ -522,7 +569,7 @@ UIは建設可否、維持率、機体適合、研究条件等を独自再計算
 
 ## 19. Save / Load / Offline / テスト
 
-Saveはversion付きSnapshotを基本とし、静的Definitionは現在のContentから再構築し、可変Stateだけを復元する。ゲーム性評価段階では旧仕様・旧Saveとの後方互換を目的化しない。
+Saveはversion付きSnapshotを基本とし、静的Definitionは現在のContentから再構築し、可変Stateだけを復元する。Fleet数量、Transport Allocation目標、再配置・回収中Fleet、Cargo Flow等は可変状態として保持し、Transport Service Planや現在のTransport Capacityは保存済み正本と重複させず再導出する。ゲーム性評価段階では旧仕様・旧Saveとの後方互換を目的化しない。
 
 Offline Progressは通常Simulationと別ルールにせず、実時間をゲーム時間へ変換した上で通常の時間進行経路を利用する。
 
@@ -536,7 +583,12 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 - 維持需要が建造投入量から決定論的に導出される
 - 維持不足が一貫してFacility能力へ反映される
 - Vehicle建造がCapability・資源・時間を消費する
-- VehicleがMissionとScientific Explorationへ二重割当されない
+- Fleet総数と輸送・Scientific Exploration・再配置等の排他的配分が整合する
+- Transport AllocationのUnits / Capacity目標が二重正本にならない
+- Capacity指定時のFleet必要数が一時的な推進剤・整備不足で自動膨張しない
+- Nominal / Available / Used Transport Capacityが同じService Planから一貫して導出される
+- 共有Transport Capacityを複数Laneが利用しても能力を二重消費しない
+- Cargo Flowが輸送latencyと資源量を保存する
 - Research Pointの生成・貯蔵上限が整合する
 - Route可否が技術名や用途ラベルではなく実能力から決まる
 - Save/Load後の決定論
@@ -622,20 +674,23 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 8. Facility維持は建造・Upgrade投入資源の一定割合を通常Resource Demandとして要求する。
 9. Facilityの生産物・投入物・稼働率・律速要因をUIから直接確認可能にする。
 10. 地球初期産業にも低効率採掘・基礎生産を置き、無限背景市場にしない。
-11. ロケット・宇宙船はCapability・資源・時間を使って建造可能な物理資産とする。
-12. 宇宙船をScientific Explorationへ割り当ててResearch Pointを得られるようにする。
-13. Scientific ExplorationとResource Surveyを別状態として扱う。
-14. 資源・中間材の種類は増やしてよいが、物流設定数の爆発を避ける。
-15. 定常物流では品目別補充より拠点間輸送能力、方式、優先度を主要判断とする。
-16. 各地点の立地条件に意味を持たせるが、固有Location ID特例をCoreへ持ち込まない。
-17. 新技術により古い拠点にも再開発価値を与える。
-18. Idle自動化は反復処理を担当し、戦略判断を奪わない。
-19. 天体と地表・軌道等のSpatial Nodeを分離する。
-20. 打上げと宇宙輸送を異なるOperationとして扱うが、Vehicle名称だけで可否を固定しない。
-21. 輸送中貨物は目的地倉庫容量を事前予約しない。
-22. LLMは世界側の問題や主体を増やすために使い、プレイヤー判断を代行させない。
-23. Simulation CoreをUIから独立させ、決定論的に再現・テスト可能にする。
-24. ゲーム性評価段階では後方互換や暫定バランス数値の固定を優先しない。
+11. ロケット・宇宙船はCapability・資源・時間を使って建造可能な物理資産とし、通常運用では所在地点ごとのFleetとして用途配分する。
+12. Fleetを拠点間輸送へ配分すると、Vehicle性能・Route・補給・整備条件から定常Transport Capacityが自動生成される。
+13. Fleet AllocationはUnits指定とCapacity指定を選択できるが、同時に二つを正本としない。
+14. 宇宙船FleetをScientific Explorationへ割り当ててResearch Pointを得られるようにする。
+15. Scientific ExplorationとResource Surveyを別状態として扱う。
+16. 資源・中間材の種類は増やしてよいが、物流設定数の爆発を避ける。
+17. 定常物流では品目別補充より拠点間輸送能力、Fleet配分、方式、優先度を主要判断とする。
+18. 通常物流は個体Vehicle Missionの反復ではなく共有Transport CapacityとCargo Flowとして扱い、輸送latencyは保持する。
+19. 各地点の立地条件に意味を持たせるが、固有Location ID特例をCoreへ持ち込まない。
+20. 新技術により古い拠点にも再開発価値を与える。
+21. Idle自動化は反復処理を担当し、戦略判断を奪わない。
+22. 天体と地表・軌道等のSpatial Nodeを分離する。
+23. 打上げと宇宙輸送を異なるOperationとして扱うが、Vehicle名称だけで可否を固定しない。
+24. 輸送中貨物は目的地倉庫容量を事前予約しない。
+25. LLMは世界側の問題や主体を増やすために使い、プレイヤー判断を代行させない。
+26. Simulation CoreをUIから独立させ、決定論的に再現・テスト可能にする。
+27. ゲーム性評価段階では後方互換や暫定バランス数値の固定を優先しない。
 
 ---
 
@@ -647,19 +702,23 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 
 - 自動時間進行、速度変更、一時停止
 - Research Point生成・貯蔵・消費
-- Scientific ExplorationによるVehicle拘束とResearch Point獲得
+- Scientific ExplorationによるFleet unit拘束とResearch Point獲得
 - Research Tier / Level
 - Theory / Prototype / Demonstration / Operational Experience
 - 建築物の2〜3資源建造Recipe
 - 建築物の維持Resource Demand
 - Process入出力とUI可視化
 - 地球初期採掘・基礎産業
-- Vehicle建造
+- Vehicle建造とFleet数量管理
+- Fleet AllocationのUnits / Capacity共存
+- Fleet AllocationからのTransport Capacity自動生成
+- Nominal / Available / Used / Spare Capacityとlimiting factor
 - 発電・配電・部分稼働
 - 在庫・倉庫・保管サービス
 - Spatial Node
 - Transport Operation
-- Logistics Laneと共有輸送能力
+- Logistics Laneと共有Transport Capacity
+- Cargo Flowと輸送latency
 - 貨物需要の自動割当
 - 推進剤の実資源化
 - Resource Survey
@@ -677,7 +736,7 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 
 本作は、
 
-「探査・実験・研究設備からResearch Pointを獲得し、その研究成果で産業・輸送・研究基盤を拡大し、建設・維持・物流・Vehicle配分のボトルネックを解消しながら、より高い桁の知識生産と技術的に困難な宇宙開発へ進むIdle型宇宙産業シミュレーション」
+「探査・実験・研究設備からResearch Pointを獲得し、その研究成果で産業・輸送・研究基盤を拡大し、建設・維持・物流・Fleet配分とTransport Capacityのボトルネックを解消しながら、より高い桁の知識生産と技術的に困難な宇宙開発へ進むIdle型宇宙産業シミュレーション」
 
 と定義する。
 
@@ -685,7 +744,7 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 
 「地球の低効率産業と人工衛星・地上研究設備で基礎知識を得る段階」
 から
-「自前のロケット・宇宙船を建造し、輸送と科学探査へ配分する段階」
+「自前のロケット・宇宙船Fleetを建造し、定常輸送能力と科学探査へ配分する段階」
 へ、
 さらに
 「恒久研究所を遠隔地へ建設し、大量の電力・物資・維持物流を投入して高効率研究を行う段階」
