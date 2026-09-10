@@ -19,13 +19,20 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Stage tracked source snapshot
+        with:
+          fetch-depth: 0
+      - name: Build restorable source bundle
         shell: bash
         run: |
           mkdir -p "${RUNNER_TEMP}/source"
-          git archive HEAD | tar -x -C "${RUNNER_TEMP}/source"
+          branch="${GITHUB_REF_NAME}"
+          git update-ref "refs/heads/${branch}" "${GITHUB_SHA}"
+          git bundle create "${RUNNER_TEMP}/source/repository.bundle" "refs/heads/${branch}"
+          git bundle verify "${RUNNER_TEMP}/source/repository.bundle"
           printf '%s\n' "${GITHUB_SHA}" > "${RUNNER_TEMP}/source/.source-commit"
-      - name: Upload source snapshot
+          git rev-parse "${GITHUB_SHA}^{tree}" > "${RUNNER_TEMP}/source/.source-tree"
+          printf '%s\n' "${branch}" > "${RUNNER_TEMP}/source/.source-branch"
+      - name: Upload source bundle
         uses: actions/upload-artifact@v4
         with:
           name: source-snapshot

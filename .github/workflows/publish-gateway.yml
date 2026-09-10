@@ -1,0 +1,135 @@
+name: Publish Gateway
+
+on:
+  push:
+    branches: [publish]
+    paths:
+      - '.publish/request.patch'
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: publish-gateway
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse and verify request
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64
+          import gzip
+          import hashlib
+          import os
+          import re
+          from pathlib import Path
+
+          request_path = Path('.publish/request.patch')
+          text = request_path.read_text(encoding='utf-8')
+          marker = '--- SPACE-IDLE PATCH ---\n'
+          if marker not in text:
+              raise SystemExit('missing patch marker')
+          header_text, payload = text.split(marker, 1)
+          headers = {}
+          for line in header_text.splitlines():
+              if not line.startswith('# '):
+                  continue
+              key, sep, value = line[2:].partition(': ')
+              if sep:
+                  headers[key] = value
+
+          required = {
+              'version',
+              'target-branch',
+              'base-sha',
+              'target-tree',
+              'patch-sha256',
+              'patch-encoding',
+              'message-b64',
+          }
+          missing = required - headers.keys()
+          if missing:
+              raise SystemExit(f'missing headers: {sorted(missing)}')
+          if headers['version'] != '2':
+              raise SystemExit('unsupported request version')
+          if headers['patch-encoding'] != 'gzip-base64':
+              raise SystemExit('unsupported patch encoding')
+          if headers['target-branch'] not in {'develop', 'temp'}:
+              raise SystemExit('unsupported target branch')
+          if not re.fullmatch(r'[0-9a-f]{40}', headers['base-sha']):
+              raise SystemExit('invalid base sha')
+          if not re.fullmatch(r'[0-9a-f]{40}', headers['target-tree']):
+              raise SystemExit('invalid target tree')
+          try:
+              patch_bytes = gzip.decompress(base64.b64decode(payload.strip(), validate=True))
+              patch = patch_bytes.decode('utf-8')
+          except Exception as exc:
+              raise SystemExit(f'invalid compressed patch payload: {exc}') from exc
+          if not patch.startswith('diff --git '):
+              raise SystemExit('empty or invalid git patch')
+
+          digest = hashlib.sha256(patch_bytes).hexdigest()
+          if digest != headers['patch-sha256']:
+              raise SystemExit(f'patch sha256 mismatch: {digest}')
+          message = base64.b64decode(headers['message-b64'], validate=True).decode('utf-8')
+          if not message.strip():
+              raise SystemExit('empty commit message')
+
+          runner_temp = Path(os.environ['RUNNER_TEMP'])
+          patch_path = runner_temp / 'publish.patch'
+          message_path = runner_temp / 'commit-message.txt'
+          patch_path.write_text(patch, encoding='utf-8', newline='')
+          message_path.write_text(message, encoding='utf-8', newline='')
+
+          with Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8') as env:
+              env.write(f"TARGET_BRANCH={headers['target-branch']}\n")
+              env.write(f"BASE_SHA={headers['base-sha']}\n")
+              env.write(f"TARGET_TREE={headers['target-tree']}\n")
+              env.write(f"PATCH_FILE={patch_path}\n")
+              env.write(f"MESSAGE_FILE={message_path}\n")
+          PY
+
+      - name: Apply exact target tree and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          if [ "${current}" != "${BASE_SHA}" ]; then
+            echo "Target moved: expected ${BASE_SHA}, found ${current}" >&2
+            exit 1
+          fi
+
+          git checkout --detach "${BASE_SHA}"
+          git apply --index --binary "${PATCH_FILE}"
+          actual_tree="$(git write-tree)"
+          if [ "${actual_tree}" != "${TARGET_TREE}" ]; then
+            echo "Target tree mismatch: expected ${TARGET_TREE}, got ${actual_tree}" >&2
+            exit 1
+          fi
+
+          git config user.name "space-idle-publish-gateway"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -F "${MESSAGE_FILE}"
+          published_sha="$(git rev-parse HEAD)"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "Published ${published_sha} to ${TARGET_BRANCH}"
+
+      - name: Dispatch Fast CI for published branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches" \
+            -f ref="${TARGET_BRANCH}"
