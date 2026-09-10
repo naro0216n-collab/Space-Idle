@@ -170,7 +170,11 @@ class VehicleProductionMixin:
                 )
         return tuple(demands)
 
-    def _consume_ready_vehicle_production_inputs(self) -> None:
+    def _consume_ready_vehicle_production_inputs(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        day: int,
+    ) -> None:
         waiting = sorted(
             (
                 state
@@ -187,15 +191,13 @@ class VehicleProductionMixin:
                 for resource_id, amount_t in definition.production.resources
                 if amount_t > 1e-12
             )
-            if not all(
-                self.inventory.reserved_for(
-                    self._vehicle_production_demand_id(state.id, resource_id),
-                    state.location_id,
-                    resource_id,
-                )
-                + 1e-9
-                >= amount_t
-                for resource_id, amount_t in resources
+            power = power_by_location.get(state.location_id)
+            if power is None:
+                power = self.power.snapshot(state.location_id, self.facilities, day)
+            if self.vehicle_production_blockers(
+                state.id,
+                day=day,
+                power=power,
             ):
                 continue
             for resource_id, amount_t in resources:
@@ -212,11 +214,16 @@ class VehicleProductionMixin:
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
         day: int,
     ) -> None:
-        self._consume_ready_vehicle_production_inputs()
+        self._consume_ready_vehicle_production_inputs(power_by_location, day)
 
         pools: dict[tuple[SpatialNodeId, str], list[VehicleProductionState]] = {}
         for state in self.vehicle_production_projects.values():
             if state.phase is not VehicleProductionPhase.BUILDING or state.paused:
+                continue
+            power = power_by_location.get(state.location_id)
+            if power is None:
+                power = self.power.snapshot(state.location_id, self.facilities, day)
+            if self.vehicle_production_blockers(state.id, day=day, power=power):
                 continue
             definition = self.vehicle_defs[state.vehicle_definition_id]
             capability_id = definition.production.capability_id
