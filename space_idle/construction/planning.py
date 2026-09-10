@@ -195,7 +195,7 @@ class ConstructionPlanningMixin:
         site_power = power if power is not None else self.power.snapshot(project.location_id, self.facilities, day)
         for failure in self.project_site_failures(project, day, site_power):
             blockers.append(ProjectBlocker(failure.code, failure.detail))
-        if project.status == ProjectStatus.PROCURING:
+        if project.status in {ProjectStatus.PROCURING, ProjectStatus.READY} and not project.materials_committed:
             waited = 0 if project.procurement_started_day is None else day - project.procurement_started_day
             wait_limit = self.sourcing_wait_days[project.sourcing_policy]
             for requirement in recipe.resources:
