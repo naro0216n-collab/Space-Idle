@@ -325,6 +325,15 @@ def run() -> dict[str, object]:
             )
             page.locator('[data-tab="overview"]').click()
 
+            page.locator('[data-tab="research"]').click()
+            research_rows = page.locator('#researchTree [data-inspect="research"]')
+            _assert(research_rows.count() > 0, "research tree must expose research decisions")
+            research_rows.first.click()
+            _assert(page.locator('#inspectorContent [data-research-action="start"]').count() == 1, "research start control must remain in a stable position")
+            _assert(page.locator('#inspectorContent [data-research-action="pause"]').count() == 1, "research pause control must remain in a stable position")
+            _assert(page.locator('#inspectorContent [data-research-action="resume"]').count() == 1, "research resume control must remain in a stable position")
+            page.locator('[data-tab="overview"]').click()
+
             page.locator('[data-tab="scientific-exploration"]').click()
             exploration_rows = page.locator('tr[data-inspect="scientific-exploration"]')
             _assert(exploration_rows.count() > 0, "scientific exploration campaign must be visible")

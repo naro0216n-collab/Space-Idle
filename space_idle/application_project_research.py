@@ -16,14 +16,19 @@ class ResearchProgressionProjectorMixin:
             return ()
         rows: list[ResearchSiteOptionRow] = []
         for node in sorted(sim.graph.nodes.values(), key=lambda row: str(row.id)):
-            failures = (
-                sim.research.demonstration_failures(definition.id, node.id, sim.day)
+            blockers = (
+                sim.research.demonstration_site_blockers(definition.id, node.id, sim.day)
                 if demonstration
-                else sim.research.prototype_failures(definition.id, node.id, sim.day)
+                else sim.research.prototype_site_blockers(definition.id, node.id, sim.day)
             )
             rows.append(ResearchSiteOptionRow(
                 str(node.id),
-                tuple((failure.code, failure.detail) for failure in failures),
+                blockers,
+                (
+                    sim.research.can_select_demonstration_site(definition.id, node.id, sim.day)
+                    if demonstration
+                    else sim.research.can_select_prototype_site(definition.id, node.id, sim.day)
+                ),
             ))
         return tuple(rows)
 
@@ -92,44 +97,19 @@ class ResearchProgressionProjectorMixin:
                 None if state is None or state.demonstration_location_id is None
                 else str(state.demonstration_location_id)
             )
-            demonstration_blockers: tuple[tuple[str, str], ...] = ()
-            if state is not None and state.status.value == "demonstration":
-                if state.paused:
-                    demonstration_blockers += (("manual_pause", "研究が手動停止中"),)
-                if state.demonstration_location_id is None:
-                    demonstration_blockers += (("demonstration_site", "実証地点を選択してください"),)
-                else:
-                    demonstration_blockers += tuple(
-                        (failure.code, failure.detail)
-                        for failure in sim.research.demonstration_failures(
-                            definition.id, state.demonstration_location_id, sim.day
-                        )
-                    )
-
-            prototype_blockers: tuple[tuple[str, str], ...] = ()
-            if state is not None and state.status.value == "prototype":
-                if state.paused:
-                    prototype_blockers += (("manual_pause", "研究が手動停止中"),)
-                if state.prototype_location_id is None:
-                    prototype_blockers += (("prototype_site", "試作地点を選択してください"),)
-                else:
-                    prototype_blockers += tuple(
-                        (failure.code, failure.detail)
-                        for failure in sim.research.prototype_failures(
-                            definition.id, state.prototype_location_id, sim.day
-                        )
-                    )
-                    if prototype is None:
-                        raise RuntimeError(f"prototype state has no prototype definition: {definition.id}")
-                    for resource_id, required in sorted(
-                        prototype.resources.items(), key=lambda row: str(row[0])
-                    ):
-                        available = sim.inventory.available(state.prototype_location_id, resource_id)
-                        if available + 1e-9 < required:
-                            prototype_blockers += ((
-                                "prototype_resource",
-                                f"{resource_id}: {available:g}/{required:g} t",
-                            ),)
+            demonstration_blockers = (
+                sim.research.demonstration_blockers(definition.id, sim.day)
+                if state is not None and state.status.value == "demonstration"
+                else ()
+            )
+            prototype_blockers = (
+                sim.research.prototype_blockers(definition.id, sim.day)
+                if state is not None and state.status.value == "prototype"
+                else ()
+            )
+            current_blockers = sim.research.current_blockers(
+                definition.id, day=sim.day, power_by_location=power_by_location
+            )
 
             demonstration_required = 0 if demonstration is None else demonstration.days
             demonstration_done = (
@@ -155,7 +135,15 @@ class ResearchProgressionProjectorMixin:
                 status,
                 False if state is None else state.paused,
                 not start_blockers,
+                sim.research.can_pause(definition.id),
+                sim.research.can_resume(definition.id),
+                (
+                    sim.research.can_fund_prototype(definition.id, sim.day)
+                    if state is not None and state.status.value == "prototype"
+                    else False
+                ),
                 definition.research_point_cost,
+                current_blockers,
                 start_blockers,
                 prototype_resources,
                 None if state is None or state.prototype_location_id is None

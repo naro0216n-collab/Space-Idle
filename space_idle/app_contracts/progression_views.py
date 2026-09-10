@@ -8,6 +8,7 @@ from .catalog_views import SiteRequirementsDefinitionRow
 class ResearchSiteOptionRow:
     location_id: str
     blockers: tuple[tuple[str, str], ...]
+    can_select: bool
 
 
 @dataclass(frozen=True)
@@ -29,7 +30,11 @@ class ResearchRow:
     status: str
     paused: bool
     can_start: bool
+    can_pause: bool
+    can_resume: bool
+    can_fund_prototype: bool
     research_point_cost: float
+    current_blockers: tuple[tuple[str, str], ...]
     start_blockers: tuple[tuple[str, str], ...]
     prototype_resources: tuple[tuple[str, float], ...]
     prototype_location_id: str | None

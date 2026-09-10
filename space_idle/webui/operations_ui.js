@@ -135,11 +135,11 @@
     return true;
   }
 
-  function researchBlockers(r){if(r.status==='prototype')return r.prototype_blockers||[];if(r.status==='demonstration')return r.demonstration_blockers||[];return r.start_blockers||[];}
+  function researchBlockers(r){return r.current_blockers||[];}
   function siteOptionsHtml(r,kind){
     const options=kind==='prototype'?(r.prototype_sites||[]):(r.demonstration_sites||[]),selected=kind==='prototype'?r.prototype_location_id:r.demonstration_location_id;
     if(!options.length)return '<div class="empty-state">候補地点なし</div>';
-    return options.map((site)=>{const blocked=(site.blockers||[]).length,isSelected=site.location_id===selected,attr=kind==='prototype'?'data-research-prototype-site':'data-research-demo-site';return `<div class="route-mode-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(locationName(site.location_id))}</span><span class="badge ${blocked?'warn':isSelected?'ok':''}">${blocked?`${blocked} blocker`:isSelected?'選択中':'実行可'}</span></div>${blocked?`<div class="issue-stack">${site.blockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:''}<button type="button" ${attr}="${esc(site.location_id)}" data-id="${esc(r.id)}" ${blocked||isSelected?'disabled':''}>${kind==='prototype'?'試作地点に設定':'実証地点に設定'}</button></div>`;}).join('');
+    return options.map((site)=>{const blockers=site.blockers||[],blocked=blockers.length,isSelected=site.location_id===selected,canSelect=Boolean(site.can_select),attr=kind==='prototype'?'data-research-prototype-site':'data-research-demo-site';const badge=isSelected?'選択中':canSelect?(blocked?`選択可 · ${blocked} 稼働blocker`:'選択可'):`${blocked||1} blocker`;return `<div class="route-mode-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(locationName(site.location_id))}</span><span class="badge ${blocked?'warn':canSelect||isSelected?'ok':''}">${badge}</span></div>${blocked?`<div class="issue-stack">${blockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:''}<button type="button" ${attr}="${esc(site.location_id)}" data-id="${esc(r.id)}" ${!canSelect||isSelected?'disabled':''}>${kind==='prototype'?'試作地点に設定':'実証地点に設定'}</button></div>`;}).join('');
   }
   function prototypeDemandHtml(r){
     const owner=`research:${r.id}`;
@@ -149,18 +149,15 @@
   }
   function renderResearchInspector(id){
     const r=state.research?.items?.find((x)=>x.id===id);if(!r)return false;
-    const canPause=!['available','locked','complete'].includes(r.status);let action='';
-    if(r.status==='available'&&r.can_start)action=`<button type="button" class="primary" data-research-action="start" data-id="${esc(r.id)}">RP ${fmt(r.research_point_cost,1)} を支払い研究開始</button>`;
-    else if(r.paused)action=`<button type="button" data-research-action="resume" data-id="${esc(r.id)}">研究再開</button>`;
-    else if(canPause)action=`<button type="button" data-research-action="pause" data-id="${esc(r.id)}">研究停止</button>`;
+    const action=`<button type="button" class="primary" data-research-action="start" data-id="${esc(r.id)}" ${r.can_start?'':'disabled'}>RP ${fmt(r.research_point_cost,1)} を支払い研究開始</button><button type="button" data-research-action="pause" data-id="${esc(r.id)}" ${r.can_pause?'':'disabled'}>研究停止</button><button type="button" data-research-action="resume" data-id="${esc(r.id)}" ${r.can_resume?'':'disabled'}>研究再開</button>`;
     const phaseBlockers=researchBlockers(r);let phase='';
     if(r.status==='prototype'){
       const resources=(r.prototype_resources||[]).map(([resource,amount])=>`${esc(resourceName(resource))} ${fmt(amount)}t`).join(' / ')||'追加資材なし';
-      const funding=r.prototype_location_id?`<button type="button" class="primary" data-research-prototype-fund="${esc(r.id)}" ${phaseBlockers.length?'disabled':''}>試作資材を投入して完了</button>`:'';
+      const funding=`<button type="button" class="primary" data-research-prototype-fund="${esc(r.id)}" ${r.can_fund_prototype?'':'disabled'}>試作資材を投入して完了</button>`;
       phase=section('試作',`<div class="cell-sub">必要資材: ${resources}</div><div class="cell-sub">試作地点: ${r.prototype_location_id?esc(locationName(r.prototype_location_id)):'未選択'}</div>${siteOptionsHtml(r,'prototype')}<h3>資材Demand</h3>${prototypeDemandHtml(r)}${funding}`);
     }else if(r.status==='demonstration')phase=section('実証',`<div class="cell-sub">進捗 ${r.demonstration_done_days}/${r.demonstration_required_days}日 · 地点 ${r.demonstration_location_id?esc(locationName(r.demonstration_location_id)):'未選択'}</div>${siteOptionsHtml(r,'demonstration')}`);
     const startState=['available','locked'].includes(r.status)?section('開始条件',kv([['必要RP',fmt(r.research_point_cost,1)],['保有RP',fmt(state.research?.stored_points,1)],['RP容量',fmt(state.research?.storage_capacity_points,1)]])):'';
-    setInspector(r.display_name,section('状態',kv([['段階',esc(stateLabels[r.status]||r.status)],['必要RP',fmt(r.research_point_cost,1)],['実証日数',`${r.demonstration_done_days}/${r.demonstration_required_days}`]]))+section('前提',(r.prerequisites||[]).length?(r.prerequisites||[]).map((x)=>`<span class="badge">${esc(definitionName(x))}</span>`).join(' '):'<span class="badge ok">なし</span>')+startState+section('現在のblocker',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:'<span class="badge ok">なし</span>')+phase+section('研究操作',`<div class="action-stack">${action||'<span class="badge">現在可能な研究操作なし</span>'}</div>`));
+    setInspector(r.display_name,section('状態',kv([['段階',esc(stateLabels[r.status]||r.status)],['必要RP',fmt(r.research_point_cost,1)],['実証日数',`${r.demonstration_done_days}/${r.demonstration_required_days}`]]))+section('前提',(r.prerequisites||[]).length?(r.prerequisites||[]).map((x)=>`<span class="badge">${esc(definitionName(x))}</span>`).join(' '):'<span class="badge ok">なし</span>')+startState+section('現在のblocker',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:'<span class="badge ok">なし</span>')+phase+section('研究操作',`<div class="action-stack">${action}</div>`));
     return true;
   }
   function renderScientificExplorationInspector(id){
