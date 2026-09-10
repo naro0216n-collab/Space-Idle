@@ -48,7 +48,7 @@ jobs:
 
           required = {
               'version', 'request-id', 'target-branch', 'base-sha', 'target-tree',
-              'patch-sha256', 'patch-encoding', 'chunk-count', 'message-b64',
+              'patch-sha256', 'patch-encoding', 'chunk-count', 'chunks-tree-git-oid', 'message-b64',
           }
           missing = required - headers.keys()
           if missing:
@@ -72,21 +72,20 @@ jobs:
           if not 1 <= chunk_count <= 256:
               raise SystemExit('invalid chunk count')
 
-          expected_chunks_tree = headers.get('chunks-tree-git-oid')
-          if expected_chunks_tree is not None:
-              object_format = subprocess.check_output(
-                  ['git', 'rev-parse', '--show-object-format'], text=True
-              ).strip()
-              oid_length = 40 if object_format == 'sha1' else 64 if object_format == 'sha256' else 0
-              if oid_length == 0 or not re.fullmatch(rf'[0-9a-f]{{{oid_length}}}', expected_chunks_tree):
-                  raise SystemExit('invalid chunks tree Git OID')
-              actual_chunks_tree = subprocess.check_output(
-                  ['git', 'rev-parse', 'HEAD:.publish/chunks'], text=True
-              ).strip()
-              if actual_chunks_tree != expected_chunks_tree:
-                  raise SystemExit(
-                      f'chunks tree mismatch: expected {expected_chunks_tree}, got {actual_chunks_tree}'
-                  )
+          expected_chunks_tree = headers['chunks-tree-git-oid']
+          object_format = subprocess.check_output(
+              ['git', 'rev-parse', '--show-object-format'], text=True
+          ).strip()
+          oid_length = 40 if object_format == 'sha1' else 64 if object_format == 'sha256' else 0
+          if oid_length == 0 or not re.fullmatch(rf'[0-9a-f]{{{oid_length}}}', expected_chunks_tree):
+              raise SystemExit('invalid chunks tree Git OID')
+          actual_chunks_tree = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD:.publish/chunks'], text=True
+          ).strip()
+          if actual_chunks_tree != expected_chunks_tree:
+              raise SystemExit(
+                  f'chunks tree mismatch: expected {expected_chunks_tree}, got {actual_chunks_tree}'
+              )
 
           payload_parts = []
           for index in range(chunk_count):
@@ -127,9 +126,11 @@ jobs:
           message_path.write_text(message, encoding='utf-8', newline='')
 
           with Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8') as env:
+              env.write(f"REQUEST_ID={headers['request-id']}\n")
               env.write(f"TARGET_BRANCH={headers['target-branch']}\n")
               env.write(f"BASE_SHA={headers['base-sha']}\n")
               env.write(f"TARGET_TREE={headers['target-tree']}\n")
+              env.write(f"CHUNKS_TREE_GIT_OID={headers['chunks-tree-git-oid']}\n")
               env.write(f"PATCH_FILE={patch_path}\n")
               env.write(f"MESSAGE_FILE={message_path}\n")
           PY
@@ -157,8 +158,57 @@ jobs:
           git commit -F "${MESSAGE_FILE}"
           published_sha="$(git rev-parse HEAD)"
           git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+
+          remote_after="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
+          if [ "${remote_after}" != "${published_sha}" ]; then
+            echo "Remote ref verification failed: expected ${published_sha}, found ${remote_after}" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/heads/${TARGET_BRANCH}"
+          remote_tree="$(git rev-parse 'FETCH_HEAD^{tree}')"
+          if [ "${remote_tree}" != "${TARGET_TREE}" ]; then
+            echo "Remote tree verification failed: expected ${TARGET_TREE}, found ${remote_tree}" >&2
+            exit 1
+          fi
+
           echo "PUBLISHED_SHA=${published_sha}" >> "$GITHUB_ENV"
-          echo "Published ${published_sha} to ${TARGET_BRANCH}"
+          echo "PUBLISHED_TREE=${remote_tree}" >> "$GITHUB_ENV"
+          echo "Published and verified ${published_sha} tree ${remote_tree} on ${TARGET_BRANCH}"
+
+      - name: Record verified publish receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt_path="${RUNNER_TEMP}/publish-receipt.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = {
+              "version": 1,
+              "request_id": os.environ["REQUEST_ID"],
+              "target_branch": os.environ["TARGET_BRANCH"],
+              "base_commit": os.environ["BASE_SHA"],
+              "target_tree": os.environ["TARGET_TREE"],
+              "chunks_tree_git_oid": os.environ["CHUNKS_TREE_GIT_OID"],
+              "published_commit": os.environ["PUBLISHED_SHA"],
+              "published_tree": os.environ["PUBLISHED_TREE"],
+          }
+          Path(os.environ["RUNNER_TEMP"], "publish-receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          receipt_b64="$(base64 -w0 "${receipt_path}")"
+          gh api \
+            --method PUT \
+            "repos/${GITHUB_REPOSITORY}/contents/.publish/receipts/${REQUEST_ID}.json" \
+            -f message="Record publish receipt ${REQUEST_ID}" \
+            -f content="${receipt_b64}" \
+            -f branch=publish >/dev/null
 
       - name: Mark Fast CI pending
         env:
