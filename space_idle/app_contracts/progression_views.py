@@ -109,7 +109,12 @@ class SurveyRow:
     active: bool
     complete: bool
     paused: bool
+    can_start: bool
+    can_pause: bool
+    can_resume: bool
+    can_set_allocation: bool
     progress: float
+    default_allocation_weight: float
     allocation_weight: float
     knowledge_level: int
     presence_probability: float | None

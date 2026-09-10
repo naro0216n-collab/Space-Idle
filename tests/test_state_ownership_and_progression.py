@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from space_idle import GetResearch, GetWorld, build_game_application
+from space_idle import GetResearch, GetSurveys, GetWorld, StartSurvey, build_game_application
 from space_idle.api import GameRuntime
 from space_idle.content import base_ids as ids
 from space_idle.logistics import PathPolicy
@@ -117,7 +117,53 @@ def test_runtime_snapshot_reads_all_projections_at_one_clock_sync(tmp_path):
     assert result.revision == 1
 
 
-def test_initial_known_deposits_are_seeded_through_survey_domain_contract():
+def test_initial_known_deposits_are_knowledge_without_active_survey_campaigns():
     app = build_game_application()
     sim = app._simulation
-    assert sim.survey.is_complete(ids.EARTH, ids.WATER)
+    key = (ids.EARTH, ids.WATER)
+
+    assert sim.survey.is_complete(*key)
+    assert key in sim.survey.knowledge_progress
+    assert key not in sim.survey.campaigns
+
+    row = next(
+        item for item in app.query(GetSurveys(str(ids.EARTH))).items
+        if item.resource_id == str(ids.WATER)
+    )
+    assert row.complete is True
+    assert row.active is False
+    assert row.can_start is False
+    assert row.can_pause is False
+    assert row.can_resume is False
+    assert row.can_set_allocation is False
+
+
+def test_survey_campaign_updates_knowledge_and_is_removed_when_complete():
+    app = build_game_application()
+    sim = app._simulation
+    key = (ids.SOUTH_POLAR_RIDGE, ids.WATER)
+    target = sim.survey.targets[key]
+
+    sim.survey.start(*key, allocation_weight=2.0)
+    assert key in sim.survey.campaigns
+    assert sim.survey.progress(*key) == 0.0
+
+    sim.survey.knowledge_progress[key] = target.thresholds[-1] - 0.5
+    original_capacity = sim.survey.capacity_at
+    sim.survey.capacity_at = lambda *_args, **_kwargs: 1.0
+    try:
+        sim.survey.advance_day({}, sim.day)
+    finally:
+        sim.survey.capacity_at = original_capacity
+
+    assert sim.survey.progress(*key) == target.thresholds[-1]
+    assert sim.survey.is_complete(*key)
+    assert key not in sim.survey.campaigns
+
+    row = next(
+        item for item in app.query(GetSurveys(str(ids.SOUTH_POLAR_RIDGE))).items
+        if item.resource_id == str(ids.WATER)
+    )
+    assert row.complete is True
+    assert row.active is False
+    assert row.blockers == ()

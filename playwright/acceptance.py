@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from space_idle import build_game_application
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
+from space_idle.content import base_ids as ids
 from space_idle.simulation import OfflineProgressPolicy
 
 try:
@@ -329,9 +330,7 @@ def run() -> dict[str, object]:
             research_rows = page.locator('#researchTree [data-inspect="research"]')
             _assert(research_rows.count() > 0, "research tree must expose research decisions")
             research_rows.first.click()
-            _assert(page.locator('#inspectorContent [data-research-action="start"]').count() == 1, "research start control must remain in a stable position")
-            _assert(page.locator('#inspectorContent [data-research-action="pause"]').count() == 1, "research pause control must remain in a stable position")
-            _assert(page.locator('#inspectorContent [data-research-action="resume"]').count() == 1, "research resume control must remain in a stable position")
+            _assert(page.locator('#inspectorContent [data-lifecycle-control="research"]').count() == 1, "research must expose one stable lifecycle control")
             page.locator('[data-tab="overview"]').click()
 
             page.locator('[data-tab="scientific-exploration"]').click()
@@ -347,7 +346,37 @@ def run() -> dict[str, object]:
             exploration_assign_buttons = page.locator('#inspectorContent [data-exploration-assign]')
             _assert(exploration_assign_buttons.count() > 0, "exploration inspector must keep vehicle assignment controls visible before campaign start")
             _assert(all(not exploration_assign_buttons.nth(i).is_enabled() for i in range(exploration_assign_buttons.count())), "vehicle assignment must remain disabled until the campaign exists")
-            _assert(page.locator('#inspectorContent [data-exploration-action="start"]').is_enabled(), "campaign start action must remain available")
+            exploration_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="exploration"]')
+            _assert(exploration_lifecycle.count() == 1, "exploration must expose one lifecycle control")
+            _assert(exploration_lifecycle.get_attribute('data-exploration-action') == 'start' and exploration_lifecycle.is_enabled(), "campaign lifecycle control must expose start when startable")
+            page.locator('[data-tab="overview"]').click()
+
+            page.locator(f'[data-location-id="{ids.EARTH}"]').click()
+            page.locator('[data-tab="survey"]').click()
+            known_survey = page.locator(f'tr[data-inspect="survey"][data-id="{ids.WATER}"]')
+            known_survey.wait_for(timeout=10000)
+            _assert("完了" in known_survey.inner_text(), "initial knowledge must not appear as an active survey campaign")
+            known_survey.click()
+            known_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey"]')
+            _assert(known_lifecycle.count() == 1, "survey must expose one stable lifecycle control")
+            _assert(known_lifecycle.is_disabled() and "完了" in known_lifecycle.inner_text(), "completed initial knowledge must expose a disabled completed lifecycle state")
+
+            page.locator(f'[data-location-id="{ids.SOUTH_POLAR_RIDGE}"]').click()
+            page.locator('[data-tab="survey"]').click()
+            survey_row = page.locator(f'tr[data-inspect="survey"][data-id="{ids.WATER}"]')
+            survey_row.wait_for(timeout=10000)
+            survey_row.click()
+            _assert(page.locator('#surveyWeightInput').is_enabled(), "startable survey must expose initial allocation")
+            _assert(float(page.locator('#surveyWeightInput').input_value()) == 1.0, "survey initial allocation must come from the application contract")
+            page.locator('#surveyWeightInput').fill("0.5")
+            survey_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey"]')
+            _assert(survey_lifecycle.get_attribute('data-survey-action') == 'start', "unstarted survey lifecycle control must expose start")
+            survey_lifecycle.click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            survey_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey"]')
+            _assert(survey_lifecycle.get_attribute('data-survey-action') == 'pause' and survey_lifecycle.is_enabled(), "active survey lifecycle control must transition to pause")
+            _assert(page.locator('#inspectorContent [data-set-survey-weight]').is_enabled(), "active survey must expose allocation command")
+            _assert(float(page.locator('#surveyWeightInput').input_value()) == 0.5, "survey start allocation must round-trip through the UI")
             page.locator('[data-tab="overview"]').click()
 
             page.locator('[data-time-speed="4"]').click()

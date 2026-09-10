@@ -19,14 +19,7 @@ class SurveyProgressionProjectorMixin:
             campaign = sim.survey.campaigns.get((loc, resource_id))
             power = sim.power.snapshot(loc, sim.facilities, sim.day)
             capacity = sim.survey.capacity_at(loc, power, sim.day)
-            blockers: list[str] = []
-            if campaign is not None:
-                if campaign.paused:
-                    blockers.append("manual_pause")
-                if campaign.allocation_weight <= 1e-12:
-                    blockers.append("allocation")
-                if capacity <= 1e-12:
-                    blockers.append("survey_capacity")
+            complete = sim.survey.is_complete(loc, resource_id)
             visible_reserve = sim.survey.visible_reserve(loc, resource_id)
             if visible_reserve is not None and sim.extraction is not None:
                 visible_reserve = sim.extraction.remaining_reserve_t.get(
@@ -39,16 +32,21 @@ class SurveyProgressionProjectorMixin:
                     str(resource_id),
                     self._resource_name(resource_id),
                     campaign is not None,
-                    sim.survey.is_complete(loc, resource_id),
+                    complete,
                     False if campaign is None else campaign.paused,
-                    0.0 if campaign is None else campaign.progress,
+                    sim.survey.can_start(loc, resource_id),
+                    sim.survey.can_pause(loc, resource_id),
+                    sim.survey.can_resume(loc, resource_id),
+                    sim.survey.can_set_allocation(loc, resource_id),
+                    sim.survey.progress(loc, resource_id),
+                    sim.survey.DEFAULT_ALLOCATION_WEIGHT,
                     0.0 if campaign is None else campaign.allocation_weight,
                     sim.survey.knowledge_level(loc, resource_id),
                     sim.survey.visible_presence_probability(loc, resource_id),
                     sim.survey.visible_concentration(loc, resource_id),
                     visible_reserve,
                     capacity,
-                    tuple(blockers),
+                    sim.survey.blockers(loc, resource_id, power, sim.day),
                 )
             )
         return SurveysView(tuple(rows))

@@ -64,7 +64,7 @@
   }
 
   function renderSurveyTab(){
-    const rows=(state.surveys?.items||[]).map((s)=>`<tr class="selectable" data-inspect="survey" data-id="${esc(s.resource_id)}"><td><div class="cell-main">${esc(s.resource_name)}</div><div class="cell-sub">知識Lv ${s.knowledge_level}</div></td><td>${s.active?(s.paused?'<span class="badge warn">停止</span>':'<span class="badge ok">探査中</span>'):'<span class="badge">未開始</span>'}</td><td>${pct(s.progress)}</td><td>${fmt(s.capacity_points_per_day,2)}</td><td>${s.presence_probability==null?'—':pct(s.presence_probability)}</td><td>${s.visible_reserve_t==null?'—':fmt(s.visible_reserve_t)}</td></tr>`).join('');
+    const rows=(state.surveys?.items||[]).map((s)=>{const status=s.complete?'<span class="badge ok">完了</span>':s.active?(s.paused?'<span class="badge warn">停止</span>':'<span class="badge ok">探査中</span>'):'<span class="badge">未開始</span>';return `<tr class="selectable" data-inspect="survey" data-id="${esc(s.resource_id)}"><td><div class="cell-main">${esc(s.resource_name)}</div><div class="cell-sub">知識Lv ${s.knowledge_level}</div></td><td>${status}</td><td>${pct(s.progress)}</td><td>${fmt(s.capacity_points_per_day,2)}</td><td>${s.presence_probability==null?'—':pct(s.presence_probability)}</td><td>${s.visible_reserve_t==null?'—':fmt(s.visible_reserve_t)}</td></tr>`;}).join('');
     return `<section class="card"><div class="card-heading"><h3>地点探査</h3></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>状態</th><th>進捗</th><th>能力/日</th><th>存在確率</th><th>推定埋蔵量</th></tr></thead><tbody>${rows||'<tr><td colspan="6">この地点に探査対象なし</td></tr>'}</tbody></table></div></section>`;
   }
 
@@ -135,6 +135,13 @@
     return true;
   }
 
+  function lifecycleButton({domain,id,canStart,canPause,canResume,complete=false,startLabel,pauseLabel,resumeLabel,completeLabel='完了'}){
+    let action='start',label=startLabel,enabled=Boolean(canStart),primary=Boolean(canStart);
+    if(canPause){action='pause';label=pauseLabel;enabled=true;primary=false;}
+    else if(canResume){action='resume';label=resumeLabel;enabled=true;primary=true;}
+    else if(complete)return `<button type="button" data-lifecycle-control="${esc(domain)}" disabled>${esc(completeLabel)}</button>`;
+    return `<button type="button" ${primary?'class="primary" ':''}data-lifecycle-control="${esc(domain)}" data-${domain}-action="${action}" data-id="${esc(id)}" ${enabled?'':'disabled'}>${label}</button>`;
+  }
   function researchBlockers(r){return r.current_blockers||[];}
   function siteOptionsHtml(r,kind){
     const options=kind==='prototype'?(r.prototype_sites||[]):(r.demonstration_sites||[]),selected=kind==='prototype'?r.prototype_location_id:r.demonstration_location_id;
@@ -149,7 +156,7 @@
   }
   function renderResearchInspector(id){
     const r=state.research?.items?.find((x)=>x.id===id);if(!r)return false;
-    const action=`<button type="button" class="primary" data-research-action="start" data-id="${esc(r.id)}" ${r.can_start?'':'disabled'}>RP ${fmt(r.research_point_cost,1)} を支払い研究開始</button><button type="button" data-research-action="pause" data-id="${esc(r.id)}" ${r.can_pause?'':'disabled'}>研究停止</button><button type="button" data-research-action="resume" data-id="${esc(r.id)}" ${r.can_resume?'':'disabled'}>研究再開</button>`;
+    const action=lifecycleButton({domain:'research',id:r.id,canStart:r.can_start,canPause:r.can_pause,canResume:r.can_resume,complete:r.status==='complete',startLabel:`RP ${fmt(r.research_point_cost,1)} を支払い研究開始`,pauseLabel:'研究停止',resumeLabel:'研究再開',completeLabel:'研究完了'});
     const phaseBlockers=researchBlockers(r);let phase='';
     if(r.status==='prototype'){
       const resources=(r.prototype_resources||[]).map(([resource,amount])=>`${esc(resourceName(resource))} ${fmt(amount)}t`).join(' / ')||'追加資材なし';
@@ -170,10 +177,7 @@
     const inputs=(x.consumable_resources||[]).map(([rid,amount])=>`${esc(resourceName(rid))} ${fmt(amount)}t`).join(' / ')||'追加消耗資源なし';
     const operations=(x.operations||[]).map(([op,dv])=>`${esc(A.operationName(op))} ${fmt(dv,2)} km/s`).join(' / ')||'—';
     const blockers=x.blockers||[];
-    let action='';
-    if(x.can_start)action+=`<button type="button" class="primary" data-exploration-action="start" data-id="${esc(x.id)}">Campaign開始</button>`;
-    if(x.can_resume)action+=`<button type="button" data-exploration-action="resume" data-id="${esc(x.id)}">再開</button>`;
-    if(x.can_pause)action+=`<button type="button" data-exploration-action="pause" data-id="${esc(x.id)}">停止</button>`;
+    let action=lifecycleButton({domain:'exploration',id:x.id,canStart:x.can_start,canPause:x.can_pause,canResume:x.can_resume,complete:x.status==='complete',startLabel:'Campaign開始',pauseLabel:'停止',resumeLabel:'再開',completeLabel:'Campaign完了'});
     if(x.can_unassign)action+=`<button type="button" data-exploration-unassign="${esc(x.id)}">Vehicle割当解除</button>`;
     setInspector(x.display_name,
       section('Campaign',kv([['出発',esc(locationName(x.origin_id))],['対象/到着',esc(locationName(x.destination_id))],['Mission Duration要件',`${fmt(x.mission_duration_days,0)}日`],['Campaign所要期間',`${fmt(x.duration_days,1)}日`],['進捗',`${fmt(x.progress_days,1)}日`],['期待RP',fmt(x.research_points_total,1)],['RP/日',fmt(x.research_points_per_day,2)],['獲得済RP',fmt(x.research_points_awarded,1)],['割当Vehicle',x.assigned_vehicle_id?esc(x.assigned_vehicle_id):'未割当']]))+
@@ -187,8 +191,9 @@
 
   function renderSurveyInspector(id){
     const s=state.surveys?.items?.find((x)=>x.resource_id===id);if(!s)return false;
-    const action=s.active?(s.paused?`<button data-survey-action="resume" data-id="${esc(id)}">探査再開</button>`:`<button data-survey-action="pause" data-id="${esc(id)}">探査停止</button>`):`<button class="primary" data-survey-action="start" data-id="${esc(id)}">探査開始</button>`;
-    setInspector(s.resource_name,section('探査状態',kv([['進捗',pct(s.progress)],['知識レベル',String(s.knowledge_level)],['能力/日',fmt(s.capacity_points_per_day,2)],['存在確率',s.presence_probability==null?'—':pct(s.presence_probability)],['推定埋蔵量',s.visible_reserve_t==null?'—':`${fmt(s.visible_reserve_t)} t`]]))+section('操作',`<div class="action-stack">${action}<div class="form-row"><label>探査配分<input id="surveyWeightInput" type="number" min="0" step="0.1" value="${s.allocation_weight||1}"></label><button data-set-survey-weight="${esc(id)}">配分を適用</button></div></div>`));return true;
+    const blockers=s.blockers||[],weightEditable=s.can_start||s.can_set_allocation,weight=s.active?s.allocation_weight:s.default_allocation_weight;
+    const actions=lifecycleButton({domain:'survey',id,canStart:s.can_start,canPause:s.can_pause,canResume:s.can_resume,complete:s.complete,startLabel:'探査開始',pauseLabel:'探査停止',resumeLabel:'探査再開',completeLabel:'探査完了'});
+    setInspector(s.resource_name,section('探査状態',kv([['進捗',pct(s.progress)],['知識レベル',String(s.knowledge_level)],['能力/日',fmt(s.capacity_points_per_day,2)],['存在確率',s.presence_probability==null?'—':pct(s.presence_probability)],['推定埋蔵量',s.visible_reserve_t==null?'—':`${fmt(s.visible_reserve_t)} t`]]))+section('現在のblocker',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+section('操作',`<div class="action-stack">${actions}<div class="form-row"><label>探査配分<input id="surveyWeightInput" type="number" min="0" step="0.1" value="${weight}" ${weightEditable?'':'disabled'}></label><button data-set-survey-weight="${esc(id)}" ${s.can_set_allocation?'':'disabled'}>配分を適用</button></div></div>`));return true;
   }
 
   function renderInspector(){
@@ -229,7 +234,7 @@
     const ea=event.target.closest('[data-exploration-action]');if(ea){const map={start:'StartScientificExploration',pause:'PauseScientificExploration',resume:'ResumeScientificExploration'};try{await command(map[ea.dataset.explorationAction],{exploration_id:ea.dataset.id});}catch{}return;}
     const assign=event.target.closest('[data-exploration-assign]');if(assign){try{await command('AssignExplorationVehicle',{exploration_id:assign.dataset.explorationAssign,vehicle_id:assign.dataset.vehicleId});}catch{}return;}
     const unassign=event.target.closest('[data-exploration-unassign]');if(unassign){try{await command('UnassignExplorationVehicle',{exploration_id:unassign.dataset.explorationUnassign});}catch{}return;}
-    const sa=event.target.closest('[data-survey-action]');if(sa){const map={start:'StartSurvey',pause:'PauseSurvey',resume:'ResumeSurvey'},payload={location_id:state.locationId,resource_id:sa.dataset.id};if(sa.dataset.surveyAction==='start')payload.allocation_weight=1;try{await command(map[sa.dataset.surveyAction],payload);}catch{}return;}
+    const sa=event.target.closest('[data-survey-action]');if(sa){const map={start:'StartSurvey',pause:'PauseSurvey',resume:'ResumeSurvey'},payload={location_id:state.locationId,resource_id:sa.dataset.id};if(sa.dataset.surveyAction==='start')payload.allocation_weight=Number($('#surveyWeightInput')?.value??1);try{await command(map[sa.dataset.surveyAction],payload);}catch{}return;}
     const sw=event.target.closest('[data-set-survey-weight]');if(sw){try{await command('SetSurveyAllocation',{location_id:state.locationId,resource_id:sw.dataset.setSurveyWeight,weight:Number($('#surveyWeightInput').value)});}catch{}return;}
   });
 

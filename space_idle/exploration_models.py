@@ -37,7 +37,6 @@ class SurveyProviderSpec:
 class SurveyCampaign:
     location_id: SpatialNodeId
     resource_id: DefinitionId
-    progress: float = 0.0
     allocation_weight: float = 1.0
     paused: bool = False
 

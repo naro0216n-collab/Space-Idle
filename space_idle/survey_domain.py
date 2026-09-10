@@ -10,27 +10,46 @@ from .shared import DefinitionId, SpatialNodeId
 
 def capture_survey(sim: Any) -> dict[str, Any]:
     if sim.survey is None:
-        return {"campaigns": []}
+        return {"knowledge_progress": [], "campaigns": []}
     return {
+        "knowledge_progress": [
+            {"location_id": str(loc), "resource_id": str(res), "progress": progress}
+            for (loc, res), progress in sorted(
+                sim.survey.knowledge_progress.items(),
+                key=lambda x: (str(x[0][0]), str(x[0][1])),
+            )
+        ],
         "campaigns": [
             {
-                "location_id": str(c.location_id), "resource_id": str(c.resource_id),
-                "progress": c.progress, "allocation_weight": c.allocation_weight, "paused": c.paused,
+                "location_id": str(c.location_id),
+                "resource_id": str(c.resource_id),
+                "allocation_weight": c.allocation_weight,
+                "paused": c.paused,
             }
-            for _, c in sorted(sim.survey.campaigns.items(), key=lambda x: (str(x[0][0]), str(x[0][1])))
-        ]
+            for _, c in sorted(
+                sim.survey.campaigns.items(),
+                key=lambda x: (str(x[0][0]), str(x[0][1])),
+            )
+        ],
     }
 
 
 def restore_survey(sim: Any, data: dict[str, Any]) -> None:
     if sim.survey is None:
         return
+    sim.survey.knowledge_progress = {
+        (SpatialNodeId(r["location_id"]), DefinitionId(r["resource_id"])): float(r["progress"])
+        for r in data.get("knowledge_progress", [])
+    }
     sim.survey.campaigns.clear()
     for r in data.get("campaigns", []):
         loc = SpatialNodeId(r["location_id"])
         res = DefinitionId(r["resource_id"])
         sim.survey.campaigns[(loc, res)] = SurveyCampaign(
-            loc, res, float(r["progress"]), float(r["allocation_weight"]), bool(r["paused"])
+            loc,
+            res,
+            allocation_weight=float(r["allocation_weight"]),
+            paused=bool(r["paused"]),
         )
 
 
@@ -102,10 +121,17 @@ def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
 def validate_survey_runtime(sim: Any) -> None:
     if sim.survey is None:
         return
+    for key, progress in sim.survey.knowledge_progress.items():
+        _require(key in sim.survey.targets, f"knowledge references unknown survey target: {key}")
+        _require(progress >= -1e-9, f"negative survey knowledge progress: {key}")
+        _require(
+            progress <= sim.survey.targets[key].thresholds[-1] + 1e-8,
+            f"survey knowledge exceeds final threshold: {key}",
+        )
     for key, campaign in sim.survey.campaigns.items():
         _require(key == (campaign.location_id, campaign.resource_id), f"survey campaign key mismatch: {key}")
         _require(key in sim.survey.targets, f"campaign references unknown survey target: {key}")
-        _require(campaign.progress >= -1e-9, f"negative survey progress: {key}")
+        _require(not sim.survey.is_complete(*key), f"completed survey retains active campaign: {key}")
         _require(campaign.allocation_weight >= 0, f"negative survey allocation: {key}")
 
 

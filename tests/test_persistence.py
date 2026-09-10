@@ -18,6 +18,7 @@ from space_idle import (
     ProduceVehicle,
     RefuelVehicle,
     StartResearch,
+    StartSurvey,
     SubmitCargo,
 )
 from space_idle.content.base_game import (
@@ -36,6 +37,7 @@ from space_idle.content.base_game import (
     TECH_ORBITAL_OPERATIONS,
 )
 from space_idle.persistence import capture_state, load_game, save_game
+from space_idle.content import base_ids as ids
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.shared import RouteId
 
@@ -112,6 +114,31 @@ def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
     app.execute(AdvanceTime(7))
     loaded.execute(AdvanceTime(7))
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
+
+
+def test_save_load_preserves_survey_knowledge_separately_from_active_campaign(tmp_path):
+    app = build_game_application()
+    sim = app._simulation
+    active_key = (ids.SOUTH_POLAR_RIDGE, ids.WATER)
+    known_key = (ids.EARTH, ids.WATER)
+    target = sim.survey.targets[active_key]
+
+    app.execute(StartSurvey(str(active_key[0]), str(active_key[1]), allocation_weight=0.75))
+    sim.survey.knowledge_progress[active_key] = target.thresholds[0] / 2.0
+
+    assert known_key not in sim.survey.campaigns
+    assert active_key in sim.survey.campaigns
+
+    path = tmp_path / "survey-knowledge.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application)
+
+    loaded_survey = loaded._simulation.survey
+    assert loaded_survey.knowledge_progress == sim.survey.knowledge_progress
+    assert known_key not in loaded_survey.campaigns
+    assert active_key in loaded_survey.campaigns
+    assert loaded_survey.campaigns[active_key].allocation_weight == 0.75
+    assert capture_state(loaded._simulation) == capture_state(sim)
 
 
 def test_offline_progress_is_the_normal_simulation_path(tmp_path):

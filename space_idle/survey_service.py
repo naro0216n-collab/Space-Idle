@@ -9,18 +9,104 @@ from .exploration_models import KnowledgeLevel, SurveyTarget, SurveyProviderSpec
 
 @dataclass
 class SurveyService:
+    DEFAULT_ALLOCATION_WEIGHT = 1.0
+
     targets: dict[tuple[SpatialNodeId, DefinitionId], SurveyTarget]
     providers: dict[DefinitionId, SurveyProviderSpec]
     facilities: FacilityBook
+    knowledge_progress: dict[tuple[SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
     campaigns: dict[tuple[SpatialNodeId, DefinitionId], SurveyCampaign] = field(default_factory=dict)
 
-    def start(self, location_id: SpatialNodeId, resource_id: DefinitionId, *, allocation_weight: float = 1.0) -> None:
+    def start_blockers(
+        self, location_id: SpatialNodeId, resource_id: DefinitionId
+    ) -> tuple[str, ...]:
         key = (location_id, resource_id)
         if key not in self.targets:
-            raise KeyError(key)
+            return ("unknown_target",)
+        if self.is_complete(location_id, resource_id):
+            return ("survey_complete",)
+        if key in self.campaigns:
+            return ("already_active",)
+        return ()
+
+    def can_start(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> bool:
+        return not self.start_blockers(location_id, resource_id)
+
+    def pause_blockers(
+        self, location_id: SpatialNodeId, resource_id: DefinitionId
+    ) -> tuple[str, ...]:
+        key = (location_id, resource_id)
+        campaign = self.campaigns.get(key)
+        if campaign is None or self.is_complete(location_id, resource_id):
+            return ("not_active",)
+        if campaign.paused:
+            return ("already_paused",)
+        return ()
+
+    def can_pause(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> bool:
+        return not self.pause_blockers(location_id, resource_id)
+
+    def resume_blockers(
+        self, location_id: SpatialNodeId, resource_id: DefinitionId
+    ) -> tuple[str, ...]:
+        key = (location_id, resource_id)
+        campaign = self.campaigns.get(key)
+        if campaign is None or self.is_complete(location_id, resource_id):
+            return ("not_active",)
+        if not campaign.paused:
+            return ("not_paused",)
+        return ()
+
+    def can_resume(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> bool:
+        return not self.resume_blockers(location_id, resource_id)
+
+    def allocation_blockers(
+        self, location_id: SpatialNodeId, resource_id: DefinitionId
+    ) -> tuple[str, ...]:
+        key = (location_id, resource_id)
+        if key not in self.campaigns or self.is_complete(location_id, resource_id):
+            return ("not_active",)
+        return ()
+
+    def can_set_allocation(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> bool:
+        return not self.allocation_blockers(location_id, resource_id)
+
+    def blockers(
+        self,
+        location_id: SpatialNodeId,
+        resource_id: DefinitionId,
+        power: PowerSnapshot | None = None,
+        day: int = 0,
+    ) -> tuple[str, ...]:
+        key = (location_id, resource_id)
+        campaign = self.campaigns.get(key)
+        if campaign is None or self.is_complete(location_id, resource_id):
+            return ()
+        blockers: list[str] = []
+        if campaign.paused:
+            blockers.append("manual_pause")
+        if campaign.allocation_weight <= 1e-12:
+            blockers.append("allocation")
+        if self.capacity_at(location_id, power, day) <= 1e-12:
+            blockers.append("survey_capacity")
+        return tuple(blockers)
+
+    def start(
+        self,
+        location_id: SpatialNodeId,
+        resource_id: DefinitionId,
+        *,
+        allocation_weight: float = DEFAULT_ALLOCATION_WEIGHT,
+    ) -> None:
+        key = (location_id, resource_id)
+        blockers = self.start_blockers(location_id, resource_id)
+        if blockers:
+            raise ValueError("; ".join(blockers))
         if allocation_weight < 0:
             raise ValueError("allocation weight must be non-negative")
-        self.campaigns.setdefault(key, SurveyCampaign(location_id, resource_id, 0.0, allocation_weight))
+        self.campaigns[key] = SurveyCampaign(
+            location_id, resource_id, allocation_weight=allocation_weight
+        )
 
     def initialize_known(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> None:
         """Seed Content-defined prior knowledge without exposing campaign State."""
@@ -28,26 +114,41 @@ class SurveyService:
         if key not in self.targets:
             raise KeyError(key)
         target = self.targets[key]
-        campaign = self.campaigns.setdefault(
-            key, SurveyCampaign(location_id, resource_id, 0.0, 1.0)
+        self.knowledge_progress[key] = max(
+            self.knowledge_progress.get(key, 0.0), target.thresholds[-1]
         )
-        campaign.progress = max(campaign.progress, target.thresholds[-1])
+        self.campaigns.pop(key, None)
 
     def set_allocation_weight(self, location_id: SpatialNodeId, resource_id: DefinitionId, weight: float) -> None:
+        blockers = self.allocation_blockers(location_id, resource_id)
+        if blockers:
+            raise ValueError("; ".join(blockers))
         if weight < 0:
             raise ValueError("allocation weight must be non-negative")
         self.campaigns[(location_id, resource_id)].allocation_weight = weight
 
     def pause(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> None:
+        blockers = self.pause_blockers(location_id, resource_id)
+        if blockers:
+            raise ValueError("; ".join(blockers))
         self.campaigns[(location_id, resource_id)].paused = True
 
     def resume(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> None:
+        blockers = self.resume_blockers(location_id, resource_id)
+        if blockers:
+            raise ValueError("; ".join(blockers))
         self.campaigns[(location_id, resource_id)].paused = False
+
+    def progress(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float:
+        key = (location_id, resource_id)
+        if key not in self.targets:
+            raise KeyError(key)
+        return self.knowledge_progress.get(key, 0.0)
 
     def knowledge_level(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> KnowledgeLevel:
         key = (location_id, resource_id)
         target = self.targets[key]
-        progress = self.campaigns.get(key, SurveyCampaign(location_id, resource_id)).progress
+        progress = self.knowledge_progress.get(key, 0.0)
         level = 0
         for index, threshold in enumerate(target.thresholds, start=1):
             if progress + 1e-9 >= threshold:
@@ -119,14 +220,19 @@ class SurveyService:
                 consumed = 0.0
                 for campaign in active:
                     final_threshold = self.targets[(campaign.location_id, campaign.resource_id)].thresholds[-1]
-                    need = max(0.0, final_threshold - campaign.progress)
+                    key = (campaign.location_id, campaign.resource_id)
+                    progress = self.knowledge_progress.get(key, 0.0)
+                    need = max(0.0, final_threshold - progress)
                     gain = min(proposed[id(campaign)], need)
-                    campaign.progress += gain
+                    progress += gain
+                    self.knowledge_progress[key] = min(progress, final_threshold)
                     consumed += gain
-                    if campaign.progress + 1e-9 >= final_threshold:
-                        campaign.progress = max(campaign.progress, final_threshold)
+                    if progress + 1e-9 >= final_threshold:
                         completed_this_round.append(campaign)
                 remaining_points = max(0.0, remaining_points - consumed)
                 if not completed_this_round:
                     break
                 active = [c for c in active if c not in completed_this_round]
+            for campaign in campaigns:
+                if self.is_complete(campaign.location_id, campaign.resource_id):
+                    self.campaigns.pop((campaign.location_id, campaign.resource_id), None)
