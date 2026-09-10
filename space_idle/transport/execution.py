@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..shared import CargoOrderId, DefinitionId, EntityId, RouteId, SpatialNodeId
-from .models import VehicleDisposition, VehicleStatus, MissionStatus, RouteDef, VehicleDef, VehicleState, TransportMissionState, CargoOrder, VehicleTransit
+from .models import OperationAssetDisposition, VehicleStatus, MissionStatus, RouteDef, VehicleDef, VehicleState, TransportMissionState, CargoOrder, VehicleTransit
 
 
 class TransportExecutionMixin:
@@ -13,7 +13,7 @@ class TransportExecutionMixin:
         def _new_mission(
             self, order_id: CargoOrderId, leg_index: int, amount_t: float, mode_id: str,
             day: int, arrival_day: int, vehicle_id: EntityId | None = None,
-            disposition: VehicleDisposition = VehicleDisposition.DESTINATION,
+            disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION,
             handoff_vehicle_id: EntityId | None = None,
         ) -> TransportMissionState:
             self._mission_counter += 1
@@ -80,7 +80,7 @@ class TransportExecutionMixin:
         def _can_continue_same_vehicle(
             self, mission: TransportMissionState, order: CargoOrder, next_leg: int, day: int
         ) -> bool:
-            if mission.vehicle_id is None or mission.vehicle_disposition is not VehicleDisposition.DESTINATION:
+            if mission.vehicle_id is None or mission.vehicle_disposition is not OperationAssetDisposition.DESTINATION:
                 return False
             state = self.vehicles[mission.vehicle_id]
             definition = self.vehicle_defs[state.definition_id]
@@ -121,7 +121,7 @@ class TransportExecutionMixin:
             mission.departure_day = day
             mission.arrival_day = day + transit_days
             mission.status = MissionStatus.IN_TRANSIT
-            mission.vehicle_disposition = definition.default_disposition
+            mission.vehicle_disposition = definition.route_asset_disposition(next_route)
             return True
 
         def _attempt_mission_arrival(self, mission: TransportMissionState, through_day: int) -> bool:
@@ -133,7 +133,7 @@ class TransportExecutionMixin:
 
             # A carrier that accompanies the payload is physically present at the
             # waypoint before unloading/continuation. A returning carrier is not.
-            if mission.vehicle_id is not None and mission.vehicle_disposition is VehicleDisposition.DESTINATION:
+            if mission.vehicle_id is not None and mission.vehicle_disposition is OperationAssetDisposition.DESTINATION:
                 state = self.vehicles[mission.vehicle_id]
                 state.location_id = route.destination_id
                 state.transit_destination_id = None
@@ -156,7 +156,7 @@ class TransportExecutionMixin:
                         handoff_state.available_day = through_day
                         mission.vehicle_id = handoff_state.id
                         mission.handoff_vehicle_id = None
-                        mission.vehicle_disposition = handoff_definition.default_disposition
+                        mission.vehicle_disposition = handoff_definition.route_asset_disposition(self.routes[order.path[next_leg]])
                         if self._continue_mission_same_vehicle(mission, order, next_leg, through_day):
                             return True
                         mission.status = MissionStatus.WAYPOINT_WAIT
@@ -235,7 +235,7 @@ class TransportExecutionMixin:
             if next_leg >= len(order.path):
                 return None
             carrier = self.vehicle_defs[carrier_state.definition_id]
-            if carrier.default_disposition is not VehicleDisposition.RETURN_TO_ORIGIN:
+            if carrier.route_asset_disposition(self.routes[order.path[leg_index]]) is not OperationAssetDisposition.ORIGIN:
                 return None
             next_route_id = order.path[next_leg]
             mode_id = order.mode_by_route.get(next_route_id)
@@ -245,7 +245,7 @@ class TransportExecutionMixin:
             if definition_id not in self.vehicle_defs:
                 return None
             onward = self.vehicle_defs[definition_id]
-            if onward.default_disposition is not VehicleDisposition.DESTINATION:
+            if onward.route_asset_disposition(self.routes[next_route_id]) is not OperationAssetDisposition.DESTINATION:
                 return None
             if self.vehicle_route_failures(next_route_id, definition_id, day):
                 return None
@@ -266,7 +266,7 @@ class TransportExecutionMixin:
 
         def _prepare_owned_vehicle_departure(
             self, state: VehicleState, route: RouteDef, day: int, order: CargoOrder, leg_index: int, cargo_t: float
-        ) -> tuple[VehicleDisposition, VehicleState | None, int] | None:
+        ) -> tuple[OperationAssetDisposition, VehicleState | None, int] | None:
             definition = self.vehicle_defs[state.definition_id]
             handoff_state = self._handoff_vehicle_for_leg(order, leg_index, state, cargo_t, day)
             next_leg = leg_index + 1
@@ -289,8 +289,8 @@ class TransportExecutionMixin:
             if not self._pay_vehicle_mission(state, definition, route, payload_mass, day):
                 return None
             transit_days = max(1, round(route.transit_days * definition.transit_time_multiplier))
-            disposition = definition.default_disposition
-            if disposition is VehicleDisposition.DESTINATION:
+            disposition = definition.route_asset_disposition(route)
+            if disposition is OperationAssetDisposition.DESTINATION:
                 state.location_id = None
                 state.status = VehicleStatus.TRANSIT
                 state.transit_destination_id = route.destination_id
@@ -345,7 +345,7 @@ class TransportExecutionMixin:
                 mission.arrival_day = day + transit_days
                 mission.vehicle_id = None
                 mission.handoff_vehicle_id = None
-                mission.vehicle_disposition = VehicleDisposition.DESTINATION
+                mission.vehicle_disposition = OperationAssetDisposition.DESTINATION
                 mission.status = MissionStatus.IN_TRANSIT
                 mission.onboard = True
                 return True
@@ -407,7 +407,7 @@ class TransportExecutionMixin:
                 if not self._pay_vehicle_mission(carrier_state, carrier, route, transport_mass_t, day):
                     raise ValueError("insufficient funds, propellant, or refueling infrastructure for carrier movement")
                 transit_days = max(1, round(route.transit_days * carrier.transit_time_multiplier))
-                if carrier.default_disposition is VehicleDisposition.DESTINATION:
+                if carrier.route_asset_disposition(route) is OperationAssetDisposition.DESTINATION:
                     carrier_state.location_id = None
                     carrier_state.status = VehicleStatus.TRANSIT
                     carrier_state.transit_destination_id = route.destination_id
@@ -421,7 +421,7 @@ class TransportExecutionMixin:
                 state.transit_destination_id = route.destination_id
                 self.vehicle_transit.append(VehicleTransit(vehicle_id, route_id, day + transit_days, False))
                 return
-            if definition.default_disposition is not VehicleDisposition.DESTINATION:
+            if definition.route_asset_disposition(route) is not OperationAssetDisposition.DESTINATION:
                 raise ValueError("vehicle mission profile returns to origin; use it as a carrier rather than repositioning it")
             if state.location_id != route.origin_id or state.status != VehicleStatus.AVAILABLE or state.available_day > day:
                 raise ValueError("vehicle is not available at route origin")

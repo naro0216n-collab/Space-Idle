@@ -14,7 +14,7 @@ from ..logistics import (
     TransportOperationRequirement,
     TransportPerformanceProfile,
     VehicleDef,
-    VehicleDisposition,
+    OperationAssetDisposition,
     VehicleMaintenanceSpec,
     VehicleProductionSpec,
 )
@@ -97,7 +97,8 @@ def build_external_transport_services() -> dict:
     )
     orbital = TransportPerformanceProfile(
         dry_mass_t=12.0, payload_t=20.0,
-        operation_capabilities=(SpaceflightCapability(6.0, 120),),
+        operation_capabilities=(SpaceflightCapability(6.0),),
+        endurance_days=120.0,
     )
     lander = TransportPerformanceProfile(
         dry_mass_t=7.0, payload_t=8.0,
@@ -105,7 +106,8 @@ def build_external_transport_services() -> dict:
     )
     direct = TransportPerformanceProfile(
         dry_mass_t=120.0, payload_t=18.0,
-        operation_capabilities=(PoweredAscentCapability(10.2, 11.0, 120000.0), SpaceflightCapability(5.0, 30), LandingCapability(2.5, 2.5, 2000.0)),
+        operation_capabilities=(PoweredAscentCapability(10.2, 11.0, 120000.0), SpaceflightCapability(5.0), LandingCapability(2.5, 2.5, 2000.0)),
+        endurance_days=30.0,
     )
     return {
         ids.EARTH_LEO_LAUNCH_SERVICE: ExternalTransportServiceDef(ids.EARTH_LEO_LAUNCH_SERVICE, "商業地表打上げ", 1.6, 4.0, launch, origin_requirements=req.ATMOSPHERIC_SURFACE_SITE, destination_requirements=req.ORBIT_SITE),
@@ -131,9 +133,9 @@ def build_vehicle_definitions() -> dict:
                 dry_mass_t=80.0, payload_t=25.0,
                 propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=45.0,
                 propellant_t_per_total_t_per_km_s=0.040,
-                operation_capabilities=(PoweredAscentCapability(10.0, 10.0, 110000.0),),
+                operation_capabilities=(PoweredAscentCapability(10.0, 10.0, 110000.0, OperationAssetDisposition.ORIGIN),),
                 operation_support_requirements=(OperationSupportRequirement(TransportOperationKind.POWERED_ASCENT, OperationSupportLocation.ORIGIN, "launch_operations"),),
-                default_disposition=VehicleDisposition.RETURN_TO_ORIGIN,
+                endurance_days=14.0,
             ),
             production=VehicleProductionSpec(
                 capability_id="vehicle_assembly", days=10.0,
@@ -148,8 +150,8 @@ def build_vehicle_definitions() -> dict:
                 dry_mass_t=8.0, payload_t=12.0,
                 propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=4.0,
                 propellant_t_per_total_t_per_km_s=0.020,
-                operation_capabilities=(SpaceflightCapability(5.0, 60),),
-                default_disposition=VehicleDisposition.DESTINATION,
+                operation_capabilities=(SpaceflightCapability(5.0),),
+                endurance_days=60.0,
             ),
             production=VehicleProductionSpec(
                 capability_id="vehicle_assembly", days=4.0,
@@ -164,8 +166,8 @@ def build_vehicle_definitions() -> dict:
                 dry_mass_t=5.0, payload_t=6.0,
                 propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=3.0,
                 propellant_t_per_total_t_per_km_s=0.030,
-                operation_capabilities=(SpaceflightCapability(5.0, 30), PoweredAscentCapability(2.1, 2.0, 1000.0), LandingCapability(2.1, 2.0, 1000.0)),
-                default_disposition=VehicleDisposition.DESTINATION,
+                operation_capabilities=(SpaceflightCapability(5.0), PoweredAscentCapability(2.1, 2.0, 1000.0), LandingCapability(2.1, 2.0, 1000.0)),
+                endurance_days=30.0,
             ),
             production=VehicleProductionSpec(
                 capability_id="vehicle_assembly", days=3.0,

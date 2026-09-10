@@ -206,3 +206,24 @@ def test_construction_queries_expose_authoritative_project_controls():
     assert updated.construction_weight == 2.5
     assert updated.sourcing_policy == "import_now"
     assert updated.import_source_id is None
+
+
+def test_vehicle_catalog_exposes_endurance_and_operation_asset_recovery_semantics():
+    app = build_game_application()
+    catalog = app.query(GetCatalog())
+
+    launch = next(
+        row for row in catalog.vehicles
+        if row.id == str(ids.REUSABLE_LAUNCH_VEHICLE)
+    )
+    tug = next(
+        row for row in catalog.vehicles
+        if row.id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+    )
+    ascent = next(
+        capability for capability in launch.operation_capability_details
+        if capability.operation_type == "powered_ascent"
+    )
+
+    assert tug.endurance_days == pytest.approx(60.0)
+    assert ("asset_disposition", "origin") in ascent.parameters

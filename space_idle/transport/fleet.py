@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..shared import CargoOrderId, DefinitionId, EntityId, RouteId, SpatialNodeId
-from .models import VehicleDisposition, VehicleStatus, RouteDef, VehicleDef, VehicleState, TransportMissionState
+from .models import OperationAssetDisposition, VehicleStatus, RouteDef, VehicleDef, VehicleState, TransportMissionState
 
 
 class FleetManagementMixin:
@@ -235,7 +235,7 @@ class FleetManagementMixin:
                 return
             state = self.vehicles[mission.vehicle_id]
             definition = self.vehicle_defs[state.definition_id]
-            if mission.vehicle_disposition is VehicleDisposition.RETURN_TO_ORIGIN:
+            if mission.vehicle_disposition is OperationAssetDisposition.ORIGIN:
                 # A returned carrier is released from the cargo mission once. Cargo
                 # may remain arrival-waiting for storage without resetting vehicle
                 # maintenance every simulation day.

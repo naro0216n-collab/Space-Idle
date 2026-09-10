@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .logistics import VehicleDisposition
+from .logistics import OperationAssetDisposition
 
 
 def vehicle_concept(definition: object) -> str:
@@ -8,7 +8,7 @@ def vehicle_concept(definition: object) -> str:
     return (
         "launch_vehicle"
         if definition.powered_ascent is not None
-        and definition.default_disposition is VehicleDisposition.RETURN_TO_ORIGIN
+        and definition.powered_ascent.asset_disposition is OperationAssetDisposition.ORIGIN
         and definition.spaceflight is None
         else "spacecraft"
     )

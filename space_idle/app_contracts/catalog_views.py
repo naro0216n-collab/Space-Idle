@@ -76,6 +76,7 @@ class VehicleDefinitionRow:
     concept: str
     dry_mass_t: float
     payload_t: float
+    endurance_days: float | None
     propellant_capacity_t: float
     propellant_resource_id: str | None
     capabilities: tuple[str, ...]

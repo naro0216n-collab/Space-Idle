@@ -1,6 +1,6 @@
 from .models import (
     POWERED_ASCENT, SPACEFLIGHT, LANDING, ATMOSPHERIC_ENTRY,
-    TransportOperationKind, VehicleDisposition, PathPolicy, VehicleStatus,
+    TransportOperationKind, OperationAssetDisposition, PathPolicy, VehicleStatus,
     MissionStatus, OperationSupportLocation, OperationCapability,
     OperationSupportRequirement, TransportOperationRequirement, RouteDef,
     PoweredAscentCapability, SpaceflightCapability, LandingCapability,
@@ -17,7 +17,7 @@ from .operations import (
 
 __all__ = [
     'POWERED_ASCENT', 'SPACEFLIGHT', 'LANDING', 'ATMOSPHERIC_ENTRY',
-    'TransportOperationKind', 'VehicleDisposition', 'PathPolicy', 'VehicleStatus',
+    'TransportOperationKind', 'OperationAssetDisposition', 'PathPolicy', 'VehicleStatus',
     'MissionStatus', 'OperationSupportLocation', 'OperationCapability',
     'OperationSupportRequirement', 'TransportOperationRequirement', 'RouteDef',
     'PoweredAscentCapability', 'SpaceflightCapability', 'LandingCapability',

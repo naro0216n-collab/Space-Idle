@@ -20,9 +20,11 @@ class TransportOperationKind:
     ATMOSPHERIC_ENTRY = ATMOSPHERIC_ENTRY
 
 
-class VehicleDisposition(str, Enum):
+class OperationAssetDisposition(str, Enum):
+    """Where the operated vehicle ends after completing one Transport Operation."""
+
     DESTINATION = "destination"
-    RETURN_TO_ORIGIN = "return_to_origin"
+    ORIGIN = "origin"
 
 
 class PathPolicy(str, Enum):
@@ -106,13 +108,14 @@ class PoweredAscentCapability:
     max_delta_v_km_s: float
     max_surface_gravity_m_s2: float
     max_surface_pressure_pa: float
+    asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=POWERED_ASCENT)
 
 
 @dataclass(frozen=True)
 class SpaceflightCapability:
     max_delta_v_km_s: float
-    max_mission_days: int
+    asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=SPACEFLIGHT)
 
 
@@ -121,12 +124,14 @@ class LandingCapability:
     max_delta_v_km_s: float
     max_surface_gravity_m_s2: float
     max_surface_pressure_pa: float
+    asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=LANDING)
 
 
 @dataclass(frozen=True)
 class AtmosphericEntryCapability:
     max_surface_pressure_pa: float
+    asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=ATMOSPHERIC_ENTRY)
 
 
@@ -140,13 +145,35 @@ class TransportPerformanceProfile:
     propellant_t_per_total_t_per_km_s: float = 0.0
     operation_capabilities: tuple[OperationCapability, ...] = ()
     operation_support_requirements: tuple[OperationSupportRequirement, ...] = ()
-    default_disposition: VehicleDisposition = VehicleDisposition.DESTINATION
+    endurance_days: float | None = None
 
     def capability_for(self, operation_type: str) -> OperationCapability | None:
         for capability in self.operation_capabilities:
             if capability.operation_type == operation_type:
                 return capability
         return None
+
+    def operation_asset_disposition(self, operation_type: str) -> OperationAssetDisposition | None:
+        capability = self.capability_for(operation_type)
+        if capability is None:
+            return None
+        return getattr(capability, "asset_disposition", OperationAssetDisposition.DESTINATION)
+
+    def route_asset_disposition(self, route: RouteDef) -> OperationAssetDisposition:
+        disposition = OperationAssetDisposition.DESTINATION
+        for operation in route.operations:
+            current = self.operation_asset_disposition(operation.operation_type)
+            if current is None:
+                continue
+            disposition = current
+            if current is OperationAssetDisposition.ORIGIN:
+                break
+        return disposition
+
+    def endurance_failures(self, operating_days: float) -> tuple[str, ...]:
+        if self.endurance_days is None or operating_days <= self.endurance_days + 1e-9:
+            return ()
+        return (f"endurance:{operating_days:g}/{self.endurance_days:g}",)
 
     def propellant_t(self, route: RouteDef, cargo_t: float) -> float:
         return self.propellant_t_per_total_t_per_km_s * (self.dry_mass_t + cargo_t) * route.delta_v_km_s
@@ -207,7 +234,7 @@ class VehicleDef:
     @property
     def operation_support_requirements(self) -> tuple[OperationSupportRequirement, ...]: return self.performance.operation_support_requirements
     @property
-    def default_disposition(self) -> VehicleDisposition: return self.performance.default_disposition
+    def endurance_days(self) -> float | None: return self.performance.endurance_days
     @property
     def operating_cost_musd_per_mission(self) -> float: return self.economics.operating_cost_musd_per_mission
     @property
@@ -237,6 +264,12 @@ class VehicleDef:
 
     def max_cargo_for_route(self, route: RouteDef) -> float:
         return self.performance.max_cargo_for_route(route)
+
+    def route_asset_disposition(self, route: RouteDef) -> OperationAssetDisposition:
+        return self.performance.route_asset_disposition(route)
+
+    def endurance_failures(self, operating_days: float) -> tuple[str, ...]:
+        return self.performance.endurance_failures(operating_days)
 
     @property
     def powered_ascent(self): return self.capability_for(POWERED_ASCENT)
@@ -283,7 +316,7 @@ class TransportMissionState:
     departure_day: int
     arrival_day: int
     vehicle_id: EntityId | None = None
-    vehicle_disposition: VehicleDisposition = VehicleDisposition.DESTINATION
+    vehicle_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     status: MissionStatus = MissionStatus.IN_TRANSIT
     onboard: bool = True
     handoff_vehicle_id: EntityId | None = None

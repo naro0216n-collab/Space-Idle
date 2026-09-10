@@ -87,8 +87,6 @@ def _spaceflight(req, cap: SpaceflightCapability, ctx: OperationEvaluationContex
     failures: list[str] = []
     if req.delta_v_km_s > cap.max_delta_v_km_s + 1e-9:
         failures.append(f"operation:{req.operation_type}:delta_v:{req.delta_v_km_s:g}/{cap.max_delta_v_km_s:g}")
-    if ctx.transit_days > cap.max_mission_days:
-        failures.append(f"operation:{req.operation_type}:duration:{ctx.transit_days}/{cap.max_mission_days}")
     return tuple(failures)
 
 

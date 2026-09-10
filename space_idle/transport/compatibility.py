@@ -5,6 +5,7 @@ from ..shared import DefinitionId, RouteId, SpatialNodeId
 from ..site import evaluate_site_requirements
 from ..spatial import AtmosphereField, GravityField, SurfaceField
 from .models import (
+    OperationAssetDisposition,
     OperationSupportLocation,
     RouteDef,
     TransportPerformanceProfile,
@@ -65,10 +66,21 @@ class TransportCompatibilityMixin:
             destination_surface=self._surface_environment(route.destination_id, day),
         )
         present_operations: set[str] = set()
-        for operation in route.operations:
+        for index, operation in enumerate(route.operations):
             present_operations.add(operation.operation_type)
             capability = performance.capability_for(operation.operation_type)
             failures.extend(self.operation_registry.evaluate(operation, capability, context))
+            if (
+                capability is not None
+                and getattr(capability, "asset_disposition", OperationAssetDisposition.DESTINATION)
+                is OperationAssetDisposition.ORIGIN
+                and index < len(route.operations) - 1
+            ):
+                failures.append(
+                    f"operation:{operation.operation_type}:asset_returns_before_route_complete"
+                )
+
+        failures.extend(performance.endurance_failures(context.transit_days))
 
         if include_operation_support:
             for support in performance.operation_support_requirements:

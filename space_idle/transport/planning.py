@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..shared import CargoOrderId, DefinitionId, EntityId, RouteId, SpatialNodeId
-from .models import VehicleDisposition, PathPolicy, VehicleStatus, RouteDef, ExternalTransportServiceDef, TransportMode
+from .models import OperationAssetDisposition, PathPolicy, VehicleStatus, RouteDef, ExternalTransportServiceDef, TransportMode
 
 import heapq
 
@@ -243,7 +243,11 @@ class TransportPlanningMixin:
                     state.location_id != origin
                     or state.status != VehicleStatus.AVAILABLE
                     or state.available_day > day
-                    or definition.default_disposition is not VehicleDisposition.DESTINATION
+                    or any(
+                        definition.route_asset_disposition(self.routes[route_id])
+                        is not OperationAssetDisposition.DESTINATION
+                        for route_id in path
+                    )
                 ):
                     continue
                 if all(
@@ -283,13 +287,17 @@ class TransportPlanningMixin:
                 if state.location_id != origin or state.status != VehicleStatus.AVAILABLE or state.available_day > day:
                     continue
                 if (
-                    definition.default_disposition is VehicleDisposition.RETURN_TO_ORIGIN
+                    definition.route_asset_disposition(first_route) is OperationAssetDisposition.ORIGIN
                     and not self.vehicle_route_failures(first_route.id, definition.id, day)
                 ):
                     first_candidates.append(definition.id)
                 if (
-                    definition.default_disposition is VehicleDisposition.DESTINATION
-                    and all(not self.vehicle_route_failures(route_id, definition.id, day) for route_id in path[1:])
+                    all(
+                        definition.route_asset_disposition(self.routes[route_id])
+                        is OperationAssetDisposition.DESTINATION
+                        and not self.vehicle_route_failures(route_id, definition.id, day)
+                        for route_id in path[1:]
+                    )
                 ):
                     onward_candidates.append(definition.id)
             combinations: list[tuple[float, str, str, DefinitionId, DefinitionId]] = []

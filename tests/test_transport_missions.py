@@ -44,7 +44,6 @@ from space_idle.logistics import (
     SpaceflightCapability,
     TransportPerformanceProfile,
     VehicleDef,
-    VehicleDisposition,
     VehicleMaintenanceSpec,
 )
 from space_idle.resource_demand import ResourceDemand
@@ -69,8 +68,8 @@ def test_one_vehicle_can_keep_cargo_onboard_through_a_waypoint_without_transfer_
         "連続月輸送試験船",
         performance=TransportPerformanceProfile(
             dry_mass_t=4.0, payload_t=5.0,
-            operation_capabilities=(SpaceflightCapability(5.0, 30), LandingCapability(2.1, 2.0, 1000.0)),
-            default_disposition=VehicleDisposition.DESTINATION,
+            operation_capabilities=(SpaceflightCapability(5.0), LandingCapability(2.1, 2.0, 1000.0)),
+            endurance_days=30.0,
         ),
     )
     vehicle_id = sim.logistics.add_vehicle(definition_id, LEO)
@@ -205,8 +204,8 @@ def test_spacecraft_waits_for_servicing_infrastructure_after_mission():
         "整備要求試験船",
         performance=TransportPerformanceProfile(
             dry_mass_t=3.0, payload_t=1.0,
-            operation_capabilities=(SpaceflightCapability(5.0, 30),),
-            default_disposition=VehicleDisposition.DESTINATION,
+            operation_capabilities=(SpaceflightCapability(5.0),),
+            endurance_days=30.0,
         ),
         maintenance=VehicleMaintenanceSpec("spacecraft_servicing", 2.0),
     )
@@ -402,8 +401,8 @@ def test_turnaround_can_require_real_service_funds_and_replacement_materials():
         "整備資材要求試験船",
         performance=TransportPerformanceProfile(
             dry_mass_t=2.0, payload_t=1.0,
-            operation_capabilities=(SpaceflightCapability(5.0, 30),),
-            default_disposition=VehicleDisposition.DESTINATION,
+            operation_capabilities=(SpaceflightCapability(5.0),),
+            endurance_days=30.0,
         ),
         maintenance=VehicleMaintenanceSpec("spacecraft_servicing", 2.0, 0.25, ((MACHINERY, 0.5),)),
     )
@@ -529,7 +528,7 @@ def test_vehicle_eligibility_is_derived_from_physical_ascent_capability_not_conc
             operation_capabilities=(
                 PoweredAscentCapability(route.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0),
             ),
-            default_disposition=VehicleDisposition.DESTINATION,
+            endurance_days=30.0,
         ),
     )
     vehicle_id = sim.logistics.add_vehicle(definition_id, EARTH)

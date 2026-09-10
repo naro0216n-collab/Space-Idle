@@ -36,7 +36,7 @@ from .transport.models import (
     TransportOperationRequirement,
     TransportPerformanceProfile,
     VehicleDef,
-    VehicleDisposition,
+    OperationAssetDisposition,
     VehicleEconomicsSpec,
     VehicleMaintenanceSpec,
     VehicleProductionSpec,
@@ -102,7 +102,7 @@ __all__ = [
     "OperationSupportRequirement", "PathPolicy", "PoweredAscentCapability", "RouteDef",
     "SpaceflightCapability", "TransportMissionState", "TransportMode", "TransportOperationKind",
     "TransportOperationRequirement", "TransportPathPlan", "TransportPerformanceProfile",
-    "TransportPlanCapacity", "VehicleDef", "VehicleDisposition", "VehicleEconomicsSpec",
+    "TransportPlanCapacity", "VehicleDef", "OperationAssetDisposition", "VehicleEconomicsSpec",
     "VehicleLegResourcePlan", "VehicleMaintenanceSpec", "VehicleProductionSpec", "VehicleState",
     "VehicleStatus", "VehicleTransit",
 ]

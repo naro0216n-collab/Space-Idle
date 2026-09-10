@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
-from .models import PathPolicy, VehicleDisposition, VehicleStatus
+from .models import PathPolicy, OperationAssetDisposition, VehicleStatus
 
 
 _EPS = 1e-9
@@ -84,7 +84,11 @@ class TransportCapacityMixin:
             or state.available_day > day
         ):
             return None
-        if len(route_ids) > 1 and definition.default_disposition is not VehicleDisposition.DESTINATION:
+        if len(route_ids) > 1 and any(
+            definition.route_asset_disposition(self.routes[route_id])
+            is not OperationAssetDisposition.DESTINATION
+            for route_id in route_ids
+        ):
             return None
 
         remaining = budget.copy()
@@ -228,8 +232,12 @@ class TransportCapacityMixin:
         carrier = self.vehicle_defs[carrier_definition_id]
         onward = self.vehicle_defs[onward_definition_id]
         if (
-            carrier.default_disposition is not VehicleDisposition.RETURN_TO_ORIGIN
-            or onward.default_disposition is not VehicleDisposition.DESTINATION
+            carrier.route_asset_disposition(self.routes[first_route]) is not OperationAssetDisposition.ORIGIN
+            or any(
+                onward.route_asset_disposition(self.routes[route_id])
+                is not OperationAssetDisposition.DESTINATION
+                for route_id in route_ids[1:]
+            )
         ):
             return 0.0, ()
 

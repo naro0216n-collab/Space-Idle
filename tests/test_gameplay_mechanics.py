@@ -664,7 +664,7 @@ def test_manual_pause_resume_controls_preserve_configuration_and_halt_autonomous
 
 def test_vehicle_eligibility_is_derived_from_physical_ascent_capability_not_concept_name():
     from space_idle.logistics import (
-        PoweredAscentCapability, TransportPerformanceProfile, VehicleDef, VehicleDisposition
+        PoweredAscentCapability, TransportPerformanceProfile, VehicleDef
     )
     from space_idle.shared import DefinitionId, RouteId
     from space_idle.spatial import AtmosphereField, GravityField
@@ -689,7 +689,6 @@ def test_vehicle_eligibility_is_derived_from_physical_ascent_capability_not_conc
             operation_capabilities=(
                 PoweredAscentCapability(route.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0),
             ),
-            default_disposition=VehicleDisposition.DESTINATION,
         ),
     )
     vehicle_id = sim.logistics.add_vehicle(definition_id, EARTH)

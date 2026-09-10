@@ -15,7 +15,7 @@ from .models import (
     MissionStatus,
     PathPolicy,
     TransportMissionState,
-    VehicleDisposition,
+    OperationAssetDisposition,
     VehicleState,
     VehicleStatus,
     VehicleTransit,
@@ -212,7 +212,7 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             int(row["departure_day"]),
             int(row["arrival_day"]),
             None if row.get("vehicle_id") is None else EntityId(row["vehicle_id"]),
-            VehicleDisposition(row.get("vehicle_disposition", "destination")),
+            OperationAssetDisposition(row.get("vehicle_disposition", "destination")),
             MissionStatus(row.get("status", "in_transit")),
             bool(row.get("onboard", True)),
             None if row.get("handoff_vehicle_id") is None else EntityId(row["handoff_vehicle_id"]),
@@ -252,6 +252,8 @@ def _validate_transport_profile(sim: Any, profile, known_capabilities: set[str],
     _require(profile.dry_mass_t >= 0, f"negative transport dry mass: {label}")
     _require(profile.payload_t > 0, f"non-positive transport payload: {label}")
     _require(profile.transit_time_multiplier > 0, f"non-positive transport time multiplier: {label}")
+    if profile.endurance_days is not None:
+        _require(profile.endurance_days > 0, f"non-positive transport endurance: {label}")
     _require(profile.propellant_capacity_t >= 0, f"negative propellant capacity: {label}")
     _require(profile.propellant_t_per_total_t_per_km_s >= 0, f"negative propellant use: {label}")
     if profile.propellant_t_per_total_t_per_km_s > 0:
