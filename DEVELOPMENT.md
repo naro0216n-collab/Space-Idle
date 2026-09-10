@@ -79,10 +79,10 @@ git diff --check
 通常publishは次の順序に固定する。
 
 1. ローカル変更を整合した単位としてcommitし、working treeをcleanにする。
-2. `scripts/publish_request.py`で、前回publish済みtreeから現在HEAD treeまでのbinary diffを1つのrequestへ生成する。
-3. publish直前にremote対象branch HEADを一度だけ確認し、requestの `base-sha` と一致することを確認する。不一致ならrequestを送らず差分を調査する。
-4. GitHub Connectorで `publish` branchの `.publish/request.patch` を1回だけ置換する。通常publishでゲーム実装ファイルをConnectorから個別更新しない。
-5. Publish Gatewayはrequest digest、remote base SHA、patch適用後のGit tree SHAを検証し、すべて一致した場合だけ通常のnon-force pushで対象branchを更新する。
+2. `scripts/publish_request.py`で、前回publish済みtreeから現在HEAD treeまでのbinary diffを固定長chunkと小さなmanifestへ生成する。
+3. publish直前にremote対象branch HEADを一度だけ確認し、manifestの `base-sha` と一致することを確認する。不一致ならrequestを送らず差分を調査する。
+4. GitHub Connectorで `publish` branchの `.publish/chunks/` に必要chunkを更新し、最後に `.publish/request.patch` manifestを更新する。chunk更新だけではGatewayを起動しない。
+5. Publish Gatewayは各chunk digest、request digest、remote base SHA、patch適用後のGit tree SHAを検証し、すべて一致した場合だけ通常のnon-force pushで対象branchを更新する。
 6. Gateway成功後は対象branchのremote commit/treeを確認し、ローカルpublish stateへ記録する。
 7. Gatewayは対象branch更新後にFast CIを `workflow_dispatch` し、実ブラウザ・clean install・次回用Git bundle artifactを検証する。
 
@@ -106,21 +106,14 @@ python scripts/publish_request.py record \
   --local-ref HEAD
 ```
 
-requestには以下だけを含める。
-
-- target branch
-- 期待するremote base commit SHA
-- 期待する最終Git tree SHA
-- gzip+Base64化したbinary diff
-- 展開後diffのSHA-256
-- commit message
+manifestにはtarget branch、remote base commit SHA、最終Git tree SHA、diff全体と各chunkのSHA-256、commit messageを含める。gzip+Base64化したbinary diff本体は固定長chunkへ分離する。manifestを最後に更新することで、不完全なchunk転送では対象branchを更新しない。
 
 変更ファイル全文、個別blob登録、個別blob SHA照合は通常publishでは行わない。Git tree SHA一致を最終内容の同一性判定とする。
 
 ### Publish failure handling
 
 - remote HEAD不一致: publishしない。remote変更を調査し、必要なら新しいartifactから再同期する。
-- request SHA不一致: Gatewayは適用前に失敗する。requestを再生成する。
+- chunkまたはrequest SHA不一致: Gatewayは適用前に失敗する。該当chunkだけ再転送し、manifestのrequest-idを更新して再検証する。
 - patch適用失敗: base不一致またはrequest破損として扱い、ゲーム実装を転送都合へ合わせて変更しない。
 - target tree不一致: Gatewayはcommit前に失敗する。ローカルrequest生成または転送破損を調査する。
 - target branch push競合: forceしない。remote HEADを再確認する。

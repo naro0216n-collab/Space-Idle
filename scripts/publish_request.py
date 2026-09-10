@@ -7,10 +7,11 @@ import gzip
 import hashlib
 import json
 import subprocess
+import uuid
 from pathlib import Path
 
 STATE_NAME = "space-idle-publish-state.json"
-PATCH_MARKER = "--- SPACE-IDLE PATCH ---\n"
+CHUNK_SIZE = 3072
 
 
 class PublishStateError(RuntimeError):
@@ -162,6 +163,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     patch_bytes = patch.encode("utf-8")
     patch_digest = hashlib.sha256(patch_bytes).hexdigest()
     patch_payload = base64.b64encode(gzip.compress(patch_bytes, compresslevel=9)).decode("ascii")
+    chunks = [patch_payload[i : i + CHUNK_SIZE] for i in range(0, len(patch_payload), CHUNK_SIZE)]
+    chunk_digests = [hashlib.sha256(chunk.encode("ascii")).hexdigest() for chunk in chunks]
     message = args.message if args.message is not None else _default_message(repo, state, target_ref)
     if not message.strip():
         raise PublishStateError("commit message must not be empty")
@@ -169,21 +172,47 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         message += "\n"
     message_b64 = base64.b64encode(message.encode("utf-8")).decode("ascii")
 
-    request = (
-        "# version: 2\n"
-        f"# target-branch: {args.target_branch}\n"
-        f"# base-sha: {state['remote_commit']}\n"
-        f"# target-tree: {target_tree}\n"
-        f"# patch-sha256: {patch_digest}\n"
-        f"# patch-encoding: gzip-base64\n"
-        f"# message-b64: {message_b64}\n"
-        f"{PATCH_MARKER}"
-        f"{patch_payload}\n"
+    request_lines = [
+        "# version: 3",
+        f"# request-id: {uuid.uuid4().hex}",
+        f"# target-branch: {args.target_branch}",
+        f"# base-sha: {state['remote_commit']}",
+        f"# target-tree: {target_tree}",
+        f"# patch-sha256: {patch_digest}",
+        "# patch-encoding: gzip-base64-chunks",
+        f"# chunk-count: {len(chunks)}",
+        f"# message-b64: {message_b64}",
+    ]
+    request_lines.extend(
+        f"# chunk-{index:04d}-sha256: {digest}"
+        for index, digest in enumerate(chunk_digests)
     )
+    request = "\n".join(request_lines) + "\n"
+
     if args.output:
-        Path(args.output).write_text(request, encoding="utf-8", newline="")
+        output = Path(args.output)
+        output.write_text(request, encoding="utf-8", newline="")
+        chunk_dir = Path(f"{output}.chunks")
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        for stale in chunk_dir.glob("*.txt"):
+            stale.unlink()
+        for index, chunk in enumerate(chunks):
+            (chunk_dir / f"{index:04d}.txt").write_text(chunk + "\n", encoding="ascii", newline="")
+        print(
+            json.dumps(
+                {
+                    "manifest": str(output),
+                    "chunk_dir": str(chunk_dir),
+                    "chunk_count": len(chunks),
+                    "target_tree": target_tree,
+                    "patch_sha256": patch_digest,
+                },
+                indent=2,
+            )
+        )
     else:
         print(request, end="")
+        raise PublishStateError("chunked requests require --output so payload chunks can be written")
     return 0
 
 

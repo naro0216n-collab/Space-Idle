@@ -9,7 +9,6 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "publish_request.py"
-MARKER = "--- SPACE-IDLE PATCH ---\n"
 
 
 def git(repo: Path, *args: str) -> str:
@@ -38,15 +37,20 @@ def commit_all(repo: Path, message: str) -> None:
     git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", message)
 
 
-def parse_request(text: str) -> tuple[dict[str, str], str]:
-    header_text, payload = text.split(MARKER, 1)
+def parse_request(manifest: str, chunk_dir: Path) -> tuple[dict[str, str], str]:
     headers: dict[str, str] = {}
-    for line in header_text.splitlines():
+    for line in manifest.splitlines():
         if line.startswith("# "):
             key, sep, value = line[2:].partition(": ")
             if sep:
                 headers[key] = value
-    patch = gzip.decompress(base64.b64decode(payload.strip(), validate=True)).decode("utf-8")
+    chunk_count = int(headers["chunk-count"])
+    payload_parts = []
+    for index in range(chunk_count):
+        chunk = (chunk_dir / f"{index:04d}.txt").read_text(encoding="ascii").strip()
+        assert hashlib.sha256(chunk.encode("ascii")).hexdigest() == headers[f"chunk-{index:04d}-sha256"]
+        payload_parts.append(chunk)
+    patch = gzip.decompress(base64.b64decode("".join(payload_parts), validate=True)).decode("utf-8")
     return headers, patch
 
 
@@ -69,10 +73,14 @@ def test_publish_request_recreates_exact_target_tree_and_tracks_next_baseline(tm
     target_tree = git(repo, "rev-parse", "HEAD^{tree}")
 
     published_local_ref = git(repo, "rev-parse", "HEAD")
-    request = run_request(repo, "prepare", "--target-branch", "temp", "--target-ref", published_local_ref)
-    headers, patch = parse_request(request)
-    assert headers["version"] == "2"
-    assert headers["patch-encoding"] == "gzip-base64"
+    request_path = tmp_path / "publish-request.patch"
+    run_request(
+        repo, "prepare", "--target-branch", "temp", "--target-ref", published_local_ref,
+        "--output", str(request_path),
+    )
+    headers, patch = parse_request(request_path.read_text(encoding="utf-8"), Path(f"{request_path}.chunks"))
+    assert headers["version"] == "3"
+    assert headers["patch-encoding"] == "gzip-base64-chunks"
     assert headers["target-branch"] == "temp"
     assert headers["base-sha"] == base_commit
     assert headers["target-tree"] == target_tree
@@ -101,8 +109,9 @@ def test_publish_request_recreates_exact_target_tree_and_tracks_next_baseline(tm
 
     (repo / "c.txt").write_text("newer\n", encoding="utf-8")
     commit_all(repo, "next")
-    next_request = run_request(repo, "prepare")
-    next_headers, next_patch = parse_request(next_request)
+    next_path = tmp_path / "next-request.patch"
+    run_request(repo, "prepare", "--output", str(next_path))
+    next_headers, next_patch = parse_request(next_path.read_text(encoding="utf-8"), Path(f"{next_path}.chunks"))
     assert next_headers["base-sha"] == published_commit
     assert "a/a.txt" not in next_patch
     assert "b/b.txt" not in next_patch
