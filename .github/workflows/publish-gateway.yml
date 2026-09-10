@@ -37,12 +37,8 @@ jobs:
 
           request_path = Path('.publish/request.patch')
           text = request_path.read_text(encoding='utf-8')
-          marker = '--- SPACE-IDLE PATCH ---\n'
-          if marker not in text:
-              raise SystemExit('missing patch marker')
-          header_text, payload = text.split(marker, 1)
           headers = {}
-          for line in header_text.splitlines():
+          for line in text.splitlines():
               if not line.startswith('# '):
                   continue
               key, sep, value = line[2:].partition(': ')
@@ -50,20 +46,15 @@ jobs:
                   headers[key] = value
 
           required = {
-              'version',
-              'target-branch',
-              'base-sha',
-              'target-tree',
-              'patch-sha256',
-              'patch-encoding',
-              'message-b64',
+              'version', 'request-id', 'target-branch', 'base-sha', 'target-tree',
+              'patch-sha256', 'patch-encoding', 'chunk-count', 'message-b64',
           }
           missing = required - headers.keys()
           if missing:
               raise SystemExit(f'missing headers: {sorted(missing)}')
-          if headers['version'] != '2':
+          if headers['version'] != '3':
               raise SystemExit('unsupported request version')
-          if headers['patch-encoding'] != 'gzip-base64':
+          if headers['patch-encoding'] != 'gzip-base64-chunks':
               raise SystemExit('unsupported patch encoding')
           if headers['target-branch'] not in {'develop', 'temp'}:
               raise SystemExit('unsupported target branch')
@@ -71,17 +62,43 @@ jobs:
               raise SystemExit('invalid base sha')
           if not re.fullmatch(r'[0-9a-f]{40}', headers['target-tree']):
               raise SystemExit('invalid target tree')
+          if not re.fullmatch(r'[0-9a-f]{32}', headers['request-id']):
+              raise SystemExit('invalid request id')
           try:
-              patch_bytes = gzip.decompress(base64.b64decode(payload.strip(), validate=True))
+              chunk_count = int(headers['chunk-count'])
+          except ValueError as exc:
+              raise SystemExit('invalid chunk count') from exc
+          if not 1 <= chunk_count <= 256:
+              raise SystemExit('invalid chunk count')
+
+          payload_parts = []
+          for index in range(chunk_count):
+              key = f'chunk-{index:04d}-sha256'
+              expected = headers.get(key)
+              if expected is None or not re.fullmatch(r'[0-9a-f]{64}', expected):
+                  raise SystemExit(f'missing or invalid digest for chunk {index:04d}')
+              chunk_path = Path('.publish/chunks') / f'{index:04d}.txt'
+              try:
+                  chunk = chunk_path.read_text(encoding='ascii').strip()
+              except OSError as exc:
+                  raise SystemExit(f'missing chunk {index:04d}') from exc
+              actual = hashlib.sha256(chunk.encode('ascii')).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f'chunk {index:04d} sha256 mismatch: {actual}')
+              payload_parts.append(chunk)
+
+          try:
+              compressed = base64.b64decode(''.join(payload_parts), validate=True)
+              patch_bytes = gzip.decompress(compressed)
               patch = patch_bytes.decode('utf-8')
           except Exception as exc:
               raise SystemExit(f'invalid compressed patch payload: {exc}') from exc
           if not patch.startswith('diff --git '):
               raise SystemExit('empty or invalid git patch')
-
           digest = hashlib.sha256(patch_bytes).hexdigest()
           if digest != headers['patch-sha256']:
               raise SystemExit(f'patch sha256 mismatch: {digest}')
+
           message = base64.b64decode(headers['message-b64'], validate=True).decode('utf-8')
           if not message.strip():
               raise SystemExit('empty commit message')
