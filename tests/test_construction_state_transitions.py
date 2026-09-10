@@ -77,3 +77,25 @@ def test_planned_project_with_unmet_technology_does_not_claim_inventory():
     )
     assert sim.projects.resource_demands(sim.day) == ()
     validate_runtime_state(sim)
+
+
+def test_parallel_projects_share_construction_capacity_by_weight():
+    app = build_game_application()
+    first = app.execute(
+        PlanBuild(str(ids.EARTH), str(ids.WATER_STORAGE), priority=100, sourcing_policy="import_now")
+    ).created_id
+    second = app.execute(
+        PlanBuild(str(ids.EARTH), str(ids.BULK_STORAGE), priority=100, sourcing_policy="import_now")
+    ).created_id
+    assert first is not None and second is not None
+
+    app.execute(SetConstructionWeight(first, 3.0))
+    app.execute(SetConstructionWeight(second, 1.0))
+    app.execute(AdvanceTime(1))
+
+    projects = {str(project.id): project for project in app._simulation.projects.projects.values()}
+    assert projects[first].status is ProjectStatus.BUILDING
+    assert projects[second].status is ProjectStatus.BUILDING
+    assert projects[first].construction_done == pytest.approx(
+        projects[second].construction_done * 3.0
+    )

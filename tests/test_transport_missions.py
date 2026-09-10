@@ -10,6 +10,8 @@ from space_idle import (
     ApplicationError,
     CreateLogisticsLane,
     GetLogistics,
+    GetRoutes,
+    GetVehicles,
     GetTransportPlans,
     ProduceVehicle,
     RefuelVehicle,
@@ -37,6 +39,7 @@ from space_idle.content.base_game import (
 )
 from space_idle.logistics import (
     LandingCapability,
+    PoweredAscentCapability,
     PathPolicy,
     SpaceflightCapability,
     TransportPerformanceProfile,
@@ -497,3 +500,53 @@ def test_vehicle_production_progress_pauses_when_assembly_capability_is_unavaila
     app.execute(AdvanceTime(int(definition.production.days)))
     assert state.phase.value == "complete"
     assert state.completed_vehicle_id in sim.logistics.vehicles
+
+
+def test_vehicle_eligibility_is_derived_from_physical_ascent_capability_not_concept_name():
+    from space_idle.spatial import AtmosphereField, GravityField
+
+    app = build_game_application()
+    sim = app._simulation
+    route_id = RouteId("base.route.earth_leo")
+    route = sim.logistics.routes[route_id]
+
+    route_view = app.query(GetRoutes(route_id=str(route_id), include_modes=True)).items[0]
+    lander_mode = next(
+        mode for mode in route_view.modes if mode.id == str(REUSABLE_SURFACE_CARGO_LANDER)
+    )
+    assert not lander_mode.usable_now
+    assert any("operation:powered_ascent" in blocker for blocker in lander_mode.blockers)
+
+    gravity = sim.environment.require(route.origin_id, GravityField).local_acceleration_m_s2
+    pressure = sim.environment.require(route.origin_id, AtmosphereField).pressure_pa
+    definition_id = DefinitionId("test.vehicle.integrated_spacecraft")
+    sim.logistics.vehicle_defs[definition_id] = VehicleDef(
+        id=definition_id,
+        display_name="統合型試験宇宙船",
+        performance=TransportPerformanceProfile(
+            dry_mass_t=10.0,
+            payload_t=2.0,
+            operation_capabilities=(
+                PoweredAscentCapability(route.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0),
+            ),
+            default_disposition=VehicleDisposition.DESTINATION,
+        ),
+    )
+    vehicle_id = sim.logistics.add_vehicle(definition_id, EARTH)
+    assert not sim.logistics.vehicle_route_failures(route_id, definition_id, sim.day)
+
+    order_id = app.execute(
+        SubmitCargo(
+            str(EARTH),
+            str(LEO),
+            str(WATER),
+            1.0,
+            100,
+            (str(route_id),),
+            ((str(route_id), str(definition_id)),),
+        )
+    ).created_id
+    assert order_id
+    app.execute(AdvanceTime(2))
+    vehicle = next(v for v in app.query(GetVehicles()).items if v.id == str(vehicle_id))
+    assert vehicle.location_id == str(LEO)

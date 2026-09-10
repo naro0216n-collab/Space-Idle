@@ -50,3 +50,30 @@ def test_owned_transport_is_physical_while_commercial_transport_uses_money():
     ))
     commercial.execute(AdvanceTime(1))
     assert commercial.query(GetWorld()).funds_musd < commercial_before
+
+
+def test_extraction_stops_when_output_storage_service_is_full():
+    app = build_game_application()
+    sim = app._simulation
+    power = sim.power.snapshot(EARTH, sim.facilities, sim.day)
+    initial = next(
+        row
+        for row in sim.extraction.snapshots(EARTH, sim.facilities, sim.inventory, power, sim.day)
+        if row.output_t_per_day > 0
+    )
+    spec = sim.extraction.specs[initial.facility_def_id]
+    free = sim.inventory.free_capacity(EARTH, spec.output_resource_id)
+    assert free is not None and free > 0
+
+    sim.inventory.add(EARTH, spec.output_resource_id, free)
+    before = sim.inventory.amount(EARTH, spec.output_resource_id)
+    blocked = next(
+        row
+        for row in sim.extraction.snapshots(EARTH, sim.facilities, sim.inventory, power, sim.day)
+        if row.facility_id == initial.facility_id
+    )
+    assert blocked.output_t_per_day == 0.0
+    assert any(reason.startswith("storage:") for reason in blocked.limiting_factors)
+
+    sim.extraction.advance_day(EARTH, sim.facilities, sim.inventory, power, sim.day)
+    assert sim.inventory.amount(EARTH, spec.output_resource_id) == before
