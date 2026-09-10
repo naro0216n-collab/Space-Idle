@@ -4,9 +4,8 @@ from dataclasses import dataclass, field
 
 from .facilities import FacilityBook
 from .inventory import InventoryBook
-from .logistics import LogisticsService
 from .power import PowerService
-from .shared import AccountState, DefinitionId, ProjectId
+from .shared import DefinitionId, ProjectId
 from .technology import TechnologyState
 from .construction.models import (
     ProjectStatus,
@@ -37,8 +36,6 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     inventory: InventoryBook
     facilities: FacilityBook
     power: PowerService
-    logistics: LogisticsService
-    account: AccountState
     sourcing_wait_days: dict[SourcingPolicy, int]
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     construction_resource_providers: dict[DefinitionId, ConstructionResourceProviderSpec] = field(default_factory=dict)

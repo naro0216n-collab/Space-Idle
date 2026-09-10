@@ -88,8 +88,6 @@ def build_base_simulation() -> Simulation:
         inventory=inventory,
         facilities=facilities,
         power=power,
-        logistics=logistics,
-        account=account,
         sourcing_wait_days=sourcing_wait_days(),
         technology_state=technology,
         construction_resource_providers=build_construction_resource_providers(),

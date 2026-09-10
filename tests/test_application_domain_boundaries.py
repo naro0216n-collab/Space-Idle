@@ -19,3 +19,17 @@ def test_application_logistics_projection_uses_public_transport_query_boundary()
             "_demand_pipeline_remaining",
         ):
             assert private_name not in source, f"{path.name} reaches transport private API {private_name}"
+
+
+def test_construction_owns_demand_without_transport_or_account_state_dependencies():
+    from space_idle.projects import ProjectService
+
+    fields = ProjectService.__dataclass_fields__
+    assert "logistics" not in fields
+    assert "account" not in fields
+
+    for path in (PACKAGE / "construction").glob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert "from ..logistics" not in source
+        assert "from .logistics" not in source
+

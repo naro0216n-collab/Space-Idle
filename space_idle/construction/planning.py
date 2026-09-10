@@ -165,37 +165,6 @@ class ConstructionPlanningMixin:
         project.paused = False
         project.pause_started_day = None
 
-    def _matching_import_lanes(self, project: ConstructionProject):
-        return tuple(
-            lane
-            for lane in self.logistics.lanes.values()
-            if lane.destination_id == project.location_id
-            and (project.import_source_id is None or lane.source_id == project.import_source_id)
-        )
-
-    def _import_lane_blocker(self, project: ConstructionProject, requirement, state, day: int) -> ProjectBlocker | None:
-        lanes = self._matching_import_lanes(project)
-        if not lanes:
-            return ProjectBlocker("import_lane", str(requirement.resource_id))
-        if all(self.logistics.lane_effective_capacity_t_per_day(lane.id, day) <= 1e-12 for lane in lanes):
-            details = tuple(
-                blocker
-                for lane in lanes
-                for blocker in self.logistics.lane_blockers(lane.id, day)
-            )
-            return ProjectBlocker(
-                "import_lane_blocked",
-                str(requirement.resource_id) + (":" + ";".join(dict.fromkeys(details)) if details else ""),
-            )
-        if all(
-            self.inventory.available(lane.source_id, requirement.resource_id) <= 1e-12
-            for lane in lanes
-        ):
-            return ProjectBlocker("import_stock", str(requirement.resource_id))
-        if self._reserved_resource_t(project, requirement.resource_id) + 1e-9 < requirement.amount_t:
-            return ProjectBlocker("import_transit", str(requirement.resource_id))
-        return None
-
     def blockers(
         self,
         project_id: ProjectId,
@@ -236,12 +205,8 @@ class ConstructionPlanningMixin:
                 if state.import_committed_t is None:
                     if waited < wait_limit:
                         blockers.append(ProjectBlocker("destination_supply_wait", str(requirement.resource_id)))
-                    elif not self._matching_import_lanes(project):
-                        blockers.append(ProjectBlocker("import_lane", str(requirement.resource_id)))
                     continue
-                blocker = self._import_lane_blocker(project, requirement, state, day)
-                if blocker is not None:
-                    blockers.append(blocker)
+                blockers.append(ProjectBlocker("resource_shortage", str(requirement.resource_id)))
         if (
             project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}
             and not recipe.self_deploying
