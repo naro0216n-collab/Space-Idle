@@ -171,3 +171,36 @@ def test_scientific_exploration_rejects_duplicate_consumable_resources():
 
     with pytest.raises(ConfigurationError, match="duplicate consumable resource"):
         validate_simulation_configuration(sim)
+
+
+def test_rp_storage_blocker_prevents_input_consumption_and_vehicle_relocation():
+    app = build_game_application()
+    sim = app._simulation
+    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
+    tug = _orbital_tug(sim)
+
+    app.execute(StartScientificExploration(str(exploration_id)))
+    app.execute(AssignExplorationVehicle(str(exploration_id), str(tug.id)))
+    state = sim.scientific_exploration.campaigns[exploration_id]
+    demands = sim.scientific_exploration.resource_demands(sim.day)
+    assert demands
+    assert all(
+        sim.inventory.reserved_for(demand.id, demand.destination_id, demand.resource_id) > 0
+        for demand in demands
+    )
+
+    capacity = sim.research.storage_capacity(day=sim.day)
+    sim.research.store_generated_points(capacity, day=sim.day)
+    assert "rp_storage_full" in sim.scientific_exploration.blockers(
+        exploration_id,
+        day=sim.day,
+    )
+
+    app.execute(AdvanceTime(1))
+
+    assert state.inputs_consumed is False
+    assert state.progress_days == pytest.approx(0.0)
+    assert state.research_points_awarded == pytest.approx(0.0)
+    assert tug.location_id == ids.LEO
+    assert tug.transit_destination_id is None
+    assert tug.status.value == "assigned"
