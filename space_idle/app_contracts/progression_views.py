@@ -51,6 +51,41 @@ class ResearchView:
     items: tuple[ResearchRow, ...]
 
 
+
+@dataclass(frozen=True)
+class ScientificExplorationVehicleOptionRow:
+    vehicle_id: str
+    vehicle_definition_id: str
+    display_name: str
+    location_id: str | None
+    status: str
+    blockers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ScientificExplorationRow:
+    id: str
+    display_name: str
+    status: str
+    paused: bool
+    origin_id: str
+    destination_id: str
+    operations: tuple[tuple[str, float], ...]
+    mission_duration_days: int
+    duration_days: float
+    progress_days: float
+    research_points_total: float
+    research_points_awarded: float
+    consumable_resources: tuple[tuple[str, float], ...]
+    assigned_vehicle_id: str | None
+    blockers: tuple[str, ...]
+    vehicle_options: tuple[ScientificExplorationVehicleOptionRow, ...]
+
+
+@dataclass(frozen=True)
+class ScientificExplorationsView:
+    items: tuple[ScientificExplorationRow, ...]
+
 @dataclass(frozen=True)
 class SurveyRow:
     location_id: str

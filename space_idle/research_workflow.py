@@ -121,8 +121,7 @@ class ResearchWorkflowMixin:
             for resource_id, required_t in sorted(
                 prototype.resources.items(), key=lambda row: str(row[0])
             ):
-                shortage = max(0.0, required_t - self.inventory.available(location_id, resource_id))
-                if shortage <= 1e-9:
+                if required_t <= 1e-9:
                     continue
                 demands.append(ResourceDemand(
                     EntityId(f"demand.research:{research_id}:{resource_id}"),
@@ -130,9 +129,11 @@ class ResearchWorkflowMixin:
                     EntityId(f"research:{research_id}"),
                     location_id,
                     resource_id,
-                    shortage,
+                    required_t,
                     60,
                     None,
+                    required_t,
+                    True,
                 ))
         return tuple(demands)
 
@@ -153,11 +154,13 @@ class ResearchWorkflowMixin:
                 "prototype site requirements not met: " + "; ".join(f.detail for f in failures)
             )
         for resource_id, amount in prototype.resources.items():
-            if self.inventory.available(location_id, resource_id) + 1e-9 < amount:
+            demand_id = EntityId(f"demand.research:{research_id}:{resource_id}")
+            allocated = self.inventory.reserved_for(demand_id, location_id, resource_id)
+            if allocated + 1e-9 < amount:
                 raise ValueError(f"prototype resource shortfall: {resource_id}")
         for resource_id, amount in prototype.resources.items():
-            if not self.inventory.take_unreserved(location_id, resource_id, amount):
-                raise RuntimeError("prototype accounting race")
+            demand_id = EntityId(f"demand.research:{research_id}:{resource_id}")
+            self.inventory.consume_reserved(demand_id, location_id, resource_id, amount)
         if definition.demonstration is not None:
             state.status = ResearchPhase.DEMONSTRATION
             if not self.demonstration_failures(research_id, location_id, day):
@@ -177,9 +180,13 @@ class ResearchWorkflowMixin:
         if state.paused:
             raise ValueError("research is paused")
         failures = self.demonstration_failures(research_id, location_id, day)
-        if failures:
+        structural_failures = tuple(
+            failure for failure in failures if failure.code != "capability:available"
+        )
+        if structural_failures:
             raise ValueError(
-                "demonstration site requirements not met: " + "; ".join(f.detail for f in failures)
+                "demonstration site requirements not met: "
+                + "; ".join(f.detail for f in structural_failures)
             )
         state.demonstration_location_id = location_id
         state.demonstration_done_days = 0

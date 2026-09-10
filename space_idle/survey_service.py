@@ -22,6 +22,17 @@ class SurveyService:
             raise ValueError("allocation weight must be non-negative")
         self.campaigns.setdefault(key, SurveyCampaign(location_id, resource_id, 0.0, allocation_weight))
 
+    def initialize_known(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> None:
+        """Seed Content-defined prior knowledge without exposing campaign State."""
+        key = (location_id, resource_id)
+        if key not in self.targets:
+            raise KeyError(key)
+        target = self.targets[key]
+        campaign = self.campaigns.setdefault(
+            key, SurveyCampaign(location_id, resource_id, 0.0, 1.0)
+        )
+        campaign.progress = max(campaign.progress, target.thresholds[-1])
+
     def set_allocation_weight(self, location_id: SpatialNodeId, resource_id: DefinitionId, weight: float) -> None:
         if weight < 0:
             raise ValueError("allocation weight must be non-negative")
@@ -74,14 +85,17 @@ class SurveyService:
             if provider is None:
                 continue
             utilization = 1.0 if power is None else power.utilization_by_facility.get(facility.id, 1.0)
-            points += provider.points_per_day * utilization
+            maintenance = (
+                self.facilities.maintenance_factor(facility.id)
+                if power is None
+                else power.maintenance_factor_by_facility.get(
+                    facility.id, self.facilities.maintenance_factor(facility.id)
+                )
+            )
+            points += provider.points_per_day * utilization * maintenance
         return points
 
     def advance_day(self, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int = 0) -> None:
-        # Survey capability at a site is a finite flow. Completed campaigns stop
-        # consuming it automatically. If one campaign reaches its final threshold
-        # part-way through a day, unused capacity is redistributed to the remaining
-        # campaigns rather than being discarded.
         by_location: dict[SpatialNodeId, list[SurveyCampaign]] = {}
         for campaign in self.campaigns.values():
             if (

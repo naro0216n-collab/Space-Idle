@@ -29,3 +29,20 @@ class ResumeSurvey:
 @dataclass(frozen=True)
 class SetSurveyAllocation:
     location_id: str; resource_id: str; weight: float
+
+@dataclass(frozen=True)
+class StartScientificExploration:
+    exploration_id: str
+@dataclass(frozen=True)
+class PauseScientificExploration:
+    exploration_id: str
+@dataclass(frozen=True)
+class ResumeScientificExploration:
+    exploration_id: str
+@dataclass(frozen=True)
+class AssignExplorationVehicle:
+    exploration_id: str
+    vehicle_id: str
+@dataclass(frozen=True)
+class UnassignExplorationVehicle:
+    exploration_id: str

@@ -47,6 +47,7 @@ from .transport.models import (
 from .transport.operations import OperationEvaluatorRegistry, build_default_operation_registry
 from .transport.orders import TransportOrderMixin
 from .transport.planning import TransportPlanningMixin
+from .transport.production import VehicleProductionMixin, VehicleProductionState
 from .transport.query import TransportPathPlan, TransportQueryMixin
 
 
@@ -61,6 +62,7 @@ class LogisticsService(
     TransportOrderMixin,
     TransportLaneMixin,
     TransportExecutionMixin,
+    VehicleProductionMixin,
 ):
     routes: dict[RouteId, RouteDef]
     inventory: InventoryBook
@@ -77,10 +79,12 @@ class LogisticsService(
     missions: dict[EntityId, TransportMissionState] = field(default_factory=dict)
     vehicle_transit: list[VehicleTransit] = field(default_factory=list)
     lanes: dict[EntityId, LogisticsLane] = field(default_factory=dict)
+    vehicle_production_projects: dict[EntityId, VehicleProductionState] = field(default_factory=dict)
     _counter: int = 0
     _lane_counter: int = 0
     _vehicle_counter: int = 0
     _mission_counter: int = 0
+    _vehicle_production_counter: int = 0
 
     @property
     def unlocked_technologies(self) -> set[DefinitionId]:

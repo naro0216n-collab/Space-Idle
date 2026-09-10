@@ -25,6 +25,16 @@ class ProduceVehicle:
 
 
 @dataclass(frozen=True)
+class PauseVehicleProduction:
+    production_id: str
+
+
+@dataclass(frozen=True)
+class ResumeVehicleProduction:
+    production_id: str
+
+
+@dataclass(frozen=True)
 class SubmitCargo:
     source_id: str
     destination_id: str

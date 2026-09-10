@@ -11,7 +11,7 @@ from .domain import validate_extension_registry
 from .simulation import OfflineProgressPolicy, OfflineProgressResult
 
 
-SAVE_SCHEMA_VERSION = 20
+SAVE_SCHEMA_VERSION = 23
 
 
 class SaveFormatError(ValueError):
@@ -54,6 +54,7 @@ def restore_state(sim, data: dict[str, Any]) -> None:
             raise SaveFormatError(f"save state is missing domain section: {codec.key}")
         codec.restore(sim, data[codec.key])
     sim.refresh_storage()
+    sim.refresh_resource_claims()
 
 
 def save_game(

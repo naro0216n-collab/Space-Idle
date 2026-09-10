@@ -104,8 +104,20 @@ class IndustryPlanningMixin:
         if not rows:
             return ()
 
+        power_factors = {
+            facility.id: max(
+                0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0))
+            )
+            for facility, _process in rows
+        }
+        maintenance_factors = {
+            facility.id: power.maintenance_factor_by_facility.get(
+                facility.id, facilities.maintenance_factor(facility.id)
+            )
+            for facility, _process in rows
+        }
         power_limits = {
-            facility.id: max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
+            facility.id: power_factors[facility.id] * maintenance_factors[facility.id]
             for facility, _process in rows
         }
         process_by_id = {facility.id: process for facility, process in rows}
@@ -208,7 +220,10 @@ class IndustryPlanningMixin:
             reasons: list[str] = []
             power_limit = power_limits[facility.id]
             if power_limit < 1.0 - 1e-9 and scale + 1e-9 >= power_limit:
-                reasons.append("power")
+                if power_factors[facility.id] < 1.0 - 1e-9:
+                    reasons.append("power")
+                if maintenance_factors[facility.id] < 1.0 - 1e-9:
+                    reasons.append("maintenance")
             if scale < power_limit - 1e-9:
                 for resource_id, need in process.inputs_per_day.items():
                     if need <= 1e-12:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..power import PowerSnapshot
 from ..shared import DefinitionId, RouteId, SpatialNodeId
 from ..site import evaluate_site_requirements
 from ..spatial import AtmosphereField, GravityField, SurfaceField
@@ -46,7 +47,7 @@ class TransportCompatibilityMixin:
             0.0 if atmosphere is None else atmosphere.pressure_pa,
         )
 
-    def _performance_route_failures(
+    def performance_route_failures(
         self,
         route: RouteDef,
         performance: TransportPerformanceProfile,
@@ -54,6 +55,7 @@ class TransportCompatibilityMixin:
         *,
         transit_multiplier: float | None = None,
         include_operation_support: bool = True,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[str, ...]:
         failures: list[str] = []
         multiplier = performance.transit_time_multiplier if transit_multiplier is None else transit_multiplier
@@ -77,7 +79,10 @@ class TransportCompatibilityMixin:
                     if support.location is OperationSupportLocation.ORIGIN
                     else route.destination_id
                 )
-                if not self._has_available_capability(location_id, support.capability_id, day):
+                snapshot = None if power_by_location is None else power_by_location.get(location_id)
+                if not self._has_available_capability(
+                    location_id, support.capability_id, day, power=snapshot
+                ):
                     failures.append(
                         f"operation_support:{support.operation_type}:{support.location.value}:{support.capability_id}"
                     )
@@ -93,7 +98,7 @@ class TransportCompatibilityMixin:
     def vehicle_route_physical_failures(
         self, route_id: RouteId, vehicle_definition_id: DefinitionId, day: int = 0
     ) -> tuple[str, ...]:
-        return self._performance_route_failures(
+        return self.performance_route_failures(
             self.routes[route_id],
             self.vehicle_defs[vehicle_definition_id].performance,
             day,
@@ -103,7 +108,7 @@ class TransportCompatibilityMixin:
     def vehicle_route_failures(
         self, route_id: RouteId, vehicle_definition_id: DefinitionId, day: int = 0
     ) -> tuple[str, ...]:
-        return self._performance_route_failures(
+        return self.performance_route_failures(
             self.routes[route_id], self.vehicle_defs[vehicle_definition_id].performance, day
         )
 
@@ -113,7 +118,7 @@ class TransportCompatibilityMixin:
         route = self.routes[route_id]
         service = self.external_services[service_id]
         failures = list(
-            self._performance_route_failures(
+            self.performance_route_failures(
                 route,
                 service.performance,
                 day,
@@ -131,9 +136,27 @@ class TransportCompatibilityMixin:
                 failures.append(f"{prefix}:{failure.code}:{failure.detail}")
         return tuple(failures)
 
-    def _available_capability(self, location_id: SpatialNodeId, capability_id: str, day: int) -> float:
-        power = self.power.snapshot(location_id, self.facilities, day)
-        return self.facilities.available_capability_capacity_at(location_id, capability_id, power, day)
+    def _available_capability(
+        self,
+        location_id: SpatialNodeId,
+        capability_id: str,
+        day: int,
+        *,
+        power: PowerSnapshot | None = None,
+    ) -> float:
+        snapshot = power if power is not None else self.power.snapshot(location_id, self.facilities, day)
+        return self.facilities.available_capability_capacity_at(
+            location_id, capability_id, snapshot, day
+        )
 
-    def _has_available_capability(self, location_id: SpatialNodeId, capability_id: str, day: int) -> bool:
-        return self._available_capability(location_id, capability_id, day) > 1e-12
+    def _has_available_capability(
+        self,
+        location_id: SpatialNodeId,
+        capability_id: str,
+        day: int,
+        *,
+        power: PowerSnapshot | None = None,
+    ) -> bool:
+        return self._available_capability(
+            location_id, capability_id, day, power=power
+        ) > 1e-12

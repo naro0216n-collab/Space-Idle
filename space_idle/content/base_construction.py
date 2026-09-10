@@ -15,7 +15,7 @@ def build_construction_recipes() -> dict:
     return {
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: ConstructionRecipe(
             ids.MICROGRAVITY_EXPERIMENT_PLATFORM,
-            (req._structure_component(2.0), req._machinery_component(1.5), req._electronics_component(1.5)),
+            (req._structure_resource(2.0), req._machinery_resource(1.5), req._electronics_resource(1.5)),
             0.0,
             SiteRequirements(),
             frozenset({ids.TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS}),
@@ -23,7 +23,7 @@ def build_construction_recipes() -> dict:
         ),
         ids.CREWED_ORBITAL_LABORATORY: ConstructionRecipe(
             ids.CREWED_ORBITAL_LABORATORY,
-            (req._structure_component(8.0), req._machinery_component(7.0), req._electronics_component(5.0)),
+            (req._structure_resource(8.0), req._machinery_resource(7.0), req._electronics_resource(5.0)),
             0.0,
             SiteRequirements(),
             frozenset({ids.TECH_CREWED_ORBITAL_RESEARCH}),
@@ -59,7 +59,7 @@ def build_construction_recipes() -> dict:
         ),
         ids.ORBITAL_LOGISTICS_NODE: ConstructionRecipe(
             ids.ORBITAL_LOGISTICS_NODE,
-            (req._structure_component(3.0), req._machinery_component(2.0), req._electronics_component(1.0)),
+            (req._structure_resource(3.0), req._machinery_resource(2.0), req._electronics_resource(1.0)),
             0.0,
             SiteRequirements(),
             frozenset({ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS}),
@@ -116,6 +116,21 @@ def build_construction_recipes() -> dict:
             ids.HEAVY_EQUIPMENT_ASSEMBLY, 14, 14, 6, 100,
             technologies=frozenset({ids.TECH_HEAVY_EQUIPMENT_ASSEMBLY}),
         ),
+        ids.SURFACE_AGGREGATE_QUARRY: req._surface_recipe(
+            ids.SURFACE_AGGREGATE_QUARRY, 5, 7, 0, 32,
+        ),
+        ids.METAL_ORE_MINE: req._surface_recipe(
+            ids.METAL_ORE_MINE, 6, 8, 0, 38,
+        ),
+        ids.INDUSTRIAL_WATER_INTAKE: req._surface_recipe(
+            ids.INDUSTRIAL_WATER_INTAKE, 5, 5, 0, 30,
+        ),
+        ids.BASIC_STRUCTURAL_MATERIAL_PLANT: req._surface_recipe(
+            ids.BASIC_STRUCTURAL_MATERIAL_PLANT, 8, 8, 1, 45,
+        ),
+        ids.BASIC_MACHINERY_WORKS: req._surface_recipe(
+            ids.BASIC_MACHINERY_WORKS, 8, 10, 1, 52,
+        ),
     }
 
 
@@ -125,9 +140,9 @@ def build_facility_upgrade_recipes() -> dict:
             ids.EARTH_RESEARCH_LAB,
             2,
             (
-                req._structure_component(1.5),
-                req._machinery_component(2.0),
-                req._electronics_component(1.2),
+                req._structure_resource(1.5),
+                req._machinery_resource(2.0),
+                req._electronics_resource(1.2),
             ),
             20.0,
             SiteRequirements(),
@@ -137,9 +152,9 @@ def build_facility_upgrade_recipes() -> dict:
             ids.EARTH_RESEARCH_LAB,
             3,
             (
-                req._structure_component(2.5),
-                req._machinery_component(3.0),
-                req._electronics_component(2.0),
+                req._structure_resource(2.5),
+                req._machinery_resource(3.0),
+                req._electronics_resource(2.0),
             ),
             35.0,
             SiteRequirements(),

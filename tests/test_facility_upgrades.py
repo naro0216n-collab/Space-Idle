@@ -57,11 +57,12 @@ def test_facility_upgrade_is_a_resource_backed_construction_project():
     )
 
     stock_before = {
-        component.import_resource_id: app._simulation.inventory.amount(
-            facility.location_id, component.import_resource_id
+        requirement.resource_id: app._simulation.inventory.amount(
+            facility.location_id, requirement.resource_id
         )
-        for component in recipe.components
+        for requirement in recipe.resources
     }
+    investment_before = dict(facility.invested_resources)
 
     result = app.execute(
         PlanFacilityUpgrade(
@@ -101,14 +102,17 @@ def test_facility_upgrade_is_a_resource_backed_construction_project():
     assert completed.completed_facility_id == before_row.id
     assert facility.level == 2
 
-    for requirement, component in zip(recipe.components, completed.components, strict=True):
-        assert component.committed_primary_t >= requirement.amount_t - 1e-9
-        assert component.committed_import_t <= 1e-9
-        assert component.import_demand_id is None
+    for requirement, resource in zip(recipe.resources, completed.resources, strict=True):
+        assert resource.resource_id == str(requirement.resource_id)
+        assert resource.committed_t >= requirement.amount_t - 1e-9
+        assert resource.demand_id is None
         after = app._simulation.inventory.amount(
-            facility.location_id, requirement.import_resource_id
+            facility.location_id, requirement.resource_id
         )
-        assert after < stock_before[requirement.import_resource_id]
+        assert after < stock_before[requirement.resource_id]
+        assert facility.invested_resources[requirement.resource_id] == pytest.approx(
+            investment_before.get(requirement.resource_id, 0.0) + requirement.amount_t
+        )
 
     after_row, _ = _earth_lab(app)
     power = app._simulation.power.snapshot(
@@ -149,7 +153,10 @@ def test_active_upgrade_roundtrips_without_applying_level_early(tmp_path):
     active = _project(app, project_id)
     assert active.status in {"procuring", "ready"}
     assert facility.level == 1
-    assert any(component.reserved_primary_t > 0 for component in active.components)
+    assert any(
+        resource.reserved_t > 0 or resource.committed_t > 0
+        for resource in active.resources
+    )
 
     path = tmp_path / "active-upgrade.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))

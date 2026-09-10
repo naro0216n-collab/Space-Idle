@@ -35,4 +35,9 @@ def build_power_specs() -> dict:
         ids.FABRICATION_WORKSHOP: PowerSpec(None, 0.35, 45),
         ids.MACHINE_SHOP: PowerSpec(None, 0.45, 40),
         ids.HEAVY_EQUIPMENT_ASSEMBLY: PowerSpec(None, 0.55, 40),
+        ids.SURFACE_AGGREGATE_QUARRY: PowerSpec(None, 0.25, 45),
+        ids.METAL_ORE_MINE: PowerSpec(None, 0.30, 45),
+        ids.INDUSTRIAL_WATER_INTAKE: PowerSpec(None, 0.18, 50),
+        ids.BASIC_STRUCTURAL_MATERIAL_PLANT: PowerSpec(None, 0.40, 40),
+        ids.BASIC_MACHINERY_WORKS: PowerSpec(None, 0.48, 40),
     }

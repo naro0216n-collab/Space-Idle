@@ -57,6 +57,13 @@ class StorageService:
             utilization = 1.0
             if snapshot is not None:
                 utilization = max(0.0, min(1.0, snapshot.utilization_by_facility.get(facility.id, 1.0)))
+            maintenance = (
+                self.facilities.maintenance_factor(facility.id)
+                if snapshot is None
+                else snapshot.maintenance_factor_by_facility.get(
+                    facility.id, self.facilities.maintenance_factor(facility.id)
+                )
+            )
 
             for storage_class, capacity in provider.capacity_t_by_class.items():
                 key = (facility.location_id, storage_class)
@@ -64,9 +71,9 @@ class StorageService:
                 if not compatible:
                     factor = 0.0
                 elif storage_class in provider.power_sensitive_classes:
-                    factor = utilization
+                    factor = utilization * maintenance
                 else:
-                    factor = 1.0
+                    factor = maintenance
                 service[key] = service.get(key, 0.0) + capacity * factor
 
         self.inventory.set_capacity_snapshot(physical, service)

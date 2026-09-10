@@ -143,6 +143,19 @@ class LocationProjectorMixin:
                 research_storage = sim.research.provider_storage_capacity(
                     facility.id, research_power, sim.day
                 )
+            power_utilization = power.utilization_by_facility.get(
+                facility.id, 0.0 if not active_and_compatible else 1.0
+            )
+            maintenance_requirements = sim.facilities.maintenance_requirements_per_day(facility.id)
+            operating_blockers = list(activation_failures)
+            if active_and_compatible and power_utilization < 1.0 - 1e-9:
+                operating_blockers.append(("power", "電力配分不足"))
+            if facility.maintenance_satisfaction < 1.0 - 1e-9:
+                operating_blockers.append(("maintenance", "維持資源充足率不足"))
+            operational_utilization = (
+                power_utilization * facility.maintenance_satisfaction
+                if active_and_compatible else 0.0
+            )
             facilities.append(
                 FacilityRow(
                     str(facility.id),
@@ -153,19 +166,29 @@ class LocationProjectorMixin:
                     active_and_compatible,
                     tuple(activation_failures),
                     facility.power_priority,
+                    facility.maintenance_priority,
                     tuple(
                         sorted(
                             (supply.id, supply.rated_capacity)
                             for supply in definition.capability_supplies
                         )
                     ),
-                    power.utilization_by_facility.get(
-                        facility.id, 0.0 if not active_and_compatible else 1.0
-                    ),
+                    power_utilization,
                     research_tier,
                     research_generation,
                     research_storage,
                     self._facility_upgrade_option(facility, power),
+                    tuple(
+                        (str(resource_id), amount)
+                        for resource_id, amount in sorted(facility.invested_resources.items(), key=lambda row: str(row[0]))
+                    ),
+                    tuple(
+                        (str(resource_id), amount)
+                        for resource_id, amount in sorted(maintenance_requirements.items(), key=lambda row: str(row[0]))
+                    ),
+                    facility.maintenance_satisfaction,
+                    operational_utilization,
+                    tuple(operating_blockers),
                 )
             )
 

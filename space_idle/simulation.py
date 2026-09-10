@@ -9,15 +9,23 @@ from .facilities import FacilityBook
 from .industry import IndustryService
 from .inventory import InventoryBook
 from .logistics import LogisticsService
+from .maintenance import FacilityMaintenanceService
 from .power import PowerService, PowerSnapshot
 from .projects import ProjectService
 from .research import ResearchService
-from .resource_demand import ResourceDemand
+from .resource_demand import (
+    ResourceDemand,
+    external_resource_demands,
+    reconcile_local_resource_claims,
+    resolve_local_resource_supply,
+    ResourceDemandResolution,
+)
 from .shared import AccountState, SpatialNodeId
 from .spatial import EnvironmentResolver, SpatialGraph
 from .storage import StorageService
 from .technology import TechnologyState
 from .survey import ExtractionService, SurveyService
+from .scientific_exploration import ScientificExplorationService
 
 
 @dataclass(frozen=True)
@@ -61,6 +69,8 @@ class Simulation:
     research: ResearchService | None = None
     survey: SurveyService | None = None
     extraction: ExtractionService | None = None
+    scientific_exploration: ScientificExplorationService | None = None
+    maintenance: FacilityMaintenanceService | None = None
     content_id: str = "unconfigured"
     pending_offline_game_days: float = 0.0
     domain_extensions: tuple[DomainExtension, ...] = ()
@@ -70,6 +80,15 @@ class Simulation:
         locations.update(project.location_id for project in self.projects.projects.values())
         if self.survey is not None:
             locations.update(campaign.location_id for campaign in self.survey.campaigns.values())
+        locations.update(
+            project.location_id
+            for project in self.logistics.vehicle_production_projects.values()
+        )
+        if self.scientific_exploration is not None:
+            for definition_id in self.scientific_exploration.campaigns:
+                definition = self.scientific_exploration.definitions[definition_id]
+                locations.add(definition.origin_id)
+                locations.add(definition.destination_id)
         return locations
 
     def refresh_storage(self) -> None:
@@ -82,11 +101,11 @@ class Simulation:
         }
         self.storage.refresh(self.day, power_by_location)
 
-    def resource_demands(
+    def _gross_resource_demands(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[ResourceDemand, ...]:
-        """Collect material needs declared by domains without coupling logistics to them."""
+        """Collect domain need before local supply and transport are resolved."""
         locations = self._active_locations()
         powers = power_by_location or {
             loc: self.power.snapshot(loc, self.facilities, self.day)
@@ -104,12 +123,61 @@ class Simulation:
             )
         if self.research is not None:
             demands.extend(self.research.resource_demands(self.day))
+        if self.maintenance is not None:
+            demands.extend(self.maintenance.resource_demands(self.day))
+        demands.extend(self.logistics.vehicle_production_resource_demands(self.day))
+        if self.scientific_exploration is not None:
+            demands.extend(self.scientific_exploration.resource_demands(self.day))
         seen: set[object] = set()
         for demand in demands:
             if demand.id in seen:
                 raise RuntimeError(f"duplicate resource demand id: {demand.id}")
             seen.add(demand.id)
-        return tuple(sorted(demands, key=lambda row: (-row.priority, str(row.id))))
+        return tuple(demands)
+
+    def resource_demand_resolutions(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+    ) -> tuple[ResourceDemandResolution, ...]:
+        """Expose gross need and deterministic on-site allocation for queries.
+
+        This is observational. It does not reserve resources or alter priorities,
+        and therefore does not remove a supply bottleneck on the player's behalf.
+        """
+        return resolve_local_resource_supply(
+            self._gross_resource_demands(power_by_location), self.inventory
+        )
+
+    def resource_demands(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+    ) -> tuple[ResourceDemand, ...]:
+        """Return only the true off-site shortage after shared local netting."""
+        rows: list[ResourceDemand] = []
+        for resolution in self.resource_demand_resolutions(power_by_location):
+            demand = resolution.external_demand()
+            if demand is not None:
+                rows.append(demand)
+        return tuple(rows)
+
+    def refresh_resource_claims(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+    ) -> tuple[ResourceDemandResolution, ...]:
+        """Recompute present-time local allocations without advancing the clock.
+
+        Commands that commit a discrete demand may call this after changing the
+        demand set. It applies the same Location × Resource priority allocator as
+        the daily orchestrator; it does not create supply, choose a route, or
+        advance logistics.
+        """
+        powers = power_by_location or {
+            loc: self.power.snapshot(loc, self.facilities, self.day)
+            for loc in sorted(self._active_locations(), key=str)
+        }
+        return reconcile_local_resource_claims(
+            self._gross_resource_demands(powers), self.inventory
+        )
 
     def advance_to_day(self, target_day: int) -> None:
         if target_day < self.day:
@@ -153,6 +221,15 @@ class Simulation:
                 for loc in ordered_locations
             }
             self.storage.refresh(self.day, power_before)
+
+            # Re-evaluate previous-day discrete claims before production. This
+            # protects already allocated high-priority material from being
+            # consumed by a lower-priority process simply because industry runs
+            # earlier in the daily orchestrator.
+            reconcile_local_resource_claims(
+                self._gross_resource_demands(power_before), self.inventory
+            )
+
             for loc in ordered_locations:
                 self.industry.advance_day(
                     loc, self.facilities, self.inventory, power_before[loc], self.day
@@ -162,27 +239,50 @@ class Simulation:
                         loc, self.facilities, self.inventory, power_before[loc], self.day
                     )
 
+            # Production changes physical stock. Rebuild the derived allocation
+            # before the progression and maintenance steps that follow it in the
+            # canonical daily order.
+            reconcile_local_resource_claims(
+                self._gross_resource_demands(power_before), self.inventory
+            )
+
             if self.research is not None:
                 self.research.advance_day(power_before, self.day)
+            if self.scientific_exploration is not None:
+                self.scientific_exploration.advance_day(power_before, self.day)
             if self.survey is not None:
                 self.survey.advance_day(power_before, self.day)
 
-            # Procurement determines domain need; logistics then allocates that
-            # need across player-configured lanes and creates physical orders.
-            self.projects.advance_procurement(self.day)
-            demands = self.resource_demands(power_before)
-            self.logistics.advance_automation(self.day, demands)
-            self.logistics.advance_day(self.day)
-            # Arrivals can satisfy construction reservations on the same tick.
-            self.projects.advance_procurement(self.day)
+            # Maintenance is fulfilled from stock available before today's
+            # logistics progression. Logistics replenishes future demand; it is
+            # not retroactively available to an earlier daily Domain step.
+            if self.maintenance is not None:
+                self.maintenance.advance_day(self.day)
 
-            power_after = {
-                loc: self.power.snapshot(loc, self.facilities, self.day)
-                for loc in ordered_locations
-            }
-            self.projects.advance_construction(power_after, self.day)
+            # Sourcing policy determines whether residual shortage may leave the
+            # site. It does not reserve local stock itself.
+            self.projects.advance_procurement(self.day)
+            gross_demands = self._gross_resource_demands(power_before)
+            external_demands = external_resource_demands(gross_demands, self.inventory)
+            self.logistics.advance_automation(self.day, external_demands)
+            self.logistics.advance_day(self.day)
+
+            # Cargo that arrived this tick may serve later daily steps such as
+            # vehicle production and construction, using the same shared
+            # Location × Resource allocation as pre-existing inventory.
+            reconcile_local_resource_claims(gross_demands, self.inventory)
+
+            self.logistics.advance_vehicle_production_day(power_before, self.day)
+
+            # Construction commits material only after the common allocator has
+            # assigned every required resource to the project in the same tick.
+            self.projects.finalize_procurement(self.day)
+            self.projects.advance_construction(power_before, self.day)
             self.refresh_storage()
             next_day = self.day + 1
             if self.contracts is not None:
                 self.contracts.advance_day(next_day)
             self.day = next_day
+            # Reservations are derived from the state visible at the new day.
+            # Never leave an end-of-tick allocation as authoritative state.
+            self.refresh_resource_claims()

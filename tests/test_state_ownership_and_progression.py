@@ -37,6 +37,7 @@ def test_full_research_point_payment_transitions_directly_to_visible_prototype_a
     assert not earth.blockers
 
     sim.research.set_prototype_site(ids.TECH_ORBITAL_OPERATIONS, ids.EARTH, sim.day)
+    sim.refresh_resource_claims()
     sim.research.fund_prototype(ids.TECH_ORBITAL_OPERATIONS, sim.day)
     assert ids.TECH_ORBITAL_OPERATIONS in sim.research.completed
     assert ids.TECH_ORBITAL_OPERATIONS not in sim.research.active

@@ -180,20 +180,24 @@ def test_save_load_preserves_vehicle_production_progress(tmp_path):
     app = build_game_application()
     result = app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     assert result.created_id is not None
-    vehicle_id = next(vid for vid in app._simulation.logistics.vehicles if str(vid) == result.created_id)
-    original = app._simulation.logistics.vehicles[vehicle_id]
-    assert original.status == "production"
+    production_id = next(pid for pid in app._simulation.vehicle_production.projects if str(pid) == result.created_id)
+    app.execute(AdvanceTime(1))
+    original = app._simulation.vehicle_production.projects[production_id]
+    assert original.phase.value == "building"
+    assert original.progress_days > 0
 
     path = tmp_path / "vehicle-production.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
-    days = max(1, original.available_day - app._simulation.day)
+    days = int(app._simulation.logistics.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production.days)
     app.execute(AdvanceTime(days))
     loaded.execute(AdvanceTime(days))
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
-    assert loaded._simulation.logistics.vehicles[vehicle_id].status == "available"
+    loaded_state = loaded._simulation.vehicle_production.projects[production_id]
+    assert loaded_state.phase.value == "complete"
+    assert loaded_state.completed_vehicle_id in loaded._simulation.logistics.vehicles
 
 
 def test_offline_progress_preserves_vehicle_production_state_machine(tmp_path):

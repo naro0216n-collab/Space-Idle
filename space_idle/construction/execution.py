@@ -1,59 +1,28 @@
 from __future__ import annotations
 
 from ..power import PowerSnapshot
-from ..shared import EntityId, SpatialNodeId
+from ..shared import SpatialNodeId
 from .models import ConstructionProject, FacilityUpgradeTarget, NewFacilityTarget, ProjectStatus
 
 
 class ConstructionExecutionMixin:
-    def _commit_materials(self, project: ConstructionProject) -> None:
-        if project.materials_committed:
-            return
-        recipe = self._recipe_for_project(project)
-        for component in recipe.components:
-            state = project.components[component.component_id]
-            if state.reserved_local_t > 1e-9:
-                if state.reserved_local_resource_id is None:
-                    raise RuntimeError("lost local resource type")
-                self.inventory.consume_reserved(
-                    EntityId(project.id),
-                    project.location_id,
-                    state.reserved_local_resource_id,
-                    state.reserved_local_t,
-                )
-                state.committed_local_t = state.reserved_local_t
-                state.committed_local_resource_id = state.reserved_local_resource_id
-                state.reserved_local_t = 0.0
-                state.reserved_local_resource_id = None
-            if state.reserved_primary_t > 1e-9:
-                self.inventory.consume_reserved(
-                    EntityId(project.id),
-                    project.location_id,
-                    component.import_resource_id,
-                    state.reserved_primary_t,
-                )
-                state.committed_primary_t = state.reserved_primary_t
-                state.reserved_primary_t = 0.0
-            if state.reserved_import_t > 1e-9:
-                self.inventory.consume_reserved(
-                    EntityId(project.id),
-                    project.location_id,
-                    component.import_resource_id,
-                    state.reserved_import_t,
-                )
-                state.committed_import_t = state.reserved_import_t
-                state.reserved_import_t = 0.0
-        project.materials_committed = True
 
     def _finish_project(self, project: ConstructionProject) -> None:
         self._commit_materials(project)
+        invested = self._committed_resources(project)
         target = project.target
         if isinstance(target, NewFacilityTarget):
             project.completed_facility_id = self.facilities.install(
-                target.facility_def_id, project.location_id
+                target.facility_def_id,
+                project.location_id,
+                invested_resources=invested,
             )
         else:
-            self.facilities.upgrade_to(target.facility_id, target.target_level)
+            self.facilities.upgrade_to(
+                target.facility_id,
+                target.target_level,
+                invested_resources=invested,
+            )
             project.completed_facility_id = target.facility_id
         project.status = ProjectStatus.COMPLETE
 
@@ -113,29 +82,21 @@ class ConstructionExecutionMixin:
             capacity = self.construction_capacity_at(location_id, power, day)
             if capacity <= 1e-12:
                 continue
-            active = [
-                project for project in candidates if project.construction_weight > 1e-12
-            ]
+            active = [project for project in candidates if project.construction_weight > 1e-12]
             remaining_capacity = capacity
             while active and remaining_capacity > 1e-12:
                 total_weight = sum(project.construction_weight for project in active)
                 if total_weight <= 1e-12:
                     break
                 allocations = {
-                    project.id: remaining_capacity
-                    * project.construction_weight
-                    / total_weight
+                    project.id: remaining_capacity * project.construction_weight / total_weight
                     for project in active
                 }
                 used = 0.0
                 completed: list[ConstructionProject] = []
-                for project in sorted(
-                    active, key=lambda row: (-row.priority, str(row.id))
-                ):
+                for project in sorted(active, key=lambda row: (-row.priority, str(row.id))):
                     recipe = self._recipe_for_project(project)
-                    remaining_work = max(
-                        0.0, recipe.construction_work - project.construction_done
-                    )
+                    remaining_work = max(0.0, recipe.construction_work - project.construction_done)
                     work = min(allocations[project.id], remaining_work)
                     if work <= 1e-12:
                         completed.append(project)

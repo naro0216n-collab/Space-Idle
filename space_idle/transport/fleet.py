@@ -20,47 +20,6 @@ class FleetManagementMixin:
                 raise ValueError("vehicle count must be non-negative")
             return tuple(self.add_vehicle(definition_id, location_id) for _ in range(count))
 
-        def produce_vehicle(self, definition_id: DefinitionId, location_id: SpatialNodeId, day: int = 0) -> EntityId:
-            """Start a time-based vehicle build using real assembly capacity and inputs."""
-            self._refresh_vehicle_states(day)
-            definition = self.vehicle_defs[definition_id]
-            capability_id = definition.production_capability_id
-            if capability_id is None:
-                raise ValueError("vehicle has no production recipe")
-            assembly_capacity = self._available_capability(location_id, capability_id, day)
-            if assembly_capacity <= 1e-12:
-                raise ValueError(f"missing vehicle production capability: {capability_id}")
-            active_builds = sum(
-                1
-                for state in self.vehicles.values()
-                if state.location_id == location_id
-                and state.status == VehicleStatus.PRODUCTION
-                and self.vehicle_defs[state.definition_id].production_capability_id == capability_id
-            )
-            if active_builds + 1 > assembly_capacity + 1e-12:
-                raise ValueError(f"vehicle production capacity occupied: {capability_id}")
-            if self.account.funds_musd + 1e-12 < definition.production_cost_musd:
-                raise ValueError("insufficient funds for vehicle production")
-            for resource_id, amount_t in definition.production_resources:
-                if self.inventory.available(location_id, resource_id) + 1e-12 < amount_t:
-                    raise ValueError(f"insufficient vehicle production resource: {resource_id}")
-            if not self.account.spend(definition.production_cost_musd):
-                raise ValueError("insufficient funds for vehicle production")
-            consumed: list[tuple[DefinitionId, float]] = []
-            for resource_id, amount_t in definition.production_resources:
-                if not self.inventory.take_unreserved(location_id, resource_id, amount_t):
-                    for restore_id, restore_amount in consumed:
-                        self.inventory.add(location_id, restore_id, restore_amount)
-                    self.account.earn(definition.production_cost_musd)
-                    raise RuntimeError("vehicle production resource accounting failed")
-                consumed.append((resource_id, amount_t))
-            vehicle_id = self.add_vehicle(definition_id, location_id)
-            state = self.vehicles[vehicle_id]
-            if definition.production_days > 1e-12:
-                state.status = VehicleStatus.PRODUCTION
-                state.available_day = day + max(1, round(definition.production_days))
-            return vehicle_id
-
         def refuel_vehicle(self, vehicle_id: EntityId, amount_t: float | None = None, day: int = 0) -> float:
             """Load propellant from the current node into a stationary vehicle tank."""
             self._refresh_vehicle_states(day)
@@ -112,8 +71,6 @@ class FleetManagementMixin:
                     if self.inventory.available(state.location_id, resource_id) + 1e-12 < amount_t:
                         blockers.append(f"maintenance_resource:{resource_id}")
                 return tuple(blockers) or (VehicleStatus.MAINTENANCE_WAIT,)
-            if state.status == VehicleStatus.PRODUCTION:
-                return (f"production_until:{state.available_day}",)
             if state.status == VehicleStatus.TURNAROUND:
                 return (f"turnaround_until:{state.available_day}",)
             if state.status == VehicleStatus.UNLOADING:
@@ -144,6 +101,88 @@ class FleetManagementMixin:
             states = [row for row in self.vehicles.values() if row.definition_id == definition_id]
             available = sum(1 for row in states if row.status == VehicleStatus.AVAILABLE)
             return len(states), available
+
+        def exclusive_assignment_failures(
+            self,
+            vehicle_id: EntityId,
+            required_location_id: SpatialNodeId,
+            day: int = 0,
+        ) -> tuple[str, ...]:
+            """Return blockers for handing a vehicle to another Domain exclusively."""
+            self._refresh_vehicle_states(day)
+            if vehicle_id not in self.vehicles:
+                return ("unknown_vehicle",)
+            state = self.vehicles[vehicle_id]
+            failures: list[str] = []
+            if state.status is not VehicleStatus.AVAILABLE:
+                failures.append(f"vehicle_status:{state.status.value}")
+            if state.available_day > day:
+                failures.append(f"vehicle_available_day:{state.available_day}")
+            if state.location_id != required_location_id:
+                failures.append(f"vehicle_location:{state.location_id}/{required_location_id}")
+            if state.assignment_id is not None:
+                failures.append(f"vehicle_assignment:{state.assignment_id}")
+            return tuple(failures)
+
+        def assign_vehicle_exclusively(
+            self,
+            vehicle_id: EntityId,
+            assignment_id: EntityId,
+            assignment_kind: str,
+            required_location_id: SpatialNodeId,
+            day: int = 0,
+        ) -> None:
+            """Transfer a vehicle to one external activity without knowing that activity's Domain."""
+            if not assignment_kind:
+                raise ValueError("vehicle assignment kind must be non-empty")
+            failures = self.exclusive_assignment_failures(
+                vehicle_id, required_location_id, day
+            )
+            if failures:
+                raise ValueError("vehicle is unavailable for assignment: " + "; ".join(failures))
+            state = self.vehicles[vehicle_id]
+            state.status = VehicleStatus.ASSIGNED
+            state.assignment_id = assignment_id
+            state.assignment_kind = assignment_kind
+
+        def move_assigned_vehicle(
+            self,
+            vehicle_id: EntityId,
+            assignment_id: EntityId,
+            destination_id: SpatialNodeId,
+        ) -> None:
+            """Record an assigned activity taking a vehicle away from its current node."""
+            state = self.vehicles[vehicle_id]
+            if state.assignment_id != assignment_id:
+                raise ValueError("vehicle assignment owner mismatch")
+            if state.status is not VehicleStatus.ASSIGNED:
+                raise ValueError("vehicle is not in an assigned activity state")
+            if destination_id not in self.facilities.environment.graph.nodes:
+                raise KeyError(destination_id)
+            state.location_id = None
+            state.transit_destination_id = destination_id
+
+        def release_vehicle_assignment(
+            self,
+            vehicle_id: EntityId,
+            assignment_id: EntityId,
+            final_location_id: SpatialNodeId,
+            *,
+            available_day: int | None = None,
+        ) -> None:
+            """Return an exclusively assigned vehicle to normal Fleet availability."""
+            state = self.vehicles[vehicle_id]
+            if state.assignment_id != assignment_id:
+                raise ValueError("vehicle assignment owner mismatch")
+            if final_location_id not in self.facilities.environment.graph.nodes:
+                raise KeyError(final_location_id)
+            state.location_id = final_location_id
+            state.transit_destination_id = None
+            state.assignment_id = None
+            state.assignment_kind = None
+            state.status = VehicleStatus.AVAILABLE
+            if available_day is not None:
+                state.available_day = available_day
 
         def _turnaround_requirements_available(
             self, definition: VehicleDef, location_id: SpatialNodeId, day: int
@@ -213,20 +252,3 @@ class FleetManagementMixin:
                     state.available_day = day
             else:
                 self._start_turnaround(state, definition, route.destination_id, day)
-
-        def _advance_vehicle_production(self, day: int) -> None:
-            for state in sorted(self.vehicles.values(), key=lambda row: str(row.id)):
-                if state.status != VehicleStatus.PRODUCTION or state.location_id is None:
-                    continue
-                definition = self.vehicle_defs[state.definition_id]
-                capability_id = definition.production_capability_id
-                if capability_id is None:
-                    continue
-                if not self._has_available_capability(state.location_id, capability_id, day):
-                    # Preserve remaining production time rather than letting an
-                    # absolute wall-clock completion ignore a stopped factory.
-                    state.available_day += 1
-                    continue
-                if state.available_day <= day + 1:
-                    state.status = VehicleStatus.AVAILABLE
-                    state.available_day = day + 1

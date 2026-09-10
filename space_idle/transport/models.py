@@ -7,8 +7,6 @@ from typing import Protocol, runtime_checkable
 from ..shared import CargoOrderId, DefinitionId, EntityId, RouteId, SpatialNodeId
 from ..site import SiteRequirements
 
-# Operation types are open string identifiers rather than a closed enum. New
-# operations can be registered without editing this model module.
 POWERED_ASCENT = "powered_ascent"
 SPACEFLIGHT = "spaceflight"
 LANDING = "landing"
@@ -16,12 +14,6 @@ ATMOSPHERIC_ENTRY = "atmospheric_entry"
 
 
 class TransportOperationKind:
-    """Well-known built-in operation identifiers.
-
-    This is deliberately not an Enum: content/extensions may use additional
-    operation identifiers without modifying a central closed set.
-    """
-
     POWERED_ASCENT = POWERED_ASCENT
     SPACEFLIGHT = SPACEFLIGHT
     LANDING = LANDING
@@ -41,13 +33,13 @@ class PathPolicy(str, Enum):
 
 class VehicleStatus(str, Enum):
     AVAILABLE = "available"
-    PRODUCTION = "production"
     TURNAROUND = "turnaround"
     MAINTENANCE_WAIT = "maintenance_wait"
     TRANSIT = "transit"
     TRANSIT_RETURN = "transit_return"
     UNLOADING = "unloading"
     WAYPOINT_WAIT = "waypoint_wait"
+    ASSIGNED = "assigned"
 
 
 class MissionStatus(str, Enum):
@@ -140,8 +132,6 @@ class AtmosphericEntryCapability:
 
 @dataclass(frozen=True)
 class TransportPerformanceProfile:
-    """Physical/operational performance shared by owned vehicles and services."""
-
     dry_mass_t: float
     payload_t: float
     transit_time_multiplier: float = 1.0
@@ -182,6 +172,7 @@ class VehicleProductionSpec:
     days: float = 0.0
     cost_musd: float = 0.0
     resources: tuple[tuple[DefinitionId, float], ...] = ()
+    site_requirements: SiteRequirements = SiteRequirements()
 
 
 @dataclass(frozen=True)
@@ -278,6 +269,8 @@ class VehicleState:
     available_day: int = 0
     transit_destination_id: SpatialNodeId | None = None
     propellant_t: float = 0.0
+    assignment_id: EntityId | None = None
+    assignment_kind: str | None = None
 
 
 @dataclass

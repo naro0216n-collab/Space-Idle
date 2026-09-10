@@ -38,7 +38,13 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 continue
             utilization = max(
                 0.0,
-                min(1.0, power.utilization_by_facility.get(facility.id, 1.0)),
+                min(
+                    1.0,
+                    power.utilization_by_facility.get(facility.id, 1.0)
+                    * power.maintenance_factor_by_facility.get(
+                        facility.id, facilities.maintenance_factor(facility.id)
+                    ),
+                ),
             )
             for resource_id, amount_t in process.inputs_per_day.items():
                 if amount_t > 1e-12:
@@ -47,8 +53,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         owner_id = EntityId(f"industry.site:{location_id}")
         demands: list[ResourceDemand] = []
         for resource_id, target_t in sorted(required.items(), key=lambda row: str(row[0])):
-            shortage = max(0.0, target_t - inventory.available(location_id, resource_id))
-            if shortage <= 1e-9:
+            if target_t <= 1e-9:
                 continue
             demands.append(ResourceDemand(
                 EntityId(f"demand.industry:{location_id}:{resource_id}"),
@@ -56,9 +61,11 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 owner_id,
                 location_id,
                 resource_id,
-                shortage,
+                target_t,
                 50,
                 None,
+                0.0,
+                True,
             ))
         return tuple(demands)
 

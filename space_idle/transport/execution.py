@@ -504,5 +504,4 @@ class TransportExecutionMixin:
             self._move_waiting_by_priority(day)
             self._arrive(day + 1)
             self.waiting = {key: value for key, value in self.waiting.items() if value > 1e-9}
-            self._advance_vehicle_production(day)
             self._refresh_vehicle_states(day + 1)

@@ -59,17 +59,3 @@ class SetConstructionWeight:
 class SetProjectImportSource:
     project_id: str
     location_id: str | None
-
-
-@dataclass(frozen=True)
-class SetProjectLocalFraction:
-    project_id: str
-    component_id: str
-    fraction: float
-
-
-@dataclass(frozen=True)
-class SetProjectLocalMaterial:
-    project_id: str
-    component_id: str
-    resource_id: str | None

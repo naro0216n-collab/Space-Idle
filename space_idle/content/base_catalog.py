@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..catalog import GameCatalog, ResourceDef
-from .base_ids import STRUCTURAL_COMPONENTS, MACHINERY, PRECISION_ELECTRONICS, BULK_STRUCTURE, FABRICATED_STRUCTURE, BASIC_MACHINE_PARTS, CONSTRUCTION_EQUIPMENT, REGOLITH, METAL_FEEDSTOCK, WATER, OXYGEN, HYDROGEN, PROPELLANT
+from .base_ids import STRUCTURAL_COMPONENTS, MACHINERY, PRECISION_ELECTRONICS, BULK_STRUCTURE, FABRICATED_STRUCTURE, BASIC_MACHINE_PARTS, CONSTRUCTION_EQUIPMENT, REGOLITH, METAL_FEEDSTOCK, AGGREGATE, METAL_ORE, WATER, OXYGEN, HYDROGEN, PROPELLANT
 
 def build_base_catalog() -> GameCatalog:
     resources = {
@@ -14,6 +14,8 @@ def build_base_catalog() -> GameCatalog:
         CONSTRUCTION_EQUIPMENT: ResourceDef(CONSTRUCTION_EQUIPMENT, "建設機械", category="equipment"),
         REGOLITH: ResourceDef(REGOLITH, "レゴリス", category="bulk"),
         METAL_FEEDSTOCK: ResourceDef(METAL_FEEDSTOCK, "金属原料", category="bulk"),
+        AGGREGATE: ResourceDef(AGGREGATE, "鉱物骨材", category="bulk"),
+        METAL_ORE: ResourceDef(METAL_ORE, "金属鉱石", category="bulk"),
         WATER: ResourceDef(WATER, "水"), OXYGEN: ResourceDef(OXYGEN, "酸素"), HYDROGEN: ResourceDef(HYDROGEN, "水素"),
         PROPELLANT: ResourceDef(PROPELLANT, "化学推進剤"),
     }

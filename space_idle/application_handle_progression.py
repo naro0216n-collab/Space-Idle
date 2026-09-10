@@ -3,9 +3,9 @@ from __future__ import annotations
 from .application_commands import (
     Command, CommandResult, FundResearchPrototype, PauseResearch, PauseSurvey,
     ResumeResearch, ResumeSurvey, SetResearchDemonstrationSite,
-    SetResearchPrototypeSite, SetSurveyAllocation, StartResearch, StartSurvey,
+    SetResearchPrototypeSite, SetSurveyAllocation, StartResearch, StartSurvey, StartScientificExploration, PauseScientificExploration, ResumeScientificExploration, AssignExplorationVehicle, UnassignExplorationVehicle,
 )
-from .shared import DefinitionId
+from .shared import DefinitionId, EntityId
 
 
 class ProgressionCommandHandlerMixin:
@@ -27,9 +27,28 @@ class ProgressionCommandHandlerMixin:
             elif isinstance(command, SetResearchPrototypeSite):
                 sim.research.set_prototype_site(rid, self._require_location(command.location_id), sim.day)
             elif isinstance(command, FundResearchPrototype):
+                sim.refresh_resource_claims()
                 sim.research.fund_prototype(rid, sim.day)
             else:
                 sim.research.set_demonstration_site(rid, self._require_location(command.location_id), sim.day)
+            return CommandResult()
+        if isinstance(command, (
+            StartScientificExploration, PauseScientificExploration, ResumeScientificExploration,
+            AssignExplorationVehicle, UnassignExplorationVehicle,
+        )):
+            if sim.scientific_exploration is None:
+                raise RuntimeError("scientific exploration is not configured")
+            exploration_id = DefinitionId(command.exploration_id)
+            if isinstance(command, StartScientificExploration):
+                sim.scientific_exploration.start(exploration_id, day=sim.day)
+            elif isinstance(command, PauseScientificExploration):
+                sim.scientific_exploration.pause(exploration_id)
+            elif isinstance(command, ResumeScientificExploration):
+                sim.scientific_exploration.resume(exploration_id)
+            elif isinstance(command, AssignExplorationVehicle):
+                sim.scientific_exploration.assign_vehicle(exploration_id, EntityId(command.vehicle_id), day=sim.day)
+            else:
+                sim.scientific_exploration.unassign_vehicle(exploration_id)
             return CommandResult()
         if isinstance(command, (StartSurvey, PauseSurvey, ResumeSurvey, SetSurveyAllocation)):
             if sim.survey is None:

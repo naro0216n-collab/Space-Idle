@@ -11,6 +11,8 @@ BASIC_MACHINE_PARTS = DefinitionId("base.resource.basic_machine_parts")
 CONSTRUCTION_EQUIPMENT = DefinitionId("base.resource.construction_equipment")
 REGOLITH = DefinitionId("base.resource.regolith")
 METAL_FEEDSTOCK = DefinitionId("base.resource.metal_feedstock")
+AGGREGATE = DefinitionId("base.resource.aggregate")
+METAL_ORE = DefinitionId("base.resource.metal_ore")
 WATER = DefinitionId("base.resource.water")
 OXYGEN = DefinitionId("base.resource.oxygen")
 HYDROGEN = DefinitionId("base.resource.hydrogen")
@@ -61,6 +63,11 @@ METALLURGY = DefinitionId("base.facility.metallurgy")
 FABRICATION_WORKSHOP = DefinitionId("base.facility.fabrication_workshop")
 MACHINE_SHOP = DefinitionId("base.facility.machine_shop")
 HEAVY_EQUIPMENT_ASSEMBLY = DefinitionId("base.facility.heavy_equipment_assembly")
+SURFACE_AGGREGATE_QUARRY = DefinitionId("base.facility.surface_aggregate_quarry")
+METAL_ORE_MINE = DefinitionId("base.facility.metal_ore_mine")
+INDUSTRIAL_WATER_INTAKE = DefinitionId("base.facility.industrial_water_intake")
+BASIC_STRUCTURAL_MATERIAL_PLANT = DefinitionId("base.facility.basic_structural_material_plant")
+BASIC_MACHINERY_WORKS = DefinitionId("base.facility.basic_machinery_works")
 
 # Industrial processes are separately selectable from facility definitions.
 PROCESS_ELECTROLYSIS = DefinitionId("base.process.water_electrolysis")
@@ -71,6 +78,8 @@ PROCESS_ORE_PROCESS = DefinitionId("base.process.ore_processing")
 PROCESS_METALLURGY = DefinitionId("base.process.metallurgy")
 PROCESS_BASIC_MACHINING = DefinitionId("base.process.basic_machining")
 PROCESS_HEAVY_EQUIPMENT = DefinitionId("base.process.heavy_equipment_assembly")
+PROCESS_BASIC_STRUCTURAL_MATERIAL = DefinitionId("base.process.basic_structural_material")
+PROCESS_BASIC_MACHINERY = DefinitionId("base.process.basic_machinery")
 
 # Research IDs identify concrete engineering/science subjects. Progression is
 # based on technical difficulty and experimental infrastructure rather than a
@@ -104,3 +113,6 @@ EARTH_LEO_LAUNCH_SERVICE = DefinitionId("base.transport_service.commercial_earth
 LEO_LUNAR_SERVICE = DefinitionId("base.transport_service.commercial_orbital_transfer")
 LUNAR_LANDING_SERVICE = DefinitionId("base.transport_service.commercial_vacuum_lander")
 DIRECT_LUNAR_SERVICE = DefinitionId("base.transport_service.commercial_earth_lunar_direct")
+
+# Scientific Exploration campaigns are finite science activities, separate from resource survey.
+CISLUNAR_SCIENCE_EXPLORATION = DefinitionId("base.scientific_exploration.cislunar_environment_observation")

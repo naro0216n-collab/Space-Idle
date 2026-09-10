@@ -93,7 +93,7 @@ class ApplicationReportProjectorMixin:
         for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id)):
             if project.location_id != location_id:
                 continue
-            definition_id = str(sim.projects._target_facility_def_id(project))
+            definition_id = str(sim.projects.target_facility_definition_id(project))
             for blocker in sim.projects.blockers(project.id, sim.day, power):
                 issues.append(self._issue(
                     blocker.code, blocker.detail, category="construction", source="project",
@@ -167,7 +167,7 @@ class ApplicationReportProjectorMixin:
                 continue
             matching = [
                 lane for lane in sim.logistics.lanes.values()
-                if sim.logistics._lane_accepts_demand(lane, demand)
+                if sim.logistics.lane_accepts_demand(lane, demand)
             ]
             if matching:
                 continue

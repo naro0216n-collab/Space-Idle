@@ -18,6 +18,8 @@ class LogisticsProjectorMixin(
         return LogisticsView(
             self._route_rows(),
             self._vehicle_rows(),
+            self._vehicle_production_option_rows(),
+            self._vehicle_production_rows(),
             self._mission_rows(),
             self._order_rows(),
             self._lane_rows(demands, snapshot),
@@ -47,7 +49,7 @@ class LogisticsProjectorMixin(
             blocked_order_count=sum(1 for row in orders if row.blockers),
             lane_count=len(lanes),
             paused_lane_count=sum(1 for row in lanes if row.paused),
-            demand_count=len(demands),
+            demand_count=len(demand_rows),
             queued_demand_t=sum(row.remaining_t for row in demand_rows),
             waiting_t=sum(row.waiting_t for row in orders),
             in_transit_t=sum(row.in_transit_t for row in orders),

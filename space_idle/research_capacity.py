@@ -23,7 +23,16 @@ class ResearchCapacityMixin:
         snapshot = power_by_location.get(facility.location_id)
         if snapshot is None:
             snapshot = self.power.snapshot(facility.location_id, self.facilities, day)
-        return max(0.0, min(1.0, snapshot.utilization_by_facility.get(facility.id, 1.0)))
+        return max(
+            0.0,
+            min(
+                1.0,
+                snapshot.utilization_by_facility.get(facility.id, 1.0)
+                * snapshot.maintenance_factor_by_facility.get(
+                    facility.id, self.facilities.maintenance_factor(facility.id)
+                ),
+            ),
+        )
 
     def _provider_level_spec(self, facility_id):
         facility = self.facilities.facilities[facility_id]
@@ -57,6 +66,23 @@ class ResearchCapacityMixin:
             for facility in self.facilities.facilities.values()
             if facility.definition_id in self.providers
         )
+
+
+    def store_generated_points(
+        self,
+        points: float,
+        *,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+        day: int = 0,
+    ) -> float:
+        """Store newly generated RP without ever deleting already stored RP."""
+        if points < -1e-9:
+            raise ValueError("generated research points must be non-negative")
+        capacity = self.storage_capacity(power_by_location, day)
+        free = max(0.0, capacity - self.stored_points)
+        accepted = min(max(0.0, points), free)
+        self.stored_points += accepted
+        return accepted
 
     def is_over_capacity(self, power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None, day: int = 0) -> bool:
         return self.stored_points > self.storage_capacity(power_by_location, day) + 1e-9

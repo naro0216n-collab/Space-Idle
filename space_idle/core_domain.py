@@ -19,7 +19,7 @@ def validate_core_configuration(sim: Any, ctx: ValidationContext) -> None:
     for (node_id, facet_type), facet in sim.environment.static.facets.items():
         _require(node_id in nodes, f"environment facet references unknown location: {node_id}")
         _require(isinstance(facet, facet_type), f"environment facet type mismatch: {node_id}/{facet_type.__name__}")
-    sim.environment._ordered_overlays()
+    sim.environment.ordered_overlays()
 
 
 def validate_core_runtime(sim: Any) -> None:

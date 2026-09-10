@@ -8,7 +8,7 @@
   const section=(title,body)=>`<section class="inspector-section"><h3>${esc(title)}</h3>${body}</section>`;
   const kv=(rows)=>`<dl class="kv-grid">${rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
   const setInspector=(title,html)=>{$('#inspectorTitle').textContent=title;$('#inspectorContent').innerHTML=html;};
-  const componentCards=(components)=>(components||[]).map((c)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(c.component_id.replaceAll('_',' '))}</span><span>${fmt(c.required_t)} t</span></div><div class="cell-sub">標準材: ${esc(resourceName(c.import_resource_id))}${(c.local_substitutions||[]).length?` · 現地代替: ${(c.local_substitutions||[]).map(([r,f])=>`${esc(resourceName(r))} ${pct(f)}`).join(' / ')}`:''}</div></div>`).join('')||'<div class="empty-state">追加部材なし</div>';
+  const resourceCards=(resources)=>(resources||[]).map((r)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div></div>`).join('')||'<div class="empty-state">追加資源なし</div>';
 
   function renderOverviewTab(){
     const loc=state.location,flow=state.flow,issues=state.bottlenecks?.items||[];
@@ -18,8 +18,8 @@
   }
 
   function renderFacilitiesTab(){
-    const rows=(state.location?.facilities||[]).map((f)=>{const u=f.next_upgrade;const upgrade=u?(u.active_project_id?`案件 ${esc(u.active_project_id)}`:`→ Lv ${fmt(u.target_level,0)}`):'—';return `<tr class="selectable" data-inspect="facility" data-id="${esc(f.id)}"><td><div class="cell-main">${esc(f.display_name)}</div><div class="cell-sub">${esc(f.id)}</div></td><td>Lv ${fmt(f.level,0)}</td><td>${f.paused?'<span class="badge warn">停止</span>':'<span class="badge ok">稼働</span>'}</td><td>${pct(f.power_utilization)}</td><td>${f.power_priority??'—'}</td><td>${upgrade}</td><td>${(f.activation_blockers||[]).length}</td></tr>`;}).join('');
-    return `<section class="card"><div class="card-heading"><h3>設備一覧</h3><span class="badge">${state.location?.facilities?.length||0}</span></div><div class="table-wrap"><table><thead><tr><th>設備</th><th>Level</th><th>状態</th><th>電力</th><th>優先度</th><th>Upgrade</th><th>blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="7">設備なし</td></tr>'}</tbody></table></div></section>`;
+    const rows=(state.location?.facilities||[]).map((f)=>{const u=f.next_upgrade;const upgrade=u?(u.active_project_id?`案件 ${esc(u.active_project_id)}`:`→ Lv ${fmt(u.target_level,0)}`):'—';return `<tr class="selectable" data-inspect="facility" data-id="${esc(f.id)}"><td><div class="cell-main">${esc(f.display_name)}</div><div class="cell-sub">${esc(f.id)}</div></td><td>Lv ${fmt(f.level,0)}</td><td>${f.paused?'<span class="badge warn">停止</span>':'<span class="badge ok">稼働</span>'}</td><td>${pct(f.operational_utilization)}</td><td>${pct(f.maintenance_satisfaction)}</td><td>${f.power_priority??'—'}</td><td>${f.maintenance_priority??50}</td><td>${upgrade}</td><td>${(f.activation_blockers||[]).length}</td></tr>`;}).join('');
+    return `<section class="card"><div class="card-heading"><h3>設備一覧</h3><span class="badge">${state.location?.facilities?.length||0}</span></div><div class="table-wrap"><table><thead><tr><th>設備</th><th>Level</th><th>状態</th><th>実効稼働</th><th>維持</th><th>電力優先</th><th>維持優先</th><th>Upgrade</th><th>blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="9">設備なし</td></tr>'}</tbody></table></div></section>`;
   }
 
   function renderInventoryTab(){
@@ -31,7 +31,7 @@
   function renderConstructionTab(){
     const projects=state.projects?.items||[],options=state.buildOptions?.items||[];
     const pRows=projects.map((p)=>{const target=p.target_kind==='facility_upgrade'?`Upgrade → Lv ${fmt(p.target_level,0)}`:'新規建設';return `<tr class="selectable" data-inspect="project" data-id="${esc(p.id)}"><td><div class="cell-main">${esc(p.display_name||p.facility_display_name||p.id)}</div><div class="cell-sub">${esc(target)} · ${esc(p.id)}</div></td><td>${esc(stateLabels[p.status]||p.status||(p.paused?'paused':'active'))}</td><td>${fmt(p.progress??p.construction_done??0)}/${fmt(p.construction_required??0)}</td><td>${p.priority??'—'}</td><td>${(p.blockers||[]).length}</td></tr>`;}).join('');
-    const optionCards=options.map((o)=>{const blocked=(o.missing_technologies?.length||0)+(o.site_blockers?.length||0);return `<div class="route-mode-card"><div class="mode-title"><span>${esc(o.display_name)}</span><span class="badge ${blocked?'warn':'ok'}">${blocked?`${blocked} blocker`:'建設可'}</span></div><div class="cell-sub">工数 ${fmt(o.construction_required,0)} · 部材 ${o.components?.length||0}種</div><div class="action-row" style="margin-top:8px"><button type="button" data-build="${esc(o.facility_definition_id)}" ${blocked?'disabled':''}>建設計画</button><button type="button" data-inspect="build-option" data-id="${esc(o.facility_definition_id)}">詳細</button></div></div>`;}).join('');
+    const optionCards=options.map((o)=>{const blocked=(o.missing_technologies?.length||0)+(o.site_blockers?.length||0);return `<div class="route-mode-card"><div class="mode-title"><span>${esc(o.display_name)}</span><span class="badge ${blocked?'warn':'ok'}">${blocked?`${blocked} blocker`:'建設可'}</span></div><div class="cell-sub">工数 ${fmt(o.construction_required,0)} · 資源 ${o.resources?.length||0}種</div><div class="action-row" style="margin-top:8px"><button type="button" data-build="${esc(o.facility_definition_id)}" ${blocked?'disabled':''}>建設計画</button><button type="button" data-inspect="build-option" data-id="${esc(o.facility_definition_id)}">詳細</button></div></div>`;}).join('');
     return `<div class="card-grid"><section class="card"><div class="card-heading"><h3>建設案件</h3><span class="badge">${projects.length}</span></div><div class="table-wrap"><table><thead><tr><th>案件</th><th>状態</th><th>進捗</th><th>優先</th><th>blocker</th></tr></thead><tbody>${pRows||'<tr><td colspan="5">進行中案件なし</td></tr>'}</tbody></table></div></section><section class="card"><div class="card-heading"><h3>新規建設</h3><span class="badge">${options.length}</span></div><div class="card-body">${optionCards||'<div class="empty-state">建設候補なし</div>'}</div></section></div>`;
   }
 
@@ -39,28 +39,41 @@
     if(!window.SpaceIdleResearchTree)return '<section class="card"><div class="card-heading"><h3>技術ツリー</h3></div><div class="empty-state">技術ツリー描画機構を読み込めませんでした。</div></section>';
     return window.SpaceIdleResearchTree.render(state.research||{items:[],providers:[]});
   }
+  function renderScientificExplorationTab(){
+    const items=state.scientificExplorations?.items||[];
+    const rows=items.map((x)=>{
+      const rewardLeft=Math.max(0,Number(x.research_points_total||0)-Number(x.research_points_awarded||0));
+      const blocked=(x.blockers||[]).length;
+      const assigned=x.assigned_vehicle_id?definitionName((state.vehicles?.items||[]).find((v)=>v.id===x.assigned_vehicle_id)?.definition_id||x.assigned_vehicle_id):'未割当';
+      return `<tr class="selectable" data-inspect="scientific-exploration" data-id="${esc(x.id)}"><td><div class="cell-main">${esc(x.display_name)}</div><div class="cell-sub">${esc(locationName(x.origin_id))} → ${esc(locationName(x.destination_id))}</div></td><td>${esc(stateLabels[x.status]||x.status)}</td><td>${fmt(x.progress_days,1)}/${fmt(x.duration_days,1)}日</td><td>${fmt(x.research_points_awarded,1)}/${fmt(x.research_points_total,1)} RP<div class="cell-sub">残り ${fmt(rewardLeft,1)}</div></td><td>${esc(assigned)}</td><td>${blocked}</td></tr>`;
+    }).join('');
+    return `<section class="card"><div class="card-heading"><h3>Scientific Exploration</h3><span class="badge">${items.length}</span></div><div class="card-body"><div class="cell-sub">Vehicleを輸送へ使うか科学探査へ拘束するかを選択します。Campaign報酬は有限で、資源Surveyとは別状態です。</div></div><div class="table-wrap"><table><thead><tr><th>Campaign</th><th>状態</th><th>期間</th><th>Research Point</th><th>割当Vehicle</th><th>blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="6">Scientific Exploration候補なし</td></tr>'}</tbody></table></div></section>`;
+  }
+
   function renderSurveyTab(){
     const rows=(state.surveys?.items||[]).map((s)=>`<tr class="selectable" data-inspect="survey" data-id="${esc(s.resource_id)}"><td><div class="cell-main">${esc(s.resource_name)}</div><div class="cell-sub">知識Lv ${s.knowledge_level}</div></td><td>${s.active?(s.paused?'<span class="badge warn">停止</span>':'<span class="badge ok">探査中</span>'):'<span class="badge">未開始</span>'}</td><td>${pct(s.progress)}</td><td>${fmt(s.capacity_points_per_day,2)}</td><td>${s.presence_probability==null?'—':pct(s.presence_probability)}</td><td>${s.visible_reserve_t==null?'—':fmt(s.visible_reserve_t)}</td></tr>`).join('');
     return `<section class="card"><div class="card-heading"><h3>地点探査</h3></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>状態</th><th>進捗</th><th>能力/日</th><th>存在確率</th><th>推定埋蔵量</th></tr></thead><tbody>${rows||'<tr><td colspan="6">この地点に探査対象なし</td></tr>'}</tbody></table></div></section>`;
   }
 
   function renderActiveTab(){
-    const renderers={overview:renderOverviewTab,facilities:renderFacilitiesTab,inventory:renderInventoryTab,construction:renderConstructionTab,research:renderResearchTab,survey:renderSurveyTab};
+    const renderers={overview:renderOverviewTab,facilities:renderFacilitiesTab,inventory:renderInventoryTab,construction:renderConstructionTab,research:renderResearchTab,'scientific-exploration':renderScientificExplorationTab,survey:renderSurveyTab};
     $('#operationsTabContent').innerHTML=(renderers[state.activeTab]||renderOverviewTab)();
   }
 
   function renderFacilityInspector(id){
     const f=state.location?.facilities?.find((x)=>x.id===id);if(!f)return false;
-    const blockers=f.activation_blockers||[],u=f.next_upgrade;
+    const blockers=f.operating_blockers||f.activation_blockers||[],u=f.next_upgrade;
     const researchRows=f.research_tier==null?[]:[['Research Tier',fmt(f.research_tier,0)],['RP生成',`${fmt(f.research_generation_points_per_day,2)}/日`],['RP貯蔵',fmt(f.research_storage_capacity_points,1)]];
     let upgradeSection='';
     if(u){
       const upgradeBlockers=[...(u.missing_technologies||[]).map((x)=>['technology',x]),...(u.site_blockers||[])];
       const active=u.active_project_id?`<div class="issue"><div class="issue-title">Upgrade案件 ${esc(u.active_project_id)} が進行中</div></div>`:'';
       const blocked=upgradeBlockers.length||Boolean(u.active_project_id);
-      upgradeSection=section(`次のUpgrade · Lv ${fmt(u.target_level,0)}`,kv([['必要工数',fmt(u.construction_required,0)],['既存案件',u.active_project_id?esc(u.active_project_id):'なし']])+componentCards(u.components)+`<div class="issue-stack">${active}${upgradeBlockers.map(issueHtml).join('')}</div><button type="button" class="primary" data-upgrade="${esc(f.id)}" ${blocked?'disabled':''}>Lv ${fmt(u.target_level,0)} Upgrade案件を作成</button>`);
+      upgradeSection=section(`次のUpgrade · Lv ${fmt(u.target_level,0)}`,kv([['必要工数',fmt(u.construction_required,0)],['既存案件',u.active_project_id?esc(u.active_project_id):'なし']])+resourceCards(u.resources)+`<div class="issue-stack">${active}${upgradeBlockers.map(issueHtml).join('')}</div><button type="button" class="primary" data-upgrade="${esc(f.id)}" ${blocked?'disabled':''}>Lv ${fmt(u.target_level,0)} Upgrade案件を作成</button>`);
     }else upgradeSection=section('次のUpgrade','<div class="empty-state">現在定義されている次LevelのUpgradeはありません。</div>');
-    setInspector(f.display_name,section('状態',kv([['ID',esc(f.id)],['定義',esc(f.definition_id)],['Level',fmt(f.level,0)],['運転',f.paused?'手動停止':'稼働'],['電力利用率',pct(f.power_utilization)],['電力優先度',esc(f.power_priority??'—')],...researchRows]))+section('Blocker',blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'<div class="badge ok">なし</div>')+upgradeSection+section('運用操作',`<div class="action-stack"><button type="button" data-command="${f.paused?'ResumeFacility':'PauseFacility'}" data-facility-id="${esc(f.id)}">${f.paused?'設備を再開':'設備を停止'}</button><div class="form-row"><label>電力優先度<input id="facilityPriorityInput" type="number" step="1" value="${f.power_priority??50}"></label><button type="button" data-set-power-priority="${esc(f.id)}">優先度を適用</button></div></div>`));
+    const investment=(f.invested_resources||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a)} t</div>`).join('')||'<div class="empty-state">投入履歴なし</div>';
+    const maintenance=(f.maintenance_demand_per_day||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a,4)} t/日</div>`).join('')||'<div class="empty-state">維持資源要求なし</div>';
+    setInspector(f.display_name,section('状態',kv([['ID',esc(f.id)],['定義',esc(f.definition_id)],['Level',fmt(f.level,0)],['運転',f.paused?'手動停止':'稼働'],['電力利用率',pct(f.power_utilization)],['維持充足率',pct(f.maintenance_satisfaction)],['実効稼働率',pct(f.operational_utilization)],['電力優先度',esc(f.power_priority??'—')],['維持優先度',esc(f.maintenance_priority??50)],...researchRows]))+section('建造・Upgrade投入資源',investment)+section('維持資源需要',maintenance)+section('Blocker',blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'<div class="badge ok">なし</div>')+upgradeSection+section('運用操作',`<div class="action-stack"><button type="button" data-command="${f.paused?'ResumeFacility':'PauseFacility'}" data-facility-id="${esc(f.id)}">${f.paused?'設備を再開':'設備を停止'}</button><div class="form-row"><label>電力優先度<input id="facilityPriorityInput" type="number" step="1" value="${f.power_priority??50}"></label><button type="button" data-set-power-priority="${esc(f.id)}">電力優先を適用</button></div><div class="form-row"><label>維持優先度<input id="maintenancePriorityInput" type="number" step="1" value="${f.maintenance_priority??50}"></label><button type="button" data-set-maintenance-priority="${esc(f.id)}">維持優先を適用</button></div></div>`));
     return true;
   }
   function renderResourceInspector(id){
@@ -73,16 +86,16 @@
     const target=p.target_kind==='facility_upgrade'?`Facility Upgrade → Lv ${fmt(p.target_level,0)}`:'新規施設建設';
     const targetRows=[['ID',esc(p.id)],['種別',esc(target)],['状態',esc(stateLabels[p.status]||p.status||(p.paused?'paused':'active'))],['優先度',esc(p.priority??'—')],['工数',`${fmt(p.progress??p.construction_done??0)}/${fmt(p.construction_required??0)}`]];
     if(p.target_facility_id)targetRows.push(['対象設備',esc(p.target_facility_id)]);if(p.completed_facility_id)targetRows.push(['反映設備',esc(p.completed_facility_id)]);
-    const componentRows=(p.components||[]).map((c)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(c.component_id.replaceAll('_',' '))}</span><span>${fmt(c.required_t)} t</span></div><div class="cell-sub">現地予約 ${fmt(c.reserved_local_t)} t · 到着済予約 ${fmt(c.reserved_import_t)} t · 投入済 ${fmt((c.committed_local_t||0)+(c.committed_import_t||0))} t</div></div>`).join('');
+    const resourceRows=(p.resources||[]).map((r)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div><div class="cell-sub">予約 ${fmt(r.reserved_t)} t · 投入済 ${fmt(r.committed_t)} t · 不足 ${fmt(r.shortage_t)} t</div></div>`).join('');
     const demands=(state.demands||[]).filter((d)=>d.owner_kind==='project'&&d.owner_id===p.id);
     const demandHtml=demands.length?demands.map((d)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(d.resource_id))}</span><span>${fmt(d.remaining_t)} t 待ち</span></div><div class="cell-sub">${d.source_id?esc(locationName(d.source_id)):'Laneが供給元を選択'} → ${esc(locationName(d.destination_id))} · 輸送系内 ${fmt(d.pipeline_t)} t</div></div>`).join(''):'<div class="empty-state">現在の物流Demandなし</div>';
-    setInspector(p.display_name||p.facility_display_name||p.id,section('案件',kv(targetRows))+section('必要部材 / 調達',componentRows||'<div class="empty-state">追加部材なし</div>')+section('物流Demand',demandHtml)+section('Blocker',(p.blockers||[]).length?`<div class="issue-stack">${p.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">なし</span>')+section('操作',`<div class="action-stack"><button type="button" data-command="${p.paused?'ResumeBuild':'PauseBuild'}" data-project-id="${esc(p.id)}" ${['complete','cancelled'].includes(p.status)?'disabled':''}>${p.paused?'建設再開':'建設停止'}</button><button type="button" class="danger-button" data-command="CancelBuild" data-project-id="${esc(p.id)}" ${['complete','cancelled'].includes(p.status)?'disabled':''}>案件取消</button></div>`));
+    setInspector(p.display_name||p.facility_display_name||p.id,section('案件',kv(targetRows))+section('必要資源 / 調達',resourceRows||'<div class="empty-state">追加資源なし</div>')+section('物流Demand',demandHtml)+section('Blocker',(p.blockers||[]).length?`<div class="issue-stack">${p.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">なし</span>')+section('操作',`<div class="action-stack"><button type="button" data-command="${p.paused?'ResumeBuild':'PauseBuild'}" data-project-id="${esc(p.id)}" ${['complete','cancelled'].includes(p.status)?'disabled':''}>${p.paused?'建設再開':'建設停止'}</button><button type="button" class="danger-button" data-command="CancelBuild" data-project-id="${esc(p.id)}" ${['complete','cancelled'].includes(p.status)?'disabled':''}>案件取消</button></div>`));
     return true;
   }
   function renderBuildOptionInspector(id){
     const o=state.buildOptions?.items?.find((x)=>x.facility_definition_id===id);if(!o)return false;
     const blockers=[...(o.missing_technologies||[]).map((x)=>['technology',x]),...(o.site_blockers||[])];
-    setInspector(o.display_name,section('建設',kv([['必要工数',fmt(o.construction_required,0)],['自己展開',o.self_deploying?'はい':'いいえ']]))+section('必要部材',componentCards(o.components))+section('Blocker',blockers.length?blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+section('操作',`<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" ${blockers.length?'disabled':''}>この地点に建設</button>`));
+    setInspector(o.display_name,section('建設',kv([['必要工数',fmt(o.construction_required,0)],['自己展開',o.self_deploying?'はい':'いいえ']]))+section('必要資源',resourceCards(o.resources))+section('Blocker',blockers.length?blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+section('操作',`<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" ${blockers.length?'disabled':''}>この地点に建設</button>`));
     return true;
   }
 
@@ -114,6 +127,28 @@
     setInspector(r.display_name,section('状態',kv([['段階',esc(stateLabels[r.status]||r.status)],['必要RP',fmt(r.research_point_cost,1)],['実証日数',`${r.demonstration_done_days}/${r.demonstration_required_days}`]]))+section('前提',(r.prerequisites||[]).length?(r.prerequisites||[]).map((x)=>`<span class="badge">${esc(definitionName(x))}</span>`).join(' '):'<span class="badge ok">なし</span>')+startState+section('現在のblocker',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:'<span class="badge ok">なし</span>')+phase+section('研究操作',`<div class="action-stack">${action||'<span class="badge">現在可能な研究操作なし</span>'}</div>`));
     return true;
   }
+  function renderScientificExplorationInspector(id){
+    const x=state.scientificExplorations?.items?.find((row)=>row.id===id);if(!x)return false;
+    const vehicleRows=(x.vehicle_options||[]).map((v)=>{
+      const blockers=v.blockers||[];const selected=v.vehicle_id===x.assigned_vehicle_id;
+      return `<div class="route-mode-card"><div class="mode-title"><span>${esc(v.display_name)}</span><span class="badge ${selected?'ok':blockers.length?'warn':''}">${selected?'割当中':blockers.length?'不適合':'適合'}</span></div><div class="cell-sub">${esc(v.vehicle_id)} · ${esc(locationName(v.location_id))} · ${esc(stateLabels[v.status]||v.status)}</div>${blockers.length?`<div class="issue-stack" style="margin-top:7px">${blockers.map((b)=>issueHtml(['exploration',b])).join('')}</div>`:''}<div class="action-row" style="margin-top:8px"><button type="button" data-exploration-assign="${esc(x.id)}" data-vehicle-id="${esc(v.vehicle_id)}" ${selected||blockers.length||x.status==='complete'?'disabled':''}>割り当て</button></div></div>`;
+    }).join('')||'<div class="empty-state">Vehicle候補なし</div>';
+    const inputs=(x.consumable_resources||[]).map(([rid,amount])=>`${esc(resourceName(rid))} ${fmt(amount)}t`).join(' / ')||'追加消耗資源なし';
+    const operations=(x.operations||[]).map(([op,dv])=>`${esc(A.operationName(op))} ${fmt(dv,2)} km/s`).join(' / ')||'—';
+    const blockers=x.blockers||[];
+    let action='';
+    if(x.status==='available')action=`<button type="button" class="primary" data-exploration-action="start" data-id="${esc(x.id)}">Campaign開始</button>`;
+    else if(x.status!=='complete')action=`<button type="button" data-exploration-action="${x.paused?'resume':'pause'}" data-id="${esc(x.id)}">${x.paused?'再開':'停止'}</button>${x.assigned_vehicle_id&&Number(x.progress_days||0)<=1e-9?`<button type="button" data-exploration-unassign="${esc(x.id)}">Vehicle割当解除</button>`:''}`;
+    setInspector(x.display_name,
+      section('Campaign',kv([['出発',esc(locationName(x.origin_id))],['対象/到着',esc(locationName(x.destination_id))],['所要期間',`${fmt(x.duration_days,1)}日`],['進捗',`${fmt(x.progress_days,1)}日`],['期待RP',fmt(x.research_points_total,1)],['獲得済RP',fmt(x.research_points_awarded,1)],['割当Vehicle',x.assigned_vehicle_id?esc(x.assigned_vehicle_id):'未割当']]))+
+      section('必要条件',`<div class="cell-sub">Operation: ${operations}</div><div class="cell-sub">消耗資源: ${inputs}</div>`)+
+      section('現在のblocker',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['exploration',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+
+      section('Vehicle適合性',vehicleRows)+
+      section('操作',`<div class="action-stack">${action||'<span class="badge">操作なし</span>'}</div>`)
+    );
+    return true;
+  }
+
   function renderSurveyInspector(id){
     const s=state.surveys?.items?.find((x)=>x.resource_id===id);if(!s)return false;
     const action=s.active?(s.paused?`<button data-survey-action="resume" data-id="${esc(id)}">探査再開</button>`:`<button data-survey-action="pause" data-id="${esc(id)}">探査停止</button>`):`<button class="primary" data-survey-action="start" data-id="${esc(id)}">探査開始</button>`;
@@ -123,7 +158,7 @@
   function renderInspector(){
     if(!state.inspector){setInspector('選択項目','<div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div>');return;}
     const {type,id}=state.inspector;
-    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,survey:renderSurveyInspector};
+    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector};
     if(!handlers[type]?.(id)){state.inspector=null;setInspector('選択項目','<div class="empty-state">項目の状態が変化しました。再選択してください。</div>');}
   }
 
@@ -145,10 +180,14 @@
     const upgrade=event.target.closest('[data-upgrade]');if(upgrade){try{const result=await command('PlanFacilityUpgrade',{facility_id:upgrade.dataset.upgrade,priority:50,sourcing_policy:'mixed',import_source_id:null});banner(`Upgrade案件 ${result?.created_id||''} を作成しました`);}catch{}return;}
     const cmd=event.target.closest('[data-command]');if(cmd){const payload={};if(cmd.dataset.facilityId)payload.facility_id=cmd.dataset.facilityId;if(cmd.dataset.projectId)payload.project_id=cmd.dataset.projectId;try{await command(cmd.dataset.command,payload);}catch{}return;}
     const pp=event.target.closest('[data-set-power-priority]');if(pp){try{await command('SetPowerPriority',{facility_id:pp.dataset.setPowerPriority,priority:Number($('#facilityPriorityInput').value)});}catch{}return;}
+    const mp=event.target.closest('[data-set-maintenance-priority]');if(mp){try{await command('SetMaintenancePriority',{facility_id:mp.dataset.setMaintenancePriority,priority:Number($('#maintenancePriorityInput').value)});}catch{}return;}
     const ra=event.target.closest('[data-research-action]');if(ra){const map={start:'StartResearch',pause:'PauseResearch',resume:'ResumeResearch'};try{await command(map[ra.dataset.researchAction],{research_id:ra.dataset.id});}catch{}return;}
     const protoSite=event.target.closest('[data-research-prototype-site]');if(protoSite){try{await command('SetResearchPrototypeSite',{research_id:protoSite.dataset.id,location_id:protoSite.dataset.researchPrototypeSite});}catch{}return;}
     const protoFund=event.target.closest('[data-research-prototype-fund]');if(protoFund){try{await command('FundResearchPrototype',{research_id:protoFund.dataset.researchPrototypeFund});}catch{}return;}
     const demo=event.target.closest('[data-research-demo-site]');if(demo){try{await command('SetResearchDemonstrationSite',{research_id:demo.dataset.id,location_id:demo.dataset.researchDemoSite});}catch{}return;}
+    const ea=event.target.closest('[data-exploration-action]');if(ea){const map={start:'StartScientificExploration',pause:'PauseScientificExploration',resume:'ResumeScientificExploration'};try{await command(map[ea.dataset.explorationAction],{exploration_id:ea.dataset.id});}catch{}return;}
+    const assign=event.target.closest('[data-exploration-assign]');if(assign){try{await command('AssignExplorationVehicle',{exploration_id:assign.dataset.explorationAssign,vehicle_id:assign.dataset.vehicleId});}catch{}return;}
+    const unassign=event.target.closest('[data-exploration-unassign]');if(unassign){try{await command('UnassignExplorationVehicle',{exploration_id:unassign.dataset.explorationUnassign});}catch{}return;}
     const sa=event.target.closest('[data-survey-action]');if(sa){const map={start:'StartSurvey',pause:'PauseSurvey',resume:'ResumeSurvey'},payload={location_id:state.locationId,resource_id:sa.dataset.id};if(sa.dataset.surveyAction==='start')payload.allocation_weight=1;try{await command(map[sa.dataset.surveyAction],payload);}catch{}return;}
     const sw=event.target.closest('[data-set-survey-weight]');if(sw){try{await command('SetSurveyAllocation',{location_id:state.locationId,resource_id:sw.dataset.setSurveyWeight,weight:Number($('#surveyWeightInput').value)});}catch{}return;}
   });

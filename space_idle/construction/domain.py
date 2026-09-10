@@ -13,7 +13,7 @@ from .models import (
     ConstructionProject,
     FacilityUpgradeTarget,
     NewFacilityTarget,
-    ProjectComponentState,
+    ProjectResourceState,
     ProjectStatus,
 )
 
@@ -54,24 +54,14 @@ def capture_projects(sim: Any) -> dict[str, Any]:
                 "paused": project.paused,
                 "pause_started_day": project.pause_started_day,
                 "completed_facility_id": None if project.completed_facility_id is None else str(project.completed_facility_id),
-                "local_fraction_targets": dict(sorted(project.local_fraction_targets.items())),
-                "local_resource_choices": {key: str(value) for key, value in sorted(project.local_resource_choices.items())},
                 "materials_committed": project.materials_committed,
-                "components": [
+                "resources": [
                     {
-                        "component_id": component_id,
-                        "reserved_local_t": component.reserved_local_t,
-                        "reserved_local_resource_id": None if component.reserved_local_resource_id is None else str(component.reserved_local_resource_id),
-                        "reserved_primary_t": component.reserved_primary_t,
-                        "reserved_import_t": component.reserved_import_t,
-                        "committed_local_t": component.committed_local_t,
-                        "committed_local_resource_id": None if component.committed_local_resource_id is None else str(component.committed_local_resource_id),
-                        "committed_primary_t": component.committed_primary_t,
-                        "committed_import_t": component.committed_import_t,
-                        "local_target_t": component.local_target_t,
-                        "import_committed_t": component.import_committed_t,
+                        "resource_id": str(resource_id),
+                        "committed_t": state.committed_t,
+                        "import_committed_t": state.import_committed_t,
                     }
-                    for component_id, component in sorted(project.components.items())
+                    for resource_id, state in sorted(project.resources.items(), key=lambda row: str(row[0]))
                 ],
             }
             for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id))
@@ -84,20 +74,13 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
     sim.projects.projects.clear()
     for row in data["items"]:
         project_id = ProjectId(row["id"])
-        components: dict[str, ProjectComponentState] = {}
-        for component in row["components"]:
-            components[component["component_id"]] = ProjectComponentState(
-                reserved_local_t=float(component["reserved_local_t"]),
-                reserved_local_resource_id=None if component["reserved_local_resource_id"] is None else DefinitionId(component["reserved_local_resource_id"]),
-                reserved_primary_t=float(component["reserved_primary_t"]),
-                reserved_import_t=float(component["reserved_import_t"]),
-                committed_local_t=float(component["committed_local_t"]),
-                committed_local_resource_id=None if component["committed_local_resource_id"] is None else DefinitionId(component["committed_local_resource_id"]),
-                committed_primary_t=float(component["committed_primary_t"]),
-                committed_import_t=float(component["committed_import_t"]),
-                local_target_t=float(component["local_target_t"]),
-                import_committed_t=None if component["import_committed_t"] is None else float(component["import_committed_t"]),
+        resources = {
+            DefinitionId(item["resource_id"]): ProjectResourceState(
+                committed_t=float(item["committed_t"]),
+                import_committed_t=None if item["import_committed_t"] is None else float(item["import_committed_t"]),
             )
+            for item in row["resources"]
+        }
         sim.projects.projects[project_id] = ConstructionProject(
             id=project_id,
             target=_restore_target(row["target"]),
@@ -111,9 +94,7 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
             construction_weight=float(row["construction_weight"]),
             paused=bool(row["paused"]),
             pause_started_day=None if row["pause_started_day"] is None else int(row["pause_started_day"]),
-            components=components,
-            local_fraction_targets={key: float(value) for key, value in row.get("local_fraction_targets", {}).items()},
-            local_resource_choices={key: DefinitionId(value) for key, value in row.get("local_resource_choices", {}).items()},
+            resources=resources,
             materials_committed=bool(row["materials_committed"]),
             completed_facility_id=None if row["completed_facility_id"] is None else EntityId(row["completed_facility_id"]),
         )
@@ -122,9 +103,7 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
 def referenced_resources(sim: Any) -> set[DefinitionId]:
     result: set[DefinitionId] = set(sim.projects.construction_resource_providers)
     for recipe in tuple(sim.projects.recipes.values()) + tuple(sim.projects.upgrade_recipes.values()):
-        for component in recipe.components:
-            result.add(component.import_resource_id)
-            result.update(tier.local_resource_id for tier in component.local_tiers)
+        result.update(requirement.resource_id for requirement in recipe.resources)
     return result
 
 
@@ -136,16 +115,15 @@ def _validate_recipe(recipe, owner: str, ctx: ValidationContext) -> None:
     _require(recipe.construction_work >= 0, f"negative construction work: {owner}")
     _require(recipe.prerequisite_technologies.issubset(ctx.known_technologies), f"construction references unknown technology: {owner}")
     _validate_site_requirements(recipe.site_requirements, ctx.known_capabilities, owner)
-    component_ids: set[str] = set()
-    for component in recipe.components:
-        _require(component.component_id not in component_ids, f"duplicate build component: {owner}/{component.component_id}")
-        component_ids.add(component.component_id)
-        _require(component.amount_t >= 0, f"negative component mass: {owner}/{component.component_id}")
-        seen_local_resources: set[object] = set()
-        for tier in component.local_tiers:
-            _require(0 <= tier.max_fraction <= 1, f"local substitution outside 0..1: {owner}/{component.component_id}")
-            _require(tier.local_resource_id not in seen_local_resources, f"duplicate local substitution resource: {owner}/{component.component_id}/{tier.local_resource_id}")
-            seen_local_resources.add(tier.local_resource_id)
+    resource_ids: set[DefinitionId] = set()
+    for requirement in recipe.resources:
+        _require(requirement.resource_id not in resource_ids, f"duplicate construction resource: {owner}/{requirement.resource_id}")
+        resource_ids.add(requirement.resource_id)
+        _require(requirement.amount_t > 0, f"non-positive construction resource amount: {owner}/{requirement.resource_id}")
+    _require(
+        2 <= len(recipe.resources) <= 3,
+        f"construction recipe must use 2-3 physical resources: {owner}",
+    )
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
@@ -211,21 +189,12 @@ def validate_runtime(sim: Any) -> None:
                 _require(project.completed_facility_id == project.target.facility_id, f"upgrade completed wrong facility: {project_id}")
         else:
             _require(project.completed_facility_id is None, f"incomplete project has completed facility: {project_id}")
-        expected_components = {component.component_id for component in recipe.components}
-        _require(set(project.components) == expected_components, f"project component state mismatch: {project_id}")
-        for component in project.components.values():
-            values = (
-                component.reserved_local_t,
-                component.reserved_primary_t,
-                component.reserved_import_t,
-                component.committed_local_t,
-                component.committed_primary_t,
-                component.committed_import_t,
-                component.local_target_t,
-            )
-            _require(all(value >= -1e-9 for value in values), f"negative project material accounting: {project_id}")
-            if component.import_committed_t is not None:
-                _require(component.import_committed_t >= -1e-9, f"negative project import commitment: {project_id}")
+        expected_resources = {requirement.resource_id for requirement in recipe.resources}
+        _require(set(project.resources) == expected_resources, f"project resource state mismatch: {project_id}")
+        for resource_id, state in project.resources.items():
+            _require(state.committed_t >= -1e-9, f"negative project resource accounting: {project_id}/{resource_id}")
+            if state.import_committed_t is not None:
+                _require(state.import_committed_t >= -1e-9, f"negative project import commitment: {project_id}/{resource_id}")
 
 
 DOMAIN_EXTENSION = DomainExtension(

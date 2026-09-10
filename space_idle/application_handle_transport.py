@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_commands import (
     Command, CommandResult, CreateLogisticsLane, DeleteLogisticsLane, DispatchVehicle,
-    PauseLogisticsLane, ProduceVehicle, RefuelVehicle, ResumeLogisticsLane, SubmitCargo,
+    PauseLogisticsLane, ProduceVehicle, PauseVehicleProduction, ResumeVehicleProduction, RefuelVehicle, ResumeLogisticsLane, SubmitCargo,
     UpdateLogisticsLane,
 )
 from .logistics import PathPolicy
@@ -22,10 +22,18 @@ class TransportCommandHandlerMixin:
             sim.logistics.refuel_vehicle(EntityId(command.vehicle_id), command.amount_t, sim.day)
             return CommandResult()
         if isinstance(command, ProduceVehicle):
-            vehicle_id = sim.logistics.produce_vehicle(
-                DefinitionId(command.vehicle_definition_id), self._require_location(command.location_id), sim.day
+            production_id = sim.logistics.plan_vehicle_production(
+                DefinitionId(command.vehicle_definition_id),
+                self._require_location(command.location_id),
+                day=sim.day,
             )
-            return CommandResult(str(vehicle_id))
+            return CommandResult(str(production_id))
+        if isinstance(command, PauseVehicleProduction):
+            sim.logistics.pause_vehicle_production(EntityId(command.production_id))
+            return CommandResult()
+        if isinstance(command, ResumeVehicleProduction):
+            sim.logistics.resume_vehicle_production(EntityId(command.production_id))
+            return CommandResult()
         if isinstance(command, SubmitCargo):
             source_id = self._require_location(command.source_id)
             destination_id = self._require_location(command.destination_id)

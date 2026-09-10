@@ -55,9 +55,17 @@ class ExtractionService:
                 reasons[facility.id] = [f"survey:{spec.deposit_resource_id}"]
                 continue
             target = self.survey.targets[key]
-            utilization = max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
+            power_factor = max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
+            maintenance_factor = power.maintenance_factor_by_facility.get(
+                facility.id, facilities.maintenance_factor(facility.id)
+            )
+            utilization = power_factor * maintenance_factor
             raw_output[facility.id] = spec.excavated_t_per_day * target.actual_concentration * utilization
-            reasons[facility.id] = ["power"] if utilization < 1.0 - 1e-9 else []
+            reasons[facility.id] = []
+            if power_factor < 1.0 - 1e-9:
+                reasons[facility.id].append("power")
+            if maintenance_factor < 1.0 - 1e-9:
+                reasons[facility.id].append("maintenance")
 
         # Shared deposits are depleted proportionally rather than by facility order.
         demand_by_deposit: dict[tuple[SpatialNodeId, DefinitionId], float] = {}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .application_commands import Command, CommandResult, PauseFacility, ResumeFacility, SetFacilityProcess, SetPowerPriority
+from .application_commands import Command, CommandResult, PauseFacility, ResumeFacility, SetFacilityProcess, SetPowerPriority, SetMaintenancePriority
 from .shared import DefinitionId, EntityId
 
 
@@ -16,4 +16,6 @@ class OperationsCommandHandlerMixin:
             sim.industry.set_process(facility, DefinitionId(command.process_id)); return CommandResult()
         if isinstance(command, SetPowerPriority):
             sim.facilities.set_power_priority(EntityId(command.facility_id), command.priority); sim.refresh_storage(); return CommandResult()
+        if isinstance(command, SetMaintenancePriority):
+            sim.facilities.set_maintenance_priority(EntityId(command.facility_id), command.priority); return CommandResult()
         return NotImplemented

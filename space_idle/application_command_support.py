@@ -32,7 +32,9 @@ class ApplicationCommandSupportMixin:
 
     def execute(self, command: Command) -> CommandResult:
         try:
-            return self._execute(command)
+            result = self._execute(command)
+            self._simulation.refresh_resource_claims()
+            return result
         except ApplicationError:
             raise
         except KeyError as exc:

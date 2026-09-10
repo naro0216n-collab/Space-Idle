@@ -7,6 +7,9 @@ from typing import Literal, TypeAlias
 from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId
 from ..site import SiteRequirements
 
+# Procurement policy controls how long a project waits for inventory already at
+# the destination before declaring an import demand. It does not change the
+# recipe or substitute one material for another.
 SourcingPolicy = Literal["import_now", "mixed", "local_priority"]
 
 
@@ -20,27 +23,23 @@ class ProjectStatus(str, Enum):
 
 
 @dataclass(frozen=True)
-class LocalSubstitutionTier:
-    """A material that may replace part of an imported component requirement."""
+class BuildResourceRequirement:
+    """One physical resource consumed by construction or an upgrade."""
 
-    local_resource_id: DefinitionId
-    max_fraction: float
-
-
-@dataclass(frozen=True)
-class BuildComponentRequirement:
-    component_id: str
+    resource_id: DefinitionId
     amount_t: float
-    import_resource_id: DefinitionId
-    local_tiers: tuple[LocalSubstitutionTier, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.amount_t <= 0:
+            raise ValueError("construction resource amount must be positive")
 
 
 @dataclass(frozen=True)
 class ConstructionRecipe:
-    """Requirements for creating one new facility instance."""
+    """Physical resource and work requirements for a new facility instance."""
 
     facility_def_id: DefinitionId
-    components: tuple[BuildComponentRequirement, ...]
+    resources: tuple[BuildResourceRequirement, ...]
     construction_work: float
     site_requirements: SiteRequirements = SiteRequirements()
     prerequisite_technologies: frozenset[DefinitionId] = frozenset()
@@ -49,11 +48,11 @@ class ConstructionRecipe:
 
 @dataclass(frozen=True)
 class FacilityUpgradeRecipe:
-    """Requirements for advancing one facility definition to a specific level."""
+    """Physical resource and work requirements for one level transition."""
 
     facility_def_id: DefinitionId
     target_level: int
-    components: tuple[BuildComponentRequirement, ...]
+    resources: tuple[BuildResourceRequirement, ...]
     construction_work: float
     site_requirements: SiteRequirements = SiteRequirements()
     prerequisite_technologies: frozenset[DefinitionId] = frozenset()
@@ -100,16 +99,12 @@ class ConstructionResourceProviderSpec:
 
 
 @dataclass
-class ProjectComponentState:
-    reserved_local_t: float = 0.0
-    reserved_local_resource_id: DefinitionId | None = None
-    reserved_primary_t: float = 0.0
-    reserved_import_t: float = 0.0
-    committed_local_t: float = 0.0
-    committed_local_resource_id: DefinitionId | None = None
-    committed_primary_t: float = 0.0
-    committed_import_t: float = 0.0
-    local_target_t: float = 0.0
+class ProjectResourceState:
+    """Mutable accounting for a recipe resource at the build destination."""
+
+    committed_t: float = 0.0
+    # None while the project is still waiting for destination inventory. Once
+    # set, logistics may satisfy the remaining physical shortage from lanes.
     import_committed_t: float | None = None
 
 
@@ -127,9 +122,7 @@ class ConstructionProject:
     construction_weight: float = 1.0
     paused: bool = False
     pause_started_day: int | None = None
-    components: dict[str, ProjectComponentState] = field(default_factory=dict)
-    local_fraction_targets: dict[str, float] = field(default_factory=dict)
-    local_resource_choices: dict[str, DefinitionId] = field(default_factory=dict)
+    resources: dict[DefinitionId, ProjectResourceState] = field(default_factory=dict)
     materials_committed: bool = False
     completed_facility_id: EntityId | None = None
 

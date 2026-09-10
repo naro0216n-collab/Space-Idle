@@ -6,6 +6,7 @@ from ..facilities import FacilityBook
 from ..industry import IndustryService
 from ..inventory import InventoryBook
 from ..logistics import LogisticsService
+from ..maintenance import FacilityMaintenanceService
 from ..power import PowerService
 from ..projects import ProjectService
 from ..research import ResearchService
@@ -14,6 +15,7 @@ from ..simulation import Simulation
 from ..storage import StorageService
 from ..survey import ExtractionService, SurveyService
 from ..technology import TechnologyState
+from ..scientific_exploration import ScientificExplorationService
 
 from ..content import base_ids as ids
 from ..content.base_construction import (
@@ -24,7 +26,7 @@ from ..content.base_construction import (
     sourcing_wait_days,
 )
 from ..content.base_contracts import build_contract_templates
-from ..content.base_facilities import build_facility_definitions, initial_facility_placements
+from ..content.base_facilities import build_facility_definitions, initial_facility_placements, initial_facility_investments
 from ..content.base_industry import build_process_specs
 from ..content.base_initial_state import configure_initial_inventory
 from ..content.base_power import build_power_specs
@@ -32,8 +34,10 @@ from ..content.base_progression import (
     build_extraction_specs,
     build_survey_providers,
     build_survey_targets,
+    initial_known_deposits,
 )
 from ..content.base_research import build_research_definitions, build_research_providers
+from ..content.base_scientific_exploration import build_scientific_exploration_definitions
 from ..content.base_spatial import build_spatial_model
 from ..content.base_storage import build_storage_provider_specs
 from ..content.base_transport import (
@@ -49,8 +53,12 @@ def build_base_simulation() -> Simulation:
     graph, environment = build_spatial_model()
 
     facilities = FacilityBook(build_facility_definitions(), environment)
+    initial_investments = initial_facility_investments()
     for facility_id, location_id in initial_facility_placements():
-        facilities.install(facility_id, location_id)
+        facilities.install(
+            facility_id, location_id,
+            invested_resources=initial_investments.get(facility_id, {}),
+        )
 
     inventory = InventoryBook()
     configure_initial_inventory(inventory)
@@ -88,12 +96,19 @@ def build_base_simulation() -> Simulation:
     )
 
     storage = StorageService(build_storage_provider_specs(), inventory, facilities)
+    maintenance = FacilityMaintenanceService(facilities, inventory)
 
     research = ResearchService(
         build_research_definitions(), build_research_providers(),
         facilities, inventory, power, technology_state=technology,
     )
+    scientific_exploration = ScientificExplorationService(
+        build_scientific_exploration_definitions(),
+        facilities, inventory, power, logistics, research,
+    )
     survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities)
+    for location_id, resource_id in initial_known_deposits():
+        survey.initialize_known(location_id, resource_id)
     extraction = ExtractionService(build_extraction_specs(), survey)
 
     # Keep the Contract Domain composed and available for future events,
@@ -103,6 +118,7 @@ def build_base_simulation() -> Simulation:
     sim = Simulation(
         0, account, graph, environment, inventory, facilities, power, storage,
         industry, logistics, projects, technology, contracts, research, survey, extraction,
+        scientific_exploration=scientific_exploration, maintenance=maintenance,
     )
     initial_locations = {facility.location_id for facility in facilities.facilities.values()} | set(graph.nodes)
     initial_power = {loc: power.snapshot(loc, facilities, 0) for loc in sorted(initial_locations, key=str)}

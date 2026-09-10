@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from .application_views import (
-    BuildComponentOption,
+    BuildResourceOption,
     BuildOptionRow,
     BuildOptionsView,
     FacilityUpgradeOption,
-    ProjectComponentRow,
+    ProjectResourceRow,
     ProjectRow,
 )
 from .construction.models import FacilityUpgradeTarget, NewFacilityTarget, ProjectStatus
@@ -14,18 +14,10 @@ from .shared import SpatialNodeId
 
 class ProjectProjectorMixin:
     @staticmethod
-    def _construction_component_options(recipe) -> tuple[BuildComponentOption, ...]:
+    def _construction_resource_options(recipe) -> tuple[BuildResourceOption, ...]:
         return tuple(
-            BuildComponentOption(
-                component.component_id,
-                component.amount_t,
-                str(component.import_resource_id),
-                tuple(
-                    (str(tier.local_resource_id), tier.max_fraction)
-                    for tier in component.local_tiers
-                ),
-            )
-            for component in recipe.components
+            BuildResourceOption(str(requirement.resource_id), requirement.amount_t)
+            for requirement in recipe.resources
         )
 
     def _facility_upgrade_option(self, facility, power=None) -> FacilityUpgradeOption | None:
@@ -43,23 +35,13 @@ class ProjectProjectorMixin:
             ),
             None,
         )
-        snapshot = power if power is not None else sim.power.snapshot(
-            facility.location_id, sim.facilities, sim.day
-        )
-        failures = sim.projects.upgrade_site_failures(
-            facility.id, recipe.target_level, sim.day, snapshot
-        )
+        snapshot = power if power is not None else sim.power.snapshot(facility.location_id, sim.facilities, sim.day)
+        failures = sim.projects.upgrade_site_failures(facility.id, recipe.target_level, sim.day, snapshot)
         return FacilityUpgradeOption(
             recipe.target_level,
             recipe.construction_work,
-            self._construction_component_options(recipe),
-            tuple(
-                sorted(
-                    str(technology)
-                    for technology in recipe.prerequisite_technologies
-                    - sim.projects.unlocked_technologies
-                )
-            ),
+            self._construction_resource_options(recipe),
+            tuple(sorted(str(technology) for technology in recipe.prerequisite_technologies - sim.projects.unlocked_technologies)),
             tuple((failure.code, failure.detail) for failure in failures),
             active_project_id,
         )
@@ -70,113 +52,57 @@ class ProjectProjectorMixin:
         for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id)):
             if location_id is not None and project.location_id != location_id:
                 continue
-            recipe = sim.projects._recipe_for_project(project)
-            facility_definition_id = sim.projects._target_facility_def_id(project)
+            recipe = sim.projects.recipe_for_project(project)
+            facility_definition_id = sim.projects.target_facility_definition_id(project)
             definition = sim.facilities.definitions[facility_definition_id]
             project_power = sim.power.snapshot(project.location_id, sim.facilities, sim.day)
-            blockers = tuple(
-                (blocker.code, blocker.detail)
-                for blocker in sim.projects.blockers(project.id, sim.day, project_power)
-            )
-            components = []
-            for requirement in recipe.components:
-                state = project.components[requirement.component_id]
-                max_local_fraction = max(
-                    (tier.max_fraction for tier in requirement.local_tiers), default=0.0
-                )
-                selected_local, _target = sim.projects._selected_local_target(
-                    project, requirement, sim.day
-                )
-                explicit_local = project.local_resource_choices.get(requirement.component_id)
-                import_demand_id = None
-                if (
-                    project.import_source_id is not None
-                    and (state.import_committed_t or 0.0) > state.reserved_import_t + 1e-9
-                ):
-                    import_demand_id = (
-                        f"demand.project:{project.id}:{requirement.component_id}"
-                    )
-                components.append(
-                    ProjectComponentRow(
-                        requirement.component_id,
-                        requirement.amount_t,
-                        str(requirement.import_resource_id),
-                        state.local_target_t,
-                        state.reserved_local_t,
-                        state.reserved_primary_t,
-                        state.reserved_import_t,
-                        state.committed_local_t,
-                        state.committed_primary_t,
-                        state.committed_import_t,
-                        state.import_committed_t,
-                        import_demand_id,
-                        project.local_fraction_targets.get(requirement.component_id),
-                        None if selected_local is None else str(selected_local),
-                        explicit_local is not None,
-                        max_local_fraction,
-                    )
-                )
+            blockers = tuple((blocker.code, blocker.detail) for blocker in sim.projects.blockers(project.id, sim.day, project_power))
+            resources = []
+            for requirement in recipe.resources:
+                state = project.resources[requirement.resource_id]
+                reserved_t = sim.projects.reserved_resource_t(project, requirement.resource_id)
+                shortage = max(0.0, requirement.amount_t - reserved_t - state.committed_t)
+                demand_id = None
+                if state.import_committed_t is not None and shortage > 1e-9:
+                    demand_id = f"demand.project:{project.id}:{requirement.resource_id}"
+                resources.append(ProjectResourceRow(
+                    str(requirement.resource_id),
+                    requirement.amount_t,
+                    reserved_t,
+                    state.committed_t,
+                    shortage,
+                    state.import_committed_t,
+                    demand_id,
+                ))
             if isinstance(project.target, NewFacilityTarget):
-                target_kind = "new_facility"
-                target_facility_id = None
-                target_level = None
+                target_kind = "new_facility"; target_facility_id = None; target_level = None
             else:
-                target_kind = "facility_upgrade"
-                target_facility_id = str(project.target.facility_id)
-                target_level = project.target.target_level
-            rows.append(
-                ProjectRow(
-                    str(project.id),
-                    target_kind,
-                    str(project.location_id),
-                    str(facility_definition_id),
-                    target_facility_id,
-                    target_level,
-                    definition.display_name,
-                    project.status,
-                    project.paused,
-                    project.priority,
-                    project.sourcing_policy,
-                    None if project.import_source_id is None else str(project.import_source_id),
-                    project.construction_done,
-                    recipe.construction_work,
-                    project.construction_weight,
-                    project.materials_committed,
-                    None if project.completed_facility_id is None else str(project.completed_facility_id),
-                    tuple(components),
-                    blockers,
-                )
-            )
+                target_kind = "facility_upgrade"; target_facility_id = str(project.target.facility_id); target_level = project.target.target_level
+            rows.append(ProjectRow(
+                str(project.id), target_kind, str(project.location_id), str(facility_definition_id),
+                target_facility_id, target_level, definition.display_name, project.status, project.paused,
+                project.priority, project.sourcing_policy,
+                None if project.import_source_id is None else str(project.import_source_id),
+                project.construction_done, recipe.construction_work, project.construction_weight,
+                project.materials_committed,
+                None if project.completed_facility_id is None else str(project.completed_facility_id),
+                tuple(resources), blockers,
+            ))
         return tuple(rows)
 
     def _build_options_view(self, location_id: SpatialNodeId) -> BuildOptionsView:
         sim = self._simulation
         rows = []
-        for recipe in sorted(
-            sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id)
-        ):
+        for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id)):
             definition = sim.facilities.definitions[recipe.facility_def_id]
             failures = sim.projects.site_failures(
-                recipe.facility_def_id,
-                location_id,
-                sim.day,
+                recipe.facility_def_id, location_id, sim.day,
                 sim.power.snapshot(location_id, sim.facilities, sim.day),
             )
-            rows.append(
-                BuildOptionRow(
-                    str(recipe.facility_def_id),
-                    definition.display_name,
-                    recipe.construction_work,
-                    recipe.self_deploying,
-                    self._construction_component_options(recipe),
-                    tuple(
-                        sorted(
-                            str(technology)
-                            for technology in recipe.prerequisite_technologies
-                            - sim.projects.unlocked_technologies
-                        )
-                    ),
-                    tuple((failure.code, failure.detail) for failure in failures),
-                )
-            )
+            rows.append(BuildOptionRow(
+                str(recipe.facility_def_id), definition.display_name, recipe.construction_work,
+                recipe.self_deploying, self._construction_resource_options(recipe),
+                tuple(sorted(str(technology) for technology in recipe.prerequisite_technologies - sim.projects.unlocked_technologies)),
+                tuple((failure.code, failure.detail) for failure in failures),
+            ))
         return BuildOptionsView(str(location_id), tuple(rows))

@@ -8,6 +8,7 @@ from space_idle import (
     build_game_application,
     AdvanceTime,
     ApplicationError,
+    CreateLogisticsLane,
     GetLogistics,
     GetTransportPlans,
     ProduceVehicle,
@@ -43,7 +44,8 @@ from space_idle.logistics import (
     VehicleDisposition,
     VehicleMaintenanceSpec,
 )
-from space_idle.shared import DefinitionId, RouteId
+from space_idle.resource_demand import ResourceDemand
+from space_idle.shared import DefinitionId, EntityId, RouteId
 
 
 def _unlock_lunar_transport(app) -> None:
@@ -161,20 +163,32 @@ def test_refueling_requires_refueling_service_but_route_passage_does_not():
     assert sim.logistics.vehicles[tug.id].propellant_t == pytest.approx(1.0)
 
 
-def test_vehicle_production_consumes_industrial_inputs_and_creates_owned_asset():
+def test_vehicle_production_consumes_industrial_inputs_and_creates_owned_asset_only_when_complete():
     app = build_game_application()
     sim = app._simulation
     before = len(sim.logistics.vehicles)
+    definition = sim.logistics.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG]
+    before_inputs = {resource_id: sim.inventory.amount(EARTH, resource_id) for resource_id, _ in definition.production.resources}
+
     result = app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     assert result.created_id is not None
+    production_id = next(pid for pid in sim.vehicle_production.projects if str(pid) == result.created_id)
+    state = sim.vehicle_production.projects[production_id]
+    assert len(sim.logistics.vehicles) == before
+    assert state.phase.value == "awaiting_inputs"
+
+    app.execute(AdvanceTime(1))
+    assert state.phase.value == "building"
+    for resource_id, amount in definition.production.resources:
+        assert sim.inventory.amount(EARTH, resource_id) <= before_inputs[resource_id] - amount + 1e-9
+
+    app.execute(AdvanceTime(int(definition.production.days) - 1))
+    assert state.phase.value == "complete"
+    assert state.completed_vehicle_id in sim.logistics.vehicles
+    vehicle = sim.logistics.vehicles[state.completed_vehicle_id]
+    assert vehicle.location_id == EARTH
+    assert vehicle.status == "available"
     assert len(sim.logistics.vehicles) == before + 1
-    state = sim.logistics.vehicles[next(eid for eid in sim.logistics.vehicles if str(eid) == result.created_id)]
-    assert state.location_id == EARTH
-    assert state.status == "production"
-    with pytest.raises(ApplicationError, match="production capacity occupied"):
-        app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
-    app.execute(AdvanceTime(int(sim.logistics.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production_days)))
-    assert state.status == "available"
 
 
 def test_spacecraft_waits_for_servicing_infrastructure_after_mission():
@@ -204,6 +218,54 @@ def test_spacecraft_waits_for_servicing_infrastructure_after_mission():
     assert sim.logistics.vehicles[vehicle_id].status == "turnaround"
     app.execute(AdvanceTime(2))
     assert sim.logistics.vehicles[vehicle_id].status == "available"
+
+
+def test_lane_capacity_recognizes_onboard_handoff_even_with_transfer_infrastructure():
+    app = build_game_application()
+    sim = app._simulation
+    _unlock_lunar_transport(app)
+    # LEO can transfer cargo, but the selected physical plan also permits the
+    # onward lander to be integrated at Earth and separated in LEO. Projection
+    # must not require that lander or its fuel to be pre-positioned at LEO.
+    sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
+    onward_id = sim.logistics.add_vehicle(REUSABLE_SURFACE_CARGO_LANDER, EARTH)
+    onward_def = sim.logistics.vehicle_defs[REUSABLE_SURFACE_CARGO_LANDER]
+    sim.logistics.vehicles[onward_id].propellant_t = onward_def.propellant_capacity_t
+    assert sim.inventory.amount(LEO, PROPELLANT) == pytest.approx(0.0)
+
+    first = "base.route.earth_leo"
+    second = "base.route.leo_ridge"
+    lane_id = app.execute(CreateLogisticsLane(
+        str(EARTH),
+        str(SOUTH_POLAR_RIDGE),
+        10.0,
+        100,
+        (first, second),
+        ((first, str(REUSABLE_LAUNCH_VEHICLE)),
+         (second, str(REUSABLE_SURFACE_CARGO_LANDER))),
+        "lowest_cost",
+    )).created_id
+    assert lane_id is not None
+    lane = next(row for row in app.query(GetLogistics()).lanes if row.id == lane_id)
+    assert lane.effective_capacity_t_per_day > 0
+    assert not any("propellant" in blocker for blocker in lane.blockers)
+
+    demand = ResourceDemand(
+        EntityId("demand.test.onboard_handoff"),
+        "test",
+        EntityId("test.owner"),
+        SOUTH_POLAR_RIDGE,
+        MACHINERY,
+        1.0,
+        100,
+        EARTH,
+    )
+    sim.logistics.advance_automation(sim.day, (demand,))
+    sim.logistics.advance_day(sim.day)
+    order = next(row for row in sim.logistics.orders.values() if row.demand_id == demand.id)
+    mission = next(row for row in sim.logistics.missions.values() if row.order_id == order.id)
+    assert mission.handoff_vehicle_id == onward_id
+    assert mission.onboard
 
 
 def test_automatic_path_does_not_assume_unowned_vehicle_definitions_exist_as_capacity():
@@ -265,6 +327,7 @@ def test_launch_carrier_can_handoff_onboard_spacecraft_without_leo_cargo_transfe
 
     first = RouteId("base.route.earth_leo")
     second = RouteId("base.route.leo_ridge")
+    leo_machinery_before = sim.inventory.amount(LEO, MACHINERY)
     order_id = app.execute(
         SubmitCargo(
             str(EARTH), str(SOUTH_POLAR_RIDGE), str(MACHINERY), 1.0, 100,
@@ -279,7 +342,11 @@ def test_launch_carrier_can_handoff_onboard_spacecraft_without_leo_cargo_transfe
     mission = next(m for m in app.query(GetLogistics()).missions if m.order_id == order_id)
     assert mission.leg_index == 0
     assert mission.handoff_vehicle_id == str(onward_id)
-    assert sim.inventory.amount(LEO, MACHINERY) == 0.0
+    assert mission.onboard
+    # The order remains physically onboard during the handoff path. Ambient LEO
+    # inventory may exist for other systems (for example facility maintenance),
+    # so verify that this 1 t cargo was not deposited into node inventory.
+    assert sim.inventory.amount(LEO, MACHINERY) <= leo_machinery_before + 1e-9
 
     app.execute(AdvanceTime(1))
     mission = next(m for m in app.query(GetLogistics()).missions if m.order_id == order_id)
@@ -287,7 +354,7 @@ def test_launch_carrier_can_handoff_onboard_spacecraft_without_leo_cargo_transfe
     assert mission.vehicle_id == str(onward_id)
     assert mission.handoff_vehicle_id is None
     assert mission.onboard
-    assert sim.inventory.amount(LEO, MACHINERY) == 0.0
+    assert sim.inventory.amount(LEO, MACHINERY) <= leo_machinery_before + 1e-9
 
     app.execute(AdvanceTime(7))
     order = next(o for o in app.query(GetLogistics()).orders if o.id == order_id)
@@ -407,17 +474,17 @@ def test_vehicle_production_progress_pauses_when_assembly_capability_is_unavaila
     app = build_game_application()
     sim = app._simulation
     result = app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
-    vehicle_id = next(eid for eid in sim.logistics.vehicles if str(eid) == result.created_id)
-    state = sim.logistics.vehicles[vehicle_id]
-    original_due = state.available_day
+    production_id = next(pid for pid in sim.vehicle_production.projects if str(pid) == result.created_id)
+    state = sim.vehicle_production.projects[production_id]
     factory_id = next(
         row.id for row in app.query(GetLocation(str(EARTH))).facilities
         if row.definition_id == str(VEHICLE_ASSEMBLY_FACILITY)
     )
     app.execute(PauseFacility(factory_id))
     app.execute(AdvanceTime(2))
-    assert state.status == "production"
-    assert state.available_day == original_due + 2
+    assert state.progress_days == pytest.approx(0.0)
+    assert state.phase.value == "building"
     app.execute(ResumeFacility(factory_id))
-    app.execute(AdvanceTime(int(sim.logistics.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production_days)))
-    assert state.status == "available"
+    app.execute(AdvanceTime(int(sim.logistics.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production.days)))
+    assert state.phase.value == "complete"
+    assert state.completed_vehicle_id in sim.logistics.vehicles

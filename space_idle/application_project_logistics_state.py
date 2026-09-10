@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .application_transport_support import vehicle_concept
-from .application_views import CargoOrderRow, CargoOrdersView, TransportMissionRow, TransportMissionsView, VehicleRow, VehiclesView
+from .application_views import CargoOrderRow, CargoOrdersView, TransportMissionRow, TransportMissionsView, VehicleRow, VehicleProductionOptionRow, VehicleProductionRow, VehiclesView
 
 
 class LogisticsStateProjectorMixin:
@@ -40,6 +40,68 @@ class LogisticsStateProjectorMixin:
                 definition.turnaround_cost_musd,
                 tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.turnaround_resources),
                 sim.logistics.vehicle_blockers(state.id, sim.day),
+                None if state.assignment_id is None else str(state.assignment_id),
+                state.assignment_kind,
+            ))
+        return tuple(rows)
+
+    def _vehicle_production_option_rows(self) -> tuple[VehicleProductionOptionRow, ...]:
+        sim = self._simulation
+        rows: list[VehicleProductionOptionRow] = []
+        for definition in sorted(sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)):
+            if definition.production.capability_id is None or definition.production.days <= 1e-12:
+                continue
+            for node in sorted(sim.graph.nodes.values(), key=lambda row: str(row.id)):
+                power = sim.power.snapshot(node.id, sim.facilities, sim.day)
+                blockers = tuple(
+                    f"{failure.code}:{failure.detail}"
+                    for failure in sim.logistics.vehicle_production_site_failures(
+                        definition.id, node.id, day=sim.day, power=power
+                    )
+                )
+                rows.append(VehicleProductionOptionRow(
+                    str(definition.id),
+                    definition.display_name,
+                    str(node.id),
+                    definition.production.capability_id,
+                    definition.production.days,
+                    tuple((str(resource_id), amount) for resource_id, amount in definition.production.resources),
+                    blockers,
+                ))
+        return tuple(rows)
+
+    def _vehicle_production_rows(self) -> tuple[VehicleProductionRow, ...]:
+        sim = self._simulation
+        rows: list[VehicleProductionRow] = []
+        for state in sorted(sim.logistics.vehicle_production_projects.values(), key=lambda row: str(row.id)):
+            definition = sim.logistics.vehicle_defs[state.vehicle_definition_id]
+            power = sim.power.snapshot(state.location_id, sim.facilities, sim.day)
+            blockers = sim.logistics.vehicle_production_blockers(
+                state.id, day=sim.day, power=power
+            )
+            remaining_days = max(0.0, definition.production.days - state.progress_days)
+            estimated_completion_day = (
+                float(sim.day) + remaining_days
+                if not state.paused and not blockers and state.phase.value != "complete"
+                else float(sim.day) if state.phase.value == "complete" else None
+            )
+            rows.append(VehicleProductionRow(
+                str(state.id),
+                str(state.vehicle_definition_id),
+                definition.display_name,
+                str(state.location_id),
+                state.phase.value,
+                state.paused,
+                state.progress_days,
+                definition.production.days,
+                remaining_days,
+                estimated_completion_day,
+                definition.production.capability_id,
+                tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.production.resources),
+                state.priority,
+                state.allocation_weight,
+                blockers,
+                None if state.completed_vehicle_id is None else str(state.completed_vehicle_id),
             ))
         return tuple(rows)
 

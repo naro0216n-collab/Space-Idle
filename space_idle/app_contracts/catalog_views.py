@@ -45,6 +45,7 @@ class FacilityDefinitionRow:
     capabilities: tuple[tuple[str, float], ...]
     installation_environment: tuple[RequirementConditionRow, ...] = ()
     operating_environment: tuple[RequirementConditionRow, ...] = ()
+    maintenance_fraction_per_year: float = 0.0
 
 
 @dataclass(frozen=True)

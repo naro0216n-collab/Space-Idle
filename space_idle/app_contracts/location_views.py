@@ -38,12 +38,18 @@ class FacilityRow:
     active_and_site_compatible: bool
     activation_blockers: tuple[tuple[str, str], ...]
     power_priority: int | None
+    maintenance_priority: int
     capabilities: tuple[tuple[str, float], ...]
     power_utilization: float
     research_tier: int | None
     research_generation_points_per_day: float
     research_storage_capacity_points: float
     next_upgrade: FacilityUpgradeOption | None
+    invested_resources: tuple[tuple[str, float], ...] = ()
+    maintenance_demand_per_day: tuple[tuple[str, float], ...] = ()
+    maintenance_satisfaction: float = 1.0
+    operational_utilization: float = 1.0
+    operating_blockers: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

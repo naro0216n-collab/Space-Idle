@@ -20,6 +20,7 @@ from .models import (
     VehicleStatus,
     VehicleTransit,
 )
+from .production import VehicleProductionPhase, VehicleProductionState
 
 
 def capture_logistics(sim: Any) -> dict[str, Any]:
@@ -38,6 +39,8 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
                 "available_day": s.available_day,
                 "transit_destination_id": None if s.transit_destination_id is None else str(s.transit_destination_id),
                 "propellant_t": s.propellant_t,
+                "assignment_id": None if s.assignment_id is None else str(s.assignment_id),
+                "assignment_kind": s.assignment_kind,
             }
             for s in sorted(lg.vehicles.values(), key=lambda row: str(row.id))
         ],
@@ -111,6 +114,24 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
             }
             for mission in sorted(lg.missions.values(), key=lambda row: str(row.id))
         ],
+        "vehicle_production": {
+            "counter": lg._vehicle_production_counter,
+            "projects": [
+                {
+                    "id": str(state.id),
+                    "vehicle_definition_id": str(state.vehicle_definition_id),
+                    "location_id": str(state.location_id),
+                    "priority": state.priority,
+                    "allocation_weight": state.allocation_weight,
+                    "progress_days": state.progress_days,
+                    "phase": state.phase.value,
+                    "paused": state.paused,
+                    "completed_vehicle_id": None if state.completed_vehicle_id is None else str(state.completed_vehicle_id),
+                    "created_day": state.created_day,
+                }
+                for state in sorted(lg.vehicle_production_projects.values(), key=lambda row: str(row.id))
+            ],
+        },
     }
 
 
@@ -143,6 +164,8 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             int(row["available_day"]),
             None if row.get("transit_destination_id") is None else SpatialNodeId(row["transit_destination_id"]),
             float(row.get("propellant_t", 0.0)),
+            None if row.get("assignment_id") is None else EntityId(row["assignment_id"]),
+            row.get("assignment_kind"),
         )
         for row in data.get("vehicles", [])
     }
@@ -196,7 +219,23 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
         )
         for row in data.get("missions", [])
     }
-
+    production_data = data.get("vehicle_production", {})
+    lg._vehicle_production_counter = int(production_data.get("counter", 0))
+    lg.vehicle_production_projects = {
+        EntityId(row["id"]): VehicleProductionState(
+            EntityId(row["id"]),
+            DefinitionId(row["vehicle_definition_id"]),
+            SpatialNodeId(row["location_id"]),
+            int(row.get("priority", 50)),
+            float(row.get("allocation_weight", 1.0)),
+            float(row.get("progress_days", 0.0)),
+            VehicleProductionPhase(row.get("phase", "awaiting_inputs")),
+            bool(row.get("paused", False)),
+            None if row.get("completed_vehicle_id") is None else EntityId(row["completed_vehicle_id"]),
+            int(row.get("created_day", 0)),
+        )
+        for row in production_data.get("projects", [])
+    }
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:
     result: set[DefinitionId] = set()
@@ -281,6 +320,10 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             _require(vehicle.maintenance.capability_id in known_capabilities, f"vehicle turnaround references unknown capability: {vehicle_id}/{vehicle.maintenance.capability_id}")
         if vehicle.production.capability_id is not None:
             _require(vehicle.production.capability_id in known_capabilities, f"vehicle production references unknown capability: {vehicle_id}/{vehicle.production.capability_id}")
+            _require(vehicle.production.days > 0, f"vehicle production duration must be positive: {vehicle_id}")
+            _require(2 <= len(vehicle.production.resources) <= 3, f"vehicle production should use 2-3 physical resources: {vehicle_id}")
+            _require(all(amount > 0 for _resource, amount in vehicle.production.resources), f"vehicle production has non-positive resource input: {vehicle_id}")
+            _validate_site_requirements(vehicle.production.site_requirements, known_capabilities, f"vehicle_production:{vehicle_id}")
     for route_id in sim.logistics.routes:
         external_service_exists = any(
             service.capacity_t_per_day > 1e-12 and not sim.logistics.service_route_failures(route_id, service.id, 0)
@@ -302,15 +345,40 @@ def validate_runtime(sim: Any) -> None:
         if state.status is VehicleStatus.TRANSIT:
             _require(state.location_id is None, f"transit vehicle still has a location: {vehicle_id}")
             _require(state.transit_destination_id in sim.graph.nodes, f"transit vehicle lacks valid destination: {vehicle_id}")
+            _require(state.assignment_id is None, f"transport vehicle retains exclusive assignment: {vehicle_id}")
+            _require(state.assignment_kind is None, f"transport vehicle retains assignment kind: {vehicle_id}")
         elif state.status is VehicleStatus.TRANSIT_RETURN:
             _require(state.location_id in sim.graph.nodes, f"returning vehicle lacks recovery location: {vehicle_id}")
             _require(state.transit_destination_id is None, f"returning vehicle retains transit destination: {vehicle_id}")
+            _require(state.assignment_id is None, f"returning vehicle retains exclusive assignment: {vehicle_id}")
+            _require(state.assignment_kind is None, f"returning vehicle retains assignment kind: {vehicle_id}")
+        elif state.status is VehicleStatus.ASSIGNED:
+            _require(state.assignment_id is not None, f"assigned vehicle lacks assignment: {vehicle_id}")
+            _require(bool(state.assignment_kind), f"assigned vehicle lacks assignment kind: {vehicle_id}")
+            if state.location_id is None:
+                _require(state.transit_destination_id in sim.graph.nodes, f"assigned vehicle lacks valid target: {vehicle_id}")
+            else:
+                _require(state.location_id in sim.graph.nodes, f"assigned vehicle references unknown location: {vehicle_id}")
         else:
             _require(state.location_id in sim.graph.nodes, f"vehicle references unknown location: {vehicle_id}")
             _require(state.transit_destination_id is None, f"stationary vehicle retains transit destination: {vehicle_id}")
+            _require(state.assignment_id is None, f"stationary vehicle retains exclusive assignment: {vehicle_id}")
+            _require(state.assignment_kind is None, f"stationary vehicle retains assignment kind: {vehicle_id}")
         definition = lg.vehicle_defs[state.definition_id]
         _require(state.propellant_t >= -1e-9, f"negative onboard propellant: {vehicle_id}")
         _require(state.propellant_t <= definition.performance.propellant_capacity_t + 1e-9, f"onboard propellant exceeds tank capacity: {vehicle_id}")
+    for project_id, state in lg.vehicle_production_projects.items():
+        _require(project_id == state.id, f"vehicle production state key mismatch: {project_id}")
+        _require(state.vehicle_definition_id in lg.vehicle_defs, f"vehicle production references unknown definition: {project_id}")
+        _require(state.location_id in sim.graph.nodes, f"vehicle production references unknown location: {project_id}")
+        _require(state.progress_days >= -1e-9, f"negative vehicle production progress: {project_id}")
+        definition = lg.vehicle_defs[state.vehicle_definition_id]
+        _require(state.progress_days <= definition.production.days + 1.0 + 1e-9, f"vehicle production progress exceeds duration: {project_id}")
+        if state.phase is VehicleProductionPhase.COMPLETE:
+            _require(state.completed_vehicle_id in lg.vehicles, f"completed vehicle production lacks vehicle: {project_id}")
+        else:
+            _require(state.completed_vehicle_id is None, f"incomplete vehicle production references completed vehicle: {project_id}")
+
     for movement in lg.vehicle_transit:
         _require(movement.vehicle_id in lg.vehicles, f"vehicle transit references unknown vehicle: {movement.vehicle_id}")
         _require(movement.route_id in lg.routes, f"vehicle transit references unknown route: {movement.route_id}")

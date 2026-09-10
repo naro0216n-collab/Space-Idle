@@ -4,7 +4,7 @@ from .application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCargoOrders,
     GetCatalog, GetContracts, GetFlowReport, GetLocation, GetLogistics,
     GetLogisticsLanes, GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
-    GetSurveys, GetTransportMissions, GetTransportPlans, GetVehicles, GetWorld,
+    GetScientificExplorations, GetSurveys, GetTransportMissions, GetTransportPlans, GetVehicles, GetWorld,
     Query,
 )
 from .application_views import ProjectsView, QueryResult
@@ -66,6 +66,8 @@ class ApplicationQueryRouterMixin:
             )
         if isinstance(query, GetResearch):
             return self._research_view()
+        if isinstance(query, GetScientificExplorations):
+            return self._scientific_explorations_view()
         if isinstance(query, GetSurveys):
             return self._surveys_view(
                 None if query.location_id is None else self._require_location(query.location_id)

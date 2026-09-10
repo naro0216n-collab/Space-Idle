@@ -358,6 +358,38 @@ class TransportCapacityMixin:
             return 0.0, (), tuple(f"route:{first}:{reason}" for reason in operational)
         return 0.0, (), (f"route:{first}:transport_capacity",)
 
+    def _staged_full_path_capacity(
+        self,
+        path: tuple[RouteId, ...],
+        mode_by_route: dict[RouteId, str],
+        day: int,
+    ) -> tuple[float, tuple[float, ...]]:
+        """Project carrier/onboard-handoff capacity even at transfer-capable waypoints.
+
+        Mission execution may keep cargo onboard by carrying the onward vehicle
+        through the first leg and separating it at the waypoint. The presence of
+        cargo-transfer infrastructure does not make that physical option disappear.
+        Capacity/query projection therefore has to recognize the same state
+        transition instead of requiring the onward vehicle to be pre-positioned at
+        the intermediate node.
+        """
+        if len(path) < 2:
+            return 0.0, ()
+        modes = tuple(mode_by_route[route_id] for route_id in path)
+        first_mode = modes[0]
+        onward_mode = modes[1]
+        if self._service_for_mode(first_mode) is not None or self._service_for_mode(onward_mode) is not None:
+            return 0.0, ()
+        if any(mode != onward_mode for mode in modes[1:]):
+            return 0.0, ()
+        carrier_definition_id = DefinitionId(first_mode)
+        onward_definition_id = DefinitionId(onward_mode)
+        if carrier_definition_id not in self.vehicle_defs or onward_definition_id not in self.vehicle_defs:
+            return 0.0, ()
+        return self._staged_segment_capacity(
+            path, carrier_definition_id, onward_definition_id, day
+        )
+
     def transport_plan_capacity(
         self,
         path: tuple[RouteId, ...],
@@ -373,6 +405,14 @@ class TransportCapacityMixin:
                 (),
                 tuple(f"route:{route_id}:transport_mode_unresolved" for route_id in missing_modes),
             )
+
+        # Execution can use a recoverable first-stage carrier with an onboard
+        # onward vehicle even when the waypoint also has cargo-transfer service.
+        # Treat this as an alternative realization of the same explicit mode plan.
+        staged_capacity, staged_chunks = self._staged_full_path_capacity(
+            path, mode_by_route, day
+        )
+
         capacities: list[float] = []
         blockers: list[str] = []
         source_chunks: tuple[float, ...] = ()
@@ -384,12 +424,20 @@ class TransportCapacityMixin:
             blockers.extend(segment_blockers)
             if index == 0:
                 source_chunks = chunks
+
+        transfer_capacity = min(capacities) if capacities and not blockers else 0.0
+        # Both realizations use the same configured path/modes. Use the stronger
+        # currently executable projection, but never add them together because
+        # they can share the same first-stage carrier and resource budget.
+        if staged_capacity > transfer_capacity + _EPS:
+            return TransportPlanCapacity(staged_capacity, staged_chunks)
+        if transfer_capacity > _EPS:
+            return TransportPlanCapacity(transfer_capacity, source_chunks)
+        if staged_capacity > _EPS:
+            return TransportPlanCapacity(staged_capacity, staged_chunks)
         if blockers:
             return TransportPlanCapacity(0.0, (), tuple(dict.fromkeys(blockers)))
-        capacity = min(capacities) if capacities else 0.0
-        if capacity <= _EPS:
-            return TransportPlanCapacity(0.0, (), ("transport_capacity",))
-        return TransportPlanCapacity(capacity, source_chunks)
+        return TransportPlanCapacity(0.0, (), ("transport_capacity",))
 
     def resolved_transport_modes(
         self,

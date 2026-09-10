@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..resource_demand import ResourceDemand
-from ..shared import EntityId, RouteId
+from ..shared import EntityId, RouteId, SpatialNodeId
 from .models import LogisticsLane, MissionStatus, PathPolicy
 
 
@@ -21,6 +21,21 @@ class LaneRuntimeMetrics:
 class LogisticsLaneSnapshot:
     demand_pipeline_t: tuple[tuple[EntityId, float], ...]
     lanes: tuple[LaneRuntimeMetrics, ...]
+
+
+@dataclass(frozen=True)
+class DemandSupplyOptions:
+    """Observable supply alternatives for one demand.
+
+    These are indicators only. The logistics system does not switch lanes or
+    sources automatically because an alternative is visible here.
+    """
+
+    eligible_lane_ids: tuple[EntityId, ...]
+    operational_lane_ids: tuple[EntityId, ...]
+    stocked_source_ids: tuple[SpatialNodeId, ...]
+    blockers: tuple[str, ...]
+    earliest_confirmed_arrival_day: int | None
 
 
 class TransportLaneMixin:
@@ -135,6 +150,11 @@ class TransportLaneMixin:
         lane = self.lanes[lane_id]
         return self._lane_runtime(lane, day)[3]
 
+    def _active_order_ids(self) -> set[EntityId]:
+        active = {order_id for (order_id, _leg_index), mass in self.waiting.items() if mass > 1e-12}
+        active.update(mission.order_id for mission in self.missions.values())
+        return active
+
     def lane_used_t(self, lane_id: EntityId, day: int) -> float:
         return sum(
             order.amount_t for order in self.orders.values()
@@ -145,13 +165,60 @@ class TransportLaneMixin:
         pipeline = {demand_id: 0.0 for demand_id in demand_ids}
         if not pipeline:
             return pipeline
-        for order in self.orders.values():
-            if order.demand_id in pipeline and not self.order_complete(order.id):
+        for order_id in self._active_order_ids():
+            order = self.orders[order_id]
+            if order.demand_id in pipeline:
                 pipeline[order.demand_id] += max(0.0, order.amount_t - order.delivered_t)
         return pipeline
 
     def demand_pipeline_t(self, demand_id: EntityId) -> float:
         return self._demand_pipeline_by_id({demand_id})[demand_id]
+
+    def demand_supply_options(
+        self, demand: ResourceDemand, day: int = 0
+    ) -> DemandSupplyOptions:
+        eligible = tuple(
+            lane for lane in sorted(self.lanes.values(), key=lambda row: str(row.id))
+            if self._lane_accepts_demand(lane, demand)
+        )
+        operational: list[EntityId] = []
+        stocked_sources: set[SpatialNodeId] = set()
+        blockers: list[str] = []
+        waiting_lanes = self._lanes_with_waiting_missions()
+        for lane in eligible:
+            _path, _modes, lane_blockers, effective, _chunks = self._lane_runtime(
+                lane, day, waiting_lanes
+            )
+            if not lane_blockers and effective > 1e-9:
+                operational.append(lane.id)
+            else:
+                blockers.extend(lane_blockers)
+            if self.inventory.available(lane.source_id, demand.resource_id) > 1e-9:
+                stocked_sources.add(lane.source_id)
+
+        earliest: int | None = None
+        for mission in self.missions.values():
+            order = self.orders.get(mission.order_id)
+            if order is None or order.demand_id != demand.id:
+                continue
+            if mission.leg_index < 0 or mission.leg_index >= len(order.path):
+                continue
+            route = self.routes[order.path[mission.leg_index]]
+            if route.destination_id != demand.destination_id:
+                continue
+            status = getattr(mission.status, "value", mission.status)
+            if status not in {"in_transit", "arrival_waiting"}:
+                continue
+            arrival = max(day, mission.arrival_day) if status == "arrival_waiting" else mission.arrival_day
+            earliest = arrival if earliest is None else min(earliest, arrival)
+
+        return DemandSupplyOptions(
+            tuple(lane.id for lane in eligible),
+            tuple(operational),
+            tuple(sorted(stocked_sources, key=str)),
+            tuple(dict.fromkeys(blockers)),
+            earliest,
+        )
 
     def demand_remaining_t(self, demand: ResourceDemand) -> float:
         return max(0.0, demand.amount_t - self.demand_pipeline_t(demand.id))
@@ -161,6 +228,9 @@ class TransportLaneMixin:
         return lane.destination_id == demand.destination_id and (
             demand.source_id is None or lane.source_id == demand.source_id
         )
+
+    def lane_accepts_demand(self, lane: LogisticsLane, demand: ResourceDemand) -> bool:
+        return self._lane_accepts_demand(lane, demand)
 
     def lane_queued_t(self, lane_id: EntityId, demands: Iterable[ResourceDemand]) -> float:
         lane = self.lanes[lane_id]
@@ -205,7 +275,8 @@ class TransportLaneMixin:
     ) -> tuple[dict[tuple[str, str], int], dict[str, float]]:
         owned: dict[tuple[str, str], int] = {}
         external: dict[str, float] = {}
-        for order in self.orders.values():
+        for order_id in self._active_order_ids():
+            order = self.orders[order_id]
             if order.created_day != day or not order.path:
                 continue
             first_route = order.path[0]
@@ -227,7 +298,8 @@ class TransportLaneMixin:
             return
         pipeline_by_demand = self._demand_pipeline_by_id({demand.id for demand in demand_rows})
         used_by_lane: dict[EntityId, float] = {}
-        for order in self.orders.values():
+        for order_id in self._active_order_ids():
+            order = self.orders[order_id]
             if order.lane_id is not None and order.created_day == day:
                 used_by_lane[order.lane_id] = used_by_lane.get(order.lane_id, 0.0) + order.amount_t
         waiting_lanes = self._lanes_with_waiting_missions()

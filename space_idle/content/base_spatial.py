@@ -55,7 +55,3 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
     facets.set(NEARSIDE_MARE, SurfaceField(0.95, 0.95, 0.60, 0.05))
     facets.set(NEARSIDE_MARE, CommunicationField(1.3, 1.0))
     return graph, EnvironmentResolver(graph, facets)
-
-
-# Compatibility alias within the content package; composition uses the public builder.
-_build_spatial_model = build_spatial_model

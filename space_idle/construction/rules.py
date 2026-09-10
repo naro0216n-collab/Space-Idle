@@ -4,9 +4,7 @@ from ..power import PowerSnapshot
 from ..shared import DefinitionId, EntityId, SpatialNodeId
 from ..site import SiteRequirements, evaluate_site_requirements
 from .models import (
-    BuildComponentRequirement,
     ConstructionProject,
-    ConstructionRecipe,
     FacilityUpgradeRecipe,
     FacilityUpgradeTarget,
     NewFacilityTarget,
@@ -15,6 +13,12 @@ from .models import (
 
 
 class ConstructionRulesMixin:
+    def target_facility_definition_id(self, project: ConstructionProject) -> DefinitionId:
+        return self._target_facility_def_id(project)
+
+    def recipe_for_project(self, project: ConstructionProject) -> ProjectRecipe:
+        return self._recipe_for_project(project)
+
     def _target_facility_def_id(self, project: ConstructionProject) -> DefinitionId:
         target = project.target
         if isinstance(target, NewFacilityTarget):
@@ -36,34 +40,6 @@ class ConstructionRulesMixin:
     def next_upgrade_recipe(self, facility_id: EntityId) -> FacilityUpgradeRecipe | None:
         facility = self.facilities.facilities[facility_id]
         return self.upgrade_recipes.get((facility.definition_id, facility.level + 1))
-
-    def _selected_local_target(
-        self, project: ConstructionProject, component: BuildComponentRequirement, day: int
-    ) -> tuple[DefinitionId | None, float]:
-        if project.sourcing_policy == "import_now":
-            return None, 0.0
-        state = project.components[component.component_id]
-        eligible = list(component.local_tiers)
-        if state.reserved_local_resource_id is not None:
-            same_resource = [tier for tier in eligible if tier.local_resource_id == state.reserved_local_resource_id]
-            if not same_resource:
-                return None, max(state.local_target_t, state.reserved_local_t)
-            selected = max(same_resource, key=lambda tier: (tier.max_fraction, str(tier.local_resource_id)))
-        else:
-            if not eligible:
-                return None, 0.0
-            explicit_resource = project.local_resource_choices.get(component.component_id)
-            if explicit_resource is not None:
-                selected = next(tier for tier in eligible if tier.local_resource_id == explicit_resource)
-            else:
-                def score(tier) -> tuple[float, float, str]:
-                    available = self.inventory.available(project.location_id, tier.local_resource_id)
-                    stocked_fraction = min(tier.max_fraction, available / component.amount_t) if component.amount_t > 1e-12 else tier.max_fraction
-                    return stocked_fraction, tier.max_fraction, str(tier.local_resource_id)
-                selected = max(eligible, key=score)
-        requested = project.local_fraction_targets.get(component.component_id, selected.max_fraction)
-        fraction = min(selected.max_fraction, max(0.0, requested))
-        return selected.local_resource_id, component.amount_t * fraction
 
     def _site_failures_for_recipe(
         self,
@@ -115,7 +91,10 @@ class ConstructionRulesMixin:
             if spec is None:
                 continue
             utilization = power.utilization_by_facility.get(facility.id, 1.0)
-            capacity += spec.work_per_day * utilization
+            maintenance = power.maintenance_factor_by_facility.get(
+                facility.id, self.facilities.maintenance_factor(facility.id)
+            )
+            capacity += spec.work_per_day * utilization * maintenance
         for resource_id, spec in self.construction_resource_providers.items():
             capacity += self.inventory.available(location_id, resource_id) * spec.work_per_t_per_day
         return capacity

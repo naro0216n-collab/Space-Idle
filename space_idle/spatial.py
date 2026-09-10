@@ -81,8 +81,6 @@ class SurfaceField(SpatialFacet):
             raise ValueError("surface factors must be non-negative")
 
 
-
-
 @dataclass(frozen=True)
 class OrbitalField(SpatialFacet):
     facet_key: ClassVar[str] = "orbit"
@@ -120,13 +118,8 @@ class SpatialNodeDef:
     id: SpatialNodeId
     display_name: str
     parent_id: SpatialNodeId | None = None
-    # Body membership is distinct from topology and environmental inheritance.
-    # A body is not itself an inventory/facility location.
     body_id: CelestialBodyId | None = None
     kind: SpatialNodeKind = SpatialNodeKind.GENERIC
-    # Containment and environmental inheritance are distinct. Orbital nodes,
-    # sealed habitats, etc. can remain topologically related without inheriting
-    # a surface atmosphere or climate.
     inherits_parent_environment: bool = True
 
 
@@ -209,8 +202,6 @@ class StaticFacetStore:
         return None
 
 
-
-
 class StatefulEnvironmentOverlay(Protocol):
     """Optional persistence contract for mutable environment overlays."""
 
@@ -247,7 +238,7 @@ class EnvironmentResolver:
     static: StaticFacetStore
     overlays: list[EnvironmentOverlay] = field(default_factory=list)
 
-    def _ordered_overlays(self) -> tuple[EnvironmentOverlay, ...]:
+    def ordered_overlays(self) -> tuple[EnvironmentOverlay, ...]:
         keyed: list[tuple[int, str, EnvironmentOverlay]] = []
         seen: set[str] = set()
         for overlay in self.overlays:
@@ -263,7 +254,7 @@ class EnvironmentResolver:
 
     def get(self, node_id: SpatialNodeId, facet_type: type[FacetT], day: int = 0) -> FacetT | None:
         value = self.static.nearest(self.graph, node_id, facet_type)
-        for overlay in self._ordered_overlays():
+        for overlay in self.ordered_overlays():
             value = overlay.apply(self.graph, node_id, facet_type, value, day)
         return value
 
@@ -276,7 +267,7 @@ class EnvironmentResolver:
     def capture_overlay_state(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for overlay in self._ordered_overlays():
+        for overlay in self.ordered_overlays():
             key = getattr(overlay, "state_key", None)
             capture = getattr(overlay, "capture_state", None)
             if key is None or capture is None:
@@ -289,7 +280,7 @@ class EnvironmentResolver:
 
     def restore_overlay_state(self, rows: list[dict[str, Any]]) -> None:
         overlays: dict[str, object] = {}
-        for overlay in self._ordered_overlays():
+        for overlay in self.ordered_overlays():
             key = getattr(overlay, "state_key", None)
             restore = getattr(overlay, "restore_state", None)
             if key is None or restore is None:

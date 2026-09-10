@@ -8,7 +8,7 @@ from . import base_requirements as req
 def build_facility_definitions() -> dict:
     surface = req.SURFACE_ENV
     orbit = req.ORBIT_ENV
-    return {
+    definitions = {
         ids.EARTH_RESEARCH_LAB: FacilityDef(ids.EARTH_RESEARCH_LAB, "総合研究所", req._capabilities("research_lab"), surface, surface),
         ids.EARTH_OBSERVATION_SATELLITE: FacilityDef(ids.EARTH_OBSERVATION_SATELLITE, "地球観測衛星", (), orbit, orbit),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: FacilityDef(ids.MICROGRAVITY_EXPERIMENT_PLATFORM, "微小重力実験プラットフォーム", req._capabilities("research_lab"), orbit, orbit),
@@ -38,7 +38,22 @@ def build_facility_definitions() -> dict:
         ids.FABRICATION_WORKSHOP: FacilityDef(ids.FABRICATION_WORKSHOP, "構造材加工工場", req._capabilities("structural_fabrication"), surface, surface),
         ids.MACHINE_SHOP: FacilityDef(ids.MACHINE_SHOP, "機械工場", req._capabilities("basic_machine_shop"), surface, surface),
         ids.HEAVY_EQUIPMENT_ASSEMBLY: FacilityDef(ids.HEAVY_EQUIPMENT_ASSEMBLY, "重機組立設備", req._capabilities("heavy_equipment_assembly"), surface, surface),
+        ids.SURFACE_AGGREGATE_QUARRY: FacilityDef(ids.SURFACE_AGGREGATE_QUARRY, "露天骨材採掘場", req._capabilities("aggregate_extraction"), surface, surface, 0.10),
+        ids.METAL_ORE_MINE: FacilityDef(ids.METAL_ORE_MINE, "露天金属鉱山", req._capabilities("metal_ore_extraction"), surface, surface, 0.10),
+        ids.INDUSTRIAL_WATER_INTAKE: FacilityDef(ids.INDUSTRIAL_WATER_INTAKE, "工業用水取水・処理設備", req._capabilities("industrial_water_supply"), surface, surface, 0.08),
+        ids.BASIC_STRUCTURAL_MATERIAL_PLANT: FacilityDef(ids.BASIC_STRUCTURAL_MATERIAL_PLANT, "基礎構造材工場", req._capabilities("basic_structural_material"), surface, surface, 0.09),
+        ids.BASIC_MACHINERY_WORKS: FacilityDef(ids.BASIC_MACHINERY_WORKS, "基礎機械製作所", req._capabilities("basic_machinery_production"), surface, surface, 0.09),
     }
+    # Maintenance rates are Content balance. Mature/general equipment uses a
+    # modest baseline while deliberately inefficient opening industry carries
+    # a higher burden above. No location identity participates in this rule.
+    for definition_id, definition in tuple(definitions.items()):
+        if definition.maintenance_fraction_per_year <= 1e-12:
+            definitions[definition_id] = FacilityDef(
+                definition.id, definition.display_name, definition.capability_supplies,
+                definition.installation_environment, definition.operating_environment, 0.05,
+            )
+    return definitions
 
 
 def initial_facility_placements() -> tuple[tuple, ...]:
@@ -48,4 +63,26 @@ def initial_facility_placements() -> tuple[tuple, ...]:
         (ids.GRID_POWER_SUPPLY, ids.EARTH),
         (ids.EARTH_LAUNCH_SUPPORT, ids.EARTH),
         (ids.VEHICLE_ASSEMBLY_FACILITY, ids.EARTH),
+        (ids.SURFACE_AGGREGATE_QUARRY, ids.EARTH),
+        (ids.METAL_ORE_MINE, ids.EARTH),
+        (ids.INDUSTRIAL_WATER_INTAKE, ids.EARTH),
+        (ids.BASIC_STRUCTURAL_MATERIAL_PLANT, ids.EARTH),
+        (ids.BASIC_MACHINERY_WORKS, ids.EARTH),
     )
+
+
+def initial_facility_investments() -> dict:
+    """Content-owned physical investment history for starting facilities."""
+    S, M, E = ids.STRUCTURAL_COMPONENTS, ids.MACHINERY, ids.PRECISION_ELECTRONICS
+    return {
+        ids.EARTH_RESEARCH_LAB: {S: 12.0, M: 10.0, E: 8.0},
+        ids.EARTH_OBSERVATION_SATELLITE: {S: 1.5, M: 1.0, E: 1.0},
+        ids.GRID_POWER_SUPPLY: {S: 8.0, M: 6.0},
+        ids.EARTH_LAUNCH_SUPPORT: {S: 10.0, M: 8.0, E: 2.0},
+        ids.VEHICLE_ASSEMBLY_FACILITY: {S: 10.0, M: 10.0, E: 3.0},
+        ids.SURFACE_AGGREGATE_QUARRY: {S: 5.0, M: 7.0},
+        ids.METAL_ORE_MINE: {S: 6.0, M: 8.0},
+        ids.INDUSTRIAL_WATER_INTAKE: {S: 5.0, M: 5.0},
+        ids.BASIC_STRUCTURAL_MATERIAL_PLANT: {S: 8.0, M: 8.0},
+        ids.BASIC_MACHINERY_WORKS: {S: 8.0, M: 10.0, E: 1.0},
+    }

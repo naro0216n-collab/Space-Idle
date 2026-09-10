@@ -7,10 +7,8 @@ from .research_models import ResearchPhase
 
 class ResearchExecutionMixin:
     def advance_day(self, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int = 0) -> None:
-        capacity = self.storage_capacity(power_by_location, day)
-        if self.stored_points < capacity - 1e-9:
-            generated = self.generation_rate(power_by_location, day)
-            self.stored_points = min(capacity, self.stored_points + generated)
+        generated = self.generation_rate(power_by_location, day)
+        self.store_generated_points(generated, power_by_location=power_by_location, day=day)
 
         for state in list(self.active.values()):
             if state.paused or state.status != ResearchPhase.DEMONSTRATION or state.demonstration_location_id is None:

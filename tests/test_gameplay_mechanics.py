@@ -7,17 +7,22 @@ import pytest
 from space_idle import (
     AdvanceTime,
     CreateLogisticsLane,
+    DeleteLogisticsLane,
     DispatchVehicle,
     FundResearchPrototype,
     GetCargoOrders,
+    GetCatalog,
     GetLocation,
+    GetLogistics,
     GetLogisticsLanes,
+    GetTransportPlans,
     GetProjects,
     GetResearch,
     GetRoutes,
     GetSurveys,
     GetVehicles,
     PlanBuild,
+    ProduceVehicle,
     RefuelVehicle,
     SetConstructionWeight,
     SetResearchDemonstrationSite,
@@ -171,6 +176,88 @@ def _advance_until_complete(app, project_ids, max_days=2000):
     raise AssertionError("projects did not complete")
 
 
+def _replace_slow_lunar_import_lane_with_owned_staged_capacity(app, project_ids, destination_id):
+    """Exercise an explicit player response to a visible transport bottleneck.
+
+    The default fastest lane is intentionally low-throughput commercial direct
+    transport. The fixture does not wait for Core to rescue that choice. It
+    observes that requested lane capacity is not being delivered, builds enough
+    physical landers for the currently planned resource-specific cargo demands,
+    fuels them at Earth, and replaces the lane with the player-selected staged
+    launch + lander plan returned by the Application query.
+    """
+    lane = next(
+        row for row in app.query(GetLogisticsLanes()).items
+        if row.source_id == str(EARTH) and row.destination_id == str(destination_id)
+    )
+    assert lane.effective_capacity_t_per_day + 1e-9 < lane.requested_capacity_t_per_day
+
+    plan = next(
+        row for row in app.query(GetTransportPlans(str(EARTH), str(destination_id))).options
+        if row.policy == "lowest_cost"
+        and any(mode_id == str(REUSABLE_SURFACE_CARGO_LANDER) for _route_id, mode_id in row.route_modes)
+    )
+    catalog = app.query(GetCatalog())
+    lander = next(row for row in catalog.vehicles if row.id == str(REUSABLE_SURFACE_CARGO_LANDER))
+    assert lander.payload_t > 0
+
+    # CargoOrders are resource-specific, so each project-resource demand needs
+    # enough physical destination vehicles for its own remaining batches. Derive
+    # the count from current Query state rather than a fixed balance constant.
+    remaining_batches = 0
+    for project_id in project_ids:
+        project = _project_row(app, project_id)
+        for resource in project.resources:
+            if resource.shortage_t > 1e-9:
+                remaining_batches += ceil(resource.shortage_t / lander.payload_t)
+    assert remaining_batches > 0
+
+    production_ids = []
+    for _ in range(remaining_batches):
+        production_id = app.execute(ProduceVehicle(
+            str(REUSABLE_SURFACE_CARGO_LANDER), str(EARTH)
+        )).created_id
+        assert production_id is not None
+        production_ids.append(production_id)
+
+    for _ in range(max(20, remaining_batches * 6)):
+        productions = app.query(GetLogistics()).vehicle_production
+        if all(
+            next(row for row in productions if row.id == production_id).phase == "complete"
+            for production_id in production_ids
+        ):
+            break
+        app.execute(AdvanceTime(1))
+    else:
+        raise AssertionError("player-built lunar delivery fleet did not complete")
+
+    productions = app.query(GetLogistics()).vehicle_production
+    for production_id in production_ids:
+        vehicle_id = next(
+            row for row in productions if row.id == production_id
+        ).completed_vehicle_id
+        assert vehicle_id is not None
+        app.execute(RefuelVehicle(vehicle_id))
+
+    app.execute(DeleteLogisticsLane(lane.id))
+    replacement_id = app.execute(CreateLogisticsLane(
+        str(EARTH),
+        str(destination_id),
+        lane.requested_capacity_t_per_day,
+        priority=lane.priority,
+        path=plan.path,
+        route_modes=plan.route_modes,
+        path_policy=plan.policy,
+    )).created_id
+    assert replacement_id is not None
+    replacement = next(
+        row for row in app.query(GetLogisticsLanes()).items if row.id == replacement_id
+    )
+    # A carrier may be in turnaround on the exact command tick, but the selected
+    # path itself must no longer be blocked by missing pre-positioned lander fuel.
+    assert not any("propellant" in blocker for blocker in replacement.blockers)
+
+
 def _build_facility_if_absent(app, location_id, facility_definition_id):
     if any(
         row.definition_id == str(facility_definition_id)
@@ -269,6 +356,9 @@ def isru_checkpoint(survey_ready_checkpoint):
         sourcing_policy="import_now", import_source_id=str(EARTH)
     )).created_id
     assert power and extractor and tank
+    _replace_slow_lunar_import_lane_with_owned_staged_capacity(
+        app, [power, extractor, tank], POLAR_COLD_TRAP
+    )
     _advance_until_complete(app, [power, extractor, tank])
     return capture_state(app._simulation)
 

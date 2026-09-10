@@ -52,6 +52,39 @@ class VehicleRow:
     turnaround_cost_musd: float
     turnaround_resources: tuple[tuple[str, float], ...]
     blockers: tuple[str, ...]
+    assignment_id: str | None = None
+    assignment_kind: str | None = None
+
+
+@dataclass(frozen=True)
+class VehicleProductionOptionRow:
+    vehicle_definition_id: str
+    display_name: str
+    location_id: str
+    production_capability_id: str | None
+    production_days: float
+    resources: tuple[tuple[str, float], ...]
+    blockers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class VehicleProductionRow:
+    id: str
+    vehicle_definition_id: str
+    display_name: str
+    location_id: str
+    phase: str
+    paused: bool
+    progress_days: float
+    required_days: float
+    remaining_days: float
+    estimated_completion_day: float | None
+    production_capability_id: str | None
+    resources: tuple[tuple[str, float], ...]
+    priority: int
+    allocation_weight: float
+    blockers: tuple[str, ...]
+    completed_vehicle_id: str | None
 
 @dataclass(frozen=True)
 class CargoOrderRow:
@@ -84,9 +117,20 @@ class ResourceDemandRow:
     destination_id: str
     resource_id: str
     requested_t: float
+    local_supply_t: float
+    external_required_t: float
     pipeline_t: float
     remaining_t: float
     priority: int
+    recurring_rate_t_per_day: float | None = None
+    local_runway_days: float | None = None
+    earliest_confirmed_arrival_day: int | None = None
+    projected_gap_days: float | None = None
+    eligible_lane_count: int = 0
+    operational_lane_count: int = 0
+    stocked_source_count: int = 0
+    supply_state: str = "covered"
+    blockers: tuple[str, ...] = ()
 
 @dataclass(frozen=True)
 class LogisticsLaneRow:
@@ -124,6 +168,8 @@ class TransportMissionRow:
 class LogisticsView:
     routes: tuple[RouteRow, ...]
     vehicles: tuple[VehicleRow, ...]
+    vehicle_production_options: tuple[VehicleProductionOptionRow, ...]
+    vehicle_production: tuple[VehicleProductionRow, ...]
     missions: tuple[TransportMissionRow, ...]
     orders: tuple[CargoOrderRow, ...]
     lanes: tuple[LogisticsLaneRow, ...]

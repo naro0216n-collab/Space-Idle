@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..facilities import CapabilitySupply
-from ..projects import BuildComponentRequirement, ConstructionRecipe, LocalSubstitutionTier
+from ..projects import BuildResourceRequirement, ConstructionRecipe
 from ..shared import DefinitionId
 from ..site import CapabilityRequirement, FacetValueRange, RequiresFacet, SiteRequirements
 from ..spatial import AtmosphereField, OrbitalField, SurfaceField, ThermalField
@@ -41,29 +41,16 @@ def _available_requirements(*ids: str) -> tuple[CapabilityRequirement, ...]:
     return tuple(CapabilityRequirement(capability_id, 0.01, "available") for capability_id in ids)
 
 
-def _structure_component(amount: float) -> BuildComponentRequirement:
-    return BuildComponentRequirement(
-        "structure",
-        amount,
-        STRUCTURAL_COMPONENTS,
-        (
-            LocalSubstitutionTier(BULK_STRUCTURE, 0.25),
-            LocalSubstitutionTier(FABRICATED_STRUCTURE, 0.80),
-        ),
-    )
+def _structure_resource(amount: float) -> BuildResourceRequirement:
+    return BuildResourceRequirement(STRUCTURAL_COMPONENTS, amount)
 
 
-def _machinery_component(amount: float) -> BuildComponentRequirement:
-    return BuildComponentRequirement(
-        "machinery",
-        amount,
-        MACHINERY,
-        (LocalSubstitutionTier(BASIC_MACHINE_PARTS, 0.35),),
-    )
+def _machinery_resource(amount: float) -> BuildResourceRequirement:
+    return BuildResourceRequirement(MACHINERY, amount)
 
 
-def _electronics_component(amount: float) -> BuildComponentRequirement:
-    return BuildComponentRequirement("electronics", amount, PRECISION_ELECTRONICS)
+def _electronics_resource(amount: float) -> BuildResourceRequirement:
+    return BuildResourceRequirement(PRECISION_ELECTRONICS, amount)
 
 
 def _surface_recipe(
@@ -78,9 +65,18 @@ def _surface_recipe(
     self_deploying: bool = False,
 ) -> ConstructionRecipe:
     site = SiteRequirements(capability_requirements=_infrastructure_requirements(*sorted(capabilities)))
+    resources = tuple(
+        requirement
+        for requirement in (
+            _structure_resource(structure_t) if structure_t > 0 else None,
+            _machinery_resource(machinery_t) if machinery_t > 0 else None,
+            _electronics_resource(electronics_t) if electronics_t > 0 else None,
+        )
+        if requirement is not None
+    )
     return ConstructionRecipe(
         facility_id,
-        (_structure_component(structure_t), _machinery_component(machinery_t), _electronics_component(electronics_t)),
+        resources,
         work,
         site,
         technologies,

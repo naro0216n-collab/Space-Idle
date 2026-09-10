@@ -12,4 +12,7 @@ class SetFacilityProcess:
 class SetPowerPriority:
     facility_id: str; priority: int | None
 @dataclass(frozen=True)
+class SetMaintenancePriority:
+    facility_id: str; priority: int
+@dataclass(frozen=True)
 class AdvanceTime: days: int

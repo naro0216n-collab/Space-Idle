@@ -3,31 +3,20 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class ProjectComponentRow:
-    component_id: str
+class ProjectResourceRow:
+    resource_id: str
     required_t: float
-    import_resource_id: str
-    local_target_t: float
-    reserved_local_t: float
-    reserved_primary_t: float
-    reserved_import_t: float
-    committed_local_t: float
-    committed_primary_t: float
-    committed_import_t: float
+    reserved_t: float
+    committed_t: float
+    shortage_t: float
     import_committed_t: float | None
-    import_demand_id: str | None
-    local_fraction_target: float | None
-    selected_local_resource_id: str | None
-    local_resource_selection_explicit: bool
-    max_local_fraction_available: float
+    demand_id: str | None
 
 
 @dataclass(frozen=True)
-class BuildComponentOption:
-    component_id: str
+class BuildResourceOption:
+    resource_id: str
     required_t: float
-    import_resource_id: str
-    local_substitutions: tuple[tuple[str, float], ...]
 
 
 @dataclass(frozen=True)
@@ -36,7 +25,7 @@ class BuildOptionRow:
     display_name: str
     construction_required: float
     self_deploying: bool
-    components: tuple[BuildComponentOption, ...]
+    resources: tuple[BuildResourceOption, ...]
     missing_technologies: tuple[str, ...]
     site_blockers: tuple[tuple[str, str], ...]
 
@@ -45,7 +34,7 @@ class BuildOptionRow:
 class FacilityUpgradeOption:
     target_level: int
     construction_required: float
-    components: tuple[BuildComponentOption, ...]
+    resources: tuple[BuildResourceOption, ...]
     missing_technologies: tuple[str, ...]
     site_blockers: tuple[tuple[str, str], ...]
     active_project_id: str | None
@@ -76,7 +65,7 @@ class ProjectRow:
     construction_weight: float
     materials_committed: bool
     completed_facility_id: str | None
-    components: tuple[ProjectComponentRow, ...]
+    resources: tuple[ProjectResourceRow, ...]
     blockers: tuple[tuple[str, str], ...]
 
 

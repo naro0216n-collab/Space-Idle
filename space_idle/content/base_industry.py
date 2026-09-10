@@ -14,4 +14,19 @@ def build_process_specs() -> dict:
         ids.PROCESS_STRUCTURAL_FABRICATION: ProcessSpec(ids.PROCESS_STRUCTURAL_FABRICATION, "構造部材加工", ids.FABRICATION_WORKSHOP, {ids.BULK_STRUCTURE: 0.65}, {ids.FABRICATED_STRUCTURE: 0.55}),
         ids.PROCESS_BASIC_MACHINING: ProcessSpec(ids.PROCESS_BASIC_MACHINING, "基礎機械加工", ids.MACHINE_SHOP, {ids.BULK_STRUCTURE: 0.4}, {ids.BASIC_MACHINE_PARTS: 0.25}),
         ids.PROCESS_HEAVY_EQUIPMENT: ProcessSpec(ids.PROCESS_HEAVY_EQUIPMENT, "建設機械組立", ids.HEAVY_EQUIPMENT_ASSEMBLY, {ids.BASIC_MACHINE_PARTS: 0.30, ids.PRECISION_ELECTRONICS: 0.05}, {ids.CONSTRUCTION_EQUIPMENT: 0.25}),
+        # Deliberately low-throughput opening industry. These are ordinary
+        # ProcessSpecs and can operate at any site where their facility and
+        # inputs are available; Earth is only their initial Content placement.
+        ids.PROCESS_BASIC_STRUCTURAL_MATERIAL: ProcessSpec(
+            ids.PROCESS_BASIC_STRUCTURAL_MATERIAL, "基礎構造部材製造",
+            ids.BASIC_STRUCTURAL_MATERIAL_PLANT,
+            {ids.AGGREGATE: 1.20, ids.METAL_ORE: 0.40},
+            {ids.STRUCTURAL_COMPONENTS: 0.30},
+        ),
+        ids.PROCESS_BASIC_MACHINERY: ProcessSpec(
+            ids.PROCESS_BASIC_MACHINERY, "基礎機械製造",
+            ids.BASIC_MACHINERY_WORKS,
+            {ids.METAL_ORE: 0.70, ids.STRUCTURAL_COMPONENTS: 0.20},
+            {ids.MACHINERY: 0.16},
+        ),
     }

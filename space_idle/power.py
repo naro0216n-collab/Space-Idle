@@ -39,6 +39,7 @@ class PowerSnapshot:
     demand_mw: float
     allocated_mw: float
     utilization_by_facility: dict[EntityId, float]
+    maintenance_factor_by_facility: dict[EntityId, float]
 
     @property
     def site_utilization(self) -> float:
@@ -72,14 +73,17 @@ class PowerService:
         rows: list[tuple[int, EntityId, float]] = []
         generation = 0.0
         demand = 0.0
+        maintenance_factors: dict[EntityId, float] = {}
         for facility in facilities.all_at(location_id):
             if not facilities.is_environmentally_compatible(facility, day):
                 continue
             spec = self.specs.get(facility.definition_id)
             if spec is None:
                 continue
+            maintenance = facilities.maintenance_factor(facility.id)
+            maintenance_factors[facility.id] = maintenance
             if not facility.paused:
-                generation += self._generation(spec, location_id, day)
+                generation += self._generation(spec, location_id, day) * maintenance
             load = spec.standby_load_mw if facility.paused else spec.load_mw
             if load > 0:
                 priority = facility.power_priority if facility.power_priority is not None else spec.default_priority
@@ -104,4 +108,4 @@ class PowerService:
                 allocated += use
                 utilization[facility_id] = factor
             remaining = max(0.0, remaining - group_demand * factor)
-        return PowerSnapshot(generation, demand, allocated, utilization)
+        return PowerSnapshot(generation, demand, allocated, utilization, maintenance_factors)

@@ -4,7 +4,7 @@
   const state = {
     revision:null, session:null, world:null, catalog:null, locationId:null, location:null,
     flow:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
-    research:null, surveys:null, contracts:null, logisticsSummary:null, routes:null,
+    research:null, scientificExplorations:null, surveys:null, contracts:null, logisticsSummary:null, logistics:null, routes:null,
     vehicles:null, orders:null, missions:null, lanes:null, demands:[],
     selectedRouteId:null, activeView:'operations', activeTab:'overview', inspector:null,
     busy:false, syncInFlight:null,
@@ -52,6 +52,7 @@
     offered:'提示中',accepted:'受諾済み',declined:'辞退',failed:'失敗',waiting:'待機',
     in_transit:'輸送中',arrival_waiting:'到着待機',prototype:'試作',demonstration:'実証',
     planned:'計画',procuring:'調達中',ready:'施工待ち',building:'施工中',cancelled:'取消済み',
+    awaiting_inputs:'資材待ち',awaiting_vehicle:'Vehicle待ち',exploration:'科学探査中',
   };
   const capabilityName=(id)=>capabilityLabels[id]||id||'—';
   const operationName=(id)=>operationLabels[id]||id||'—';
@@ -121,7 +122,7 @@
 
   function applyUiSnapshot(data){
     state.session=data.session; state.world=data.world; state.globalIssues=data.global_issues;
-    state.research=data.research; state.contracts=data.contracts; state.logisticsSummary=data.logistics_summary;
+    state.research=data.research; state.scientificExplorations=data.scientific_explorations; state.contracts=data.contracts; state.logisticsSummary=data.logistics_summary; state.logistics=data.logistics;
     state.routes=data.routes; state.vehicles=data.vehicles; state.orders=data.orders; state.missions=data.missions;
     state.lanes=data.lanes??state.lanes; state.demands=state.lanes?.demands||[];
     if(data.location!==undefined)state.location=data.location;

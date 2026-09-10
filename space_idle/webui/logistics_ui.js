@@ -8,7 +8,7 @@
   let cargoContractId=null;
   let editingLaneId=null;
 
-  const ownerLabels={project:'建設',research:'研究',industry:'産業',player:'手動',contract:'契約'};
+  const ownerLabels={project:'建設',research:'研究',industry:'産業',facility_maintenance:'設備維持',vehicle_production:'機体建造',scientific_exploration:'科学探査',player:'手動',contract:'契約'};
   const ownerLabel=(kind)=>ownerLabels[kind]||kind;
   const section=(title,body)=>`<section class="inspector-section"><h3>${esc(title)}</h3>${body}</section>`;
   const kv=(rows)=>`<dl class="kv-grid">${rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
@@ -47,10 +47,19 @@
     $('#laneTable').innerHTML=`<div style="padding:8px"><button type="button" class="primary" id="newLaneButton">Laneを作成</button></div><table><thead><tr><th>Lane</th><th>要求容量</th><th>優先度</th><th>実効容量</th><th>本日使用</th><th>待ち需要</th><th>状態</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="8">Laneなし。Domain DemandはLaneが作成されるまで輸送Order化されません。</td></tr>'}</tbody></table>`;
   }
 
+  function demandStateLabel(d){
+    return {local_covered:'現地充足',pipeline_covered:'輸送中で充足',no_lane:'Lane未設定',lane_blocked:'Lane阻害',source_shortage:'供給元不足',coverage_gap:'供給空白',low_runway:'猶予小',uncovered:'未充足'}[d.supply_state]||d.supply_state;
+  }
   function renderDemands(){
     const items=state.demands||[];$('#demandCountBadge').textContent=`${items.length}件`;
-    const rows=items.map((d)=>`<tr><td><div class="cell-main">${esc(ownerLabel(d.owner_kind))}</div><div class="cell-sub">${esc(d.owner_id)}</div></td><td>${esc(resourceName(d.resource_id))}</td><td>${d.source_id?esc(locationName(d.source_id)):'Lane選択'} → ${esc(locationName(d.destination_id))}</td><td>${fmt(d.requested_t)} t</td><td>${fmt(d.pipeline_t)} t</td><td>${fmt(d.remaining_t)} t</td><td>${d.priority}</td></tr>`).join('');
-    $('#demandTable').innerHTML=`<table><thead><tr><th>発生元</th><th>資源</th><th>供給→需要地</th><th>要求</th><th>輸送系内</th><th>未充足</th><th>優先</th></tr></thead><tbody>${rows||'<tr><td colspan="7">現在のResource Demandなし</td></tr>'}</tbody></table>`;
+    const rows=items.map((d)=>{
+      const runway=d.local_runway_days==null?'—':`${fmt(d.local_runway_days,1)}日`;
+      const arrival=d.earliest_confirmed_arrival_day==null?'—':`Day ${fmt(d.earliest_confirmed_arrival_day,0)}`;
+      const alternatives=`Lane ${d.operational_lane_count}/${d.eligible_lane_count} · 在庫源 ${d.stocked_source_count}`;
+      const stateClass=['local_covered','pipeline_covered'].includes(d.supply_state)?'ok':['no_lane','lane_blocked','source_shortage','coverage_gap','low_runway'].includes(d.supply_state)?'warn':'';
+      return `<tr><td><div class="cell-main">${esc(ownerLabel(d.owner_kind))}</div><div class="cell-sub">${esc(d.owner_id)}</div></td><td>${esc(resourceName(d.resource_id))}</td><td>${d.source_id?esc(locationName(d.source_id)):'Lane選択'} → ${esc(locationName(d.destination_id))}</td><td>${fmt(d.requested_t)} t<div class="cell-sub">現地 ${fmt(d.local_supply_t)} / 外部 ${fmt(d.external_required_t)} t</div></td><td>${fmt(d.pipeline_t)} t<div class="cell-sub">最短確定到着 ${esc(arrival)}</div></td><td>${fmt(d.remaining_t)} t<div class="cell-sub">猶予 ${esc(runway)}${d.projected_gap_days!=null&&d.projected_gap_days>0?` · 空白 ${fmt(d.projected_gap_days,1)}日`:''}</div></td><td><span class="badge ${stateClass}">${esc(demandStateLabel(d))}</span><div class="cell-sub">${esc(alternatives)}</div></td><td>${d.priority}</td></tr>`;
+    }).join('');
+    $('#demandTable').innerHTML=`<table><thead><tr><th>発生元</th><th>資源</th><th>供給→需要地</th><th>要求/現地</th><th>輸送系内</th><th>未充足/猶予</th><th>供給状態/代替</th><th>優先</th></tr></thead><tbody>${rows||'<tr><td colspan="8">現在のResource Demandなし</td></tr>'}</tbody></table>`;
   }
 
   function renderVehicles(){
@@ -58,6 +67,22 @@
     const rows=items.map((v)=>`<tr><td><div class="cell-main">${esc(v.display_name)}</div><div class="cell-sub">${esc(v.id)}</div></td><td>${esc(locationName(v.location_id))}</td><td>${esc(stateLabels[v.status]||v.status)}</td><td>${fmt(v.propellant_t)}/${fmt(v.propellant_capacity_t)}</td><td>${fmt(v.payload_t)}t</td><td>${(v.blockers||[]).length}</td></tr>`).join('');
     $('#vehicleTable').innerHTML=`<table><thead><tr><th>機体</th><th>現在地</th><th>状態</th><th>推進剤</th><th>Payload</th><th>blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="6">輸送資産なし</td></tr>'}</tbody></table>`;
   }
+  function renderVehicleProduction(){
+    const projects=state.logistics?.vehicle_production||[];
+    const options=state.logistics?.vehicle_production_options||[];
+    $('#vehicleProductionCountBadge').textContent=`${projects.length}件`;
+    const projectRows=projects.map((p)=>{
+      const blockers=p.blockers||[];
+      const control=p.phase==='complete'?'<span class="badge ok">完成</span>':`<button type="button" data-production-toggle="${esc(p.id)}" data-paused="${p.paused?'1':'0'}">${p.paused?'再開':'停止'}</button>`;
+      return `<tr><td><div class="cell-main">${esc(p.display_name)}</div><div class="cell-sub">${esc(p.id)} · ${esc(locationName(p.location_id))}</div></td><td>${esc(stateLabels[p.phase]||p.phase)}</td><td>${fmt(p.progress_days,1)}/${fmt(p.required_days,1)}日</td><td>${(p.resources||[]).map(([rid,amount])=>`${esc(resourceName(rid))} ${fmt(amount)}t`).join(' / ')}</td><td>${blockers.length}<div class="cell-sub">${blockers.slice(0,2).map(A.userFacingText).join(' / ')}</div></td><td>${control}</td></tr>`;
+    }).join('');
+    const optionRows=options.map((o)=>{
+      const blockers=o.blockers||[];
+      return `<tr><td><div class="cell-main">${esc(o.display_name)}</div><div class="cell-sub">${esc(locationName(o.location_id))}</div></td><td>${fmt(o.production_days,1)}日</td><td>${(o.resources||[]).map(([rid,amount])=>`${esc(resourceName(rid))} ${fmt(amount)}t`).join(' / ')}</td><td>${esc(o.production_capability_id||'—')}</td><td>${blockers.length}<div class="cell-sub">${blockers.slice(0,2).map(A.userFacingText).join(' / ')}</div></td><td><button type="button" data-produce-vehicle="${esc(o.vehicle_definition_id)}" data-production-location="${esc(o.location_id)}" ${blockers.length?'disabled':''}>建造</button></td></tr>`;
+    }).join('');
+    $('#vehicleProductionTable').innerHTML=`<div class="table-wrap"><table><thead><tr><th>建造中</th><th>状態</th><th>進捗</th><th>投入資源</th><th>blocker</th><th>操作</th></tr></thead><tbody>${projectRows||'<tr><td colspan="6">建造中Vehicleなし</td></tr>'}</tbody></table></div><div class="table-wrap"><table><thead><tr><th>建造候補 / 地点</th><th>期間</th><th>必要資源</th><th>必要Capability</th><th>blocker</th><th>操作</th></tr></thead><tbody>${optionRows||'<tr><td colspan="6">建造候補なし</td></tr>'}</tbody></table></div>`;
+  }
+
   function renderCargo(){
     const items=(state.orders?.items||[]).filter((o)=>o.owner_kind!=='contract');$('#cargoCountBadge').textContent=`${items.length}件`;
     const rows=items.map((o)=>{const origin=o.lane_id?`Lane自動 · ${ownerLabel(o.owner_kind)}`:'手動輸送';return `<tr><td>${esc(resourceName(o.resource_id))}<div class="cell-sub">${esc(origin)} · ${esc(o.id)}</div></td><td>${esc(locationName(o.source_id))} → ${esc(locationName(o.destination_id))}</td><td>${fmt(o.delivered_t)}/${fmt(o.amount_t)}t</td><td>${esc(stateLabels[o.status]||o.status)}</td><td>${(o.blockers||[]).length}</td></tr>`;}).join('');
@@ -124,7 +149,7 @@
     if(!state.logisticsSummary||!state.routes)return;
     const s=state.logisticsSummary;
     $('#logisticsSummary').innerHTML=[['Lane',`${s.lane_count??(state.lanes?.items||[]).length}`],['Demand',`${s.demand_count??state.demands.length}`],['待ち需要',`${fmt(s.queued_demand_t)} t`],['輸送中',`${fmt(s.in_transit_t)} t`],['到着待機',`${fmt(s.arrival_waiting_t)} t`]].map(metricHtml).join('');
-    populateLocationSelects();renderRouteFilters();renderRouteList();renderNetwork();renderLanes();renderDemands();renderVehicles();renderCargo();renderRouteInspector();
+    populateLocationSelects();renderRouteFilters();renderRouteList();renderNetwork();renderLanes();renderDemands();renderVehicles();renderVehicleProduction();renderCargo();renderRouteInspector();
   }
 
   document.addEventListener('click',async(event)=>{
@@ -136,6 +161,8 @@
     if(event.target.closest('#routeLaneButton')){openLaneDialog((state.routes?.items||[]).find((x)=>x.id===state.selectedRouteId));return;}
     if(event.target.closest('#newCargoButton')){await openCargoDialog();return;}
     if(event.target.closest('#routeCargoButton')){await openCargoDialog((state.routes?.items||[]).find((x)=>x.id===state.selectedRouteId));return;}
+    const produce=event.target.closest('[data-produce-vehicle]');if(produce){try{await command('ProduceVehicle',{vehicle_definition_id:produce.dataset.produceVehicle,location_id:produce.dataset.productionLocation});banner('Vehicle建造を開始しました');}catch{}return;}
+    const productionToggle=event.target.closest('[data-production-toggle]');if(productionToggle){try{await command(productionToggle.dataset.paused==='1'?'ResumeVehicleProduction':'PauseVehicleProduction',{production_id:productionToggle.dataset.productionToggle});}catch{}return;}
     const edit=event.target.closest('[data-lane-edit]');if(edit){const lane=(state.lanes?.items||[]).find((x)=>x.id===edit.dataset.laneEdit);if(lane)openLaneDialog(null,lane);return;}
     const toggle=event.target.closest('[data-lane-toggle]');if(toggle){try{await command(toggle.dataset.paused==='1'?'ResumeLogisticsLane':'PauseLogisticsLane',{lane_id:toggle.dataset.laneToggle});}catch{}return;}
     const del=event.target.closest('[data-lane-delete]');if(del){try{await command('DeleteLogisticsLane',{lane_id:del.dataset.laneDelete});}catch{}return;}

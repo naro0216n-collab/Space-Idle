@@ -103,6 +103,27 @@ def test_http_api_revision_etag_gzip_command_and_save_load(tmp_path):
         thread.join(timeout=5)
 
 
+
+def test_ui_state_exposes_scientific_exploration_and_vehicle_production(tmp_path):
+    runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
+    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
+    port = server.server_address[1]
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, _, payload = _request(
+            port, "GET", "/api/v1/ui-state?location_id=base.node.earth_surface"
+        )
+        assert status == 200
+        data = payload["data"]
+        assert data["scientific_explorations"]["items"]
+        assert data["logistics"]["vehicle_production_options"]
+        assert "vehicle_production" in data["logistics"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
 def test_http_api_cors_preflight_for_ipad_dev_client(tmp_path):
     runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0, cors_origins=("*",)))
@@ -217,6 +238,8 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert headers["Content-Type"].startswith("text/javascript")
         assert "SpaceIdleResearchTree.render" in operations_js
         assert "FundResearchPrototype" in operations_js
+        assert "StartScientificExploration" in operations_js
+        assert "AssignExplorationVehicle" in operations_js
 
         status, headers, body = _raw_request(port, "/logistics_ui.js")
         logistics_js = body.decode("utf-8")
@@ -224,6 +247,8 @@ def test_development_webui_is_served_from_same_origin(tmp_path):
         assert headers["Content-Type"].startswith("text/javascript")
         assert "SubmitCargo" in logistics_js
         assert "CreateLogisticsLane" in logistics_js
+        assert "ProduceVehicle" in logistics_js
+        assert "PauseVehicleProduction" in logistics_js
 
         status, headers, body = _raw_request(port, "/research_tree.css")
         assert status == 200

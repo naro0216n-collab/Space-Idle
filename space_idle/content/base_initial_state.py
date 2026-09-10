@@ -6,7 +6,7 @@ from . import base_ids as ids
 def configure_initial_inventory(inventory) -> None:
     for resource in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY, ids.PRECISION_ELECTRONICS, ids.CONSTRUCTION_EQUIPMENT):
         inventory.register_storage_class(resource, "general_cargo")
-    for resource in (ids.BULK_STRUCTURE, ids.FABRICATED_STRUCTURE, ids.BASIC_MACHINE_PARTS, ids.REGOLITH, ids.METAL_FEEDSTOCK):
+    for resource in (ids.BULK_STRUCTURE, ids.FABRICATED_STRUCTURE, ids.BASIC_MACHINE_PARTS, ids.REGOLITH, ids.METAL_FEEDSTOCK, ids.AGGREGATE, ids.METAL_ORE):
         inventory.register_storage_class(resource, "bulk")
     inventory.register_storage_class(ids.WATER, "liquid")
     for resource in (ids.OXYGEN, ids.HYDROGEN, ids.PROPELLANT):
@@ -33,3 +33,10 @@ def configure_initial_inventory(inventory) -> None:
     inventory.add(ids.EARTH, ids.OXYGEN, 5000.0)
     inventory.add(ids.EARTH, ids.HYDROGEN, 2000.0)
     inventory.add(ids.EARTH, ids.PROPELLANT, 5000.0)
+
+    # Existing orbital assets begin with a finite service stock. This is not an
+    # external market: once consumed it must be replenished through normal
+    # logistics lanes from industrial inventory.
+    inventory.add(ids.LEO, ids.STRUCTURAL_COMPONENTS, 1.0)
+    inventory.add(ids.LEO, ids.MACHINERY, 1.0)
+    inventory.add(ids.LEO, ids.PRECISION_ELECTRONICS, 1.0)

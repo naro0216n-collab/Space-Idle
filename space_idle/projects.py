@@ -10,13 +10,12 @@ from .shared import AccountState, DefinitionId, ProjectId
 from .technology import TechnologyState
 from .construction.models import (
     ProjectStatus,
-    LocalSubstitutionTier,
-    BuildComponentRequirement,
+    BuildResourceRequirement,
     ConstructionRecipe,
     FacilityUpgradeRecipe,
     ConstructionProviderSpec,
     ConstructionResourceProviderSpec,
-    ProjectComponentState,
+    ProjectResourceState,
     ConstructionProject,
     NewFacilityTarget,
     FacilityUpgradeTarget,
@@ -24,13 +23,14 @@ from .construction.models import (
     SourcingPolicy,
 )
 from .construction.rules import ConstructionRulesMixin
+from .construction.accounting import ConstructionAccountingMixin
 from .construction.planning import ConstructionPlanningMixin
 from .construction.procurement import ConstructionProcurementMixin
 from .construction.execution import ConstructionExecutionMixin
 
 
 @dataclass
-class ProjectService(ConstructionRulesMixin, ConstructionPlanningMixin, ConstructionProcurementMixin, ConstructionExecutionMixin):
+class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, ConstructionPlanningMixin, ConstructionProcurementMixin, ConstructionExecutionMixin):
     recipes: dict[DefinitionId, ConstructionRecipe]
     upgrade_recipes: dict[tuple[DefinitionId, int], FacilityUpgradeRecipe]
     construction_providers: dict[DefinitionId, ConstructionProviderSpec]

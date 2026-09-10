@@ -8,7 +8,7 @@ from .app_contracts.catalog_views import (
     CatalogView, LocationSummary, WorldView,
 )
 from .app_contracts.project_views import (
-    ProjectComponentRow, BuildComponentOption, BuildOptionRow, FacilityUpgradeOption,
+    ProjectResourceRow, BuildResourceOption, BuildOptionRow, FacilityUpgradeOption,
     BuildOptionsView, ProjectRow, ProjectsView,
 )
 from .app_contracts.location_views import (
@@ -16,7 +16,7 @@ from .app_contracts.location_views import (
     EnvironmentFacetRow, ExtractionRow, LocationView,
 )
 from .app_contracts.logistics_views import (
-    RouteModeRow, RouteRow, VehicleRow, CargoOrderRow, ResourceDemandRow,
+    RouteModeRow, RouteRow, VehicleRow, VehicleProductionOptionRow, VehicleProductionRow, CargoOrderRow, ResourceDemandRow,
     LogisticsLaneRow, TransportMissionRow, LogisticsView, TransportPathOptionRow,
     TransportPlansView,
 )
@@ -25,7 +25,7 @@ from .app_contracts.logistics_reports import (
     LogisticsLanesView, TransportMissionsView,
 )
 from .app_contracts.progression_views import (
-    ResearchProviderRow, ResearchRow, ResearchView, SurveyRow, SurveysView, ContractRow, ContractsView,
+    ResearchProviderRow, ResearchRow, ResearchView, ScientificExplorationVehicleOptionRow, ScientificExplorationRow, ScientificExplorationsView, SurveyRow, SurveysView, ContractRow, ContractsView,
 )
 from .app_contracts.ui_reports import IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView
 
@@ -33,7 +33,7 @@ QueryResult: TypeAlias = (
     CatalogView | WorldView | LocationView | FlowReportView | BottlenecksView |
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     RoutesView | VehiclesView | CargoOrdersView | LogisticsLanesView |
-    TransportMissionsView | TransportPlansView | ResearchView | SurveysView |
+    TransportMissionsView | TransportPlansView | ResearchView | ScientificExplorationsView | SurveysView |
     ContractsView
 )
 
@@ -42,14 +42,14 @@ __all__ = [
     "OperationCapabilityDefinitionRow", "ResourceDefinitionRow", "FacilityDefinitionRow",
     "ProcessDefinitionRow", "ResearchDefinitionRow", "VehicleDefinitionRow", "RouteDefinitionRow",
     "TransportServiceDefinitionRow", "CelestialBodyDefinitionRow", "LocationDefinitionRow",
-    "CatalogView", "LocationSummary", "WorldView", "ProjectComponentRow", "BuildComponentOption",
+    "CatalogView", "LocationSummary", "WorldView", "ProjectResourceRow", "BuildResourceOption",
     "BuildOptionRow", "FacilityUpgradeOption", "BuildOptionsView", "ProjectRow", "ProjectsView",
     "InventoryRow", "StorageRow", "FacilityRow", "CapabilityRow", "IndustryRow", "EnvironmentFacetRow",
-    "ExtractionRow", "LocationView", "RouteModeRow", "RouteRow", "VehicleRow", "CargoOrderRow",
+    "ExtractionRow", "LocationView", "RouteModeRow", "RouteRow", "VehicleRow", "VehicleProductionOptionRow", "VehicleProductionRow", "CargoOrderRow",
     "ResourceDemandRow", "LogisticsLaneRow", "TransportMissionRow", "LogisticsView",
     "TransportPathOptionRow", "TransportPlansView", "LogisticsSummaryView", "RoutesView",
     "VehiclesView", "CargoOrdersView", "LogisticsLanesView", "TransportMissionsView",
     "IssueRow", "ResourceFlowRow", "FlowReportView", "BottlenecksView",
-    "ResearchProviderRow", "ResearchRow", "ResearchView", "SurveyRow", "SurveysView", "ContractRow",
+    "ResearchProviderRow", "ResearchRow", "ResearchView", "ScientificExplorationVehicleOptionRow", "ScientificExplorationRow", "ScientificExplorationsView", "SurveyRow", "SurveysView", "ContractRow",
     "ContractsView", "QueryResult",
 ]

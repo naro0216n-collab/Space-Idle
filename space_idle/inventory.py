@@ -184,6 +184,11 @@ class InventoryBook:
         for key in [key for key in self.reserved if key[0] == owner_id]:
             self.reserved.pop(key, None)
 
+    def release_reservations_by_owner_prefix(self, prefix: str) -> None:
+        """Release a simulation-owned reservation class by stable owner prefix."""
+        for key in [key for key in self.reserved if str(key[0]).startswith(prefix)]:
+            self.reserved.pop(key, None)
+
     def release_reserved_amount(
         self, owner_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId, amount: float
     ) -> None:
