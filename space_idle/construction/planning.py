@@ -97,13 +97,48 @@ class ConstructionPlanningMixin:
             import_source_id,
         )
 
+    def settings_mutable(self, project_id: ProjectId) -> bool:
+        return self.projects[project_id].status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
+
     def set_priority(self, project_id: ProjectId, priority: int) -> None:
+        if not self.settings_mutable(project_id):
+            raise ValueError("completed or cancelled project settings cannot change")
         self.projects[project_id].priority = priority
 
+    def sourcing_mutable(self, project_id: ProjectId) -> bool:
+        project = self.projects[project_id]
+        return (
+            project.status in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}
+            and not any(
+                state.import_committed_t is not None
+                for state in project.resources.values()
+            )
+        )
+
+    def sourcing_policy_options(self) -> tuple[SourcingPolicy, ...]:
+        return tuple(self.sourcing_wait_days)
+
+    def import_source_options_for_location(self, location_id: SpatialNodeId) -> tuple[SpatialNodeId, ...]:
+        if location_id not in self.facilities.environment.graph.nodes:
+            raise KeyError(location_id)
+        return tuple(
+            sorted(
+                (
+                    candidate_id
+                    for candidate_id in self.facilities.environment.graph.nodes
+                    if candidate_id != location_id
+                ),
+                key=str,
+            )
+        )
+
+    def import_source_options(self, project_id: ProjectId) -> tuple[SpatialNodeId, ...]:
+        return self.import_source_options_for_location(self.projects[project_id].location_id)
+
     def _ensure_sourcing_mutable(self, project: ConstructionProject) -> None:
-        if project.status not in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}:
-            raise ValueError("sourcing can only change before construction readiness")
-        if any(state.import_committed_t is not None for state in project.resources.values()):
+        if not self.sourcing_mutable(project.id):
+            if project.status not in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}:
+                raise ValueError("sourcing can only change before construction readiness")
             raise ValueError("sourcing cannot change after import commitment")
 
     def _release_project_reservations(self, project: ConstructionProject) -> None:
@@ -124,6 +159,8 @@ class ConstructionPlanningMixin:
     def set_construction_weight(self, project_id: ProjectId, weight: float) -> None:
         if weight < 0:
             raise ValueError("construction weight must be non-negative")
+        if not self.settings_mutable(project_id):
+            raise ValueError("completed or cancelled project settings cannot change")
         self.projects[project_id].construction_weight = weight
 
     def set_import_source(self, project_id: ProjectId, location_id: SpatialNodeId | None) -> None:

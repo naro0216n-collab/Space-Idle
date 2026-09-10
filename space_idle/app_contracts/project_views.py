@@ -43,6 +43,8 @@ class FacilityUpgradeOption:
 @dataclass(frozen=True)
 class BuildOptionsView:
     location_id: str
+    sourcing_policy_options: tuple[str, ...]
+    import_source_options: tuple[str, ...]
     items: tuple[BuildOptionRow, ...]
 
 
@@ -60,6 +62,10 @@ class ProjectRow:
     priority: int
     sourcing_policy: str
     import_source_id: str | None
+    settings_editable: bool
+    sourcing_editable: bool
+    sourcing_policy_options: tuple[str, ...]
+    import_source_options: tuple[str, ...]
     construction_done: float
     construction_required: float
     construction_weight: float

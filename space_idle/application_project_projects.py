@@ -133,6 +133,10 @@ class ProjectProjectorMixin:
                 target_facility_id, target_level, definition.display_name, project.status, project.paused,
                 project.priority, project.sourcing_policy,
                 None if project.import_source_id is None else str(project.import_source_id),
+                sim.projects.settings_mutable(project.id),
+                sim.projects.sourcing_mutable(project.id),
+                tuple(sim.projects.sourcing_policy_options()),
+                tuple(str(source_id) for source_id in sim.projects.import_source_options(project.id)),
                 project.construction_done, recipe.construction_work, project.construction_weight,
                 project.materials_committed,
                 None if project.completed_facility_id is None else str(project.completed_facility_id),
@@ -155,4 +159,9 @@ class ProjectProjectorMixin:
                 tuple(sorted(str(technology) for technology in recipe.prerequisite_technologies - sim.projects.unlocked_technologies)),
                 tuple((failure.code, failure.detail) for failure in failures),
             ))
-        return BuildOptionsView(str(location_id), tuple(rows))
+        return BuildOptionsView(
+            str(location_id),
+            tuple(sim.projects.sourcing_policy_options()),
+            tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(location_id)),
+            tuple(rows),
+        )
