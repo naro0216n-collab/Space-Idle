@@ -104,11 +104,7 @@ jobs:
           if not isinstance(source, dict):
               raise SystemExit('invalid payload source')
           kind = source.get('kind')
-          if kind == 'inline':
-              payload_text = source.get('data')
-              if not isinstance(payload_text, str) or not payload_text:
-                  raise SystemExit('invalid inline payload')
-          elif kind == 'git-tree':
+          if kind == 'git-tree':
               tree_oid = source.get('oid')
               part_count = source.get('part_count')
               if not isinstance(tree_oid, str) or not re.fullmatch(rf'[0-9a-f]{{{oid_length}}}', tree_oid):
