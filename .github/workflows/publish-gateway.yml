@@ -63,7 +63,7 @@ jobs:
           missing = required - request.keys()
           if missing:
               raise SystemExit(f'missing request fields: {sorted(missing)}')
-          if request['version'] != 5:
+          if request['version'] != 6:
               raise SystemExit('unsupported request version')
           request_id = request['request_id']
           if not isinstance(request_id, str) or not re.fullmatch(r'[0-9a-f]{32}', request_id):
@@ -103,74 +103,79 @@ jobs:
           source = request['payload_source']
           if not isinstance(source, dict):
               raise SystemExit('invalid payload source')
-          if source.get('kind') != 'git-tree':
-              raise SystemExit('unsupported payload source')
+          kind = source.get('kind')
+          if kind == 'inline':
+              payload_text = source.get('data')
+              if not isinstance(payload_text, str) or not payload_text:
+                  raise SystemExit('invalid inline payload')
+          elif kind == 'git-tree':
+              tree_oid = source.get('oid')
+              part_count = source.get('part_count')
+              if not isinstance(tree_oid, str) or not re.fullmatch(rf'[0-9a-f]{{{oid_length}}}', tree_oid):
+                  raise SystemExit('invalid payload tree oid')
+              if not isinstance(part_count, int) or not 1 <= part_count <= 256:
+                  raise SystemExit('invalid payload tree part count')
 
-          tree_oid = source.get('oid')
-          chunk_count = source.get('chunk_count')
-          if not isinstance(tree_oid, str) or not re.fullmatch(rf'[0-9a-f]{{{oid_length}}}', tree_oid):
-              raise SystemExit('invalid payload tree oid')
-          if not isinstance(chunk_count, int) or not 1 <= chunk_count <= 256:
-              raise SystemExit('invalid payload tree chunk count')
-
-          tree_response = json.loads(subprocess.check_output(
-              ['gh', 'api', f"repos/{os.environ['GITHUB_REPOSITORY']}/git/trees/{tree_oid}"],
-              text=True,
-          ))
-          if tree_response.get('sha') != tree_oid or tree_response.get('truncated'):
-              raise SystemExit('GitHub payload tree identity mismatch')
-          entries = tree_response.get('tree')
-          if not isinstance(entries, list) or len(entries) != chunk_count:
-              raise SystemExit('GitHub payload tree chunk count mismatch')
-          entries = sorted(entries, key=lambda entry: entry.get('path', ''))
-
-          payload_parts = []
-          raw_tree = bytearray()
-          for index, entry in enumerate(entries):
-              if not isinstance(entry, dict):
-                  raise SystemExit(f'invalid payload tree entry {index}')
-              expected_path = f'{index:04d}.txt'
-              path = entry.get('path')
-              mode = entry.get('mode')
-              entry_type = entry.get('type')
-              blob_oid = entry.get('sha')
-              if path != expected_path or mode != '100644' or entry_type != 'blob':
-                  raise SystemExit(f'invalid payload tree entry shape at {index}')
-              if not isinstance(blob_oid, str) or not re.fullmatch(rf'[0-9a-f]{{{oid_length}}}', blob_oid):
-                  raise SystemExit(f'invalid payload blob oid at chunk {index}')
-
-              raw_tree.extend(b'100644 ')
-              raw_tree.extend(path.encode('ascii'))
-              raw_tree.append(0)
-              raw_tree.extend(bytes.fromhex(blob_oid))
-
-              response = json.loads(subprocess.check_output(
-                  ['gh', 'api', f"repos/{os.environ['GITHUB_REPOSITORY']}/git/blobs/{blob_oid}"],
+              tree_response = json.loads(subprocess.check_output(
+                  ['gh', 'api', f"repos/{os.environ['GITHUB_REPOSITORY']}/git/trees/{tree_oid}"],
                   text=True,
               ))
-              if response.get('sha') != blob_oid or response.get('encoding') != 'base64':
-                  raise SystemExit(f'GitHub payload blob identity mismatch at chunk {index}')
-              try:
-                  raw = base64.b64decode(response['content'], validate=False)
-                  text = raw.decode('ascii')
-              except Exception as exc:
-                  raise SystemExit(f'invalid GitHub payload blob at chunk {index}: {exc}') from exc
-              actual_oid = subprocess.check_output(
-                  ['git', 'hash-object', '--stdin'], input=text.encode('ascii')
-              ).decode('ascii').strip()
-              if actual_oid != blob_oid:
-                  raise SystemExit(
-                      f'GitHub payload blob Git OID mismatch at chunk {index}: expected {blob_oid}, got {actual_oid}'
-                  )
-              payload_parts.append(text)
+              if tree_response.get('sha') != tree_oid or tree_response.get('truncated'):
+                  raise SystemExit('GitHub payload tree identity mismatch')
+              entries = tree_response.get('tree')
+              if not isinstance(entries, list) or len(entries) != part_count:
+                  raise SystemExit('GitHub payload tree part count mismatch')
+              entries = sorted(entries, key=lambda entry: entry.get('path', ''))
 
-          tree_header = f'tree {len(raw_tree)}\0'.encode('ascii')
-          actual_tree_oid = hashlib.new(object_format, tree_header + raw_tree).hexdigest()
-          if actual_tree_oid != tree_oid:
-              raise SystemExit(
-                  f'GitHub payload tree Git OID mismatch: expected {tree_oid}, got {actual_tree_oid}'
-              )
-          payload_text = ''.join(payload_parts)
+              payload_parts = []
+              raw_tree = bytearray()
+              for index, entry in enumerate(entries):
+                  if not isinstance(entry, dict):
+                      raise SystemExit(f'invalid payload tree entry {index}')
+                  expected_path = f'{index:04d}.b64'
+                  path = entry.get('path')
+                  mode = entry.get('mode')
+                  entry_type = entry.get('type')
+                  blob_oid = entry.get('sha')
+                  if path != expected_path or mode != '100644' or entry_type != 'blob':
+                      raise SystemExit(f'invalid payload tree entry shape at {index}')
+                  if not isinstance(blob_oid, str) or not re.fullmatch(rf'[0-9a-f]{{{oid_length}}}', blob_oid):
+                      raise SystemExit(f'invalid payload blob oid at part {index}')
+
+                  raw_tree.extend(b'100644 ')
+                  raw_tree.extend(path.encode('ascii'))
+                  raw_tree.append(0)
+                  raw_tree.extend(bytes.fromhex(blob_oid))
+
+                  response = json.loads(subprocess.check_output(
+                      ['gh', 'api', f"repos/{os.environ['GITHUB_REPOSITORY']}/git/blobs/{blob_oid}"],
+                      text=True,
+                  ))
+                  if response.get('sha') != blob_oid or response.get('encoding') != 'base64':
+                      raise SystemExit(f'GitHub payload blob identity mismatch at part {index}')
+                  try:
+                      raw = base64.b64decode(response['content'], validate=False)
+                      text = raw.decode('ascii')
+                  except Exception as exc:
+                      raise SystemExit(f'invalid GitHub payload blob at part {index}: {exc}') from exc
+                  actual_oid = subprocess.check_output(
+                      ['git', 'hash-object', '--stdin'], input=text.encode('ascii')
+                  ).decode('ascii').strip()
+                  if actual_oid != blob_oid:
+                      raise SystemExit(
+                          f'GitHub payload blob Git OID mismatch at part {index}: expected {blob_oid}, got {actual_oid}'
+                      )
+                  payload_parts.append(text)
+
+              tree_header = f'tree {len(raw_tree)}\0'.encode('ascii')
+              actual_tree_oid = hashlib.new(object_format, tree_header + raw_tree).hexdigest()
+              if actual_tree_oid != tree_oid:
+                  raise SystemExit(
+                      f'GitHub payload tree Git OID mismatch: expected {tree_oid}, got {actual_tree_oid}'
+                  )
+              payload_text = ''.join(payload_parts)
+          else:
+              raise SystemExit('unsupported payload source')
 
           if len(payload_text) != request['payload_chars']:
               raise SystemExit(
@@ -262,7 +267,7 @@ jobs:
           receipt = {
               'version': 3,
               'request_id': os.environ['REQUEST_ID'],
-              'request_version': 5,
+              'request_version': 6,
               'target_branch': os.environ['TARGET_BRANCH'],
               'base_commit': os.environ['BASE_SHA'],
               'target_tree': os.environ['TARGET_TREE'],
