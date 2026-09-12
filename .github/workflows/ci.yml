@@ -56,6 +56,20 @@ jobs:
       - name: Run tests
         run: pytest -vv --ignore=tests/test_gameplay_mechanics.py
 
+  development-tooling:
+    name: Development tooling
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install -U pip pytest
+      - name: Run development infrastructure tests
+        run: pytest -q development_tests
+
   package-smoke:
     name: Clean package install
     runs-on: ubuntu-latest
@@ -109,7 +123,7 @@ jobs:
   report-status:
     name: Report Fast CI status
     if: always()
-    needs: [source-artifact, unit, package-smoke, chromium-smoke]
+    needs: [source-artifact, unit, development-tooling, package-smoke, chromium-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -118,6 +132,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RESULT: ${{ needs.source-artifact.result }}
           UNIT_RESULT: ${{ needs.unit.result }}
+          DEVELOPMENT_RESULT: ${{ needs.development-tooling.result }}
           PACKAGE_RESULT: ${{ needs.package-smoke.result }}
           CHROMIUM_RESULT: ${{ needs.chromium-smoke.result }}
         shell: bash
@@ -125,7 +140,7 @@ jobs:
           set -euo pipefail
           state=success
           description='Fast CI passed'
-          for result in "${SOURCE_RESULT}" "${UNIT_RESULT}" "${PACKAGE_RESULT}" "${CHROMIUM_RESULT}"; do
+          for result in "${SOURCE_RESULT}" "${UNIT_RESULT}" "${DEVELOPMENT_RESULT}" "${PACKAGE_RESULT}" "${CHROMIUM_RESULT}"; do
             if [ "${result}" != 'success' ]; then
               state=failure
               description='Fast CI failed'
