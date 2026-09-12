@@ -29,6 +29,20 @@ jobs:
       - name: Run structural tests
         run: pytest -q --ignore=tests/test_gameplay_mechanics.py
 
+  development-tooling:
+    name: Development tooling
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install -U pip pytest
+      - name: Run development infrastructure tests
+        run: pytest -q development_tests
+
   gameplay-evaluation:
     name: Gameplay evaluation
     continue-on-error: true
