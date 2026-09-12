@@ -1,0 +1,11 @@
+name: Workflow Maintenance Permission Probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  noop:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo workflow-maintenance-permission-probe
