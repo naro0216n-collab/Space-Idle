@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -8,6 +9,9 @@ import subprocess
 from pathlib import Path
 
 from publish_gateway_payload import GatewayPayloadError, load_indexed_payload
+
+
+TRUSTED_CONTROL_WORKFLOW = ".github/workflows/publish-gateway.yml"
 
 
 class GatewayRequestError(RuntimeError):
@@ -40,6 +44,42 @@ def _require_oid(value: object, *, length: int, name: str) -> str:
         raise GatewayRequestError(f"invalid {name}")
     return value
 
+
+
+def verify_trusted_workflow() -> int:
+    base_sha = os.environ.get("BASE_SHA", "")
+    publish_commit = os.environ.get("PUBLISH_COMMIT", "")
+    control_commit = os.environ.get("GITHUB_SHA", "")
+    if not base_sha or not publish_commit or not control_commit:
+        raise GatewayRequestError("trusted workflow verification environment is incomplete")
+
+    output = _git(
+        "diff",
+        "--name-status",
+        "--no-renames",
+        base_sha,
+        publish_commit,
+        "--",
+        ".github/workflows",
+    )
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        status, path = line.split("\t", 1)
+        status = status[0]
+        if path != TRUSTED_CONTROL_WORKFLOW:
+            raise GatewayRequestError(f"untrusted workflow change in publish target: {path}")
+        if status not in {"A", "M"}:
+            raise GatewayRequestError(
+                f"trusted control workflow must exist in publish target: {path}"
+            )
+        target_oid = _git("rev-parse", f"{publish_commit}:{path}")
+        control_oid = _git("rev-parse", f"{control_commit}:{path}")
+        if target_oid != control_oid:
+            raise GatewayRequestError(
+                f"trusted control workflow blob mismatch: target {target_oid}, control {control_oid}"
+            )
+    return 0
 
 def main() -> int:
     request_path = Path(os.environ["REQUEST_FILE"])
@@ -108,8 +148,17 @@ def main() -> int:
     return 0
 
 
+def cli() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--verify-trusted-workflow", action="store_true")
+    args = parser.parse_args()
+    if args.verify_trusted_workflow:
+        return verify_trusted_workflow()
+    return main()
+
+
 if __name__ == "__main__":
     try:
-        raise SystemExit(main())
+        raise SystemExit(cli())
     except (GatewayRequestError, GatewayPayloadError) as exc:
         raise SystemExit(str(exc)) from exc

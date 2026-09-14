@@ -79,6 +79,8 @@ jobs:
             exit 1
           fi
 
+          python scripts/publish_gateway_validate.py --verify-trusted-workflow
+
           git push origin "${PUBLISH_COMMIT}:refs/heads/${TARGET_BRANCH}"
           remote_after="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')"
           if [ "${remote_after}" != "${PUBLISH_COMMIT}" ]; then
