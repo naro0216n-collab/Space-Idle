@@ -1,0 +1,11 @@
+{
+  "base_commit": "32327cd6d0e26c38c5391278fa3cda696b8d3b92",
+  "published_commit": "2495c3de143735d8924de56f6a0011b30ccf1c61",
+  "published_commit_object_b64": "dHJlZSA0YWExNGVhNWQ2NTQwYmMwZjE3N2U1ZmM3NWI5MDQ0NTM2MzdjOWFhCnBhcmVudCAzMjMyN2NkNmQwZTI2YzM4YzUzOTEyNzhmYTNjZGE2OTZiOGQzYjkyCmF1dGhvciBzcGFjZS1pZGxlLXB1Ymxpc2gtZ2F0ZXdheSA8NDE4OTgyODIrZ2l0aHViLWFjdGlvbnNbYm90XUB1c2Vycy5ub3JlcGx5LmdpdGh1Yi5jb20+IDk0NjY4NDgwMCArMDAwMApjb21taXR0ZXIgc3BhY2UtaWRsZS1wdWJsaXNoLWdhdGV3YXkgPDQxODk4MjgyK2dpdGh1Yi1hY3Rpb25zW2JvdF1AdXNlcnMubm9yZXBseS5naXRodWIuY29tPiA5NDY2ODQ4MDAgKzAwMDAKCk1pZ3JhdGUgcmVzZWFyY2ggdG8gc3RhZ2VkIHByaW9yaXR5IGFsbG9jYXRpb24gYW5kIGtub3dsZWRnZQo=",
+  "published_tree": "4aa14ea5d6540bc0f177e5fc75b904453637c9aa",
+  "request_id": "b8f6d90d2ea9449f8eac873d64685084",
+  "request_version": 7,
+  "target_branch": "develop",
+  "target_tree": "4aa14ea5d6540bc0f177e5fc75b904453637c9aa",
+  "version": 3
+}
