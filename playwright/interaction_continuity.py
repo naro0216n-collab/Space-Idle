@@ -100,7 +100,7 @@ def run() -> None:
             inspector_title = page.locator("#inspectorTitle").inner_text()
             priority = page.locator("#facilityPriorityInput")
             priority.wait_for(timeout=10000)
-            priority.fill("37")
+            priority.select_option("4")
             priority.focus()
             start_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
             page.wait_for_function(
@@ -111,7 +111,7 @@ def run() -> None:
             assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "facilities"
             assert page.locator("#inspectorTitle").inner_text() == inspector_title
             assert priority.is_visible()
-            assert priority.input_value() == "37"
+            assert priority.input_value() == "4"
             assert page.evaluate("() => document.activeElement?.id || ''") == "facilityPriorityInput"
     finally:
         server.shutdown()

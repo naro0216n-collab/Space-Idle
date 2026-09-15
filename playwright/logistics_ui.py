@@ -67,7 +67,7 @@ def run() -> None:
         PlanBuild(
             LEO,
             str(ids.ORBITAL_LOGISTICS_NODE),
-            priority=100,
+            priority=5,
             sourcing_policy="import_now",
             import_source_id=EARTH,
         )
@@ -111,7 +111,7 @@ def run() -> None:
             page.locator("#allocationDestination").select_option(LEO)
             page.locator("#allocationMode").select_option("units")
             page.locator("#allocationUnits").fill("1")
-            page.locator("#allocationPriority").fill("100")
+            page.locator("#allocationPriority").select_option("5")
             page.get_by_role("button", name="Allocation作成").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
 
@@ -136,7 +136,7 @@ def run() -> None:
             page.locator("#laneSource").select_option(EARTH)
             page.locator("#laneDestination").select_option(LEO)
             page.locator("#laneCapacity").fill("20")
-            page.locator("#lanePriority").fill("100")
+            page.locator("#lanePriority").select_option("5")
             page.get_by_role("button", name="Lane作成").click()
             page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
             lane_row = page.locator(

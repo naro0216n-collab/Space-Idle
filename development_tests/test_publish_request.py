@@ -94,6 +94,22 @@ def plan(repo: Path, develop_head: str, publish_head: str) -> dict[str, object]:
     ).stdout)
 
 
+def verify_all_chunks(repo: Path, summary: dict[str, object]) -> dict[str, object]:
+    current = summary
+    while current["stage"] in {"blob-ready", "blob-retry-ready"}:
+        state = connector_state(repo)
+        plan_data = state["plan"]
+        assert isinstance(plan_data, dict)
+        chunks = plan_data["chunks"]
+        assert isinstance(chunks, list)
+        chunk = chunks[int(state["blob_chunk_index"])]
+        assert isinstance(chunk, dict)
+        current = json.loads(run_request(
+            repo, "connector-blob", "--blob-sha", str(chunk["expected_blob"])
+        ).stdout)
+    return current
+
+
 def test_init_requires_exact_develop_and_publish_base_metadata(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -173,58 +189,94 @@ def test_connector_plan_builds_fixed_slot_from_recorded_publish_tree(tmp_path: P
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     prepare_change(repo)
     result = plan(repo, base, publish_head)
-    assert result["strategy"] == "fixed-slot-expected-tree"
+    assert result["strategy"] == "fixed-slot-16kib-blob-verified"
+    assert result["transport_chunk_bytes"] == 16 * 1024
     assert result["tree_call_count"] == 1
     assert result["payload_part_count"] == 1
-    packet = json.loads(Path(result["tree_packet"]).read_text(encoding="utf-8"))
-    paths = [entry["path"] for entry in packet["action_args"]["tree_elements"] if "content" in entry]
-    assert paths == [".publish/transport/develop/0000.b64"]
-    assert packet["action_args"]["base_tree_sha"] == connector_state(repo)["publish_base_tree"]
+    packet = json.loads(Path(result["blob_packet"]).read_text(encoding="utf-8"))
+    assert packet["action"] == "GitHub.create_blob"
+    assert packet["action_args"]["encoding"] == "utf-8"
+    assert len(packet["action_args"]["content"].encode("utf-8")) <= 16 * 1024
 
 
-def test_returned_tree_sha_is_the_pre_ref_integrity_boundary(tmp_path: Path) -> None:
+def test_blob_sha_verification_retries_only_failed_chunk_and_tree_uses_verified_oids(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     prepare_change(repo)
     first = plan(repo, base, publish_head)
-    expected = first["expected_tree_sha"]
+    first_packet = Path(str(first["blob_packet"])).read_text(encoding="utf-8")
+    initial_state = connector_state(repo)
+    expected_blob = str(initial_state["plan"]["chunks"][0]["expected_blob"])
 
-    retry = json.loads(run_request(repo, "connector-tree", "--tree-sha", "f" * 40).stdout)
-    assert retry["stage"] == "transport-retry-tree-ready"
-    assert retry["transport_attempt"] == 1
-    assert retry["adaptive_handoff"] is False
-    assert connector_state(repo)["stage"] == "tree-ready"
+    retry = json.loads(run_request(repo, "connector-blob", "--blob-sha", "f" * 40).stdout)
+    assert retry["stage"] == "blob-retry-ready"
+    assert retry["retry_count"] == 1
+    assert retry["retry_failed_chunk_only"] is True
+    assert Path(str(retry["blob_packet"])).read_text(encoding="utf-8") == first_packet
+    assert connector_state(repo)["blob_chunk_index"] == 0
     assert not (transaction(repo) / "connector" / "create-transport-commit.json").exists()
 
-    succeeded = json.loads(run_request(repo, "connector-tree", "--tree-sha", expected).stdout)
+    tree = json.loads(run_request(repo, "connector-blob", "--blob-sha", expected_blob).stdout)
+    assert tree["stage"] == "tree-ready"
+    tree_packet = json.loads(Path(str(tree["tree_packet"])).read_text(encoding="utf-8"))
+    entries = tree_packet["action_args"]["tree_elements"]
+    payload_entries = [entry for entry in entries if entry["path"].endswith(".b64")]
+    assert payload_entries == [{
+        "mode": "100644",
+        "path": ".publish/transport/develop/0000.b64",
+        "sha": expected_blob,
+        "type": "blob",
+    }]
+
+    tree_state = connector_state(repo)
+    expected_tree = str(tree_state["plan"]["batches"][0]["expected_tree"])
+    succeeded = json.loads(run_request(repo, "connector-tree", "--tree-sha", expected_tree).stdout)
     assert succeeded["stage"] == "commit-packet-ready"
     commit_packet = json.loads(Path(succeeded["commit_packet"]).read_text(encoding="utf-8"))
     assert commit_packet["action"] == "GitHub.create_commit"
-    assert commit_packet["action_args"]["tree_sha"] == expected
+    assert commit_packet["action_args"]["tree_sha"] == expected_tree
 
 
-def test_second_tree_mismatch_adapts_transfer_and_third_exhausts_without_ref_packet(tmp_path: Path) -> None:
+def test_failed_chunk_can_retry_repeatedly_without_restarting_successful_chunks(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
-    # Force multiple large inline fields so adaptive repartitioning is observable.
-    (repo / "large.bin").write_bytes(os.urandom(180_000))
+    (repo / "large.bin").write_bytes(os.urandom(80_000))
     commit_all(repo, "large checkpoint")
     run_request(repo, "prepare")
-    initial = plan(repo, base, publish_head)
-    initial_cap = initial["max_inline_content_chars"]
+    first = plan(repo, base, publish_head)
+    assert first["payload_part_count"] > 1
+    first_state = connector_state(repo)
+    expected_first_blob = str(first_state["plan"]["chunks"][0]["expected_blob"])
+    next_chunk = json.loads(run_request(
+        repo, "connector-blob", "--blob-sha", expected_first_blob
+    ).stdout)
+    assert next_chunk["chunk_index"] == 1
 
-    run_request(repo, "connector-tree", "--tree-sha", "a" * 40)
-    second = json.loads(run_request(repo, "connector-tree", "--tree-sha", "b" * 40).stdout)
-    assert second["adaptive_handoff"] is True
+    for attempt in range(1, 6):
+        failed = json.loads(run_request(repo, "connector-blob", "--blob-sha", "a" * 40).stdout)
+        assert failed["stage"] == "blob-retry-ready"
+        assert failed["chunk_index"] == 1
+        assert failed["retry_count"] == attempt
     state = connector_state(repo)
-    assert state["transport_attempt"] == 2
-    assert state["plan"]["max_inline_content_chars"] < initial_cap
-    exhausted = run_request(repo, "connector-tree", "--tree-sha", "c" * 40, check=False)
-    assert exhausted.returncode != 0
-    assert "publish ref was not updated" in exhausted.stderr
-    assert connector_state(repo)["stage"] == "transport-failed"
+    assert state["blob_chunk_index"] == 1
+    assert state["verified_blob_shas"][".publish/transport/develop/0000.b64"] == expected_first_blob
     assert not (transaction(repo) / "connector" / "advance-publish-ref.json").exists()
 
 
-def test_dynamic_packing_respects_connector_ceiling_with_minimum_batches(tmp_path: Path) -> None:
+def test_tree_mismatch_is_machine_retried_without_commit_or_ref_packet(tmp_path: Path) -> None:
+    repo, base, _, publish_head, _ = init_repo(tmp_path)
+    prepare_change(repo)
+    tree = verify_all_chunks(repo, plan(repo, base, publish_head))
+    original_packet = Path(str(tree["tree_packet"])).read_text(encoding="utf-8")
+
+    for attempt in range(1, 6):
+        retry = json.loads(run_request(repo, "connector-tree", "--tree-sha", "e" * 40).stdout)
+        assert retry["stage"] == "tree-retry-ready"
+        assert retry["tree_retry_count"] == attempt
+        assert Path(str(retry["tree_packet"])).read_text(encoding="utf-8") == original_packet
+        assert not (transaction(repo) / "connector" / "create-transport-commit.json").exists()
+        assert not (transaction(repo) / "connector" / "advance-publish-ref.json").exists()
+
+
+def test_transport_uses_fixed_16kib_chunks_and_sha_only_tree_entries(tmp_path: Path) -> None:
     repo, _, base_tree, publish_head, publish_tree = init_repo(tmp_path)
     prepared_request = {
         "target_branch": "develop",
@@ -233,19 +285,28 @@ def test_dynamic_packing_respects_connector_ceiling_with_minimum_batches(tmp_pat
     plan_data = PUBLISH_REQUEST._build_transport_plan(
         repo, prepared_request, publish_head=publish_head, publish_tree=publish_tree
     )
-    assert plan_data["max_inline_content_chars"] > 100_000
-    assert plan_data["payload_part_count"] == 3
-    assert plan_data["tree_call_count"] == 3
+    assert plan_data["transport_chunk_bytes"] == 16 * 1024
+    assert plan_data["payload_part_count"] == 19
+    assert all(len(chunk["content"].encode("utf-8")) <= 16 * 1024 for chunk in plan_data["chunks"])
     for batch in plan_data["batches"]:
         packet = PUBLISH_REQUEST._tree_packet(batch["base_tree"], batch["elements"], batch["batch_index"])
         assert PUBLISH_REQUEST._connector_call_bytes(packet) <= 144 * 1024
+        assert all("content" not in element for element in batch["elements"])
+        assert all(
+            element.get("sha") is not None
+            for element in batch["elements"]
+            if element.get("type") == "blob"
+        )
 
 
 def test_commit_then_ref_is_only_remaining_normal_write_sequence_and_record_uses_gateway_run(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     result = prepare_change(repo)
-    tree = plan(repo, base, publish_head)
-    commit = json.loads(run_request(repo, "connector-tree", "--tree-sha", tree["expected_tree_sha"]).stdout)
+    first = plan(repo, base, publish_head)
+    tree = verify_all_chunks(repo, first)
+    state = connector_state(repo)
+    expected_tree = str(state["plan"]["batches"][0]["expected_tree"])
+    commit = json.loads(run_request(repo, "connector-tree", "--tree-sha", expected_tree).stdout)
     fake_transport_commit = "a" * 40
     update = json.loads(run_request(repo, "connector-commit", "--commit-sha", fake_transport_commit).stdout)
     update_packet = json.loads(Path(update["update_packet"]).read_text(encoding="utf-8"))
@@ -269,8 +330,10 @@ def test_commit_then_ref_is_only_remaining_normal_write_sequence_and_record_uses
 def test_record_stays_bound_to_prepared_target_if_local_head_advances(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     first = prepare_change(repo, "first\n")
-    tree = plan(repo, base, publish_head)
-    run_request(repo, "connector-tree", "--tree-sha", tree["expected_tree_sha"])
+    tree = verify_all_chunks(repo, plan(repo, base, publish_head))
+    state = connector_state(repo)
+    expected_tree = str(state["plan"]["batches"][0]["expected_tree"])
+    run_request(repo, "connector-tree", "--tree-sha", expected_tree)
     candidate = "b" * 40
     run_request(repo, "connector-commit", "--commit-sha", candidate)
     (repo / "later.txt").write_text("later\n", encoding="utf-8")

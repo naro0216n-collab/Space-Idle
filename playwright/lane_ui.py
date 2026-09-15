@@ -83,21 +83,21 @@ def run() -> None:
                 "#vehicleProductionTable [data-production-option-row]"
             ).filter(has=page.locator("button[data-produce-vehicle]:not([disabled])")).first
             production_option.wait_for(timeout=10000)
-            production_option.locator("[data-production-priority-value]").fill("37")
+            production_option.locator("[data-production-priority-value]").select_option("4")
             page.wait_for_timeout(1200)
-            assert production_option.locator("[data-production-priority-value]").input_value() == "37"
+            assert production_option.locator("[data-production-priority-value]").input_value() == "4"
             production_option.locator("button[data-produce-vehicle]").click()
             project_row = page.locator(
                 "#vehicleProductionTable [data-production-project-row]"
             ).first
             project_row.wait_for(timeout=10000)
-            assert project_row.locator("[data-production-priority-value]").input_value() == "37"
-            project_row.locator("[data-production-priority-value]").fill("81")
+            assert project_row.locator("[data-production-priority-value]").input_value() == "4"
+            project_row.locator("[data-production-priority-value]").select_option("5")
             project_row.get_by_role("button", name="設定適用").click()
             page.wait_for_function(
                 """() => {
                   const row = document.querySelector('#vehicleProductionTable [data-production-project-row]');
-                  return row?.querySelector('[data-production-priority-value]')?.value === '81';
+                  return row?.querySelector('[data-production-priority-value]')?.value === '5';
                 }""",
                 timeout=10000,
             )
@@ -203,7 +203,7 @@ def run() -> None:
             page.locator("#laneSource").select_option(options[0])
             page.locator("#laneDestination").select_option(options[1])
             page.locator("#laneCapacity").fill("2")
-            page.locator("#lanePriority").fill("70")
+            page.locator("#lanePriority").select_option("4")
             page.get_by_role("button", name="Lane作成").click()
             page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
             lane_rows = page.locator("#laneTable tbody tr").filter(
@@ -212,7 +212,7 @@ def run() -> None:
             lane_rows.first.wait_for(timeout=10000)
             row = lane_rows.first
             assert "2 t/日" in row.inner_text()
-            assert "70" in row.inner_text()
+            assert "高" in row.inner_text()
 
             row.get_by_role("button", name="設定").click()
             page.locator("#laneDialog").wait_for(state="visible", timeout=10000)
@@ -220,7 +220,7 @@ def run() -> None:
             assert page.locator("#laneDestination").is_disabled()
             assert page.locator("#lanePolicy").is_enabled()
             page.locator("#laneCapacity").fill("3")
-            page.locator("#lanePriority").fill("85")
+            page.locator("#lanePriority").select_option("5")
             page.locator("#lanePolicy").select_option("lowest_propellant")
             page.get_by_role("button", name="設定を更新").click()
             page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
@@ -231,7 +231,7 @@ def run() -> None:
             row = lane_rows.first
             text = row.inner_text()
             assert "3 t/日" in text
-            assert "85" in text
+            assert "最高" in text
             assert "lowest_propellant" in text
 
             row.get_by_role("button", name="停止").click()

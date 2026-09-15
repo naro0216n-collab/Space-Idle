@@ -17,10 +17,10 @@ STATE_NAME = "space-idle-publish-state.json"
 WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
 MANIFEST_VERSION = 8
 CONNECTOR_CALL_BUDGET_BYTES = 144 * 1024
+TRANSPORT_CHUNK_BYTES = 16 * 1024
 MAX_PAYLOAD_PARTS = 256
-MAX_TRANSPORT_ATTEMPTS = 3
 CONNECTOR_STATE_NAME = "connector-state.json"
-CONNECTOR_STATE_VERSION = 9
+CONNECTOR_STATE_VERSION = 10
 CONNECTOR_SUMMARY_NAME = "summary.json"
 TRANSACTION_DIR_NAME = "space-idle-publish-transaction"
 WORKFLOW_TRANSACTION_DIR_NAME = "space-idle-workflow-maintenance-transaction"
@@ -506,8 +506,8 @@ def _connector_call_bytes(packet: dict[str, object]) -> int:
     return len(json.dumps(args, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def _tree_content_element(path: str, content: str) -> dict[str, object]:
-    return {"path": path, "mode": "100644", "type": "blob", "content": content}
+def _tree_blob_element(path: str, sha: str) -> dict[str, object]:
+    return {"path": path, "mode": "100644", "type": "blob", "sha": sha}
 
 
 def _tree_delete_element(path: str, *, mode: str = "100644", object_type: str = "blob") -> dict[str, object]:
@@ -527,20 +527,18 @@ def _tree_packet(base_tree: str, elements: list[dict[str, object]], batch_index:
     }
 
 
-def _max_single_inline_chars(base_tree: str, path: str) -> int:
-    lo, hi = 1, CONNECTOR_CALL_BUDGET_BYTES
-    best = 0
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        packet = _tree_packet(base_tree, [_tree_content_element(path, "A" * mid)], 0)
-        if _connector_call_bytes(packet) <= CONNECTOR_CALL_BUDGET_BYTES:
-            best = mid
-            lo = mid + 1
-        else:
-            hi = mid - 1
-    if best <= 0:
-        raise PublishStateError("Connector ceiling cannot fit a publish transport tree element")
-    return best
+def _blob_packet(content: str, chunk_index: int, path: str) -> dict[str, object]:
+    return {
+        "stage": "upload-publish-transport-chunk",
+        "chunk_index": chunk_index,
+        "transport_path": path,
+        "action": "GitHub.create_blob",
+        "action_args": {
+            "repository_full_name": GITHUB_REPOSITORY,
+            "content": content,
+            "encoding": "utf-8",
+        },
+    }
 
 
 def _list_publish_paths(repo: Path, tree: str) -> list[str]:
@@ -605,37 +603,34 @@ def _compact_stale_delete_elements(
     return deletes
 
 
-def _payload_parts(
-    payload: str, *, base_tree: str, target_branch: str, max_content_chars: int | None = None,
-) -> tuple[list[dict[str, object]], int]:
+def _payload_chunks(repo: Path, payload: str, *, target_branch: str) -> list[dict[str, object]]:
     slot = f".publish/transport/{target_branch}"
-    natural_max = _max_single_inline_chars(base_tree, f"{slot}/0000.b64")
-    cap = natural_max if max_content_chars is None else min(natural_max, max_content_chars)
-    if cap <= 0:
-        raise PublishStateError("invalid publish transport inline content capacity")
-    parts: list[dict[str, object]] = []
-    for start in range(0, len(payload), cap):
-        index = len(parts)
-        content = payload[start:start + cap]
-        parts.append(_tree_content_element(f"{slot}/{index:04d}.b64", content))
-    if not parts:
+    chunks: list[dict[str, object]] = []
+    for start in range(0, len(payload), TRANSPORT_CHUNK_BYTES):
+        index = len(chunks)
+        content = payload[start:start + TRANSPORT_CHUNK_BYTES]
+        path = f"{slot}/{index:04d}.b64"
+        chunks.append({
+            "chunk_index": index,
+            "path": path,
+            "content": content,
+            "expected_blob": _write_blob(repo, content),
+        })
+    if not chunks:
         raise PublishStateError("publish payload is empty")
-    if len(parts) > MAX_PAYLOAD_PARTS:
+    if len(chunks) > MAX_PAYLOAD_PARTS:
         raise PublishStateError(
-            f"publish payload needs {len(parts)} transport files, exceeding limit {MAX_PAYLOAD_PARTS}"
+            f"publish payload needs {len(chunks)} transport files, exceeding limit {MAX_PAYLOAD_PARTS}"
         )
-    return parts, cap
+    return chunks
 
 
 def _desired_transport_elements(
-    repo: Path, prepared: dict[str, object], *, base_tree: str, max_content_chars: int | None = None,
-) -> tuple[list[dict[str, object]], int, list[str]]:
+    repo: Path, prepared: dict[str, object], *, base_tree: str,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[str]]:
     target = str(prepared["target_branch"])
-    parts, cap = _payload_parts(
-        str(prepared["payload_b64"]), base_tree=base_tree, target_branch=target,
-        max_content_chars=max_content_chars,
-    )
-    desired_paths = {str(element["path"]) for element in parts}
+    chunks = _payload_chunks(repo, str(prepared["payload_b64"]), target_branch=target)
+    desired_paths = {str(chunk["path"]) for chunk in chunks}
     current_slot_prefix = f".publish/transport/{target}/"
     allowed_other_prefixes = tuple(
         f".publish/transport/{branch}/" for branch in ALLOWED_TRANSPORT_TARGETS if branch != target
@@ -654,8 +649,11 @@ def _desired_transport_elements(
     deletes = _compact_stale_delete_elements(
         repo, base_tree=base_tree, target=target, stale=stale
     )
-    elements = [*parts, *deletes]
-    return elements, cap, stale
+    elements = [
+        *[_tree_blob_element(str(chunk["path"]), str(chunk["expected_blob"])) for chunk in chunks],
+        *deletes,
+    ]
+    return chunks, elements, stale
 
 
 def _pack_tree_elements(base_tree: str, elements: list[dict[str, object]]) -> list[list[dict[str, object]]]:
@@ -736,19 +734,17 @@ def _expected_tree_batches(
 
 def _build_transport_plan(
     repo: Path, prepared: dict[str, object], *, publish_head: str, publish_tree: str,
-    max_content_chars: int | None = None,
 ) -> dict[str, object]:
-    elements, cap, stale = _desired_transport_elements(
-        repo, prepared, base_tree=publish_tree, max_content_chars=max_content_chars
-    )
+    chunks, elements, stale = _desired_transport_elements(repo, prepared, base_tree=publish_tree)
     raw_batches = _pack_tree_elements(publish_tree, elements)
     batches = _expected_tree_batches(repo, base_tree=publish_tree, batches=raw_batches)
     return {
         "publish_head": publish_head,
         "publish_tree": publish_tree,
         "target_branch": prepared["target_branch"],
-        "max_inline_content_chars": cap,
-        "payload_part_count": sum(1 for e in elements if "content" in e),
+        "transport_chunk_bytes": TRANSPORT_CHUNK_BYTES,
+        "payload_part_count": len(chunks),
+        "chunks": chunks,
         "stale_transport_path_count": len(stale),
         "stale_transport_paths": stale,
         "batches": batches,
@@ -781,9 +777,61 @@ def _write_summary(repo: Path, summary: dict[str, object]) -> None:
     )
 
 
+def _write_blob_packet(repo: Path, state: dict[str, object]) -> dict[str, object]:
+    plan = state["plan"]
+    assert isinstance(plan, dict)
+    chunks = plan["chunks"]
+    assert isinstance(chunks, list)
+    index = int(state["blob_chunk_index"])
+    chunk = chunks[index]
+    assert isinstance(chunk, dict)
+    path_value = str(chunk["path"])
+    packet = _blob_packet(str(chunk["content"]), index, path_value)
+    call_bytes = _connector_call_bytes(packet)
+    if call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
+        raise PublishStateError("generated create_blob call exceeds Connector hard ceiling")
+    path = _connector_dir(repo) / f"blob-chunk-{index:04d}.json"
+    path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    state["stage"] = "blob-ready"
+    state["blob_packet"] = str(path)
+    _write_connector_state(repo, state)
+    retry_counts = state.setdefault("blob_retry_counts", {})
+    assert isinstance(retry_counts, dict)
+    summary = {
+        "stage": "blob-ready",
+        "request_id": state["request_id"],
+        "chunk_index": index,
+        "chunk_count": len(chunks),
+        "chunk_bytes": len(str(chunk["content"]).encode("utf-8")),
+        "blob_call_bytes": call_bytes,
+        "blob_packet": str(path),
+        "retry_count": int(retry_counts.get(path_value, 0)),
+        "integrity_decision": "helper-owned",
+        "next": (
+            "execute the generated GitHub.create_blob packet and pass only its returned blob SHA to connector-blob; "
+            "the helper performs the integrity decision mechanically and emits either the same failed chunk or the next action"
+        ),
+        "verified": True,
+    }
+    _write_summary(repo, summary)
+    return summary
+
+
 def _write_tree_packet(repo: Path, state: dict[str, object]) -> dict[str, object]:
     plan = state["plan"]
     assert isinstance(plan, dict)
+    chunks = plan["chunks"]
+    assert isinstance(chunks, list)
+    verified = state.get("verified_blob_shas", {})
+    if not isinstance(verified, dict):
+        raise PublishStateError("invalid verified blob state")
+    for chunk in chunks:
+        assert isinstance(chunk, dict)
+        path_value = str(chunk["path"])
+        if verified.get(path_value) != chunk["expected_blob"]:
+            raise PublishStateError(
+                f"transport chunk is not machine-verified: {path_value}"
+            )
     batches = plan["batches"]
     assert isinstance(batches, list)
     index = int(state["tree_batch_index"])
@@ -805,12 +853,11 @@ def _write_tree_packet(repo: Path, state: dict[str, object]) -> dict[str, object
         "tree_batch_count": len(batches),
         "tree_call_bytes": call_bytes,
         "tree_packet": str(path),
-        "expected_tree_sha": batch["expected_tree"],
-        "transport_attempt": state["transport_attempt"],
-        "max_transport_attempts": MAX_TRANSPORT_ATTEMPTS,
+        "tree_retry_count": int(state.get("tree_retry_count", 0)),
+        "integrity_decision": "helper-owned",
         "next": (
             "execute the generated GitHub.create_tree packet and pass only its returned tree SHA to connector-tree; "
-            "the helper compares that SHA with the locally precomputed expected tree before any commit or ref update"
+            "the helper compares it mechanically with the locally precomputed expected tree and emits the next action"
         ),
         "verified": True,
     }
@@ -845,25 +892,27 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     )
     state: dict[str, object] = {
         "version": CONNECTOR_STATE_VERSION,
-        "stage": "tree-ready",
+        "stage": "blob-ready",
         "request_id": prepared["request_id"],
         "target_remote_head": target_head,
         "publish_base_head": publish_head,
         "publish_base_tree": state_base["publish_tree"],
+        "blob_chunk_index": 0,
+        "blob_retry_counts": {},
+        "verified_blob_shas": {},
         "tree_batch_index": 0,
-        "transport_attempt": 0,
+        "tree_retry_count": 0,
         "plan": plan,
         "request_verified": bool(verified["verified"]),
     }
-    summary = _write_tree_packet(repo, state)
+    summary = _write_blob_packet(repo, state)
     summary.update({
-        "strategy": "fixed-slot-expected-tree",
+        "strategy": "fixed-slot-16kib-blob-verified",
         "connector_call_budget_bytes": CONNECTOR_CALL_BUDGET_BYTES,
+        "transport_chunk_bytes": TRANSPORT_CHUNK_BYTES,
         "payload_part_count": plan["payload_part_count"],
         "tree_call_count": plan["tree_call_count"],
-        "max_inline_content_chars": plan["max_inline_content_chars"],
         "stale_transport_path_count": plan["stale_transport_path_count"],
-        "final_expected_tree": plan["final_tree"],
         "normal_pre_ref_verification_reads": 0,
         "index_files": 0,
         "trigger_files": 0,
@@ -905,48 +954,57 @@ def _write_commit_packet(repo: Path, state: dict[str, object]) -> dict[str, obje
     return summary
 
 
-def _retry_tree_mismatch(
-    repo: Path, state: dict[str, object], *, actual_tree: str, expected_tree: str,
-) -> dict[str, object]:
-    current = int(state.get("transport_attempt", 0))
-    next_attempt = current + 1
-    if next_attempt >= MAX_TRANSPORT_ATTEMPTS:
-        state["stage"] = "transport-failed"
-        state["last_tree_mismatch"] = {"expected": expected_tree, "actual": actual_tree}
-        _write_connector_state(repo, state)
-        _write_summary(repo, {
-            "stage": "transport-failed", "request_id": state["request_id"],
-            "transport_attempt": current, "max_transport_attempts": MAX_TRANSPORT_ATTEMPTS,
-            "expected_tree": expected_tree, "actual_tree": actual_tree, "verified": False,
+def cmd_connector_blob(args: argparse.Namespace) -> int:
+    repo = _repo_from_cwd()
+    state = _read_connector_state(repo)
+    if state.get("stage") != "blob-ready":
+        raise PublishStateError(f"connector-blob requires blob-ready, found {state.get('stage')}")
+    actual = _require_hex_sha(args.blob_sha, name="created publish transport blob SHA")
+    plan = state["plan"]
+    assert isinstance(plan, dict)
+    chunks = plan["chunks"]
+    assert isinstance(chunks, list)
+    index = int(state["blob_chunk_index"])
+    chunk = chunks[index]
+    assert isinstance(chunk, dict)
+    path_value = str(chunk["path"])
+    expected = str(chunk["expected_blob"])
+    retry_counts = state.setdefault("blob_retry_counts", {})
+    verified = state.setdefault("verified_blob_shas", {})
+    assert isinstance(retry_counts, dict)
+    assert isinstance(verified, dict)
+    if actual != expected:
+        retry_counts[path_value] = int(retry_counts.get(path_value, 0)) + 1
+        state["last_blob_mismatch"] = {
+            "chunk_index": index,
+            "path": path_value,
+            "expected": expected,
+            "actual": actual,
+        }
+        summary = _write_blob_packet(repo, state)
+        summary.update({
+            "stage": "blob-retry-ready",
+            "retry_failed_chunk_only": True,
+            "integrity_result": "mismatch",
         })
-        raise PublishStateError(
-            f"publish transport tree mismatch after {MAX_TRANSPORT_ATTEMPTS} attempts; publish ref was not updated"
-        )
+        _write_summary(repo, summary)
+        print(json.dumps(summary, indent=2))
+        return 0
 
-    state["transport_attempt"] = next_attempt
-    state["last_tree_mismatch"] = {"expected": expected_tree, "actual": actual_tree}
-    if next_attempt >= 2:
-        prepared = _read_prepared_request(_manifest_path(repo))
-        current_plan = state["plan"]
-        assert isinstance(current_plan, dict)
-        smaller = max(1, int(current_plan["max_inline_content_chars"]) // 2)
-        state["plan"] = _build_transport_plan(
-            repo, prepared,
-            publish_head=str(state["publish_base_head"]),
-            publish_tree=str(state["publish_base_tree"]),
-            max_content_chars=smaller,
-        )
-        state["tree_batch_index"] = 0
+    verified[path_value] = actual
+    state.pop("last_blob_mismatch", None)
+    next_index = index + 1
+    if next_index < len(chunks):
+        state["blob_chunk_index"] = next_index
+        summary = _write_blob_packet(repo, state)
+        print(json.dumps(summary, indent=2))
+        return 0
+    state["tree_batch_index"] = 0
+    state["tree_retry_count"] = 0
+    state.pop("blob_packet", None)
     summary = _write_tree_packet(repo, state)
-    summary.update({
-        "stage": "transport-retry-tree-ready",
-        "mismatch_expected_tree": expected_tree,
-        "mismatch_actual_tree": actual_tree,
-        "adaptive_handoff": next_attempt >= 2,
-        "attempt_number": next_attempt + 1,
-    })
-    _write_summary(repo, summary)
-    return summary
+    print(json.dumps(summary, indent=2))
+    return 0
 
 
 def cmd_connector_tree(args: argparse.Namespace) -> int:
@@ -964,11 +1022,18 @@ def cmd_connector_tree(args: argparse.Namespace) -> int:
     assert isinstance(batch, dict)
     expected = str(batch["expected_tree"])
     if actual != expected:
-        summary = _retry_tree_mismatch(repo, state, actual_tree=actual, expected_tree=expected)
+        state["tree_retry_count"] = int(state.get("tree_retry_count", 0)) + 1
+        state["last_tree_mismatch"] = {"expected": expected, "actual": actual}
+        summary = _write_tree_packet(repo, state)
+        summary.update({
+            "stage": "tree-retry-ready",
+            "integrity_result": "mismatch",
+        })
+        _write_summary(repo, summary)
         print(json.dumps(summary, indent=2))
         return 0
     next_index = index + 1
-    state["transport_attempt"] = 0
+    state["tree_retry_count"] = 0
     state.pop("last_tree_mismatch", None)
     if next_index < len(batches):
         state["tree_batch_index"] = next_index
@@ -1107,6 +1172,13 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--target-remote-head", required=True)
     plan.add_argument("--publish-remote-head", required=True)
     plan.set_defaults(func=cmd_connector_plan)
+
+    blob = sub.add_parser(
+        "connector-blob",
+        help="mechanically verify one returned transport chunk blob SHA and emit only the next required action",
+    )
+    blob.add_argument("--blob-sha", required=True)
+    blob.set_defaults(func=cmd_connector_blob)
 
     tree = sub.add_parser(
         "connector-tree",

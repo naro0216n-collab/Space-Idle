@@ -246,9 +246,9 @@ publish transportは実行環境ごとに一意にする。認証済みnative Gi
 
 現在のConnector実行環境では、publish対象を現在の `HEAD` commitへ固定し、記録済み `develop` commitを親、local target treeをtreeに持つ決定論的commitをGit bundleへ格納してPublish Gatewayへ渡す。source-snapshotは `develop` commit/treeだけでなく生成時点の `publish` commit/treeとそのGit objectを保持し、通常publishのtransport baseを追加network readなしでローカル再構築できる状態にする。repo-localな単一active transactionを正本とし、active transaction中に別requestを開始しない。
 
-通常transportは `.publish/transport/<target>` の固定slotだけを使用する。request trigger、generation index、receiptを別ファイルとして重ねず、payload partそのものを一つの原子的transport treeとして表現する。payloadは固定の小chunkへ分割せず、Connector call全体の144 KiB hard ceilingに収まる最大単位をhelperが計算し、超過時だけ必要最少数の連続 `GitHub.create_tree` callへ分割する。旧 `.publish` transport artifactは固定slotへ移行するtreeで削除し、同責務の新旧経路を併存させない。
+通常transportは `.publish/transport/<target>` の固定slotだけを使用する。request trigger、generation index、receiptを別ファイルとして重ねず、payloadをBase64 ASCIIの16 KiB固定chunkへ分割して連番partとして表現する。各chunkはまず独立したGit blobとしてConnectorへ転送し、helperがローカルGitで事前計算した期待blob OIDと返却OIDを機械比較する。成功したchunkは確定済みとして再送せず、不一致となったchunkだけを同一内容・同一期待OIDのまま成功するまで再試行する。旧 `.publish` transport artifactは固定slotへ移行するtreeで削除し、同責務の新旧経路を併存させない。
 
-各 `create_tree` callについてhelperは、source-snapshot由来の `publish` base treeと正準payloadから期待root tree SHAをローカルGitで事前計算する。返却tree SHAをこの期待値と照合することをpre-ref integrity boundaryとし、一致するまでtransport commitもbranch updateも生成しない。したがって正常系にpayload metadata GET、blob再取得、本文目視検証を置かない。返却SHA不一致は同じactive transaction・publish対象・baseのまま即再送し、初回を含む最大3 attemptとする。最初の再送は同じlayout、最後の再送だけinline単位を縮小してbase treeから再構築する。
+全chunkのblob OIDが一致した後だけ、helperは確定したblob SHAを `create_tree` の各entryへ指定する。tree組立時に本文を再転記せず、Git object IDを参照させることで、Git側にも正確なobject identityを強制する。helperはsource-snapshot由来の `publish` base treeと確定blob OIDから期待root tree SHAをローカルGitで事前計算し、`create_tree` 返却SHAも機械比較する。一致するまでtransport commitもbranch updateも生成しない。正常系・retryとも、LLMや作業者によるSHA目視比較、payload本文確認、成功済みchunkの再送を手順に含めない。
 
 期待tree成立後だけ `create_commit` → non-force `update_ref` を行い、`publish` branchは1回だけ進める。Gatewayはcheckout済み固定slotを直接読み、連番partを連結してbundleを検証し、bundle自身からpublish commit、parent/base、target treeを導出する。GitHub Contents / Blob APIでpayloadを再取得せず、checkout済み `origin/<target>` とbundle parentをローカル比較する。成立後はexact publish commitをnon-force pushし、成功push後の `ls-remote` /再fetch、receipt書込み、pending commit status書込みを重ねない。Fast CIは `GITHUB_TOKEN` によるpushから別workflowが起動しないため明示dispatchする。
 

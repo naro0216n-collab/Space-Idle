@@ -292,13 +292,13 @@ def run() -> dict[str, object]:
             _assert(page.locator("#upgradePlanPriorityInput").is_visible(), "upgrade planning must expose priority before project creation")
             _assert(page.locator("#upgradePlanSourcingPolicy").is_visible(), "upgrade planning must expose sourcing policy before project creation")
             _assert(page.locator("#upgradePlanImportSource").is_visible(), "upgrade planning must expose preferred import source before project creation")
-            page.locator("#upgradePlanPriorityInput").fill("73")
+            page.locator("#upgradePlanPriorityInput").select_option("4")
             # The form is a multi-field draft. Moving focus to another control
             # must not let periodic synchronization overwrite the first edit.
             page.locator("#upgradePlanSourcingPolicy").focus()
             page.wait_for_timeout(1200)
             _assert(
-                page.locator("#upgradePlanPriorityInput").input_value() == "73",
+                page.locator("#upgradePlanPriorityInput").input_value() == "4",
                 "non-focused construction planning drafts must survive periodic refresh",
             )
             page.locator("#upgradePlanSourcingPolicy").select_option("import_now")
@@ -310,7 +310,7 @@ def run() -> dict[str, object]:
             # Unsaved planning values are client-owned drafts. A refresh with no
             # authoritative change must not silently reset them before submission.
             page.evaluate("async () => { await window.SpaceIdleApp.loadUiSnapshot(); }")
-            _assert(page.locator("#upgradePlanPriorityInput").input_value() == "73", "upgrade planning priority must survive refresh")
+            _assert(page.locator("#upgradePlanPriorityInput").input_value() == "4", "upgrade planning priority must survive refresh")
             _assert(page.locator("#upgradePlanSourcingPolicy").input_value() == "import_now", "upgrade sourcing policy must survive refresh")
             if selected_source is not None:
                 _assert(page.locator("#upgradePlanImportSource").input_value() == selected_source, "upgrade import source must survive refresh")
@@ -326,16 +326,16 @@ def run() -> dict[str, object]:
             upgrade_rows.first.click()
             inspector_text = page.locator("#inspectorContent").inner_text()
             _assert("Facility Upgrade" in inspector_text, "project inspector must retain typed upgrade target information")
-            _assert("73" in page.locator("#projectPriorityInput").input_value(), "project inspector must retain the planned priority")
+            _assert(page.locator("#projectPriorityInput").input_value() == "4", "project inspector must retain the planned priority")
             _assert(page.locator("#projectSourcingPolicy").input_value() == "import_now", "project inspector must retain the planned sourcing policy")
             if selected_source is not None:
                 _assert(page.locator("#projectImportSource").input_value() == selected_source, "project inspector must retain the planned preferred source")
             _assert(page.locator("#projectPriorityInput").is_enabled(), "mutable project priority must stay visible and enabled")
             _assert(page.locator("#projectSourcingPolicy").is_enabled(), "mutable sourcing policy must stay visible and enabled")
-            page.locator("#projectPriorityInput").fill("82")
+            page.locator("#projectPriorityInput").select_option("5")
             page.locator('[data-set-project-priority]').click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            _assert(page.locator("#projectPriorityInput").input_value() == "82", "project priority command must round-trip through the UI")
+            _assert(page.locator("#projectPriorityInput").input_value() == "5", "project priority command must round-trip through the UI")
             cancel_upgrade = page.locator('#inspectorContent [data-command="CancelBuild"]')
             _assert(cancel_upgrade.is_enabled(), "planned upgrade project must use ordinary construction cancellation")
             cancel_upgrade.click()
@@ -410,8 +410,8 @@ def run() -> dict[str, object]:
             survey_row.wait_for(timeout=10000)
             survey_row.click()
             _assert(page.locator('#surveyPriorityInput').is_enabled(), "startable survey must expose priority")
-            _assert(int(page.locator('#surveyPriorityInput').input_value()) == 50, "survey priority must come from the application contract")
-            page.locator('#surveyPriorityInput').fill("70")
+            _assert(int(page.locator('#surveyPriorityInput').input_value()) == 3, "survey priority must come from the application contract")
+            page.locator('#surveyPriorityInput').select_option("4")
             survey_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey"]')
             _assert(survey_lifecycle.get_attribute('data-survey-action') == 'start', "unstarted survey lifecycle control must expose start")
             survey_lifecycle.click()
@@ -419,7 +419,7 @@ def run() -> dict[str, object]:
             survey_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey"]')
             _assert(survey_lifecycle.get_attribute('data-survey-action') == 'pause' and survey_lifecycle.is_enabled(), "active survey lifecycle control must transition to pause")
             _assert(page.locator('#inspectorContent [data-set-survey-priority]').is_enabled(), "active survey must expose priority command")
-            _assert(int(page.locator('#surveyPriorityInput').input_value()) == 70, "survey start priority must round-trip through the UI")
+            _assert(int(page.locator('#surveyPriorityInput').input_value()) == 4, "survey start priority must round-trip through the UI")
 
             # A surveyed Cell must become a player-selectable founding site; the
             # UI must use the Application-projected option rather than inventing
