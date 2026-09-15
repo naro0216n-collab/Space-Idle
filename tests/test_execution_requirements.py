@@ -199,6 +199,52 @@ def test_real_maintenance_and_industry_bundles_share_one_resource_constraint():
     assert plan.used_by_constraint[structural_key] == pytest.approx(maintenance_need)
 
 
+def test_simulation_priority_allocation_is_not_decided_by_maintenance_call_order():
+    from dataclasses import replace
+
+    from space_idle import build_game_application
+    from space_idle.content import base_ids as ids
+
+    sim = build_game_application()._simulation
+    for facility in sim.facilities.facilities.values():
+        facility.maintenance_priority = ActivityPriority(1)
+
+    snapshot = sim._physical_tick_snapshot()
+    intents = sim._generate_tick_intents(snapshot)
+    available = sim.inventory.available(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
+    high_priority = ExecutionRequirementBundle(
+        id=EntityId("execution.priority_probe"),
+        owner_kind="test_activity",
+        owner_id=EntityId("priority_probe"),
+        purpose="priority_probe",
+        operational_node_id=ids.EARTH,
+        requested_execution=available,
+        priority=ActivityPriority(5),
+        requirements=(ResourceRequirement(ids.STRUCTURAL_COMPONENTS, 1.0),),
+    )
+    intents = replace(
+        intents,
+        execution_requirements=intents.execution_requirements + (high_priority,),
+    )
+
+    allocations = sim._allocate_tick(snapshot, intents, sim._plan_tick(intents))
+
+    assert allocations.execution.allocated(high_priority.id) == pytest.approx(available)
+    structural_key = resource_constraint(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
+    maintenance = tuple(
+        row
+        for row in allocations.execution.bundles
+        if row.owner_kind == "facility_maintenance"
+        and row.operational_node_id == ids.EARTH
+        and any(key == structural_key for key, _coefficient in row.coefficients())
+    )
+    assert maintenance
+    assert all(
+        allocations.execution.allocated(row.id) == pytest.approx(0.0)
+        for row in maintenance
+    )
+
+
 def test_real_industry_and_extraction_requirements_are_settled_by_execution_plan():
     from space_idle import build_game_application
     from space_idle.content import base_ids as ids

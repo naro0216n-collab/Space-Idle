@@ -894,23 +894,6 @@ class Simulation:
         return capacities
 
     @staticmethod
-    def _merge_sequential_execution_plans(
-        first: ExecutionAllocationPlan, second: ExecutionAllocationPlan
-    ) -> ExecutionAllocationPlan:
-        capacities = dict(first.capacity_by_constraint)
-        for key, amount in second.capacity_by_constraint.items():
-            capacities.setdefault(key, amount)
-        used = dict(first.used_by_constraint)
-        for key, amount in second.used_by_constraint.items():
-            used[key] = used.get(key, 0.0) + amount
-        return ExecutionAllocationPlan(
-            first.bundles + second.bundles,
-            first.allocations + second.allocations,
-            capacities,
-            used,
-        )
-
-    @staticmethod
     def _resource_plan_from_execution(
         claims: tuple[ResourceClaim, ...], execution: ExecutionAllocationPlan
     ) -> ResourceAllocationPlan:
@@ -1006,7 +989,14 @@ class Simulation:
         intents: TickIntents,
         plan: TickPlan,
     ) -> TickAllocations:
-        """Resolve current and migrated activities without duplicate settlement."""
+        """Resolve the current tick as one priority allocation with provider dependencies.
+
+        Maintenance is an Activity Priority consumer of physical Resources, not a
+        privileged pre-allocation stage.  At the same time, its fulfillment enables
+        Power and downstream Service Capacity.  Resolve that dependency by iterating
+        the common execution allocation to a deterministic fixed point instead of
+        letting Domain call order decide who receives shared stock.
+        """
         funds = self.external_economy.allocate(plan.spending_requests, self.day)
         authorized_logistics = self.logistics.authorize_capacity_logistics(
             plan.logistics, funds, self.day
@@ -1015,68 +1005,130 @@ class Simulation:
             plan.procurement, funds
         )
 
-        all_migrated = tuple(intents.execution_requirements)
-        maintenance_intents = tuple(
-            row for row in all_migrated
-            if self._as_execution_bundle(row).owner_kind == "facility_maintenance"
-        )
-        downstream_intents = tuple(
-            row for row in all_migrated
-            if self._as_execution_bundle(row).owner_kind != "facility_maintenance"
-        )
-
-        if maintenance_intents:
-            maintenance_capacity = self._constraint_capacities(maintenance_intents)
-            maintenance_execution = allocate_execution_requirements(
-                maintenance_intents, maintenance_capacity
-            )
-        else:
-            maintenance_execution = ExecutionAllocationPlan.empty()
-        maintenance_factors = (
-            self.maintenance.satisfaction_projection(maintenance_execution)
-            if self.maintenance is not None
-            else {facility.id: 1.0 for facility in self.facilities.facilities.values()}
-        )
-        power_by_location = {
-            location_id: self.power.resolve_snapshot(
-                snapshot.power_inputs_by_location[location_id], maintenance_factors
-            )
-            for location_id in snapshot.ordered_locations
-        }
-
-        # Resolve only service-provider dependencies here. Consumer demand is
-        # settled below as Bundles so Resource + Service remain one execution.
-        provider_plan = self._allocate_tick_services(power_by_location, requests=())
-
+        legacy_resource_claims = intents.resource_claims + tuple(authorized_logistics.claims)
         transport_requests = self.transport.transport_service_capacity_requests(
             self.day, authorized_logistics.planned_usage
         )
-        legacy_service_requests = self._complete_service_requests(
+        all_service_requests = self._complete_service_requests(
             intents.service_requests + transport_requests
         )
-        provider_ids = {request.id for request in provider_plan.requests}
-        legacy_service_requests = tuple(
-            request for request in legacy_service_requests if request.id not in provider_ids
-        )
-        legacy_resource_claims = intents.resource_claims + tuple(authorized_logistics.claims)
-
-        main_intents: tuple[AllocationIntent | ExecutionRequirementBundle, ...] = (
-            downstream_intents
+        base_intents: tuple[AllocationIntent | ExecutionRequirementBundle, ...] = (
+            tuple(intents.execution_requirements)
             + tuple(self._legacy_resource_bundle(claim) for claim in legacy_resource_claims)
-            + tuple(self._legacy_service_bundle(request) for request in legacy_service_requests)
         )
-        main_capacity = self._constraint_capacities(
-            main_intents,
-            resource_used=dict(maintenance_execution.used_by_constraint),
-            service_supply=provider_plan,
-        )
-        main_execution = allocate_execution_requirements(main_intents, main_capacity)
-        execution = self._merge_sequential_execution_plans(
-            maintenance_execution, main_execution
-        )
-        resources = self._resource_plan_from_execution(legacy_resource_claims, main_execution)
+
+        def resolve_for_maintenance(maintenance_factors):
+            power_by_location = {
+                location_id: self.power.resolve_snapshot(
+                    snapshot.power_inputs_by_location[location_id], maintenance_factors
+                )
+                for location_id in snapshot.ordered_locations
+            }
+
+            # Provider dependencies are derived from the current upstream
+            # fulfillment estimate. Consumer Service requirements join the same
+            # Execution Requirement allocation as Resource requirements below.
+            provider_plan = self._allocate_tick_services(power_by_location, requests=())
+            provider_ids = {request.id for request in provider_plan.requests}
+            legacy_service_requests = tuple(
+                request for request in all_service_requests
+                if request.id not in provider_ids
+            )
+            allocation_intents = (
+                base_intents
+                + tuple(
+                    self._legacy_service_bundle(request)
+                    for request in legacy_service_requests
+                )
+            )
+            capacities = self._constraint_capacities(
+                allocation_intents, service_supply=provider_plan
+            )
+            execution = allocate_execution_requirements(allocation_intents, capacities)
+            next_maintenance_factors = (
+                maintenance_factors
+                if self.maintenance is None
+                else self.maintenance.satisfaction_projection(execution)
+            )
+            return (
+                power_by_location,
+                provider_plan,
+                legacy_service_requests,
+                execution,
+                next_maintenance_factors,
+            )
+
+        maintenance_factors = {
+            facility.id: 1.0 for facility in self.facilities.facilities.values()
+        }
+        convergence_tolerance = 1e-8
+        max_iterations = 64
+        damping = 0.5
+
+        for _iteration in range(max_iterations):
+            (
+                power_by_location,
+                provider_plan,
+                legacy_service_requests,
+                execution,
+                next_maintenance_factors,
+            ) = resolve_for_maintenance(maintenance_factors)
+
+            facility_ids = set(maintenance_factors) | set(next_maintenance_factors)
+            delta = max(
+                (
+                    abs(
+                        next_maintenance_factors.get(facility_id, 1.0)
+                        - maintenance_factors.get(facility_id, 1.0)
+                    )
+                    for facility_id in facility_ids
+                ),
+                default=0.0,
+            )
+            if delta <= convergence_tolerance:
+                # Re-evaluate once at the actual fulfillment rather than at the
+                # damped estimate. This preserves exact 0/1 dependency states
+                # while accepting only a self-consistent result within tolerance.
+                maintenance_factors = dict(next_maintenance_factors)
+                (
+                    power_by_location,
+                    provider_plan,
+                    legacy_service_requests,
+                    execution,
+                    verified_factors,
+                ) = resolve_for_maintenance(maintenance_factors)
+                verify_ids = set(maintenance_factors) | set(verified_factors)
+                verification_delta = max(
+                    (
+                        abs(
+                            verified_factors.get(facility_id, 1.0)
+                            - maintenance_factors.get(facility_id, 1.0)
+                        )
+                        for facility_id in verify_ids
+                    ),
+                    default=0.0,
+                )
+                if verification_delta <= convergence_tolerance:
+                    break
+                next_maintenance_factors = verified_factors
+                facility_ids = verify_ids
+
+            maintenance_factors = {
+                facility_id: (
+                    damping * maintenance_factors.get(facility_id, 1.0)
+                    + (1.0 - damping)
+                    * next_maintenance_factors.get(facility_id, 1.0)
+                )
+                for facility_id in sorted(facility_ids, key=str)
+            }
+        else:
+            raise RuntimeError(
+                "tick allocation provider dependencies did not converge"
+            )
+
+        resources = self._resource_plan_from_execution(legacy_resource_claims, execution)
         services = self._service_plan_from_execution(
-            legacy_service_requests, main_execution, provider_plan
+            legacy_service_requests, execution, provider_plan
         )
         transport = self.logistics.allocate_capacity_logistics_execution(
             self.day, authorized_logistics, resources, services
