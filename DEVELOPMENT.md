@@ -60,16 +60,29 @@ python -m playwright install chromium
 
 変更はテストファイル単位ではなく、DomainからApplication・Persistence・UI等まで責務が一貫する単位で実装し、ローカルcommitする。CI完了を次のローカル作業開始条件にしない。
 
-高速に再現できる検証はローカルで実行する。
+### Test maintenance
+
+検証対象は `docs/design.md` / `docs/architecture.md` の現在の契約から選ぶ。テストsuiteは実装履歴の保存場所ではなく、現在の正準仕様を効率よく検証する構成として維持する。詳細な選定・統廃合基準は `docs/development-principles.md` §6 を正本とする。
+
+変更時は、関連する既存テストについても契約を再評価する。新しい実装に合わせて期待値だけを書き換えるのではなく、現在の契約を表すなら更新し、上位の不変条件へ統合できるなら統合し、旧仕様・暫定Content・private実装・過去の移行状態だけを固定するなら削除する。
+
+バグ修正や旧経路撤去のたびに恒久テストを1件ずつ追加する運用にはしない。旧symbolや旧APIの不存在確認が必要な場合は移行完了確認として扱い、長期的に守る内容があるならState ownership、Domain境界、保存則等の現行契約へ検証を置き換える。
+
+新規テストを追加する前に、同じ契約を既存テストが覆っていないか確認する。同じruleをDomain、integration、gameplayの各層で重複して検証せず、それぞれのlayer固有の契約だけを持たせる。
+
+### Local validation
+
+高速に再現できるDomain invariant、architecture、integration等の検証はローカルで行う。変更checkpointでは、変更した責務に直接関係する検証をまず実行し、State ownership、Resource保存、Save / Load、Offline、Application契約等への影響に応じて範囲を広げる。
+
+テストファイル名や現在のsuite分割を開発手順の恒久契約にはしない。必要なtest targetは変更内容と現在のtest構成から選択する。コード・文書差分の基本確認には少なくとも次を利用できる。
 
 ```bash
-pytest -q --ignore=tests/test_gameplay_mechanics.py
 git diff --check
 ```
 
-実ブラウザ、clean install、OS差などローカル環境で十分再現できない検証は、対応するテストも変更単位に含めてGitHub CIで実行する。
+実ブラウザ、clean install、OS差などローカル環境で十分再現できない検証は、対応するテストも変更単位に含めてGitHub CIで実行する。ローカルで実行できないことを理由に、正準契約上必要な検証自体を省略しない。
 
-Publish Gateway、publish helper、CI/E2E harnessなど開発環境そのものの契約テストは `development_tests/` に物理分離し、ゲーム本体の `tests/` と通常suiteには含めない。開発基盤を変更した場合は `pytest -q development_tests`、publish経路だけを変更した場合は `pytest -q development_tests/test_publish_request.py` で専用検証する。実ブラウザの受入シナリオは `playwright/` に置き、この開発基盤テストとも分離する。
+Publish Gateway、publish helper、CI/E2E harnessなど開発環境そのものの契約テストは `development_tests/` に物理分離し、ゲーム本体の `tests/` と通常suiteには含めない。開発基盤を変更した場合は `pytest -q development_tests` を基準とし、変更責務が明確に限定される場合は現在のsuite構成から関連targetだけを選んでよい。特定test file名を開発手順上の恒久契約にはしない。実ブラウザの受入シナリオは `playwright/` に置き、この開発基盤テストとも分離する。
 
 ## Publish procedure
 

@@ -136,15 +136,82 @@ Domain model
 
 ## 6. 検証・テスト・CIの位置づけ
 
-検証は、設計と実装が一致しているかを確認するための証拠収集であり、開発の目的や正準仕様ではない。
+### 6.1 テストが表すもの
 
-設計とDomain契約を先に定め、その契約に必要な検証を後から選ぶ。既存テスト、fixture、CI構成は、その検証対象が変われば更新・統廃合する。
+テストは、現在の正準仕様から導出される契約を実行可能な形で検証するためのものとする。過去の実装手順、修正履歴、削除済み設計、ある時点の内部構造を保存する記録にはしない。
 
-GreenなCIは全体設計の妥当性を保証しない。Redなテストも、直ちに実装が誤っていることを意味しない。失敗した場合は、現在の設計に対して実装・Content・検証方法・環境のどこが不一致なのかを確認する。
+恒久テストを置くかどうかは、「このテストが失敗したとき、現在の `design.md` / `architecture.md` が要求する不変条件、状態遷移、Domain境界、Application契約のどれが破られたと言えるか」で判断する。対応する現行契約を説明できない検証は、恒久suiteへ残す根拠を持たない。
 
-テストを増やすこと自体を品質向上とみなさない。長期的に守るDomain invariant、状態遷移、会計、境界、保存復元、決定論等を中心に検証し、開発中の数値や一攻略例を固定する検証は、その実験目的がなくなれば廃棄する。
+バグ修正や移行作業を契機に検証を追加する場合も、個別の事故や旧実装の不存在そのものではなく、その事故が示した一般的な契約へ検証対象を引き上げる。例えば旧class名の不存在ではなくState ownership、旧call pathの不存在ではなくApplication境界、特定順序で偶然成立したScenarioではなく登録順非依存を検証する。
 
-Gameplay evaluation、性能分析、Domain invariant、Content validation、Browser / Integration validationは目的が異なるため分離する。Gameplayの停止はゲーム上のボトルネックであり得る一方、Simulation計算量の増大は性能問題である。両者を同じScenarioの合否だけで判断しない。
+### 6.2 優先して検証する契約
+
+テストsuiteは、現在のゲームとArchitectureを長期的に守る契約へ集中させる。特に次を優先する。
+
+- Domain invariantと状態遷移
+- State ownershipとDomain間境界
+- Resource / Funds / Cargo等の保存と二重計上防止
+- Allocation、Service Capacity、Inventory、Logistics等のDomain間整合性
+- Save / Loadでauthoritative Stateが保存され、派生Stateが正しく再導出されること
+- Offline Progressと通常Simulationの意味論的一致
+- Entity登録順、Domain登録順、同順位処理順に依存しない決定論
+- Application Command / QueryがDomain契約を正しく公開し、UIの意思決定に必要なstate、blocker、必要条件、limiting factorを返すこと
+- Content追加がGeneric Coreの特定ID例外を要求しないこと
+
+Gameplay検証は実Application APIと実際の状態遷移を使い、複数Domainを通した契約が成立することを確認する。ただし一つの攻略順、特定Facility数、暫定初期在庫、特定の成功日数等を正準仕様へ昇格させない。
+
+### 6.3 仕様変更時のテスト再構成
+
+仕様・Architectureが変わった場合は、既存テストを新仕様へ機械的に追従させるのではなく、各テストが現在も有効な契約を表しているかを再評価する。
+
+変更後の契約に対して、既存テストは次のいずれかとして扱う。
+
+- 現在も同じ契約を検証するなら維持する。
+- 契約の表現が変わったなら、新しいpublic / Domain契約へ書き換える。
+- より上位の不変条件テストへ包含できるなら統合する。
+- 契約自体が廃止された、暫定Content値だけを固定する、旧API・旧class・旧fixture形状だけを保存する場合は削除する。
+
+「過去に一度壊れたから」という理由だけで個別回帰テストを永久に積み上げない。過去の不具合が恒久的な設計契約を示している場合だけ、その契約を最小限のテストで保持する。
+
+テスト削除は品質低下とはみなさない。不要なテストを残して現行設計と矛盾する契約を固定する方が回帰リスクになる。削除・統合時は、そのテストが表していた現行契約が別の検証で十分に覆われているか、または契約自体が廃止済みであることを確認する。
+
+### 6.4 重複と実装詳細への依存を避ける
+
+同じDomain ruleを複数layerで同じ内容のまま繰り返し検証しない。各layerではそのlayer固有の契約を確認する。
+
+- Domain test: invariant、state transition、allocation、保存則等のルール
+- Architecture test: dependency方向、State ownership、Domain越境を含む境界契約
+- Application / integration test: Command / Queryと複数Domain接続
+- Gameplay / browser test: 実際の意思決定に必要な状態が一連の操作で利用可能か
+- Development infrastructure test: publish、CI、package、launcher等の開発基盤契約
+
+private helper、内部call順、現在のmodule分割、temporary adapter等は、それ自体がArchitecture契約でない限りテストの正本にしない。内部構造を変更しただけで大量のテスト修正が必要になる場合は、テストがpublic / Domain契約ではなく実装を写していないかを先に確認する。
+
+新しいテストを追加する前に、同じ不変条件を既存テストが既に検証していないかを確認する。既存テストへ自然に統合できる場合は、個別ケースを別ファイル・別testとして増やすより契約中心に統合する。
+
+### 6.5 Fixture・Content・Scenario
+
+fixtureは検証したい状態を構築する入力であり、それ自体を仕様としない。テストの意味に不要な初期Scenario全体、暫定Content、ID一覧、登録数、balance値を複製しない。
+
+数値そのものが正準契約でない場合は、特定値より関係を検証する。例えば「施設が3個ある」よりState ownership、「100日で完成する」より必要Resourceとworkに応じて進行すること、「Moonだけ到達可能」よりSpatial / Vehicle requirementから可否が導出されることを検証する。
+
+Content固有のvalidationが必要な場合は、Generic Coreの不変条件と分離してContent validationとして扱う。Gameplay ScenarioもContent評価とCore契約検証を混同しない。
+
+### 6.6 一時的な移行確認
+
+大規模移行では、旧経路が残っていないこと、旧schemaが参照されていないこと、特定migrationが完了したことを一時的に確認してよい。ただしこれは移行作業の完了確認であり、そのまま恒久suiteの仕様にはしない。
+
+移行完了後に長期的に守るべき内容がある場合は、「旧symbolが存在しない」という履歴依存の形ではなく、現在のArchitecture境界やauthoritative Stateが一意であることを検証する形へ置き換える。
+
+### 6.7 CIと検証範囲
+
+GreenなCIは設計妥当性の証明ではなく、選択された検証が通ったという証拠である。Redなテストも直ちに実装誤りとは限らず、正準仕様の変更に対してテスト契約が古くなっていないかを含めて原因を確認する。
+
+変更単位では、その責務に直接関係する最小の検証から開始し、Domain横断、Persistence、Offline、Application等の影響範囲に応じて必要な検証を広げる。変更と無関係な長時間検証を毎回機械的に実行することを品質基準にはしない一方、ローカル実行不能を理由に必要な実環境検証を変更単位から除外しない。
+
+実ブラウザ、clean package install、OS差等はGitHub CIで検証し、高速に再現できるDomain / architecture / integration検証はローカルで優先する。Gameplay evaluation、性能分析、Domain invariant、Content validation、Browser / Integration validationは目的を分け、それぞれの結果を別の契約の証明として流用しない。
+
+テストsuiteは現在の正準仕様を効率よく検証する構成として継続的に統廃合する。テスト数、ファイル数、過去ケースの保存量そのものを品質指標にしない。
 
 ---
 
