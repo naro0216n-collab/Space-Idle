@@ -326,9 +326,8 @@ class ConstructionPlanningMixin:
                 state = project.resources[requirement.resource_id]
                 if self.reserved_resource_t(project, requirement.resource_id) + 1e-9 >= requirement.amount_t:
                     continue
-                if state.import_committed_t is None:
-                    if waited < wait_limit:
-                        blockers.append(ProjectBlocker("destination_supply_wait", str(requirement.resource_id)))
+                if state.import_committed_t is None and waited < wait_limit:
+                    blockers.append(ProjectBlocker("destination_supply_wait", str(requirement.resource_id)))
                     continue
                 blockers.append(ProjectBlocker("resource_shortage", str(requirement.resource_id)))
         if (

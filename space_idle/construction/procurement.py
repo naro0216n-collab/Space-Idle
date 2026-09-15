@@ -34,6 +34,29 @@ class ConstructionProcurementMixin:
         project.procurement_started_day = day
         return True
 
+    def _procurement_policy_due(self, project, day: int) -> bool:
+        if project.status is not ProjectStatus.PROCURING:
+            return False
+        assert project.procurement_started_day is not None
+        waited = day - project.procurement_started_day
+        return waited >= self.sourcing_wait_days[project.sourcing_policy]
+
+    def _mature_procurement_if_due(self, project, day: int) -> None:
+        """Persist a due sourcing transition at a canonical Boundary."""
+        if not self._procurement_policy_due(project, day):
+            return
+        recipe = self._recipe_for_project(project)
+        for requirement in recipe.resources:
+            state = project.resources[requirement.resource_id]
+            reserved = self._reserved_resource_t(project, requirement.resource_id)
+            if (
+                state.import_committed_t is None
+                and state.committed_t + reserved + 1e-9 < requirement.amount_t
+            ):
+                state.import_committed_t = max(
+                    0.0, requirement.amount_t - state.committed_t - reserved
+                )
+
     def resource_demands(self, day: int) -> tuple[ResourceDemand, ...]:
         demands: list[ResourceDemand] = []
         for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
@@ -48,7 +71,12 @@ class ConstructionProcurementMixin:
                 state = project.resources[requirement.resource_id]
                 reserved = self._reserved_resource_t(project, requirement.resource_id)
                 missing = max(0.0, requirement.amount_t - state.committed_t - reserved)
-                if missing <= 1e-9 or state.import_committed_t is None:
+                if missing <= 1e-9:
+                    continue
+                if (
+                    state.import_committed_t is None
+                    and not self._procurement_policy_due(project, day)
+                ):
                     continue
                 demands.append(ResourceDemand(
                     self._resource_demand_id(project.id, requirement.resource_id),
@@ -105,19 +133,7 @@ class ConstructionProcurementMixin:
             if project.status is ProjectStatus.PLANNED and not self._activate_procurement_if_eligible(project, day):
                 continue
 
-            recipe = self._recipe_for_project(project)
-            assert project.procurement_started_day is not None
-            waited = day - project.procurement_started_day
-            wait_limit = self.sourcing_wait_days[project.sourcing_policy]
-            if waited < wait_limit:
-                continue
-            for requirement in recipe.resources:
-                state = project.resources[requirement.resource_id]
-                reserved = self._reserved_resource_t(project, requirement.resource_id)
-                if state.import_committed_t is None and state.committed_t + reserved + 1e-9 < requirement.amount_t:
-                    state.import_committed_t = max(
-                        0.0, requirement.amount_t - state.committed_t - reserved
-                    )
+            self._mature_procurement_if_due(project, day)
 
     def finalize_procurement(
         self, allocations: ExecutionAllocationPlan, day: int

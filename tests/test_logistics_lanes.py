@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from space_idle import AdvanceTime, GetBottlenecks, GetCargoFlows, GetProjects, build_game_application
+from space_idle import AdvanceTime, GetBottlenecks, GetCargoFlows, GetProjects, PlanBuild, build_game_application
 from space_idle.content.base_game import (
     EARTH,
     LEO,
@@ -203,11 +203,10 @@ def test_construction_declares_source_constrained_import_demand_and_uses_matchin
     sim = app._simulation
     _unlock_orbital_logistics(sim)
     _owned_earth_leo_capacity(sim)
-    project_id = sim.projects.plan_build(
-        ORBITAL_LOGISTICS_NODE, LEO, 3, "import_now", day=sim.day,
-        import_source_id=EARTH,
-    )
-    sim.projects.advance_procurement(sim.day)
+    project_id = app.execute(PlanBuild(
+        str(LEO), str(ORBITAL_LOGISTICS_NODE), 3, "import_now", str(EARTH),
+    )).created_id
+    assert project_id is not None
     demands = sim.projects.resource_demands(sim.day)
     assert demands
     assert all(demand.source_id == EARTH and demand.destination_id == LEO for demand in demands)
@@ -232,11 +231,10 @@ def test_construction_without_source_constraint_allows_lane_to_choose_supply_sou
     sim = app._simulation
     _unlock_orbital_logistics(sim)
     _owned_earth_leo_capacity(sim)
-    project_id = sim.projects.plan_build(
-        ORBITAL_LOGISTICS_NODE, LEO, 3, "import_now", day=sim.day,
-        import_source_id=None,
-    )
-    sim.projects.advance_procurement(sim.day)
+    project_id = app.execute(PlanBuild(
+        str(LEO), str(ORBITAL_LOGISTICS_NODE), 3, "import_now", None,
+    )).created_id
+    assert project_id is not None
     demands = sim.projects.resource_demands(sim.day)
     assert demands and all(demand.source_id is None for demand in demands)
     lane_id = sim.logistics.create_lane(EARTH, LEO, 100.0, 5)
