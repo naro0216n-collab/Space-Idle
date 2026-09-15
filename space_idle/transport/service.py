@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 from ..facilities import FacilityBook
 from ..inventory import InventoryBook
 from ..power import PowerService
-from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
+from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId, SurfaceCellId
 from ..technology import TechnologyState
 from .compatibility import TransportCompatibilityMixin
 from .fleet_allocations import FleetAllocationMixin
@@ -15,13 +15,13 @@ from .models import (
     FleetRelocation,
     FleetRelease,
     FleetReservation,
-    RouteDef,
+    MovementPlan,
     TransportAllocation,
     VehicleDef,
 )
 from .operations import OperationEvaluatorRegistry, build_default_operation_registry
 from .production import VehicleProductionMixin, VehicleProductionState
-from .surface_routes import SurfaceOrbitRouteRule, SurfaceTransportRouteRule
+from .movement import MovementResolver, SpaceflightMovementRule, SurfaceAccessMovementRule, SurfaceTransportMovementRule
 from .supply import TransportSupplyMixin
 
 
@@ -35,19 +35,20 @@ class TransportService(
     """Authoritative Fleet and Transport state owner.
 
     Logistics consumes capacity derived here but does not own or mutate Fleet
-    commitments. Route/Vehicle definitions and vehicle production live with the
+    commitments. Movement rules/Vehicle definitions and vehicle production live with the
     same Transport/Fleet aggregate because they determine and change Fleet state.
     """
 
-    routes: dict
     inventory: InventoryBook
     facilities: FacilityBook
     power: PowerService
     vehicle_defs: dict[DefinitionId, VehicleDef] = field(default_factory=dict)
     external_services: dict[DefinitionId, ExternalTransportServiceDef] = field(default_factory=dict)
     operation_registry: OperationEvaluatorRegistry = field(default_factory=build_default_operation_registry)
-    surface_route_rules: tuple[SurfaceTransportRouteRule, ...] = ()
-    surface_orbit_route_rules: tuple[SurfaceOrbitRouteRule, ...] = ()
+    surface_movement_rules: tuple[SurfaceTransportMovementRule, ...] = ()
+    surface_access_movement_rules: tuple[SurfaceAccessMovementRule, ...] = ()
+    spaceflight_movement_rules: tuple[SpaceflightMovementRule, ...] = ()
+    _movement_plan_cache: dict[RouteId, MovementPlan] = field(default_factory=dict, repr=False)
     fleet_pools: dict[tuple[DefinitionId, SpatialNodeId], FleetPool] = field(default_factory=dict)
     fleet_reservations: dict[EntityId, FleetReservation] = field(default_factory=dict)
     transport_allocations: dict[EntityId, TransportAllocation] = field(default_factory=dict)
@@ -71,13 +72,51 @@ class TransportService(
     def vehicle_definitions(self) -> tuple[VehicleDef, ...]:
         """Return immutable Vehicle definitions in deterministic order."""
         return tuple(sorted(self.vehicle_defs.values(), key=lambda row: str(row.id)))
-    def route_definition(self, route_id: RouteId) -> RouteDef | None:
-        """Return one immutable Route definition through the Transport facade."""
-        return self.routes.get(route_id)
+    def movement_resolver(self) -> MovementResolver:
+        return MovementResolver(
+            self.facilities.environment.graph,
+            self.facilities,
+            surface_rules=self.surface_movement_rules,
+            surface_access_rules=self.surface_access_movement_rules,
+            spaceflight_rules=self.spaceflight_movement_rules,
+        )
 
-    def route_definitions(self) -> tuple[RouteDef, ...]:
-        """Return immutable Route definitions in deterministic order."""
-        return tuple(sorted(self.routes.values(), key=lambda row: str(row.id)))
+    def movement_plan_candidates(
+        self, origin_id: SpatialNodeId, destination_id: SpatialNodeId
+    ) -> tuple[MovementPlan, ...]:
+        return self.movement_resolver().direct_plans(origin_id, destination_id)
+
+    def movement_plans_to_physical_target(
+        self, origin_id: SpatialNodeId, target_cell_id: SurfaceCellId
+    ) -> tuple[MovementPlan, ...]:
+        # Physical targets are not part of the regular Operational Node graph, so
+        # retain only these ephemeral candidates long enough for one-shot owners
+        # to validate/start them. Established-node plans are always re-derived.
+        plans = self.movement_resolver().plans_to_physical_target(origin_id, target_cell_id)
+        self._movement_plan_cache.update((plan.id, plan) for plan in plans)
+        return plans
+
+    def outbound_movement_plans(self, origin_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
+        return self.movement_resolver().outbound_plans(origin_id)
+
+    def movement_plan(self, plan_id: RouteId) -> MovementPlan | None:
+        current = self.movement_resolver().plan_by_id(plan_id)
+        if current is not None:
+            return current
+        return self._movement_plan_cache.get(plan_id)
+
+    def movement_plan_options(self) -> tuple[MovementPlan, ...]:
+        return self.movement_resolver().all_direct_plans()
+
+    def require_movement_plan(self, plan_id: RouteId) -> MovementPlan:
+        plan = self.movement_plan(plan_id)
+        if plan is None:
+            raise KeyError(plan_id)
+        return plan
+
+    def invalidate_movement_plans(self) -> None:
+        """Drop derived Movement Plan cache after physical/spatial state changes."""
+        self._movement_plan_cache.clear()
 
     def external_transport_service_definition(
         self, service_id: DefinitionId

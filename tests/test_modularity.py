@@ -38,7 +38,6 @@ def test_domain_authoritative_state_is_not_read_directly_across_domain_boundarie
     authoritative_state = {
         "transport": {
             "vehicle_defs",
-            "routes",
             "external_services",
             "fleet_pools",
             "fleet_reservations",

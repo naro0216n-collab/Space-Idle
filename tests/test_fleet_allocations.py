@@ -524,15 +524,18 @@ def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execut
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
     sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
 
-    route_id = RouteId("base.route.leo_lunar_orbit")
-    route = lg.routes[route_id]
-    lg.routes[route_id] = replace(
-        route,
-        origin_requirements=SiteRequirements(
-            route.origin_requirements.environment,
-            (CapabilityRequirement("research_lab", CapabilityRequirementState.ACTIVE),),
-        ),
+    rule = lg.spaceflight_movement_rules[0]
+    lg.spaceflight_movement_rules = tuple(
+        replace(
+            row,
+            origin_requirements=SiteRequirements(
+                row.origin_requirements.environment,
+                (CapabilityRequirement("research_lab", CapabilityRequirementState.ACTIVE),),
+            ),
+        ) if row.id == rule.id else row
+        for row in lg.spaceflight_movement_rules
     )
+    lg.invalidate_movement_plans()
     allocation_id = lg.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
@@ -562,11 +565,7 @@ def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
     sim.graph.found_location(target_id, "Target", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS)
     sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, target_id)
     sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, target_id, site_cell_id=ids.MOON_CELL_FARSIDE_HIGHLANDS)
-    lg.synchronize_surface_access_routes()
-    landing_route = next(
-        route_id for route_id, route in lg.routes.items()
-        if route.origin_id == ids.LUNAR_ORBIT and route.destination_id == target_id
-    )
+    landing_plan = lg.movement_plan_candidates(ids.LUNAR_ORBIT, target_id)[0]
     definition = lg.vehicle_defs[vehicle_id]
     lg.vehicle_defs[vehicle_id] = replace(
         definition,
@@ -587,7 +586,11 @@ def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
     sim.facilities.install(ids.MICROGRAVITY_EXPERIMENT_PLATFORM, ids.LEO)
     allocation_id = lg.create_transport_allocation(
         vehicle_id, ids.LEO, target_id, target_units=1,
-        path=(RouteId("base.route.leo_lunar_orbit"), landing_route), day=sim.day,
+        path=(
+            lg.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT)[0].id,
+            landing_plan.id,
+        ),
+        day=sim.day,
     )
     snapshot = lg.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert snapshot.available.forward_t_per_day == 0
@@ -625,7 +628,7 @@ def test_same_priority_allocation_result_does_not_depend_on_registration_order()
         sim.graph.found_location(target_id, "Target", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS)
         sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, target_id)
         sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, target_id, site_cell_id=ids.MOON_CELL_FARSIDE_HIGHLANDS)
-        lg.synchronize_surface_access_routes()
+        lg.invalidate_movement_plans()
         lg.fleet_pool(ids.REUSABLE_SURFACE_CARGO_LANDER, ids.LUNAR_ORBIT).total_units = 1
         actual = [ids.LEO if d == "leo" else target_id for d in destinations]
         for destination in actual:

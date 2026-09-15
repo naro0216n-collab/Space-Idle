@@ -6,12 +6,12 @@ from math import asin, cos, radians, sin, sqrt
 from ..facilities import FacilityBook, FacilityPlacementScope
 from ..shared import EntityId, SpatialNodeId, SurfaceCellId
 from ..spatial import SpatialContextId, SurfacePoint
-from .models import RouteDef, RouteEndpoint
+from .models import MovementEndpoint, MovementPlan
 
 
 @dataclass(frozen=True)
-class ResolvedRouteEndpoint:
-    node_id: SpatialNodeId
+class ResolvedMovementEndpoint:
+    node_id: SpatialNodeId | None
     locator_kind: str
     locator_id: str
     environment_context_id: SpatialContextId
@@ -19,34 +19,47 @@ class ResolvedRouteEndpoint:
 
 
 @dataclass(frozen=True)
-class RouteGeometrySnapshot:
-    origin: ResolvedRouteEndpoint
-    destination: ResolvedRouteEndpoint
+class MovementGeometrySnapshot:
+    origin: ResolvedMovementEndpoint
+    destination: ResolvedMovementEndpoint
     same_body_surface: bool
     distance_km: float | None
 
 
-def resolve_route_endpoint(endpoint: RouteEndpoint, facilities: FacilityBook) -> ResolvedRouteEndpoint:
+def resolve_movement_endpoint(endpoint: MovementEndpoint, facilities: FacilityBook) -> ResolvedMovementEndpoint:
     graph = facilities.environment.graph
-    if not graph.has_operational_node(endpoint.node_id):
-        raise ValueError(f"unknown route endpoint location: {endpoint.node_id}")
+    if endpoint.physical_target_cell_id is not None:
+        cell = graph.surface_cells.get(endpoint.physical_target_cell_id)
+        if cell is None:
+            raise ValueError(f"unknown movement physical target: {endpoint.physical_target_cell_id}")
+        return ResolvedMovementEndpoint(
+            None,
+            endpoint.locator_kind,
+            endpoint.locator_id,
+            endpoint.physical_target_cell_id,
+            endpoint.physical_target_cell_id,
+        )
+
+    node_id = endpoint.node_id
+    if not graph.has_operational_node(node_id):
+        raise ValueError(f"unknown movement endpoint location: {node_id}")
 
     if endpoint.surface_interface_id is not None:
         facility = facilities.facilities.get(endpoint.surface_interface_id)
         if facility is None:
-            raise ValueError(f"unknown route surface interface: {endpoint.surface_interface_id}")
-        if facility.operational_node_id != endpoint.node_id:
-            raise ValueError("route surface interface belongs to another Location")
+            raise ValueError(f"unknown movement surface interface: {endpoint.surface_interface_id}")
+        if facility.operational_node_id != node_id:
+            raise ValueError("movement surface interface belongs to another Location")
         definition = facilities.definitions[facility.definition_id]
         if definition.placement_scope is not FacilityPlacementScope.SURFACE_CELL:
-            raise ValueError("route surface interface must be a SURFACE_CELL facility")
+            raise ValueError("movement surface interface must be a SURFACE_CELL facility")
         if facility.site_cell_id is None:
-            raise ValueError("route surface interface has no site cell")
-        location = graph.locations.get(endpoint.node_id)
+            raise ValueError("movement surface interface has no site cell")
+        location = graph.locations.get(node_id)
         if location is None or facility.site_cell_id not in location.developed_cell_ids:
-            raise ValueError("route surface interface is outside developed territory")
-        return ResolvedRouteEndpoint(
-            endpoint.node_id,
+            raise ValueError("movement surface interface is outside developed territory")
+        return ResolvedMovementEndpoint(
+            node_id,
             endpoint.locator_kind,
             endpoint.locator_id,
             facility.site_cell_id,
@@ -54,28 +67,28 @@ def resolve_route_endpoint(endpoint: RouteEndpoint, facilities: FacilityBook) ->
         )
 
     if endpoint.access_cell_id is not None:
-        location = graph.locations.get(endpoint.node_id)
+        location = graph.locations.get(node_id)
         if location is None:
-            raise ValueError("route access cell requires a surface Location")
+            raise ValueError("movement access cell requires a surface Location")
         cell = graph.surface_cells.get(endpoint.access_cell_id)
         if cell is None:
-            raise ValueError(f"unknown route access cell: {endpoint.access_cell_id}")
+            raise ValueError(f"unknown movement access cell: {endpoint.access_cell_id}")
         if cell.body_id != location.body_id:
-            raise ValueError("route access cell belongs to another celestial body")
+            raise ValueError("movement access cell belongs to another celestial body")
         if endpoint.access_cell_id not in location.developed_cell_ids:
-            raise ValueError("route access cell is not developed by endpoint Location")
-        return ResolvedRouteEndpoint(
-            endpoint.node_id,
+            raise ValueError("movement access cell is not developed by endpoint Location")
+        return ResolvedMovementEndpoint(
+            node_id,
             endpoint.locator_kind,
             endpoint.locator_id,
             endpoint.access_cell_id,
             endpoint.access_cell_id,
         )
 
-    if endpoint.node_id not in graph.nodes:
-        raise ValueError("non-surface route interface requires a non-surface operational node")
-    return ResolvedRouteEndpoint(
-        endpoint.node_id,
+    if node_id not in graph.nodes:
+        raise ValueError("non-surface movement interface requires a non-surface operational node")
+    return ResolvedMovementEndpoint(
+        node_id,
         endpoint.locator_kind,
         endpoint.locator_id,
         endpoint.node_id,
@@ -92,18 +105,18 @@ def great_circle_distance_km(a: SurfacePoint, b: SurfacePoint, radius_km: float)
     return 2.0 * radius_km * asin(min(1.0, sqrt(max(0.0, h))))
 
 
-def route_geometry(route: RouteDef, facilities: FacilityBook) -> RouteGeometrySnapshot:
+def movement_geometry(plan: MovementPlan, facilities: FacilityBook) -> MovementGeometrySnapshot:
     graph = facilities.environment.graph
-    origin = resolve_route_endpoint(route.origin, facilities)
-    destination = resolve_route_endpoint(route.destination, facilities)
+    origin = resolve_movement_endpoint(plan.origin, facilities)
+    destination = resolve_movement_endpoint(plan.destination, facilities)
     if origin.surface_cell_id is None or destination.surface_cell_id is None:
-        return RouteGeometrySnapshot(origin, destination, False, None)
+        return MovementGeometrySnapshot(origin, destination, False, None)
     origin_cell = graph.surface_cells[origin.surface_cell_id]
     destination_cell = graph.surface_cells[destination.surface_cell_id]
     if origin_cell.body_id != destination_cell.body_id:
-        return RouteGeometrySnapshot(origin, destination, False, None)
+        return MovementGeometrySnapshot(origin, destination, False, None)
     body = graph.bodies[origin_cell.body_id]
-    return RouteGeometrySnapshot(
+    return MovementGeometrySnapshot(
         origin,
         destination,
         True,

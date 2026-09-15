@@ -51,9 +51,9 @@ from ..content.base_spatial import build_spatial_model
 from ..content.base_storage import build_storage_provider_specs
 from ..content.base_transport import (
     build_external_transport_services,
-    build_route_definitions,
-    build_surface_orbit_route_rules,
-    build_surface_route_rules,
+    build_spaceflight_movement_rules,
+    build_surface_access_movement_rules,
+    build_surface_movement_rules,
     build_vehicle_definitions,
     initial_vehicle_deployments,
 )
@@ -65,9 +65,9 @@ def build_base_simulation() -> Simulation:
 
     facilities = FacilityBook(build_facility_definitions(), environment)
     initial_investments = initial_facility_investments()
-    for facility_id, location_id in initial_facility_placements():
+    for facility_id, location_id, site_cell_id in initial_facility_placements():
         facilities.install(
-            facility_id, location_id,
+            facility_id, location_id, site_cell_id=site_cell_id,
             invested_resources=initial_investments.get(facility_id, {}),
         )
 
@@ -83,19 +83,18 @@ def build_base_simulation() -> Simulation:
     power = PowerService(build_power_specs(), environment)
 
     transport = TransportService(
-        routes=build_route_definitions(),
         inventory=inventory,
         facilities=facilities,
         power=power,
-        surface_route_rules=build_surface_route_rules(),
-        surface_orbit_route_rules=build_surface_orbit_route_rules(),
+        surface_movement_rules=build_surface_movement_rules(),
+        surface_access_movement_rules=build_surface_access_movement_rules(),
+        spaceflight_movement_rules=build_spaceflight_movement_rules(),
         technology_state=technology,
     )
     transport.external_services.update(build_external_transport_services())
     for service_id in transport.external_services:
         external_economy.register_service(service_id)
     transport.vehicle_defs.update(build_vehicle_definitions())
-    transport.synchronize_surface_access_routes()
     for vehicle_definition_id, count, location_id in initial_vehicle_deployments():
         transport.add_fleet_units(vehicle_definition_id, count, location_id)
 

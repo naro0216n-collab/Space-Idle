@@ -4,12 +4,12 @@ from dataclasses import replace
 
 from space_idle import AdvanceTime, GetRoutes, GetWorld, build_game_application
 from space_idle.api import GameRuntime
+from space_idle.content import base_ids as ids
 from space_idle.content.base_game import (
     TECH_CISLUNAR_LOGISTICS,
     TECH_LUNAR_PROSPECTING,
     REUSABLE_ORBITAL_CARGO_TUG,
 )
-from space_idle.shared import RouteId
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.persistence import capture_state
 
@@ -61,28 +61,27 @@ def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ti
 
 def test_positive_transport_duration_rounds_up_to_canonical_day_boundary():
     sim = build_game_application()._simulation
-    route = sim.transport.routes[RouteId("base.route.leo_lunar_orbit")]
+    plan = sim.transport.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT)[0]
     base = sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].performance
     performance = replace(base, transit_time_multiplier=0.7)
 
-    assert route.transit_days * performance.transit_time_multiplier == 3.5
-    assert sim.transport.performance_route_transit_days(route, performance) == 4
+    assert plan.transit_days * performance.transit_time_multiplier == 3.5
+    assert sim.transport.performance_movement_transit_days(plan, performance) == 4
 
 
 def test_route_reachability_is_not_directly_gated_by_research_completion():
     app = build_game_application()
     sim = app._simulation
-    route_id = RouteId("base.route.leo_lunar_orbit")
-    route_definition = sim.transport.routes[route_id]
+    plan = sim.transport.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT)[0]
 
-    before = sim.transport.route_failures(route_id, sim.day)
+    before = sim.transport.movement_plan_failures(plan.id, sim.day)
     assert not any(failure.startswith("technology:") for failure in before)
 
     sim.technology.completed.update({TECH_CISLUNAR_LOGISTICS, TECH_LUNAR_PROSPECTING})
-    after = sim.transport.route_failures(route_id, sim.day)
+    after = sim.transport.movement_plan_failures(plan.id, sim.day)
     assert after == before
 
-    route = app.query(GetRoutes(route_id=str(route_id), include_modes=True)).items[0]
+    route = app.query(GetRoutes(route_id=str(plan.id), include_modes=True)).items[0]
     assert route.available
     assert route.service_feasible_now
     assert route.modes

@@ -4,7 +4,7 @@ from .models import (
     FleetReservationKind, TransportControlMode,
     OperationSupportLocation, OperationCapability, OperationSupportRequirement,
     ResourceSupportRequirement,
-    TransportOperationRequirement, RouteEndpoint, RouteDef, PoweredAscentCapability,
+    TransportOperationRequirement, MovementEndpoint, SpatialRelation, MovementPlan, PoweredAscentCapability,
     SpaceflightCapability, LandingCapability, AtmosphericEntryCapability, SurfaceTransportCapability,
     TransportPerformanceProfile, VehicleEconomicsSpec, VehicleProductionSpec,
     VehicleMaintenanceSpec, VehicleDef, ExternalTransportServiceDef,
@@ -13,6 +13,7 @@ from .models import (
     TransportCapacitySnapshot, TransportServiceSupply,
     TransportOperationDependencyProjection,
 )
+from .movement import MovementResolver, SpaceflightMovementRule, SurfaceAccessMovementRule, SurfaceTransportMovementRule
 from .operations import (
     OperationEvaluationContext, OperationEvaluatorRegistry,
     build_default_operation_registry,
@@ -24,7 +25,7 @@ __all__ = [
     'FleetReservationKind', 'TransportControlMode',
     'OperationSupportLocation', 'OperationCapability', 'OperationSupportRequirement',
     'ResourceSupportRequirement',
-    'TransportOperationRequirement', 'RouteEndpoint', 'RouteDef', 'PoweredAscentCapability',
+    'TransportOperationRequirement', 'MovementEndpoint', 'SpatialRelation', 'MovementPlan', 'PoweredAscentCapability',
     'SpaceflightCapability', 'LandingCapability', 'AtmosphericEntryCapability', 'SurfaceTransportCapability',
     'TransportPerformanceProfile', 'VehicleEconomicsSpec', 'VehicleProductionSpec',
     'VehicleMaintenanceSpec', 'VehicleDef', 'ExternalTransportServiceDef',
@@ -32,6 +33,7 @@ __all__ = [
     'DirectionalCapacity', 'TransportAllocation', 'TransportServicePlan',
     'TransportCapacitySnapshot', 'TransportServiceSupply',
     'TransportOperationDependencyProjection',
+    'MovementResolver', 'SpaceflightMovementRule', 'SurfaceAccessMovementRule', 'SurfaceTransportMovementRule',
     'OperationEvaluationContext', 'OperationEvaluatorRegistry',
     'build_default_operation_registry', 'TransportService',
 ]

@@ -19,7 +19,7 @@ from space_idle import (
 )
 from space_idle.content import base_ids as ids
 from space_idle.transport import PoweredAscentCapability, TransportPerformanceProfile, VehicleDef
-from space_idle.shared import DefinitionId, RouteId
+from space_idle.shared import DefinitionId
 from space_idle.spatial import AtmosphereField, GravityField
 
 
@@ -89,16 +89,16 @@ def test_paused_lane_keeps_project_demand_visible_without_dispatching_cargo_flow
 def test_vehicle_route_eligibility_is_derived_from_operation_capability_not_vehicle_name():
     app = build_game_application()
     sim = app._simulation
-    route_id = RouteId("base.route.earth_leo")
-    route = sim.transport.routes[route_id]
+    plan = sim.transport.movement_plan_candidates(ids.EARTH, ids.LEO)[0]
 
-    route_view = app.query(GetRoutes(route_id=str(route_id), include_modes=True)).items[0]
+    route_view = app.query(GetRoutes(route_id=str(plan.id), include_modes=True)).items[0]
     lander_mode = next(mode for mode in route_view.modes if mode.id == str(ids.REUSABLE_SURFACE_CARGO_LANDER))
     assert not lander_mode.service_feasible
     assert any("operation:powered_ascent" in blocker for blocker in lander_mode.blockers)
 
-    gravity = sim.environment.require(route.origin_id, GravityField).local_acceleration_m_s2
-    pressure = sim.environment.require(route.origin_id, AtmosphereField).pressure_pa
+    origin_context = sim.transport.movement_geometry(plan.id).origin.environment_context_id
+    gravity = sim.environment.require(origin_context, GravityField).local_acceleration_m_s2
+    pressure = sim.environment.require(origin_context, AtmosphereField).pressure_pa
     definition_id = DefinitionId("test.vehicle.integrated_spacecraft")
     sim.transport.vehicle_defs[definition_id] = VehicleDef(
         id=definition_id,
@@ -108,14 +108,14 @@ def test_vehicle_route_eligibility_is_derived_from_operation_capability_not_vehi
             payload_t=2.0,
             endurance_days=30.0,
             operation_capabilities=(
-                PoweredAscentCapability(route.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0),
+                PoweredAscentCapability(plan.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0),
             ),
         ),
     )
     sim.transport.add_fleet_units(definition_id, 1, ids.EARTH)
-    assert not sim.transport.vehicle_route_failures(route_id, definition_id, sim.day)
+    assert not sim.transport.vehicle_movement_failures(plan.id, definition_id, sim.day)
     mode = next(
-        row for row in app.query(GetRoutes(route_id=str(route_id), include_modes=True)).items[0].modes
+        row for row in app.query(GetRoutes(route_id=str(plan.id), include_modes=True)).items[0].modes
         if row.id == str(definition_id)
     )
     assert mode.fleet_total_units == 1

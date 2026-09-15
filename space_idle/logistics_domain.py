@@ -116,7 +116,7 @@ def validate_logistics_runtime(sim: Any) -> None:
         _require(lane.requested_capacity_t_per_day > 0, f"lane has non-positive requested capacity: {lane_id}")
         _require(1 <= int(lane.priority) <= 5, f"lane priority must be 1..5: {lane_id}")
         if lane.path is not None:
-            tr.validate_path_structure(lane.source_id, lane.destination_id, lane.path)
+            tr.validate_movement_path_structure(lane.source_id, lane.destination_id, lane.path)
 
 LOGISTICS_STATE_CODEC = StateCodec("logistics", capture_logistics, restore_logistics)
 DOMAIN_EXTENSION = DomainExtension(

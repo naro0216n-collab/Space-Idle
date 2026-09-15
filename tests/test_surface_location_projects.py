@@ -21,7 +21,6 @@ from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.founding import FoundingResourceRequirement
 from space_idle.shared import DefinitionId
-from space_idle.transport.surface_routes import DERIVED_SURFACE_ORBIT_ROUTE_PREFIX
 
 
 def _survey_cell_to_l2(sim, cell_id):
@@ -198,13 +197,10 @@ def test_founding_requires_orbital_survey_and_does_not_create_target_inventory_b
     assert project.new_location_id not in sim.graph.locations
     assert not sim.graph.has_operational_node(project.new_location_id)
     assert all(location_id != project.new_location_id for location_id, _resource in sim.inventory.stock)
-    assert not any(
-        project.new_location_id in {route.origin_id, route.destination_id}
-        for route in sim.transport.routes.values()
-    )
+    assert not sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, project.new_location_id)
 
 
-def test_founding_completion_creates_location_bootstrap_and_dynamic_orbit_routes_once():
+def test_founding_completion_creates_location_bootstrap_and_dynamic_orbit_movement_once():
     app = build_game_application()
     sim = app._simulation
     cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
@@ -222,12 +218,9 @@ def test_founding_completion_creates_location_bootstrap_and_dynamic_orbit_routes
     assert location.core_cell_id == cell
     deployed_defs = {f.definition_id for f in sim.facilities.all_at(project.new_location_id)}
     assert {d.facility_def_id for d in package.deployed_facilities} <= deployed_defs
-    orbit_routes = [
-        route for route_id, route in sim.transport.routes.items()
-        if str(route_id).startswith(DERIVED_SURFACE_ORBIT_ROUTE_PREFIX)
-        and project.new_location_id in {route.origin_id, route.destination_id}
-    ]
-    assert orbit_routes
+    outbound = sim.transport.movement_plan_candidates(project.new_location_id, ids.LUNAR_ORBIT)
+    inbound = sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, project.new_location_id)
+    assert outbound and inbound
     assert (
         sim.transport.fleet_pool(ids.REUSABLE_SURFACE_CARGO_LANDER, project.new_location_id).total_units
         == package.required_units
@@ -404,19 +397,19 @@ def test_deploying_founding_save_load_completes_exactly_once(tmp_path):
     assert {row.definition_id for row in facilities} == {
         row.facility_def_id for row in package.deployed_facilities
     }
-    orbit_routes = [
-        route for route_id, route in loaded_sim.transport.routes.items()
-        if str(route_id).startswith(DERIVED_SURFACE_ORBIT_ROUTE_PREFIX)
-        and location_id in {route.origin_id, route.destination_id}
-    ]
-    assert orbit_routes
-    route_ids = {route.id for route in orbit_routes}
+    orbit_plans = (
+        loaded_sim.transport.movement_plan_candidates(location_id, ids.LUNAR_ORBIT)
+        + loaded_sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, location_id)
+    )
+    assert orbit_plans
+    plan_ids = {plan.id for plan in orbit_plans}
 
     loaded.execute(AdvanceTime(1))
     assert loaded_project.status.value == "complete"
     assert len(loaded_sim.facilities.all_at(location_id)) == len(package.deployed_facilities)
     assert {
-        route.id for route_id, route in loaded_sim.transport.routes.items()
-        if str(route_id).startswith(DERIVED_SURFACE_ORBIT_ROUTE_PREFIX)
-        and location_id in {route.origin_id, route.destination_id}
-    } == route_ids
+        plan.id for plan in (
+            loaded_sim.transport.movement_plan_candidates(location_id, ids.LUNAR_ORBIT)
+            + loaded_sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, location_id)
+        )
+    } == plan_ids

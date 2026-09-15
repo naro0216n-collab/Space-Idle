@@ -7,18 +7,38 @@ import pytest
 from space_idle import GetSurfaceMap, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
-from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId, SurfaceCellId
+from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId, StarSystemId, SurfaceCellId
 from space_idle.spatial import (
     CelestialBodyDef,
+    CharacteristicTransportGeometry,
     SpatialGraph,
     SpatialNodeDef,
     SpatialNodeKind,
+    StarSystemDef,
     SurfaceCellDef,
     SurfaceField,
     SurfacePoint,
 )
 from space_idle.validation import validate_runtime_state
 from space_idle.facilities import FacilityDef
+
+
+def _add_system(graph: SpatialGraph, system_id: str = "test.system") -> StarSystemId:
+    value = StarSystemId(system_id)
+    graph.add_star_system(StarSystemDef(
+        value, system_id, CharacteristicTransportGeometry((0.0,), (0.0,))
+    ))
+    return value
+
+
+def _body(
+    graph: SpatialGraph, body_id: CelestialBodyId, display_name: str,
+    system_id: StarSystemId, coordinate: float = 0.0,
+) -> None:
+    graph.add_body(CelestialBodyDef(
+        body_id, display_name, 1000.0, system_id,
+        CharacteristicTransportGeometry((coordinate,), (coordinate,)),
+    ))
 
 
 def _cell(cell_id: str, body_id: CelestialBodyId, neighbors: tuple[str, ...]) -> SurfaceCellDef:
@@ -37,8 +57,9 @@ def test_surface_topology_supports_variable_cell_counts_and_non_hex_neighbors():
     graph = SpatialGraph()
     body_a = CelestialBodyId("body.a")
     body_b = CelestialBodyId("body.b")
-    graph.add_body(CelestialBodyDef(body_a, "A", 1000.0))
-    graph.add_body(CelestialBodyDef(body_b, "B", 1000.0))
+    system = _add_system(graph)
+    _body(graph, body_a, "A", system, 0.0)
+    _body(graph, body_b, "B", system, 10.0)
     graph.add_surface_cell(_cell("a.1", body_a, ("a.2",)))
     graph.add_surface_cell(_cell("a.2", body_a, ("a.1",)))
     graph.add_surface_cell(_cell("b.1", body_b, ("b.2", "b.3")))
@@ -53,7 +74,8 @@ def test_surface_topology_supports_variable_cell_counts_and_non_hex_neighbors():
 def test_location_territory_owns_cells_once_and_expands_only_to_adjacent_cells():
     graph = SpatialGraph()
     body = CelestialBodyId("body")
-    graph.add_body(CelestialBodyDef(body, "Body", 1000.0))
+    system = _add_system(graph)
+    _body(graph, body, "Body", system)
     graph.add_surface_cell(_cell("c1", body, ("c2",)))
     graph.add_surface_cell(_cell("c2", body, ("c1", "c3")))
     graph.add_surface_cell(_cell("c3", body, ("c2",)))
@@ -110,11 +132,15 @@ def test_non_surface_spatial_context_is_not_operational_until_explicitly_promote
     graph = SpatialGraph()
     body = CelestialBodyId("body.context")
     node_id = SpatialNodeId("node.context.only")
-    graph.add_body(CelestialBodyDef(body, "Body", 1000.0))
+    system = _add_system(graph)
+    geometry = CharacteristicTransportGeometry((0.0,), (0.0,))
+    graph.add_body(CelestialBodyDef(body, "Body", 1000.0, system, geometry))
     graph.add(
         SpatialNodeDef(
             node_id,
             "Context only",
+            system,
+            geometry,
             body_id=body,
             kind=SpatialNodeKind.ORBITAL,
             inherits_parent_environment=False,
@@ -134,6 +160,8 @@ def test_non_operational_spatial_context_cannot_own_facility_lane_or_inventory_s
         SpatialNodeDef(
             dormant,
             "Dormant orbit",
+            ids.SOL_SYSTEM,
+            sim.graph.bodies[ids.MOON].system_local_transport_geometry,
             body_id=ids.MOON,
             kind=SpatialNodeKind.ORBITAL,
             inherits_parent_environment=False,
@@ -160,6 +188,8 @@ def test_save_load_preserves_operational_node_existence_separately_from_surface_
         SpatialNodeDef(
             dormant,
             "Context only",
+            ids.SOL_SYSTEM,
+            sim.graph.bodies[ids.MOON].system_local_transport_geometry,
             body_id=ids.MOON,
             kind=SpatialNodeKind.ORBITAL,
             inherits_parent_environment=False,

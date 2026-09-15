@@ -58,7 +58,7 @@ class LogisticsLaneMixin:
         if not graph.has_operational_node(destination_id):
             raise KeyError(destination_id)
         if path is not None:
-            self.transport.validate_path_structure(source_id, destination_id, path)
+            self.transport.validate_movement_path_structure(source_id, destination_id, path)
         self._lane_counter += 1
         lane_id = EntityId(f"logistics.lane.{self._lane_counter}")
         self.lanes[lane_id] = LogisticsLane(

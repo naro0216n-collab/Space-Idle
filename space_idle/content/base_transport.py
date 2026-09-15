@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..shared import DefinitionId, RouteId
+from ..shared import DefinitionId
 from ..transport import (
     ExternalTransportServiceDef,
     LandingCapability,
@@ -8,8 +8,6 @@ from ..transport import (
     OperationSupportRequirement,
     ResourceSupportRequirement,
     PoweredAscentCapability,
-    RouteDef,
-    RouteEndpoint,
     SpaceflightCapability,
     SurfaceTransportCapability,
     TransportOperationKind,
@@ -20,67 +18,68 @@ from ..transport import (
     VehicleMaintenanceSpec,
     VehicleProductionSpec,
 )
-from ..transport.surface_routes import SurfaceOrbitRouteRule, SurfaceTransportRouteRule
+from ..transport.movement import SpaceflightMovementRule, SurfaceAccessMovementRule, SurfaceTransportMovementRule
 from . import base_ids as ids
 from . import base_requirements as req
 
-_SURFACE_ACCESS_CELLS = {ids.EARTH: ids.EARTH_CELL_INDUSTRIAL}
-
-
-def _route_endpoint(location_id):
-    cell_id = _SURFACE_ACCESS_CELLS.get(location_id)
-    if cell_id is not None:
-        return RouteEndpoint(location_id, access_cell_id=cell_id)
-    return RouteEndpoint(location_id, non_surface_interface="operational_node")
-
-
-def build_route_definitions() -> dict:
-    routes = {
-        RouteId("base.route.earth_leo"): RouteDef(
-            id=RouteId("base.route.earth_leo"), origin=_route_endpoint(ids.EARTH), destination=_route_endpoint(ids.LEO), transit_days=2,
-            operations=(TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 9.4),),
-            display_name="地球地表→低軌道", origin_requirements=req.SURFACE_SITE, destination_requirements=req.ORBIT_SITE,
-        ),
-        RouteId("base.route.leo_lunar_orbit"): RouteDef(
-            id=RouteId("base.route.leo_lunar_orbit"), origin=_route_endpoint(ids.LEO), destination=_route_endpoint(ids.LUNAR_ORBIT), transit_days=5,
-            operations=(TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),),
-            display_name="低軌道→月周回軌道",
-            origin_requirements=req.ORBIT_SITE, destination_requirements=req.ORBIT_SITE,
-        ),
-        RouteId("base.route.lunar_orbit_leo"): RouteDef(
-            id=RouteId("base.route.lunar_orbit_leo"), origin=_route_endpoint(ids.LUNAR_ORBIT), destination=_route_endpoint(ids.LEO), transit_days=5,
-            operations=(TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),),
-            display_name="月周回軌道→低軌道",
-            origin_requirements=req.ORBIT_SITE, destination_requirements=req.ORBIT_SITE,
-        ),
-    }
-    return routes
-
-
-def build_surface_route_rules() -> tuple[SurfaceTransportRouteRule, ...]:
+def build_surface_movement_rules() -> tuple[SurfaceTransportMovementRule, ...]:
     return (
-        SurfaceTransportRouteRule(
-            id=DefinitionId("base.route_rule.surface_transport"),
+        SurfaceTransportMovementRule(
+            id=DefinitionId("base.movement.surface_transport"),
             display_name="地表輸送",
-            operation=TransportOperationRequirement(TransportOperationKind.SURFACE_TRANSPORT, 120.0),
+            operation=TransportOperationRequirement(TransportOperationKind.SURFACE_TRANSPORT, 0.0),
             gateway_capability_id="surface_distribution",
             transit_days=1,
         ),
     )
 
 
-def build_surface_orbit_route_rules() -> tuple[SurfaceOrbitRouteRule, ...]:
+def build_surface_access_movement_rules() -> tuple[SurfaceAccessMovementRule, ...]:
     return (
-        SurfaceOrbitRouteRule(
-            id=DefinitionId("base.route_rule.lunar_surface_orbit"),
-            display_name="月周回軌道",
-            orbit_node_id=ids.LUNAR_ORBIT,
-            descent_operations=(TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),),
-            ascent_operations=(TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 1.9),),
+        SurfaceAccessMovementRule(
+            id=DefinitionId("base.movement.earth_surface_access"),
+            display_name="地球地表アクセス",
+            body_id=ids.EARTH_BODY,
+            descent_operations=(
+                TransportOperationRequirement(TransportOperationKind.ATMOSPHERIC_ENTRY, 0.0),
+            ),
+            ascent_operations=(
+                TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 9.4),
+            ),
+            transit_days=2,
+            gateway_capability_id="launch_operations",
+            space_requirements=req.ORBIT_SITE,
+            surface_requirements=req.ATMOSPHERIC_SURFACE_SITE,
+        ),
+        SurfaceAccessMovementRule(
+            id=DefinitionId("base.movement.lunar_surface_access"),
+            display_name="月面アクセス",
+            body_id=ids.MOON,
+            descent_operations=(
+                TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),
+            ),
+            ascent_operations=(
+                TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 1.9),
+            ),
             transit_days=3,
             gateway_capability_id="surface_distribution",
-            orbit_requirements=req.ORBIT_SITE,
+            space_requirements=req.ORBIT_SITE,
             surface_requirements=req.SURFACE_SITE,
+        ),
+    )
+
+
+def build_spaceflight_movement_rules() -> tuple[SpaceflightMovementRule, ...]:
+    # 384,400 km / 76,880 km/day = 5 characteristic days for the baseline
+    # Earth-Moon anchors. New bodies reuse this profile from their own Spatial
+    # transport geometry rather than adding OD-specific definitions.
+    return (
+        SpaceflightMovementRule(
+            id=DefinitionId("base.movement.spaceflight"),
+            display_name="宇宙航行",
+            operation_type=TransportOperationKind.SPACEFLIGHT,
+            characteristic_speed_km_per_day=76_880.0,
+            minimum_transit_days=1,
         ),
     )
 

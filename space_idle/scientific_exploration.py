@@ -15,7 +15,7 @@ from .execution_requirements import (
 from .resource_demand import ResourceDemand
 from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
-from .transport.models import FleetReservationKind, RouteDef, RouteEndpoint, TransportOperationRequirement
+from .transport.models import FleetReservationKind, MovementEndpoint, MovementPlan, SpatialRelation, TransportOperationRequirement
 
 if TYPE_CHECKING:
     from .transport.service import TransportService
@@ -25,8 +25,8 @@ if TYPE_CHECKING:
 class ScientificExplorationDefinition:
     id: DefinitionId
     display_name: str
-    origin: RouteEndpoint
-    destination: RouteEndpoint
+    origin: MovementEndpoint
+    destination: MovementEndpoint
     operations: tuple[TransportOperationRequirement, ...]
     mission_duration_days: int
     duration_days: float
@@ -65,11 +65,12 @@ class ScientificExplorationDefinition:
     def points_per_day(self) -> float:
         return self.research_points_total / self.duration_days
 
-    def compatibility_route(self) -> RouteDef:
-        return RouteDef(
-            RouteId(f"exploration.route:{self.id}"),
+    def compatibility_movement_plan(self) -> MovementPlan:
+        return MovementPlan(
+            RouteId(f"exploration.movement:{self.id}"),
             self.origin,
             self.destination,
+            SpatialRelation(self.origin.node_id, self.destination.node_id, "scientific_exploration"),
             self.mission_duration_days,
             self.operations,
             display_name=self.display_name,
@@ -150,11 +151,11 @@ class ScientificExplorationService:
         day: int,
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> tuple[str, ...]:
-        route = definition.compatibility_route()
+        plan = definition.compatibility_movement_plan()
         failures = list(
             self.transport.fleet_campaign_failures(
                 vehicle_definition_id,
-                route,
+                plan,
                 activity_days=definition.duration_days,
                 return_to_origin=definition.return_to_origin,
                 minimum_payload_t=definition.minimum_payload_t,

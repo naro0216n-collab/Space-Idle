@@ -99,21 +99,21 @@ class TransportSupplyMixin:
         for service in sorted(self.external_services.values(), key=lambda row: str(row.id)):
             if service.capacity_t_per_day <= 1e-12:
                 continue
-            for route in sorted(self.routes.values(), key=lambda row: str(row.id)):
-                if self.service_route_failures(route.id, service.id, day):
+            for plan in self.movement_plan_options():
+                if self.service_movement_failures(plan.id, service.id, day):
                     continue
                 supplies.append(
                     TransportServiceSupply(
-                        key=f"external:{service.id}:{route.id}",
-                        source_id=route.origin_id,
-                        destination_id=route.destination_id,
+                        key=f"external:{service.id}:{plan.id}",
+                        source_id=plan.origin_id,
+                        destination_id=plan.destination_id,
                         capacity_t_per_day=service.capacity_t_per_day,
-                        latency_days=self.performance_route_transit_days(
-                            route,
+                        latency_days=self.performance_movement_transit_days(
+                            plan,
                             service.performance,
                             transit_multiplier=service.transit_time_multiplier,
                         ),
-                        route_path=(route.id,),
+                        route_path=(plan.id,),
                         external_service_id=service.id,
                         cost_musd_per_t=service.cost_musd_per_t,
                     )
@@ -129,7 +129,7 @@ class TransportSupplyMixin:
             service_plan = self.derive_transport_service_plan(allocation.id, day)
             surface_locations: set[SpatialNodeId] = set()
             for route_id in service_plan.forward_path + service_plan.reverse_path:
-                geometry = self.route_geometry(route_id)
+                geometry = self.movement_geometry(route_id)
                 for endpoint in (geometry.origin, geometry.destination):
                     if endpoint.surface_cell_id is not None:
                         surface_locations.add(endpoint.node_id)

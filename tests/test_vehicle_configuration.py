@@ -114,18 +114,19 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
 def test_operation_asset_disposition_prevents_route_continuation_after_recovery():
     from space_idle.content import base_ids as ids
     from space_idle.transport import (
-        LandingCapability, OperationAssetDisposition, PoweredAscentCapability,
-        RouteDef, RouteEndpoint, SpaceflightCapability, TransportOperationKind,
-        TransportOperationRequirement, TransportPerformanceProfile,
+        LandingCapability, MovementEndpoint, MovementPlan, OperationAssetDisposition,
+        PoweredAscentCapability, SpaceflightCapability, SpatialRelation,
+        TransportOperationKind, TransportOperationRequirement, TransportPerformanceProfile,
     )
     from space_idle.shared import RouteId
 
     app = build_game_application()
     sim = app._simulation
-    route = RouteDef(
-        RouteId("test.route.multi_operation_recovery"),
-        RouteEndpoint(ids.EARTH, access_cell_id=ids.EARTH_CELL_INDUSTRIAL),
-        RouteEndpoint(ids.LEO, non_surface_interface="operational_node"),
+    plan = MovementPlan(
+        RouteId("test.movement.multi_operation_recovery"),
+        MovementEndpoint(ids.EARTH, access_cell_id=ids.EARTH_CELL_INDUSTRIAL),
+        MovementEndpoint(ids.LEO, non_surface_interface="operational_node"),
+        SpatialRelation(ids.EARTH_CELL_INDUSTRIAL, ids.LEO, "test"),
         transit_days=3,
         operations=(
             TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 9.4),
@@ -139,8 +140,8 @@ def test_operation_asset_disposition_prevents_route_continuation_after_recovery(
             SpaceflightCapability(5.0), LandingCapability(2.5, 2.5, 2000.0),
         ),
     )
-    failures = sim.transport.performance_route_failures(route, profile, sim.day)
-    assert "operation:powered_ascent:asset_returns_before_route_complete" in failures
+    failures = sim.transport.performance_movement_failures(plan, profile, sim.day)
+    assert "operation:powered_ascent:asset_returns_before_movement_complete" in failures
 
 
 def test_transport_endurance_is_profile_level_and_validated():
@@ -180,7 +181,10 @@ def test_transport_endurance_applies_independently_of_operation_kind():
 
     app = build_game_application()
     sim = app._simulation
-    route = sim.transport.routes[RouteId("base.route.earth_leo")]
+    plan = sim.transport.movement_plan_candidates(
+        __import__("space_idle.content.base_ids", fromlist=["EARTH"]).EARTH,
+        __import__("space_idle.content.base_ids", fromlist=["LEO"]).LEO,
+    )[0]
     profile = TransportPerformanceProfile(
         dry_mass_t=10.0,
         payload_t=1.0,
@@ -188,6 +192,6 @@ def test_transport_endurance_applies_independently_of_operation_kind():
         endurance_days=1.0,
     )
 
-    failures = sim.transport.performance_route_failures(route, profile, sim.day)
+    failures = sim.transport.performance_movement_failures(plan, profile, sim.day)
 
     assert "endurance:2/1" in failures

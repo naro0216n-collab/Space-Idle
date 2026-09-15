@@ -117,7 +117,7 @@ def test_scientific_exploration_fleet_contract_checks_usable_payload_and_generic
 
     sim.scientific_exploration.definitions[exploration_id] = replace(
         definition,
-        minimum_payload_t=vehicle.max_cargo_for_route(definition.compatibility_route()) + 0.1,
+        minimum_payload_t=vehicle.max_cargo_for_movement(definition.compatibility_movement_plan()) + 0.1,
         required_vehicle_capabilities=("docking",),
     )
     failures = sim.scientific_exploration.fleet_failures(
@@ -132,7 +132,7 @@ def test_scientific_exploration_fleet_contract_checks_usable_payload_and_generic
     )
     sim.scientific_exploration.definitions[exploration_id] = replace(
         definition,
-        minimum_payload_t=vehicle.max_cargo_for_route(definition.compatibility_route()),
+        minimum_payload_t=vehicle.max_cargo_for_movement(definition.compatibility_movement_plan()),
         required_vehicle_capabilities=("docking",),
     )
     row = _row(app)
@@ -142,7 +142,7 @@ def test_scientific_exploration_fleet_contract_checks_usable_payload_and_generic
     )
     assert tug.blockers == ()
     assert row.minimum_payload_t == pytest.approx(
-        vehicle.max_cargo_for_route(definition.compatibility_route())
+        vehicle.max_cargo_for_movement(definition.compatibility_movement_plan())
     )
     assert row.required_vehicle_capabilities == ("docking",)
 

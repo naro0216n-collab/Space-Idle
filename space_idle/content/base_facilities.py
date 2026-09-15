@@ -19,7 +19,7 @@ def build_facility_definitions() -> dict:
         ids.VACUUM_REGOLITH_PROCESS_LABORATORY: FacilityDef(ids.VACUUM_REGOLITH_PROCESS_LABORATORY, "真空レゴリスプロセス研究所", req._capabilities("research_lab"), surface, req.VACUUM_SURFACE_ENV, service_capacity_supplies=req._services(research_execution=1.0)),
         ids.GRID_POWER_SUPPLY: FacilityDef(ids.GRID_POWER_SUPPLY, "外部電力網接続", req._capabilities("grid_power"), surface, surface),
         ids.ORBITAL_LOGISTICS_NODE: FacilityDef(ids.ORBITAL_LOGISTICS_NODE, "軌道物流・整備ノード", req._capabilities("cargo_transfer", "vehicle_refueling", "spacecraft_servicing"), orbit, orbit, service_capacity_supplies=req._services(cargo_transfer=1.0, spacecraft_servicing=1.0)),
-        ids.EARTH_LAUNCH_SUPPORT: FacilityDef(ids.EARTH_LAUNCH_SUPPORT, "打上げ・回収整備設備", req._capabilities("cargo_transfer", "vehicle_refueling", "launch_vehicle_servicing", "launch_operations"), surface, surface, service_capacity_supplies=req._services(cargo_transfer=1.0, launch_vehicle_servicing=1.0)),
+        ids.EARTH_LAUNCH_SUPPORT: FacilityDef(ids.EARTH_LAUNCH_SUPPORT, "打上げ・回収整備設備", req._capabilities("cargo_transfer", "vehicle_refueling", "launch_vehicle_servicing", "launch_operations"), surface, surface, placement_scope=FacilityPlacementScope.SURFACE_CELL, service_capacity_supplies=req._services(cargo_transfer=1.0, launch_vehicle_servicing=1.0)),
         ids.VEHICLE_ASSEMBLY_FACILITY: FacilityDef(ids.VEHICLE_ASSEMBLY_FACILITY, "宇宙輸送機製造・組立設備", req._capabilities("vehicle_assembly"), surface, surface, service_capacity_supplies=req._services(vehicle_assembly=1.0)),
         ids.ROBOTIC_SURVEY_PACKAGE: FacilityDef(ids.ROBOTIC_SURVEY_PACKAGE, "ロボット探査・初期建設パッケージ", req._capabilities("surface_survey", "base_construction", "robotic_operations", "spacecraft_servicing", "cargo_transfer"), surface, surface, service_capacity_supplies=req._services(cargo_transfer=1.0, spacecraft_servicing=1.0)),
         ids.SURFACE_POWER_GRID: FacilityDef(ids.SURFACE_POWER_GRID, "地表太陽光発電・配電設備", req._capabilities("power_grid"), surface, surface),
@@ -70,18 +70,18 @@ def build_facility_definitions() -> dict:
 
 def initial_facility_placements() -> tuple[tuple, ...]:
     return (
-        (ids.EARTH_RESEARCH_LAB, ids.EARTH),
-        (ids.EARTH_OBSERVATION_SATELLITE, ids.LEO),
-        (ids.LUNAR_RESOURCE_SURVEY_ORBITER, ids.LUNAR_ORBIT),
-        (ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT),
-        (ids.GRID_POWER_SUPPLY, ids.EARTH),
-        (ids.EARTH_LAUNCH_SUPPORT, ids.EARTH),
-        (ids.VEHICLE_ASSEMBLY_FACILITY, ids.EARTH),
-        (ids.SURFACE_AGGREGATE_QUARRY, ids.EARTH),
-        (ids.METAL_ORE_MINE, ids.EARTH),
-        (ids.INDUSTRIAL_WATER_INTAKE, ids.EARTH),
-        (ids.BASIC_STRUCTURAL_MATERIAL_PLANT, ids.EARTH),
-        (ids.BASIC_MACHINERY_WORKS, ids.EARTH),
+        (ids.EARTH_RESEARCH_LAB, ids.EARTH, None),
+        (ids.EARTH_OBSERVATION_SATELLITE, ids.LEO, None),
+        (ids.LUNAR_RESOURCE_SURVEY_ORBITER, ids.LUNAR_ORBIT, None),
+        (ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT, None),
+        (ids.GRID_POWER_SUPPLY, ids.EARTH, None),
+        (ids.EARTH_LAUNCH_SUPPORT, ids.EARTH, ids.EARTH_CELL_INDUSTRIAL),
+        (ids.VEHICLE_ASSEMBLY_FACILITY, ids.EARTH, None),
+        (ids.SURFACE_AGGREGATE_QUARRY, ids.EARTH, None),
+        (ids.METAL_ORE_MINE, ids.EARTH, None),
+        (ids.INDUSTRIAL_WATER_INTAKE, ids.EARTH, None),
+        (ids.BASIC_STRUCTURAL_MATERIAL_PLANT, ids.EARTH, None),
+        (ids.BASIC_MACHINERY_WORKS, ids.EARTH, None),
     )
 
 

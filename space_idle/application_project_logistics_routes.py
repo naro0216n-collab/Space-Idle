@@ -70,8 +70,8 @@ class LogisticsRouteProjectorMixin:
         for service in sim.transport.external_transport_service_definitions():
             blockers = tuple(
                 dict.fromkeys(
-                    sim.transport.route_failures(route.id, sim.day)
-                    + sim.transport.service_route_failures(
+                    sim.transport.movement_plan_failures(route.id, sim.day)
+                    + sim.transport.service_movement_failures(
                         route.id, service.id, sim.day
                     )
                 )
@@ -88,7 +88,7 @@ class LogisticsRouteProjectorMixin:
                         service.capacity_t_per_day, 0.0
                     ),
                     cycle_days=None,
-                    forward_latency_days=sim.transport.performance_route_transit_days(
+                    forward_latency_days=sim.transport.performance_movement_transit_days(
                         route,
                         service.performance,
                         transit_multiplier=service.transit_time_multiplier,
@@ -115,19 +115,19 @@ class LogisticsRouteProjectorMixin:
         include_modes: bool = True,
     ) -> tuple[RouteRow, ...]:
         sim = self._simulation
-        sim.transport.synchronize_surface_access_routes()
+        sim.transport.invalidate_movement_plans()
         rows: list[RouteRow] = []
-        for route in sim.transport.route_definitions():
+        for route in sim.transport.movement_plan_options():
             if origin_id is not None and str(route.origin_id) != origin_id:
                 continue
             if destination_id is not None and str(route.destination_id) != destination_id:
                 continue
             if route_id is not None and str(route.id) != route_id:
                 continue
-            route_blockers = sim.transport.route_failures(route.id, sim.day)
+            route_blockers = sim.transport.movement_plan_failures(route.id, sim.day)
             mode_rows = self._route_mode_rows(route)
             try:
-                geometry = sim.transport.route_geometry(route.id)
+                geometry = sim.transport.movement_geometry(route.id)
                 origin_endpoint = RouteEndpointRow(
                     str(geometry.origin.node_id), geometry.origin.locator_kind,
                     geometry.origin.locator_id,
@@ -190,7 +190,7 @@ class LogisticsRouteProjectorMixin:
         self, source_id, destination_id
     ) -> TransportAllocationOptionsView:
         sim = self._simulation
-        sim.transport.synchronize_surface_access_routes()
+        sim.transport.invalidate_movement_plans()
         options: list[TransportAllocationOptionRow] = []
         for definition in sim.transport.vehicle_definitions():
             fleet = sim.transport.fleet_pool_snapshot(definition.id, source_id)

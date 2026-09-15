@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..shared import CelestialBodyId, DefinitionId, SpatialNodeId, SurfaceCellId
+from ..shared import CelestialBodyId, DefinitionId, SpatialNodeId, StarSystemId, SurfaceCellId
 
 STRUCTURAL_COMPONENTS = DefinitionId("base.resource.structural_components")
 MACHINERY = DefinitionId("base.resource.machinery")
@@ -22,6 +22,7 @@ PROPELLANT = DefinitionId("base.resource.chemical_propellant")
 # Spatial content. Surface geography is separate from player-operated
 # Locations; orbital/non-surface nodes remain SpatialNodeDef endpoints.
 # ---------------------------------------------------------------------------
+SOL_SYSTEM = StarSystemId("base.star_system.sol")
 EARTH_BODY = CelestialBodyId("base.body.earth")
 MOON = CelestialBodyId("base.body.moon")
 

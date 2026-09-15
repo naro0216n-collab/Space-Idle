@@ -660,7 +660,7 @@ class Simulation:
         self.transport.advance_fleet_state(self.day)
         if self.founding is not None:
             self.founding.settle_arrivals(self.day)
-        self.transport.synchronize_surface_access_routes()
+        self.transport.invalidate_movement_plans()
         self.logistics.settle_cargo_arrivals(self.day)
         self.logistics.settle_procurement_arrivals(self.day)
 
@@ -1090,7 +1090,7 @@ class Simulation:
         if self.research is not None:
             self.research.settle_completions(self.day + 1)
         self.projects.settle_completions(allocations.power_by_location, self.day)
-        self.transport.synchronize_surface_access_routes()
+        self.transport.invalidate_movement_plans()
         next_day = self.day + 1
         if self.contracts is not None:
             self.contracts.advance_day(

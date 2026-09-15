@@ -44,7 +44,7 @@ class FleetAllocationMixin:
     ) -> tuple[DefinitionId, SpatialNodeId]:
         return vehicle_definition_id, location_id
 
-    def validate_path_structure(
+    def validate_movement_path_structure(
         self,
         source_id: SpatialNodeId,
         destination_id: SpatialNodeId,
@@ -54,13 +54,13 @@ class FleetAllocationMixin:
             raise ValueError("transport path must be non-empty")
         node = source_id
         for route_id in path:
-            route = self.routes[route_id]
-            if route.origin_id != node:
+            plan = self.require_movement_plan(route_id)
+            if plan.origin_id != node:
                 raise ValueError(
                     f"transport path is discontinuous at {route_id}: "
-                    f"expected origin {node}, got {route.origin_id}"
+                    f"expected origin {node}, got {plan.origin_id}"
                 )
-            node = route.destination_id
+            node = plan.destination_id
         if node != destination_id:
             raise ValueError(
                 f"transport path ends at {node}, expected {destination_id}"
@@ -242,9 +242,9 @@ class FleetAllocationMixin:
         """Evaluate a finite Fleet use without exposing Fleet internals to its owner Domain."""
         definition = self.vehicle_defs[vehicle_definition_id]
         failures = list(
-            self.performance_route_failures(route, definition.performance, day)
+            self.performance_movement_failures(route, definition.performance, day)
         )
-        usable_payload_t = definition.max_cargo_for_route(route)
+        usable_payload_t = definition.max_cargo_for_movement(route)
         if usable_payload_t + 1e-9 < minimum_payload_t:
             failures.append(f"payload_capacity:{usable_payload_t:g}/{minimum_payload_t:g}")
         vehicle_capabilities = set(definition.generic_capabilities)
@@ -252,10 +252,10 @@ class FleetAllocationMixin:
             f"vehicle_capability:{capability}"
             for capability in sorted(set(required_vehicle_capabilities) - vehicle_capabilities)
         )
-        travel_days = self.performance_route_transit_days(route, definition.performance)
-        if return_to_origin and definition.route_asset_disposition(route) is OperationAssetDisposition.DESTINATION:
+        travel_days = self.performance_movement_transit_days(route, definition.performance)
+        if return_to_origin and definition.movement_asset_disposition(route) is OperationAssetDisposition.DESTINATION:
             try:
-                reverse = self._route_path_for_vehicle(
+                reverse = self._movement_path_for_vehicle(
                     route.destination_id,
                     route.origin_id,
                     vehicle_definition_id,
@@ -263,7 +263,7 @@ class FleetAllocationMixin:
                     PathPolicy.FASTEST,
                 )
                 travel_days += sum(
-                    self.performance_route_transit_days(self.routes[route_id], definition.performance)
+                    self.performance_movement_transit_days(self.require_movement_plan(route_id), definition.performance)
                     for route_id in reverse
                 )
             except ValueError as exc:
@@ -365,7 +365,7 @@ class FleetAllocationMixin:
         del self.fleet_reservations[reservation_id]
         self.reconcile_fleet_allocations(day)
 
-    def _route_path_for_vehicle(
+    def _movement_path_for_vehicle(
         self,
         source_id: SpatialNodeId,
         destination_id: SpatialNodeId,
@@ -376,11 +376,10 @@ class FleetAllocationMixin:
         *,
         require_destination_disposition: bool = False,
     ) -> tuple[RouteId, ...]:
-        self.synchronize_surface_access_routes()
         if explicit_path is not None:
-            self.validate_path_structure(source_id, destination_id, explicit_path)
+            self.validate_movement_path_structure(source_id, destination_id, explicit_path)
             failures = [
-                (route_id, self.vehicle_route_physical_failures(route_id, vehicle_definition_id, day))
+                (route_id, self.vehicle_movement_physical_failures(route_id, vehicle_definition_id, day))
                 for route_id in explicit_path
             ]
             bad = [(route_id, reasons) for route_id, reasons in failures if reasons]
@@ -393,8 +392,8 @@ class FleetAllocationMixin:
                 bad_disposition = tuple(
                     route_id
                     for route_id in explicit_path
-                    if self.vehicle_defs[vehicle_definition_id].route_asset_disposition(
-                        self.routes[route_id]
+                    if self.vehicle_defs[vehicle_definition_id].movement_asset_disposition(
+                        self.require_movement_plan(route_id)
                     )
                     is not OperationAssetDisposition.DESTINATION
                 )
@@ -421,29 +420,27 @@ class FleetAllocationMixin:
             best[node] = (score, key_path)
             if node == destination_id:
                 return path
-            for route in sorted(self.routes.values(), key=lambda row: str(row.id)):
-                if route.origin_id != node:
-                    continue
-                if self.vehicle_route_physical_failures(route.id, vehicle_definition_id, day):
+            for plan in self.outbound_movement_plans(node):
+                if self.vehicle_movement_physical_failures(plan.id, vehicle_definition_id, day):
                     continue
                 definition = self.vehicle_defs[vehicle_definition_id]
                 if (
                     require_destination_disposition
-                    and definition.route_asset_disposition(route)
+                    and definition.movement_asset_disposition(plan)
                     is not OperationAssetDisposition.DESTINATION
                 ):
                     continue
                 if policy is PathPolicy.FASTEST:
-                    edge = self.performance_route_transit_days(route, definition.performance)
+                    edge = self.performance_movement_transit_days(plan, definition.performance)
                 elif policy is PathPolicy.LOWEST_PROPELLANT:
-                    edge = definition.propellant_t(route, max(definition.max_cargo_for_route(route), 0.0))
+                    edge = definition.propellant_t(plan, max(definition.max_cargo_for_movement(plan), 0.0))
                 else:
-                    payload = max(definition.max_cargo_for_route(route), 1e-9)
+                    payload = max(definition.max_cargo_for_movement(plan), 1e-9)
                     edge = definition.operating_cost_musd_per_cargo_t + definition.operating_cost_musd_per_cycle / payload
-                new_path = path + (route.id,)
+                new_path = path + (plan.id,)
                 heapq.heappush(
                     queue,
-                    (score + float(edge), tuple(str(r) for r in new_path), route.destination_id, new_path),
+                    (score + float(edge), tuple(str(r) for r in new_path), plan.destination_id, new_path),
                 )
         raise ValueError(f"no physically compatible path {source_id} -> {destination_id}")
 
@@ -533,7 +530,7 @@ class FleetAllocationMixin:
         definition = self.vehicle_defs[allocation.vehicle_definition_id]
         blockers: list[str] = []
         try:
-            forward = self._route_path_for_vehicle(
+            forward = self._movement_path_for_vehicle(
                 allocation.anchor_node_id,
                 allocation.destination_id,
                 allocation.vehicle_definition_id,
@@ -554,69 +551,69 @@ class FleetAllocationMixin:
         if not forward:
             raise ValueError("transport service path must be non-empty")
 
-        forward_routes = tuple(self.routes[route_id] for route_id in forward)
+        forward_routes = tuple(self.require_movement_plan(route_id) for route_id in forward)
         for index, route in enumerate(forward_routes):
-            blockers.extend(self.route_failures(route.id, day))
+            blockers.extend(self.movement_plan_failures(route.id, day))
             blockers.extend(
-                self.vehicle_route_failures(
+                self.vehicle_movement_failures(
                     route.id, allocation.vehicle_definition_id, day
                 )
             )
             if (
                 index < len(forward_routes) - 1
-                and definition.route_asset_disposition(route)
+                and definition.movement_asset_disposition(route)
                 is not OperationAssetDisposition.DESTINATION
             ):
                 blockers.append(
                     f"asset_position:{route.id}:cannot_continue_to_next_route"
                 )
         forward_days = sum(
-            self.performance_route_transit_days(route, definition.performance)
+            self.performance_movement_transit_days(route, definition.performance)
             for route in forward_routes
         )
-        forward_payload = min(definition.max_cargo_for_route(route) for route in forward_routes)
+        forward_payload = min(definition.max_cargo_for_movement(route) for route in forward_routes)
         if forward_payload <= 1e-12:
             blockers.append("payload_capacity")
 
         # A route whose operation returns the asset to its origin already closes
         # the service cycle. Otherwise the same Fleet unit needs a physical
         # reverse path to become reusable at its anchor.
-        final_disposition = definition.route_asset_disposition(forward_routes[-1])
+        final_disposition = definition.movement_asset_disposition(forward_routes[-1])
         reverse: tuple[RouteId, ...] = ()
         reverse_routes: tuple = ()
         reverse_days = 0
         reverse_payload = 0.0
         if final_disposition is OperationAssetDisposition.DESTINATION:
             try:
-                reverse = self._route_path_for_vehicle(
+                reverse = self._movement_path_for_vehicle(
                     allocation.destination_id,
                     allocation.anchor_node_id,
                     allocation.vehicle_definition_id,
                     day,
                     allocation.path_policy,
                 )
-                reverse_routes = tuple(self.routes[route_id] for route_id in reverse)
+                reverse_routes = tuple(self.require_movement_plan(route_id) for route_id in reverse)
                 for index, route in enumerate(reverse_routes):
-                    blockers.extend(self.route_failures(route.id, day))
+                    blockers.extend(self.movement_plan_failures(route.id, day))
                     blockers.extend(
-                        self.vehicle_route_failures(
+                        self.vehicle_movement_failures(
                             route.id, allocation.vehicle_definition_id, day
                         )
                     )
                     if (
                         index < len(reverse_routes) - 1
-                        and definition.route_asset_disposition(route)
+                        and definition.movement_asset_disposition(route)
                         is not OperationAssetDisposition.DESTINATION
                     ):
                         blockers.append(
                             f"asset_position:{route.id}:cannot_continue_to_next_route"
                         )
                 reverse_days = sum(
-                    self.performance_route_transit_days(route, definition.performance)
+                    self.performance_movement_transit_days(route, definition.performance)
                     for route in reverse_routes
                 )
                 reverse_payload = min(
-                    (definition.max_cargo_for_route(route) for route in reverse_routes),
+                    (definition.max_cargo_for_movement(route) for route in reverse_routes),
                     default=0.0,
                 )
             except ValueError as exc:
@@ -646,7 +643,7 @@ class FleetAllocationMixin:
                         direction,
                         True,
                         payload,
-                        self.performance_route_transit_days(route, definition.performance),
+                        self.performance_movement_transit_days(route, definition.performance),
                         loaded_propellant,
                     )
                 )
@@ -982,7 +979,7 @@ class FleetAllocationMixin:
         route_path: tuple[RouteId, ...] = ()
         if source_id != destination_id:
             try:
-                route_path = self._route_path_for_vehicle(
+                route_path = self._movement_path_for_vehicle(
                     source_id,
                     destination_id,
                     vehicle_definition_id,
@@ -999,13 +996,13 @@ class FleetAllocationMixin:
             blockers.append("relocation_path:empty")
 
         definition = self.vehicle_defs[vehicle_definition_id]
-        routes = tuple(self.routes[route_id] for route_id in route_path)
+        routes = tuple(self.require_movement_plan(route_id) for route_id in route_path)
         propellant_requirements: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
         if route_path:
             for route in routes:
-                blockers.extend(self.route_failures(route.id, day))
+                blockers.extend(self.movement_plan_failures(route.id, day))
                 blockers.extend(
-                    self.vehicle_route_failures(route.id, vehicle_definition_id, day)
+                    self.vehicle_movement_failures(route.id, vehicle_definition_id, day)
                 )
                 if definition.propellant_resource_id is not None and units > 0:
                     amount = definition.propellant_t(route, 0.0) * units
@@ -1040,7 +1037,7 @@ class FleetAllocationMixin:
                 )
 
         travel_days = sum(
-            self.performance_route_transit_days(route, definition.performance)
+            self.performance_movement_transit_days(route, definition.performance)
             for route in routes
         )
         if route_path:
@@ -1434,7 +1431,7 @@ class FleetAllocationMixin:
         # operation occurs.  Allocation endpoints are not sufficient for a
         # multi-leg service and would incorrectly skip intermediate support.
         for leg in plan.legs:
-            route = self.routes[leg.route_id]
+            route = self.require_movement_plan(leg.route_id)
             present_operations = {operation.operation_type for operation in route.operations}
             for support in definition.operation_support_requirements:
                 if support.operation_type not in present_operations:

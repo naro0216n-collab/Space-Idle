@@ -4,6 +4,7 @@ from ..shared import DefinitionId
 from ..spatial import (
     AtmosphereField,
     CelestialBodyDef,
+    CharacteristicTransportGeometry,
     CommunicationField,
     EnvironmentResolver,
     GravityField,
@@ -13,6 +14,7 @@ from ..spatial import (
     SpatialGraph,
     SpatialNodeDef,
     SpatialNodeKind,
+    StarSystemDef,
     StaticFacetStore,
     SurfaceCellDef,
     SurfaceField,
@@ -58,14 +60,35 @@ def _moon_cell(
 
 def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
     graph = SpatialGraph()
-    graph.add_body(CelestialBodyDef(ids.EARTH_BODY, "地球", 6371.0))
-    graph.add_body(CelestialBodyDef(ids.MOON, "月", 1737.4))
+    graph.add_star_system(StarSystemDef(
+        ids.SOL_SYSTEM,
+        "太陽系",
+        CharacteristicTransportGeometry((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+    ))
+    earth_geometry = CharacteristicTransportGeometry(
+        (0.0, 0.0, 0.0),
+        (0.0, 0.0, 0.0),
+    )
+    moon_geometry = CharacteristicTransportGeometry(
+        (384_400.0, 0.0, 0.0),
+        (4.1, 0.0, 0.0),
+    )
+    graph.add_body(CelestialBodyDef(
+        ids.EARTH_BODY, "地球", 6371.0, ids.SOL_SYSTEM, earth_geometry
+    ))
+    graph.add_body(CelestialBodyDef(
+        ids.MOON, "月", 1737.4, ids.SOL_SYSTEM, moon_geometry
+    ))
 
-    # Non-surface spatial nodes remain static definitions.
+    # Non-surface nodes provide their own stable transport anchors.  Current
+    # baseline orbits use their parent body's characteristic system position;
+    # local surface-access effort is represented by Movement operations.
     graph.add(
         SpatialNodeDef(
             ids.LEO,
             "地球低軌道",
+            ids.SOL_SYSTEM,
+            earth_geometry,
             body_id=ids.EARTH_BODY,
             kind=SpatialNodeKind.ORBITAL,
             inherits_parent_environment=False,
@@ -75,6 +98,8 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
         SpatialNodeDef(
             ids.LUNAR_ORBIT,
             "月周回軌道",
+            ids.SOL_SYSTEM,
+            moon_geometry,
             body_id=ids.MOON,
             kind=SpatialNodeKind.ORBITAL,
             inherits_parent_environment=False,

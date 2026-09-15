@@ -335,7 +335,7 @@ def test_remote_surface_route_available_capacity_uses_location_surface_infrastru
     sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, a, site_cell_id=ids.MOON_CELL_SOUTH_POLAR_RIDGE)
     sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, b, site_cell_id=ids.MOON_CELL_NEARSIDE_MARE)
     sim.transport.add_fleet_units(ids.SURFACE_CARGO_HAULER, 1, a)
-    sim.transport.synchronize_surface_access_routes()
+    sim.transport.invalidate_movement_plans()
     allocation_id = sim.transport.create_transport_allocation(
         ids.SURFACE_CARGO_HAULER, a, b, target_units=1, day=sim.day
     )
@@ -345,7 +345,7 @@ def test_remote_surface_route_available_capacity_uses_location_surface_infrastru
 
     sim.graph.develop_surface_cell(a, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
     sim.graph.develop_surface_cell(a, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
-    sim.transport.synchronize_surface_access_routes()
+    sim.transport.invalidate_movement_plans()
     physical = sim.transport.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert physical.available.forward_t_per_day == pytest.approx(physical.nominal.forward_t_per_day)
     decision = sim.tick_decision_projection()

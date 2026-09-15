@@ -292,23 +292,37 @@ def _validate_unique_resources(resources, label: str) -> None:
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
-    sim.transport.synchronize_surface_access_routes()
-    nodes = ctx.nodes
     known_capabilities = ctx.known_capabilities
     known_service_types = ctx.known_service_types
-    for route_id, route in sim.transport.routes.items():
-        _require(route_id == route.id, f"route definition key mismatch: {route_id}")
-        _require(route.origin_id in nodes and route.destination_id in nodes, f"route references unknown location: {route_id}")
-        _require(route.origin_id != route.destination_id, f"route loops to same location: {route_id}")
-        _require(route.transit_days >= 0, f"negative route transit time: {route_id}")
-        _require(route.delta_v_km_s >= 0, f"negative route delta-v: {route_id}")
-        for operation in route.operations:
+
+    graph = sim.graph
+    for rule in sim.transport.surface_movement_rules:
+        _require(bool(rule.id), "surface movement rule id must not be empty")
+        _require(rule.transit_days > 0, f"non-positive surface movement transit time: {rule.id}")
+        _require(
+            sim.transport.operation_registry.supports(rule.operation.operation_type),
+            f"surface movement rule references unregistered operation: {rule.id}/{rule.operation.operation_type}",
+        )
+    for rule in sim.transport.surface_access_movement_rules:
+        _require(rule.body_id in graph.bodies, f"surface-access movement rule references unknown body: {rule.id}/{rule.body_id}")
+        _require(rule.transit_days > 0, f"non-positive surface-access movement transit time: {rule.id}")
+        _require(bool(rule.ascent_operations) and bool(rule.descent_operations), f"surface-access movement rule requires both directions: {rule.id}")
+        for operation in rule.ascent_operations + rule.descent_operations:
             _require(
                 sim.transport.operation_registry.supports(operation.operation_type),
-                f"route references unregistered transport operation: {route_id}/{operation.operation_type}",
+                f"surface-access movement rule references unregistered operation: {rule.id}/{operation.operation_type}",
             )
-        _validate_site_requirements(route.origin_requirements, known_capabilities, f"route:{route_id}:origin", known_service_types)
-        _validate_site_requirements(route.destination_requirements, known_capabilities, f"route:{route_id}:destination", known_service_types)
+        _validate_site_requirements(rule.space_requirements, known_capabilities, f"movement_rule:{rule.id}:space", known_service_types)
+        _validate_site_requirements(rule.surface_requirements, known_capabilities, f"movement_rule:{rule.id}:surface", known_service_types)
+    for rule in sim.transport.spaceflight_movement_rules:
+        _require(rule.characteristic_speed_km_per_day > 0, f"non-positive spaceflight characteristic speed: {rule.id}")
+        _require(rule.minimum_transit_days > 0, f"non-positive spaceflight minimum transit time: {rule.id}")
+        _require(
+            sim.transport.operation_registry.supports(rule.operation_type),
+            f"spaceflight movement rule references unregistered operation: {rule.id}/{rule.operation_type}",
+        )
+        _validate_site_requirements(rule.origin_requirements, known_capabilities, f"movement_rule:{rule.id}:origin", known_service_types)
+        _validate_site_requirements(rule.destination_requirements, known_capabilities, f"movement_rule:{rule.id}:destination", known_service_types)
     for service_id, service in sim.transport.external_services.items():
         _require(service_id == service.id, f"transport service key mismatch: {service_id}")
         _require(service.capacity_t_per_day >= 0, f"negative transport service capacity: {service_id}")
@@ -344,21 +358,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             _require(2 <= len(vehicle.production.resources) <= 3, f"vehicle production should use 2-3 physical resources: {vehicle_id}")
             _require(all(amount > 0 for _resource, amount in vehicle.production.resources), f"vehicle production has non-positive resource input: {vehicle_id}")
             _validate_site_requirements(vehicle.production.site_requirements, known_capabilities, f"vehicle_production:{vehicle_id}", known_service_types)
-    for route_id in sim.transport.routes:
-        external_service_exists = any(
-            service.capacity_t_per_day > 1e-12 and not sim.transport.service_route_failures(route_id, service.id, 0)
-            for service in sim.transport.external_services.values()
-        )
-        compatible_vehicle_exists = any(
-            not sim.transport.vehicle_route_physical_failures(route_id, vehicle_id, 0)
-            for vehicle_id in sim.transport.vehicle_defs
-        )
-        _require(external_service_exists or compatible_vehicle_exists, f"route has no physically compatible transport mode: {route_id}")
-
-
 def validate_transport_runtime(sim: Any) -> None:
     tr = sim.transport
-    tr.synchronize_surface_access_routes()
     for (vehicle_definition_id, location_id), pool in tr.fleet_pools.items():
         _require(pool.vehicle_definition_id == vehicle_definition_id and pool.operational_node_id == location_id, f"fleet pool key mismatch: {vehicle_definition_id}/{location_id}")
         _require(vehicle_definition_id in tr.vehicle_defs, f"fleet pool references unknown vehicle definition: {vehicle_definition_id}")
@@ -393,7 +394,7 @@ def validate_transport_runtime(sim: Any) -> None:
         _require(allocation.vehicle_definition_id in tr.vehicle_defs, f"transport allocation references unknown vehicle definition: {allocation_id}")
         _require(sim.graph.has_operational_node(allocation.anchor_node_id) and sim.graph.has_operational_node(allocation.destination_id), f"transport allocation references unknown endpoint: {allocation_id}")
         if allocation.path is not None:
-            tr.validate_path_structure(allocation.anchor_node_id, allocation.destination_id, allocation.path)
+            tr.validate_movement_path_structure(allocation.anchor_node_id, allocation.destination_id, allocation.path)
         required = tr.allocation_required_units(allocation_id, sim.day)
         active_units = tr.transport_active_units(allocation_id)
         _require(active_units <= required, f"transport allocation exceeds target: {allocation_id}")

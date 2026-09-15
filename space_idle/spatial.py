@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import dist, isfinite
 from enum import Enum
 from typing import Any, ClassVar, Mapping, Protocol, TypeAlias, TypeVar, cast
 
-from .shared import CelestialBodyId, DefinitionId, SpatialNodeId, SurfaceCellId
+from .shared import CelestialBodyId, DefinitionId, SpatialNodeId, StarSystemId, SurfaceCellId
 
 FacetT = TypeVar("FacetT", bound="SpatialFacet")
 SpatialContextId: TypeAlias = SpatialNodeId | SurfaceCellId
@@ -125,14 +126,70 @@ class SpatialNodeKind(str, Enum):
 
 
 @dataclass(frozen=True)
+class CharacteristicTransportGeometry:
+    """Stable transport coordinates used to derive characteristic separation.
+
+    These coordinates are deliberately not instantaneous ephemeris state.  They
+    provide a deterministic spatial anchor from which Movement can derive a
+    characteristic relation for arbitrary endpoint pairs.  Concrete latency,
+    payload and resource use remain Movement/Vehicle responsibilities.
+    """
+
+    position_km: tuple[float, ...]
+    delta_v_coordinate_km_s: tuple[float, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.position_km:
+            raise ValueError("transport geometry requires at least one position coordinate")
+        if any(not isfinite(value) for value in self.position_km):
+            raise ValueError("transport position coordinates must be finite")
+        if any(not isfinite(value) for value in self.delta_v_coordinate_km_s):
+            raise ValueError("transport delta-v coordinates must be finite")
+
+    def separation_to(self, other: "CharacteristicTransportGeometry") -> tuple[float, float]:
+        if len(self.position_km) != len(other.position_km):
+            raise ValueError("transport position coordinate dimensions must match")
+        distance_km = dist(self.position_km, other.position_km)
+        if not self.delta_v_coordinate_km_s and not other.delta_v_coordinate_km_s:
+            delta_v_km_s = 0.0
+        else:
+            if len(self.delta_v_coordinate_km_s) != len(other.delta_v_coordinate_km_s):
+                raise ValueError("transport delta-v coordinate dimensions must match")
+            delta_v_km_s = dist(self.delta_v_coordinate_km_s, other.delta_v_coordinate_km_s)
+        return distance_km, delta_v_km_s
+
+
+@dataclass(frozen=True)
+class CharacteristicTransportSeparation:
+    scope: str
+    distance_km: float
+    delta_v_km_s: float
+
+
+@dataclass(frozen=True)
+class StarSystemDef:
+    id: StarSystemId
+    display_name: str
+    interstellar_transport_geometry: CharacteristicTransportGeometry
+
+    def __post_init__(self) -> None:
+        if not self.display_name.strip():
+            raise ValueError("star system display name must not be empty")
+
+
+@dataclass(frozen=True)
 class CelestialBodyDef:
     id: CelestialBodyId
     display_name: str
     mean_radius_km: float
+    star_system_id: StarSystemId
+    system_local_transport_geometry: CharacteristicTransportGeometry
 
     def __post_init__(self) -> None:
         if self.mean_radius_km <= 0:
             raise ValueError("celestial body mean radius must be positive")
+        if not self.display_name.strip():
+            raise ValueError("celestial body display name must not be empty")
 
 
 @dataclass(frozen=True)
@@ -197,6 +254,8 @@ class SpatialNodeDef:
 
     id: SpatialNodeId
     display_name: str
+    star_system_id: StarSystemId
+    system_local_transport_geometry: CharacteristicTransportGeometry
     parent_id: SpatialNodeId | None = None
     body_id: CelestialBodyId | None = None
     kind: SpatialNodeKind = SpatialNodeKind.GENERIC
@@ -205,6 +264,8 @@ class SpatialNodeDef:
     def __post_init__(self) -> None:
         if self.kind is SpatialNodeKind.SURFACE:
             raise ValueError("surface geography must use SurfaceCellDef and SurfaceLocationState")
+        if not self.display_name.strip():
+            raise ValueError("spatial node display name must not be empty")
 
 
 @dataclass(frozen=True)
@@ -225,6 +286,7 @@ class OperationalNodeView:
 
 @dataclass
 class SpatialGraph:
+    star_systems: dict[StarSystemId, StarSystemDef] = field(default_factory=dict)
     bodies: dict[CelestialBodyId, CelestialBodyDef] = field(default_factory=dict)
     # Non-surface nodes only. Surface economic nodes live in locations.
     nodes: dict[SpatialNodeId, SpatialNodeDef] = field(default_factory=dict)
@@ -232,18 +294,31 @@ class SpatialGraph:
     locations: dict[SpatialNodeId, SurfaceLocationState] = field(default_factory=dict)
     operational_node_states: dict[SpatialNodeId, OperationalNodeState] = field(default_factory=dict)
 
+    def add_star_system(self, system: StarSystemDef) -> None:
+        if system.id in self.star_systems:
+            raise ValueError(f"duplicate star system: {system.id}")
+        self.star_systems[system.id] = system
+
     def add_body(self, body: CelestialBodyDef) -> None:
         if body.id in self.bodies:
             raise ValueError(f"duplicate celestial body: {body.id}")
+        if body.star_system_id not in self.star_systems:
+            raise ValueError(f"unknown star system {body.star_system_id} for {body.id}")
         self.bodies[body.id] = body
 
     def add(self, node: SpatialNodeDef) -> None:
         if node.id in self.nodes or node.id in self.locations:
             raise ValueError(f"duplicate spatial context: {node.id}")
+        if node.star_system_id not in self.star_systems:
+            raise ValueError(f"unknown star system {node.star_system_id} for {node.id}")
         if node.parent_id is not None and node.parent_id not in self.nodes:
             raise ValueError(f"unknown non-surface parent {node.parent_id} for {node.id}")
+        if node.parent_id is not None and self.nodes[node.parent_id].star_system_id != node.star_system_id:
+            raise ValueError(f"non-surface parent belongs to another star system: {node.id}")
         if node.body_id is not None and node.body_id not in self.bodies:
             raise ValueError(f"unknown celestial body {node.body_id} for {node.id}")
+        if node.body_id is not None and self.bodies[node.body_id].star_system_id != node.star_system_id:
+            raise ValueError(f"spatial node body belongs to another star system: {node.id}")
         self.nodes[node.id] = node
 
     def add_surface_cell(self, cell: SurfaceCellDef) -> None:
@@ -501,6 +576,49 @@ class SpatialGraph:
         if context_id in self.nodes:
             return self.nodes[cast(SpatialNodeId, context_id)].body_id
         raise KeyError(context_id)
+
+    def context_star_system_id(self, context_id: SpatialContextId) -> StarSystemId:
+        if context_id in self.locations:
+            body_id = self.locations[cast(SpatialNodeId, context_id)].body_id
+            return self.bodies[body_id].star_system_id
+        if context_id in self.surface_cells:
+            body_id = self.surface_cells[cast(SurfaceCellId, context_id)].body_id
+            return self.bodies[body_id].star_system_id
+        if context_id in self.nodes:
+            return self.nodes[cast(SpatialNodeId, context_id)].star_system_id
+        raise KeyError(context_id)
+
+    def transport_geometry_for_context(
+        self, context_id: SpatialContextId
+    ) -> CharacteristicTransportGeometry:
+        if context_id in self.locations:
+            body_id = self.locations[cast(SpatialNodeId, context_id)].body_id
+            return self.bodies[body_id].system_local_transport_geometry
+        if context_id in self.surface_cells:
+            body_id = self.surface_cells[cast(SurfaceCellId, context_id)].body_id
+            return self.bodies[body_id].system_local_transport_geometry
+        if context_id in self.nodes:
+            return self.nodes[cast(SpatialNodeId, context_id)].system_local_transport_geometry
+        raise KeyError(context_id)
+
+    def characteristic_transport_separation(
+        self, origin_context_id: SpatialContextId, destination_context_id: SpatialContextId
+    ) -> CharacteristicTransportSeparation:
+        origin_system = self.context_star_system_id(origin_context_id)
+        destination_system = self.context_star_system_id(destination_context_id)
+        if origin_system == destination_system:
+            origin_geometry = self.transport_geometry_for_context(origin_context_id)
+            destination_geometry = self.transport_geometry_for_context(destination_context_id)
+            distance_km, delta_v_km_s = origin_geometry.separation_to(destination_geometry)
+            return CharacteristicTransportSeparation(
+                "system_local", distance_km, delta_v_km_s
+            )
+        origin_geometry = self.star_systems[origin_system].interstellar_transport_geometry
+        destination_geometry = self.star_systems[destination_system].interstellar_transport_geometry
+        distance_km, delta_v_km_s = origin_geometry.separation_to(destination_geometry)
+        return CharacteristicTransportSeparation(
+            "interstellar", distance_km, delta_v_km_s
+        )
 
     def surface_cell_for_context(self, context_id: SpatialContextId) -> SurfaceCellId | None:
         if context_id in self.locations:

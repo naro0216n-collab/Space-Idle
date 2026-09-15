@@ -33,7 +33,7 @@ def project_routes(projector):
             site_requirements_definition(route.origin_requirements),
             site_requirements_definition(route.destination_requirements),
         )
-        for route in projector._simulation.transport.route_definitions()
+        for route in projector._simulation.transport.movement_plan_options()
     )
 
 

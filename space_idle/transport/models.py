@@ -373,28 +373,42 @@ class TransportOperationRequirement:
 
 
 @dataclass(frozen=True)
-class RouteEndpoint:
-    """Physical locator for one end of a Location-to-Location route.
+class MovementEndpoint:
+    """Physical endpoint used by the Movement Resolver.
 
-    The Location remains the economic/logistics node.  The locator only selects
-    the physical interface used to derive environment and geometry.
+    Normal logistics endpoints belong to an established Operational Node.
+    ``physical_target_cell_id`` is reserved for one-shot movement to a surface
+    target that is not yet an Operational Node (for example Founding).
     """
 
-    node_id: SpatialNodeId
+    operational_node_id: SpatialNodeId | None = None
     surface_interface_id: EntityId | None = None
     access_cell_id: SurfaceCellId | None = None
     non_surface_interface: str | None = None
+    physical_target_cell_id: SurfaceCellId | None = None
 
     def __post_init__(self) -> None:
         locators = (
             self.surface_interface_id is not None,
             self.access_cell_id is not None,
             self.non_surface_interface is not None,
+            self.physical_target_cell_id is not None,
         )
         if sum(locators) != 1:
-            raise ValueError("route endpoint requires exactly one physical locator")
+            raise ValueError("movement endpoint requires exactly one physical locator")
+        if self.physical_target_cell_id is not None:
+            if self.operational_node_id is not None:
+                raise ValueError("physical target must not claim an Operational Node")
+        elif self.operational_node_id is None:
+            raise ValueError("normal movement endpoint requires an Operational Node")
         if self.non_surface_interface is not None and not self.non_surface_interface:
-            raise ValueError("non-surface route interface must not be empty")
+            raise ValueError("non-surface movement interface must not be empty")
+
+    @property
+    def node_id(self) -> SpatialNodeId:
+        if self.operational_node_id is None:
+            raise ValueError("physical target has no Operational Node")
+        return self.operational_node_id
 
     @property
     def locator_kind(self) -> str:
@@ -402,6 +416,8 @@ class RouteEndpoint:
             return "surface_interface"
         if self.access_cell_id is not None:
             return "access_cell"
+        if self.physical_target_cell_id is not None:
+            return "physical_target"
         return "non_surface_interface"
 
     @property
@@ -410,33 +426,63 @@ class RouteEndpoint:
             return str(self.surface_interface_id)
         if self.access_cell_id is not None:
             return str(self.access_cell_id)
+        if self.physical_target_cell_id is not None:
+            return str(self.physical_target_cell_id)
         assert self.non_surface_interface is not None
         return self.non_surface_interface
 
 
 @dataclass(frozen=True)
-class RouteDef:
+class SpatialRelation:
+    origin_context_id: SpatialNodeId | SurfaceCellId
+    destination_context_id: SpatialNodeId | SurfaceCellId
+    movement_context: str
+    characteristic_distance_km: float | None = None
+    characteristic_delta_v_km_s: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not self.movement_context:
+            raise ValueError("movement context must not be empty")
+        if self.characteristic_distance_km is not None and self.characteristic_distance_km < 0:
+            raise ValueError("movement relation distance must be non-negative")
+        if self.characteristic_delta_v_km_s < 0:
+            raise ValueError("movement relation delta-v must be non-negative")
+
+
+@dataclass(frozen=True)
+class MovementPlan:
+    """Derived, non-persisted physical plan for one direct Movement leg."""
+
     id: RouteId
-    origin: RouteEndpoint
-    destination: RouteEndpoint
+    origin: MovementEndpoint
+    destination: MovementEndpoint
+    relation: SpatialRelation
     transit_days: int
     operations: tuple[TransportOperationRequirement, ...]
     display_name: str | None = None
     origin_requirements: SiteRequirements = SiteRequirements()
     destination_requirements: SiteRequirements = SiteRequirements()
 
-    @property
-    def origin_id(self) -> SpatialNodeId:
-        return self.origin.node_id
+    def __post_init__(self) -> None:
+        if self.origin.operational_node_id is not None and self.destination.operational_node_id is not None:
+            if self.origin.operational_node_id == self.destination.operational_node_id:
+                raise ValueError("movement plan endpoints must differ")
+        if self.transit_days <= 0:
+            raise ValueError("movement plan transit days must be positive")
+        if not self.operations:
+            raise ValueError("movement plan requires at least one operation")
 
     @property
-    def destination_id(self) -> SpatialNodeId:
-        return self.destination.node_id
+    def origin_id(self) -> SpatialNodeId | None:
+        return self.origin.operational_node_id
+
+    @property
+    def destination_id(self) -> SpatialNodeId | None:
+        return self.destination.operational_node_id
 
     @property
     def delta_v_km_s(self) -> float:
         return sum(operation.delta_v_km_s for operation in self.operations)
-
 
 @dataclass(frozen=True)
 class PoweredAscentCapability:
@@ -519,9 +565,9 @@ class TransportPerformanceProfile:
             if requirement.resource_id == resource_id
         )
 
-    def route_asset_disposition(self, route: RouteDef) -> OperationAssetDisposition:
+    def movement_asset_disposition(self, plan: MovementPlan) -> OperationAssetDisposition:
         disposition = OperationAssetDisposition.DESTINATION
-        for operation in route.operations:
+        for operation in plan.operations:
             current = self.operation_asset_disposition(operation.operation_type)
             if current is None:
                 continue
@@ -535,14 +581,14 @@ class TransportPerformanceProfile:
             return ()
         return (f"endurance:{operating_days:g}/{self.endurance_days:g}",)
 
-    def propellant_t(self, route: RouteDef, cargo_t: float) -> float:
-        return self.propellant_t_per_total_t_per_km_s * (self.dry_mass_t + cargo_t) * route.delta_v_km_s
+    def propellant_t(self, plan: MovementPlan, cargo_t: float) -> float:
+        return self.propellant_t_per_total_t_per_km_s * (self.dry_mass_t + cargo_t) * plan.delta_v_km_s
 
-    def max_cargo_for_route(self, route: RouteDef) -> float:
-        if self.propellant_t_per_total_t_per_km_s <= 1e-12 or route.delta_v_km_s <= 1e-12:
+    def max_cargo_for_movement(self, plan: MovementPlan) -> float:
+        if self.propellant_t_per_total_t_per_km_s <= 1e-12 or plan.delta_v_km_s <= 1e-12:
             return self.payload_t
         mass_budget = self.propellant_capacity_t / (
-            self.propellant_t_per_total_t_per_km_s * route.delta_v_km_s
+            self.propellant_t_per_total_t_per_km_s * plan.delta_v_km_s
         )
         return max(0.0, min(self.payload_t, mass_budget - self.dry_mass_t))
 
@@ -623,14 +669,14 @@ class VehicleDef:
     def capability_for(self, operation_type: str) -> OperationCapability | None:
         return self.performance.capability_for(operation_type)
 
-    def propellant_t(self, route: RouteDef, cargo_t: float) -> float:
-        return self.performance.propellant_t(route, cargo_t)
+    def propellant_t(self, plan: MovementPlan, cargo_t: float) -> float:
+        return self.performance.propellant_t(plan, cargo_t)
 
-    def max_cargo_for_route(self, route: RouteDef) -> float:
-        return self.performance.max_cargo_for_route(route)
+    def max_cargo_for_movement(self, plan: MovementPlan) -> float:
+        return self.performance.max_cargo_for_movement(plan)
 
-    def route_asset_disposition(self, route: RouteDef) -> OperationAssetDisposition:
-        return self.performance.route_asset_disposition(route)
+    def movement_asset_disposition(self, plan: MovementPlan) -> OperationAssetDisposition:
+        return self.performance.movement_asset_disposition(plan)
 
     def endurance_failures(self, operating_days: float) -> tuple[str, ...]:
         return self.performance.endurance_failures(operating_days)
