@@ -211,6 +211,11 @@ def test_blob_sha_verification_retries_only_failed_chunk_and_tree_uses_verified_
     assert retry["stage"] == "blob-retry-ready"
     assert retry["retry_count"] == 1
     assert retry["retry_failed_chunk_only"] is True
+    assert retry["transcription_segment_bytes"] <= 8 * 1024
+    segment_files = [Path(path) for path in retry["transcription_segment_files"]]
+    assert len(segment_files) == 2
+    packet = json.loads(first_packet)
+    assert "".join(path.read_text(encoding="utf-8") for path in segment_files) == packet["action_args"]["content"]
     assert Path(str(retry["blob_packet"])).read_text(encoding="utf-8") == first_packet
     assert connector_state(repo)["blob_chunk_index"] == 0
     assert not (transaction(repo) / "connector" / "create-transport-commit.json").exists()
@@ -250,11 +255,18 @@ def test_failed_chunk_can_retry_repeatedly_without_restarting_successful_chunks(
     ).stdout)
     assert next_chunk["chunk_index"] == 1
 
+    previous_segment_bytes = 16 * 1024
     for attempt in range(1, 6):
         failed = json.loads(run_request(repo, "connector-blob", "--blob-sha", "a" * 40).stdout)
         assert failed["stage"] == "blob-retry-ready"
         assert failed["chunk_index"] == 1
         assert failed["retry_count"] == attempt
+        assert failed["transcription_segment_bytes"] <= max(1, previous_segment_bytes // 2)
+        segment_files = [Path(path) for path in failed["transcription_segment_files"]]
+        state_now = connector_state(repo)
+        chunk_now = state_now["plan"]["chunks"][1]
+        assert "".join(path.read_text(encoding="utf-8") for path in segment_files) == chunk_now["content"]
+        previous_segment_bytes = int(failed["transcription_segment_bytes"])
     state = connector_state(repo)
     assert state["blob_chunk_index"] == 1
     assert state["verified_blob_shas"][".publish/transport/develop/0000.b64"] == expected_first_blob

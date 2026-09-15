@@ -777,6 +777,29 @@ def _write_summary(repo: Path, summary: dict[str, object]) -> None:
     )
 
 
+def _write_transcription_segments(
+    repo: Path, *, chunk_index: int, content: str, retry_count: int,
+) -> tuple[int, list[str]]:
+    segment_dir = _connector_dir(repo) / f"blob-chunk-{chunk_index:04d}-transcription"
+    if segment_dir.exists():
+        shutil.rmtree(segment_dir)
+    if retry_count <= 0:
+        return len(content.encode("utf-8")), []
+
+    # Transport identity remains one fixed logical chunk. Only the LLM transcription
+    # unit is halved after each mismatch so the same content can be reconstructed
+    # more reliably without changing path, payload, or expected Git blob OID.
+    segment_count = min(1 << retry_count, max(1, len(content)))
+    segment_bytes = max(1, (len(content) + segment_count - 1) // segment_count)
+    segment_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[str] = []
+    for index, start in enumerate(range(0, len(content), segment_bytes)):
+        path = segment_dir / f"{index:04d}.txt"
+        path.write_text(content[start:start + segment_bytes], encoding="utf-8")
+        paths.append(str(path))
+    return segment_bytes, paths
+
+
 def _write_blob_packet(repo: Path, state: dict[str, object]) -> dict[str, object]:
     plan = state["plan"]
     assert isinstance(plan, dict)
@@ -786,7 +809,8 @@ def _write_blob_packet(repo: Path, state: dict[str, object]) -> dict[str, object
     chunk = chunks[index]
     assert isinstance(chunk, dict)
     path_value = str(chunk["path"])
-    packet = _blob_packet(str(chunk["content"]), index, path_value)
+    content = str(chunk["content"])
+    packet = _blob_packet(content, index, path_value)
     call_bytes = _connector_call_bytes(packet)
     if call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
         raise PublishStateError("generated create_blob call exceeds Connector hard ceiling")
@@ -797,20 +821,33 @@ def _write_blob_packet(repo: Path, state: dict[str, object]) -> dict[str, object
     _write_connector_state(repo, state)
     retry_counts = state.setdefault("blob_retry_counts", {})
     assert isinstance(retry_counts, dict)
+    retry_count = int(retry_counts.get(path_value, 0))
+    segment_bytes, segment_files = _write_transcription_segments(
+        repo, chunk_index=index, content=content, retry_count=retry_count,
+    )
+    if retry_count == 0:
+        next_step = (
+            "execute the generated GitHub.create_blob packet and pass only its returned blob SHA to connector-blob"
+        )
+    else:
+        next_step = (
+            "retranscribe the same logical chunk by reading the listed transcription segment files in order, "
+            "concatenate them without modification into the packet content, execute GitHub.create_blob, "
+            "and pass only its returned blob SHA to connector-blob"
+        )
     summary = {
         "stage": "blob-ready",
         "request_id": state["request_id"],
         "chunk_index": index,
         "chunk_count": len(chunks),
-        "chunk_bytes": len(str(chunk["content"]).encode("utf-8")),
+        "chunk_bytes": len(content.encode("utf-8")),
         "blob_call_bytes": call_bytes,
         "blob_packet": str(path),
-        "retry_count": int(retry_counts.get(path_value, 0)),
+        "retry_count": retry_count,
+        "transcription_segment_bytes": segment_bytes,
+        "transcription_segment_files": segment_files,
         "integrity_decision": "helper-owned",
-        "next": (
-            "execute the generated GitHub.create_blob packet and pass only its returned blob SHA to connector-blob; "
-            "the helper performs the integrity decision mechanically and emits either the same failed chunk or the next action"
-        ),
+        "next": next_step,
         "verified": True,
     }
     _write_summary(repo, summary)

@@ -239,6 +239,7 @@
   }
   function openTargetStockDialog(){populateLocationSelects();$('#targetStockDialog').showModal();}
 
+  function updateAllocationModeFields(){const capacity=$('#allocationMode').value==='capacity';$('#allocationUnitsGroup').hidden=capacity;$('#allocationCapacityGroup').hidden=!capacity;}
   function openAllocationDialog(route=null,allocation=null){
     editingAllocationId=allocation?.id||null;allocationOptionsView=null;allocationOptionSerial++;populateLocationSelects();const editing=Boolean(allocation);
     $('#allocationDialog h2').textContent=editing?'Transport Allocationを編集':'Fleetを輸送へ配分';

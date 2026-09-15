@@ -102,7 +102,7 @@ GitHub反映の入口は差分種別で決める。
 1. 変更を責務としてまとまったlocal commitにする。
 2. `prepare`で現在の `HEAD` をpublish対象として固定する。
 3. GitHubのheads一覧を1回取得し、`develop` HEADと`publish` HEADを同じ観測から `connector-plan` へ渡す。`publish` treeはsource-snapshotに保持した正準baseを使うため再取得しない。
-4. helperが生成した `GitHub.create_blob` packetを実行し、返却blob SHAを `connector-blob` に渡す。helperが期待OIDとの一致を機械判定し、成功なら次chunk、失敗なら同じchunkだけを再提示する。作業者はSHAを比較しない。
+4. helperが生成した16 KiB logical chunkの `GitHub.create_blob` packetをそのまま実行し、返却blob SHAだけを `connector-blob` に渡す。helperが期待OIDとの一致を機械判定し、成功なら次chunkへ進む。
 5. 全chunk成功後にhelperが生成した `GitHub.create_tree` packetを実行し、返却tree SHAを `connector-tree` に渡す。treeは確定済みblob SHAを参照し、helperが期待tree SHAとの一致を機械判定する。
 6. 期待SHAと一致したtreeだけを `GitHub.create_commit` へ進め、返却commit SHAを `connector-commit` に渡す。
 7. helperが生成したnon-force `GitHub.update_ref` packetを1回実行して固定 `publish` branchを進める。これがGatewayを起動する唯一のbranch更新である。
@@ -116,7 +116,7 @@ python scripts/publish_request.py connector-plan \
   --publish-remote-head <current-publish-head>
 python scripts/publish_request.py connector-blob \
   --blob-sha <create-blob-result-sha>
-# helperが次chunkを返す間、同じ手順を繰り返す。失敗時は同じchunkだけが再提示される。
+# helperが次chunkを返す間、同じ手順を繰り返す。SHA不一致時だけ後述の転記retryへ入る。
 python scripts/publish_request.py connector-tree \
   --tree-sha <create-tree-result-sha>
 python scripts/publish_request.py connector-commit \
@@ -128,9 +128,9 @@ python scripts/publish_request.py record \
   --gateway-conclusion success
 ```
 
-transportは `.publish/transport/<target>/0000.b64` から始まる固定slotを使用する。独立したrequest trigger、generation index、receipt fileは作らない。bundleのBase64表現を16 KiB固定chunkへ分割し、各chunkを `GitHub.create_blob` で独立転送する。helperは各chunk本文からGit blob OIDを事前計算してstateへ保持し、connector返却OIDを `connector-blob` で機械比較する。成功済みchunkは再送せず、不一致chunkだけ同一packetで成功するまで再試行する。retry回数の上限やadaptive再分割は設けない。
+transportは `.publish/transport/<target>/0000.b64` から始まる固定slotを使用する。bundleのBase64表現を16 KiB固定logical chunkへ分割し、各chunkを `GitHub.create_blob` で独立転送する。helperは各chunk本文からGit blob OIDを事前計算し、connector返却OIDを `connector-blob` で機械比較する。通常系では生成packetをそのまま転記して次chunkへ進み、成功済みchunkへ戻らない。
 
-全chunk成功後の `create_tree` は本文を含めず、検証済みblob SHAをtree entryの `sha` として渡す。これによりtree構築側でも正確なGit object identityを使用する。期待root tree SHAはsource-snapshotの `publish` base treeと確定blob SHAからローカルGitで事前計算し、返却SHAをhelperが機械比較する。返却SHAが一致しない限りcommitもref updateも生成しない。正常系にverification GET、payload metadata GET、blob再取得、SHA目視照合を置かない。初回移行時に旧 `.publish` transport artifactが残っている場合も、固定slot以外の旧artifactを同じunreferenced tree組立の中で削除し、部分的なremote状態を作らない。
+全chunk成功後の `create_tree` は確定済みblob SHAだけをtree entryへ渡す。期待root tree SHAはsource-snapshotの `publish` base treeと確定blob SHAからローカルGitで事前計算し、返却SHAをhelperが機械比較する。通常publishでは、helperが生成したpacketと各Connector callの返却SHAだけを次stageへ渡して一本道で進める。初回移行時に旧 `.publish` transport artifactが残っている場合も、固定slot以外の旧artifactを同じunreferenced tree組立の中で削除し、部分的なremote状態を作らない。
 
 Gatewayはtransport commitをcheckoutした後、そのworking treeにある固定slotだけを読む。GitHub Contents / Blob APIでpayloadを再取得せず、連番partを連結してbundleを検証し、bundleからpublish commit、base、target treeを導出する。checkout済み `origin/<target>` がbundle parentと一致することをローカル確認した後、exact publish commitをnon-force pushする。成功したpush後の `ls-remote` /再fetch、receipt書込み、Fast CI pending status書込みは行わない。Fast CIの明示dispatchは `GITHUB_TOKEN` pushから別workflowが自動起動しないため維持する。
 
@@ -146,9 +146,11 @@ python scripts/publish_request.py cancel \
 
 #### Pre-ref transport retry
 
-`create_blob`返却OIDが期待OIDと不一致なら、`publish` refを動かさず同じactive transaction内でそのchunkだけを即再試行する。成功済みchunkへ戻らず、chunk内容・path・期待OIDも変更しない。helperが成否と次stageを決定するため、LLMや作業者はSHA一致を判断しない。`create_tree`返却SHA不一致も同じtree packetを機械的に再提示し、一致するまでcommit/ref packetを生成しない。
+`create_blob`返却OIDが不一致なら、logical chunkは16 KiBのまま固定し、その失敗chunkだけを再転記する。最初のretryではhelperが同一本文を連続する2区間へ分けた転記用fileを提示し、8 KiBずつ読み出して順番どおり連結して同じ `content` として再送する。さらに不一致なら転記区間だけを再び1/2にし、4 KiB、2 KiB、1 KiB…と半減させる。chunkのpath、本文、期待OID、transport上の16 KiB境界は変更せず、成功済みchunkへ戻らない。
 
-ref更新後の一時的なGateway障害ではtransportを別generationとして書き直さず、同じtransport commitのworkflow rerunを用いる。target移動やcontrol不一致など意味のあるGateway failureはtransport再送で隠さず、原因を解消してから次のpublish判断を行う。
+helperが返却OIDを機械判定し、一致した時点で自動的に次chunkまたはtree stageを提示する。作業者は提示された転記区間を順番どおり連結して再送し、返却SHAをhelperへ渡すだけとする。`create_tree`でもhelperが返却SHAを機械判定し、一致後にだけcommit/ref stageへ進む。
+
+ref更新後の一時的なGateway障害では、同じtransport commitのworkflow rerunを用いる。target移動やcontrol不一致など意味のあるGateway failureは原因を解消してから次のpublish判断を行う。
 
 ### Workflow maintenance procedure
 
