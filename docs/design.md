@@ -1,5 +1,22 @@
 # 宇宙開発Idleゲーム デザイン案 v0.5.0
 
+## 文書ナビゲーション
+
+- §1–4: ゲーム目的、中心ループ、発展像、初期評価範囲
+- §5–7: Resource / Inventory / Priority / Facility / Industry
+- §8: Spatial / Surface Location / Environment
+- §9–10: Movement / Transport / Logistics / Cargo / Vehicle
+- §11–14: Scientific Exploration / Research / Knowledge / Survey
+- §15–16: Location発展、外部依存、自動進行
+- §17–19: LLM、Application / UI、Save / Offline / Test
+- §20: 初期Content候補
+- §21: 全体へ横断適用するゲームデザイン原則
+- §22–23: ゲーム性評価範囲と現時点の定義
+
+ゲーム上の意味は担当節を正本とし、§21は詳細メカニクスを再定義しない。Domain責務・State ownership・処理順は `architecture.md` を参照する。
+
+---
+
 ## 1. 目的
 
 現代の地球から始まり、探査・実験・研究によって知識生産能力を拡大し、その成果で新技術、新しい生産設備、輸送方式、研究手段を成立させ、最終的に太陽系規模の産業圏へ発展するIdle型宇宙開発シミュレーションを目指す。
@@ -152,7 +169,25 @@ Service CapacityはOperational Node等へ固定値として付与するのでは
 
 このallocation graphへ当tickのDomain executionやmovementで新たに生産・到着したResourceを戻さない。それらはBoundary settlement後の次tick snapshotから利用可能になる。同tick依存関係に循環を持つContent / DefinitionはValidationでfail-closedとし、Domain固有の実行順や自己供給例外で解決しない。
 
-Research Point生成率のような有限flowと、Research Point貯蔵上限のようなPool Capacityも区別する。前者をService Capacityとして扱う場合でも、後者はある時点で保持できる量の上限でありService Capacityではない。輸送能力もVehicle自体へ固定の`t/day`を持たせず、Vehicle性能、Fleet配分、Route、補給・整備InfrastructureからService Capacityとして導出する。
+Research Point生成率のような有限flowと、Research Point貯蔵上限のようなPool Capacityも区別する。前者をService Capacityとして扱う場合でも、後者はある時点で保持できる量の上限でありService Capacityではない。輸送能力もVehicle自体へ固定の`t/day`を持たせず、Vehicle性能、Fleet配分、二地点間のMovement Plan、補給・整備InfrastructureからService Capacityとして導出する。
+
+### 5.4 Priorityと活動の優先順位
+
+プレイヤーが複数の活動間で限られたResource、Power、Service Capacity、Research Point、物流能力等を配分する場合、優先度は5段階で指定する。
+
+```text
+1  最低
+2  低
+3  標準
+4  高
+5  最優先
+```
+
+新しい設定の標準値は3とする。Priorityは割合や重みではなく、「どの活動を先に成立させるか」を表す順序尺度とする。同じPriorityに属する活動は、利用可能なResource / Serviceの範囲で公平に充足する。複数日にまたがってStockを確保するProjectは、その蓄積をatomic要求へ任せず、Activity Priorityを持つReservation acquisitionとして在庫を段階的に確保する。停止はPriorityの一段階として表現せず、Pause等の活動状態として扱う。
+
+PriorityはResourceやPower等の個別Requirementへ別々に設定するのではなく、原則としてPlayerが優先したい活動へ設定する。Construction Project、Research Project、Facility operation、Maintenance、Target Stock等の活動がPriorityを持ち、それらを成立させるために同時利用するResource / Service /既存Transport Capacityへその優先度を引き継ぐ。
+
+一方、限られたFleetをどのTransport Allocationへ配備するかは、輸送能力を用意する側の別判断とする。需要側のActivity Priorityと、Fleet配備側のProvisioning Priorityを分離することで、高Priorityの需要が既に用意された輸送能力を優先利用できる一方、別用途のFleetを需要側が暗黙に奪う構造にしない。Transport AllocationのProvisioning Priorityも1〜5、標準値3とする。
 
 ---
 
@@ -204,7 +239,7 @@ Content側は設備ごと、または設備群ごとに維持率を持つ。具�
 = 建造・Upgradeで累積投入した resource × 維持率
 ```
 
-維持資材は特別な税として消去せず通常Resourceとして扱う。当tickの維持消費はResource Claimとして他用途と競合させ、将来の補充必要量はResource DemandとしてInventory / Logisticsへ流す。維持Resource Claimが不足した場合は設備を即時破壊せず、保守充足率を下げ、その設備が供給するService Capacity、生産、研究点生成等を一貫して縮退させる。Capabilityそのものの有無と、現在供給できる量を混同しない。
+維持資材は特別な税として消去せず通常Resourceとして扱う。当tickの維持実行は必要Resource / ServiceをExecution Requirement Bundleとして他用途と競合させ、将来の補充必要量はSupply RequirementとしてLogisticsへ流す。維持executionのfulfillmentが不足した場合は設備を即時破壊せず、保守充足率を下げ、その設備が供給するService Capacity、生産、研究点生成等を一貫して縮退させる。Capabilityそのものの有無と、現在供給できる量を混同しない。
 
 通常の手動停止だけで維持費をゼロにしない。将来、長期保管・Mothballを導入する場合はPauseとは別状態とする。
 
@@ -252,7 +287,8 @@ Opportunity × Capacity
 
 物理的な位置を表すSpatial modelと、Inventory・Facility・Fleet等を所有して経済活動を行うOperational Nodeを分離する。
 
-- Celestial Body：天体そのもの。
+- Star System：複数のCelestial Body / Spatial contextを含む恒星系上位context。
+- Celestial Body：Star System内の天体そのもの。
 - Surface Cell：地表の物理・地理・資源・環境・Surveyの単位。
 - non-surface Spatial Node：軌道、Lagrange領域、深宇宙上の運用地点等の物理的context。
 - Operational Node：Inventory、Facility、Fleet、Storage、Power等を所有し、産業・研究・物流活動の端点となる運用拠点。
@@ -263,13 +299,14 @@ Opportunity × Capacity
 地表をSurface Cellへ分割し、資源・地形・環境・Survey・開発領域の正準単位とする。UIではヘックス主体の天体マップとして表現してよいが、球面を完全な六角形だけで覆うことや、全Cellが同面積・常に6隣接であることをCore仕様にはしない。天体ごとにSurface Cell数を変えてよく、各Cellは面積、隣接関係、天体上の位置を持つ。
 
 ```text
-Celestial Body
-└ Surface Cell graph
-   ├ static geology / resource potential
-   ├ terrain / area / adjacency
-   ├ dynamic environment
-   ├ survey knowledge
-   └ derived development affiliation
+Star System
+└ Celestial Body
+   └ Surface Cell graph
+      ├ static geology / resource potential
+      ├ terrain / area / adjacency
+      ├ dynamic environment
+      ├ survey knowledge
+      └ derived development affiliation
 ```
 
 Surface CellはFacility配置スロットでもOperational Nodeでもない。通常Facilityを建設するたびにCellを選択させず、地理的開発と産業設備投資を別判断として扱う。
@@ -278,9 +315,9 @@ Surface CellはFacility配置スロットでもOperational Nodeでもない。�
 
 地表LocationはContent側が「月南極高地」「表側海地域」等の候補をあらかじめ列挙する方式を基本とせず、プレイヤーがSurvey結果と地形・資源・環境条件を見てSurface Cell上の任意地点へ設立する。標準の月面開発では、開始時からプレイヤー運営の月面Locationを与えず、月周回等の既存non-surface Operational Nodeから広域Surveyを行い、その結果を比較して最初の月面Locationを選ぶ。既設Surface LocationをContentとして持たせるのは、シナリオの前提として既存拠点が明示される場合に限る。
 
-Location設立前のSurface CellはInventoryや通常物流LaneのNodeではない。最初の拠点は、既存のOperational Nodeをstaging originとして、Survey済みCellへFounding / Deployment Operationを実施することで成立させる。設立処理は「まだ存在しないDestination Inventoryへ通常Construction資材を配送する」方式にはしない。必要Resource、展開Facility / Fleet、輸送・着陸能力、準備作業、所要時間、SiteRequirementsを一つの設立Projectとして満たし、成功時にSurface LocationとそのOperational Node状態を生成する。
+Location設立前のSurface CellはInventoryや通常物流のNodeではない。最初の拠点は、既存のOperational Nodeをstaging originとして、Survey済みCellへFounding / Deployment Operationを実施することで成立させる。設立処理は「まだ存在しないDestination Inventoryへ通常Construction資材を配送する」方式にはしない。必要Resource、展開Facility / Fleet、輸送・着陸能力、準備作業、所要時間、SiteRequirementsを一つの設立Projectとして満たし、成功時にSurface LocationとそのOperational Node状態を生成する。
 
-Founding PackageはContentで定義し、設立直後に通常の建設・物流へ移行するための最小運用基盤を与えられるようにする。何を含めるかは固定のCore特例にせず、初期Storage、Surface access / cargo handling、電力、Survey、Construction等のFacility、必要なら初期Fleet、InventoryからPackageを構成する。これにより「Locationを作るにはLocation側の倉庫やGatewayが既に必要」という循環依存を作らない。
+Founding PackageはContentで定義し、設立直後に通常の建設・物流へ移行するための最小運用基盤を構成する。Packageはstaging nodeで準備すべき実Resource、展開設備、必要Fleet等のdeployable manifestを定義し、Deployment開始時にsource側の物理Stateから移動payloadへ移す。成功時にはそのpayloadを初期Storage、Surface access / cargo handling、電力、Survey、Construction等のFacility、必要なら初期Fleet、Inventoryへ一度だけ展開する。Package Definitionだけを根拠にtarget側へ物理ResourceやFleetを生成しない。これにより「Locationを作るにはLocation側の倉庫やGatewayが既に必要」という循環依存を作らず、同時にResource / Fleet保存を維持する。
 
 Surface Locationは一点座標ではなく、Operational Nodeとしての経済・産業・物流機能と、設立時のCore Cellから連続して開発したSurface Cell群の双方を持つ。
 
@@ -339,99 +376,107 @@ Dynamic
 
 ## 9. 輸送と物流
 
-本作では、地表から軌道へ質量を投入するPowered Ascentと、軌道投入後のSpaceflight、Landing、Atmospheric Entry等を異なるOperationとして扱う。ただしLaunch Vehicle / Spacecraftという名称を排他的な可否ラベルにはしない。
+本作の物流は、任意の成立済みOperational Nodeから任意の成立済みOperational NodeへResourceを輸送できる一般モデルとする。地球、惑星、衛星、小惑星、軌道拠点、深宇宙拠点、将来の別恒星系は同じSpatial / Movement / Transport / Logistics契約を利用する。
 
-輸送可否と輸送性能は、機体のDry Mass、Payload、Propellant、推進性能、Operation Capability、Endurance、Atmospheric / Landing Capability、Docking / Refueling Compatibility、整備要求と、Route側のOperation要件・端点条件から決める。Vehicle自体に固定の輸送能力t/dayを持たせず、実際の輸送能力は使用Routeと運用条件から導出する。
-
-研究は新しい機体・推進・補給方式を解禁するが、航路そのものを技術IDで直接アンロックしない。
-
-Operational Nodeは物流上の経済Nodeであり、地表Locationもその一種とする。ただし地表Locationを代表座標一点として距離計算しない。位置が意味を持つ地表輸送では、実際に接続に使用するGateway / access pointのSurface Cell間から距離・所要時間・必要Operationを導出する。Location拡大によって二つの開発圏が接近した場合、旧Core Cell間距離を理由に長距離輸送扱いを固定しない。
-
-Surface Cell自体はInventory Nodeや物流Lane Nodeにはしない。Location内移動は集約Surface Infrastructureとして扱い、成立済みOperational Node間のRouteだけを通常物流Networkへ公開する。Location設立前のCellはFounding / Deployment Operationの物理targetにはなれるが、通常Cargo Flowのdestination Inventoryにはならない。設立完了後はSurface Locationのaccess / Gatewayと他Operational Nodeとの物理関係から利用可能Routeを導出し、将来生成されるLocation IDを静的Route一覧へ事前列挙しない。これにより惑星表面のCell解像度を物流Node数へ直接転嫁しない。
-
-### 9.1 Fleet配分と輸送能力
-
-プレイヤー保有Vehicleは通常物流では同型機・所在Operational NodeごとのFleetとして扱い、輸送、Scientific Exploration、再配置等へ用途配分する。通常物流の主要判断は個々の便を発進させることではなく、どのVehicle Fleetをどの拠点間輸送へどれだけ投入するかとする。
-
-Fleetを輸送へ割り当てると、Route、Vehicle性能、往復・回収経路、Turnaround、補給・整備条件から反復可能なTransport Serviceを自動構成し、方向別の定常輸送能力を生成する。Transport Service / Corridor自体をプレイヤーが別途作成・管理する対象にはしない。
-
-Fleet Allocationは、次のどちらか一方を目標として設定できる。
-
-- Units：投入するFleet隻数を指定し、その隻数から輸送能力を導出する。
-- Capacity：必要な定常輸送能力を方向別に指定し、Vehicle性能と通常運用条件から必要隻数を導出する。
-
-Transport AllocationではVehicle type、拠点間関係、経路・運用Policyを明示する。性能・所要時間・推進剤消費等が実質的に異なる複数のTransport Service Planが成立する場合は候補を提示し、Coreが戦略上重要な方式を暗黙に最適化・切替しない。
-
-UnitsとCapacityを同時に正本とはしない。Capacity指定時の必要隻数はNominalな1隻当たり能力から決め、推進剤不足や整備不足等の一時的低下を埋めるためにFleetを自動増員しない。Fleet不足で目標隻数を満たせない場合は不足を表示し、新造・探査終了等で利用可能になったFleetを既存目標まで自動投入できる。
-
-限られたFleetを複数Transport Allocationが要求する場合はAllocation priorityで配分する。これはLane priorityとは分離し、前者はVehicle用途配分、後者は輸送能力の貨物需要への配分を表す。
-
-輸送能力は少なくとも以下を区別して表示する。
-
-- Target：Capacity指定時のプレイヤー目標
-- Nominal：Fleet数とTransport Serviceの通常運用から得られる能力
-- Available：現在の推進剤、整備、荷役、Infrastructure等を反映した利用可能能力
-- Used：物流Laneが実際に利用している能力
-- Spare：AvailableからUsedを引いた余剰能力
-
-推進剤・整備等の運用需要はFleetを割り当てただけで常に最大量を消費させず、実際のTransport Service利用率から発生させる。能力不足時はFleet不足、推進剤不足、整備能力不足、Infrastructure不足等のlimiting factorを区別して示す。
-
-### 9.2 拠点間物流LaneとResource Demand
-
-定常物流でプレイヤーが主に設計する対象は、品目ごとの補充ルールではなくOperational Node間の物流需要と、その需要を支える共有輸送能力とする。
+責務を次のように分離する。
 
 ```text
-Transport Capacity
-Earth Base → LEO          30 t/day
-LEO → Lunar Base A         8 t/day
+Spatial
+  位置と二地点間の空間的関係を表す
 
-Lane Demand
-Earth Base → Lunar Base A  6 t/day
+Movement
+  二地点間で必要となるOperationと移動特性を導出する
+
+Transport
+  Vehicle / FleetとInfrastructureから反復可能な輸送能力を供給する
+
+Logistics
+  Resourceをどこからどこへ、どの需要のために運ぶかを計画する
 ```
 
-Facility、Construction、Maintenance、Industry、Research等のDomainは、自分の成立条件からdestination、resource、必要量または目標量、urgency / priorityを持つResource Demandを生成する。Resource Demandは原則として特定の調達元を決めない。特定sourceがゲーム上の条件である場合だけsource constraintを与える。既に同じDemandへ割り当て済み・輸送中のCargoは未充足量から控除し、同じ将来需要への重複発送を防ぐ。ただし輸送中Cargoをdestination InventoryやStorage予約へ読み替えない。
+通常物流の二地点関係をOperational Node IDごとの静的な航路一覧として正本化しない。各EndpointのSpatial context、利用可能なaccess / Gateway、二地点間のtransport geometry、Movement Operation、Vehicle性能、InfrastructureからMovement PlanとTransport Serviceを導出する。新しいCelestial BodyやLocationを追加するときに、既存全地点とのOD別Route Definitionを追加することを要求しない。
 
-Logisticsはプレイヤーが設定したsourcing / route Policyの範囲で利用可能sourceと経路を選び、Laneの要求量とpriorityに従って、Fleet Allocationや許可済みExternal Transport Serviceから生じた共有Transport Capacityへ貨物を割り当てる。sourceから発送するResourceは現地用途と同じResource Claim allocationへ参加し、Logisticsだけがsource Inventoryを先取りしない。Domainが物流経路を直接所有せず、LogisticsがDomainの戦略条件を勝手に変更しない。
+### 9.1 Spatial relationとMovement
 
-Transport AllocationのCapacityは「どれだけ輸送能力を用意するか」、Laneのrequested capacityは「その能力を物流需要へどれだけ利用するか」を表す。Lane需要からFleetを無条件に増員せず、輸送能力をどこまで増強するかはプレイヤー判断として残す。
+同一Surface上では実際のSurface geometryとGateway / access pointを利用する。宇宙空間では各Spatial contextが持つ安定したtransport geometryから二地点間のcharacteristicな空間関係を導出する。別恒星系についても同じ考え方を一段上の空間関係へ適用する。
 
-外部輸送・外部調達を自動利用できるのは、プレイヤーが当該Laneや調達Policyで明示的に許可した場合だけとする。利用可否、支出上限、最低保持資金等のPolicyを設定でき、Simulationはその範囲内の反復判断だけを自動化する。物理Resourceの外部調達も通常のdelivery latency、到着、Storage契約を通り、資金支払いだけで目的地Inventoryへ即時生成しない。
-
-### 9.3 Transport Serviceと往復運用
-
-定常輸送能力を生成するTransport Serviceは、Cargoを目的地へ運ぶだけでなく、Fleet資産が同じ運用を反復可能な状態へ戻れることを要件とする。
-
-軌道間輸送船のようにVehicle自体が目的地へ移る場合は、逆方向Routeや回送を含めた往復cycleを自動構成する。再使用打上げ系のようにCargoの到着先とVehicleの回収先が異なる運用も、Vehicle固有のOperation / recovery性能から表現する。Powered Ascent等のOperation名そのものへ固定の帰還規則は持たせない。
-
-往復Serviceでは同一Fleetが往路・復路を担当するため、方向別Capacityを単純加算してFleet必要量を求めない。復路Cargoがない場合は空荷回送を含む定常運用とし、帰り荷がある場合は既存の復路能力を利用できる。
-
-Fleet Allocationを減らした場合、運用中Fleetを即座に別地点へ戻さず、必要な回収・再配置時間を経てFleet Poolへ戻す。地点間の恒久再配置もaggregateなFleet relocationとして時間を要する。
-
-### 9.4 End-to-End輸送とCargo Flow
-
-プレイヤーは出発地と最終目的地を指定でき、中継ノードごとの再発送操作を要求しない。
+Movementは少なくとも次の要素へ分解できる。
 
 ```text
-Earth Base → Lunar Base A
-Earth Base → LEO → Lunar Base A
-Earth Base → LEO → Lunar Orbit → Lunar Base A
+origin-side operation
++
+space / surface movement
++
+destination-side operation
 ```
 
-Fleet Allocationや外部Serviceが生成した方向別Transport Capacityをネットワークとして扱い、End-to-End能力は経路上の共有capacityから決まる。同じVehicleが途中NodeでCargoを引き渡さず連続運行できる場合は一つのTransport Serviceとして扱え、別Fleetへ引き渡す地点だけが物流上のhandoffになる。
+Powered Ascent、Spaceflight、Landing、Atmospheric Entry、Surface Transport等はMovement Operationとして表現する。同じSpatial relationでも利用するVehicle、推進方式、Infrastructureによって所要時間、Payload、Resource消費、Endurance要求は変化する。Spatial側のgeometryをそのまま輸送日数や単一の万能性能値へ読み替えず、Movement OperationとVehicle性能の組み合わせから運用結果を導出する。
 
-通常物流では個々のVehicle Missionを反復生成せず、利用した定常capacityに応じてCargo Flowを発生させる。ただし輸送時間は保持し、出発したCargoはRoute / Serviceのlatencyを経て目的地へ到着する。
+Surface Cell自体はInventory Nodeや通常物流Nodeにはしない。成立前のSurface CellはFounding / Deployment等の一回限りの物理targetにはなれるが、通常物流は成立済みOperational Nodeをorigin / destinationとする。Surface Locationでは実際に利用するGateway / access Surface CellをEndpoint条件へ反映する。
 
-LEOや月周回軌道は有力な補給・積替え・整備ノードだが、必須ゲートではない。
+### 9.2 通常輸送の抽象化とFleet配分
 
-到着先倉庫が満杯の場合、Cargoは物流側のarrival waitingに残る。輸送中から目的地倉庫を予約しない。
+通常物流では個別のVehicle便を主要な管理対象とせず、Fleetの反復運用から方向別の定常Transport Capacityを導出する。Transport Serviceは少なくともPayload / Transport Capacity、Cargo latency、往復・回収を含むcycle、Propellantやservicing等の運用要求を持つ。
 
----
+長距離輸送の戦略性は、有限Fleet、有限capacity、大きなlatency、運用Resource、Storage、Cargo Handling、先行備蓄から生じる。Playerの主要判断は個々の出発時刻ではなく、どのVehicleをどの拠点間輸送へ投入するか、どの程度のcapacityを用意するか、どのResourceやProjectを優先するか、どこへ在庫を前置きするか、中継・補給・積替えInfrastructureを整備するかに置く。
+
+Fleet Allocationは次のどちらか一方をauthoritative targetとして設定できる。
+
+- Units：投入するFleet数を指定し、そのFleet数から輸送能力を導出する。
+- Capacity：必要な定常輸送能力を指定し、Vehicle性能と通常運用条件から必要Fleet数を導出する。
+
+Transport AllocationのProvisioning Priorityは1〜5、標準値3とする。これは限られたFleetを複数Transport Allocationへ配備するときの優先順位であり、Cargo需要のActivity Priorityとは別の判断とする。
+
+Transport AllocationのCapacityは「どれだけ輸送能力を用意するか」を表し、物流需要からFleetを無条件に増員しない。Fleet不足、推進剤不足、整備能力不足、Infrastructure不足等は別々のlimiting factorとして示す。
+
+Transport Capacityは少なくともTarget、Nominal、Available、Used、Spareを区別する。推進剤・整備等の運用需要はFleetを割り当てただけで最大量を常時消費させず、実際のService利用率から発生させる。
+
+### 9.3 Supply Requirementと先行物流
+
+Facility、Construction、Maintenance、Industry、Research等のDomainは、自分の成立条件から現在必要なResourceだけでなく、既に決定済みのProject進行等から予測できる将来必要量をLogisticsへ提示できる。PlayerはOperational NodeごとにTarget Stockを設定できる。
+
+物流計画は少なくとも次の情報を扱う。
+
+- 現在必要なResource
+- Project等から予測される将来必要量・継続消費率と予測必要時期
+- Playerが設定したTarget Stock
+- 現地Inventory / Reservation
+- 既に輸送中またはInboundのCargo
+- end-to-end latencyと利用可能Transport Capacity
+- Activity Priority
+- sourcing / path Policy
+
+将来必要量は、その時点でResourceを消費・予約するものではない。Logisticsは予測必要時期、継続消費率、輸送lead time、現在在庫、Inbound量、利用可能capacityから、現在発送を開始する必要がある量・rateを判断する。将来まで十分な余裕がある高Priority Requirementが、現在必要な低Priority活動のResourceやTransport Capacityを直ちに先取りしない。
+
+Projectの進捗や物流条件が変化した場合はProjected Material Readinessを更新する。Playerが明示的な期日を設定する機能を将来持つ場合は、Project進行から得る予測必要時期とhard deadlineを同一概念にしない。
+
+sourceから発送するResourceは現地用途と同じResource allocationへ参加し、Logisticsだけがsource Inventoryを先取りしない。調達元と経路はPlayerのsourcing / path Policyの範囲でLogisticsが選択する。
+
+外部輸送・外部調達を自動利用できるのは、Playerが該当Policyで明示的に許可した場合だけとする。物理Resourceの外部調達も通常のCargo lifecycle、delivery latency、Inventory admissionを通り、資金支払いだけで目的地Inventoryへ即時生成しない。
+
+### 9.4 Cargo lifecycleとhandoff
+
+Resourceはsource Inventoryからdispatchされた時点でLogistics上の輸送中Cargoとなる。通常物流では大量の個別便を生成せず、同じsource、destination、Resource、Transport Service、latency、dispatch rate等の条件が続く期間をCargo Flowとしてまとめて扱う。
+
+別Fleetへ直接積み替えられる場合は、Cargo Handling等の必要条件を満たした上でStorageへ一旦入庫せず次のTransport Serviceへhandoffできる。一旦中継Operational Nodeへ荷卸しする場合は、その時点で物理Resourceのauthoritative ownershipをInventoryへ戻してStorage Capacityを使用し、次Legへ確保する必要があれば通常のReservation / commitmentを利用する。
+
+最終目的地でも同じInventory admission契約を利用する。到着時に荷役・Storage条件が成立していないCargoはarrival waitingとなり、輸送完了前の物理量としてLogistics側へ残る。arrival waitingはCargo Handling / arrival holdingと反復利用可能Transport Capacityへbackpressureを発生させ、無制限の無料Storageとして機能しない。
+
+輸送中Cargoは目的地Storageを事前予約しない。既に同じSupply Requirementへ割り当て済み・輸送中のCargoは未充足見込みから控除し、重複発送を防ぐ。
+
+### 9.5 End-to-End輸送
+
+Playerはorigin Operational Nodeと最終destination Operational Nodeを指定できる。経路未指定時はPlayerの明示Policyに従い、現在成立しているMovement / Transport ServiceとOperational Nodeからend-to-end pathを選択する。中継Nodeごとの再発送Commandを通常操作として要求しない。
+
+同一Vehicle / Transport Serviceが途中でCargoを保持したまま運行を継続できる場合、Movement上に複数Operationが存在していても一つの物流Legとして扱える。実在するOperational Nodeで別Fleet / Transport ServiceへCargoを引き渡す地点だけが物流上のhandoff pointとなる。Spatial hierarchy上の中間contextそれ自体はhandoff pointではない。
+
+LEOや月周回軌道等は有力な補給・積替え・整備Nodeになり得るが必須進行ゲートではない。有限・状況依存のFounding、Fleet relocation、Scientific Exploration等は一回限りのMovementとして同じMovement評価契約を利用し、通常物流を個体Missionの反復へ戻さない。
 
 ## 10. ロケット・宇宙船の建造と保有
 
 ロケットや宇宙船は外部サービスだけでなく、プレイヤーが建造・保有できる物理資産とする。通常運用では同型機と所在Operational NodeごとのFleet数量として管理し、個体識別そのものを主要なゲーム操作にはしない。
 
-Vehicle Definitionは固定のt/day能力ではなく、RouteとTransport Serviceに応じた輸送・探査適合性と運用効率を決める性能を持つ。必要に応じて以下を含む。
+Vehicle Definitionは固定の`t/day`能力ではなく、任意のMovement Planについて適合性、Payload、latency、運用Resource、反復cycleを導出できる性能を持つ。必要に応じて以下を含む。
 
 - Dry Mass / Payload Capacity
 - Propellant種類・容量・消費モデル
@@ -443,15 +488,15 @@ Vehicle Definitionは固定のt/day能力ではなく、RouteとTransport Servic
 - 建造期間
 - 2〜3種類程度の実Resource投入量
 
-同じ性能要因からRoute可否、1cycle当たりPayload、所要時間、推進剤需要、整備需要を導出し、Fleet投入数から定常Transport Capacityへ変換する。用途名や機種名へ物流能力を直接結び付けない。
+Spatial relationのcharacteristic geometryやOperation要件をVehicle性能と組み合わせ、Movement可否、1cycle当たりPayload、所要時間、推進剤需要、整備需要を導出し、Fleet投入数から定常Transport Capacityへ変換する。Delta-v等は適用可能なOperationの評価指標として利用できるが、すべてのMovementを一つの性能尺度へ固定しない。用途名や機種名へ物流能力を直接結び付けない。
 
 Vehicle Assembly Facility等へ建造を指示すると、製造Capabilityと資源を消費してProduction状態へ入り、完了後に建造Operational Nodeの該当Fleetへ1隻追加される。
 
-UIでは建造候補に加えて、保有Fleetについて所在、総数、輸送配分、Scientific Exploration拘束、再配置・回収中、未配分数を確認できるようにする。Transport Allocationでは目標mode、目標値、必要隻数、実際の投入隻数、Nominal / Available / Used / Spare Capacity、運用資源需要、blocker / limiting factorを表示する。
+Fleet relocationは一回限りのMovementとして実際の所要時間を持つ。出発したFleetはsource側free Fleetから除かれ、Movement完了後にdestination側Fleetへ加わる。Transport Allocation解除時も運用中Fleetを瞬時にfree Fleetへ戻さず、必要な回収・再配置時間を経て解放する。
 
-打上げヴィークル、軌道間輸送船、着陸船、統合型宇宙船等を用途名称だけで使用制限しない。実性能がOperation要件を満たすかで判定する。
+UIでは建造候補に加えて、保有Fleetについて所在、総数、輸送配分、Scientific Exploration拘束、再配置・回収中、未配分数を確認できるようにする。Transport Allocationでは目標mode、目標値、Provisioning Priority、必要隻数、実際の投入隻数、Nominal / Available / Used / Spare Capacity、運用資源需要、blocker / limiting factorを表示する。
 
----
+打上げヴィークル、軌道間輸送船、着陸船、統合型宇宙船等を用途名称だけで使用制限しない。実性能がMovement Operation要件を満たすかで判定する。
 
 ## 11. 科学探査とResearch Point
 
@@ -514,7 +559,7 @@ Research Projectは複数を並行して進められる。並行性は固定queu
 - Demonstration：指定条件を満たした状態で一定期間の実証を要求する。
 - Operational Experience：実際の運用から蓄積されたKnowledge Stateを要求する。
 
-Prototype / Demonstrationの実施場所は特定Location IDで固定せず、必要Environment、Capability、Service Capacityから判定する。試作資材は通常のResource Claim / Resource Demand、物流、Inventoryを通して確保し、Researchだけが別会計で資材を消費しない。
+Prototype / Demonstrationの実施場所は特定Location IDで固定せず、必要Environment、Capability、Service Capacityから判定する。試作資材は通常のResource allocation / Supply Requirement、物流、Inventoryを通して確保し、Researchだけが別会計で資材を消費しない。
 
 Operational ExperienceはResearch Project自身が時間経過だけで生成するpointではない。輸送、採掘、製造、有人運用等の実Domain activityが対応するexperience categoryへ知識を蓄積し、Researchはその状態をrequirementとして参照する。
 
@@ -540,7 +585,7 @@ Operational ExperienceはResearch Project自身が時間経過だけで生成す
 
 一本道にはせず、発電方式、物流方式、研究資産更新、有人・無人開発等で複数の合理的経路を持たせる。
 
-現段階ではCrew個人を独立Entityとして管理するDomainは導入しない。有人運用はcrew-ratedなVehicle / Facility特性、Habitation / Life Support等のCapability・Service Capacity、消耗ResourceのResource Claim / Resource Demandとして表現する。将来Crewそのものが主要な意思決定対象になる場合にだけ、個体・人口Stateを独立Domainへ昇格する。
+現段階ではCrew個人を独立Entityとして管理するDomainは導入しない。有人運用はcrew-ratedなVehicle / Facility特性、Habitation / Life Support等のCapability・Service Capacity、消耗ResourceのExecution Requirement / Supply Requirementとして表現する。将来Crewそのものが主要な意思決定対象になる場合にだけ、個体・人口Stateを独立Domainへ昇格する。
 
 ---
 
@@ -559,7 +604,7 @@ Unknown
 
 初期の広域観測では粗い地域差を示し、より詳細なSurveyによって候補CellのPotential推定幅を狭められる。Survey手段は観測位置・方式ごとに到達範囲と到達可能なKnowledge深度を持つ。軌道Remote SurveyはSurface Locationが存在しなくても対象天体の広域Cellを観測でき、最初のLocation候補比較に必要な粗いKnowledgeを与える。地表Surveyや近接観測は既設Location、展開Facility / Fleet、到達可能範囲等を必要とする代わりに、より高いKnowledge Levelまで精査できる。Surveyは基地設立・領域拡張・新鉱業拠点投資の意思決定情報を提供する。
 
-Survey開始条件を単なる「providerとtargetが同一天体」に縮退させない。ProviderのObservation / Sensor Capability、providerのSpatial context、target coverage、必要Operation、到達可能Knowledge Levelから可否と進行を決める。広域軌道SurveyはSurface物流Routeを要求せず、Surface Surveyは通常物流や現地運用条件と接続できる。
+Survey開始条件を単なる「providerとtargetが同一天体」に縮退させない。ProviderのObservation / Sensor Capability、providerのSpatial context、target coverage、必要Operation、到達可能Knowledge Levelから可否と進行を決める。広域軌道SurveyはSurface物流Movementを要求せず、Surface Surveyは通常物流や現地運用条件と接続できる。
 
 完了Campaignは能力配分対象から自動的に外し、余剰Survey能力を未完了対象へ再配分する。地球の一般鉱物等、開始時点で既知とする資源はSurface Cellごとの初期Knowledgeを高い状態で定義してよい。
 
@@ -582,7 +627,7 @@ Locationの発展は「到達したか」「基地が存在するか」という
 
 初期Contentでは月面開発がこの進行を代表するが、Coreで扱う概念はロケーション産業自立であり、特定天体名へ結び付けない。火星、小惑星、軌道拠点その他の地域でも同じLocation / Operational Nodeモデルを利用する。
 
-ロケーション産業自立はbinaryな達成状態や単一の自給率ではなく、選択したLocationまたはOperational Node集合について、外部依存構造を示すderived analyticsとする。ここでいうロケーションは分析scopeを指し、Entity型としてのSurface Locationだけに限定しない。既存のProduction、Consumption、Resource Demand、Import / Export、Unmet Demandから、ResourceまたはContent定義のResource Group単位で少なくとも以下を確認できるようにする。
+ロケーション産業自立はbinaryな達成状態や単一の自給率ではなく、選択したLocationまたはOperational Node集合について、外部依存構造を示すderived analyticsとする。ここでいうロケーションは分析scopeを指し、Entity型としてのSurface Locationだけに限定しない。既存のProduction、Consumption、Supply Requirement、Import / Export、Unmet Requirementから、ResourceまたはContent定義のResource Group単位で少なくとも以下を確認できるようにする。
 
 - local production
 - local consumption / demand
@@ -604,15 +649,22 @@ Mass、Energy、Propellant、Machinery等の特定カテゴリをGeneric Coreへ
 
 ゲーム時間は通常状態で自動進行する。プレイヤーは一時停止と複数段階の速度変更を行う。
 
+Simulationは1 game dayをcanonicalな状態更新単位とする。一日の開始時点で利用可能なInventory、Reservation、Facility、Fleet、Environment、Capability、Service Capacity等をPhysical snapshotとして固定し、その日のPlanning / Allocationを決める。その日に新たに生産・到着・完了したResourceやCapabilityは、次の日のsnapshotから新しいAllocationへ利用する。
+
+この日次境界は、本作が日単位以上の産業・研究・物流を集約して扱うためのSimulation解像度である。通常速度、高速進行、Offline Progressはいずれも同じ日次Simulation semanticsを利用する。複数日を一括して計算できる区間は実装上まとめてよいが、同じ期間を日次Simulationで進めた結果と同じStateへ到達することを契約とする。
+
 自動化対象：
 
 - 定常生産・採掘
-- 各DomainからのResource Claim / Resource Demand生成
-- 設定済みpriorityに基づくResource / Service Capacity配分
+- 各DomainからのExecution Requirement / Supply Requirement生成
+- 設定済みActivity Priorityに基づくResource / Service / Stock admission配分
 - Research Point生成
 - 設定済み研究・Survey・Scientific Explorationの進行
 - Transport Allocation目標に対する利用可能Fleetの投入
-- 物流Lane上の共有Transport Capacityへの貨物割当
+- 将来Supply RequirementとTarget Stockを含む物流計画
+- 利用可能Transport CapacityへのCargo allocation
+- 輸送latencyを考慮した先行dispatch
+- Cargo arrival / direct handoff / Inventory admission
 - Playerが許可したsourcing / external service Policy内での反復調達
 - 建設進行
 - 保守
@@ -620,23 +672,22 @@ Mass、Energy、Propellant、Machinery等の特定カテゴリをGeneric Coreへ
 
 プレイヤー判断として残すもの：
 
-- 研究対象と研究優先度
+- 研究対象とActivity Priority
 - 旧研究資産のLevelアップと新Tier資産建設の比較
 - 新規産業配置
-- Resource / Service Capacityのpriority Policy
+- Facility operation / Project / Maintenance / Target Stock等のActivity Priority
 - 拠点間物流能力の増強
 - Vehicle建造とFleet用途配分
-- Transport AllocationのUnits / Capacity目標とpriority
-- sourcing / route / external service Policyと支出上限
+- Transport AllocationのUnits / Capacity目標とProvisioning Priority
+- Target Stock
+- sourcing / path / external service Policyと支出上限
 - 輸送方式・輸送資産の選択
 - 新地域への進出、Location拡張と別Location設立の比較
 - 発電方式
 - 技術経路
 - 大規模再開発
 
-施設、建設案件、研究、Survey、Scientific Exploration、物流Lane等は必要に応じて停止・再開できる。停止は取消と区別し、設定と進捗を保持する。
-
----
+施設、建設案件、研究、Survey、Scientific Exploration、Transport Allocation等は必要に応じて停止・再開できる。停止は取消と区別し、設定と進捗を保持する。
 
 ## 17. LLM利用方針
 
@@ -667,14 +718,15 @@ LLMはプレイヤーの主要判断を代行させない。
 - 時間一時停止・再開・速度変更
 - 軌道Survey結果からのLocation設立Deployment・隣接Surface Cell開発
 - 建設計画・停止・再開・取消
-- Facility停止・再開・Levelアップ
-- Process選択・Power / Resource / Service Capacity priority
+- Facility停止・再開・Levelアップ・Process選択
+- Activity Priorityを1〜5で設定
 - Vehicle建造・Fleet再配置
-- Transport Allocation設定・停止・再開
-- Logistics Lane / sourcing / route Policy設定
+- Transport Allocation設定・停止・再開・Units / Capacity目標・Provisioning Priority設定
+- Target Stock設定
+- sourcing / path / external service Policy設定
 - External transport / procurement許可・支出Policy設定
-- 手動Cargo / 特殊Transport Mission
-- Research開始・停止・再開・priority設定
+- 手動Cargo / 特殊Movement
+- Research開始・停止・再開・Activity Priority設定
 - Scientific Exploration開始・停止・Fleet unit割当
 - Resource Survey開始・停止・配分
 - 位置依存FacilityのSurface Cell配置
@@ -683,66 +735,53 @@ LLMはプレイヤーの主要判断を代行させない。
 
 - 世界・天体Surface Map・Operational Node / Location概要
 - Surface CellのSurvey / Resource Potential / Environment / 開発状態
-- Inventory・Flow・Storage
+- Inventory・Reservation・Inbound / outbound flow・Storage / over-capacity状態
 - Facility / Level / 維持充足率 / 配置種別
 - Capability / Service CapacityのNominal / Available / Allocated / Spare
-- Resource Claim / allocation / unmet amount / priority
+- Activity Priority / Execution Requirement Bundle / requested execution / fulfillment / limiting factor
 - Process投入・産出・稼働率・limiting factor
-- 建設候補・案件
+- 建設候補・案件・将来Supply Requirement・Projected Material Readiness
 - Vehicle建造候補・必要資材・blocker
-- Fleet / Transport Allocation / Transport Capacity / Cargo Flow / Logistics Lane
+- Fleet / Transport Allocation / Provisioning Priority / Transport Capacity
+- end-to-end Movement / Transport Service候補・latency・必要Operation
+- Cargo Flow / handoff / arrival waiting / transport capacity shortfall
+- Target Stock / current stock / inbound amount
 - Research Point生成量・保有量・上限 / Technology Unlock / Operational Experience
 - Research / Scientific Exploration / Survey
 - Location領域、Surface Infrastructure負荷、Gateway / access point候補
 - LocationまたはOperational Node集合のロケーション産業自立・外部依存分析
 - Bottleneck / blocker
 
-UIは建設可否、維持率、機体適合、研究条件、資源・能力配分等を独自再計算しない。Core/Applicationが判断材料、priority、allocation結果、停止理由を返す。
-
----
+UIは建設可否、維持率、機体適合、Movement、研究条件、資源・能力配分等を独自再計算しない。Core/Applicationが判断材料、Priority、Allocation結果、予測準備時期、停止理由を返す。Priority UIは5段階の固定選択として表示し、標準値3を「標準」として提示する。
 
 ## 19. Save / Load / Offline / テスト
 
-Saveはversion付きSnapshotを基本とし、静的Definitionは現在のContentから再構築し、可変Stateだけを復元する。Fleet数量、Transport Allocation目標、再配置・回収中Fleet、Cargo Flow等は可変状態として保持し、Transport Service Planや現在のTransport Capacityは保存済み正本と重複させず再導出する。ゲーム性評価段階では旧仕様・旧Saveとの後方互換を目的化しない。
+Saveはversion付きSnapshotを基本とし、静的Definitionは現在のContentから再構築し、可変Stateだけを復元する。Fleet数量、Transport Allocation目標とProvisioning Priority、再配置・回収中Fleet、Inventory / Reservation、Target Stock Policy、Cargo Flow、arrival waiting、進行中のone-shot Movement等は可変状態として保持する。Movement Plan候補、Transport Service Plan、現在のTransport Capacity、Projected Material Readiness等は保存済み正本と重複させず再導出する。ゲーム性評価段階では旧仕様・旧Saveとの後方互換を目的化しない。
 
-Offline Progressは通常Simulationと別ルールにせず、実時間をゲーム時間へ変換した上で通常の時間進行経路を利用する。
+Offline Progressは通常Simulationと別ルールにせず、実時間をゲーム時間へ変換した上で同じ日次時間進行経路を利用する。通常進行、高速進行、Offlineで同じgame timeを進めた場合は同じSimulation Stateへ到達することを不変条件とする。複数日をまとめるfast-forwardは、この同値性を保つ実装最適化としてのみ利用する。
 
 テストは暫定バランス数値を固定せず、以下の構造的不変条件を優先する。
 
 - 資源が負にならない
-- 在庫・予約・Cargo質量が整合する
+- Inventory / Reservation / Logistics-owned CargoのResource保存が成立する
+- Storageへ荷卸し済みResourceをInventoryとLogisticsが同時にauthoritative ownershipしない
 - 輸送中Cargoが目的地倉庫を事前予約しない
+- 複数のCargo arrivalがStorage不足時にも決定論的にadmission / waitingへ分かれる
+- Industry / Extraction等の同tick outputが共有Storage / Pool admission容量を二重利用しない
+- Execution Requirement Bundleが同一executionに必要な複数入力・Service・output admissionを整合したfulfillmentでsettleする
+- PriorityLevelが1〜5の順序尺度として機能し、標準値3である
+- 同Priority結果がEntity登録順へ依存しない
+- Activity PriorityとTransport AllocationのProvisioning Priorityが別責務である
+- 任意の成立済みOperational Node pairについてSpatial / Movement契約から到達可能性を評価できる
+- 新規Location / Celestial Body追加時に既存全地点との静的OD Route追加を要求しない
+- Cargo Flow State量が経過tick数そのものに比例して増加しない
+- dispatch済みCargo / Movementのlatencyが後続のInfrastructure変更で遡及変更されない
 - 建設Recipeが明示Resourceを消費する
 - 建設資材の産地による代替特例が存在しない
-- 維持需要が建造投入量から決定論的に導出される
-- 維持不足が一貫してFacility能力へ反映される
-- Vehicle建造がCapability・資源・時間を消費する
-- Fleet総数と輸送・Scientific Exploration・再配置等の排他的配分が整合する
-- Transport AllocationのUnits / Capacity目標が二重正本にならない
-- Capacity指定時のFleet必要数が一時的な推進剤・整備不足で自動膨張しない
-- Nominal / Available / Used Transport Capacityが同じService Planから一貫して導出される
-- 共有Transport Capacityを複数Laneが利用しても能力を二重消費しない
-- Cargo Flowが輸送latencyと資源量を保存する
-- Research Pointの生成・貯蔵上限が整合する
-- Technology Unlockが単一のauthoritative stateとして保持される
-- Operational Experienceが実Domain activityから蓄積され、Research時間経過だけで生成されない
-- 同じInventory Resourceを複数Domainが登録順依存で二重消費せず、Resource Claim allocationで競合する
-- 同じService Capacityを複数用途が二重利用せず、priorityと同順位配分が決定論的である
-- External transport / procurementが未許可Policyで資金を自動消費しない
-- Route可否が技術名や用途ラベルではなく実能力から決まる
-- Surface Cell数や隣接数を天体間で固定しない
-- Locationの開発領域が同一天体上で連結し、同一Cellを複数Locationが重複利用しない
-- Resource Potentialが採掘で枯渇せず、Installed Capacity増加に対して総採掘量が単調増加かつ限界収益逓減となる
-- 研究完了だけでは既存Facilityの採掘能力が変化しない
-- Surface Cellが物流Nodeへ自動昇格せず、地表Route距離が実Gateway / access pointから導出される
-- Surface Locationとnon-surface Operational Nodeが共通のInventory / Facility / Fleet所有契約で扱える
-- 通常Facilityに不要なCell指定を要求せず、位置依存Facilityだけが有効な開発Cellへ配置される
-- Dynamic Environment変化が静的地質Potentialを無条件に書き換えない
-- Save/Load後の決定論
-- Offline進行との同値性
-- 登録順や固有Location IDに依存しない
-
----
+- Save / Load後の将来進行が一致する
+- 通常速度、高速進行、Offlineで同じgame timeを進めた結果が一致する
+- 同tick Domain登録順・呼出順でAllocation結果が変化しない
+- Location固有IDやVehicle用途名によるGeneric Core分岐が存在しない
 
 ## 20. 初期Content候補
 
@@ -809,47 +848,20 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 
 ---
 
-## 21. 基本的なデザイン原則
+## 21. 横断的なデザイン原則
 
-1. ゲームの中心成長ループは、Research Point獲得 → 技術 → 産業・物流拡大 → 高度研究手段 → より大きなResearch Point獲得とする。
-2. Research Point源の世代差はTier、同一世代の拡張はLevelで表現し、複数Research Projectは実際のResource / Service Capacityによって並行性を制約する。
-3. 一世代前の高Level資産と新世代の低Level資産が比較対象になり、旧資産が即座に無価値にならないようにする。
-4. 研究難易度は距離ではなく技術的困難さを中心に決める。
-5. 技術研究は航路を直接解除せず、単一のTechnology Stateを通して実際のVehicle・Facility・Process等を解禁する。
-6. Theory / Prototype / Demonstration / Operational Experienceは研究ごとに必要な組み合わせで使い、Operational Experienceは実運用から得る。
-7. 建築物は2〜3種類の実Resourceを投入して建造し、建造時の現地代替レイヤーを持たない。
-8. Facility維持は建造・Upgrade投入Resourceの一定割合を通常Resource requirementとして要求し、当tick消費はResource Claim、補充はResource Demandとして扱う。
-9. Capabilityという資格と、複数用途が競合する有限Service Capacityを分離する。
-10. 同じResourceやService Capacityを複数Domainが必要とする場合、Domain処理順ではなく明示的priorityと共通allocationで競合を解決する。
-11. Facilityの生産物・投入物・稼働率・allocation・律速要因をUIから直接確認可能にする。
-12. 地球初期産業にも低効率採掘・基礎生産を置き、無限背景市場にしない。
-13. Celestial Body、Surface Cell、Spatial Node、Operational Node、Surface Locationを分離する。
-14. Inventory、Facility、Fleet、Storage、Power等の一般的な所有先はOperational Nodeとし、Surface LocationだけがSurface Cell領域を追加で持つ。
-15. ロケット・宇宙船はCapability・Service Capacity・Resource・時間を使って建造可能な物理資産とし、通常運用ではOperational NodeごとのFleetとして用途配分する。
-16. Fleetを拠点間輸送へ配分すると、Vehicle性能・Route・補給・整備条件から定常Transport Capacityが自動生成される。
-17. Fleet AllocationはUnits指定とCapacity指定を選択できるが、同時に二つを正本としない。
-18. 宇宙船FleetをScientific Explorationへ割り当ててResearch Pointを得られるようにし、Scientific ExplorationとResource Surveyを別状態として扱う。
-19. 資源・中間材の種類は増やしてよいが、物流設定数の爆発を避ける。
-20. DomainはResource Demandで必要量とpriorityを表し、調達元・経路はPlayer Policyの範囲でLogisticsが選択する。
-21. 外部調達・外部輸送はPlayerが明示的に許可したPolicy内だけ自動利用し、戦略的支出判断をSimulationが暗黙代行しない。
-22. 通常物流は個体Vehicle Missionの反復ではなく共有Transport CapacityとCargo Flowとして扱い、輸送latencyは保持する。
-23. 地表Locationは固定候補から選ぶのではなく、Surface拠点を前提としない軌道Surveyで候補を比較し、天体Surface Cell上へ最初の拠点をDeploymentしてから隣接地域を開発して拡大できる。
-24. Surface Cellは物理地理・資源・環境・開発領域の単位とし、通常Facility配置スロットや物流Nodeとして扱わない。
-25. 地表資源は有限ReserveではなくResource Potentialと採掘Service Capacityのsoft saturationで表現し、採掘設備数へハード上限を置かない。
-26. 新技術は高性能Facilityや工法を解禁し、既存設備を研究完了だけで自動強化しない。
-27. Location拡大による内部移動負荷は集約Surface Infrastructure Service Capacityで扱い、個別貨物のCell routingへ展開しない。
-28. 近接地域への別Location設立を禁止せず、単一Location拡張と複数拠点化をFounding・Infrastructure・物流コストのtrade-offにする。
-29. 位置が本質的なFacilityだけSurface Cellへ配置し、それ以外のFacilityへ不要なCell選択を要求しない。
-30. 地表Location間の物理距離はLocation代表点ではなく実Gateway / access pointから導出する。
-31. Surface Cellの静的地質と可変Environmentを分離し、将来のテラフォーミング・環境変化を同じ空間モデル上で扱えるようにする。
-32. ロケーション産業自立は特定天体固有の状態ではなく、任意のLocation / Operational Node集合の実Resource flowから導出する外部依存分析とする。
-33. Idle自動化は反復処理を担当し、研究・Resource priority・物流方式・外部支出等の戦略判断を奪わない。
-34. 有人運用は当面Capability、Service Capacity、Resource Claim / Resource Demand、crew-rated特性で表現し、必要性が生じるまでCrew個体Domainを導入しない。
-35. 打上げと宇宙輸送を異なるOperationとして扱うが、Vehicle名称だけで可否を固定しない。
-36. 輸送中貨物は目的地倉庫容量を事前予約しない。
-37. LLMは世界側の問題や主体を増やすために使い、プレイヤー判断を代行させない。
-38. Simulation CoreをUIから独立させ、明示的なphase contractに基づいて決定論的に再現・テスト可能にする。
-39. ゲーム性評価段階では後方互換や暫定バランス数値の固定を優先しない。
+この節は各メカニクスの詳細を再掲せず、ゲーム全体で維持する判断軸だけを示す。具体的な仕様は対応節を正本とする。
+
+1. **研究と産業を相互強化させる。** Research Point → Technology → 産業・物流・研究手段 → より大きなResearch Pointという中心ループを維持し、距離や資金だけを進行軸にしない。§1–4、§11–13参照。
+2. **実際のボトルネックをPlayer判断にする。** Resource、Power、Service Capacity、Fleet、Storage、輸送latency等から制約を発生させ、Activity Priorityは5段階・標準3で「どの活動を先に成立させるか」を表す。§5–6、§9、§16参照。
+3. **技術は新しい手段を成立させる。** Research完了だけで既存Assetを一律強化せず、Facility、Process、Vehicle、推進、建設・運用方法等を解禁して投資判断を生む。§6–7、§10、§12–13参照。
+4. **空間を経済状態から分離しつつ、距離と立地を意味のある制約にする。** Surface Cell、Operational Node、Surface Locationを役割分離し、任意の成立済みNode間Movementを一般則で評価する。§8–10参照。
+5. **宇宙物流は個別便ではなくnetwork capacityとして設計する。** Fleet配備、Transport Capacity、latency、Cargo lifecycle、Target Stock、将来Supply Requirementから、長距離開発に先行計画の意味を持たせる。§9–10、§16参照。
+6. **現地産業化の価値を通常Resource flowから生む。** 建設材の産地特例や有限鉱床による強制移住ではなく、Resource Potential、加工、Maintenance、Storage、物流負担からLocation発展を成立させる。§6–9、§15参照。
+7. **Location開発を地理的・産業的な選択にする。** 一つのLocation拡張と複数拠点化、Gateway、Surface Infrastructure、Resource Potentialのtrade-offを保ち、必要な情報を判断地点で提示する。§8、§15、§18参照。
+8. **Idle自動化は反復処理を担う。** Research対象、Priority、Fleet provisioning、物流方式、外部支出、新地域進出等の戦略判断はPlayerに残す。§16、§18参照。
+9. **日次Simulationを共通時間軸にする。** 1 game dayをcanonical state-update単位とし、通常進行・高速進行・Offlineで同じgame timeの結果を一致させる。§16、§19参照。
+10. **拡張時にCoreの個別例外を増やさない。** 新しい天体、Vehicle、Facility、Research、ResourceをContentと共通能力モデルで追加できる状態を維持する。全節および `architecture.md` 参照。
 
 ---
 
@@ -859,20 +871,22 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 
 優先評価対象：
 
-- 自動時間進行、速度変更、一時停止
+- 自動時間進行、速度変更、一時停止、日次canonical Simulation、Offline同値性
 - Research Point生成・貯蔵・消費
 - Scientific ExplorationによるFleet unit拘束とResearch Point獲得
 - Research Tier / Level
-- 複数Research Project、Research Point priority allocation、Theory / Prototype / Demonstration / Operational Experience
+- 複数Research Project、Activity Priority、Theory / Prototype / Demonstration / Operational Experience
 - Technology Unlock / Operational Experienceの単一状態所有
 - 建築物の2〜3資源建造Recipe
-- 建築物の維持Resource Claim / Resource Demand
-- Resource ClaimによるDomain横断の在庫競合とpriority allocation
+- 建築物の維持Execution Requirement / Supply Requirement
+- Execution Requirement BundleによるDomain横断の複合Resource / Service競合
+- 5段階Activity Priorityと同順位fair allocation
+- Stock / Pool admissionを含む出力側capacity競合
 - Capability / Service Capacity分離と共有capacity競合
 - Process入出力とUI可視化
 - 地球初期採掘・基礎産業
 - Vehicle建造とFleet数量管理
-- Fleet AllocationのUnits / Capacity共存
+- Fleet AllocationのUnits / CapacityとProvisioning Priority
 - Fleet AllocationからのTransport Capacity自動生成
 - Nominal / Available / Used / Spare Capacityとlimiting factor
 - 発電・配電・部分稼働
@@ -882,11 +896,12 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 - Resource Potential / soft saturation採掘
 - Surface Infrastructureによる大規模Locationの集約内部物流負荷
 - Operational NodeとSurface Location / non-surface Spatial contextの分離
-- Transport Operation
-- Logistics Laneと共有Transport Capacity
-- Cargo Flowと輸送latency
-- Resource Demand、sourcing Policy、source側Resource Claim、貨物需要の自動割当
-- 明示Policy内のExternal Transport / Procurement、資金摩擦、通常のdelivery latency / Storage契約
+- 任意Operational Node間のSpatial Relation / Movement Plan導出
+- 通常物流のaggregate Transport CapacityとCargo Flow
+- direct handoff / Storage経由handoff / arrival waiting
+- Supply Requirement、Target Stock、future-aware sourcing / dispatch
+- 長距離latency下でのProjected Material ReadinessとTransport shortfall表示
+- 明示Policy内のExternal Transport / Procurement、資金摩擦、通常Cargo lifecycle / Storage契約
 - 推進剤の実資源化
 - Surface Cell単位のResource Survey
 - 初期月面ContentでのISRU・現地加工
@@ -904,7 +919,7 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 
 本作は、
 
-「探査・実験・研究設備からResearch PointとOperational Experienceを獲得し、その研究成果で産業・輸送・研究基盤を拡大し、Surface Locationと軌道等のOperational Nodeを産業・物流Networkとして発展させながら、Resource / Service Capacity配分、建設・維持・資源利用・Fleet配分・Transport Capacityのボトルネックを解消し、ロケーション産業自立を高めつつ、より高い桁の知識生産と技術的に困難な宇宙開発へ進むIdle型宇宙産業シミュレーション」
+「探査・実験・研究設備からResearch PointとOperational Experienceを獲得し、その研究成果で産業・輸送・研究基盤を拡大し、Surface Locationと軌道等のOperational Nodeを産業・物流Networkとして発展させながら、5段階Activity PriorityによるResource / Service Capacity配分、建設・維持・資源利用、将来需要を見越した物流、Fleet配分・Transport Capacityのボトルネックを解消し、ロケーション産業自立を高めつつ、より高い桁の知識生産と技術的に困難な宇宙開発へ進むIdle型宇宙産業シミュレーション」
 
 と定義する。
 
@@ -912,7 +927,7 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 
 「地球の低効率産業と人工衛星・地上研究設備で基礎知識を得る段階」
 から
-「自前のロケット・宇宙船Fleetを建造し、定常輸送能力と科学探査へ配分する段階」
+「自前のロケット・宇宙船Fleetを建造し、任意拠点間の定常輸送能力と科学探査へ配分する段階」
 へ、
 さらに
 「恒久研究所を遠隔地へ建設し、大量の電力・物資・維持物流を投入して高効率研究を行う段階」
