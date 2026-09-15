@@ -655,6 +655,76 @@ class Simulation:
             capped=capped,
         )
 
+    def _allocate_boundary_handoff_services(
+        self, requests: tuple[ServiceCapacityRequest, ...]
+    ) -> tuple[ServiceCapacityAllocationPlan | None, ServiceCapacityAllocationPlan | None]:
+        """Allocate boundary Cargo Handling without hiding its provider source.
+
+        Local ``cargo_transfer`` capacity is shared by direct handoff, unload and
+        reload work.  External carriers can additionally supply the carrier-side
+        handling needed to unload Cargo they have already delivered, but that
+        exogenous capacity cannot be reused to reload Inventory-owned Cargo or
+        masquerade as local transfer infrastructure.
+        """
+        if not requests:
+            return None, None
+
+        locations = self._active_locations() | set(self.graph.operational_node_ids())
+        power_by_location = {
+            location_id: self.power.resolve_snapshot(
+                self.power.physical_snapshot(location_id, self.facilities, self.day)
+            )
+            for location_id in locations
+        }
+        local = self._allocate_tick_services(power_by_location, requests)
+
+        external_supply = self.logistics.external_arrival_handling_supply()
+        residual_requests: list[ServiceCapacityRequest] = []
+        for request in requests:
+            if request.purpose != "arrival_handling":
+                continue
+            residual = max(0.0, request.requested_rate - local.allocated(request.id))
+            if residual <= 1e-12:
+                continue
+            residual_requests.append(ServiceCapacityRequest(
+                request.id,
+                request.operational_node_id,
+                request.service_type,
+                residual,
+                request.priority,
+                request.owner_kind,
+                request.owner_id,
+                request.purpose,
+            ))
+        external = allocate_service_capacity(
+            tuple(residual_requests),
+            nominal_supply=external_supply,
+        )
+        external_ids = {request.id for request in external.requests}
+
+        allocations: list[ServiceCapacityAllocation] = []
+        for request in requests:
+            amount = local.allocated(request.id)
+            if request.id in external_ids:
+                amount += external.allocated(request.id)
+            amount = min(request.requested_rate, max(0.0, amount))
+            allocations.append(ServiceCapacityAllocation(
+                request.id, request.requested_rate, amount,
+                max(0.0, request.requested_rate - amount),
+            ))
+
+        nominal = dict(local.supply_nominal)
+        enabled = dict(local.supply_enabled)
+        limiting = dict(local.supply_limiting_factors)
+        for key, amount in external.supply_nominal.items():
+            nominal[key] = nominal.get(key, 0.0) + amount
+        for key, amount in external.supply_enabled.items():
+            enabled[key] = enabled.get(key, 0.0) + amount
+        combined = ServiceCapacityAllocationPlan(
+            requests, tuple(allocations), nominal, enabled, limiting
+        )
+        return combined, local
+
     def _settle_tick_boundary(self) -> None:
         """Settle state whose completion time was reached before this tick."""
         self.external_economy.settle_periods(self.day)
@@ -666,19 +736,12 @@ class Simulation:
         self.transport.invalidate_movement_plans()
         self.logistics.prepare_cargo_arrivals(self.day)
         handoff_requests = self.logistics.cargo_handoff_service_requests(self.day)
-        handoff_allocations = None
-        if handoff_requests:
-            locations = self._active_locations() | set(self.graph.operational_node_ids())
-            power_by_location = {
-                location_id: self.power.physical_snapshot(
-                    location_id, self.facilities, self.day
-                )
-                for location_id in locations
-            }
-            handoff_allocations = self._allocate_tick_services(
-                power_by_location, handoff_requests
-            )
-        self.logistics.settle_cargo_arrivals(self.day, handoff_allocations)
+        handoff_allocations, direct_handoff_allocations = (
+            self._allocate_boundary_handoff_services(handoff_requests)
+        )
+        self.logistics.settle_cargo_arrivals(
+            self.day, handoff_allocations, direct_handoff_allocations
+        )
         self.logistics.settle_external_supply(self.day)
 
         # Procurement wait/policy maturation is a clock-boundary transition.

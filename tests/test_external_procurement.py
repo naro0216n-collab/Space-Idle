@@ -249,8 +249,15 @@ def test_remote_procurement_replenishes_logistics_source_without_bypassing_trans
     assert sim.inventory.amount(ids.EARTH, ids.MACHINERY) == pytest.approx(0.0)
     assert sim.inventory.amount(ids.LEO, ids.MACHINERY) == pytest.approx(0.0)
 
-    sim.logistics.prepare_cargo_arrivals(flow.first_arrival_day)
-    sim.logistics.settle_cargo_arrivals(flow.first_arrival_day)
+    arrival_day = flow.first_arrival_day
+    sim.logistics.prepare_cargo_arrivals(arrival_day)
+    handoff_requests = sim.logistics.cargo_handoff_service_requests(arrival_day)
+    handoff_allocations, direct_allocations = sim._allocate_boundary_handoff_services(
+        handoff_requests
+    )
+    sim.logistics.settle_cargo_arrivals(
+        arrival_day, handoff_allocations, direct_allocations
+    )
     assert sim.inventory.amount(ids.LEO, ids.MACHINERY) == pytest.approx(1.0)
 
 

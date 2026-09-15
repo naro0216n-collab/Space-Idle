@@ -95,7 +95,7 @@ def run() -> None:
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
             page.get_by_role("button", name="物流ネットワーク").click()
 
-            requirement_row = page.locator("#demandTable tbody tr", has_text=project_id).first
+            requirement_row = page.locator("#requirementTable tbody tr", has_text=project_id).first
             requirement_row.wait_for(timeout=10000)
             assert "輸送能力阻害" in requirement_row.inner_text(), (
                 "Supply Requirement must remain visible while Transport Capacity is unavailable"

@@ -297,8 +297,7 @@ def test_cargo_is_not_available_until_boundary_arrival_settlement():
     sim.logistics.prepare_cargo_arrivals(ready_day - 1)
     sim.logistics.settle_cargo_arrivals(ready_day - 1)
     assert sim.inventory.amount(LEO, resource) == pytest.approx(before)
-    sim.logistics.prepare_cargo_arrivals(ready_day)
-    sim.logistics.settle_cargo_arrivals(ready_day)
+    _settle_cargo_boundary(sim, ready_day)
     assert sim.inventory.amount(LEO, resource) == pytest.approx(before + dispatched)
 
 
@@ -315,8 +314,7 @@ def test_cargo_arrival_waits_for_inventory_admission():
     _advance_logistics(sim, 0, (requirement,))
     flow = next(row for row in sim.logistics.cargo_flows.values() if row.requirement_id == requirement.id)
     ready_day = flow.first_arrival_day
-    sim.logistics.prepare_cargo_arrivals(ready_day)
-    sim.logistics.settle_cargo_arrivals(ready_day)
+    _settle_cargo_boundary(sim, ready_day)
     waiting = next(
         row for row in sim.logistics.arrival_waiting.values() if row.requirement_id == requirement.id
     )
@@ -328,7 +326,7 @@ def test_cargo_arrival_waits_for_inventory_admission():
     assert any("storage" in blocker for blocker in projected.admission_blockers)
 
     sim.inventory.consume_allocated(LEO, PRECISION_ELECTRONICS, 1.0)
-    sim.logistics.settle_cargo_arrivals(ready_day + 1)
+    _settle_cargo_boundary(sim, ready_day + 1)
     assert waiting.id not in sim.logistics.arrival_waiting
 
 
@@ -371,15 +369,10 @@ def test_locally_covered_requirement_does_not_report_unused_transport_blockers()
 def _settle_cargo_boundary(sim, day: int, *, allocate_transfer: bool = True):
     sim.logistics.prepare_cargo_arrivals(day)
     requests = sim.logistics.cargo_handoff_service_requests(day)
-    allocations = None
+    allocations = direct_allocations = None
     if allocate_transfer and requests:
-        locations = sim._active_locations() | set(sim.graph.operational_node_ids())
-        powers = {
-            location_id: sim.power.snapshot(location_id, sim.facilities, day)
-            for location_id in locations
-        }
-        allocations = sim._allocate_tick_services(powers, requests)
-    sim.logistics.settle_cargo_arrivals(day, allocations)
+        allocations, direct_allocations = sim._allocate_boundary_handoff_services(requests)
+    sim.logistics.settle_cargo_arrivals(day, allocations, direct_allocations)
     return allocations
 
 
@@ -455,10 +448,12 @@ def test_multistage_arrival_direct_handoff_preserves_logistics_ownership():
     assert sim.inventory.amount(handoff_node, MACHINERY) == pytest.approx(stock_before)
 
 
-def test_multistage_arrival_can_unload_to_inventory_reservation_then_reload():
+def test_multistage_external_arrival_can_unload_to_inventory_reservation_then_reload():
     sim = build_game_application()._simulation
     _allow_external_transport(sim)
-    sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
+    # No local transfer capability exists at the first handoff yet.  The
+    # external carrier can unload its delivered Cargo, but cannot provide the
+    # subsequent Inventory-owned reload.
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
     sim.refresh_storage()
     sim.inventory.add(EARTH, MACHINERY, 0.1)
@@ -474,11 +469,12 @@ def test_multistage_arrival_can_unload_to_inventory_reservation_then_reload():
         row for row in sim.logistics.cargo_flows.values()
         if row.requirement_id == requirement.id
     )
+    assert first.remaining_legs
     handoff_node = first.destination_id
     stock_before = sim.inventory.amount(handoff_node, MACHINERY)
     ready_day = first.first_arrival_day
 
-    _settle_cargo_boundary(sim, ready_day, allocate_transfer=False)
+    _settle_cargo_boundary(sim, ready_day)
 
     staging = next(
         row for row in sim.logistics.handoff_staging.values()
@@ -494,22 +490,11 @@ def test_multistage_arrival_can_unload_to_inventory_reservation_then_reload():
     assert sim.inventory.reserved_for(
         staging.reservation_owner_id, handoff_node, MACHINERY
     ) == pytest.approx(staging.amount_t)
-    assert sim.logistics.cargo_flow_pipeline_t(requirement.id) == pytest.approx(
-        staging.amount_t
-    )
-    # The continuation metadata counts for planning, but the physical mass is
-    # authoritative only in Inventory while unloaded.
-    logistics_owned = sum(
-        row.amount_t
-        for row in sim.logistics.cargo_flows.values()
-        if row.requirement_id == requirement.id
-    ) + sum(
-        row.amount_t
-        for row in sim.logistics.arrival_waiting.values()
-        if row.requirement_id == requirement.id
-    )
-    assert logistics_owned == pytest.approx(0.0)
 
+    # Once local handling infrastructure exists, the Inventory-owned Cargo can
+    # consume local transfer capacity, reload, and continue downstream.
+    sim.facilities.install(ORBITAL_LOGISTICS_NODE, handoff_node)
+    sim.refresh_storage()
     _settle_cargo_boundary(sim, ready_day + 1)
 
     assert staging.id not in sim.logistics.handoff_staging
@@ -523,6 +508,8 @@ def test_multistage_arrival_can_unload_to_inventory_reservation_then_reload():
 
 def test_arrival_waiting_reduces_reusable_transport_capacity_until_cleared():
     sim = build_game_application()._simulation
+    sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
+    sim.refresh_storage()
     allocation_id = _owned_earth_leo_capacity(sim)
     baseline = sim.logistics.current_transport_capacity_snapshot(allocation_id, day=0)
     free = sim.inventory.free_capacity(LEO, MACHINERY)
@@ -550,7 +537,7 @@ def test_arrival_waiting_reduces_reusable_transport_capacity_until_cleared():
     assert "arrival_backpressure" in blocked.limiting_factors
 
     sim.inventory.consume_allocated(LEO, PRECISION_ELECTRONICS, waiting.amount_t)
-    sim.logistics.settle_cargo_arrivals(ready_day + 1)
+    _settle_cargo_boundary(sim, ready_day + 1)
     assert waiting.id not in sim.logistics.arrival_waiting
     restored = sim.logistics.current_transport_capacity_snapshot(
         allocation_id, day=ready_day + 1

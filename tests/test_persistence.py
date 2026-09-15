@@ -363,7 +363,9 @@ def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):
 def test_save_load_preserves_unloaded_handoff_reservation_ownership(tmp_path):
     app = build_game_application()
     sim = app._simulation
-    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    # Leave the first handoff without local transfer capacity.  External carrier
+    # handling can unload the Cargo, creating the canonical Inventory-owned
+    # reservation that must survive Save / Load.
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
     sim.refresh_storage()
     for service_id in sim.transport.external_services:
@@ -388,12 +390,16 @@ def test_save_load_preserves_unloaded_handoff_reservation_ownership(tmp_path):
         sim.day, plan, resources, services
     )
     sim.logistics.advance_capacity_logistics(sim.day, plan, funds, execution)
-    first = next(row for row in sim.logistics.cargo_flows.values() if row.requirement_id == demand.id)
+    first = next(
+        row for row in sim.logistics.cargo_flows.values() if row.requirement_id == demand.id
+    )
     assert first.remaining_legs
     sim.logistics.prepare_cargo_arrivals(first.first_arrival_day)
-    # No direct transfer allocation: unload through common Inventory Admission,
-    # then preserve the downstream commitment with an Inventory Reservation.
-    sim.logistics.settle_cargo_arrivals(first.first_arrival_day)
+    requests = sim.logistics.cargo_handoff_service_requests(first.first_arrival_day)
+    allocations, direct_allocations = sim._allocate_boundary_handoff_services(requests)
+    sim.logistics.settle_cargo_arrivals(
+        first.first_arrival_day, allocations, direct_allocations
+    )
     staging = next(
         row for row in sim.logistics.handoff_staging.values() if row.requirement_id == demand.id
     )

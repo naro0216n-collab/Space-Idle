@@ -978,22 +978,58 @@ class LogisticsFlowMixin:
     def _handoff_request_id(owner_id: EntityId, kind: str) -> EntityId:
         return EntityId(f"service.cargo_handoff:{kind}:{owner_id}")
 
+    def external_arrival_handling_supply(
+        self,
+    ) -> dict[tuple[SpatialNodeId, str], float]:
+        """Return exogenous Cargo Handling supplied by active external carriers.
+
+        A commercial Transport service that has already delivered Cargo remains
+        responsible for the carrier-side unload/transfer work represented by its
+        contracted service capacity.  Local Facility Cargo Handling can augment
+        this supply, but bootstrap deliveries are not made impossible merely
+        because the destination's own handling infrastructure is the Cargo being
+        delivered.  The supply is exposed only for actual external arrivals at
+        the boundary and is therefore not a reusable local Service Capacity.
+        """
+        by_provider: dict[tuple[str, SpatialNodeId], float] = {}
+        for waiting in self.arrival_waiting.values():
+            service_id = waiting.arrival_leg.external_service_id
+            if service_id is None:
+                continue
+            definition = self.transport.external_transport_service_definition(service_id)
+            if definition is None:
+                continue
+            provider_key = (waiting.arrival_leg.service_identity, waiting.node_id)
+            by_provider[provider_key] = max(
+                by_provider.get(provider_key, 0.0), definition.capacity_t_per_day
+            )
+        supply: dict[tuple[SpatialNodeId, str], float] = {}
+        for (_provider, node_id), amount in by_provider.items():
+            key = (node_id, "cargo_transfer")
+            supply[key] = supply.get(key, 0.0) + amount
+        return supply
+
     def cargo_handoff_service_requests(self, day: int) -> tuple[ServiceCapacityRequest, ...]:
-        """Expose direct-transfer/reload work for shared cargo-transfer allocation."""
+        """Expose arrival handling and reload work to shared Service allocation.
+
+        Every arriving Cargo quantity must consume finite Cargo Handling before
+        it can either remain Logistics-owned through a direct handoff or cross
+        the ownership boundary into Inventory.  Inventory Admission is therefore
+        never used as an implicit substitute for Cargo Handling.
+        """
+        del day
         rows: list[ServiceCapacityRequest] = []
         for waiting in sorted(self.arrival_waiting.values(), key=lambda row: str(row.id)):
-            if not waiting.remaining_legs:
-                continue
             rows.append(
                 ServiceCapacityRequest(
-                    self._handoff_request_id(waiting.id, "direct"),
+                    self._handoff_request_id(waiting.id, "arrival"),
                     waiting.node_id,
                     "cargo_transfer",
                     waiting.amount_t,
                     waiting.priority,
                     "cargo_handoff",
                     waiting.id,
-                    "direct_handoff",
+                    "arrival_handling",
                 )
             )
         for staging in sorted(self.handoff_staging.values(), key=lambda row: str(row.id)):
@@ -1077,24 +1113,29 @@ class LogisticsFlowMixin:
         return admitted
 
     def settle_cargo_arrivals(
-        self, day: int, service_allocations: ServiceCapacityAllocationPlan | None = None
+        self,
+        day: int,
+        service_allocations: ServiceCapacityAllocationPlan | None = None,
+        direct_handoff_allocations: ServiceCapacityAllocationPlan | None = None,
     ) -> None:
         """Complete Boundary handoff/admission after arrival slices are prepared.
 
-        Direct handoff consumes finite ``cargo_transfer`` Service Capacity and
-        preserves Logistics ownership. Overflow may unload into Inventory; that
-        Resource is immediately reserved under a Logistics continuation
-        commitment and is reloaded through the same transfer Service on a later
-        boundary. Final-destination Cargo uses ordinary Inventory Admission.
+        Arrival handling consumes finite ``cargo_transfer`` Service Capacity
+        before either direct handoff or Inventory Admission. Direct handoff
+        preserves Logistics ownership. If a handled intermediate quantity is
+        unloaded, the admitted Resource is immediately reserved under a
+        Logistics continuation commitment and is reloaded through the same
+        transfer Service on a later boundary.
         """
         # Existing unloaded handoffs get the first chance to reload according to
         # the shared Service allocation that was resolved for this boundary.
         for staging_id in sorted(tuple(self.handoff_staging), key=str):
             staging = self.handoff_staging[staging_id]
             request_id = self._handoff_request_id(staging.id, "reload")
+            direct_plan = direct_handoff_allocations or service_allocations
             amount = min(
                 staging.amount_t,
-                self._allocated_handoff_rate(service_allocations, request_id),
+                self._allocated_handoff_rate(direct_plan, request_id),
             )
             if amount <= 1e-12:
                 continue
@@ -1118,19 +1159,27 @@ class LogisticsFlowMixin:
 
         for waiting_id in sorted(tuple(self.arrival_waiting), key=str):
             waiting = self.arrival_waiting[waiting_id]
+            arrival_request = self._handoff_request_id(waiting.id, "arrival")
+            handled = min(
+                waiting.amount_t,
+                self._allocated_handoff_rate(service_allocations, arrival_request),
+            )
+            if handled <= 1e-12:
+                continue
+
             if not waiting.remaining_legs:
                 admission = self.inventory.admit(
-                    waiting.node_id, waiting.resource_id, waiting.amount_t
+                    waiting.node_id, waiting.resource_id, handled
                 )
                 waiting.amount_t = max(0.0, waiting.amount_t - admission.admitted_t)
                 if waiting.amount_t <= 1e-9:
                     del self.arrival_waiting[waiting_id]
                 continue
 
-            direct_request = self._handoff_request_id(waiting.id, "direct")
+            direct_plan = direct_handoff_allocations or service_allocations
             direct = min(
-                waiting.amount_t,
-                self._allocated_handoff_rate(service_allocations, direct_request),
+                handled,
+                self._allocated_handoff_rate(direct_plan, arrival_request),
             )
             if direct > 1e-12:
                 self._append_cargo_segment(
@@ -1146,8 +1195,11 @@ class LogisticsFlowMixin:
                 )
                 waiting.amount_t = max(0.0, waiting.amount_t - direct)
 
-            if waiting.amount_t > 1e-12:
-                staged = self._stage_unloaded_handoff(waiting, waiting.amount_t, day)
+            unload_budget = max(0.0, handled - direct)
+            if unload_budget > 1e-12 and waiting.amount_t > 1e-12:
+                staged = self._stage_unloaded_handoff(
+                    waiting, min(waiting.amount_t, unload_budget), day
+                )
                 waiting.amount_t = max(0.0, waiting.amount_t - staged)
             if waiting.amount_t <= 1e-9:
                 del self.arrival_waiting[waiting_id]
