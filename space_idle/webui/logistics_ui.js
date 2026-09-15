@@ -203,12 +203,11 @@
 
   function renderCargoFlows(){
     const cargo=state.cargoFlows?.items||logistics().cargo_flows||[];
-    const procurement=logistics().procurement_deliveries||[];
-    $('#cargoCountBadge').textContent=`${cargo.length+procurement.length}件`;
+    const procurement=logistics().external_supply_batches||[];
+    $('#cargoCountBadge').textContent=`${cargo.length}件`;
     const cargoRows=cargo.map((f)=>`<tr><td><div class="cell-main">${esc(resourceName(f.resource_id))}</div><div class="cell-sub">${esc(ownerLabel(f.owner_kind))} · ${esc(f.owner_id)}</div></td><td>${esc(locationName(f.source_id))} → ${esc(locationName(f.destination_id))}</td><td>${fmt(f.amount_t)} t</td><td>${esc(f.status)}</td><td>Day ${fmt(f.departure_day,0)} → ${fmt(f.ready_day,0)}</td><td>${esc((f.service_ids||[]).map(definitionName).join(' → '))}</td><td>${esc((f.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')}</td></tr>`).join('');
-    const procurementRows=procurement.map((f)=>`<tr><td><div class="cell-main">${esc(resourceName(f.resource_id))}</div><div class="cell-sub">${esc(ownerLabel(f.owner_kind))} · ${esc(f.owner_id)}</div></td><td>External → ${esc(locationName(f.delivery_node_id))}</td><td>${fmt(f.amount_t)} t</td><td>${esc(f.status)}</td><td>Day ${fmt(f.order_day,0)} → ${fmt(f.ready_day,0)}</td><td>${esc(definitionName(f.service_id))}</td><td>${esc((f.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')}</td></tr>`).join('');
-    const rows=cargoRows+procurementRows;
-    $('#cargoTable').innerHTML=`<table><thead><tr><th>資源 / 発生元</th><th>区間</th><th>量</th><th>状態</th><th>dispatch / arrival</th><th>Service path</th><th>入庫blocker</th></tr></thead><tbody>${rows||'<tr><td colspan="7">輸送中・到着待機Cargo Flowなし</td></tr>'}</tbody></table>`;
+    const procurementRows=procurement.map((f)=>`<tr><td><div class="cell-main">${esc(resourceName(f.resource_id))}</div><div class="cell-sub">${esc(ownerLabel(f.owner_kind))} · ${esc(f.owner_id)}</div></td><td>${esc(locationName(f.supply_node_id))}</td><td>${fmt(f.amount_t)} t</td><td>${esc(f.status)}</td><td>Day ${fmt(f.order_day,0)} → ${fmt(f.available_day,0)}</td><td>${esc(definitionName(f.service_id))}</td><td>${esc((f.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')}</td></tr>`).join('');
+    $('#cargoTable').innerHTML=`<h4>Cargo Flow</h4><table><thead><tr><th>資源 / 発生元</th><th>区間</th><th>量</th><th>状態</th><th>dispatch / arrival</th><th>Service path</th><th>入庫blocker</th></tr></thead><tbody>${cargoRows||'<tr><td colspan="7">輸送中・到着待機Cargo Flowなし</td></tr>'}</tbody></table><h4>External Supply</h4><table><thead><tr><th>資源 / 用途</th><th>Supply Endpoint</th><th>量</th><th>状態</th><th>order / available</th><th>Provider</th><th>Admission blocker</th></tr></thead><tbody>${procurementRows||'<tr><td colspan="7">External Supply待機なし</td></tr>'}</tbody></table>`;
   }
 
   function renderRouteInspector(){

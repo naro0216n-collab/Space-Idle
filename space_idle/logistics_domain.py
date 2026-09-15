@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .domain import DomainExtension, StateCodec
-from .external_procurement import ProcurementDeliveryBatch, ProcurementDeliveryStatus
+from .external_procurement import ExternalSupplyBatch, ExternalSupplyStatus
 from .logistics_models import (
     CargoArrivalWaiting,
     CargoFlowSegment,
@@ -56,7 +56,7 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
         "cargo_flow_counter": lg._cargo_flow_counter,
         "arrival_waiting_counter": lg._arrival_waiting_counter,
         "handoff_staging_counter": lg._handoff_staging_counter,
-        "procurement_delivery_counter": lg._procurement_delivery_counter,
+        "external_supply_counter": lg._external_supply_counter,
         "cargo_flows": [
             {
                 "id": str(row.id),
@@ -110,21 +110,21 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
             }
             for row in sorted(lg.handoff_staging.values(), key=lambda row: str(row.id))
         ],
-        "procurement_deliveries": [
+        "external_supply_batches": [
             {
                 "id": str(row.id),
                 "service_id": str(row.service_id),
                 "demand_id": str(row.demand_id),
                 "owner_kind": row.owner_kind,
                 "owner_id": str(row.owner_id),
-                "delivery_node_id": str(row.delivery_node_id),
+                "supply_node_id": str(row.supply_node_id),
                 "resource_id": str(row.resource_id),
                 "amount_t": row.amount_t,
                 "order_day": row.order_day,
-                "ready_day": row.ready_day,
+                "available_day": row.available_day,
                 "status": row.status.value,
             }
-            for row in sorted(lg.procurement_deliveries.values(), key=lambda row: str(row.id))
+            for row in sorted(lg.external_supply_batches.values(), key=lambda row: str(row.id))
         ],
         "target_stocks": [
             {
@@ -161,7 +161,7 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
     lg._cargo_flow_counter = int(data.get("cargo_flow_counter", 0))
     lg._arrival_waiting_counter = int(data.get("arrival_waiting_counter", 0))
     lg._handoff_staging_counter = int(data.get("handoff_staging_counter", 0))
-    lg._procurement_delivery_counter = int(data.get("procurement_delivery_counter", 0))
+    lg._external_supply_counter = int(data.get("external_supply_counter", 0))
     lg.cargo_flows = {
         EntityId(row["id"]): CargoFlowSegment(
             id=EntityId(row["id"]),
@@ -215,21 +215,21 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
         )
         for row in data.get("handoff_staging", [])
     }
-    lg.procurement_deliveries = {
-        EntityId(row["id"]): ProcurementDeliveryBatch(
+    lg.external_supply_batches = {
+        EntityId(row["id"]): ExternalSupplyBatch(
             EntityId(row["id"]),
             DefinitionId(row["service_id"]),
             EntityId(row["demand_id"]),
             row["owner_kind"],
             EntityId(row["owner_id"]),
-            SpatialNodeId(row["delivery_node_id"]),
+            SpatialNodeId(row["supply_node_id"]),
             DefinitionId(row["resource_id"]),
             float(row["amount_t"]),
             int(row["order_day"]),
-            int(row["ready_day"]),
-            ProcurementDeliveryStatus(row.get("status", "in_transit")),
+            int(row["available_day"]),
+            ExternalSupplyStatus(row.get("status", "ordered")),
         )
-        for row in data.get("procurement_deliveries", [])
+        for row in data.get("external_supply_batches", [])
     }
     lg.target_stocks = {
         EntityId(row["id"]): TargetStockPolicy(
@@ -323,16 +323,16 @@ def validate_logistics_runtime(sim: Any) -> None:
             f"handoff staging reservation mismatch: {staging_id}",
         )
 
-    for delivery_id, delivery in lg.procurement_deliveries.items():
-        _require(delivery_id == delivery.id, f"procurement delivery key mismatch: {delivery_id}")
-        service = lg.procurement_services.get(delivery.service_id)
-        _require(service is not None, f"procurement delivery references unknown service: {delivery_id}/{delivery.service_id}")
-        _require(sim.graph.has_operational_node(delivery.delivery_node_id), f"procurement delivery references unknown node: {delivery_id}/{delivery.delivery_node_id}")
+    for supply_id, supply in lg.external_supply_batches.items():
+        _require(supply_id == supply.id, f"external supply key mismatch: {supply_id}")
+        service = lg.procurement_services.get(supply.service_id)
+        _require(service is not None, f"external supply references unknown service: {supply_id}/{supply.service_id}")
+        _require(sim.graph.has_operational_node(supply.supply_node_id), f"external supply references unknown endpoint: {supply_id}/{supply.supply_node_id}")
         if service is not None:
-            _require(delivery.delivery_node_id == service.delivery_node_id, f"procurement delivery node does not match service: {delivery_id}")
-            _require(service.unit_price_musd_per_t(delivery.resource_id) is not None, f"procurement delivery resource is not offered by service: {delivery_id}/{delivery.resource_id}")
-        _require(delivery.amount_t > 0, f"procurement delivery has non-positive amount: {delivery_id}")
-        _require(delivery.ready_day > delivery.order_day, f"procurement delivery has non-positive latency: {delivery_id}")
+            _require(supply.supply_node_id == service.supply_node_id, f"external supply endpoint does not match service: {supply_id}")
+            _require(service.unit_price_musd_per_t(supply.resource_id) is not None, f"external supply resource is not offered by service: {supply_id}/{supply.resource_id}")
+        _require(supply.amount_t > 0, f"external supply has non-positive amount: {supply_id}")
+        _require(supply.available_day > supply.order_day, f"external supply has non-positive lead time: {supply_id}")
 
     for policy_id, policy in lg.target_stocks.items():
         _require(policy_id == policy.id, f"target stock key mismatch: {policy_id}")

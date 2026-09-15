@@ -7,6 +7,7 @@ from .models import (
     MovementExecution,
     MovementExecutionKind,
     MovementExecutionLeg,
+    MovementExecutionPayloadResource,
     MovementExecutionResourceRequirement,
     MovementPlan,
     OperationAssetDisposition,
@@ -58,6 +59,7 @@ class MovementExecutionMixin:
         plans: tuple[MovementPlan, ...],
         *,
         payload_t_per_unit: float = 0.0,
+        payload_resources: tuple[MovementExecutionPayloadResource, ...] = (),
         day: int = 0,
     ) -> MovementExecution:
         if execution_id in self.movement_executions:
@@ -136,6 +138,7 @@ class MovementExecutionMixin:
             payload_t_per_unit=payload_t_per_unit,
             started_day=day,
             completion_day=day + max(1, latency_days),
+            payload_resources=payload_resources,
         )
         self.movement_executions[execution_id] = execution
         return execution
@@ -150,6 +153,7 @@ class MovementExecutionMixin:
         path: tuple[RouteId, ...],
         *,
         payload_t_per_unit: float = 0.0,
+        payload_resources: tuple[MovementExecutionPayloadResource, ...] = (),
         day: int = 0,
     ) -> MovementExecution:
         plans = tuple(self.require_movement_plan(plan_id) for plan_id in path)
@@ -161,6 +165,7 @@ class MovementExecutionMixin:
             units,
             plans,
             payload_t_per_unit=payload_t_per_unit,
+            payload_resources=payload_resources,
             day=day,
         )
 
@@ -174,6 +179,7 @@ class MovementExecutionMixin:
         plan: MovementPlan,
         *,
         payload_t_per_unit: float = 0.0,
+        payload_resources: tuple[MovementExecutionPayloadResource, ...] = (),
         day: int = 0,
     ) -> MovementExecution:
         # Physical-target plans are ephemeral and intentionally need not be
@@ -187,6 +193,7 @@ class MovementExecutionMixin:
             units,
             (plan,),
             payload_t_per_unit=payload_t_per_unit,
+            payload_resources=payload_resources,
             day=day,
         )
 

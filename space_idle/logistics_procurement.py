@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 from .external_economy import FundsAllocationPlan, FundsRequest
 from .external_procurement import (
     ExternalProcurementPlan,
-    ProcurementDeliveryBatch,
-    ProcurementDeliveryStatus,
+    ExternalSupplyBatch,
+    ExternalSupplyStatus,
     ProcurementOrder,
 )
 from .supply import SupplyRequirement
@@ -23,43 +23,43 @@ class ExternalProcurementMixin:
     @staticmethod
     def _procurement_request_id(
         demand_id: EntityId,
-        delivery_node_id: SpatialNodeId,
+        supply_node_id: SpatialNodeId,
         service_id: DefinitionId,
     ) -> EntityId:
         return EntityId(
-            f"funds.procurement:{demand_id}:{delivery_node_id}:{service_id}"
+            f"funds.procurement:{demand_id}:{supply_node_id}:{service_id}"
         )
 
-    def procurement_pipeline_t(
+    def external_supply_pipeline_t(
         self,
         demand_id: EntityId,
         *,
-        delivery_node_id: SpatialNodeId | None = None,
+        supply_node_id: SpatialNodeId | None = None,
     ) -> float:
         return sum(
             row.amount_t
-            for row in self.procurement_deliveries.values()
+            for row in self.external_supply_batches.values()
             if row.demand_id == demand_id
-            and (delivery_node_id is None or row.delivery_node_id == delivery_node_id)
+            and (supply_node_id is None or row.supply_node_id == supply_node_id)
         )
 
-    def procurement_delivery_snapshots(self) -> tuple[ProcurementDeliveryBatch, ...]:
-        """Return detached external Procurement pipeline state for projections."""
+    def external_supply_snapshots(self) -> tuple[ExternalSupplyBatch, ...]:
+        """Return detached provider-side external Supply Interface state."""
         return tuple(
             replace(row)
             for row in sorted(
-                self.procurement_deliveries.values(), key=lambda row: str(row.id)
+                self.external_supply_batches.values(), key=lambda row: str(row.id)
             )
         )
 
     def _procurement_service_for(
         self,
         demand: SupplyRequirement,
-        delivery_node_id: SpatialNodeId,
+        supply_node_id: SpatialNodeId,
     ):
         candidates = []
         for service in self.procurement_services.values():
-            if service.delivery_node_id != delivery_node_id:
+            if service.supply_node_id != supply_node_id:
                 continue
             price = service.unit_price_musd_per_t(demand.resource_id)
             if price is None:
@@ -96,8 +96,8 @@ class ExternalProcurementMixin:
 
         remaining_rows: list[tuple[SupplyRequirement, SpatialNodeId, float]] = []
         for (demand_id, source_id), (demand, amount_t) in planned.items():
-            pipeline = self.procurement_pipeline_t(
-                demand_id, delivery_node_id=source_id
+            pipeline = self.external_supply_pipeline_t(
+                demand_id, supply_node_id=source_id
             )
             need = max(0.0, amount_t - pipeline)
             if need > 1e-12:
@@ -149,8 +149,8 @@ class ExternalProcurementMixin:
             delivered_or_planned = (
                 self.cargo_flow_pipeline_t(demand.id)
                 + planned_transport_by_demand.get(demand.id, 0.0)
-                + self.procurement_pipeline_t(
-                    demand.id, delivery_node_id=demand.destination_id
+                + self.external_supply_pipeline_t(
+                    demand.id, supply_node_id=demand.destination_id
                 )
             )
             direct_need = max(0.0, demand.amount_t - delivered_or_planned)
@@ -160,7 +160,7 @@ class ExternalProcurementMixin:
 
         orders: list[ProcurementOrder] = []
         requests: list[FundsRequest] = []
-        for demand, delivery_node_id, amount_t in sorted(
+        for demand, supply_node_id, amount_t in sorted(
             needs,
             key=lambda row: (
                 -row[0].priority,
@@ -168,20 +168,20 @@ class ExternalProcurementMixin:
                 str(row[1]),
             ),
         ):
-            resolved = self._procurement_service_for(demand, delivery_node_id)
+            resolved = self._procurement_service_for(demand, supply_node_id)
             if resolved is None:
                 continue
             service, policy = resolved
             if (
-                delivery_node_id == demand.destination_id
+                supply_node_id == demand.destination_id
                 and demand.forecast_requirement_day is not None
-                and day + service.delivery_latency_days < demand.forecast_requirement_day
+                and day + service.supply_latency_days < demand.forecast_requirement_day
             ):
                 continue
             unit_price = service.unit_price_musd_per_t(demand.resource_id)
             assert unit_price is not None
             request_id = self._procurement_request_id(
-                demand.id, delivery_node_id, service.id
+                demand.id, supply_node_id, service.id
             )
             request = FundsRequest(
                 request_id,
@@ -191,14 +191,14 @@ class ExternalProcurementMixin:
                 demand.priority,
                 demand.owner_kind,
                 demand.owner_id,
-                f"procurement:{demand.resource_id}:{delivery_node_id}",
+                f"procurement:{demand.resource_id}:{supply_node_id}",
             )
             requests.append(request)
             orders.append(
                 ProcurementOrder(
                     service.id,
                     demand,
-                    delivery_node_id,
+                    supply_node_id,
                     amount_t,
                     amount_t,
                     unit_price,
@@ -237,7 +237,6 @@ class ExternalProcurementMixin:
         plan: ExternalProcurementPlan,
         funds: FundsAllocationPlan,
     ) -> None:
-        requests_by_id = {request.id: request for request in plan.spending_requests}
         for order in plan.orders:
             service = self.procurement_services[order.service_id]
             authorization = funds.authorization(order.funds_request_id)
@@ -245,36 +244,36 @@ class ExternalProcurementMixin:
             if actual_cost > authorization.authorized_musd + 1e-8:
                 raise RuntimeError("external procurement spend exceeded authorization")
             self.external_economy.spend_authorized(authorization, actual_cost, day)
-            self._procurement_delivery_counter += 1
-            delivery_id = EntityId(
-                f"procurement.delivery.{self._procurement_delivery_counter}"
+            self._external_supply_counter += 1
+            supply_id = EntityId(
+                f"external.supply.{self._external_supply_counter}"
             )
-            self.procurement_deliveries[delivery_id] = ProcurementDeliveryBatch(
-                delivery_id,
+            self.external_supply_batches[supply_id] = ExternalSupplyBatch(
+                supply_id,
                 service.id,
                 order.demand.id,
                 order.demand.owner_kind,
                 order.demand.owner_id,
-                order.delivery_node_id,
+                order.supply_node_id,
                 order.demand.resource_id,
                 order.amount_t,
                 day,
-                day + service.delivery_latency_days,
+                day + service.supply_latency_days,
             )
 
-    def settle_procurement_arrivals(self, day: int) -> None:
-        for delivery_id in sorted(tuple(self.procurement_deliveries), key=str):
-            row = self.procurement_deliveries[delivery_id]
+    def settle_external_supply(self, day: int) -> None:
+        for supply_id in sorted(tuple(self.external_supply_batches), key=str):
+            row = self.external_supply_batches[supply_id]
             if (
-                row.status is ProcurementDeliveryStatus.IN_TRANSIT
-                and row.ready_day <= day
+                row.status is ExternalSupplyStatus.ORDERED
+                and row.available_day <= day
             ):
-                row.status = ProcurementDeliveryStatus.ARRIVAL_WAITING
-            if row.status is not ProcurementDeliveryStatus.ARRIVAL_WAITING:
+                row.status = ExternalSupplyStatus.ADMISSION_WAITING
+            if row.status is not ExternalSupplyStatus.ADMISSION_WAITING:
                 continue
             admission = self.inventory.admit(
-                row.delivery_node_id, row.resource_id, row.amount_t
+                row.supply_node_id, row.resource_id, row.amount_t
             )
             row.amount_t = max(0.0, row.amount_t - admission.admitted_t)
             if row.amount_t <= 1e-9:
-                del self.procurement_deliveries[delivery_id]
+                del self.external_supply_batches[supply_id]

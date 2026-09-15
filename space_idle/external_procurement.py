@@ -10,24 +10,25 @@ from .shared import DefinitionId, EntityId, SpatialNodeId
 
 @dataclass(frozen=True)
 class ExternalProcurementServiceDef:
-    """Content-owned offer that delivers purchased physical resources to one node.
+    """Content-owned external Supply Interface at one Operational Node.
 
-    Procurement is not an Inventory shortcut.  An accepted order becomes a
-    persisted delivery batch and reaches Inventory only through normal arrival
-    admission after ``delivery_latency_days``.
+    Procurement creates provider-side supply at ``supply_node_id`` after the
+    configured lead time.  Physical Resource enters player-owned state only
+    through normal Inventory Admission at that endpoint; onward delivery uses
+    the regular Cargo / Transport lifecycle.
     """
 
     id: DefinitionId
     display_name: str
-    delivery_node_id: SpatialNodeId
+    supply_node_id: SpatialNodeId
     resource_prices_musd_per_t: tuple[tuple[DefinitionId, float], ...]
-    delivery_latency_days: int
+    supply_latency_days: int
 
     def __post_init__(self) -> None:
         if not self.display_name:
             raise ValueError("external procurement display name must be non-empty")
-        if self.delivery_latency_days <= 0:
-            raise ValueError("external procurement delivery latency must be positive")
+        if self.supply_latency_days <= 0:
+            raise ValueError("external procurement supply latency must be positive")
         seen: set[DefinitionId] = set()
         for resource_id, price in self.resource_prices_musd_per_t:
             if resource_id in seen:
@@ -45,37 +46,39 @@ class ExternalProcurementServiceDef:
         return None
 
 
-class ProcurementDeliveryStatus(str, Enum):
-    IN_TRANSIT = "in_transit"
-    ARRIVAL_WAITING = "arrival_waiting"
+class ExternalSupplyStatus(str, Enum):
+    ORDERED = "ordered"
+    ADMISSION_WAITING = "admission_waiting"
 
 
 @dataclass
-class ProcurementDeliveryBatch:
+class ExternalSupplyBatch:
+    """Provider-owned external supply awaiting entry at a fixed Supply Endpoint."""
+
     id: EntityId
     service_id: DefinitionId
     demand_id: EntityId
     owner_kind: str
     owner_id: EntityId
-    delivery_node_id: SpatialNodeId
+    supply_node_id: SpatialNodeId
     resource_id: DefinitionId
     amount_t: float
     order_day: int
-    ready_day: int
-    status: ProcurementDeliveryStatus = ProcurementDeliveryStatus.IN_TRANSIT
+    available_day: int
+    status: ExternalSupplyStatus = ExternalSupplyStatus.ORDERED
 
     def __post_init__(self) -> None:
         if self.amount_t <= 0:
-            raise ValueError("external procurement delivery amount must be positive")
-        if self.ready_day <= self.order_day:
-            raise ValueError("external procurement delivery must have positive latency")
+            raise ValueError("external supply amount must be positive")
+        if self.available_day <= self.order_day:
+            raise ValueError("external supply must have positive lead time")
 
 
 @dataclass(frozen=True)
 class ProcurementOrder:
     service_id: DefinitionId
     demand: SupplyRequirement
-    delivery_node_id: SpatialNodeId
+    supply_node_id: SpatialNodeId
     amount_t: float
     requested_amount_t: float
     unit_price_musd_per_t: float

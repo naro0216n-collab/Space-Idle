@@ -120,21 +120,21 @@ class ApplicationReportProjectorMixin:
             else:
                 external_outflow[dispatch.resource_id] += dispatch.amount_t
 
-        # External Procurement crosses the player-system boundary without a source
-        # Operational Node. Authorized orders are this tick's external inflow;
-        # persisted delivery batches are pipeline stock until Storage admission.
+        # External Procurement crosses the player-system boundary at a fixed
+        # Supply Endpoint. Authorized orders are this tick's external inflow;
+        # provider-side supply remains pipeline state until Inventory Admission.
         projected_procurement_by_destination: dict[
             tuple[object, SpatialNodeId], float
         ] = defaultdict(float)
         for order in decision.allocations.procurement.orders:
             projected_procurement_by_destination[
-                (order.demand.id, order.delivery_node_id)
+                (order.demand.id, order.supply_node_id)
             ] += order.amount_t
-            if order.delivery_node_id in scope:
+            if order.supply_node_id in scope:
                 external_inflow[order.demand.resource_id] += order.amount_t
 
-        for delivery in sim.logistics.procurement_delivery_snapshots():
-            if delivery.delivery_node_id in scope:
+        for delivery in sim.logistics.external_supply_snapshots():
+            if delivery.supply_node_id in scope:
                 imports_pipeline[delivery.resource_id] += delivery.amount_t
 
         for flow in sim.logistics.cargo_flow_snapshots():
@@ -168,8 +168,8 @@ class ApplicationReportProjectorMixin:
             remaining = max(
                 0.0,
                 sim.logistics.demand_remaining_t(demand)
-                - sim.logistics.procurement_pipeline_t(
-                    demand.id, delivery_node_id=demand.destination_id
+                - sim.logistics.external_supply_pipeline_t(
+                    demand.id, supply_node_id=demand.destination_id
                 )
                 - projected_dispatch_by_demand[demand.id]
                 - projected_procurement_by_destination[

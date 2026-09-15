@@ -18,7 +18,8 @@ from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialN
 from .site import SiteRequirements, evaluate_environment_requirements, evaluate_site_requirements
 from .storage import StorageService
 from .transport.models import (
-    FleetReservationKind, MovementExecutionKind, OperationAssetDisposition,
+    FleetReservationKind, MovementExecutionKind, MovementExecutionPayloadResource,
+    OperationAssetDisposition,
 )
 
 
@@ -654,6 +655,10 @@ class LocationFoundingService:
                         package.required_units,
                         movement_plan,
                         payload_t_per_unit=package.payload_t_per_unit,
+                        payload_resources=tuple(
+                            MovementExecutionPayloadResource(req.resource_id, req.amount_t)
+                            for req in package.payload_resources
+                        ),
                         day=day,
                     )
                     reservation_id = self.fleet_reservation_id(project.id)
@@ -692,13 +697,30 @@ class LocationFoundingService:
         graph = self.facilities.environment.graph
         if graph.owner_of_cell(project.target_core_cell_id) is not None:
             raise RuntimeError(f"founding target cell became occupied: {project.target_core_cell_id}")
+        execution_id = project.movement_execution_id
+        if execution_id is None:
+            raise RuntimeError(f"founding completion lacks MovementExecution: {project.id}")
+        execution = self.transport.movement_executions.get(execution_id)
+        if execution is None:
+            raise RuntimeError(f"founding completion MovementExecution missing: {project.id}")
+        package = self.packages[project.founding_package_id]
+        expected_payload = {
+            req.resource_id: req.amount_t for req in package.payload_resources
+        }
+        actual_payload = {
+            req.resource_id: req.amount_t for req in execution.payload_resources
+        }
+        if actual_payload.keys() != expected_payload.keys() or any(
+            abs(actual_payload[resource_id] - amount_t) > 1e-9
+            for resource_id, amount_t in expected_payload.items()
+        ):
+            raise RuntimeError(f"founding MovementExecution payload manifest mismatch: {project.id}")
         graph.found_location(
             project.new_location_id,
             project.display_name,
             project.target_body_id,
             project.target_core_cell_id,
         )
-        package = self.packages[project.founding_package_id]
         for deployment in package.deployed_facilities:
             definition = self.facilities.definitions[deployment.facility_def_id]
             site_cell_id = project.target_core_cell_id if (
@@ -724,12 +746,6 @@ class LocationFoundingService:
                     raise RuntimeError(
                         f"founding manifest exceeds Inventory Admission: {req.resource_id}"
                     )
-        execution_id = project.movement_execution_id
-        if execution_id is None:
-            raise RuntimeError(f"founding completion lacks MovementExecution: {project.id}")
-        execution = self.transport.movement_executions.get(execution_id)
-        if execution is None:
-            raise RuntimeError(f"founding completion MovementExecution missing: {project.id}")
         final_location = (
             project.new_location_id
             if execution.final_asset_disposition is OperationAssetDisposition.DESTINATION

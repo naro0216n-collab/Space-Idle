@@ -21,6 +21,7 @@ from .models import (
     MovementExecution,
     MovementExecutionKind,
     MovementExecutionLeg,
+    MovementExecutionPayloadResource,
     MovementExecutionResourceRequirement,
     OperationAssetDisposition,
     PathPolicy,
@@ -61,6 +62,10 @@ def _capture_movement_execution(row: MovementExecution) -> dict[str, Any]:
         "payload_t_per_unit": row.payload_t_per_unit,
         "started_day": row.started_day,
         "completion_day": row.completion_day,
+        "payload_resources": [
+            {"resource_id": str(payload.resource_id), "amount_t": payload.amount_t}
+            for payload in row.payload_resources
+        ],
         "legs": [
             {
                 "movement_plan_id": str(leg.movement_plan_id),
@@ -124,6 +129,13 @@ def _restore_movement_execution(data: dict[str, Any]) -> MovementExecution:
         payload_t_per_unit=float(data.get("payload_t_per_unit", 0.0)),
         started_day=int(data["started_day"]),
         completion_day=int(data["completion_day"]),
+        payload_resources=tuple(
+            MovementExecutionPayloadResource(
+                DefinitionId(payload["resource_id"]),
+                float(payload["amount_t"]),
+            )
+            for payload in data.get("payload_resources", [])
+        ),
     )
 
 

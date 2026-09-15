@@ -13,7 +13,7 @@ from space_idle.shared import DefinitionId, EntityId
 from space_idle.validation import validate_catalog_coverage
 from space_idle.validation_support import ConfigurationError
 from space_idle.logistics_models import CargoFlowSegment, CargoServiceLeg
-from space_idle.external_procurement import ProcurementDeliveryBatch
+from space_idle.external_procurement import ExternalSupplyBatch
 
 
 def _resource(view, resource_id):
@@ -218,7 +218,7 @@ def test_authorized_external_procurement_is_current_inflow_and_not_unmet():
         order
         for order in decision.allocations.procurement.orders
         if order.demand.owner_id == EntityId(str(project_id))
-        and order.delivery_node_id == EARTH
+        and order.supply_node_id == EARTH
     )
     assert orders
 
@@ -238,7 +238,7 @@ def test_authorized_external_procurement_is_current_inflow_and_not_unmet():
 
 
 
-def test_external_procurement_delivery_to_destination_reduces_unmet_and_is_pipeline():
+def test_external_supply_at_destination_reduces_unmet_and_is_pipeline():
     app = build_game_application()
     sim = app._simulation
     project_id = sim.projects.plan_build(
@@ -256,9 +256,9 @@ def test_external_procurement_delivery_to_destination_reduces_unmet_and_is_pipel
         GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),))
     )
     pipeline_amount = min(0.4, demand.amount_t)
-    sim.logistics.procurement_deliveries[EntityId("procurement.delivery.analytics.direct")] = (
-        ProcurementDeliveryBatch(
-            EntityId("procurement.delivery.analytics.direct"),
+    sim.logistics.external_supply_batches[EntityId("external.supply.analytics.direct")] = (
+        ExternalSupplyBatch(
+            EntityId("external.supply.analytics.direct"),
             ids.EARTH_INDUSTRIAL_MARKET,
             demand.id,
             demand.owner_kind,
@@ -283,7 +283,7 @@ def test_external_procurement_delivery_to_destination_reduces_unmet_and_is_pipel
         pipeline_amount
     )
 
-def test_external_procurement_delivery_is_pipeline_only_at_its_delivery_scope():
+def test_external_supply_is_pipeline_only_at_its_supply_endpoint_scope():
     app = build_game_application()
     sim = app._simulation
     sim.technology.completed.update(
@@ -307,9 +307,9 @@ def test_external_procurement_delivery_is_pipeline_only_at_its_delivery_scope():
     leo_before = app.query(
         GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),))
     )
-    sim.logistics.procurement_deliveries[EntityId("procurement.delivery.analytics")] = (
-        ProcurementDeliveryBatch(
-            EntityId("procurement.delivery.analytics"),
+    sim.logistics.external_supply_batches[EntityId("external.supply.analytics")] = (
+        ExternalSupplyBatch(
+            EntityId("external.supply.analytics"),
             ids.EARTH_INDUSTRIAL_MARKET,
             demand.id,
             demand.owner_kind,

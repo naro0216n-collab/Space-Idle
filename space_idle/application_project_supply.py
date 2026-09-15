@@ -34,8 +34,8 @@ class SupplyPlanningProjectorMixin:
         for resolution in resolutions:
             demand = resolution.demand
             cargo_pipeline = sim.logistics.cargo_flow_pipeline_t(demand.id)
-            procurement_pipeline = sim.logistics.procurement_pipeline_t(
-                demand.id, delivery_node_id=demand.destination_id
+            procurement_pipeline = sim.logistics.external_supply_pipeline_t(
+                demand.id, supply_node_id=demand.destination_id
             )
             pipeline_t = cargo_pipeline + procurement_pipeline
             remaining_t = max(0.0, resolution.external_required_t - pipeline_t)
@@ -48,17 +48,17 @@ class SupplyPlanningProjectorMixin:
             runway = None if rate is None else runway_by_key.get(
                 (demand.destination_id, demand.resource_id), 0.0
             )
-            procurement_arrivals = [
-                row.ready_day
-                for row in sim.logistics.procurement_delivery_snapshots()
+            external_supply_days = [
+                row.available_day
+                for row in sim.logistics.external_supply_snapshots()
                 if row.demand_id == demand.id
-                and row.delivery_node_id == demand.destination_id
+                and row.supply_node_id == demand.destination_id
             ]
             arrivals = [
                 value
                 for value in (
                     options.earliest_confirmed_arrival_day,
-                    min(procurement_arrivals) if procurement_arrivals else None,
+                    min(external_supply_days) if external_supply_days else None,
                 )
                 if value is not None
             ]

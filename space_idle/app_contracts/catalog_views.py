@@ -131,8 +131,8 @@ class TransportServiceDefinitionRow:
 class ProcurementServiceDefinitionRow:
     id: str
     display_name: str
-    delivery_node_id: str
-    delivery_latency_days: int
+    supply_node_id: str
+    supply_latency_days: int
     resource_prices_musd_per_t: tuple[tuple[str, float], ...]
 
 

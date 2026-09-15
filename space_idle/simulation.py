@@ -679,7 +679,7 @@ class Simulation:
                 power_by_location, handoff_requests
             )
         self.logistics.settle_cargo_arrivals(self.day, handoff_allocations)
-        self.logistics.settle_procurement_arrivals(self.day)
+        self.logistics.settle_external_supply(self.day)
 
         # Procurement wait/policy maturation is a clock-boundary transition.
         # It may expose intents for this tick but never consumes inventory.

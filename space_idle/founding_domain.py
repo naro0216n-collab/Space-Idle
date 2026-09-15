@@ -168,6 +168,15 @@ def validate_runtime(sim: Any) -> None:
                     if package is not None:
                         _require(execution.units == package.required_units, f"founding MovementExecution unit mismatch: {project_id}")
                         _require(abs(execution.payload_t_per_unit - package.payload_t_per_unit) <= 1e-9, f"founding MovementExecution payload mismatch: {project_id}")
+                        expected_payload = {
+                            req.resource_id: req.amount_t for req in package.payload_resources
+                        }
+                        actual_payload = {
+                            req.resource_id: req.amount_t for req in execution.payload_resources
+                        }
+                        _require(actual_payload.keys() == expected_payload.keys(), f"founding MovementExecution payload resources mismatch: {project_id}")
+                        for resource_id, amount_t in expected_payload.items():
+                            _require(abs(actual_payload[resource_id] - amount_t) <= 1e-9, f"founding MovementExecution payload amount mismatch: {project_id}/{resource_id}")
         elif p.status is FoundingStatus.COMPLETE:
             _require(p.movement_execution_id is None, f"completed founding retains MovementExecution: {project_id}")
             _require(p.new_location_id in sim.graph.locations, f"completed founding location missing: {project_id}")

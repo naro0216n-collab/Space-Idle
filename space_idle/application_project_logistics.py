@@ -23,7 +23,7 @@ class LogisticsProjectorMixin(
             vehicle_production_options=self._vehicle_production_option_rows(),
             vehicle_production=self._vehicle_production_rows(),
             cargo_flows=self._cargo_flow_rows(),
-            procurement_deliveries=self._procurement_delivery_rows(),
+            external_supply_batches=self._external_supply_rows(),
             supply_policies=self._supply_policy_rows(),
             target_stocks=self._target_stock_rows(),
             requirements=self._requirement_rows(
@@ -38,7 +38,6 @@ class LogisticsProjectorMixin(
         pools = self._fleet_pool_rows()
         allocations = self._transport_allocation_rows()
         flows = self._cargo_flow_rows()
-        procurement_deliveries = self._procurement_delivery_rows()
         decision = sim.tick_decision_projection()
         requirement_rows = self._requirement_rows(
             execution_allocation=decision.allocations.transport,
@@ -51,17 +50,11 @@ class LogisticsProjectorMixin(
             free_fleet_units=sum(row.free_units for row in pools),
             allocation_count=len(allocations),
             unfilled_allocation_units=sum(row.unfilled_units for row in allocations),
-            cargo_flow_count=len(flows) + len(procurement_deliveries),
+            cargo_flow_count=len(flows),
             supply_policy_count=len(sim.logistics.supply_policy_rows()),
             target_stock_count=len(sim.logistics.target_stock_policies()),
             requirement_count=len(requirement_rows),
             queued_supply_t=sum(row.remaining_t for row in requirement_rows),
-            in_transit_t=(
-                sum(row.amount_t for row in flows if row.status == "in_transit")
-                + sum(row.amount_t for row in procurement_deliveries if row.status == "in_transit")
-            ),
-            arrival_waiting_t=(
-                sum(row.amount_t for row in flows if row.status == "arrival_waiting")
-                + sum(row.amount_t for row in procurement_deliveries if row.status == "arrival_waiting")
-            ),
+            in_transit_t=sum(row.amount_t for row in flows if row.status == "in_transit"),
+            arrival_waiting_t=sum(row.amount_t for row in flows if row.status == "arrival_waiting"),
         )

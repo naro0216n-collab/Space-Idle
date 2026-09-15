@@ -373,6 +373,19 @@ def test_deploying_founding_save_load_completes_exactly_once(tmp_path):
     )
     assert project.status.value == "deploying"
     assert project.new_location_id not in sim.graph.locations
+    assert project.movement_execution_id is not None
+    execution = sim.transport.movement_executions[project.movement_execution_id]
+    expected_payload = {
+        row.resource_id: row.amount_t for row in package.payload_resources
+    }
+    assert {
+        row.resource_id: row.amount_t for row in execution.payload_resources
+    } == expected_payload
+    assert sum(row.amount_t for row in execution.payload_resources) == pytest.approx(
+        package.payload_t
+    )
+    for row in package.payload_resources:
+        assert sim.founding.staged_payload_t(project.id, row.resource_id) == pytest.approx(0.0)
     project_row = next(
         row for row in app.query(GetProjects(str(ids.LUNAR_ORBIT))).items
         if row.id == project_id
@@ -388,12 +401,20 @@ def test_deploying_founding_save_load_completes_exactly_once(tmp_path):
     loaded_project = loaded_sim.founding.projects[project.id]
     assert loaded_project.status.value == "deploying"
     assert loaded_project.new_location_id not in loaded_sim.graph.locations
+    assert loaded_project.movement_execution_id is not None
+    loaded_execution = loaded_sim.transport.movement_executions[
+        loaded_project.movement_execution_id
+    ]
+    assert {
+        row.resource_id: row.amount_t for row in loaded_execution.payload_resources
+    } == expected_payload
 
     remaining_days = _advance_until(
         loaded, lambda: loaded_project.status.value == "complete", "loaded founding completion"
     )
     assert remaining_days > 0
     assert loaded_project.status.value == "complete"
+    assert loaded_project.movement_execution_id is None
     location_id = loaded_project.new_location_id
     assert location_id in loaded_sim.graph.locations
     facilities = loaded_sim.facilities.all_at(location_id)

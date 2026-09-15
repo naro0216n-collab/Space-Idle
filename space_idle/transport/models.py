@@ -502,6 +502,18 @@ class MovementExecutionResourceRequirement:
 
 
 @dataclass(frozen=True)
+class MovementExecutionPayloadResource:
+    """Physical Resource cargo owned by a started finite Movement."""
+
+    resource_id: DefinitionId
+    amount_t: float
+
+    def __post_init__(self) -> None:
+        if self.amount_t <= 0:
+            raise ValueError("movement execution payload resource must be positive")
+
+
+@dataclass(frozen=True)
 class MovementExecutionLeg:
     """Frozen movement conditions captured when a one-shot execution starts."""
 
@@ -544,6 +556,7 @@ class MovementExecution:
     payload_t_per_unit: float
     started_day: int
     completion_day: int
+    payload_resources: tuple[MovementExecutionPayloadResource, ...] = ()
 
     def __post_init__(self) -> None:
         if self.units <= 0:
@@ -556,6 +569,12 @@ class MovementExecution:
             raise ValueError("movement execution completion must follow start")
         if self.payload_t_per_unit > min(leg.payload_capacity_t for leg in self.legs) + 1e-9:
             raise ValueError("movement execution payload exceeds frozen capacity")
+        payload_resource_ids = [row.resource_id for row in self.payload_resources]
+        if len(set(payload_resource_ids)) != len(payload_resource_ids):
+            raise ValueError("movement execution payload resources must be unique")
+        resource_payload_t = sum(row.amount_t for row in self.payload_resources)
+        if resource_payload_t > self.payload_t_per_unit * self.units + 1e-9:
+            raise ValueError("movement execution resource payload exceeds total payload")
 
     @property
     def latency_days(self) -> int:

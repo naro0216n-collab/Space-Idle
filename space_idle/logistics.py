@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .external_economy import ExternalEconomyState
-from .external_procurement import ExternalProcurementServiceDef, ProcurementDeliveryBatch
+from .external_procurement import ExternalProcurementServiceDef, ExternalSupplyBatch
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .logistics_procurement import ExternalProcurementMixin
@@ -29,11 +29,11 @@ class LogisticsService(SupplyPlanningMixin, LogisticsFlowMixin, ExternalProcurem
     target_stocks: dict[EntityId, TargetStockPolicy] = field(default_factory=dict)
     supply_policies: dict[EntityId, SupplyPolicy] = field(default_factory=dict)
     procurement_services: dict[DefinitionId, ExternalProcurementServiceDef] = field(default_factory=dict)
-    procurement_deliveries: dict[EntityId, ProcurementDeliveryBatch] = field(default_factory=dict)
+    external_supply_batches: dict[EntityId, ExternalSupplyBatch] = field(default_factory=dict)
     _cargo_flow_counter: int = 0
     _arrival_waiting_counter: int = 0
     _handoff_staging_counter: int = 0
-    _procurement_delivery_counter: int = 0
+    _external_supply_counter: int = 0
 
 
 __all__ = ["LogisticsService"]

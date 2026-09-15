@@ -55,8 +55,8 @@ def project_procurement_services(projector):
         ProcurementServiceDefinitionRow(
             str(service.id),
             service.display_name,
-            str(service.delivery_node_id),
-            service.delivery_latency_days,
+            str(service.supply_node_id),
+            service.supply_latency_days,
             tuple((str(resource_id), price) for resource_id, price in service.resource_prices_musd_per_t),
         )
         for service in sorted(

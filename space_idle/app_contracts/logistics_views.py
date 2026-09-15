@@ -167,17 +167,17 @@ class CargoFlowRow:
 
 
 @dataclass(frozen=True)
-class ProcurementDeliveryRow:
+class ExternalSupplyRow:
     id: str
     service_id: str
     demand_id: str
     owner_kind: str
     owner_id: str
-    delivery_node_id: str
+    supply_node_id: str
     resource_id: str
     amount_t: float
     order_day: int
-    ready_day: int
+    available_day: int
     status: str
     admission_blockers: tuple[str, ...] = ()
 
@@ -268,7 +268,7 @@ class LogisticsView:
     vehicle_production_options: tuple[VehicleProductionOptionRow, ...]
     vehicle_production: tuple[VehicleProductionRow, ...]
     cargo_flows: tuple[CargoFlowRow, ...]
-    procurement_deliveries: tuple[ProcurementDeliveryRow, ...]
+    external_supply_batches: tuple[ExternalSupplyRow, ...]
     supply_policies: tuple[SupplyPolicyRow, ...]
     target_stocks: tuple[TargetStockRow, ...]
     requirements: tuple[SupplyRequirementRow, ...]
