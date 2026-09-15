@@ -12,7 +12,7 @@ from space_idle.persistence import load_game, save_game
 from space_idle.shared import DefinitionId, EntityId
 from space_idle.validation import validate_catalog_coverage
 from space_idle.validation_support import ConfigurationError
-from space_idle.logistics_models import CargoFlowBatch
+from space_idle.logistics_models import CargoFlowSegment, CargoServiceLeg
 from space_idle.external_procurement import ProcurementDeliveryBatch
 
 
@@ -23,10 +23,13 @@ def _resource(view, resource_id):
 def test_scope_boundary_changes_import_export_without_double_counting_internal_flow():
     app = build_game_application()
     sim = app._simulation
-    sim.logistics.cargo_flows[EntityId("flow.analytics.scope")] = CargoFlowBatch(
-        EntityId("flow.analytics.scope"), ids.WATER, 12.0,
-        EARTH, LEO, None, "test", EntityId("analytics.owner"), 3,
-        ("analytics.service",), (LEO,), sim.day, sim.day + 2,
+    sim.logistics.cargo_flows[EntityId("flow.analytics.scope")] = CargoFlowSegment(
+        id=EntityId("flow.analytics.scope"), resource_id=ids.WATER, amount_t=12.0,
+        source_id=EARTH, final_destination_id=LEO, demand_id=None,
+        owner_kind="test", owner_id=EntityId("analytics.owner"), priority=3,
+        leg=CargoServiceLeg("analytics.service", EARTH, LEO, 2, 2.0),
+        remaining_legs=(), dispatch_start_day=sim.day, dispatch_end_day=sim.day + 1,
+        dispatch_rate_t_per_day=12.0,
     )
 
     earth = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),)))
@@ -363,10 +366,13 @@ def test_resource_group_definition_fails_closed_when_member_resource_is_missing(
 def test_dependency_analytics_is_derived_again_after_load(tmp_path):
     app = build_game_application()
     sim = app._simulation
-    sim.logistics.cargo_flows[EntityId("flow.analytics.persist")] = CargoFlowBatch(
-        EntityId("flow.analytics.persist"), ids.WATER, 7.0,
-        EARTH, LEO, None, "test", EntityId("analytics.owner"), 3,
-        ("analytics.service",), (LEO,), sim.day, sim.day + 2,
+    sim.logistics.cargo_flows[EntityId("flow.analytics.persist")] = CargoFlowSegment(
+        id=EntityId("flow.analytics.persist"), resource_id=ids.WATER, amount_t=7.0,
+        source_id=EARTH, final_destination_id=LEO, demand_id=None,
+        owner_kind="test", owner_id=EntityId("analytics.owner"), priority=3,
+        leg=CargoServiceLeg("analytics.service", EARTH, LEO, 2, 2.0),
+        remaining_legs=(), dispatch_start_day=sim.day, dispatch_end_day=sim.day + 1,
+        dispatch_rate_t_per_day=7.0,
     )
     before = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),)))
 

@@ -160,6 +160,10 @@ class CargoFlowRow:
     ready_day: int
     status: str
     admission_blockers: tuple[str, ...] = ()
+    final_destination_id: str | None = None
+    dispatch_end_day: int | None = None
+    dispatch_rate_t_per_day: float | None = None
+    latency_days: int | None = None
 
 
 @dataclass(frozen=True)

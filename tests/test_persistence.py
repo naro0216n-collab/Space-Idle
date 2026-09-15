@@ -358,3 +358,57 @@ def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):
 
     assert loaded._simulation.environment.capture_overlay_state() == before
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
+
+
+def test_save_load_preserves_unloaded_handoff_reservation_ownership(tmp_path):
+    app = build_game_application()
+    sim = app._simulation
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
+    sim.refresh_storage()
+    for service_id in sim.transport.external_services:
+        sim.external_economy.register_service(service_id)
+    sim.external_economy.create_policy(
+        enabled=True,
+        allowed_service_ids=tuple(sim.transport.external_services),
+        day=sim.day,
+    )
+    sim.inventory.add(ids.EARTH, ids.MACHINERY, 0.1)
+    demand = SupplyRequirement(
+        EntityId("demand.persistence-handoff"), "test",
+        EntityId("owner.persistence-handoff"), ids.LUNAR_ORBIT,
+        ids.MACHINERY, 0.1, 4, ids.EARTH,
+    )
+    plan = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
+    funds = sim.external_economy.allocate(plan.spending_requests, sim.day)
+    plan = sim.logistics.authorize_capacity_logistics(plan, funds, sim.day)
+    resources = allocate_resource_claims(plan.claims, sim.inventory)
+    services = _transport_service_allocations(sim, sim.day, plan)
+    execution = sim.logistics.allocate_capacity_logistics_execution(
+        sim.day, plan, resources, services
+    )
+    sim.logistics.advance_capacity_logistics(sim.day, plan, funds, execution)
+    first = next(row for row in sim.logistics.cargo_flows.values() if row.demand_id == demand.id)
+    assert first.remaining_legs
+    sim.logistics.prepare_cargo_arrivals(first.first_arrival_day)
+    # No direct transfer allocation: unload through common Inventory Admission,
+    # then preserve the downstream commitment with an Inventory Reservation.
+    sim.logistics.settle_cargo_arrivals(first.first_arrival_day)
+    staging = next(
+        row for row in sim.logistics.handoff_staging.values() if row.demand_id == demand.id
+    )
+    assert sim.inventory.reserved_for(
+        staging.reservation_owner_id, staging.node_id, staging.resource_id
+    ) == pytest.approx(staging.amount_t)
+
+    path = tmp_path / "cargo-handoff.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application)
+
+    assert capture_state(loaded._simulation) == capture_state(sim)
+    loaded_staging = loaded._simulation.logistics.handoff_staging[staging.id]
+    assert loaded._simulation.inventory.reserved_for(
+        loaded_staging.reservation_owner_id,
+        loaded_staging.node_id,
+        loaded_staging.resource_id,
+    ) == pytest.approx(loaded_staging.amount_t)

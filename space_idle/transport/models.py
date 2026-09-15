@@ -281,6 +281,7 @@ class TransportServiceSupply:
     destination_id: SpatialNodeId
     capacity_t_per_day: float
     latency_days: int
+    cycle_days: float
     route_path: tuple[RouteId, ...]
     allocation_id: EntityId | None = None
     direction: str | None = None
@@ -293,6 +294,8 @@ class TransportServiceSupply:
             raise ValueError("transport service supply capacity must be non-negative")
         if self.latency_days <= 0:
             raise ValueError("transport service supply latency must be positive")
+        if self.cycle_days <= 0:
+            raise ValueError("transport service supply cycle must be positive")
         if self.source_id == self.destination_id:
             raise ValueError("transport service supply endpoints must differ")
         if (self.allocation_id is None) != (self.direction is None):

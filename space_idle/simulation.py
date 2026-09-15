@@ -664,7 +664,21 @@ class Simulation:
         if self.founding is not None:
             self.founding.settle_arrivals(self.day)
         self.transport.invalidate_movement_plans()
-        self.logistics.settle_cargo_arrivals(self.day)
+        self.logistics.prepare_cargo_arrivals(self.day)
+        handoff_requests = self.logistics.cargo_handoff_service_requests(self.day)
+        handoff_allocations = None
+        if handoff_requests:
+            locations = self._active_locations() | set(self.graph.operational_node_ids())
+            power_by_location = {
+                location_id: self.power.physical_snapshot(
+                    location_id, self.facilities, self.day
+                )
+                for location_id in locations
+            }
+            handoff_allocations = self._allocate_tick_services(
+                power_by_location, handoff_requests
+            )
+        self.logistics.settle_cargo_arrivals(self.day, handoff_allocations)
         self.logistics.settle_procurement_arrivals(self.day)
 
         # Procurement wait/policy maturation is a clock-boundary transition.

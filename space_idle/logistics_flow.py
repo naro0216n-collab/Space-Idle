@@ -7,10 +7,15 @@ from .external_economy import FundsAllocationPlan, FundsRequest
 from .knowledge import DomainActivity
 from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .supply import SupplyRequirement
-from .service_capacity import ServiceCapacityAllocationPlan
+from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .supply_planning import SupplyPlanningOptions
-from .logistics_models import CargoFlowBatch, CargoFlowStatus
+from .logistics_models import (
+    CargoArrivalWaiting,
+    CargoFlowSegment,
+    CargoHandoffStaging,
+    CargoServiceLeg,
+)
 from .transport.models import (
     DirectionalCapacity,
     PathPolicy,
@@ -89,7 +94,59 @@ class LogisticsFlowMixin:
     """
 
     def _service_edges(self, day: int) -> tuple[TransportServiceSupply, ...]:
-        return self.transport.transport_service_supplies(day)
+        rows: list[TransportServiceSupply] = []
+        backpressure = self._arrival_backpressure_by_service()
+        for edge in self.transport.transport_service_supplies(day):
+            occupied = backpressure.get(self._capacity_owner_key_from_supply(edge), 0.0)
+            if occupied <= 1e-12:
+                rows.append(edge)
+                continue
+            rows.append(
+                replace(
+                    edge,
+                    capacity_t_per_day=max(
+                        0.0,
+                        edge.capacity_t_per_day - occupied / max(1.0, edge.cycle_days),
+                    ),
+                )
+            )
+        return tuple(rows)
+
+    @staticmethod
+    def _cargo_service_leg(edge: TransportServiceSupply) -> CargoServiceLeg:
+        return CargoServiceLeg(
+            service_identity=edge.key,
+            source_id=edge.source_id,
+            destination_id=edge.destination_id,
+            latency_days=edge.latency_days,
+            cycle_days=edge.cycle_days,
+            allocation_id=edge.allocation_id,
+            direction=edge.direction,
+            external_service_id=edge.external_service_id,
+        )
+
+    @staticmethod
+    def _capacity_owner_key_from_leg(leg: CargoServiceLeg) -> tuple:
+        if leg.allocation_id is not None:
+            return ("allocation", leg.allocation_id, leg.direction)
+        if leg.external_service_id is not None:
+            return ("external", leg.external_service_id, leg.source_id, leg.destination_id)
+        return ("service", leg.service_identity)
+
+    @staticmethod
+    def _capacity_owner_key_from_supply(edge: TransportServiceSupply) -> tuple:
+        if edge.allocation_id is not None:
+            return ("allocation", edge.allocation_id, edge.direction)
+        if edge.external_service_id is not None:
+            return ("external", edge.external_service_id, edge.source_id, edge.destination_id)
+        return ("service", edge.key)
+
+    def _arrival_backpressure_by_service(self) -> dict[tuple, float]:
+        occupied: dict[tuple, float] = {}
+        for waiting in self.arrival_waiting.values():
+            key = self._capacity_owner_key_from_leg(waiting.arrival_leg)
+            occupied[key] = occupied.get(key, 0.0) + waiting.amount_t
+        return occupied
 
     @staticmethod
     def _edge_score(edge: TransportServiceSupply, policy: PathPolicy) -> float:
@@ -272,16 +329,34 @@ class LogisticsFlowMixin:
         for flow in self.cargo_flows.values():
             if flow.demand_id in pipeline:
                 pipeline[flow.demand_id] += flow.amount_t
+        for waiting in self.arrival_waiting.values():
+            if waiting.demand_id in pipeline:
+                pipeline[waiting.demand_id] += waiting.amount_t
+        for staging in self.handoff_staging.values():
+            if staging.demand_id in pipeline:
+                pipeline[staging.demand_id] += staging.amount_t
         return pipeline
 
     def cargo_flow_pipeline_t(self, demand_id: EntityId) -> float:
         return self._flow_pipeline_by_demand({demand_id})[demand_id]
 
-    def cargo_flow_snapshots(self) -> tuple[CargoFlowBatch, ...]:
-        """Return detached Cargo Flow state for cross-layer read projections."""
+    def cargo_flow_snapshots(self) -> tuple[CargoFlowSegment, ...]:
+        """Return detached in-transit Cargo Flow Segment state."""
         return tuple(
             replace(row)
             for row in sorted(self.cargo_flows.values(), key=lambda row: str(row.id))
+        )
+
+    def arrival_waiting_snapshots(self) -> tuple[CargoArrivalWaiting, ...]:
+        return tuple(
+            replace(row)
+            for row in sorted(self.arrival_waiting.values(), key=lambda row: str(row.id))
+        )
+
+    def handoff_staging_snapshots(self) -> tuple[CargoHandoffStaging, ...]:
+        return tuple(
+            replace(row)
+            for row in sorted(self.handoff_staging.values(), key=lambda row: str(row.id))
         )
 
     def _allocation_used_after(
@@ -675,27 +750,48 @@ class LogisticsFlowMixin:
         clock; a Cargo Flow dispatched on ``day`` is then authoritative evidence
         that this transport tick has already executed.
         """
-        if any(flow.departure_day == day for flow in self.cargo_flows.values()):
+        if any(
+            flow.dispatch_start_day <= day < flow.dispatch_end_day
+            for flow in self.cargo_flows.values()
+        ):
             return day
         return day - 1
 
     def _derived_allocation_usage(
         self, allocation_id: EntityId, day: int
     ) -> DirectionalCapacity:
-        """Rebuild Used capacity from authoritative Cargo Flow state."""
-        departure_day = self._latest_completed_transport_day(day)
-        forward_key = f"allocation:{allocation_id}:forward"
-        reverse_key = f"allocation:{allocation_id}:reverse"
+        """Rebuild Used capacity from authoritative current-leg Segments."""
+        dispatch_day = self._latest_completed_transport_day(day)
         forward = 0.0
         reverse = 0.0
         for flow in self.cargo_flows.values():
-            if flow.departure_day != departure_day:
+            if not (flow.dispatch_start_day <= dispatch_day < flow.dispatch_end_day):
                 continue
-            if forward_key in flow.service_ids:
-                forward += flow.amount_t
-            if reverse_key in flow.service_ids:
-                reverse += flow.amount_t
+            if flow.leg.allocation_id != allocation_id:
+                continue
+            if flow.leg.direction == "forward":
+                forward += flow.dispatch_rate_t_per_day
+            elif flow.leg.direction == "reverse":
+                reverse += flow.dispatch_rate_t_per_day
         return DirectionalCapacity(forward, reverse)
+
+    def _allocation_backpressure(
+        self, allocation_id: EntityId
+    ) -> tuple[DirectionalCapacity, bool]:
+        forward = 0.0
+        reverse = 0.0
+        any_waiting = False
+        for waiting in self.arrival_waiting.values():
+            leg = waiting.arrival_leg
+            if leg.allocation_id != allocation_id:
+                continue
+            any_waiting = True
+            blocked_rate = waiting.amount_t / max(1.0, leg.cycle_days)
+            if leg.direction == "forward":
+                forward += blocked_rate
+            elif leg.direction == "reverse":
+                reverse += blocked_rate
+        return DirectionalCapacity(forward, reverse), any_waiting
 
     def current_transport_capacity_snapshot(
         self,
@@ -709,6 +805,31 @@ class LogisticsFlowMixin:
             allocation_id,
             day=day,
             used=self._derived_allocation_usage(allocation_id, day),
+        )
+        backpressure, has_backpressure = self._allocation_backpressure(allocation_id)
+        available = DirectionalCapacity(
+            max(0.0, snapshot.available.forward_t_per_day - backpressure.forward_t_per_day),
+            max(0.0, snapshot.available.reverse_t_per_day - backpressure.reverse_t_per_day),
+        )
+        used = DirectionalCapacity(
+            min(snapshot.used.forward_t_per_day, available.forward_t_per_day),
+            min(snapshot.used.reverse_t_per_day, available.reverse_t_per_day),
+        )
+        spare = DirectionalCapacity(
+            max(0.0, available.forward_t_per_day - used.forward_t_per_day),
+            max(0.0, available.reverse_t_per_day - used.reverse_t_per_day),
+        )
+        snapshot = replace(
+            snapshot,
+            available=available,
+            used=used,
+            spare=spare,
+            limiting_factors=tuple(
+                dict.fromkeys(
+                    snapshot.limiting_factors
+                    + (("arrival_backpressure",) if has_backpressure else ())
+                )
+            ),
         )
         if execution_allocation is None:
             return snapshot
@@ -735,25 +856,301 @@ class LogisticsFlowMixin:
             ),
         )
 
-    def settle_cargo_arrivals(self, day: int) -> None:
-        """Settle Cargo Flow batches that reached their boundary arrival time.
+    @staticmethod
+    def _segment_semantics_key(
+        resource_id: DefinitionId,
+        source_id: SpatialNodeId,
+        final_destination_id: SpatialNodeId,
+        demand_id: EntityId | None,
+        owner_kind: str,
+        owner_id: EntityId,
+        priority: int,
+        leg: CargoServiceLeg,
+        remaining_legs: tuple[CargoServiceLeg, ...],
+    ) -> tuple:
+        return (
+            resource_id, source_id, final_destination_id, demand_id, owner_kind, owner_id,
+            int(priority), leg, remaining_legs,
+        )
 
-        Arrival admission is a Simulation boundary operation.  Dispatch during
-        the current tick must never feed inventory back into the same tick's
-        allocation graph, even if a route's modeled latency is minimal.
-        """
-        for flow_id in sorted(tuple(self.cargo_flows), key=str):
-            flow = self.cargo_flows[flow_id]
-            if flow.status is CargoFlowStatus.IN_TRANSIT and flow.ready_day <= day:
-                flow.status = CargoFlowStatus.ARRIVAL_WAITING
-            if flow.status is not CargoFlowStatus.ARRIVAL_WAITING:
-                continue
-            admission = self.inventory.admit(
-                flow.destination_id, flow.resource_id, flow.amount_t
+    def _append_cargo_segment(
+        self,
+        *,
+        resource_id: DefinitionId,
+        amount_t: float,
+        final_destination_id: SpatialNodeId,
+        demand_id: EntityId | None,
+        owner_kind: str,
+        owner_id: EntityId,
+        priority: int,
+        legs: tuple[CargoServiceLeg, ...],
+        dispatch_day: int,
+    ) -> EntityId:
+        if amount_t <= 1e-12:
+            raise ValueError("cargo segment append requires positive amount")
+        if not legs:
+            raise ValueError("cargo segment append requires a transport leg")
+        leg = legs[0]
+        remaining = legs[1:]
+        key = self._segment_semantics_key(
+            resource_id, leg.source_id, final_destination_id, demand_id, owner_kind,
+            owner_id, priority, leg, remaining,
+        )
+        for segment in sorted(self.cargo_flows.values(), key=lambda row: str(row.id)):
+            other = self._segment_semantics_key(
+                segment.resource_id, segment.source_id, segment.final_destination_id,
+                segment.demand_id, segment.owner_kind, segment.owner_id,
+                int(segment.priority), segment.leg, segment.remaining_legs,
             )
-            flow.amount_t = max(0.0, flow.amount_t - admission.admitted_t)
-            if flow.amount_t <= 1e-9:
-                del self.cargo_flows[flow_id]
+            if other != key:
+                continue
+            if (
+                segment.dispatch_end_day == dispatch_day
+                and abs(segment.dispatch_rate_t_per_day - amount_t) <= 1e-9
+            ):
+                segment.dispatch_end_day += 1
+                segment.amount_t += amount_t
+                return segment.id
+
+        self._cargo_flow_counter += 1
+        segment_id = EntityId(f"cargo.segment.{self._cargo_flow_counter}")
+        self.cargo_flows[segment_id] = CargoFlowSegment(
+            segment_id, resource_id, amount_t, leg.source_id, final_destination_id,
+            demand_id, owner_kind, owner_id, priority, leg, remaining,
+            dispatch_day, dispatch_day + 1, amount_t,
+        )
+        return segment_id
+
+    @staticmethod
+    def _waiting_semantics_key(waiting: CargoArrivalWaiting) -> tuple:
+        return (
+            waiting.resource_id, waiting.node_id, waiting.final_destination_id,
+            waiting.demand_id, waiting.owner_kind, waiting.owner_id, int(waiting.priority),
+            waiting.arrival_leg, waiting.remaining_legs,
+        )
+
+    def _append_arrival_waiting(
+        self, segment: CargoFlowSegment, amount_t: float, day: int
+    ) -> EntityId:
+        probe = CargoArrivalWaiting(
+            EntityId("cargo.waiting.probe"), segment.resource_id, amount_t,
+            segment.destination_id, segment.final_destination_id, segment.demand_id,
+            segment.owner_kind, segment.owner_id, segment.priority, segment.leg,
+            segment.remaining_legs, day,
+        )
+        key = self._waiting_semantics_key(probe)
+        for waiting in sorted(self.arrival_waiting.values(), key=lambda row: str(row.id)):
+            if self._waiting_semantics_key(waiting) == key:
+                waiting.amount_t += amount_t
+                waiting.arrived_day = min(waiting.arrived_day, day)
+                return waiting.id
+        self._arrival_waiting_counter += 1
+        waiting_id = EntityId(f"cargo.waiting.{self._arrival_waiting_counter}")
+        probe.id = waiting_id
+        self.arrival_waiting[waiting_id] = probe
+        return waiting_id
+
+    def prepare_cargo_arrivals(self, day: int) -> None:
+        """Move dispatch slices whose frozen latency elapsed into arrival waiting.
+
+        This is the first part of Boundary settlement. It changes only Logistics
+        ownership; Inventory admission and handoff are resolved afterwards.
+        """
+        for segment_id in sorted(tuple(self.cargo_flows), key=str):
+            segment = self.cargo_flows[segment_id]
+            arrived_end = min(
+                segment.dispatch_end_day,
+                day - segment.latency_days + 1,
+            )
+            arrived_days = max(0, arrived_end - segment.dispatch_start_day)
+            if arrived_days <= 0:
+                continue
+            arrived_amount = min(
+                segment.amount_t, segment.dispatch_rate_t_per_day * arrived_days
+            )
+            self._append_arrival_waiting(segment, arrived_amount, day)
+            segment.dispatch_start_day += arrived_days
+            segment.amount_t = max(0.0, segment.amount_t - arrived_amount)
+            if segment.amount_t <= 1e-9:
+                del self.cargo_flows[segment_id]
+
+    @staticmethod
+    def _handoff_request_id(owner_id: EntityId, kind: str) -> EntityId:
+        return EntityId(f"service.cargo_handoff:{kind}:{owner_id}")
+
+    def cargo_handoff_service_requests(self, day: int) -> tuple[ServiceCapacityRequest, ...]:
+        """Expose direct-transfer/reload work for shared cargo-transfer allocation."""
+        rows: list[ServiceCapacityRequest] = []
+        for waiting in sorted(self.arrival_waiting.values(), key=lambda row: str(row.id)):
+            if not waiting.remaining_legs:
+                continue
+            rows.append(
+                ServiceCapacityRequest(
+                    self._handoff_request_id(waiting.id, "direct"),
+                    waiting.node_id,
+                    "cargo_transfer",
+                    waiting.amount_t,
+                    waiting.priority,
+                    "cargo_handoff",
+                    waiting.id,
+                    "direct_handoff",
+                )
+            )
+        for staging in sorted(self.handoff_staging.values(), key=lambda row: str(row.id)):
+            rows.append(
+                ServiceCapacityRequest(
+                    self._handoff_request_id(staging.id, "reload"),
+                    staging.node_id,
+                    "cargo_transfer",
+                    staging.amount_t,
+                    staging.priority,
+                    "cargo_handoff",
+                    staging.id,
+                    "reload_handoff",
+                )
+            )
+        return tuple(rows)
+
+    @staticmethod
+    def _allocated_handoff_rate(
+        allocations: ServiceCapacityAllocationPlan | None, request_id: EntityId
+    ) -> float:
+        if allocations is None:
+            return 0.0
+        try:
+            return max(0.0, allocations.allocated(request_id))
+        except KeyError:
+            return 0.0
+
+    @staticmethod
+    def _staging_semantics_key(staging: CargoHandoffStaging) -> tuple:
+        return (
+            staging.resource_id, staging.node_id, staging.final_destination_id,
+            staging.demand_id, staging.owner_kind, staging.owner_id, int(staging.priority),
+            staging.remaining_legs,
+        )
+
+    def _stage_unloaded_handoff(
+        self, waiting: CargoArrivalWaiting, amount_t: float, day: int
+    ) -> float:
+        if amount_t <= 1e-12 or not waiting.remaining_legs:
+            return 0.0
+        probe_key = (
+            waiting.resource_id, waiting.node_id, waiting.final_destination_id,
+            waiting.demand_id, waiting.owner_kind, waiting.owner_id, int(waiting.priority),
+            waiting.remaining_legs,
+        )
+        existing = next(
+            (
+                row for row in sorted(self.handoff_staging.values(), key=lambda row: str(row.id))
+                if self._staging_semantics_key(row) == probe_key
+            ),
+            None,
+        )
+        if existing is None:
+            self._handoff_staging_counter += 1
+            staging_id = EntityId(f"cargo.handoff.{self._handoff_staging_counter}")
+            reservation_owner = EntityId(f"reservation.cargo_handoff:{staging_id}")
+        else:
+            staging_id = existing.id
+            reservation_owner = existing.reservation_owner_id
+
+        admission = self.inventory.admit(waiting.node_id, waiting.resource_id, amount_t)
+        admitted = admission.admitted_t
+        if admitted <= 1e-12:
+            return 0.0
+        reserved = self.inventory.reserve(
+            reservation_owner, waiting.node_id, waiting.resource_id, admitted
+        )
+        if abs(reserved - admitted) > 1e-8:
+            raise RuntimeError("cargo handoff admission could not be reserved atomically")
+        if existing is None:
+            self.handoff_staging[staging_id] = CargoHandoffStaging(
+                staging_id, waiting.resource_id, admitted, waiting.node_id,
+                waiting.final_destination_id, waiting.demand_id, waiting.owner_kind,
+                waiting.owner_id, waiting.priority, reservation_owner,
+                waiting.remaining_legs, day,
+            )
+        else:
+            existing.amount_t += admitted
+            existing.staged_day = min(existing.staged_day, day)
+        return admitted
+
+    def settle_cargo_arrivals(
+        self, day: int, service_allocations: ServiceCapacityAllocationPlan | None = None
+    ) -> None:
+        """Complete Boundary handoff/admission after arrival slices are prepared.
+
+        Direct handoff consumes finite ``cargo_transfer`` Service Capacity and
+        preserves Logistics ownership. Overflow may unload into Inventory; that
+        Resource is immediately reserved under a Logistics continuation
+        commitment and is reloaded through the same transfer Service on a later
+        boundary. Final-destination Cargo uses ordinary Inventory Admission.
+        """
+        # Existing unloaded handoffs get the first chance to reload according to
+        # the shared Service allocation that was resolved for this boundary.
+        for staging_id in sorted(tuple(self.handoff_staging), key=str):
+            staging = self.handoff_staging[staging_id]
+            request_id = self._handoff_request_id(staging.id, "reload")
+            amount = min(
+                staging.amount_t,
+                self._allocated_handoff_rate(service_allocations, request_id),
+            )
+            if amount <= 1e-12:
+                continue
+            self.inventory.consume_reserved(
+                staging.reservation_owner_id, staging.node_id, staging.resource_id, amount
+            )
+            self._append_cargo_segment(
+                resource_id=staging.resource_id,
+                amount_t=amount,
+                final_destination_id=staging.final_destination_id,
+                demand_id=staging.demand_id,
+                owner_kind=staging.owner_kind,
+                owner_id=staging.owner_id,
+                priority=staging.priority,
+                legs=staging.remaining_legs,
+                dispatch_day=day,
+            )
+            staging.amount_t = max(0.0, staging.amount_t - amount)
+            if staging.amount_t <= 1e-9:
+                del self.handoff_staging[staging_id]
+
+        for waiting_id in sorted(tuple(self.arrival_waiting), key=str):
+            waiting = self.arrival_waiting[waiting_id]
+            if not waiting.remaining_legs:
+                admission = self.inventory.admit(
+                    waiting.node_id, waiting.resource_id, waiting.amount_t
+                )
+                waiting.amount_t = max(0.0, waiting.amount_t - admission.admitted_t)
+                if waiting.amount_t <= 1e-9:
+                    del self.arrival_waiting[waiting_id]
+                continue
+
+            direct_request = self._handoff_request_id(waiting.id, "direct")
+            direct = min(
+                waiting.amount_t,
+                self._allocated_handoff_rate(service_allocations, direct_request),
+            )
+            if direct > 1e-12:
+                self._append_cargo_segment(
+                    resource_id=waiting.resource_id,
+                    amount_t=direct,
+                    final_destination_id=waiting.final_destination_id,
+                    demand_id=waiting.demand_id,
+                    owner_kind=waiting.owner_kind,
+                    owner_id=waiting.owner_id,
+                    priority=waiting.priority,
+                    legs=waiting.remaining_legs,
+                    dispatch_day=day,
+                )
+                waiting.amount_t = max(0.0, waiting.amount_t - direct)
+
+            if waiting.amount_t > 1e-12:
+                staged = self._stage_unloaded_handoff(waiting, waiting.amount_t, day)
+                waiting.amount_t = max(0.0, waiting.amount_t - staged)
+            if waiting.amount_t <= 1e-9:
+                del self.arrival_waiting[waiting_id]
 
     def _transport_operation_allocation_factor(
         self,
@@ -964,27 +1361,21 @@ class LogisticsFlowMixin:
                         authorization, actual_cost, day
                     )
 
-            self._cargo_flow_counter += 1
-            flow_id = EntityId(f"cargo.flow.{self._cargo_flow_counter}")
             activities.append(
                 DomainActivity(
                     "transport", amount, "supply_dispatch", demand.id, row.source_id
                 )
             )
-            self.cargo_flows[flow_id] = CargoFlowBatch(
-                flow_id,
-                demand.resource_id,
-                amount,
-                row.source_id,
-                demand.destination_id,
-                demand.id,
-                demand.owner_kind,
-                demand.owner_id,
-                demand.priority,
-                tuple(edge.key for edge in row.path),
-                tuple(edge.destination_id for edge in row.path),
-                day,
-                day + sum(edge.latency_days for edge in row.path),
+            self._append_cargo_segment(
+                resource_id=demand.resource_id,
+                amount_t=amount,
+                final_destination_id=demand.destination_id,
+                demand_id=demand.id,
+                owner_kind=demand.owner_kind,
+                owner_id=demand.owner_id,
+                priority=demand.priority,
+                legs=tuple(self._cargo_service_leg(edge) for edge in row.path),
+                dispatch_day=day,
             )
 
         for allocation_id, location_id, resource_id, amount in (
@@ -1097,10 +1488,9 @@ class LogisticsFlowMixin:
                 operational.append(source_id)
 
         arrivals = [
-            flow.ready_day
+            flow.first_arrival_day
             for flow in self.cargo_flows.values()
             if flow.demand_id == demand.id
-            and flow.status is CargoFlowStatus.IN_TRANSIT
         ]
         return SupplyPlanningOptions(
             tuple(candidates),

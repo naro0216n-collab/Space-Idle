@@ -9,7 +9,7 @@ from .inventory import InventoryBook
 from .logistics_procurement import ExternalProcurementMixin
 from .shared import DefinitionId, EntityId
 from .supply_planning import SupplyPlanningMixin
-from .logistics_models import CargoFlowBatch
+from .logistics_models import CargoArrivalWaiting, CargoFlowSegment, CargoHandoffStaging
 from .supply import SupplyPolicy, TargetStockPolicy
 from .transport.service import TransportService
 from .logistics_flow import LogisticsFlowMixin
@@ -23,12 +23,16 @@ class LogisticsService(SupplyPlanningMixin, LogisticsFlowMixin, ExternalProcurem
     inventory: InventoryBook
     external_economy: ExternalEconomyState
     facilities: FacilityBook
-    cargo_flows: dict[EntityId, CargoFlowBatch] = field(default_factory=dict)
+    cargo_flows: dict[EntityId, CargoFlowSegment] = field(default_factory=dict)
+    arrival_waiting: dict[EntityId, CargoArrivalWaiting] = field(default_factory=dict)
+    handoff_staging: dict[EntityId, CargoHandoffStaging] = field(default_factory=dict)
     target_stocks: dict[EntityId, TargetStockPolicy] = field(default_factory=dict)
     supply_policies: dict[EntityId, SupplyPolicy] = field(default_factory=dict)
     procurement_services: dict[DefinitionId, ExternalProcurementServiceDef] = field(default_factory=dict)
     procurement_deliveries: dict[EntityId, ProcurementDeliveryBatch] = field(default_factory=dict)
     _cargo_flow_counter: int = 0
+    _arrival_waiting_counter: int = 0
+    _handoff_staging_counter: int = 0
     _procurement_delivery_counter: int = 0
 
 

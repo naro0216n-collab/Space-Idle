@@ -46,7 +46,10 @@ def test_domain_authoritative_state_is_not_read_directly_across_domain_boundarie
             "fleet_releases",
             "vehicle_production_projects",
         },
-        "logistics": {"target_stocks", "supply_policies", "cargo_flows", "procurement_deliveries"},
+        "logistics": {
+            "target_stocks", "supply_policies", "cargo_flows", "arrival_waiting",
+            "handoff_staging", "procurement_deliveries",
+        },
     }
     service_fields = {
         "transport": set(TransportService.__dataclass_fields__),

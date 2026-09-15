@@ -147,6 +147,16 @@ class ApplicationReportProjectorMixin:
                 dependency_sources[flow.resource_id].add(flow.source_id)
             else:
                 exports_pipeline[flow.resource_id] += flow.amount_t
+        for waiting in sim.logistics.arrival_waiting_snapshots():
+            source_inside = waiting.arrival_leg.source_id in scope
+            destination_inside = waiting.node_id in scope
+            if source_inside == destination_inside:
+                continue
+            if destination_inside:
+                imports_pipeline[waiting.resource_id] += waiting.amount_t
+                dependency_sources[waiting.resource_id].add(waiting.arrival_leg.source_id)
+            else:
+                exports_pipeline[waiting.resource_id] += waiting.amount_t
 
         # Unmet Demand is the residual off-site need after local stock, existing
         # pipeline, and the current tick's actually executable dispatch are credited.
@@ -599,14 +609,13 @@ class ApplicationReportProjectorMixin:
                 production[snap.output_resource_id] += snap.output_t_per_day
 
         for flow in sim.logistics.cargo_flow_snapshots():
-            status = getattr(flow.status, "value", flow.status)
-            if status == "in_transit":
-                if flow.source_id == location_id:
-                    outbound_transit[flow.resource_id] += flow.amount_t
-                if flow.destination_id == location_id:
-                    inbound_transit[flow.resource_id] += flow.amount_t
-            elif status == "arrival_waiting" and flow.destination_id == location_id:
-                arrival_waiting[flow.resource_id] += flow.amount_t
+            if flow.source_id == location_id:
+                outbound_transit[flow.resource_id] += flow.amount_t
+            if flow.destination_id == location_id:
+                inbound_transit[flow.resource_id] += flow.amount_t
+        for waiting in sim.logistics.arrival_waiting_snapshots():
+            if waiting.node_id == location_id:
+                arrival_waiting[waiting.resource_id] += waiting.amount_t
 
         resource_ids = (
             set(production) | set(consumption) | set(outbound_waiting) |

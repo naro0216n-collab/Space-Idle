@@ -169,22 +169,59 @@ class LogisticsStateProjectorMixin:
 
     def _cargo_flow_rows(self) -> tuple[CargoFlowRow, ...]:
         sim = self._simulation
-        return tuple(
-            CargoFlowRow(
+        rows: list[CargoFlowRow] = []
+        for flow in sorted(sim.logistics.cargo_flow_snapshots(), key=lambda row: str(row.id)):
+            legs = (flow.leg,) + flow.remaining_legs
+            rows.append(CargoFlowRow(
                 id=str(flow.id), resource_id=str(flow.resource_id), amount_t=flow.amount_t,
                 source_id=str(flow.source_id), destination_id=str(flow.destination_id),
                 demand_id=None if flow.demand_id is None else str(flow.demand_id),
                 owner_kind=flow.owner_kind, owner_id=str(flow.owner_id), priority=flow.priority,
-                service_ids=flow.service_ids,
-                service_destinations=tuple(str(value) for value in flow.service_destinations),
-                departure_day=flow.departure_day, ready_day=flow.ready_day, status=flow.status.value,
-                admission_blockers=(
-                    sim.inventory.admission_state(flow.destination_id, flow.resource_id).blockers
-                    if flow.status.value == "arrival_waiting" else ()
-                ),
-            )
-            for flow in sorted(sim.logistics.cargo_flow_snapshots(), key=lambda row: str(row.id))
-        )
+                service_ids=tuple(leg.service_identity for leg in legs),
+                service_destinations=tuple(str(leg.destination_id) for leg in legs),
+                departure_day=flow.dispatch_start_day, ready_day=flow.first_arrival_day,
+                status="in_transit",
+                final_destination_id=str(flow.final_destination_id),
+                dispatch_end_day=flow.dispatch_end_day,
+                dispatch_rate_t_per_day=flow.dispatch_rate_t_per_day,
+                latency_days=flow.latency_days,
+            ))
+        for waiting in sorted(
+            sim.logistics.arrival_waiting_snapshots(), key=lambda row: str(row.id)
+        ):
+            legs = (waiting.arrival_leg,) + waiting.remaining_legs
+            rows.append(CargoFlowRow(
+                id=str(waiting.id), resource_id=str(waiting.resource_id), amount_t=waiting.amount_t,
+                source_id=str(waiting.arrival_leg.source_id), destination_id=str(waiting.node_id),
+                demand_id=None if waiting.demand_id is None else str(waiting.demand_id),
+                owner_kind=waiting.owner_kind, owner_id=str(waiting.owner_id), priority=waiting.priority,
+                service_ids=tuple(leg.service_identity for leg in legs),
+                service_destinations=tuple(str(leg.destination_id) for leg in legs),
+                departure_day=waiting.arrived_day - waiting.arrival_leg.latency_days,
+                ready_day=waiting.arrived_day, status="arrival_waiting",
+                admission_blockers=sim.inventory.admission_state(
+                    waiting.node_id, waiting.resource_id
+                ).blockers,
+                final_destination_id=str(waiting.final_destination_id),
+                latency_days=waiting.arrival_leg.latency_days,
+            ))
+        for staging in sorted(
+            sim.logistics.handoff_staging_snapshots(), key=lambda row: str(row.id)
+        ):
+            next_leg = staging.next_leg
+            rows.append(CargoFlowRow(
+                id=str(staging.id), resource_id=str(staging.resource_id), amount_t=staging.amount_t,
+                source_id=str(staging.node_id), destination_id=str(next_leg.destination_id),
+                demand_id=None if staging.demand_id is None else str(staging.demand_id),
+                owner_kind=staging.owner_kind, owner_id=str(staging.owner_id), priority=staging.priority,
+                service_ids=tuple(leg.service_identity for leg in staging.remaining_legs),
+                service_destinations=tuple(str(leg.destination_id) for leg in staging.remaining_legs),
+                departure_day=staging.staged_day, ready_day=staging.staged_day + next_leg.latency_days,
+                status="handoff_staged",
+                final_destination_id=str(staging.final_destination_id),
+                latency_days=next_leg.latency_days,
+            ))
+        return tuple(sorted(rows, key=lambda row: row.id))
 
     def _procurement_delivery_rows(self) -> tuple[ProcurementDeliveryRow, ...]:
         sim = self._simulation

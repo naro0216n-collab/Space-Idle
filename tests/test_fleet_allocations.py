@@ -456,12 +456,13 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
         row for row in sim.logistics.cargo_flows.values()
         if row.demand_id == demand.id
     )
-    assert flow.ready_day > 0
+    ready_day = flow.first_arrival_day
+    assert ready_day > 0
 
     # Prevent another physical path from being available while time moves to the
     # boundary where this seeded Cargo Flow becomes ready.
     lg.external_services.clear()
-    sim.advance_to_day(flow.ready_day)
+    sim.advance_to_day(ready_day)
     # The externally visible state rests after Boundary settlement for ready_day:
     # Cargo is already admitted, while that day's Allocation has not yet run.
     assert relocation.movement_execution_id is None
@@ -471,8 +472,8 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
 
     assert relocation.movement_execution_id is not None
     execution = lg.movement_executions[relocation.movement_execution_id]
-    assert execution.started_day == flow.ready_day
-    assert execution.completion_day == flow.ready_day + execution.latency_days
+    assert execution.started_day == ready_day
+    assert execution.completion_day == ready_day + execution.latency_days
     assert flow.id not in sim.logistics.cargo_flows
 
 
