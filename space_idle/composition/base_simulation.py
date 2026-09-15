@@ -170,6 +170,9 @@ def build_base_simulation() -> Simulation:
         scientific_exploration=scientific_exploration, maintenance=maintenance,
         surface_infrastructure=surface_infrastructure,
     )
+    # Establish the day-0 canonical Boundary before exposing the Simulation to
+    # Application/Query callers.
+    sim.prepare_player_command()
     sim.refresh_storage()
     sim.content_id = "base_game.gameplay.v0.4.5"
     sim.domain_extensions = BASE_DOMAIN_EXTENSIONS

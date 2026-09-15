@@ -660,12 +660,12 @@ class LocationFoundingService:
                 site_cell_id=site_cell_id,
                 invested_resources={req.resource_id: req.amount_t for req in deployment.invested_resources},
             )
+        # Founding completion is a Boundary transition. Rebuild the newly
+        # installed physical storage envelope before the next Physical snapshot,
+        # even when the package carries no initial Inventory. Power-sensitive
+        # usable capacity is refined by the canonical allocation/execution path.
+        self.storage.refresh(day, {})
         if package.initial_inventory:
-            # Founding completion is a boundary transition.  Establish the new
-            # physical/nominal storage envelope without privately allocating
-            # Power; current-tick usable capacity is derived by Simulation's
-            # allocation graph after the boundary.
-            self.storage.refresh(day, {})
             for req in package.initial_inventory:
                 admission = self.inventory.admit(
                     project.new_location_id, req.resource_id, req.amount_t

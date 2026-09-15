@@ -46,6 +46,7 @@ def capture_state(sim) -> dict[str, Any]:
 
 def restore_state(sim, data: dict[str, Any]) -> None:
     sim.day = int(data["day"])
+    sim.restore_boundary_settled_day(sim.day)
     sim.pending_offline_game_days = float(data.get("pending_offline_game_days", 0.0))
     for extension in _extensions(sim):
         codec = extension.state_codec

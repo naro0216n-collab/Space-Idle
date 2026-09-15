@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 
 from .allocation_graph import AllocationDependency, allocation_dependency_order
@@ -166,6 +166,40 @@ class Simulation:
     content_id: str = "unconfigured"
     pending_offline_game_days: float = 0.0
     domain_extensions: tuple[DomainExtension, ...] = ()
+    _boundary_settled_day: int = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        # A freshly composed Simulation has not yet executed the day-0 boundary.
+        # Composition finalization calls prepare_player_command(), after all
+        # domains are attached, so externally visible state is always post-boundary.
+        self._boundary_settled_day = self.day - 1
+
+    @property
+    def boundary_settled_day(self) -> int:
+        return self._boundary_settled_day
+
+    def restore_boundary_settled_day(self, day: int) -> None:
+        if day != self.day:
+            raise ValueError("saved canonical boundary does not match simulation day")
+        self._boundary_settled_day = day
+
+    def _ensure_current_boundary_settled(self) -> None:
+        if self._boundary_settled_day == self.day:
+            return
+        if self._boundary_settled_day > self.day:
+            raise RuntimeError("simulation boundary is ahead of canonical day")
+        if self._boundary_settled_day != self.day - 1:
+            raise RuntimeError("simulation has an unsettled canonical-day gap")
+        self._settle_tick_boundary()
+        self._boundary_settled_day = self.day
+
+    def prepare_player_command(self) -> None:
+        """Place Player Command application after Boundary settlement.
+
+        Application Commands mutate authoritative intent/state only between ticks.
+        Calling this is idempotent for the normal post-boundary resting state.
+        """
+        self._ensure_current_boundary_settled()
 
     def _active_locations(self) -> set[SpatialNodeId]:
         locations = {facility.operational_node_id for facility in self.facilities.facilities.values()}
@@ -1063,21 +1097,45 @@ class Simulation:
                 next_day, allocations.power_by_location
             )
         self.day = next_day
-        self.refresh_storage()
+        # Phase 8 may refresh derived state only from allocations already
+        # settled for the completed day. Do not project the next day's
+        # snapshot/allocation before its Boundary settlement. Boundary-owned
+        # transitions that install storage (for example Founding completion)
+        # refresh their new physical envelope during that boundary.
+        self.storage.refresh(self.day, allocations.power_by_location)
+
+    def _advance_canonical_day(self) -> None:
+        """Advance exactly one canonical game day through the phase contract."""
+        # Phase 1: Boundary settlement.  In the normal resting state this was
+        # already completed when the previous day returned.
+        self._ensure_current_boundary_settled()
+
+        # Phase 2: Physical snapshot.
+        snapshot = self._physical_tick_snapshot()
+        # Phase 3: Intent generation.
+        intents = self._generate_tick_intents(snapshot)
+        # Phase 4: Planning.
+        plan = self._plan_tick(intents)
+        # Phase 5: Allocation.
+        allocations = self._allocate_tick(snapshot, intents, plan)
+        # Phase 6: Domain execution.
+        activities = self._execute_tick_domains(snapshot, allocations)
+        # Phase 7: Logistics / Movement progression.
+        movement_activities = self._progress_tick_movement(plan, allocations)
+        if self.research is not None:
+            self.research.knowledge_state.record(
+                activities + movement_activities, self.research.experience_rules
+            )
+        # Phase 8: State transition / derived refresh.
+        self._settle_tick_state_transitions(allocations)
+
+        # The externally observable resting point is after the next day's
+        # Boundary settlement and before its Physical snapshot.  This is where
+        # Player Commands are allowed to mutate authoritative intent/state.
+        self._ensure_current_boundary_settled()
 
     def advance_days(self, days: int) -> None:
         if days < 0:
             raise ValueError("days must be non-negative")
         for _ in range(days):
-            self._settle_tick_boundary()
-            snapshot = self._physical_tick_snapshot()
-            intents = self._generate_tick_intents(snapshot)
-            plan = self._plan_tick(intents)
-            allocations = self._allocate_tick(snapshot, intents, plan)
-            activities = self._execute_tick_domains(snapshot, allocations)
-            movement_activities = self._progress_tick_movement(plan, allocations)
-            if self.research is not None:
-                self.research.knowledge_state.record(
-                    activities + movement_activities, self.research.experience_rules
-                )
-            self._settle_tick_state_transitions(allocations)
+            self._advance_canonical_day()

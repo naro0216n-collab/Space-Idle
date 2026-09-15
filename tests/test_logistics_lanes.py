@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from space_idle import GetBottlenecks, GetCargoFlows, GetProjects, build_game_application
+from space_idle import AdvanceTime, GetBottlenecks, GetCargoFlows, GetProjects, build_game_application
 from space_idle.content.base_game import (
     EARTH,
     LEO,
@@ -381,6 +381,42 @@ def test_multistage_cargo_flow_records_handoffs_and_cumulative_latency():
     assert flow.id not in sim.logistics.cargo_flows
     assert sim.inventory.amount(LUNAR_ORBIT, MACHINERY) == pytest.approx(
         initial_destination_machinery + dispatched_amount
+    )
+
+
+def test_advance_time_returns_after_next_day_boundary_arrivals_are_settled():
+    app = build_game_application()
+    sim = app._simulation
+    _allow_external_transport(sim)
+    lane_id = sim.logistics.create_lane(EARTH, LEO, 1.0, 5)
+    boundary_resource = DefinitionId("test.resource.canonical-boundary")
+    sim.inventory.add(EARTH, boundary_resource, 1.0)
+    destination_before = sim.inventory.amount(LEO, boundary_resource)
+    demand = _demand(
+        1.0,
+        demand_id="demand.canonical-boundary-arrival",
+        destination=LEO,
+        source=EARTH,
+        resource=boundary_resource,
+    )
+    _advance_logistics(sim, sim.day, (demand,))
+    flow = next(
+        row for row in sim.logistics.cargo_flows.values()
+        if row.lane_id == lane_id and row.demand_id == demand.id
+    )
+    dispatched = flow.amount_t
+    days = flow.ready_day - sim.day
+    assert days > 0
+
+    app.execute(AdvanceTime(days))
+
+    # AdvanceTime rests after Boundary settlement for the resulting game day.
+    # No extra tick, query side effect, or manual arrival call is required.
+    assert sim.day == flow.ready_day
+    assert sim.boundary_settled_day == sim.day
+    assert flow.id not in sim.logistics.cargo_flows
+    assert sim.inventory.amount(LEO, boundary_resource) == pytest.approx(
+        destination_before + dispatched
     )
 
 

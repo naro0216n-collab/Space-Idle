@@ -11,6 +11,29 @@ from .models import ProjectStatus, FacilityUpgradeTarget
 
 class ConstructionProcurementMixin:
 
+    def _activate_procurement_if_eligible(self, project, day: int) -> bool:
+        """Enter procurement when current authoritative conditions allow it.
+
+        Player Commands are applied after Boundary settlement and before the
+        Physical snapshot, so a newly planned eligible project must be able to
+        generate same-day procurement intent without waiting for the next day
+        boundary. Projects blocked by technology/site state remain PLANNED.
+        """
+        if project.paused or project.status is not ProjectStatus.PLANNED:
+            return project.status is ProjectStatus.PROCURING
+        recipe = self._recipe_for_project(project)
+        if not recipe.prerequisite_technologies.issubset(self.unlocked_technologies):
+            return False
+        if self.project_site_failures(project, day, None):
+            return False
+        if isinstance(project.target, FacilityUpgradeTarget) and any(
+            blocker.code.startswith("upgrade_") for blocker in self.blockers(project.id, day)
+        ):
+            return False
+        project.status = ProjectStatus.PROCURING
+        project.procurement_started_day = day
+        return True
+
     def resource_demands(self, day: int) -> tuple[ResourceDemand, ...]:
         demands: list[ResourceDemand] = []
         for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
@@ -79,19 +102,10 @@ class ConstructionProcurementMixin:
                 ProjectStatus.BUILDING,
             }:
                 continue
-            recipe = self._recipe_for_project(project)
-            if not recipe.prerequisite_technologies.issubset(self.unlocked_technologies):
+            if project.status is ProjectStatus.PLANNED and not self._activate_procurement_if_eligible(project, day):
                 continue
-            if self.project_site_failures(project, day, None):
-                continue
-            if isinstance(project.target, FacilityUpgradeTarget) and any(
-                blocker.code.startswith("upgrade_") for blocker in self.blockers(project.id, day)
-            ):
-                continue
-            if project.status == ProjectStatus.PLANNED:
-                project.status = ProjectStatus.PROCURING
-                project.procurement_started_day = day
 
+            recipe = self._recipe_for_project(project)
             assert project.procurement_started_day is not None
             waited = day - project.procurement_started_day
             wait_limit = self.sourcing_wait_days[project.sourcing_policy]

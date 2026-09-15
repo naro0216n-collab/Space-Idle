@@ -66,6 +66,7 @@ class ConstructionPlanningMixin:
         sourcing_policy: SourcingPolicy,
         import_source_id: SpatialNodeId | None,
         site_cell_id: SurfaceCellId | None = None,
+        day: int = 0,
     ) -> ProjectId:
         if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
@@ -109,6 +110,7 @@ class ConstructionPlanningMixin:
             resources=resources,
             site_cell_id=site_cell_id,
         )
+        self._activate_procurement_if_eligible(self.projects[project_id], day)
         return project_id
 
     def plan_build(
@@ -129,7 +131,7 @@ class ConstructionPlanningMixin:
                 raise KeyError(facility_def_id)
             raise ValueError("; ".join(failure.detail for failure in failures))
         return self._create_project(
-            NewFacilityTarget(facility_def_id), location_id, priority, sourcing_policy, import_source_id, site_cell_id
+            NewFacilityTarget(facility_def_id), location_id, priority, sourcing_policy, import_source_id, site_cell_id, day
         )
 
     def plan_upgrade(
@@ -155,6 +157,7 @@ class ConstructionPlanningMixin:
             priority,
             sourcing_policy,
             import_source_id,
+            day=day,
         )
 
     def plan_surface_cell_development(
@@ -181,6 +184,7 @@ class ConstructionPlanningMixin:
             priority,
             sourcing_policy,
             import_source_id,
+            day=day,
         )
 
     def settings_mutable(self, project_id: ProjectId) -> bool:
@@ -227,7 +231,9 @@ class ConstructionPlanningMixin:
                 raise ValueError("sourcing can only change before construction readiness")
             raise ValueError("sourcing cannot change after import commitment")
 
-    def set_sourcing_policy(self, project_id: ProjectId, sourcing_policy: SourcingPolicy) -> None:
+    def set_sourcing_policy(
+        self, project_id: ProjectId, sourcing_policy: SourcingPolicy, day: int = 0
+    ) -> None:
         if sourcing_policy not in self.sourcing_wait_days:
             raise ValueError(f"unknown sourcing policy: {sourcing_policy}")
         project = self.projects[project_id]
@@ -237,6 +243,7 @@ class ConstructionPlanningMixin:
         project.sourcing_policy = sourcing_policy
         project.procurement_started_day = None
         project.status = ProjectStatus.PLANNED
+        self._activate_procurement_if_eligible(project, day)
 
 
     def set_import_source(self, project_id: ProjectId, location_id: SpatialNodeId | None) -> None:
@@ -277,6 +284,8 @@ class ConstructionPlanningMixin:
             project.procurement_started_day += max(0, day - project.pause_started_day)
         project.paused = False
         project.pause_started_day = None
+        if project.status is ProjectStatus.PLANNED:
+            self._activate_procurement_if_eligible(project, day)
 
     def blockers(
         self,

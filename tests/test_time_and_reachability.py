@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from space_idle import AdvanceTime, GetRoutes, GetWorld, build_game_application
 from space_idle.api import GameRuntime
 from space_idle.content.base_game import (
     TECH_CISLUNAR_LOGISTICS,
     TECH_LUNAR_PROSPECTING,
+    REUSABLE_ORBITAL_CARGO_TUG,
 )
 from space_idle.shared import RouteId
 from space_idle.simulation import OfflineProgressPolicy
+from space_idle.persistence import capture_state
 
 
 def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ticks(tmp_path):
@@ -28,6 +32,10 @@ def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ti
     clock_result = runtime.query(GetWorld())
     assert clock_result.data.day == 2
     assert clock_result.revision == 2
+    expected = build_game_application()
+    expected.execute(AdvanceTime(2))
+    assert capture_state(runtime._app._simulation) == capture_state(expected._simulation)
+    assert runtime._app._simulation.boundary_settled_day == runtime._app._simulation.day
 
     # Revision 1 is stale only because the automatic clock advanced. It remains
     # valid for optimistic command concurrency because no other explicit player
@@ -46,6 +54,19 @@ def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ti
     now[0] += 10.0
     assert runtime.query(GetWorld()).data.day == 3
     assert runtime.revision == resumed_revision + 1
+    expected.execute(AdvanceTime(1))
+    assert capture_state(runtime._app._simulation) == capture_state(expected._simulation)
+    assert runtime._app._simulation.boundary_settled_day == runtime._app._simulation.day
+
+
+def test_positive_transport_duration_rounds_up_to_canonical_day_boundary():
+    sim = build_game_application()._simulation
+    route = sim.transport.routes[RouteId("base.route.leo_lunar_orbit")]
+    base = sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].performance
+    performance = replace(base, transit_time_multiplier=0.7)
+
+    assert route.transit_days * performance.transit_time_multiplier == 3.5
+    assert sim.transport.performance_route_transit_days(route, performance) == 4
 
 
 def test_route_reachability_is_not_directly_gated_by_research_completion():

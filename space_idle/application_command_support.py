@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from .application_commands import ApplicationError, Command, CommandResult
+from .application_commands import (
+    AdvanceTime, ApplicationError, Command, CommandResult, SetTimeControl,
+)
 from .shared import DefinitionId, SpatialNodeId
 
 
@@ -19,6 +21,12 @@ class ApplicationCommandSupportMixin:
 
     def execute(self, command: Command) -> CommandResult:
         try:
+            # Simulation-mutating Player Commands are applied only after all
+            # previous-day boundary obligations have settled and before the next
+            # Physical snapshot. Time control is Runtime scheduling state;
+            # AdvanceTime itself enters the canonical day path.
+            if not isinstance(command, (AdvanceTime, SetTimeControl)):
+                self._simulation.prepare_player_command()
             return self._execute(command)
         except ApplicationError:
             raise

@@ -98,7 +98,9 @@ class ConstructionCommandHandlerMixin:
         if isinstance(command, SetProjectPriority):
             sim.projects.set_priority(ProjectId(command.project_id), command.priority); return CommandResult()
         if isinstance(command, SetProjectSourcingPolicy):
-            sim.projects.set_sourcing_policy(ProjectId(command.project_id), command.sourcing_policy); return CommandResult()
+            sim.projects.set_sourcing_policy(
+                ProjectId(command.project_id), command.sourcing_policy, sim.day
+            ); return CommandResult()
         if isinstance(command, SetProjectImportSource):
             sim.projects.set_import_source(
                 ProjectId(command.project_id),

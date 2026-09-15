@@ -462,8 +462,10 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     sim.logistics.lanes[lane_id].paused = True
     lg.external_services.clear()
     sim.advance_to_day(flow.ready_day)
+    # The externally visible state rests after Boundary settlement for ready_day:
+    # Cargo is already admitted, while that day's Allocation has not yet run.
     assert relocation.departure_day is None
-    assert sim.inventory.available(ids.LEO, ids.PROPELLANT) == pytest.approx(0.0)
+    assert sim.inventory.available(ids.LEO, ids.PROPELLANT) == pytest.approx(required)
 
     sim.advance_days(1)
 

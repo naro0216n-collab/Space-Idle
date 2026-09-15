@@ -232,6 +232,11 @@ def test_founding_completion_creates_location_bootstrap_and_dynamic_orbit_routes
         sim.transport.fleet_pool(ids.REUSABLE_SURFACE_CARGO_LANDER, project.new_location_id).total_units
         == package.required_units
     )
+    # Founding is settled at the day boundary, so facilities installed by that
+    # transition already contribute physical Storage before the next snapshot.
+    admission = sim.inventory.admission_state(project.new_location_id, ids.MACHINERY)
+    assert admission.physical_capacity_t is not None
+    assert admission.physical_capacity_t > 0.0
 
 
 def test_founding_and_surface_development_claims_are_mutually_exclusive():

@@ -248,7 +248,7 @@ class TransportCompatibilityMixin:
             geometry = route_geometry(route, self.facilities)
             if isinstance(capability, SurfaceTransportCapability) and geometry.distance_km is not None:
                 return max(1, math.ceil(geometry.distance_km * multiplier / capability.speed_km_per_day))
-        return max(1, round(route.transit_days * multiplier))
+        return max(1, math.ceil(route.transit_days * multiplier - 1e-12))
 
     def _surface_environment(self, context_id, day: int) -> tuple[float, float] | None:
         environment = self.facilities.environment

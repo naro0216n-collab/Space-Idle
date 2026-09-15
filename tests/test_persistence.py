@@ -183,6 +183,8 @@ def test_offline_progress_uses_the_same_active_simulation_path_as_normal_time(tm
     assert result is not None and result.advanced_days == elapsed_days
     assert capture_state(offline._simulation) == capture_state(direct._simulation)
     assert offline.query(GetWorld()).day == direct.query(GetWorld()).day
+    assert offline._simulation.boundary_settled_day == offline._simulation.day
+    assert direct._simulation.boundary_settled_day == direct._simulation.day
 
 
 def test_fractional_offline_time_is_composable():

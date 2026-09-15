@@ -14,6 +14,10 @@ def validate_core_configuration(sim: Any, ctx: ValidationContext) -> None:
 
 def validate_core_runtime(sim: Any) -> None:
     _require(sim.day >= 0, "negative simulation day")
+    _require(
+        sim.boundary_settled_day == sim.day,
+        "simulation is externally visible before canonical boundary settlement",
+    )
     _require(0 <= sim.pending_offline_game_days < 1.0 + 1e-9, "invalid pending offline fraction")
 
 
