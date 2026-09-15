@@ -2,16 +2,16 @@
 from __future__ import annotations
 
 import argparse
-import json
+import base64
+import binascii
 import os
 import re
 import subprocess
 from pathlib import Path
 
-from publish_gateway_payload import GatewayPayloadError, load_indexed_payload
-
-
 TRUSTED_CONTROL_WORKFLOW = ".github/workflows/publish-gateway.yml"
+PUBLISH_BUNDLE_REF = "refs/space-idle/publish-request"
+ALLOWED_TARGET_BRANCHES = {"develop", "temp"}
 
 
 class GatewayRequestError(RuntimeError):
@@ -19,31 +19,113 @@ class GatewayRequestError(RuntimeError):
 
 
 def _git(*args: str) -> str:
-    return subprocess.check_output(["git", *args], text=True).strip()
+    result = subprocess.run(
+        ["git", *args], check=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return result.stdout.strip()
 
 
-def _trigger(request_path: Path, request_id: str) -> int:
-    path = request_path.as_posix()
-    initial = re.fullmatch(r"\.publish/requests/([0-9a-f]{32})\.json", path)
-    retry = re.fullmatch(r"\.publish/retries/([0-9a-f]{32})/g([0-9]{4})\.json", path)
-    if initial:
-        path_request_id = initial.group(1)
-        generation = 0
-    elif retry:
-        path_request_id = retry.group(1)
-        generation = int(retry.group(2))
-    else:
-        raise GatewayRequestError("invalid publish request path")
-    if path_request_id != request_id:
-        raise GatewayRequestError("request id does not match request path")
-    return generation
+def _transport_parts(directory: Path) -> list[Path]:
+    if not directory.is_dir():
+        raise GatewayRequestError(f"transport directory is missing: {directory}")
+    entries = sorted(path for path in directory.iterdir() if path.is_file())
+    expected = [f"{index:04d}.b64" for index in range(len(entries))]
+    actual = [path.name for path in entries]
+    if not entries or actual != expected:
+        raise GatewayRequestError(
+            f"transport slot must contain one contiguous 0000.b64 sequence: {actual}"
+        )
+    return entries
 
 
-def _require_oid(value: object, *, length: int, name: str) -> str:
-    if not isinstance(value, str) or not re.fullmatch(rf"[0-9a-f]{{{length}}}", value):
-        raise GatewayRequestError(f"invalid {name}")
-    return value
+def _decode_transport(directory: Path) -> bytes:
+    parts = _transport_parts(directory)
+    chunks: list[str] = []
+    for path in parts:
+        try:
+            text = path.read_text(encoding="ascii")
+        except UnicodeDecodeError as exc:
+            raise GatewayRequestError(f"transport part is not ASCII Base64: {path.name}") from exc
+        if not text or re.fullmatch(r"[A-Za-z0-9+/=]+", text) is None:
+            raise GatewayRequestError(f"transport part contains invalid Base64 characters: {path.name}")
+        chunks.append(text)
+    try:
+        return base64.b64decode("".join(chunks), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise GatewayRequestError(f"invalid transport Base64: {exc}") from exc
 
+
+def _validate_transport_commit_paths(target_branch: str) -> None:
+    sha = os.environ.get("GITHUB_SHA", "")
+    if not sha:
+        raise GatewayRequestError("GITHUB_SHA is missing")
+    parents = _git("rev-list", "--parents", "-n", "1", sha).split()
+    if len(parents) != 2:
+        raise GatewayRequestError("publish transport commit must have exactly one parent")
+    output = _git("diff-tree", "--no-commit-id", "--name-status", "--no-renames", "-r", sha)
+    active_prefix = f".publish/transport/{target_branch}/"
+    touched_active = False
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        status, path = line.split("\t", 1)
+        status = status[0]
+        if status in {"A", "M"}:
+            if not path.startswith(active_prefix) or re.fullmatch(
+                rf"{re.escape(active_prefix)}[0-9]{{4}}\.b64", path
+            ) is None:
+                raise GatewayRequestError(f"transport commit added or modified an invalid path: {path}")
+            touched_active = True
+        elif status == "D":
+            if not path.startswith(".publish/"):
+                raise GatewayRequestError(f"transport commit deleted a non-transport path: {path}")
+        else:
+            raise GatewayRequestError(f"unsupported transport commit change {status}: {path}")
+    if not touched_active:
+        raise GatewayRequestError("transport commit did not add or modify the active fixed slot")
+
+
+def _verify_bundle(bundle_path: Path, target_branch: str) -> tuple[str, str, str]:
+    try:
+        subprocess.run(
+            ["git", "bundle", "verify", str(bundle_path)], check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        heads = _git("bundle", "list-heads", str(bundle_path)).splitlines()
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
+        raise GatewayRequestError(f"invalid publish bundle: {(stderr or '').strip()}") from exc
+    parsed = [line.split(maxsplit=1) for line in heads if line.strip()]
+    if len(parsed) != 1 or len(parsed[0]) != 2 or parsed[0][1] != PUBLISH_BUNDLE_REF:
+        raise GatewayRequestError(f"bundle must advertise exactly {PUBLISH_BUNDLE_REF}")
+    advertised_commit = parsed[0][0]
+    incoming_ref = f"refs/space-idle/incoming/{os.environ.get('GITHUB_RUN_ID', 'gateway')}"
+    try:
+        subprocess.run(
+            ["git", "fetch", "--quiet", str(bundle_path), f"{PUBLISH_BUNDLE_REF}:{incoming_ref}"],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        publish_commit = _git("rev-parse", incoming_ref)
+        if publish_commit != advertised_commit:
+            raise GatewayRequestError("bundle advertised commit does not match fetched commit")
+        base_sha = _git("rev-parse", f"{publish_commit}^")
+        target_tree = _git("rev-parse", f"{publish_commit}^{{tree}}")
+    finally:
+        subprocess.run(
+            ["git", "update-ref", "-d", incoming_ref], check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+    remote_ref = f"refs/remotes/origin/{target_branch}"
+    try:
+        current = _git("rev-parse", remote_ref)
+    except subprocess.CalledProcessError as exc:
+        raise GatewayRequestError(f"checkout is missing {remote_ref}") from exc
+    if current != base_sha:
+        raise GatewayRequestError(
+            f"target moved before publish: expected bundle parent {base_sha}, checkout has {current}"
+        )
+    return publish_commit, base_sha, target_tree
 
 
 def verify_trusted_workflow() -> int:
@@ -52,15 +134,8 @@ def verify_trusted_workflow() -> int:
     control_commit = os.environ.get("GITHUB_SHA", "")
     if not base_sha or not publish_commit or not control_commit:
         raise GatewayRequestError("trusted workflow verification environment is incomplete")
-
     output = _git(
-        "diff",
-        "--name-status",
-        "--no-renames",
-        base_sha,
-        publish_commit,
-        "--",
-        ".github/workflows",
+        "diff", "--name-status", "--no-renames", base_sha, publish_commit, "--", ".github/workflows"
     )
     for line in output.splitlines():
         if not line.strip():
@@ -70,9 +145,7 @@ def verify_trusted_workflow() -> int:
         if path != TRUSTED_CONTROL_WORKFLOW:
             raise GatewayRequestError(f"untrusted workflow change in publish target: {path}")
         if status not in {"A", "M"}:
-            raise GatewayRequestError(
-                f"trusted control workflow must exist in publish target: {path}"
-            )
+            raise GatewayRequestError(f"trusted control workflow must exist in publish target: {path}")
         target_oid = _git("rev-parse", f"{publish_commit}:{path}")
         control_oid = _git("rev-parse", f"{control_commit}:{path}")
         if target_oid != control_oid:
@@ -81,70 +154,28 @@ def verify_trusted_workflow() -> int:
             )
     return 0
 
+
 def main() -> int:
-    request_path = Path(os.environ["REQUEST_FILE"])
-    request = json.loads(request_path.read_text(encoding="utf-8"))
-    required = {
-        "version",
-        "request_id",
-        "target_branch",
-        "base_sha",
-        "target_tree",
-        "publish_commit",
-        "payload_sha256",
-        "payload_encoding",
-        "payload_chars",
-        "payload_source",
-    }
-    missing = required - request.keys()
-    if missing:
-        raise GatewayRequestError(f"missing request fields: {sorted(missing)}")
-    if request["version"] != 7:
-        raise GatewayRequestError("unsupported request version")
-    request_id = request["request_id"]
-    if not isinstance(request_id, str) or not re.fullmatch(r"[0-9a-f]{32}", request_id):
-        raise GatewayRequestError("invalid request id")
-    trigger_generation = _trigger(request_path, request_id)
-    if request["target_branch"] not in {"develop", "temp"}:
+    target_branch = os.environ.get("TARGET_BRANCH", "")
+    if target_branch not in ALLOWED_TARGET_BRANCHES:
         raise GatewayRequestError("unsupported target branch")
-
-    object_format = _git("rev-parse", "--show-object-format")
-    oid_length = 40 if object_format == "sha1" else 64 if object_format == "sha256" else 0
-    if oid_length == 0:
-        raise GatewayRequestError(f"unsupported Git object format: {object_format}")
-    for key in ("base_sha", "target_tree", "publish_commit"):
-        _require_oid(request[key], length=oid_length, name=key)
-    if not isinstance(request["payload_sha256"], str) or not re.fullmatch(
-        r"[0-9a-f]{64}", request["payload_sha256"]
-    ):
-        raise GatewayRequestError("invalid payload sha256")
-    if request["payload_encoding"] != "git-bundle-base64":
-        raise GatewayRequestError("unsupported payload encoding")
-    if not isinstance(request["payload_chars"], int) or request["payload_chars"] <= 0:
-        raise GatewayRequestError("invalid payload size")
-
-    current = _git("ls-remote", "origin", f"refs/heads/{request['target_branch']}").split()
-    if not current or current[0] != request["base_sha"]:
-        actual = current[0] if current else "<missing>"
+    transport_dir_value = os.environ.get("TRANSPORT_DIR", "")
+    expected_dir = f".publish/transport/{target_branch}"
+    if transport_dir_value != expected_dir:
         raise GatewayRequestError(
-            f"target moved before payload validation: expected {request['base_sha']}, got {actual}"
+            f"transport directory does not match target branch: expected {expected_dir}, got {transport_dir_value}"
         )
-
-    payload_bytes, _, _ = load_indexed_payload(
-        request_id=request_id,
-        request=request,
-        trigger_generation=trigger_generation,
-        object_format=object_format,
-    )
+    _validate_transport_commit_paths(target_branch)
+    payload = _decode_transport(Path(transport_dir_value))
     bundle_path = Path(os.environ["RUNNER_TEMP"]) / "publish.bundle"
-    bundle_path.write_bytes(payload_bytes)
+    bundle_path.write_bytes(payload)
+    publish_commit, base_sha, target_tree = _verify_bundle(bundle_path, target_branch)
     with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env:
-        env.write(f"REQUEST_ID={request_id}\n")
-        env.write(f"TARGET_BRANCH={request['target_branch']}\n")
-        env.write(f"BASE_SHA={request['base_sha']}\n")
-        env.write(f"TARGET_TREE={request['target_tree']}\n")
-        env.write(f"PUBLISH_COMMIT={request['publish_commit']}\n")
+        env.write(f"PUBLISH_COMMIT={publish_commit}\n")
+        env.write(f"BASE_SHA={base_sha}\n")
+        env.write(f"TARGET_TREE={target_tree}\n")
         env.write(f"BUNDLE_FILE={bundle_path}\n")
+    print(f"Validated fixed transport slot with {len(_transport_parts(Path(transport_dir_value)))} part(s)")
     return 0
 
 
@@ -160,5 +191,5 @@ def cli() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(cli())
-    except (GatewayRequestError, GatewayPayloadError) as exc:
+    except GatewayRequestError as exc:
         raise SystemExit(str(exc)) from exc
