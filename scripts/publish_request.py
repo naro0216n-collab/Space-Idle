@@ -29,7 +29,6 @@ CONNECTOR_DIR_NAME = "connector"
 PUBLISH_BUNDLE_REF = "refs/space-idle/publish-request"
 PUBLISH_IDENTITY_NAME = "space-idle-publish-gateway"
 PUBLISH_IDENTITY_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
-PUBLISH_COMMIT_DATE = "946684800 +0000"
 GITHUB_REPOSITORY = "naro0216n-collab/Space-Idle"
 PUBLISH_BRANCH = "publish"
 TARGET_BRANCH = "develop"
@@ -180,17 +179,20 @@ def _default_message(repo: Path, state: dict[str, str], target_commit: str) -> s
     return _git("show", "-s", "--format=%B", target_commit, cwd=repo).rstrip() + "\n"
 
 
-def _create_publish_commit(repo: Path, base_commit: str, target_tree: str, message: bytes) -> str:
+def _create_publish_commit(
+    repo: Path, base_commit: str, target_tree: str, target_commit: str, message: bytes,
+) -> str:
     _require_object(repo, f"{base_commit}^{{commit}}", name="recorded develop base commit")
+    target_date = _git("show", "-s", "--format=%cI", target_commit, cwd=repo)
     env = os.environ.copy()
     env.update(
         {
             "GIT_AUTHOR_NAME": PUBLISH_IDENTITY_NAME,
             "GIT_AUTHOR_EMAIL": PUBLISH_IDENTITY_EMAIL,
-            "GIT_AUTHOR_DATE": PUBLISH_COMMIT_DATE,
+            "GIT_AUTHOR_DATE": target_date,
             "GIT_COMMITTER_NAME": PUBLISH_IDENTITY_NAME,
             "GIT_COMMITTER_EMAIL": PUBLISH_IDENTITY_EMAIL,
-            "GIT_COMMITTER_DATE": PUBLISH_COMMIT_DATE,
+            "GIT_COMMITTER_DATE": target_date,
         }
     )
     result = subprocess.run(
@@ -416,6 +418,13 @@ def cmd_init(_: argparse.Namespace) -> int:
         raise PublishStateError(f"restored repository branch must be {TARGET_BRANCH!r}, got {local_branch!r}")
     if local_commit != metadata["remote_commit"] or local_tree != metadata["remote_tree"]:
         raise PublishStateError("artifact/local develop commit or tree mismatch")
+    subprocess.run(
+        [
+            "git", "fetch", "origin",
+            "refs/space-idle/publish-base:refs/space-idle/publish-base",
+        ],
+        cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
     publish_ref = _git("rev-parse", "refs/space-idle/publish-base^{commit}", cwd=repo)
     publish_tree = _git("rev-parse", "refs/space-idle/publish-base^{tree}", cwd=repo)
     if publish_ref != metadata["publish_commit"] or publish_tree != metadata["publish_tree"]:
@@ -456,7 +465,7 @@ def cmd_prepare(_: argparse.Namespace) -> int:
             + ", ".join(disallowed)
         )
     publish_commit = _create_publish_commit(
-        repo, state["remote_commit"], target_tree,
+        repo, state["remote_commit"], target_tree, target_commit,
         _message_bytes(_default_message(repo, state, target_commit)),
     )
     payload_bytes = _bundle_bytes(repo, state["remote_commit"], publish_commit)

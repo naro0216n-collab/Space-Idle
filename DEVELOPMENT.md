@@ -35,7 +35,7 @@ cd space-idle-local
 python scripts/publish_request.py init
 ```
 
-`init` は復元repoの `origin` が指す `repository.bundle` からsource-snapshot directoryを一意に解決する。source pathはCLIから指定しない。artifactのcommit/treeを復元できない場合は別方式へ読み替えず、artifact生成または取得経路の問題として扱う。
+`init` は復元repoの `origin` が指す `repository.bundle` からsource-snapshot directoryを一意に解決し、通常の `git clone` ではmaterializeされない `refs/space-idle/publish-base` もそのlocal bundleから復元する。source pathはCLIから指定しない。artifactのcommit/treeを復元できない場合は別方式へ読み替えず、artifact生成または取得経路の問題として扱う。
 
 ## Local setup
 

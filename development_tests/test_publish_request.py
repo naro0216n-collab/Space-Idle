@@ -113,6 +113,42 @@ def test_init_requires_exact_develop_and_publish_base_metadata(tmp_path: Path) -
     assert "publish base" in broken.stderr
 
 
+
+def test_init_restores_publish_base_after_clone_from_snapshot_bundle(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    git(source, "init")
+    (source / "x").write_text("x\n", encoding="utf-8")
+    commit_all(source, "base")
+    git(source, "branch", "-M", "develop")
+    snapshot = write_source_snapshot(source, tmp_path / "source-snapshot")
+
+    restored = tmp_path / "restored"
+    subprocess.run(
+        ["git", "clone", "-b", "develop", str(snapshot / "repository.bundle"), str(restored)],
+        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    assert subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", "refs/space-idle/publish-base"],
+        cwd=restored, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ).returncode != 0
+
+    result = json.loads(run_request(restored, "init").stdout)
+    assert result["publish_commit"] == git(restored, "rev-parse", "refs/space-idle/publish-base")
+    assert result["publish_commit"] == (snapshot / ".source-publish-commit").read_text(encoding="utf-8").strip()
+
+
+def test_publish_commit_inherits_target_commit_time(tmp_path: Path) -> None:
+    repo, _, _, _, _ = init_repo(tmp_path)
+    result = prepare_change(repo)
+    target_commit = str(result["local_target_commit"])
+    publish_commit = str(result["publish_commit"])
+
+    assert git(repo, "show", "-s", "--format=%cI", publish_commit) == git(
+        repo, "show", "-s", "--format=%cI", target_commit
+    )
+    assert git(repo, "show", "-s", "--format=%ct", publish_commit) != "946684800"
+
 def test_prepare_uses_head_only_and_excludes_uncommitted_work(tmp_path: Path) -> None:
     repo, _, _, _, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("checkpoint\n", encoding="utf-8")
