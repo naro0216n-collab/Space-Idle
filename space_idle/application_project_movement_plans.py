@@ -3,45 +3,45 @@ from __future__ import annotations
 from .application_transport_support import infrastructure_requirement_rows, vehicle_concept
 from .application_views import (
     DirectionalCapacityRow,
-    RouteEndpointRow,
-    RouteModeRow,
-    RouteRow,
-    RoutesView,
+    MovementEndpointRow,
+    MovementServiceModeRow,
+    MovementPlanRow,
+    MovementPlansView,
     TransportAllocationOptionRow,
     TransportAllocationOptionsView,
 )
 from .transport.models import PathPolicy
 
 
-class LogisticsRouteProjectorMixin:
+class LogisticsMovementPlanProjectorMixin:
     @staticmethod
     def _directional_capacity_row(value) -> DirectionalCapacityRow:
         return DirectionalCapacityRow(
             value.forward_t_per_day, value.reverse_t_per_day
         )
 
-    def _route_mode_rows(self, route) -> tuple[RouteModeRow, ...]:
+    def _movement_service_mode_rows(self, movement_plan) -> tuple[MovementServiceModeRow, ...]:
         sim = self._simulation
-        rows: list[RouteModeRow] = []
+        rows: list[MovementServiceModeRow] = []
 
         for definition in sim.transport.vehicle_definitions():
             plan = sim.transport.transport_service_plan_for(
                 definition.id,
-                route.origin_id,
-                route.destination_id,
+                movement_plan.origin_id,
+                movement_plan.destination_id,
                 day=sim.day,
-                path=(route.id,),
+                path=(movement_plan.id,),
             )
             fleet = sim.transport.fleet_pool_snapshot(
-                definition.id, route.origin_id
+                definition.id, movement_plan.origin_id
             )
             full_load_propellant = None
             if definition.propellant_resource_id is not None:
                 full_load_propellant = definition.propellant_t(
-                    route, max(0.0, plan.forward_payload_t)
+                    movement_plan, max(0.0, plan.forward_payload_t)
                 )
             rows.append(
-                RouteModeRow(
+                MovementServiceModeRow(
                     id=str(definition.id),
                     display_name=definition.display_name,
                     kind=vehicle_concept(definition),
@@ -70,14 +70,14 @@ class LogisticsRouteProjectorMixin:
         for service in sim.transport.external_transport_service_definitions():
             blockers = tuple(
                 dict.fromkeys(
-                    sim.transport.movement_plan_failures(route.id, sim.day)
+                    sim.transport.movement_plan_failures(movement_plan.id, sim.day)
                     + sim.transport.service_movement_failures(
-                        route.id, service.id, sim.day
+                        movement_plan.id, service.id, sim.day
                     )
                 )
             )
             rows.append(
-                RouteModeRow(
+                MovementServiceModeRow(
                     id=str(service.id),
                     display_name=service.display_name,
                     kind="external_service",
@@ -89,7 +89,7 @@ class LogisticsRouteProjectorMixin:
                     ),
                     cycle_days=None,
                     forward_latency_days=sim.transport.performance_movement_transit_days(
-                        route,
+                        movement_plan,
                         service.performance,
                         transit_multiplier=service.transit_time_multiplier,
                     ),
@@ -106,34 +106,34 @@ class LogisticsRouteProjectorMixin:
             )
         return tuple(rows)
 
-    def _route_rows(
+    def _movement_plan_rows(
         self,
         *,
         origin_id: str | None = None,
         destination_id: str | None = None,
-        route_id: str | None = None,
+        movement_plan_id: str | None = None,
         include_modes: bool = True,
-    ) -> tuple[RouteRow, ...]:
+    ) -> tuple[MovementPlanRow, ...]:
         sim = self._simulation
         sim.transport.invalidate_movement_plans()
-        rows: list[RouteRow] = []
-        for route in sim.transport.movement_plan_options():
-            if origin_id is not None and str(route.origin_id) != origin_id:
+        rows: list[MovementPlanRow] = []
+        for movement_plan in sim.transport.movement_plan_options():
+            if origin_id is not None and str(movement_plan.origin_id) != origin_id:
                 continue
-            if destination_id is not None and str(route.destination_id) != destination_id:
+            if destination_id is not None and str(movement_plan.destination_id) != destination_id:
                 continue
-            if route_id is not None and str(route.id) != route_id:
+            if movement_plan_id is not None and str(movement_plan.id) != movement_plan_id:
                 continue
-            route_blockers = sim.transport.movement_plan_failures(route.id, sim.day)
-            mode_rows = self._route_mode_rows(route)
+            movement_plan_blockers = sim.transport.movement_plan_failures(movement_plan.id, sim.day)
+            mode_rows = self._movement_service_mode_rows(movement_plan)
             try:
-                geometry = sim.transport.movement_geometry(route.id)
-                origin_endpoint = RouteEndpointRow(
+                geometry = sim.transport.movement_geometry(movement_plan.id)
+                origin_endpoint = MovementEndpointRow(
                     str(geometry.origin.node_id), geometry.origin.locator_kind,
                     geometry.origin.locator_id,
                     None if geometry.origin.surface_cell_id is None else str(geometry.origin.surface_cell_id),
                 )
-                destination_endpoint = RouteEndpointRow(
+                destination_endpoint = MovementEndpointRow(
                     str(geometry.destination.node_id), geometry.destination.locator_kind,
                     geometry.destination.locator_id,
                     None if geometry.destination.surface_cell_id is None else str(geometry.destination.surface_cell_id),
@@ -141,50 +141,50 @@ class LogisticsRouteProjectorMixin:
                 same_body_surface = geometry.same_body_surface
                 distance_km = geometry.distance_km
             except ValueError:
-                origin_endpoint = RouteEndpointRow(
-                    str(route.origin_id), route.origin.locator_kind, route.origin.locator_id, None
+                origin_endpoint = MovementEndpointRow(
+                    str(movement_plan.origin_id), movement_plan.origin.locator_kind, movement_plan.origin.locator_id, None
                 )
-                destination_endpoint = RouteEndpointRow(
-                    str(route.destination_id), route.destination.locator_kind, route.destination.locator_id, None
+                destination_endpoint = MovementEndpointRow(
+                    str(movement_plan.destination_id), movement_plan.destination.locator_kind, movement_plan.destination.locator_id, None
                 )
                 same_body_surface = False
                 distance_km = None
             rows.append(
-                RouteRow(
-                    id=str(route.id),
-                    display_name=route.display_name or str(route.id),
-                    origin_id=str(route.origin_id),
-                    destination_id=str(route.destination_id),
+                MovementPlanRow(
+                    id=str(movement_plan.id),
+                    display_name=movement_plan.display_name or str(movement_plan.id),
+                    origin_id=str(movement_plan.origin_id),
+                    destination_id=str(movement_plan.destination_id),
                     origin_endpoint=origin_endpoint,
                     destination_endpoint=destination_endpoint,
                     same_body_surface=same_body_surface,
                     distance_km=distance_km,
-                    available=not route_blockers,
+                    available=not movement_plan_blockers,
                     service_feasible_now=any(
                         row.service_feasible for row in mode_rows
                     ),
-                    transit_days=route.transit_days,
-                    delta_v_km_s=route.delta_v_km_s,
+                    transit_days=movement_plan.transit_days,
+                    delta_v_km_s=movement_plan.delta_v_km_s,
                     operations=tuple(
                         (operation.operation_type, operation.delta_v_km_s)
-                        for operation in route.operations
+                        for operation in movement_plan.operations
                     ),
-                    blockers=route_blockers,
+                    blockers=movement_plan_blockers,
                     modes=mode_rows if include_modes else (),
                 )
             )
         return tuple(rows)
 
-    def _routes_view(self, query) -> RoutesView:
-        rows = self._route_rows(
+    def _movement_plans_view(self, query) -> MovementPlansView:
+        rows = self._movement_plan_rows(
             origin_id=query.origin_id,
             destination_id=query.destination_id,
-            route_id=query.route_id,
+            movement_plan_id=query.movement_plan_id,
             include_modes=query.include_modes,
         )
-        if query.route_id is not None and not rows:
-            raise KeyError(query.route_id)
-        return RoutesView(rows)
+        if query.movement_plan_id is not None and not rows:
+            raise KeyError(query.movement_plan_id)
+        return MovementPlansView(rows)
 
     def _transport_allocation_options_view(
         self, source_id, destination_id

@@ -9,7 +9,7 @@ StarSystemId = NewType("StarSystemId", str)
 CelestialBodyId = NewType("CelestialBodyId", str)
 SpatialNodeId = NewType("SpatialNodeId", str)
 SurfaceCellId = NewType("SurfaceCellId", str)
-RouteId = NewType("RouteId", str)
+MovementPlanId = NewType("MovementPlanId", str)
 ProjectId = NewType("ProjectId", str)
 ContractId = NewType("ContractId", str)
 

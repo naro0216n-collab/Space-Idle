@@ -17,7 +17,7 @@ from .logistics_flow import LogisticsFlowMixin
 
 @dataclass
 class LogisticsService(SupplyPlanningMixin, LogisticsFlowMixin, ExternalProcurementMixin):
-    """Logistics demand/capacity allocation and Cargo Flow state owner."""
+    """Supply Requirement / transport-capacity allocation and Cargo Flow state owner."""
 
     transport: TransportService
     inventory: InventoryBook

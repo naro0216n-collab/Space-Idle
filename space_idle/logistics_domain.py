@@ -10,7 +10,7 @@ from .logistics_models import (
     CargoHandoffStaging,
     CargoServiceLeg,
 )
-from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
+from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
 from .supply import SupplyPolicy, TargetStockPolicy
 from .transport.models import PathPolicy
 from .validation_support import require as _require
@@ -64,7 +64,7 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
                 "amount_t": row.amount_t,
                 "source_id": str(row.source_id),
                 "final_destination_id": str(row.final_destination_id),
-                "demand_id": None if row.demand_id is None else str(row.demand_id),
+                "requirement_id": None if row.requirement_id is None else str(row.requirement_id),
                 "owner_kind": row.owner_kind,
                 "owner_id": str(row.owner_id),
                 "priority": int(row.priority),
@@ -83,7 +83,7 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
                 "amount_t": row.amount_t,
                 "node_id": str(row.node_id),
                 "final_destination_id": str(row.final_destination_id),
-                "demand_id": None if row.demand_id is None else str(row.demand_id),
+                "requirement_id": None if row.requirement_id is None else str(row.requirement_id),
                 "owner_kind": row.owner_kind,
                 "owner_id": str(row.owner_id),
                 "priority": int(row.priority),
@@ -100,7 +100,7 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
                 "amount_t": row.amount_t,
                 "node_id": str(row.node_id),
                 "final_destination_id": str(row.final_destination_id),
-                "demand_id": None if row.demand_id is None else str(row.demand_id),
+                "requirement_id": None if row.requirement_id is None else str(row.requirement_id),
                 "owner_kind": row.owner_kind,
                 "owner_id": str(row.owner_id),
                 "priority": int(row.priority),
@@ -114,7 +114,7 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
             {
                 "id": str(row.id),
                 "service_id": str(row.service_id),
-                "demand_id": str(row.demand_id),
+                "requirement_id": str(row.requirement_id),
                 "owner_kind": row.owner_kind,
                 "owner_id": str(row.owner_id),
                 "supply_node_id": str(row.supply_node_id),
@@ -148,7 +148,7 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
                 "explicit_path": (
                     None
                     if row.explicit_path is None
-                    else [str(route_id) for route_id in row.explicit_path]
+                    else [str(movement_plan_id) for movement_plan_id in row.explicit_path]
                 ),
             }
             for row in lg.supply_policy_rows()
@@ -169,7 +169,7 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             amount_t=float(row["amount_t"]),
             source_id=SpatialNodeId(row["source_id"]),
             final_destination_id=SpatialNodeId(row["final_destination_id"]),
-            demand_id=None if row.get("demand_id") is None else EntityId(row["demand_id"]),
+            requirement_id=None if row.get("requirement_id") is None else EntityId(row["requirement_id"]),
             owner_kind=row["owner_kind"],
             owner_id=EntityId(row["owner_id"]),
             priority=int(row["priority"]),
@@ -188,7 +188,7 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             amount_t=float(row["amount_t"]),
             node_id=SpatialNodeId(row["node_id"]),
             final_destination_id=SpatialNodeId(row["final_destination_id"]),
-            demand_id=None if row.get("demand_id") is None else EntityId(row["demand_id"]),
+            requirement_id=None if row.get("requirement_id") is None else EntityId(row["requirement_id"]),
             owner_kind=row["owner_kind"],
             owner_id=EntityId(row["owner_id"]),
             priority=int(row["priority"]),
@@ -205,7 +205,7 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             amount_t=float(row["amount_t"]),
             node_id=SpatialNodeId(row["node_id"]),
             final_destination_id=SpatialNodeId(row["final_destination_id"]),
-            demand_id=None if row.get("demand_id") is None else EntityId(row["demand_id"]),
+            requirement_id=None if row.get("requirement_id") is None else EntityId(row["requirement_id"]),
             owner_kind=row["owner_kind"],
             owner_id=EntityId(row["owner_id"]),
             priority=int(row["priority"]),
@@ -219,7 +219,7 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
         EntityId(row["id"]): ExternalSupplyBatch(
             EntityId(row["id"]),
             DefinitionId(row["service_id"]),
-            EntityId(row["demand_id"]),
+            EntityId(row["requirement_id"]),
             row["owner_kind"],
             EntityId(row["owner_id"]),
             SpatialNodeId(row["supply_node_id"]),
@@ -255,7 +255,7 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             (
                 None
                 if row.get("explicit_path") is None
-                else tuple(RouteId(value) for value in row["explicit_path"])
+                else tuple(MovementPlanId(value) for value in row["explicit_path"])
             ),
         )
         for row in data.get("supply_policies", [])

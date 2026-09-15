@@ -8,7 +8,7 @@ from .application_commands import (
     UpdateTransportAllocation,
 )
 from .transport.models import PathPolicy
-from .shared import DefinitionId, EntityId, RouteId
+from .shared import DefinitionId, EntityId, MovementPlanId
 from .transport.models import DirectionalCapacity, TransportControlMode
 
 
@@ -62,7 +62,7 @@ class TransportCommandHandlerMixin:
                 self._require_operational_node(command.destination_id),
                 provisioning_priority=command.provisioning_priority, control_mode=mode,
                 target_units=target_units, target_capacity=target_capacity,
-                path=None if command.path is None else tuple(RouteId(value) for value in command.path),
+                path=None if command.path is None else tuple(MovementPlanId(value) for value in command.path),
                 path_policy=PathPolicy(command.path_policy), paused=command.paused, day=sim.day,
             )
             return CommandResult(str(allocation_id))
@@ -92,7 +92,7 @@ class TransportCommandHandlerMixin:
             relocation_id = sim.transport.relocate_fleet(
                 DefinitionId(command.vehicle_definition_id), command.units,
                 self._require_operational_node(command.source_id), self._require_operational_node(command.destination_id),
-                path=None if command.path is None else tuple(RouteId(value) for value in command.path),
+                path=None if command.path is None else tuple(MovementPlanId(value) for value in command.path),
                 path_policy=PathPolicy(command.path_policy), day=sim.day,
             )
             return CommandResult(str(relocation_id))

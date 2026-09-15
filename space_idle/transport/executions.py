@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
+from ..shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
 from .models import (
     MovementExecution,
     MovementExecutionKind,
@@ -150,7 +150,7 @@ class MovementExecutionMixin:
         kind: MovementExecutionKind,
         vehicle_definition_id: DefinitionId,
         units: int,
-        path: tuple[RouteId, ...],
+        path: tuple[MovementPlanId, ...],
         *,
         payload_t_per_unit: float = 0.0,
         payload_resources: tuple[MovementExecutionPayloadResource, ...] = (),

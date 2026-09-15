@@ -165,10 +165,10 @@ class VehicleProductionMixin:
         return tuple(failures)
 
     @staticmethod
-    def _vehicle_production_demand_id(
+    def _vehicle_production_requirement_id(
         project_id: EntityId, resource_id: DefinitionId
     ) -> EntityId:
-        return EntityId(f"demand.{project_id}:{resource_id}")
+        return EntityId(f"requirement.{project_id}:{resource_id}")
 
     @staticmethod
     def _vehicle_production_claim_id(
@@ -237,7 +237,7 @@ class VehicleProductionMixin:
     def vehicle_production_supplys(
         self, day: int = 0
     ) -> tuple[SupplyRequirement, ...]:
-        demands: list[SupplyRequirement] = []
+        requirements: list[SupplyRequirement] = []
         for state in sorted(
             self.vehicle_production_projects.values(), key=lambda row: str(row.id)
         ):
@@ -254,9 +254,9 @@ class VehicleProductionMixin:
                 )
                 if remaining <= 1e-12:
                     continue
-                demands.append(
+                requirements.append(
                     SupplyRequirement(
-                        self._vehicle_production_demand_id(state.id, resource_id),
+                        self._vehicle_production_requirement_id(state.id, resource_id),
                         "vehicle_production",
                         state.id,
                         state.operational_node_id,
@@ -265,7 +265,7 @@ class VehicleProductionMixin:
                         state.priority,
                     )
                 )
-        return tuple(demands)
+        return tuple(requirements)
 
     def vehicle_production_resource_claims(
         self, day: int = 0
@@ -293,7 +293,7 @@ class VehicleProductionMixin:
                     "vehicle_production",
                     state.id,
                     "production_inputs",
-                    demand_id=self._vehicle_production_demand_id(state.id, resource_id),
+                    requirement_id=self._vehicle_production_requirement_id(state.id, resource_id),
                 ))
         return tuple(claims)
 

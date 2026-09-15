@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
     GetContracts, GetDependencyAnalytics, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
-    GetLogisticsSummary, GetProjects, GetResearch, GetRoutes, GetSurveys,
+    GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys,
     GetTransportAllocationOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
 )
 from ..persistence import SaveFormatError
@@ -283,20 +283,20 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/logistics/summary":
             self._query_result(GetLogisticsSummary())
             return
-        if path == "/api/v1/logistics/routes":
-            self._query_result(GetRoutes(
+        if path == "/api/v1/logistics/movement-plans":
+            self._query_result(GetMovementPlans(
                 origin_id=_one(params, "origin_id"),
                 destination_id=_one(params, "destination_id"),
-                route_id=_one(params, "route_id"),
+                movement_plan_id=_one(params, "movement_plan_id"),
                 include_modes=_bool(params, "include_modes", False),
             ))
             return
-        route_prefix = "/api/v1/logistics/routes/"
-        if path.startswith(route_prefix):
-            route_id = unquote(path[len(route_prefix):])
-            if not route_id:
-                raise ApiPayloadError("route id is required")
-            self._query_result(GetRoutes(route_id=route_id, include_modes=True))
+        movement_plan_prefix = "/api/v1/logistics/movement-plans/"
+        if path.startswith(movement_plan_prefix):
+            movement_plan_id = unquote(path[len(movement_plan_prefix):])
+            if not movement_plan_id:
+                raise ApiPayloadError("movement plan id is required")
+            self._query_result(GetMovementPlans(movement_plan_id=movement_plan_id, include_modes=True))
             return
         if path == "/api/v1/logistics/fleet":
             self._query_result(GetFleet(

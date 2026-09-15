@@ -40,7 +40,7 @@ class SurfaceInfrastructureService:
     Surface Cells remain physical geography only.  This service turns the
     extent and spread of one Location's developed territory into a Location-
     scoped service load and compares that load with Facility-supplied surface
-    distribution service capacity.  No Cell Inventory or Cell-to-Cell cargo routes
+    distribution service capacity.  No Cell Inventory or direct Cell-to-Cell cargo links
     are created.
     """
 

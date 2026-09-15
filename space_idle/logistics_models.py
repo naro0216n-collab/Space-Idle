@@ -59,7 +59,7 @@ class CargoFlowSegment:
     amount_t: float
     source_id: SpatialNodeId
     final_destination_id: SpatialNodeId
-    demand_id: EntityId | None
+    requirement_id: EntityId | None
     owner_kind: str
     owner_id: EntityId
     priority: ActivityPriority
@@ -129,7 +129,7 @@ class CargoArrivalWaiting:
     amount_t: float
     node_id: SpatialNodeId
     final_destination_id: SpatialNodeId
-    demand_id: EntityId | None
+    requirement_id: EntityId | None
     owner_kind: str
     owner_id: EntityId
     priority: ActivityPriority
@@ -170,7 +170,7 @@ class CargoHandoffStaging:
     amount_t: float
     node_id: SpatialNodeId
     final_destination_id: SpatialNodeId
-    demand_id: EntityId | None
+    requirement_id: EntityId | None
     owner_kind: str
     owner_id: EntityId
     priority: ActivityPriority

@@ -29,7 +29,7 @@ class ResourceClaim:
     purpose: str
     minimum_amount: float = 0.0
     atomic: bool = False
-    demand_id: EntityId | None = None
+    requirement_id: EntityId | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "priority", ActivityPriority(self.priority))

@@ -8,7 +8,7 @@ from .knowledge import DomainActivity
 from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .supply import SupplyRequirement
 from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
-from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
+from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
 from .supply_planning import SupplyPlanningOptions
 from .logistics_models import (
     CargoArrivalWaiting,
@@ -28,7 +28,7 @@ from .transport.models import (
 @dataclass(frozen=True)
 class _PlannedDispatch:
     source_id: SpatialNodeId
-    demand: SupplyRequirement
+    requirement: SupplyRequirement
     path: tuple[TransportServiceSupply, ...]
     amount_t: float
     cargo_claim_id: EntityId
@@ -50,7 +50,7 @@ class LogisticsResourcePlan:
 
 @dataclass(frozen=True)
 class LogisticsDispatchProjection:
-    demand_id: EntityId
+    requirement_id: EntityId
     resource_id: DefinitionId
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
@@ -195,20 +195,20 @@ class LogisticsFlowMixin:
         self,
         source_id: SpatialNodeId,
         destination_id: SpatialNodeId,
-        route_path: tuple[RouteId, ...],
+        movement_plan_path: tuple[MovementPlanId, ...],
         edges: tuple[TransportServiceSupply, ...],
         policy: PathPolicy,
     ) -> tuple[TransportServiceSupply, ...]:
         candidates = sorted(edges, key=lambda edge: (self._edge_score(edge, policy), edge.key))
 
         def search(node: SpatialNodeId, index: int) -> tuple[TransportServiceSupply, ...] | None:
-            if index == len(route_path):
+            if index == len(movement_plan_path):
                 return () if node == destination_id else None
             for edge in candidates:
                 if edge.source_id != node:
                     continue
-                size = len(edge.route_path)
-                if size == 0 or route_path[index : index + size] != edge.route_path:
+                size = len(edge.movement_plan_path)
+                if size == 0 or movement_plan_path[index : index + size] != edge.movement_plan_path:
                     continue
                 suffix = search(edge.destination_id, index + size)
                 if suffix is not None:
@@ -220,9 +220,9 @@ class LogisticsFlowMixin:
             raise ValueError("explicit supply path has no matching transport services")
         return result
 
-    def _transport_edges_for_demand(
+    def _transport_edges_for_requirement(
         self,
-        demand: SupplyRequirement,
+        requirement: SupplyRequirement,
         edges: tuple[TransportServiceSupply, ...],
         *,
         enforce_external_policy: bool = True,
@@ -234,15 +234,15 @@ class LogisticsFlowMixin:
             for edge in edges
             if edge.external_service_id is None
             or self.external_economy.service_allowed(
-                edge.external_service_id, demand.owner_kind, demand.owner_id
+                edge.external_service_id, requirement.owner_kind, requirement.owner_id
             )
         )
 
     def _supply_path_preferences(
-        self, demand: SupplyRequirement
-    ) -> tuple[SpatialNodeId | None, PathPolicy, tuple[RouteId, ...] | None]:
-        policy = self.supply_policy_for(demand)
-        source_id = demand.source_id
+        self, requirement: SupplyRequirement
+    ) -> tuple[SpatialNodeId | None, PathPolicy, tuple[MovementPlanId, ...] | None]:
+        policy = self.supply_policy_for(requirement)
+        source_id = requirement.source_id
         if source_id is None and policy is not None:
             source_id = policy.preferred_source_id
         path_policy = PathPolicy.FASTEST if policy is None else policy.path_policy
@@ -257,7 +257,7 @@ class LogisticsFlowMixin:
 
     def supply_service_path(
         self,
-        demand: SupplyRequirement,
+        requirement: SupplyRequirement,
         source_id: SpatialNodeId,
         day: int,
         edges: tuple[TransportServiceSupply, ...] | None = None,
@@ -265,16 +265,16 @@ class LogisticsFlowMixin:
         enforce_external_policy: bool = True,
     ) -> tuple[TransportServiceSupply, ...]:
         available = self._service_edges(day) if edges is None else edges
-        available = self._transport_edges_for_demand(
-            demand, available, enforce_external_policy=enforce_external_policy
+        available = self._transport_edges_for_requirement(
+            requirement, available, enforce_external_policy=enforce_external_policy
         )
-        _source, path_policy, explicit_path = self._supply_path_preferences(demand)
+        _source, path_policy, explicit_path = self._supply_path_preferences(requirement)
         if explicit_path is None:
             return self._automatic_service_path(
-                source_id, demand.destination_id, available, path_policy
+                source_id, requirement.destination_id, available, path_policy
             )
         return self._explicit_service_path(
-            source_id, demand.destination_id, explicit_path, available, path_policy
+            source_id, requirement.destination_id, explicit_path, available, path_policy
         )
 
     @staticmethod
@@ -285,27 +285,27 @@ class LogisticsFlowMixin:
 
     def _candidate_supply_paths(
         self,
-        demand: SupplyRequirement,
+        requirement: SupplyRequirement,
         day: int,
         edges: tuple[TransportServiceSupply, ...],
     ) -> tuple[tuple[SpatialNodeId, tuple[TransportServiceSupply, ...]], ...]:
-        constrained_source, path_policy, _explicit_path = self._supply_path_preferences(demand)
+        constrained_source, path_policy, _explicit_path = self._supply_path_preferences(requirement)
         if constrained_source is not None:
             source_ids = (constrained_source,)
         else:
             source_ids = tuple(
                 node_id
                 for node_id in self.facilities.environment.graph.operational_node_ids()
-                if node_id != demand.destination_id
-                and self.inventory.available(node_id, demand.resource_id) > 1e-12
+                if node_id != requirement.destination_id
+                and self.inventory.available(node_id, requirement.resource_id) > 1e-12
             )
 
         rows: list[tuple[float, str, SpatialNodeId, tuple[TransportServiceSupply, ...]]] = []
         for source_id in source_ids:
-            if source_id == demand.destination_id:
+            if source_id == requirement.destination_id:
                 continue
             try:
-                path = self.supply_service_path(demand, source_id, day, edges)
+                path = self.supply_service_path(requirement, source_id, day, edges)
             except ValueError:
                 continue
             if not path:
@@ -317,28 +317,28 @@ class LogisticsFlowMixin:
 
     @staticmethod
     def _dispatch_is_due(
-        demand: SupplyRequirement, day: int, path: tuple[TransportServiceSupply, ...]
+        requirement: SupplyRequirement, day: int, path: tuple[TransportServiceSupply, ...]
     ) -> bool:
-        if demand.forecast_requirement_day is None:
+        if requirement.forecast_requirement_day is None:
             return True
         arrival_day = day + sum(edge.latency_days for edge in path)
-        return arrival_day >= demand.forecast_requirement_day
+        return arrival_day >= requirement.forecast_requirement_day
 
-    def _flow_pipeline_by_demand(self, demand_ids: set[EntityId]) -> dict[EntityId, float]:
-        pipeline = {demand_id: 0.0 for demand_id in demand_ids}
+    def _flow_pipeline_by_requirement(self, requirement_ids: set[EntityId]) -> dict[EntityId, float]:
+        pipeline = {requirement_id: 0.0 for requirement_id in requirement_ids}
         for flow in self.cargo_flows.values():
-            if flow.demand_id in pipeline:
-                pipeline[flow.demand_id] += flow.amount_t
+            if flow.requirement_id in pipeline:
+                pipeline[flow.requirement_id] += flow.amount_t
         for waiting in self.arrival_waiting.values():
-            if waiting.demand_id in pipeline:
-                pipeline[waiting.demand_id] += waiting.amount_t
+            if waiting.requirement_id in pipeline:
+                pipeline[waiting.requirement_id] += waiting.amount_t
         for staging in self.handoff_staging.values():
-            if staging.demand_id in pipeline:
-                pipeline[staging.demand_id] += staging.amount_t
+            if staging.requirement_id in pipeline:
+                pipeline[staging.requirement_id] += staging.amount_t
         return pipeline
 
-    def cargo_flow_pipeline_t(self, demand_id: EntityId) -> float:
-        return self._flow_pipeline_by_demand({demand_id})[demand_id]
+    def cargo_flow_pipeline_t(self, requirement_id: EntityId) -> float:
+        return self._flow_pipeline_by_requirement({requirement_id})[requirement_id]
 
     def cargo_flow_snapshots(self) -> tuple[CargoFlowSegment, ...]:
         """Return detached in-transit Cargo Flow Segment state."""
@@ -398,19 +398,19 @@ class LogisticsFlowMixin:
         return totals
 
     @staticmethod
-    def _cargo_claim_id(source_id: SpatialNodeId, demand_id: EntityId) -> EntityId:
-        return EntityId(f"claim.logistics.cargo:{source_id}:{demand_id}")
+    def _cargo_claim_id(source_id: SpatialNodeId, requirement_id: EntityId) -> EntityId:
+        return EntityId(f"claim.logistics.cargo:{source_id}:{requirement_id}")
 
     @staticmethod
     def _spending_request_id(
         source_id: SpatialNodeId,
-        demand_id: EntityId,
+        requirement_id: EntityId,
         service_id: DefinitionId,
         edge_key: str,
         dispatch_index: int,
     ) -> EntityId:
         return EntityId(
-            f"funds.logistics:{source_id}:{demand_id}:{service_id}:{edge_key}:{dispatch_index}"
+            f"funds.logistics:{source_id}:{requirement_id}:{service_id}:{edge_key}:{dispatch_index}"
         )
 
     @staticmethod
@@ -437,9 +437,9 @@ class LogisticsFlowMixin:
         return totals
 
     def plan_capacity_logistics(
-        self, day: int, demands: tuple[SupplyRequirement, ...]
+        self, day: int, requirements: tuple[SupplyRequirement, ...]
     ) -> LogisticsResourcePlan:
-        """Resolve current shipping demand from Supply Requirements.
+        """Resolve current shipping requirement from Supply Requirements.
 
         Supply Planning consumes only already-provisioned Transport Capacity. It
         never changes Fleet Allocation targets. Source stock is represented as
@@ -458,23 +458,23 @@ class LogisticsFlowMixin:
             for row in self.transport.transport_operation_dependencies(day)
         }
         remaining = {edge.key: edge.capacity_t_per_day for edge in edges}
-        demand_rows = tuple(sorted(demands, key=lambda row: (-row.priority, str(row.id))))
-        pipeline = self._flow_pipeline_by_demand({row.id for row in demand_rows})
+        requirement_rows = tuple(sorted(requirements, key=lambda row: (-row.priority, str(row.id))))
+        pipeline = self._flow_pipeline_by_requirement({row.id for row in requirement_rows})
         used: dict[EntityId, DirectionalCapacity] = {}
         dispatches: list[_PlannedDispatch] = []
         spending_requests: list[FundsRequest] = []
 
         by_priority: dict[int, list[SupplyRequirement]] = {}
-        for demand in demand_rows:
-            by_priority.setdefault(int(demand.priority), []).append(demand)
+        for requirement in requirement_rows:
+            by_priority.setdefault(int(requirement.priority), []).append(requirement)
 
         for priority in sorted(by_priority, reverse=True):
             band = tuple(sorted(by_priority[priority], key=lambda row: str(row.id)))
             original_need = {
-                demand.id: max(0.0, demand.amount_t - pipeline[demand.id])
-                for demand in band
+                requirement.id: max(0.0, requirement.amount_t - pipeline[requirement.id])
+                for requirement in band
             }
-            allocated = {demand.id: 0.0 for demand in band}
+            allocated = {requirement.id: 0.0 for requirement in band}
 
             while True:
                 available_edges = self._edges_with_remaining(edges, remaining)
@@ -485,30 +485,30 @@ class LogisticsFlowMixin:
                     EntityId,
                     tuple[SupplyRequirement, SpatialNodeId, tuple[TransportServiceSupply, ...]],
                 ] = {}
-                for demand in band:
-                    need = original_need[demand.id]
-                    if need <= 1e-12 or allocated[demand.id] >= need - 1e-12:
+                for requirement in band:
+                    need = original_need[requirement.id]
+                    if need <= 1e-12 or allocated[requirement.id] >= need - 1e-12:
                         continue
                     candidates = self._candidate_supply_paths(
-                        demand, day, available_edges
+                        requirement, day, available_edges
                     )
                     if not candidates:
                         continue
                     source_id, path = candidates[0]
-                    if not self._dispatch_is_due(demand, day, path):
+                    if not self._dispatch_is_due(requirement, day, path):
                         continue
-                    selected[demand.id] = (demand, source_id, path)
+                    selected[requirement.id] = (requirement, source_id, path)
 
                 if not selected:
                     break
 
                 edge_load: dict[str, float] = {}
                 completion_delta = 1.0
-                for demand_id, (_demand, _source_id, path) in selected.items():
-                    need = original_need[demand_id]
+                for requirement_id, (_requirement, _source_id, path) in selected.items():
+                    need = original_need[requirement_id]
                     completion_delta = min(
                         completion_delta,
-                        max(0.0, 1.0 - allocated[demand_id] / need),
+                        max(0.0, 1.0 - allocated[requirement_id] / need),
                     )
                     for edge in path:
                         edge_load[edge.key] = edge_load.get(edge.key, 0.0) + need
@@ -525,16 +525,16 @@ class LogisticsFlowMixin:
                 if delta <= 1e-12:
                     break
 
-                for demand_id in sorted(selected, key=str):
-                    demand, source_id, path = selected[demand_id]
+                for requirement_id in sorted(selected, key=str):
+                    requirement, source_id, path = selected[requirement_id]
                     amount = min(
-                        original_need[demand_id] - allocated[demand_id],
-                        original_need[demand_id] * delta,
+                        original_need[requirement_id] - allocated[requirement_id],
+                        original_need[requirement_id] * delta,
                     )
                     if amount <= 1e-12:
                         continue
-                    allocated[demand_id] += amount
-                    pipeline[demand_id] += amount
+                    allocated[requirement_id] += amount
+                    pipeline[requirement_id] += amount
                     used = self._allocation_used_after(used, path, amount)
                     for edge in path:
                         remaining[edge.key] = max(
@@ -549,7 +549,7 @@ class LogisticsFlowMixin:
                         ):
                             continue
                         policy = self.external_economy.resolve_policy(
-                            edge.external_service_id, demand.owner_kind, demand.owner_id
+                            edge.external_service_id, requirement.owner_kind, requirement.owner_id
                         )
                         if policy is None:
                             raise RuntimeError(
@@ -557,7 +557,7 @@ class LogisticsFlowMixin:
                             )
                         request_id = self._spending_request_id(
                             source_id,
-                            demand.id,
+                            requirement.id,
                             edge.external_service_id,
                             edge.key,
                             len(dispatches),
@@ -569,19 +569,19 @@ class LogisticsFlowMixin:
                                 policy.id,
                                 edge.external_service_id,
                                 amount * edge.cost_musd_per_t,
-                                demand.priority,
-                                demand.owner_kind,
-                                demand.owner_id,
-                                f"transport:{demand.id}",
+                                requirement.priority,
+                                requirement.owner_kind,
+                                requirement.owner_id,
+                                f"transport:{requirement.id}",
                             )
                         )
                     dispatches.append(
                         _PlannedDispatch(
                             source_id,
-                            demand,
+                            requirement,
                             path,
                             amount,
-                            self._cargo_claim_id(source_id, demand.id),
+                            self._cargo_claim_id(source_id, requirement.id),
                             tuple(spending_ids),
                             amount,
                         )
@@ -598,18 +598,18 @@ class LogisticsFlowMixin:
         claims: list[ResourceClaim] = []
         for claim_id, requested in sorted(cargo_totals.items(), key=lambda row: str(row[0])):
             row = cargo_meta[claim_id]
-            demand = row.demand
+            requirement = row.requirement
             claims.append(
                 ResourceClaim(
                     claim_id,
                     row.source_id,
-                    demand.resource_id,
+                    requirement.resource_id,
                     requested,
-                    demand.priority,
+                    requirement.priority,
                     "logistics_dispatch",
-                    demand.owner_id,
-                    f"supply:{demand.id}",
-                    demand_id=demand.id,
+                    requirement.owner_id,
+                    f"supply:{requirement.id}",
+                    requirement_id=requirement.id,
                 )
             )
 
@@ -676,7 +676,7 @@ class LogisticsFlowMixin:
             dispatches.append(
                 _PlannedDispatch(
                     row.source_id,
-                    row.demand,
+                    row.requirement,
                     row.path,
                     amount,
                     row.cargo_claim_id,
@@ -697,18 +697,18 @@ class LogisticsFlowMixin:
         claims: list[ResourceClaim] = []
         for claim_id, requested in sorted(cargo_totals.items(), key=lambda row: str(row[0])):
             row = cargo_meta[claim_id]
-            demand = row.demand
+            requirement = row.requirement
             claims.append(
                 ResourceClaim(
                     claim_id,
                     row.source_id,
-                    demand.resource_id,
+                    requirement.resource_id,
                     requested,
-                    demand.priority,
+                    requirement.priority,
                     "logistics_dispatch",
-                    demand.owner_id,
-                    f"supply:{demand.id}",
-                    demand_id=demand.id,
+                    requirement.owner_id,
+                    f"supply:{requirement.id}",
+                    requirement_id=requirement.id,
                 )
             )
 
@@ -861,7 +861,7 @@ class LogisticsFlowMixin:
         resource_id: DefinitionId,
         source_id: SpatialNodeId,
         final_destination_id: SpatialNodeId,
-        demand_id: EntityId | None,
+        requirement_id: EntityId | None,
         owner_kind: str,
         owner_id: EntityId,
         priority: int,
@@ -869,7 +869,7 @@ class LogisticsFlowMixin:
         remaining_legs: tuple[CargoServiceLeg, ...],
     ) -> tuple:
         return (
-            resource_id, source_id, final_destination_id, demand_id, owner_kind, owner_id,
+            resource_id, source_id, final_destination_id, requirement_id, owner_kind, owner_id,
             int(priority), leg, remaining_legs,
         )
 
@@ -879,7 +879,7 @@ class LogisticsFlowMixin:
         resource_id: DefinitionId,
         amount_t: float,
         final_destination_id: SpatialNodeId,
-        demand_id: EntityId | None,
+        requirement_id: EntityId | None,
         owner_kind: str,
         owner_id: EntityId,
         priority: int,
@@ -893,13 +893,13 @@ class LogisticsFlowMixin:
         leg = legs[0]
         remaining = legs[1:]
         key = self._segment_semantics_key(
-            resource_id, leg.source_id, final_destination_id, demand_id, owner_kind,
+            resource_id, leg.source_id, final_destination_id, requirement_id, owner_kind,
             owner_id, priority, leg, remaining,
         )
         for segment in sorted(self.cargo_flows.values(), key=lambda row: str(row.id)):
             other = self._segment_semantics_key(
                 segment.resource_id, segment.source_id, segment.final_destination_id,
-                segment.demand_id, segment.owner_kind, segment.owner_id,
+                segment.requirement_id, segment.owner_kind, segment.owner_id,
                 int(segment.priority), segment.leg, segment.remaining_legs,
             )
             if other != key:
@@ -916,7 +916,7 @@ class LogisticsFlowMixin:
         segment_id = EntityId(f"cargo.segment.{self._cargo_flow_counter}")
         self.cargo_flows[segment_id] = CargoFlowSegment(
             segment_id, resource_id, amount_t, leg.source_id, final_destination_id,
-            demand_id, owner_kind, owner_id, priority, leg, remaining,
+            requirement_id, owner_kind, owner_id, priority, leg, remaining,
             dispatch_day, dispatch_day + 1, amount_t,
         )
         return segment_id
@@ -925,7 +925,7 @@ class LogisticsFlowMixin:
     def _waiting_semantics_key(waiting: CargoArrivalWaiting) -> tuple:
         return (
             waiting.resource_id, waiting.node_id, waiting.final_destination_id,
-            waiting.demand_id, waiting.owner_kind, waiting.owner_id, int(waiting.priority),
+            waiting.requirement_id, waiting.owner_kind, waiting.owner_id, int(waiting.priority),
             waiting.arrival_leg, waiting.remaining_legs,
         )
 
@@ -934,7 +934,7 @@ class LogisticsFlowMixin:
     ) -> EntityId:
         probe = CargoArrivalWaiting(
             EntityId("cargo.waiting.probe"), segment.resource_id, amount_t,
-            segment.destination_id, segment.final_destination_id, segment.demand_id,
+            segment.destination_id, segment.final_destination_id, segment.requirement_id,
             segment.owner_kind, segment.owner_id, segment.priority, segment.leg,
             segment.remaining_legs, day,
         )
@@ -1026,7 +1026,7 @@ class LogisticsFlowMixin:
     def _staging_semantics_key(staging: CargoHandoffStaging) -> tuple:
         return (
             staging.resource_id, staging.node_id, staging.final_destination_id,
-            staging.demand_id, staging.owner_kind, staging.owner_id, int(staging.priority),
+            staging.requirement_id, staging.owner_kind, staging.owner_id, int(staging.priority),
             staging.remaining_legs,
         )
 
@@ -1037,7 +1037,7 @@ class LogisticsFlowMixin:
             return 0.0
         probe_key = (
             waiting.resource_id, waiting.node_id, waiting.final_destination_id,
-            waiting.demand_id, waiting.owner_kind, waiting.owner_id, int(waiting.priority),
+            waiting.requirement_id, waiting.owner_kind, waiting.owner_id, int(waiting.priority),
             waiting.remaining_legs,
         )
         existing = next(
@@ -1067,7 +1067,7 @@ class LogisticsFlowMixin:
         if existing is None:
             self.handoff_staging[staging_id] = CargoHandoffStaging(
                 staging_id, waiting.resource_id, admitted, waiting.node_id,
-                waiting.final_destination_id, waiting.demand_id, waiting.owner_kind,
+                waiting.final_destination_id, waiting.requirement_id, waiting.owner_kind,
                 waiting.owner_id, waiting.priority, reservation_owner,
                 waiting.remaining_legs, day,
             )
@@ -1105,7 +1105,7 @@ class LogisticsFlowMixin:
                 resource_id=staging.resource_id,
                 amount_t=amount,
                 final_destination_id=staging.final_destination_id,
-                demand_id=staging.demand_id,
+                requirement_id=staging.requirement_id,
                 owner_kind=staging.owner_kind,
                 owner_id=staging.owner_id,
                 priority=staging.priority,
@@ -1137,7 +1137,7 @@ class LogisticsFlowMixin:
                     resource_id=waiting.resource_id,
                     amount_t=direct,
                     final_destination_id=waiting.final_destination_id,
-                    demand_id=waiting.demand_id,
+                    requirement_id=waiting.requirement_id,
                     owner_kind=waiting.owner_kind,
                     owner_id=waiting.owner_id,
                     priority=waiting.priority,
@@ -1252,10 +1252,10 @@ class LogisticsFlowMixin:
         operation_limits: dict[EntityId, tuple[str, ...]] = {}
         # Capacity queries must observe upstream Service scarcity even when no
         # cargo happens to be scheduled for this allocation in the current
-        # tick. Resource and turnaround ratios below remain demand-shaped by
+        # tick. Resource and turnaround ratios below remain requirement-shaped by
         # ``plan``; location-wide upstream services such as surface
         # distribution are authoritative for the allocation regardless of
-        # current cargo demand.
+        # current cargo requirement.
         for dependency in self.transport.transport_operation_dependencies(day):
             allocation_id = dependency.allocation_id
             factor, limiting = self._transport_operation_allocation_factor(
@@ -1318,10 +1318,10 @@ class LogisticsFlowMixin:
     ) -> LogisticsExecutionProjection:
         dispatches = tuple(
             LogisticsDispatchProjection(
-                row.demand.id,
-                row.demand.resource_id,
+                row.requirement.id,
+                row.requirement.resource_id,
                 row.source_id,
-                row.demand.destination_id,
+                row.requirement.destination_id,
                 amount,
             )
             for row, amount in allocation.executable_dispatches
@@ -1344,8 +1344,8 @@ class LogisticsFlowMixin:
         activities: list[DomainActivity] = []
         requests_by_id = {request.id: request for request in plan.spending_requests}
         for row, amount in execution.executable_dispatches:
-            demand = row.demand
-            self.inventory.consume_allocated(row.source_id, demand.resource_id, amount)
+            requirement = row.requirement
+            self.inventory.consume_allocated(row.source_id, requirement.resource_id, amount)
             if row.spending_request_ids:
                 raw_amount = row.planned_amount_t
                 execution_factor = 0.0 if raw_amount <= 1e-12 else amount / raw_amount
@@ -1363,17 +1363,17 @@ class LogisticsFlowMixin:
 
             activities.append(
                 DomainActivity(
-                    "transport", amount, "supply_dispatch", demand.id, row.source_id
+                    "transport", amount, "supply_dispatch", requirement.id, row.source_id
                 )
             )
             self._append_cargo_segment(
-                resource_id=demand.resource_id,
+                resource_id=requirement.resource_id,
                 amount_t=amount,
-                final_destination_id=demand.destination_id,
-                demand_id=demand.id,
-                owner_kind=demand.owner_kind,
-                owner_id=demand.owner_id,
-                priority=demand.priority,
+                final_destination_id=requirement.destination_id,
+                requirement_id=requirement.id,
+                owner_kind=requirement.owner_kind,
+                owner_id=requirement.owner_id,
+                priority=requirement.priority,
                 legs=tuple(self._cargo_service_leg(edge) for edge in row.path),
                 dispatch_day=day,
             )
@@ -1393,14 +1393,14 @@ class LogisticsFlowMixin:
 
     def _external_policy_blockers_for_source(
         self,
-        demand: SupplyRequirement,
+        requirement: SupplyRequirement,
         source_id: SpatialNodeId,
         day: int,
         edges: tuple[TransportServiceSupply, ...],
     ) -> tuple[str, ...]:
         try:
             physical_path = self.supply_service_path(
-                demand, source_id, day, edges, enforce_external_policy=False
+                requirement, source_id, day, edges, enforce_external_policy=False
             )
         except ValueError:
             return ()
@@ -1409,7 +1409,7 @@ class LogisticsFlowMixin:
             for edge in physical_path
             if edge.external_service_id is not None
             and not self.external_economy.service_allowed(
-                edge.external_service_id, demand.owner_kind, demand.owner_id
+                edge.external_service_id, requirement.owner_kind, requirement.owner_id
             )
         }
         return tuple(
@@ -1440,7 +1440,7 @@ class LogisticsFlowMixin:
 
     def supply_planning_options(
         self,
-        demand: SupplyRequirement,
+        requirement: SupplyRequirement,
         day: int = 0,
         *,
         execution_allocation: LogisticsExecutionAllocation | None = None,
@@ -1449,7 +1449,7 @@ class LogisticsFlowMixin:
             day, execution_allocation
         )
         constrained_source, _path_policy, _explicit_path = (
-            self._supply_path_preferences(demand)
+            self._supply_path_preferences(requirement)
         )
         if constrained_source is not None:
             source_ids = (constrained_source,)
@@ -1457,7 +1457,7 @@ class LogisticsFlowMixin:
             source_ids = tuple(
                 node_id
                 for node_id in self.facilities.environment.graph.operational_node_ids()
-                if node_id != demand.destination_id
+                if node_id != requirement.destination_id
             )
 
         candidates: list[SpatialNodeId] = []
@@ -1467,20 +1467,20 @@ class LogisticsFlowMixin:
         for source_id in sorted(source_ids, key=str):
             try:
                 physical_path = self.supply_service_path(
-                    demand, source_id, day, edges, enforce_external_policy=False
+                    requirement, source_id, day, edges, enforce_external_policy=False
                 )
             except ValueError:
                 continue
             if not physical_path:
                 continue
             candidates.append(source_id)
-            if self.inventory.available(source_id, demand.resource_id) > 1e-9:
+            if self.inventory.available(source_id, requirement.resource_id) > 1e-9:
                 stocked.append(source_id)
             try:
-                path = self.supply_service_path(demand, source_id, day, edges)
+                path = self.supply_service_path(requirement, source_id, day, edges)
             except ValueError as exc:
                 policy_blockers = self._external_policy_blockers_for_source(
-                    demand, source_id, day, edges
+                    requirement, source_id, day, edges
                 )
                 blockers.extend(policy_blockers or (f"transport_capacity:{exc}",))
                 continue
@@ -1490,7 +1490,7 @@ class LogisticsFlowMixin:
         arrivals = [
             flow.first_arrival_day
             for flow in self.cargo_flows.values()
-            if flow.demand_id == demand.id
+            if flow.requirement_id == requirement.id
         ]
         return SupplyPlanningOptions(
             tuple(candidates),

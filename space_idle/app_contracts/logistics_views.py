@@ -20,7 +20,7 @@ class InfrastructureRequirementRow:
 
 
 @dataclass(frozen=True)
-class RouteEndpointRow:
+class MovementEndpointRow:
     node_id: str
     locator_kind: str
     locator_id: str
@@ -28,7 +28,7 @@ class RouteEndpointRow:
 
 
 @dataclass(frozen=True)
-class RouteModeRow:
+class MovementServiceModeRow:
     id: str
     display_name: str
     kind: str
@@ -48,13 +48,13 @@ class RouteModeRow:
 
 
 @dataclass(frozen=True)
-class RouteRow:
+class MovementPlanRow:
     id: str
     display_name: str
     origin_id: str
     destination_id: str
-    origin_endpoint: RouteEndpointRow
-    destination_endpoint: RouteEndpointRow
+    origin_endpoint: MovementEndpointRow
+    destination_endpoint: MovementEndpointRow
     same_body_surface: bool
     distance_km: float | None
     available: bool
@@ -63,7 +63,7 @@ class RouteRow:
     delta_v_km_s: float
     operations: tuple[tuple[str, float], ...]
     blockers: tuple[str, ...]
-    modes: tuple[RouteModeRow, ...]
+    modes: tuple[MovementServiceModeRow, ...]
 
 
 @dataclass(frozen=True)
@@ -150,7 +150,7 @@ class CargoFlowRow:
     amount_t: float
     source_id: str
     destination_id: str
-    demand_id: str | None
+    requirement_id: str | None
     owner_kind: str
     owner_id: str
     priority: ActivityPriority
@@ -170,7 +170,7 @@ class CargoFlowRow:
 class ExternalSupplyRow:
     id: str
     service_id: str
-    demand_id: str
+    requirement_id: str
     owner_kind: str
     owner_id: str
     supply_node_id: str
@@ -228,6 +228,7 @@ class SupplyRequirementRow:
     pipeline_t: float
     remaining_t: float
     priority: ActivityPriority
+    forecast_requirement_day: int | None = None
     recurring_rate_t_per_day: float | None = None
     local_runway_days: float | None = None
     earliest_confirmed_arrival_day: int | None = None
@@ -260,7 +261,7 @@ class TargetStockRow:
 
 @dataclass(frozen=True)
 class LogisticsView:
-    routes: tuple[RouteRow, ...]
+    movement_plans: tuple[MovementPlanRow, ...]
     fleet_pools: tuple[FleetPoolRow, ...]
     relocations: tuple[FleetRelocationRow, ...]
     releases: tuple[FleetReleaseRow, ...]

@@ -8,7 +8,7 @@ from .application_commands import (
     SetSupplyPolicy,
     SetTargetStock,
 )
-from .shared import DefinitionId, RouteId
+from .shared import DefinitionId, MovementPlanId
 from .transport.models import PathPolicy
 
 
@@ -42,7 +42,7 @@ class LogisticsCommandHandlerMixin:
                 explicit_path=(
                     None
                     if command.explicit_path is None
-                    else tuple(RouteId(value) for value in command.explicit_path)
+                    else tuple(MovementPlanId(value) for value in command.explicit_path)
                 ),
             )
             return CommandResult(str(policy_id))

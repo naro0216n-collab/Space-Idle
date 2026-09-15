@@ -76,7 +76,7 @@ class TransportSupplyMixin:
                         capacity_t_per_day=snapshot.available.forward_t_per_day,
                         latency_days=max(1, plan.forward_latency_days),
                         cycle_days=max(1.0, plan.cycle_days),
-                        route_path=plan.forward_path,
+                        movement_plan_path=plan.forward_path,
                         allocation_id=allocation.id,
                         direction="forward",
                         propellant_t_per_t=forward_propellant_per_t,
@@ -91,7 +91,7 @@ class TransportSupplyMixin:
                         capacity_t_per_day=snapshot.available.reverse_t_per_day,
                         latency_days=max(1, plan.reverse_latency_days or 1),
                         cycle_days=max(1.0, plan.cycle_days),
-                        route_path=plan.reverse_path,
+                        movement_plan_path=plan.reverse_path,
                         allocation_id=allocation.id,
                         direction="reverse",
                         propellant_t_per_t=reverse_propellant_per_t,
@@ -116,7 +116,7 @@ class TransportSupplyMixin:
                             transit_multiplier=service.transit_time_multiplier,
                         )),
                         cycle_days=max(1.0, float(latency)),
-                        route_path=(plan.id,),
+                        movement_plan_path=(plan.id,),
                         external_service_id=service.id,
                         cost_musd_per_t=service.cost_musd_per_t,
                     )
@@ -131,8 +131,8 @@ class TransportSupplyMixin:
             definition = self.vehicle_defs[allocation.vehicle_definition_id]
             service_plan = self.derive_transport_service_plan(allocation.id, day)
             surface_locations: set[SpatialNodeId] = set()
-            for route_id in service_plan.forward_path + service_plan.reverse_path:
-                geometry = self.movement_geometry(route_id)
+            for movement_plan_id in service_plan.forward_path + service_plan.reverse_path:
+                geometry = self.movement_geometry(movement_plan_id)
                 for endpoint in (geometry.origin, geometry.destination):
                     if endpoint.surface_cell_id is not None:
                         surface_locations.add(endpoint.node_id)

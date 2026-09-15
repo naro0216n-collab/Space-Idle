@@ -143,10 +143,10 @@ class ResearchWorkflowMixin:
         )
 
     @staticmethod
-    def prototype_demand_id(
+    def prototype_requirement_id(
         research_id: DefinitionId, resource_id: DefinitionId
     ) -> EntityId:
-        return EntityId(f"demand.research:{research_id}:{resource_id}")
+        return EntityId(f"requirement.research:{research_id}:{resource_id}")
 
     @staticmethod
     def _prototype_reservation_owner_id(research_id: DefinitionId) -> EntityId:
@@ -205,7 +205,7 @@ class ResearchWorkflowMixin:
         state.prototype_operational_node_id = location_id
 
     def supplys(self, day: int = 0) -> tuple[SupplyRequirement, ...]:
-        demands: list[SupplyRequirement] = []
+        requirements: list[SupplyRequirement] = []
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
             if state.paused or state.stage is not ResearchStage.PROTOTYPE:
                 continue
@@ -226,8 +226,8 @@ class ResearchWorkflowMixin:
                 )
                 if remaining <= 1e-9:
                     continue
-                demands.append(SupplyRequirement(
-                    self.prototype_demand_id(research_id, resource_id),
+                requirements.append(SupplyRequirement(
+                    self.prototype_requirement_id(research_id, resource_id),
                     "research",
                     self._project_owner_id(research_id),
                     location_id,
@@ -235,7 +235,7 @@ class ResearchWorkflowMixin:
                     remaining,
                     state.priority,
                 ))
-        return tuple(demands)
+        return tuple(requirements)
 
     def reservation_acquisition_requirements(
         self, day: int = 0

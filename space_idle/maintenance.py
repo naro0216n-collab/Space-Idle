@@ -35,8 +35,8 @@ class FacilityMaintenanceService:
             raise ValueError("maintenance reorder point must be below target stock")
 
     @staticmethod
-    def _demand_id(facility_id: EntityId, resource_id: DefinitionId) -> EntityId:
-        return EntityId(f"demand.maintenance:{facility_id}:{resource_id}")
+    def _requirement_id(facility_id: EntityId, resource_id: DefinitionId) -> EntityId:
+        return EntityId(f"requirement.maintenance:{facility_id}:{resource_id}")
 
     def _site_refill_required(
         self,
@@ -77,7 +77,7 @@ class FacilityMaintenanceService:
                     required * self.target_stock_days if key in refill_keys else required
                 )
                 rows.append(SupplyRequirement(
-                    self._demand_id(facility.id, resource_id),
+                    self._requirement_id(facility.id, resource_id),
                     "facility_maintenance",
                     facility.id,
                     facility.operational_node_id,

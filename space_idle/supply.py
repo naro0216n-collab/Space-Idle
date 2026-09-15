@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterable
 
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
-from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
+from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
 from .transport.models import PathPolicy
 
 if TYPE_CHECKING:
@@ -87,7 +87,7 @@ class SupplyPolicy:
     resource_id: DefinitionId
     preferred_source_id: SpatialNodeId | None = None
     path_policy: PathPolicy = PathPolicy.FASTEST
-    explicit_path: tuple[RouteId, ...] | None = None
+    explicit_path: tuple[MovementPlanId, ...] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "path_policy", PathPolicy(self.path_policy))
@@ -97,39 +97,39 @@ class SupplyPolicy:
 
 @dataclass(frozen=True)
 class SupplyRequirementResolution:
-    """Planning-only local coverage and residual transport need for one demand."""
+    """Planning-only local coverage and residual transport need for one requirement."""
 
-    demand: SupplyRequirement
+    requirement: SupplyRequirement
     local_supply_t: float
     external_required_t: float
 
     def __post_init__(self) -> None:
         if self.local_supply_t < -1e-9 or self.external_required_t < -1e-9:
             raise ValueError("supply requirement resolution amounts must be non-negative")
-        if abs(self.local_supply_t + self.external_required_t - self.demand.amount_t) > 1e-7:
+        if abs(self.local_supply_t + self.external_required_t - self.requirement.amount_t) > 1e-7:
             raise ValueError("supply requirement resolution must conserve requested quantity")
 
-    def external_demand(self) -> SupplyRequirement | None:
+    def external_requirement(self) -> SupplyRequirement | None:
         if self.external_required_t <= 1e-9:
             return None
-        demand = self.demand
+        requirement = self.requirement
         return SupplyRequirement(
-            demand.id,
-            demand.owner_kind,
-            demand.owner_id,
-            demand.destination_id,
-            demand.resource_id,
+            requirement.id,
+            requirement.owner_kind,
+            requirement.owner_id,
+            requirement.destination_id,
+            requirement.resource_id,
             self.external_required_t,
-            demand.priority,
-            demand.source_id,
-            demand.recurring_rate_t_per_day,
-            demand.forecast_requirement_day,
-            demand.purpose,
+            requirement.priority,
+            requirement.source_id,
+            requirement.recurring_rate_t_per_day,
+            requirement.forecast_requirement_day,
+            requirement.purpose,
         )
 
 
 def resolve_local_supply(
-    demands: Iterable[SupplyRequirement], inventory: InventoryBook
+    requirements: Iterable[SupplyRequirement], inventory: InventoryBook
 ) -> tuple[SupplyRequirementResolution, ...]:
     """Credit observable on-site stock toward future replenishment planning.
 
@@ -140,11 +140,11 @@ def resolve_local_supply(
     No Inventory state is mutated.
     """
 
-    ordered = tuple(sorted(demands, key=lambda row: (-row.priority, str(row.id))))
+    ordered = tuple(sorted(requirements, key=lambda row: (-row.priority, str(row.id))))
     by_key: dict[tuple[SpatialNodeId, DefinitionId], list[int]] = {}
     local_credit = [0.0 for _ in ordered]
-    for index, demand in enumerate(ordered):
-        by_key.setdefault((demand.destination_id, demand.resource_id), []).append(index)
+    for index, requirement in enumerate(ordered):
+        by_key.setdefault((requirement.destination_id, requirement.resource_id), []).append(index)
 
     for key, indices in by_key.items():
         available = max(0.0, inventory.available(key[0], key[1]))
@@ -164,22 +164,22 @@ def resolve_local_supply(
 
     return tuple(
         SupplyRequirementResolution(
-            demand,
-            min(demand.amount_t, max(0.0, local_credit[index])),
-            max(0.0, demand.amount_t - local_credit[index]),
+            requirement,
+            min(requirement.amount_t, max(0.0, local_credit[index])),
+            max(0.0, requirement.amount_t - local_credit[index]),
         )
-        for index, demand in enumerate(ordered)
+        for index, requirement in enumerate(ordered)
     )
 
 
 def external_supply_requirements(
-    demands: Iterable[SupplyRequirement], inventory: InventoryBook
+    requirements: Iterable[SupplyRequirement], inventory: InventoryBook
 ) -> tuple[SupplyRequirement, ...]:
     """Return future need that requires off-site supply; never reserve stock."""
 
     rows: list[SupplyRequirement] = []
-    for resolution in resolve_local_supply(demands, inventory):
-        demand = resolution.external_demand()
-        if demand is not None:
-            rows.append(demand)
+    for resolution in resolve_local_supply(requirements, inventory):
+        requirement = resolution.external_requirement()
+        if requirement is not None:
+            rows.append(requirement)
     return tuple(rows)

@@ -27,10 +27,10 @@ class GetLogistics: pass
 @dataclass(frozen=True)
 class GetLogisticsSummary: pass
 @dataclass(frozen=True)
-class GetRoutes:
+class GetMovementPlans:
     origin_id: str | None = None
     destination_id: str | None = None
-    route_id: str | None = None
+    movement_plan_id: str | None = None
     include_modes: bool = True
 @dataclass(frozen=True)
 class GetFleet:

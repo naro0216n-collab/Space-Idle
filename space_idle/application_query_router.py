@@ -3,7 +3,7 @@ from __future__ import annotations
 from .application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
     GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetOperationalNode, GetLogistics,
-    GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
+    GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetTransportAllocations,
     GetTransportAllocationOptions, GetWorld, GetSurfaceMap, Query,
     GetExternalEconomy,
@@ -52,12 +52,12 @@ class ApplicationQueryRouterMixin:
             return self._logistics_view()
         if isinstance(query, GetLogisticsSummary):
             return self._logistics_summary_view()
-        if isinstance(query, GetRoutes):
+        if isinstance(query, GetMovementPlans):
             if query.origin_id is not None:
                 self._require_operational_node(query.origin_id)
             if query.destination_id is not None:
                 self._require_operational_node(query.destination_id)
-            return self._routes_view(query)
+            return self._movement_plans_view(query)
         if isinstance(query, GetFleet):
             if query.operational_node_id is not None:
                 self._require_operational_node(query.operational_node_id)

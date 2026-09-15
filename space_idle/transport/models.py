@@ -7,7 +7,7 @@ from typing import Protocol, runtime_checkable
 from ..priority import (
     ActivityPriority, DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PROVISIONING_PRIORITY, ProvisioningPriority,
 )
-from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId, SurfaceCellId
+from ..shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 
 POWERED_ASCENT = "powered_ascent"
@@ -127,7 +127,7 @@ class FleetRelocation:
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
     requested_day: int
-    path: tuple[RouteId, ...]
+    path: tuple[MovementPlanId, ...]
     resource_needs: tuple[FleetRelocationResourceNeed, ...] = ()
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     movement_execution_id: EntityId | None = None
@@ -160,7 +160,7 @@ class FleetRelocationPlan:
     units: int
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
-    path: tuple[RouteId, ...]
+    path: tuple[MovementPlanId, ...]
     travel_days: int
     departure_day: int
     arrival_day: int | None
@@ -197,7 +197,7 @@ class TransportAllocation:
     control_mode: TransportControlMode
     target_units: int | None = None
     target_capacity: DirectionalCapacity | None = None
-    path: tuple[RouteId, ...] | None = None
+    path: tuple[MovementPlanId, ...] | None = None
     path_policy: PathPolicy = PathPolicy.FASTEST
     paused: bool = False
     last_operated_day: int | None = None
@@ -218,7 +218,7 @@ class TransportAllocation:
 
 @dataclass(frozen=True)
 class TransportServiceLeg:
-    route_id: RouteId
+    movement_plan_id: MovementPlanId
     direction: str
     cargo_capable: bool
     payload_t: float
@@ -232,8 +232,8 @@ class TransportServicePlan:
     vehicle_definition_id: DefinitionId
     anchor_node_id: SpatialNodeId
     destination_id: SpatialNodeId
-    forward_path: tuple[RouteId, ...]
-    reverse_path: tuple[RouteId, ...]
+    forward_path: tuple[MovementPlanId, ...]
+    reverse_path: tuple[MovementPlanId, ...]
     legs: tuple[TransportServiceLeg, ...]
     cycle_days: float
     turnaround_days: float
@@ -282,7 +282,7 @@ class TransportServiceSupply:
     capacity_t_per_day: float
     latency_days: int
     cycle_days: float
-    route_path: tuple[RouteId, ...]
+    movement_plan_path: tuple[MovementPlanId, ...]
     allocation_id: EntityId | None = None
     direction: str | None = None
     external_service_id: DefinitionId | None = None
@@ -450,7 +450,7 @@ class SpatialRelation:
 class MovementPlan:
     """Derived, non-persisted physical plan for one direct Movement leg."""
 
-    id: RouteId
+    id: MovementPlanId
     origin: MovementEndpoint
     destination: MovementEndpoint
     relation: SpatialRelation
@@ -517,7 +517,7 @@ class MovementExecutionPayloadResource:
 class MovementExecutionLeg:
     """Frozen movement conditions captured when a one-shot execution starts."""
 
-    movement_plan_id: RouteId
+    movement_plan_id: MovementPlanId
     origin: MovementEndpoint
     destination: MovementEndpoint
     operations: tuple[TransportOperationRequirement, ...]

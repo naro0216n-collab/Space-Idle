@@ -13,7 +13,7 @@ class ProjectResourceRow:
     committed_t: float
     shortage_t: float
     import_committed_t: float | None
-    demand_id: str | None
+    requirement_id: str | None
 
 
 @dataclass(frozen=True)
@@ -81,6 +81,7 @@ class ProjectRow:
     target_location_id: str | None = None
     construction_fulfillment: float = 1.0
     limiting_factors: tuple[str, ...] = ()
+    projected_material_readiness_day: int | None = None
 
 
 @dataclass(frozen=True)

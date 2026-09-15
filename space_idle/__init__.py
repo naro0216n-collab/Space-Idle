@@ -9,7 +9,7 @@ from .application import (
     DeclineContract, DeleteTransportAllocation,
     SetResearchPriority, GameApplication, GetBottlenecks, GetBuildOptions, GetCatalog,
     GetCargoFlows, GetContracts, GetDependencyAnalytics, GetExternalEconomy, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode, GetLogistics,
-    GetLogisticsSummary, GetProjects, GetResearch, GetRoutes,
+    GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetTransportAllocations, GetTransportAllocationOptions,
     GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseResearch,
     PauseScientificExploration, PauseSurvey, PauseTransportAllocation,

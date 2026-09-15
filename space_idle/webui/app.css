@@ -123,10 +123,10 @@ tbody tr.selectable:hover, tbody tr.is-selected { background: #13283a; }
 .progress-bar { height: 100%; background: var(--accent); }
 .logistics-list-panel .panel-heading { min-height: 70px; }
 .filter-row { display: grid; gap: 7px; padding: 9px; border-bottom: 1px solid var(--line-soft); }
-.route-list { padding: 8px; display: grid; gap: 6px; }
-.route-button { width: 100%; min-height: 66px; text-align: left; padding: 9px 10px; background: transparent; border-color: var(--line-soft); }
-.route-button.is-selected { background: #142a3b; border-color: #3a6e8d; }
-.route-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; color: var(--muted); font-size: 10px; }
+.movement-plan-list { padding: 8px; display: grid; gap: 6px; }
+.movement-plan-button { width: 100%; min-height: 66px; text-align: left; padding: 9px 10px; background: transparent; border-color: var(--line-soft); }
+.movement-plan-button.is-selected { background: #142a3b; border-color: #3a6e8d; }
+.movement-plan-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; color: var(--muted); font-size: 10px; }
 .logistics-workspace { padding-bottom: 18px; }
 .network-stage { width: calc(100% - 28px); min-width: 590px; height: 470px; margin: 14px; position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: radial-gradient(circle at 40% 50%, #102333 0, #0b1721 42%, #08121a 100%); }
 .network-svg { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
@@ -139,8 +139,8 @@ tbody tr.selectable:hover, tbody tr.is-selected { background: #13283a; }
 .network-node .node-name { display: block; font-weight: 700; font-size: 12px; }
 .network-node .node-meta { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
 .logistics-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 14px; }
-.route-mode-card { border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; margin-bottom: 8px; background: #0b1721; }
-.route-mode-card.is-usable { border-color: #2f6b5a; }
+.detail-card { border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; margin-bottom: 8px; background: #0b1721; }
+.detail-card.is-usable { border-color: #2f6b5a; }
 .mode-title { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 650; }
 .modal-dialog { width: min(520px, 80vw); border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 0; box-shadow: 0 24px 80px #000b; }
 #allocationDialog { width: min(760px, 90vw); max-height: 88vh; overflow: auto; }

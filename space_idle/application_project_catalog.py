@@ -10,7 +10,7 @@ from .application_catalog_core_sections import (
 )
 from .application_catalog_transport_sections import (
     project_procurement_services,
-    project_routes,
+    project_movement_plans,
     project_transport_services,
     project_vehicles,
 )
@@ -28,7 +28,7 @@ class CatalogWorldProjectorMixin:
             project_operational_nodes(self),
             project_processes(self),
             project_research(self),
-            project_routes(self),
+            project_movement_plans(self),
             project_transport_services(self),
             project_procurement_services(self),
         )

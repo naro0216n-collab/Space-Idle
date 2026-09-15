@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from space_idle import AdvanceTime, GetRoutes, GetWorld, build_game_application
+from space_idle import AdvanceTime, GetMovementPlans, GetWorld, build_game_application
 from space_idle.api import GameRuntime
 from space_idle.content import base_ids as ids
 from space_idle.content.base_game import (
@@ -69,7 +69,7 @@ def test_positive_transport_duration_rounds_up_to_canonical_day_boundary():
     assert sim.transport.performance_movement_transit_days(plan, performance) == 4
 
 
-def test_route_reachability_is_not_directly_gated_by_research_completion():
+def test_movement_reachability_is_not_directly_gated_by_research_completion():
     app = build_game_application()
     sim = app._simulation
     plan = sim.transport.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT)[0]
@@ -81,8 +81,8 @@ def test_route_reachability_is_not_directly_gated_by_research_completion():
     after = sim.transport.movement_plan_failures(plan.id, sim.day)
     assert after == before
 
-    route = app.query(GetRoutes(route_id=str(plan.id), include_modes=True)).items[0]
-    assert route.available
-    assert route.service_feasible_now
-    assert route.modes
-    assert any(mode.service_feasible for mode in route.modes)
+    movement_plan = app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=True)).items[0]
+    assert movement_plan.available
+    assert movement_plan.service_feasible_now
+    assert movement_plan.modes
+    assert any(mode.service_feasible for mode in movement_plan.modes)

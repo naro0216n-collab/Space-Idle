@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 from ..facilities import FacilityBook
 from ..inventory import InventoryBook
 from ..power import PowerService
-from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId, SurfaceCellId
+from ..shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
 from ..technology import TechnologyState
 from .compatibility import TransportCompatibilityMixin
 from .fleet_allocations import FleetAllocationMixin
@@ -51,7 +51,7 @@ class TransportService(
     surface_movement_rules: tuple[SurfaceTransportMovementRule, ...] = ()
     surface_access_movement_rules: tuple[SurfaceAccessMovementRule, ...] = ()
     spaceflight_movement_rules: tuple[SpaceflightMovementRule, ...] = ()
-    _movement_plan_cache: dict[RouteId, MovementPlan] = field(default_factory=dict, repr=False)
+    _movement_plan_cache: dict[MovementPlanId, MovementPlan] = field(default_factory=dict, repr=False)
     fleet_pools: dict[tuple[DefinitionId, SpatialNodeId], FleetPool] = field(default_factory=dict)
     fleet_reservations: dict[EntityId, FleetReservation] = field(default_factory=dict)
     transport_allocations: dict[EntityId, TransportAllocation] = field(default_factory=dict)
@@ -108,7 +108,7 @@ class TransportService(
         *,
         day: int = 0,
         path_policy=None,
-        explicit_path: tuple[RouteId, ...] | None = None,
+        explicit_path: tuple[MovementPlanId, ...] | None = None,
         require_destination_disposition: bool = False,
     ) -> tuple[MovementPlan, ...]:
         from .models import PathPolicy
@@ -168,7 +168,7 @@ class TransportService(
     def outbound_movement_plans(self, origin_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
         return self.movement_resolver().outbound_plans(origin_id)
 
-    def movement_plan(self, plan_id: RouteId) -> MovementPlan | None:
+    def movement_plan(self, plan_id: MovementPlanId) -> MovementPlan | None:
         current = self.movement_resolver().plan_by_id(plan_id)
         if current is not None:
             return current
@@ -177,7 +177,7 @@ class TransportService(
     def movement_plan_options(self) -> tuple[MovementPlan, ...]:
         return self.movement_resolver().all_direct_plans()
 
-    def require_movement_plan(self, plan_id: RouteId) -> MovementPlan:
+    def require_movement_plan(self, plan_id: MovementPlanId) -> MovementPlan:
         plan = self.movement_plan(plan_id)
         if plan is None:
             raise KeyError(plan_id)

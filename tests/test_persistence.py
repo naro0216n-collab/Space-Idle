@@ -203,7 +203,7 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
 
     sim.inventory.add(ids.EARTH, ids.MACHINERY, 1.0)
     demand = SupplyRequirement(
-        EntityId("demand.persistence"), "test", EntityId("owner.persistence"),
+        EntityId("requirement.persistence"), "test", EntityId("owner.persistence"),
         ids.LEO, ids.MACHINERY, 0.5, 5, ids.EARTH,
     )
     logistics_plan = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
@@ -375,7 +375,7 @@ def test_save_load_preserves_unloaded_handoff_reservation_ownership(tmp_path):
     )
     sim.inventory.add(ids.EARTH, ids.MACHINERY, 0.1)
     demand = SupplyRequirement(
-        EntityId("demand.persistence-handoff"), "test",
+        EntityId("requirement.persistence-handoff"), "test",
         EntityId("owner.persistence-handoff"), ids.LUNAR_ORBIT,
         ids.MACHINERY, 0.1, 4, ids.EARTH,
     )
@@ -388,14 +388,14 @@ def test_save_load_preserves_unloaded_handoff_reservation_ownership(tmp_path):
         sim.day, plan, resources, services
     )
     sim.logistics.advance_capacity_logistics(sim.day, plan, funds, execution)
-    first = next(row for row in sim.logistics.cargo_flows.values() if row.demand_id == demand.id)
+    first = next(row for row in sim.logistics.cargo_flows.values() if row.requirement_id == demand.id)
     assert first.remaining_legs
     sim.logistics.prepare_cargo_arrivals(first.first_arrival_day)
     # No direct transfer allocation: unload through common Inventory Admission,
     # then preserve the downstream commitment with an Inventory Reservation.
     sim.logistics.settle_cargo_arrivals(first.first_arrival_day)
     staging = next(
-        row for row in sim.logistics.handoff_staging.values() if row.demand_id == demand.id
+        row for row in sim.logistics.handoff_staging.values() if row.requirement_id == demand.id
     )
     assert sim.inventory.reserved_for(
         staging.reservation_owner_id, staging.node_id, staging.resource_id

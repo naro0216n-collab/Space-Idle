@@ -4,9 +4,9 @@
   const state = {
     revision:null, session:null, world:null, catalog:null, operationalNodeId:null, operationalNode:null,
     flow:null, dependencyAnalytics:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
-    research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, routes:null,
+    research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
     fleet:null, transportAllocations:null, cargoFlows:null, externalEconomy:null,
-    selectedRouteId:null, activeView:'operations', activeTab:'overview', inspector:null,
+    selectedMovementPlanId:null, activeView:'operations', activeTab:'overview', inspector:null,
     busy:false, syncInFlight:null,
   };
 
@@ -21,7 +21,7 @@
   const definitionMaps = () => [
     state.catalog?.resources, state.catalog?.facilities, state.catalog?.vehicles,
     state.catalog?.operational_nodes, state.catalog?.processes, state.catalog?.research,
-    state.catalog?.routes, state.catalog?.transport_services, state.catalog?.procurement_services,
+    state.catalog?.movement_plans, state.catalog?.transport_services, state.catalog?.procurement_services,
   ].filter(Boolean).map(byId);
   const definitionName = (id) => {
     if(!id)return '—';
@@ -179,7 +179,7 @@
   function applyUiSnapshot(data){
     state.session=data.session; state.world=data.world; state.globalIssues=data.global_issues;
     state.research=data.research; state.scientificExplorations=data.scientific_explorations; state.contracts=data.contracts; state.logisticsSummary=data.logistics_summary; state.logistics=data.logistics;
-    state.routes=data.routes; state.fleet=data.fleet; state.transportAllocations=data.transport_allocations; state.cargoFlows=data.cargo_flows;
+    state.movementPlans=data.movement_plans; state.fleet=data.fleet; state.transportAllocations=data.transport_allocations; state.cargoFlows=data.cargo_flows;
     state.externalEconomy=data.external_economy??state.externalEconomy;
     if(data.operational_node!==undefined)state.operationalNode=data.operational_node;
     if(data.flow!==undefined)state.flow=data.flow;
@@ -189,7 +189,7 @@
     if(data.bottlenecks!==undefined)state.bottlenecks=data.bottlenecks;
     if(data.surveys!==undefined)state.surveys=data.surveys;
     if(data.surface_map!==undefined)state.surfaceMap=data.surface_map;
-    if(state.selectedRouteId&&!(state.routes?.items||[]).some((r)=>r.id===state.selectedRouteId))state.selectedRouteId=null;
+    if(state.selectedMovementPlanId&&!(state.movementPlans?.items||[]).some((r)=>r.id===state.selectedMovementPlanId))state.selectedMovementPlanId=null;
   }
 
   async function beginMutation(){

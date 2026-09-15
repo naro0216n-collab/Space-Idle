@@ -237,7 +237,7 @@ class LocationProjectorMixin:
                     allocation.unmet_amount,
                     claim.effective_minimum_amount,
                     claim.atomic,
-                    None if claim.demand_id is None else str(claim.demand_id),
+                    None if claim.requirement_id is None else str(claim.requirement_id),
                 )
             )
         snapshots = {

@@ -11,7 +11,7 @@ from ..site import SiteRequirements
 CONSTRUCTION_SERVICE_TYPE = "construction_work"
 
 # Procurement policy controls how long a project waits for inventory already at
-# the destination before declaring an import demand. It does not change the
+# the destination before declaring an off-site Supply Requirement. It does not change the
 # recipe or substitute one material for another.
 SourcingPolicy = Literal["import_now", "mixed", "local_priority"]
 

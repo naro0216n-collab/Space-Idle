@@ -25,7 +25,7 @@ def test_scope_boundary_changes_import_export_without_double_counting_internal_f
     sim = app._simulation
     sim.logistics.cargo_flows[EntityId("flow.analytics.scope")] = CargoFlowSegment(
         id=EntityId("flow.analytics.scope"), resource_id=ids.WATER, amount_t=12.0,
-        source_id=EARTH, final_destination_id=LEO, demand_id=None,
+        source_id=EARTH, final_destination_id=LEO, requirement_id=None,
         owner_kind="test", owner_id=EntityId("analytics.owner"), priority=3,
         leg=CargoServiceLeg("analytics.service", EARTH, LEO, 2, 2.0),
         remaining_legs=(), dispatch_start_day=sim.day, dispatch_end_day=sim.day + 1,
@@ -217,7 +217,7 @@ def test_authorized_external_procurement_is_current_inflow_and_not_unmet():
     orders = tuple(
         order
         for order in decision.allocations.procurement.orders
-        if order.demand.owner_id == EntityId(str(project_id))
+        if order.requirement.owner_id == EntityId(str(project_id))
         and order.supply_node_id == EARTH
     )
     assert orders
@@ -227,7 +227,7 @@ def test_authorized_external_procurement_is_current_inflow_and_not_unmet():
         expected = sum(
             order.amount_t
             for order in orders
-            if order.demand.id == demand.id
+            if order.requirement.id == demand.id
         )
         before_row = _resource(before, demand.resource_id)
         row = _resource(view, demand.resource_id)
@@ -368,7 +368,7 @@ def test_dependency_analytics_is_derived_again_after_load(tmp_path):
     sim = app._simulation
     sim.logistics.cargo_flows[EntityId("flow.analytics.persist")] = CargoFlowSegment(
         id=EntityId("flow.analytics.persist"), resource_id=ids.WATER, amount_t=7.0,
-        source_id=EARTH, final_destination_id=LEO, demand_id=None,
+        source_id=EARTH, final_destination_id=LEO, requirement_id=None,
         owner_kind="test", owner_id=EntityId("analytics.owner"), priority=3,
         leg=CargoServiceLeg("analytics.service", EARTH, LEO, 2, 2.0),
         remaining_legs=(), dispatch_start_day=sim.day, dispatch_end_day=sim.day + 1,

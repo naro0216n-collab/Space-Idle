@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from space_idle import GetRoutes, build_game_application
+from space_idle import GetMovementPlans, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.transport import (
     MovementEndpoint,
@@ -145,13 +145,13 @@ def test_surface_interface_projection_and_availability_follow_gateway_facility()
     b, _ = _location_with_gateway(sim, "b", ids.MOON_CELL_NEARSIDE_MARE)
     plan = _plan_between(sim, a, b)
 
-    row = app.query(GetRoutes(route_id=str(plan.id), include_modes=False)).items[0]
+    row = app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=False)).items[0]
     assert row.origin_endpoint.locator_kind == "surface_interface"
     assert row.origin_endpoint.locator_id == str(gateway)
     assert row.origin_endpoint.surface_cell_id == str(ids.MOON_CELL_SOUTH_POLAR_RIDGE)
 
     sim.facilities.pause(gateway)
-    blocked = app.query(GetRoutes(route_id=str(plan.id), include_modes=False)).items[0]
+    blocked = app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=False)).items[0]
     assert not blocked.available
     assert any(item.startswith("origin:interface:manual_pause:") for item in blocked.blockers)
 
@@ -233,7 +233,7 @@ def test_distinct_non_surface_nodes_with_same_anchor_still_get_movement_candidat
     assert tuple(op.operation_type for op in plans[0].operations) == ("spaceflight",)
 
 
-def test_new_celestial_body_uses_spatial_geometry_without_pairwise_route_definition():
+def test_new_celestial_body_uses_spatial_geometry_without_pairwise_movement_definition():
     sim = build_game_application()._simulation
     body_id = CelestialBodyId("test.body.new")
     extra_orbit = SpatialNodeId("test.node.new_body_orbit")
@@ -264,4 +264,3 @@ def test_new_celestial_body_uses_spatial_geometry_without_pairwise_route_definit
     assert plan.relation.characteristic_delta_v_km_s == 6.0
     assert tuple(op.operation_type for op in plan.operations) == ("spaceflight",)
     assert plan.operations[0].delta_v_km_s == 6.0
-    assert not hasattr(sim.transport, "routes")

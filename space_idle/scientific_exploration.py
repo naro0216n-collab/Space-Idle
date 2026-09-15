@@ -147,7 +147,7 @@ class ScientificExplorationService:
             require_destination_disposition=True,
         )
 
-    def _route_failures_for_fleet(
+    def _movement_failures_for_fleet(
         self,
         definition: ScientificExplorationDefinition,
         vehicle_definition_id: DefinitionId,
@@ -232,7 +232,7 @@ class ScientificExplorationService:
         if self.transport.vehicle_definition(vehicle_definition_id) is None:
             return ("unknown_vehicle_definition",)
         failures = list(
-            self._route_failures_for_fleet(
+            self._movement_failures_for_fleet(
                 definition,
                 vehicle_definition_id,
                 day,
@@ -361,7 +361,7 @@ class ScientificExplorationService:
     ) -> EntityId:
         leg = "return" if returning else "outbound"
         return EntityId(
-            f"demand.scientific_exploration:{definition_id}:{leg}:"
+            f"requirement.scientific_exploration:{definition_id}:{leg}:"
             f"{operational_node_id}:{resource_id}"
         )
 
@@ -490,7 +490,7 @@ class ScientificExplorationService:
         return self._preparation_ready(definition_id, day)
 
     def supplys(self, day: int = 0) -> tuple[SupplyRequirement, ...]:
-        demands: list[SupplyRequirement] = []
+        requirements: list[SupplyRequirement] = []
         for definition_id, state in sorted(self.campaigns.items(), key=lambda row: str(row[0])):
             returning = state.phase is ScientificExplorationPhase.RETURN_PREPARING
             if (
@@ -515,7 +515,7 @@ class ScientificExplorationService:
                 )
                 if remaining <= 1e-12:
                     continue
-                demands.append(SupplyRequirement(
+                requirements.append(SupplyRequirement(
                     self._supply_id(
                         definition_id, node_id, resource_id, returning=returning
                     ),
@@ -527,7 +527,7 @@ class ScientificExplorationService:
                     state.priority,
                     None,
                 ))
-        return tuple(demands)
+        return tuple(requirements)
 
     def reservation_acquisition_requirements(
         self, day: int = 0
@@ -680,7 +680,7 @@ class ScientificExplorationService:
                         f"resource:{node_id}:{resource_id}:{allocated:g}/{amount_t:g}"
                     )
             blockers.extend(
-                self._route_failures_for_fleet(
+                self._movement_failures_for_fleet(
                     definition, state.vehicle_definition_id, day, power_by_location
                 )
             )

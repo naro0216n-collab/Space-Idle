@@ -6,7 +6,7 @@ from .application_commands import (
     DeleteTransportAllocation, SetResearchPriority, GetBottlenecks,
     GetBuildOptions, GetCatalog, GetCargoFlows, GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics,
     GetOperationalNode, GetLogistics, GetLogisticsSummary, GetProjects,
-    GetResearch, GetRoutes, GetScientificExplorations, GetSurveys, GetTransportAllocations,
+    GetResearch, GetMovementPlans, GetScientificExplorations, GetSurveys, GetTransportAllocations,
     GetTransportAllocationOptions, GetWorld, GetSurfaceMap, PauseBuild, PauseFacility,
     PauseResearch, PauseScientificExploration, PauseSurvey, PauseTransportAllocation,
     PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, FoundLocation, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet,

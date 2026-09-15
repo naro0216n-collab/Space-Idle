@@ -478,20 +478,20 @@ def run() -> dict[str, object]:
             page.wait_for_timeout(100)
             _assert(page.locator("#logisticsView").is_visible(), "logistics view should be visible after switch")
             _assert(not page.locator("#operationsView").is_visible(), "operations view must be hidden after switch")
-            route_buttons = page.locator(".route-button")
-            _assert(route_buttons.count() > 0, "at least one route must be rendered")
-            blocked = page.locator(".route-button", has=page.locator(".badge", has_text="未解禁"))
-            (blocked.first if blocked.count() else route_buttons.first).click()
-            page.locator("#routeInspectorContent .route-mode-card").first.wait_for(timeout=10000)
+            movement_plan_buttons = page.locator(".movement-plan-button")
+            _assert(movement_plan_buttons.count() > 0, "at least one movement plan must be rendered")
+            blocked = page.locator(".movement-plan-button", has=page.locator(".badge", has_text="未解禁"))
+            (blocked.first if blocked.count() else movement_plan_buttons.first).click()
+            page.locator("#movementPlanInspectorContent .detail-card").first.wait_for(timeout=10000)
             _assert(
-                page.locator("#routeInspectorTitle").inner_text() != "輸送路を選択",
-                "route inspector should show selected route",
+                page.locator("#movementPlanInspectorTitle").inner_text() != "Movement Planを選択",
+                "movement plan inspector should show selected plan",
             )
             _assert(
-                page.locator("#routeInspectorContent .route-mode-card").count() > 0,
-                "selected route should expose transport modes",
+                page.locator("#movementPlanInspectorContent .detail-card").count() > 0,
+                "selected movement plan should expose transport modes",
             )
-            issue_titles = page.locator("#routeInspectorContent .issue-title").all_inner_texts()
+            issue_titles = page.locator("#movementPlanInspectorContent .issue-title").all_inner_texts()
             _assert(all("base.tech." not in text for text in issue_titles), "technology IDs must not leak into blocker titles")
             _assert(all("technology:" not in text for text in issue_titles), "raw blocker prefixes must not leak into blocker titles")
             page.screenshot(path=ARTIFACTS / "logistics_landscape_1194x834.png", full_page=True)
@@ -545,10 +545,10 @@ def run() -> dict[str, object]:
             )
             _assert(
                 portrait_logistics["left0"] < portrait_logistics["left1"] < portrait_logistics["left2"],
-                "portrait logistics must preserve route/network/inspector order",
+                "portrait logistics must preserve movement-plan/network/inspector order",
             )
             network_locations = page.locator("#networkNodes [data-network-location]")
-            expected_network_locations = page.locator("#routeOriginFilter option").count() - 1
+            expected_network_locations = page.locator("#movementPlanOriginFilter option").count() - 1
             _assert(
                 network_locations.count() == expected_network_locations,
                 "network must render every location exposed by the Application view",
@@ -572,7 +572,7 @@ def run() -> dict[str, object]:
                 "standard_ipad_logistics": standard_logistics_metrics,
                 "portrait_scroll_width": portrait["scrollWidth"],
                 "portrait_logistics_scroll_width": portrait_logistics["scrollWidth"],
-                "route_count": route_buttons.count(),
+                "movement_plan_count": movement_plan_buttons.count(),
                 "issue_titles_checked": len(issue_titles),
                 "day_before": day_before,
                 "day_running": running_day,

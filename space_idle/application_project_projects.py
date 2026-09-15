@@ -17,6 +17,33 @@ from .shared import SpatialNodeId
 
 
 class ProjectProjectorMixin:
+
+    @staticmethod
+    def _projected_material_readiness_day(
+        *, day: int, owner_kind: str, owner_id: str, resources, requirement_rows
+    ) -> int | None:
+        shortages = [row for row in resources if row.shortage_t > 1e-9]
+        if not shortages:
+            return day
+        by_resource = {
+            row.resource_id: row
+            for row in requirement_rows
+            if row.owner_kind == owner_kind and row.owner_id == owner_id
+        }
+        readiness_days: list[int] = []
+        for resource in shortages:
+            requirement = by_resource.get(resource.resource_id)
+            if requirement is None:
+                return None
+            if requirement.external_required_t <= 1e-9:
+                readiness_days.append(day)
+                continue
+            if requirement.remaining_t > 1e-9:
+                return None
+            if requirement.earliest_confirmed_arrival_day is None:
+                return None
+            readiness_days.append(requirement.earliest_confirmed_arrival_day)
+        return max(readiness_days, default=day)
     @staticmethod
     def _construction_resource_options(recipe) -> tuple[BuildResourceOption, ...]:
         return tuple(
@@ -63,22 +90,22 @@ class ProjectProjectorMixin:
         )
 
     def _external_supply_blocker(
-        self, demand, execution_allocation=None
+        self, requirement, execution_allocation=None
     ) -> tuple[str, str]:
-        """Translate Logistics demand state into an owning-project blocker.
+        """Translate Logistics Supply Requirement state into an owning-project blocker.
 
         Finite project domains own their resource need and sourcing preference;
-        Logistics owns whether residual off-site demand has a usable source/path,
+        Logistics owns whether residual off-site requirement has a usable source/path,
         source stock and active pipeline.  The Application layer combines those public
         contracts without making either domain inspect the other's state.
         """
         sim = self._simulation
-        resource_id = str(demand.resource_id)
-        if sim.logistics.demand_remaining_t(demand) <= 1e-9:
+        resource_id = str(requirement.resource_id)
+        if sim.logistics.requirement_remaining_t(requirement) <= 1e-9:
             return ("import_transit", resource_id)
 
         options = sim.logistics.supply_planning_options(
-            demand,
+            requirement,
             sim.day,
             execution_allocation=execution_allocation,
         )
@@ -93,14 +120,14 @@ class ProjectProjectorMixin:
             return ("import_stock", resource_id)
         return ("import_transit", resource_id)
 
-    def _external_demands(self, owner_kind: str, demands=None) -> dict[str, object]:
+    def _external_requirements(self, owner_kind: str, requirements=None) -> dict[str, object]:
         return {
-            str(demand.id): demand
-            for demand in (
+            str(requirement.id): requirement
+            for requirement in (
                 self._simulation.supplys()
-                if demands is None else demands
+                if requirements is None else requirements
             )
-            if demand.owner_kind == owner_kind
+            if requirement.owner_kind == owner_kind
         }
 
     def _resource_blockers(
@@ -109,7 +136,7 @@ class ProjectProjectorMixin:
         *,
         owner_kind: str,
         owner_id: str,
-        demands: dict[str, object],
+        requirements: dict[str, object],
         execution_allocation=None,
     ) -> tuple[tuple[str, str], ...]:
         rows: list[tuple[str, str]] = []
@@ -117,36 +144,40 @@ class ProjectProjectorMixin:
             if blocker.code != "resource_shortage":
                 rows.append((blocker.code, blocker.detail))
                 continue
-            demand_id = f"demand.{owner_kind}:{owner_id}:{blocker.detail}"
-            demand = demands.get(demand_id)
+            requirement_id = f"requirement.{owner_kind}:{owner_id}:{blocker.detail}"
+            requirement = requirements.get(requirement_id)
             rows.append(
-                self._external_supply_blocker(demand, execution_allocation)
-                if demand is not None
+                self._external_supply_blocker(requirement, execution_allocation)
+                if requirement is not None
                 else (blocker.code, blocker.detail)
             )
         return tuple(rows)
 
     def _project_blockers(
-        self, project, power, external_demands=None, execution_allocation=None
+        self, project, power, external_requirements=None, execution_allocation=None
     ) -> tuple[tuple[str, str], ...]:
         sim = self._simulation
-        demands = self._external_demands("project") if external_demands is None else external_demands
+        requirements = self._external_requirements("project") if external_requirements is None else external_requirements
         return self._resource_blockers(
             sim.projects.blockers(project.id, sim.day, power),
             owner_kind="project",
             owner_id=str(project.id),
-            demands=demands,
+            requirements=requirements,
             execution_allocation=execution_allocation,
         )
 
     def _project_rows(self, location_id: SpatialNodeId | None) -> tuple[ProjectRow, ...]:
         sim = self._simulation
         decision = sim.tick_decision_projection()
-        external_demands = self._external_demands(
-            "project", decision.plan.external_demands
+        requirement_rows = self._requirement_rows(
+            execution_allocation=decision.allocations.transport,
+            resolutions=decision.plan.requirement_resolutions,
         )
-        founding_demands = self._external_demands(
-            "founding", decision.plan.external_demands
+        external_requirements = self._external_requirements(
+            "project", decision.plan.external_requirements
+        )
+        founding_requirements = self._external_requirements(
+            "founding", decision.plan.external_requirements
         )
         powers = decision.allocations.power_by_location
         rows = []
@@ -159,7 +190,7 @@ class ProjectProjectorMixin:
             blockers = self._project_blockers(
                 project,
                 project_power,
-                external_demands,
+                external_requirements,
                 decision.allocations.transport,
             )
             resources = []
@@ -167,12 +198,12 @@ class ProjectProjectorMixin:
                 state = project.resources[requirement.resource_id]
                 reserved_t = sim.projects.reserved_resource_t(project, requirement.resource_id)
                 shortage = max(0.0, requirement.amount_t - reserved_t - state.committed_t)
-                demand_id = None
+                requirement_id = None
                 if state.import_committed_t is not None and shortage > 1e-9:
-                    demand_id = f"demand.project:{project.id}:{requirement.resource_id}"
+                    requirement_id = f"requirement.project:{project.id}:{requirement.resource_id}"
                 resources.append(ProjectResourceRow(
                     str(requirement.resource_id), requirement.amount_t, reserved_t, 0.0, state.committed_t,
-                    shortage, state.import_committed_t, demand_id,
+                    shortage, state.import_committed_t, requirement_id,
                 ))
 
             target_facility_id = None
@@ -222,6 +253,13 @@ class ProjectProjectorMixin:
                 None if project.site_cell_id is None else str(project.site_cell_id),
                 target_cell_id, target_body_id, target_location_id,
                 construction_fulfillment, limiting_factors,
+                self._projected_material_readiness_day(
+                    day=sim.day,
+                    owner_kind="project",
+                    owner_id=str(project.id),
+                    resources=resources,
+                    requirement_rows=requirement_rows,
+                ),
             ))
         if sim.founding is not None:
             for project in sorted(sim.founding.projects.values(), key=lambda row: str(row.id)):
@@ -249,7 +287,7 @@ class ProjectProjectorMixin:
                     ),
                     owner_kind="founding",
                     owner_id=str(project.id),
-                    demands=founding_demands,
+                    requirements=founding_requirements,
                     execution_allocation=decision.allocations.transport,
                 )
                 rows.append(ProjectRow(
@@ -284,6 +322,13 @@ class ProjectProjectorMixin:
                     target_location_id=str(project.new_location_id),
                     construction_fulfillment=1.0,
                     limiting_factors=(),
+                    projected_material_readiness_day=self._projected_material_readiness_day(
+                        day=sim.day,
+                        owner_kind="founding",
+                        owner_id=str(project.id),
+                        resources=resources,
+                        requirement_rows=requirement_rows,
+                    ),
                 ))
         return tuple(rows)
 

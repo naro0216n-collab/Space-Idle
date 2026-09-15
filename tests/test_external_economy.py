@@ -142,7 +142,7 @@ def test_supply_planning_exposes_policy_denial_until_authorized():
     sim = app._simulation
     sim.transport.transport_allocations.clear()
     demand = __import__('space_idle.supply', fromlist=['SupplyRequirement']).SupplyRequirement(
-        EntityId("demand.policy-blocker"), "test", EntityId("owner.policy-blocker"),
+        EntityId("requirement.policy-blocker"), "test", EntityId("owner.policy-blocker"),
         ids.LEO, ids.MACHINERY, 1.0, 3, ids.EARTH,
     )
     options = sim.logistics.supply_planning_options(demand, sim.day)
@@ -209,15 +209,15 @@ def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
         day=sim.day,
     )
     sim.inventory.add(EARTH, MACHINERY, 1.0)
-    demand = SupplyRequirement(
-        EntityId("demand.multiedge-spend"), "test", EntityId("owner.multiedge-spend"),
+    requirement = SupplyRequirement(
+        EntityId("requirement.multiedge-spend"), "test", EntityId("owner.multiedge-spend"),
         LUNAR_ORBIT, MACHINERY, 1.0, 3, EARTH,
     )
-    raw = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
+    raw = sim.logistics.plan_capacity_logistics(sim.day, (requirement,))
     assert len(raw.spending_requests) == 2
     funds = sim.external_economy.allocate(raw.spending_requests, sim.day)
     plan = sim.logistics.authorize_capacity_logistics(raw, funds, sim.day)
-    row = next(item for item in plan.dispatches if item.demand.id == demand.id)
+    row = next(item for item in plan.dispatches if item.requirement.id == requirement.id)
     assert row.amount_t == pytest.approx(0.1)
     resources = allocate_resource_claims(plan.claims, sim.inventory)
     services = _transport_service_allocations(sim, sim.day, plan)

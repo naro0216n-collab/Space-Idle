@@ -10,7 +10,7 @@ class ConstructionAccountingMixin:
 
     @staticmethod
     def _supply_id(project_id, resource_id) -> EntityId:
-        return EntityId(f"demand.project:{project_id}:{resource_id}")
+        return EntityId(f"requirement.project:{project_id}:{resource_id}")
 
     @staticmethod
     def _resource_reservation_owner_id(project_id) -> EntityId:

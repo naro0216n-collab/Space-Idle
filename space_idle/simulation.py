@@ -92,8 +92,8 @@ class TickIntents:
 
 @dataclass(frozen=True)
 class TickPlan:
-    demand_resolutions: tuple[SupplyRequirementResolution, ...]
-    external_demands: tuple[SupplyRequirement, ...]
+    requirement_resolutions: tuple[SupplyRequirementResolution, ...]
+    external_requirements: tuple[SupplyRequirement, ...]
     logistics: LogisticsResourcePlan
     procurement: ExternalProcurementPlan
 
@@ -236,38 +236,38 @@ class Simulation:
     def _gross_supplys(self) -> tuple[SupplyRequirement, ...]:
         """Collect pre-allocation physical need from every active Domain."""
         locations = self._active_locations()
-        demands: list[SupplyRequirement] = list(self.projects.supplys(self.day))
-        demands.extend(self.logistics.target_stock_requirements(self.day))
+        requirements: list[SupplyRequirement] = list(self.projects.supplys(self.day))
+        requirements.extend(self.logistics.target_stock_requirements(self.day))
         if self.founding is not None:
-            demands.extend(self.founding.supplys())
+            requirements.extend(self.founding.supplys())
         for location_id in sorted(locations, key=str):
-            demands.extend(
+            requirements.extend(
                 self.industry.supplys(
                     location_id, self.facilities, self.inventory, self.day
                 )
             )
         if self.research is not None:
-            demands.extend(self.research.supplys(self.day))
+            requirements.extend(self.research.supplys(self.day))
         if self.maintenance is not None:
-            demands.extend(self.maintenance.supplys(self.day))
-        demands.extend(self.transport.vehicle_production_supplys(self.day))
-        demands.extend(self.transport.fleet_relocation_supplys(self.day))
+            requirements.extend(self.maintenance.supplys(self.day))
+        requirements.extend(self.transport.vehicle_production_supplys(self.day))
+        requirements.extend(self.transport.fleet_relocation_supplys(self.day))
         if self.scientific_exploration is not None:
-            demands.extend(self.scientific_exploration.supplys(self.day))
+            requirements.extend(self.scientific_exploration.supplys(self.day))
         seen: set[object] = set()
-        for demand in demands:
-            if demand.id in seen:
-                raise RuntimeError(f"duplicate supply requirement id: {demand.id}")
-            seen.add(demand.id)
-        return tuple(demands)
+        for requirement in requirements:
+            if requirement.id in seen:
+                raise RuntimeError(f"duplicate supply requirement id: {requirement.id}")
+            seen.add(requirement.id)
+        return tuple(requirements)
 
     def supply_resolutions(self) -> tuple[SupplyRequirementResolution, ...]:
         """Return local/external Supply Requirement coverage from the shared tick plan."""
-        return self.tick_decision_projection().plan.demand_resolutions
+        return self.tick_decision_projection().plan.requirement_resolutions
 
     def supplys(self) -> tuple[SupplyRequirement, ...]:
         """Return off-site Supply Requirements from the shared tick plan."""
-        return self.tick_decision_projection().plan.external_demands
+        return self.tick_decision_projection().plan.external_requirements
 
     def _execution_requirements(self) -> tuple[AllocationIntent, ...]:
         rows: list[AllocationIntent] = []
@@ -705,22 +705,22 @@ class Simulation:
         )
 
     def _plan_tick(self, intents: TickIntents) -> TickPlan:
-        demand_resolutions = resolve_local_supply(
+        requirement_resolutions = resolve_local_supply(
             intents.supplys, self.inventory
         )
-        external_demands = tuple(
-            demand
-            for resolution in demand_resolutions
-            if (demand := resolution.external_demand()) is not None
+        external_requirements = tuple(
+            requirement
+            for resolution in requirement_resolutions
+            if (requirement := resolution.external_requirement()) is not None
         )
         logistics_plan = self.logistics.plan_capacity_logistics(
-            self.day, external_demands
+            self.day, external_requirements
         )
         procurement_plan = self.logistics.plan_external_procurement(
-            self.day, external_demands, logistics_plan
+            self.day, external_requirements, logistics_plan
         )
         return TickPlan(
-            demand_resolutions, external_demands, logistics_plan, procurement_plan
+            requirement_resolutions, external_requirements, logistics_plan, procurement_plan
         )
 
     def _complete_service_requests(

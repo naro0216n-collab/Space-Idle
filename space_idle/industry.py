@@ -126,17 +126,17 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                     required[key] = required.get(key, 0.0) + amount_t
 
         owner_id = EntityId(f"industry.site:{location_id}")
-        demands: list[SupplyRequirement] = []
+        requirements: list[SupplyRequirement] = []
         for (resource_id, priority), target_t in sorted(
             required.items(), key=lambda row: (str(row[0][0]), -row[0][1])
         ):
             if target_t <= 1e-9:
                 continue
-            demand_id = EntityId(
-                f"demand.industry:{location_id}:{resource_id}:priority-{priority}"
+            requirement_id = EntityId(
+                f"requirement.industry:{location_id}:{resource_id}:priority-{priority}"
             )
-            demands.append(SupplyRequirement(
-                demand_id,
+            requirements.append(SupplyRequirement(
+                requirement_id,
                 "industry",
                 owner_id,
                 location_id,
@@ -146,7 +146,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 None,
                 target_t,
             ))
-        return tuple(demands)
+        return tuple(requirements)
 
 
 __all__ = ["ProcessSpec", "ProcessSnapshot", "IndustryService"]

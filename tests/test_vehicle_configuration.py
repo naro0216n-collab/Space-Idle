@@ -111,19 +111,19 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
     assert state.progress_days == pytest.approx(started_progress)
 
 
-def test_operation_asset_disposition_prevents_route_continuation_after_recovery():
+def test_operation_asset_disposition_prevents_movement_continuation_after_recovery():
     from space_idle.content import base_ids as ids
     from space_idle.transport import (
         LandingCapability, MovementEndpoint, MovementPlan, OperationAssetDisposition,
         PoweredAscentCapability, SpaceflightCapability, SpatialRelation,
         TransportOperationKind, TransportOperationRequirement, TransportPerformanceProfile,
     )
-    from space_idle.shared import RouteId
+    from space_idle.shared import MovementPlanId
 
     app = build_game_application()
     sim = app._simulation
     plan = MovementPlan(
-        RouteId("test.movement.multi_operation_recovery"),
+        MovementPlanId("test.movement.multi_operation_recovery"),
         MovementEndpoint(ids.EARTH, access_cell_id=ids.EARTH_CELL_INDUSTRIAL),
         MovementEndpoint(ids.LEO, non_surface_interface="operational_node"),
         SpatialRelation(ids.EARTH_CELL_INDUSTRIAL, ids.LEO, "test"),
@@ -177,7 +177,7 @@ def test_generic_vehicle_capabilities_are_intrinsic_and_unique():
 
 def test_transport_endurance_applies_independently_of_operation_kind():
     from space_idle.transport import PoweredAscentCapability, TransportPerformanceProfile
-    from space_idle.shared import RouteId
+    from space_idle.shared import MovementPlanId
 
     app = build_game_application()
     sim = app._simulation

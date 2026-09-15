@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from .application_project_logistics_routes import LogisticsRouteProjectorMixin
+from .application_project_movement_plans import LogisticsMovementPlanProjectorMixin
 from .application_project_logistics_state import LogisticsStateProjectorMixin
 from .application_project_supply import SupplyPlanningProjectorMixin
 from .application_views import LogisticsSummaryView, LogisticsView
 
 
 class LogisticsProjectorMixin(
-    LogisticsRouteProjectorMixin,
+    LogisticsMovementPlanProjectorMixin,
     LogisticsStateProjectorMixin,
     SupplyPlanningProjectorMixin,
 ):
@@ -15,7 +15,7 @@ class LogisticsProjectorMixin(
         sim = self._simulation
         decision = sim.tick_decision_projection()
         return LogisticsView(
-            routes=self._route_rows(),
+            movement_plans=self._movement_plan_rows(),
             fleet_pools=self._fleet_pool_rows(),
             relocations=self._fleet_relocation_rows(),
             releases=self._fleet_release_rows(),
@@ -28,24 +28,24 @@ class LogisticsProjectorMixin(
             target_stocks=self._target_stock_rows(),
             requirements=self._requirement_rows(
                 execution_allocation=decision.allocations.transport,
-                resolutions=decision.plan.demand_resolutions,
+                resolutions=decision.plan.requirement_resolutions,
             ),
         )
 
     def _logistics_summary_view(self) -> LogisticsSummaryView:
         sim = self._simulation
-        routes = self._route_rows(include_modes=False)
+        movement_plans = self._movement_plan_rows(include_modes=False)
         pools = self._fleet_pool_rows()
         allocations = self._transport_allocation_rows()
         flows = self._cargo_flow_rows()
         decision = sim.tick_decision_projection()
         requirement_rows = self._requirement_rows(
             execution_allocation=decision.allocations.transport,
-            resolutions=decision.plan.demand_resolutions,
+            resolutions=decision.plan.requirement_resolutions,
         )
         return LogisticsSummaryView(
-            route_count=len(routes),
-            usable_route_count=sum(1 for row in routes if row.service_feasible_now),
+            movement_plan_count=len(movement_plans),
+            usable_movement_plan_count=sum(1 for row in movement_plans if row.service_feasible_now),
             fleet_units=sum(row.total_units for row in pools),
             free_fleet_units=sum(row.free_units for row in pools),
             allocation_count=len(allocations),

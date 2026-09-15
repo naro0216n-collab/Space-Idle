@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_catalog_support import operation_capability_definition, site_requirements_definition
 from .application_transport_support import vehicle_concept
-from .application_views import ProcurementServiceDefinitionRow, RouteDefinitionRow, TransportServiceDefinitionRow, VehicleDefinitionRow
+from .application_views import ProcurementServiceDefinitionRow, MovementPlanDefinitionRow, TransportServiceDefinitionRow, VehicleDefinitionRow
 
 
 def project_vehicles(projector):
@@ -24,16 +24,16 @@ def project_vehicles(projector):
     )
 
 
-def project_routes(projector):
+def project_movement_plans(projector):
     return tuple(
-        RouteDefinitionRow(
-            str(route.id), route.display_name or str(route.id), str(route.origin_id), str(route.destination_id),
-            route.transit_days, route.delta_v_km_s,
-            tuple((operation.operation_type, operation.delta_v_km_s) for operation in route.operations),
-            site_requirements_definition(route.origin_requirements),
-            site_requirements_definition(route.destination_requirements),
+        MovementPlanDefinitionRow(
+            str(movement_plan.id), movement_plan.display_name or str(movement_plan.id), str(movement_plan.origin_id), str(movement_plan.destination_id),
+            movement_plan.transit_days, movement_plan.delta_v_km_s,
+            tuple((operation.operation_type, operation.delta_v_km_s) for operation in movement_plan.operations),
+            site_requirements_definition(movement_plan.origin_requirements),
+            site_requirements_definition(movement_plan.destination_requirements),
         )
-        for route in projector._simulation.transport.movement_plan_options()
+        for movement_plan in projector._simulation.transport.movement_plan_options()
     )
 
 

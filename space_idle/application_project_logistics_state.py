@@ -150,7 +150,7 @@ class LogisticsStateProjectorMixin:
                     used=self._capacity_row(snapshot.used),
                     spare=self._capacity_row(snapshot.spare),
                     utilization=snapshot.utilization,
-                    path=None if allocation.path is None else tuple(str(route_id) for route_id in allocation.path),
+                    path=None if allocation.path is None else tuple(str(movement_plan_id) for movement_plan_id in allocation.path),
                     path_policy=allocation.path_policy.value,
                     paused=allocation.paused,
                     cycle_days=plan.cycle_days,
@@ -175,7 +175,7 @@ class LogisticsStateProjectorMixin:
             rows.append(CargoFlowRow(
                 id=str(flow.id), resource_id=str(flow.resource_id), amount_t=flow.amount_t,
                 source_id=str(flow.source_id), destination_id=str(flow.destination_id),
-                demand_id=None if flow.demand_id is None else str(flow.demand_id),
+                requirement_id=None if flow.requirement_id is None else str(flow.requirement_id),
                 owner_kind=flow.owner_kind, owner_id=str(flow.owner_id), priority=flow.priority,
                 service_ids=tuple(leg.service_identity for leg in legs),
                 service_destinations=tuple(str(leg.destination_id) for leg in legs),
@@ -193,7 +193,7 @@ class LogisticsStateProjectorMixin:
             rows.append(CargoFlowRow(
                 id=str(waiting.id), resource_id=str(waiting.resource_id), amount_t=waiting.amount_t,
                 source_id=str(waiting.arrival_leg.source_id), destination_id=str(waiting.node_id),
-                demand_id=None if waiting.demand_id is None else str(waiting.demand_id),
+                requirement_id=None if waiting.requirement_id is None else str(waiting.requirement_id),
                 owner_kind=waiting.owner_kind, owner_id=str(waiting.owner_id), priority=waiting.priority,
                 service_ids=tuple(leg.service_identity for leg in legs),
                 service_destinations=tuple(str(leg.destination_id) for leg in legs),
@@ -212,7 +212,7 @@ class LogisticsStateProjectorMixin:
             rows.append(CargoFlowRow(
                 id=str(staging.id), resource_id=str(staging.resource_id), amount_t=staging.amount_t,
                 source_id=str(staging.node_id), destination_id=str(next_leg.destination_id),
-                demand_id=None if staging.demand_id is None else str(staging.demand_id),
+                requirement_id=None if staging.requirement_id is None else str(staging.requirement_id),
                 owner_kind=staging.owner_kind, owner_id=str(staging.owner_id), priority=staging.priority,
                 service_ids=tuple(leg.service_identity for leg in staging.remaining_legs),
                 service_destinations=tuple(str(leg.destination_id) for leg in staging.remaining_legs),
@@ -229,7 +229,7 @@ class LogisticsStateProjectorMixin:
             ExternalSupplyRow(
                 id=str(row.id),
                 service_id=str(row.service_id),
-                demand_id=str(row.demand_id),
+                requirement_id=str(row.requirement_id),
                 owner_kind=row.owner_kind,
                 owner_id=str(row.owner_id),
                 supply_node_id=str(row.supply_node_id),
@@ -347,7 +347,7 @@ class LogisticsStateProjectorMixin:
             source_id=str(plan.source_id),
             destination_id=str(plan.destination_id),
             path_policy=policy.value,
-            path=tuple(str(route_id) for route_id in plan.path),
+            path=tuple(str(movement_plan_id) for movement_plan_id in plan.path),
             travel_days=plan.travel_days,
             departure_day=plan.departure_day,
             arrival_day=plan.arrival_day,

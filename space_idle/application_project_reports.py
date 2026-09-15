@@ -96,10 +96,10 @@ class ApplicationReportProjectorMixin:
         # current stock/pipeline masks a dependency. Transport operation demand is
         # created during Logistics planning, so its current-tick claims are the
         # authoritative recurring requirement for that service usage.
-        for demand in decision.intents.supplys:
-            if demand.destination_id not in scope or demand.recurring_rate_t_per_day is None:
+        for requirement in decision.intents.supplys:
+            if requirement.destination_id not in scope or requirement.recurring_rate_t_per_day is None:
                 continue
-            recurring_demand[demand.resource_id] += demand.recurring_rate_t_per_day
+            recurring_demand[requirement.resource_id] += requirement.recurring_rate_t_per_day
         for claim in decision.allocations.logistics.claims:
             if claim.owner_kind != "transport_operation" or claim.operational_node_id not in scope:
                 continue
@@ -107,9 +107,9 @@ class ApplicationReportProjectorMixin:
 
         # Current authorized dispatch is a one-day flow. Existing CargoFlow state is
         # a stock in the pipeline and therefore remains a separate quantity.
-        projected_dispatch_by_demand: dict[object, float] = defaultdict(float)
+        projected_dispatch_by_requirement: dict[object, float] = defaultdict(float)
         for dispatch in logistics_execution.dispatches:
-            projected_dispatch_by_demand[dispatch.demand_id] += dispatch.amount_t
+            projected_dispatch_by_requirement[dispatch.requirement_id] += dispatch.amount_t
             source_inside = dispatch.source_id in scope
             destination_inside = dispatch.destination_id in scope
             if source_inside == destination_inside:
@@ -128,10 +128,10 @@ class ApplicationReportProjectorMixin:
         ] = defaultdict(float)
         for order in decision.allocations.procurement.orders:
             projected_procurement_by_destination[
-                (order.demand.id, order.supply_node_id)
+                (order.requirement.id, order.supply_node_id)
             ] += order.amount_t
             if order.supply_node_id in scope:
-                external_inflow[order.demand.resource_id] += order.amount_t
+                external_inflow[order.requirement.resource_id] += order.amount_t
 
         for delivery in sim.logistics.external_supply_snapshots():
             if delivery.supply_node_id in scope:
@@ -162,38 +162,38 @@ class ApplicationReportProjectorMixin:
         # pipeline, and the current tick's actually executable dispatch are credited.
         # Internal sourcing remains internal to the selected scope and is never
         # labeled as an external source.
-        for demand in decision.plan.external_demands:
-            if demand.destination_id not in scope:
+        for requirement in decision.plan.external_requirements:
+            if requirement.destination_id not in scope:
                 continue
             remaining = max(
                 0.0,
-                sim.logistics.demand_remaining_t(demand)
+                sim.logistics.requirement_remaining_t(requirement)
                 - sim.logistics.external_supply_pipeline_t(
-                    demand.id, supply_node_id=demand.destination_id
+                    requirement.id, supply_node_id=requirement.destination_id
                 )
-                - projected_dispatch_by_demand[demand.id]
+                - projected_dispatch_by_requirement[requirement.id]
                 - projected_procurement_by_destination[
-                    (demand.id, demand.destination_id)
+                    (requirement.id, requirement.destination_id)
                 ],
             )
             if remaining <= 1e-12:
                 continue
-            unmet[demand.resource_id] += remaining
-            policy = sim.logistics.supply_policy_for(demand)
-            preferred_source = demand.source_id or (
+            unmet[requirement.resource_id] += remaining
+            policy = sim.logistics.supply_policy_for(requirement)
+            preferred_source = requirement.source_id or (
                 None if policy is None else policy.preferred_source_id
             )
             if preferred_source is not None and preferred_source not in scope:
-                dependency_sources[demand.resource_id].add(preferred_source)
+                dependency_sources[requirement.resource_id].add(preferred_source)
             if preferred_source is None:
                 options = sim.logistics.supply_planning_options(
-                    demand,
+                    requirement,
                     sim.day,
                     execution_allocation=decision.allocations.transport,
                 )
                 for source_id in options.stocked_source_ids:
                     if source_id not in scope:
-                        dependency_sources[demand.resource_id].add(source_id)
+                        dependency_sources[requirement.resource_id].add(source_id)
 
         resource_ids = (
             set(production) | set(consumption) | set(recurring_demand) |
@@ -410,15 +410,15 @@ class ApplicationReportProjectorMixin:
         # Route issues are intrinsic endpoint/site constraints. Vehicle/Fleet
         # feasibility is projected through Transport Allocation rather than
         # individual Vehicle availability.
-        for route in sim.transport.movement_plan_options():
+        for movement_plan in sim.transport.movement_plan_options():
             if location_filter is not None and location_filter not in {
-                str(route.origin_id), str(route.destination_id)
+                str(movement_plan.origin_id), str(movement_plan.destination_id)
             }:
                 continue
-            for blocker in sim.transport.movement_plan_failures(route.id, sim.day):
+            for blocker in sim.transport.movement_plan_failures(movement_plan.id, sim.day):
                 issues.append(self._issue(
-                    blocker, blocker, category="logistics", source="route",
-                    operational_node_id=location_filter, entity_id=str(route.id),
+                    blocker, blocker, category="logistics", source="movement_plan",
+                    operational_node_id=location_filter, entity_id=str(movement_plan.id),
                 ))
 
         for allocation in self._transport_allocation_rows():
@@ -461,7 +461,7 @@ class ApplicationReportProjectorMixin:
 
         for requirement in self._requirement_rows(
             execution_allocation=decision.allocations.transport,
-            resolutions=decision.plan.demand_resolutions,
+            resolutions=decision.plan.requirement_resolutions,
         ):
             if location_filter is not None and location_filter != requirement.destination_id:
                 continue

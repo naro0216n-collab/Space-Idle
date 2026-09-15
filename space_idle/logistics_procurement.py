@@ -22,24 +22,24 @@ class ExternalProcurementMixin:
 
     @staticmethod
     def _procurement_request_id(
-        demand_id: EntityId,
+        requirement_id: EntityId,
         supply_node_id: SpatialNodeId,
         service_id: DefinitionId,
     ) -> EntityId:
         return EntityId(
-            f"funds.procurement:{demand_id}:{supply_node_id}:{service_id}"
+            f"funds.procurement:{requirement_id}:{supply_node_id}:{service_id}"
         )
 
     def external_supply_pipeline_t(
         self,
-        demand_id: EntityId,
+        requirement_id: EntityId,
         *,
         supply_node_id: SpatialNodeId | None = None,
     ) -> float:
         return sum(
             row.amount_t
             for row in self.external_supply_batches.values()
-            if row.demand_id == demand_id
+            if row.requirement_id == requirement_id
             and (supply_node_id is None or row.supply_node_id == supply_node_id)
         )
 
@@ -54,18 +54,18 @@ class ExternalProcurementMixin:
 
     def _procurement_service_for(
         self,
-        demand: SupplyRequirement,
+        requirement: SupplyRequirement,
         supply_node_id: SpatialNodeId,
     ):
         candidates = []
         for service in self.procurement_services.values():
             if service.supply_node_id != supply_node_id:
                 continue
-            price = service.unit_price_musd_per_t(demand.resource_id)
+            price = service.unit_price_musd_per_t(requirement.resource_id)
             if price is None:
                 continue
             policy = self.external_economy.resolve_policy(
-                service.id, demand.owner_kind, demand.owner_id
+                service.id, requirement.owner_kind, requirement.owner_id
             )
             if policy is None:
                 continue
@@ -87,27 +87,27 @@ class ExternalProcurementMixin:
         """
         planned: dict[tuple[EntityId, SpatialNodeId], tuple[SupplyRequirement, float]] = {}
         for row in logistics_plan.dispatches:
-            key = (row.demand.id, row.source_id)
+            key = (row.requirement.id, row.source_id)
             existing = planned.get(key)
             planned[key] = (
-                row.demand,
+                row.requirement,
                 row.amount_t + (0.0 if existing is None else existing[1]),
             )
 
         remaining_rows: list[tuple[SupplyRequirement, SpatialNodeId, float]] = []
-        for (demand_id, source_id), (demand, amount_t) in planned.items():
+        for (requirement_id, source_id), (requirement, amount_t) in planned.items():
             pipeline = self.external_supply_pipeline_t(
-                demand_id, supply_node_id=source_id
+                requirement_id, supply_node_id=source_id
             )
             need = max(0.0, amount_t - pipeline)
             if need > 1e-12:
-                remaining_rows.append((demand, source_id, need))
+                remaining_rows.append((requirement, source_id, need))
 
         grouped: dict[tuple[SpatialNodeId, DefinitionId], list[int]] = {}
-        for index, (demand, source_id, _amount) in enumerate(remaining_rows):
-            grouped.setdefault((source_id, demand.resource_id), []).append(index)
+        for index, (requirement, source_id, _amount) in enumerate(remaining_rows):
+            grouped.setdefault((source_id, requirement.resource_id), []).append(index)
 
-        shortages = [amount for _demand, _source, amount in remaining_rows]
+        shortages = [amount for _requirement, _source, amount in remaining_rows]
         for (source_id, resource_id), indices in grouped.items():
             available = max(0.0, self.inventory.available(source_id, resource_id))
             priorities: dict[int, list[int]] = {}
@@ -125,42 +125,42 @@ class ExternalProcurementMixin:
                 available -= covered
 
         return tuple(
-            (demand, source_id, shortages[index])
-            for index, (demand, source_id, _amount) in enumerate(remaining_rows)
+            (requirement, source_id, shortages[index])
+            for index, (requirement, source_id, _amount) in enumerate(remaining_rows)
             if shortages[index] > 1e-12
         )
 
     def plan_external_procurement(
         self,
         day: int,
-        demands: tuple[SupplyRequirement, ...],
+        requirements: tuple[SupplyRequirement, ...],
         logistics_plan: "LogisticsResourcePlan",
     ) -> ExternalProcurementPlan:
-        planned_transport_by_demand: dict[EntityId, float] = {}
+        planned_transport_by_requirement: dict[EntityId, float] = {}
         for row in logistics_plan.dispatches:
-            planned_transport_by_demand[row.demand.id] = (
-                planned_transport_by_demand.get(row.demand.id, 0.0) + row.amount_t
+            planned_transport_by_requirement[row.requirement.id] = (
+                planned_transport_by_requirement.get(row.requirement.id, 0.0) + row.amount_t
             )
 
         needs: list[tuple[SupplyRequirement, SpatialNodeId, float]] = []
-        for demand in demands:
-            if demand.source_id is not None:
+        for requirement in requirements:
+            if requirement.source_id is not None:
                 continue
             delivered_or_planned = (
-                self.cargo_flow_pipeline_t(demand.id)
-                + planned_transport_by_demand.get(demand.id, 0.0)
+                self.cargo_flow_pipeline_t(requirement.id)
+                + planned_transport_by_requirement.get(requirement.id, 0.0)
                 + self.external_supply_pipeline_t(
-                    demand.id, supply_node_id=demand.destination_id
+                    requirement.id, supply_node_id=requirement.destination_id
                 )
             )
-            direct_need = max(0.0, demand.amount_t - delivered_or_planned)
+            direct_need = max(0.0, requirement.amount_t - delivered_or_planned)
             if direct_need > 1e-12:
-                needs.append((demand, demand.destination_id, direct_need))
+                needs.append((requirement, requirement.destination_id, direct_need))
         needs.extend(self._source_procurement_needs(logistics_plan))
 
         orders: list[ProcurementOrder] = []
         requests: list[FundsRequest] = []
-        for demand, supply_node_id, amount_t in sorted(
+        for requirement, supply_node_id, amount_t in sorted(
             needs,
             key=lambda row: (
                 -row[0].priority,
@@ -168,36 +168,36 @@ class ExternalProcurementMixin:
                 str(row[1]),
             ),
         ):
-            resolved = self._procurement_service_for(demand, supply_node_id)
+            resolved = self._procurement_service_for(requirement, supply_node_id)
             if resolved is None:
                 continue
             service, policy = resolved
             if (
-                supply_node_id == demand.destination_id
-                and demand.forecast_requirement_day is not None
-                and day + service.supply_latency_days < demand.forecast_requirement_day
+                supply_node_id == requirement.destination_id
+                and requirement.forecast_requirement_day is not None
+                and day + service.supply_latency_days < requirement.forecast_requirement_day
             ):
                 continue
-            unit_price = service.unit_price_musd_per_t(demand.resource_id)
+            unit_price = service.unit_price_musd_per_t(requirement.resource_id)
             assert unit_price is not None
             request_id = self._procurement_request_id(
-                demand.id, supply_node_id, service.id
+                requirement.id, supply_node_id, service.id
             )
             request = FundsRequest(
                 request_id,
                 policy.id,
                 service.id,
                 amount_t * unit_price,
-                demand.priority,
-                demand.owner_kind,
-                demand.owner_id,
-                f"procurement:{demand.resource_id}:{supply_node_id}",
+                requirement.priority,
+                requirement.owner_kind,
+                requirement.owner_id,
+                f"procurement:{requirement.resource_id}:{supply_node_id}",
             )
             requests.append(request)
             orders.append(
                 ProcurementOrder(
                     service.id,
-                    demand,
+                    requirement,
                     supply_node_id,
                     amount_t,
                     amount_t,
@@ -251,11 +251,11 @@ class ExternalProcurementMixin:
             self.external_supply_batches[supply_id] = ExternalSupplyBatch(
                 supply_id,
                 service.id,
-                order.demand.id,
-                order.demand.owner_kind,
-                order.demand.owner_id,
+                order.requirement.id,
+                order.requirement.owner_kind,
+                order.requirement.owner_id,
                 order.supply_node_id,
-                order.demand.resource_id,
+                order.requirement.resource_id,
                 order.amount_t,
                 day,
                 day + service.supply_latency_days,

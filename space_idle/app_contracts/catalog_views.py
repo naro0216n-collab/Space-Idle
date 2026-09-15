@@ -101,7 +101,7 @@ class VehicleDefinitionRow:
 
 
 @dataclass(frozen=True)
-class RouteDefinitionRow:
+class MovementPlanDefinitionRow:
     id: str
     display_name: str
     origin_id: str
@@ -160,7 +160,7 @@ class CatalogView:
     operational_nodes: tuple[OperationalNodeDefinitionRow, ...]
     processes: tuple[ProcessDefinitionRow, ...] = ()
     research: tuple[ResearchDefinitionRow, ...] = ()
-    routes: tuple[RouteDefinitionRow, ...] = ()
+    movement_plans: tuple[MovementPlanDefinitionRow, ...] = ()
     transport_services: tuple[TransportServiceDefinitionRow, ...] = ()
     procurement_services: tuple[ProcurementServiceDefinitionRow, ...] = ()
 

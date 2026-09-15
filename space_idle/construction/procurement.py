@@ -58,7 +58,7 @@ class ConstructionProcurementMixin:
                 )
 
     def supplys(self, day: int) -> tuple[SupplyRequirement, ...]:
-        demands: list[SupplyRequirement] = []
+        requirements: list[SupplyRequirement] = []
         for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
             if (
                 project.paused
@@ -78,7 +78,7 @@ class ConstructionProcurementMixin:
                     and not self._procurement_policy_due(project, day)
                 ):
                     continue
-                demands.append(SupplyRequirement(
+                requirements.append(SupplyRequirement(
                     self._supply_id(project.id, requirement.resource_id),
                     "project",
                     EntityId(str(project.id)),
@@ -88,7 +88,7 @@ class ConstructionProcurementMixin:
                     project.priority,
                     project.import_source_id,
                 ))
-        return tuple(demands)
+        return tuple(requirements)
 
     def reservation_acquisition_requirements(
         self, day: int

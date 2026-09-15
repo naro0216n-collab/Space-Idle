@@ -68,9 +68,9 @@
 
     <main id="logisticsView" class="view-root logistics-view" hidden>
       <aside class="panel logistics-list-panel">
-        <div class="panel-heading"><div><div class="eyebrow">ROUTES</div><h2>輸送路</h2></div></div>
-        <div class="filter-row"><select id="routeOriginFilter" aria-label="出発地"></select><select id="routeDestinationFilter" aria-label="到着地"></select></div>
-        <div id="routeList" class="route-list"></div>
+        <div class="panel-heading"><div><div class="eyebrow">MOVEMENT PLANS</div><h2>Movement Plan</h2></div></div>
+        <div class="filter-row"><select id="movementPlanOriginFilter" aria-label="出発地"></select><select id="movementPlanDestinationFilter" aria-label="到着地"></select></div>
+        <div id="movementPlanList" class="movement-plan-list"></div>
       </aside>
 
       <section class="workspace logistics-workspace">
@@ -78,7 +78,7 @@
         <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
         <div class="logistics-bottom-grid">
           <section class="card"><div class="card-heading"><h3>Supply Policy / Target Stock</h3><span id="supplyPolicyCountBadge" class="badge"></span></div><div id="supplyPolicyTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Supply Requirement</h3><span id="demandCountBadge" class="badge"></span></div><div id="demandTable" class="table-wrap"></div></section>
+          <section class="card"><div class="card-heading"><h3>Supply Requirement</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Fleet</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Transport Allocation</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Vehicle Production</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
@@ -88,8 +88,8 @@
       </section>
 
       <aside class="panel inspector-panel logistics-inspector">
-        <div class="panel-heading"><div><div class="eyebrow">ROUTE INSPECTOR</div><h2 id="routeInspectorTitle">輸送路を選択</h2></div></div>
-        <div id="routeInspectorContent" class="inspector-content"><div class="empty-state">左の輸送路またはネットワーク上の接続を選択してください。</div></div>
+        <div class="panel-heading"><div><div class="eyebrow">MOVEMENT PLAN INSPECTOR</div><h2 id="movementPlanInspectorTitle">Movement Planを選択</h2></div></div>
+        <div id="movementPlanInspectorContent" class="inspector-content"><div class="empty-state">左のMovement Planまたはネットワーク上の接続を選択してください。</div></div>
       </aside>
     </main>
 

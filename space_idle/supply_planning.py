@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from .priority import ActivityPriority
-from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
+from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
 from .supply import SupplyPolicy, SupplyRequirement, TargetStockPolicy
 from .transport.models import PathPolicy
 
@@ -86,7 +86,7 @@ class SupplyPlanningMixin:
         *,
         preferred_source_id: SpatialNodeId | None = None,
         path_policy: PathPolicy = PathPolicy.FASTEST,
-        explicit_path: tuple[RouteId, ...] | None = None,
+        explicit_path: tuple[MovementPlanId, ...] | None = None,
     ) -> EntityId:
         graph = self.facilities.environment.graph
         if not graph.has_operational_node(destination_id):
@@ -128,10 +128,10 @@ class SupplyPlanningMixin:
         )
 
 
-    def demand_remaining_t(self, demand: SupplyRequirement) -> float:
-        return max(0.0, demand.amount_t - self.cargo_flow_pipeline_t(demand.id))
+    def requirement_remaining_t(self, requirement: SupplyRequirement) -> float:
+        return max(0.0, requirement.amount_t - self.cargo_flow_pipeline_t(requirement.id))
 
-    def supply_policy_for(self, demand: SupplyRequirement) -> SupplyPolicy | None:
+    def supply_policy_for(self, requirement: SupplyRequirement) -> SupplyPolicy | None:
         return self.supply_policies.get(
-            self._supply_policy_id(demand.destination_id, demand.resource_id)
+            self._supply_policy_id(requirement.destination_id, requirement.resource_id)
         )

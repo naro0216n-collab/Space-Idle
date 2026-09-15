@@ -42,7 +42,7 @@ def test_time_progression_has_no_automatic_income():
 def test_owned_transport_is_physical_while_external_transport_requires_policy_and_funds():
     def demand():
         return SupplyRequirement(
-            EntityId("demand.economy"), "test", EntityId("owner.economy"),
+            EntityId("requirement.economy"), "test", EntityId("owner.economy"),
             LEO, WATER, 1.0, 5, EARTH,
         )
 

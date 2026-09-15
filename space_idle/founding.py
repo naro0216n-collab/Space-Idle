@@ -180,8 +180,8 @@ class LocationFoundingService:
         return EntityId(f"founding.fleet:{project_id}")
 
     @staticmethod
-    def demand_id(project_id: ProjectId, resource_id: DefinitionId) -> EntityId:
-        return EntityId(f"demand.founding:{project_id}:{resource_id}")
+    def requirement_id(project_id: ProjectId, resource_id: DefinitionId) -> EntityId:
+        return EntityId(f"requirement.founding:{project_id}:{resource_id}")
 
     @staticmethod
     def payload_owner_id(project_id: ProjectId) -> EntityId:
@@ -427,7 +427,7 @@ class LocationFoundingService:
                 if remaining <= 1e-9:
                     continue
                 rows.append(SupplyRequirement(
-                    self.demand_id(project.id, resource_id),
+                    self.requirement_id(project.id, resource_id),
                     "founding",
                     EntityId(project.id),
                     project.staging_node_id,
@@ -461,7 +461,7 @@ class LocationFoundingService:
                     "founding",
                     EntityId(project.id),
                     "payload_preparation",
-                    demand_id=self.demand_id(project.id, requirement.resource_id),
+                    requirement_id=self.requirement_id(project.id, requirement.resource_id),
                 ))
         return tuple(rows)
 

@@ -93,7 +93,7 @@ def test_supply_requirement_dispatches_without_authoritative_lane():
 
     _advance_logistics(sim, sim.day, (requirement,))
 
-    flows = [row for row in sim.logistics.cargo_flows.values() if row.demand_id == requirement.id]
+    flows = [row for row in sim.logistics.cargo_flows.values() if row.requirement_id == requirement.id]
     assert sum(row.amount_t for row in flows) == pytest.approx(1.0)
     assert all(row.source_id == EARTH and row.destination_id == LEO for row in flows)
 
@@ -131,8 +131,8 @@ def test_higher_priority_requirement_uses_shared_transport_capacity_first():
 
     shipped = {high.id: 0.0, low.id: 0.0}
     for flow in sim.logistics.cargo_flows.values():
-        if flow.demand_id in shipped:
-            shipped[flow.demand_id] += flow.amount_t
+        if flow.requirement_id in shipped:
+            shipped[flow.requirement_id] += flow.amount_t
     assert shipped[high.id] == pytest.approx(amount)
     assert shipped[low.id] == pytest.approx(0.0)
 
@@ -152,7 +152,7 @@ def test_same_priority_transport_capacity_is_progressive_max_min_and_registratio
         return service_capacity, {
             requirement.id: sum(
                 row.amount_t for row in planned.dispatches
-                if row.demand.id == requirement.id
+                if row.requirement.id == requirement.id
             )
             for requirement in requirements
         }
@@ -180,7 +180,7 @@ def test_future_high_priority_requirement_does_not_preempt_current_requirement_b
     )
 
     plan = sim.logistics.plan_capacity_logistics(sim.day, (future, current))
-    planned_ids = {row.demand.id for row in plan.dispatches}
+    planned_ids = {row.requirement.id for row in plan.dispatches}
     assert current.id in planned_ids
     assert future.id not in planned_ids
 
@@ -189,7 +189,7 @@ def test_future_high_priority_requirement_does_not_preempt_current_requirement_b
     ).forward_latency_days
     due_day = future.forecast_requirement_day - latency
     due = sim.logistics.plan_capacity_logistics(due_day, (future,))
-    assert any(row.demand.id == future.id for row in due.dispatches)
+    assert any(row.requirement.id == future.id for row in due.dispatches)
 
 
 def test_inbound_cargo_is_subtracted_from_requirement_and_not_dispatched_twice():
@@ -247,7 +247,7 @@ def test_unconstrained_requirement_auto_selects_reachable_stocked_source():
     options = sim.logistics.supply_planning_options(requirement, sim.day)
     assert EARTH in options.stocked_source_ids
     _advance_logistics(sim, sim.day, (requirement,))
-    flow = next(row for row in sim.logistics.cargo_flows.values() if row.demand_id == requirement.id)
+    flow = next(row for row in sim.logistics.cargo_flows.values() if row.requirement_id == requirement.id)
     assert flow.source_id == EARTH
 
 
@@ -264,14 +264,14 @@ def test_multistage_dispatch_freezes_current_and_downstream_service_conditions()
         source=EARTH,
     )
     raw = sim.logistics.plan_capacity_logistics(sim.day, (requirement,))
-    dispatch = next(row for row in raw.dispatches if row.demand.id == requirement.id)
+    dispatch = next(row for row in raw.dispatches if row.requirement.id == requirement.id)
     assert len(dispatch.path) > 1
     expected_services = tuple(edge.key for edge in dispatch.path)
     expected_destinations = tuple(edge.destination_id for edge in dispatch.path)
     expected_latency = sum(edge.latency_days for edge in dispatch.path)
 
     _advance_logistics(sim, sim.day, (requirement,))
-    flow = next(row for row in sim.logistics.cargo_flows.values() if row.demand_id == requirement.id)
+    flow = next(row for row in sim.logistics.cargo_flows.values() if row.requirement_id == requirement.id)
     frozen_legs = (flow.leg,) + flow.remaining_legs
     assert tuple(leg.service_identity for leg in frozen_legs) == expected_services
     assert tuple(leg.destination_id for leg in frozen_legs) == expected_destinations
@@ -290,7 +290,7 @@ def test_cargo_is_not_available_until_boundary_arrival_settlement():
         resource=resource,
     )
     _advance_logistics(sim, 0, (requirement,))
-    flow = next(row for row in sim.logistics.cargo_flows.values() if row.demand_id == requirement.id)
+    flow = next(row for row in sim.logistics.cargo_flows.values() if row.requirement_id == requirement.id)
 
     dispatched = flow.amount_t
     ready_day = flow.first_arrival_day
@@ -313,12 +313,12 @@ def test_cargo_arrival_waits_for_inventory_admission():
     requirement = _requirement(1.0, requirement_id="supply.arrival-waiting")
 
     _advance_logistics(sim, 0, (requirement,))
-    flow = next(row for row in sim.logistics.cargo_flows.values() if row.demand_id == requirement.id)
+    flow = next(row for row in sim.logistics.cargo_flows.values() if row.requirement_id == requirement.id)
     ready_day = flow.first_arrival_day
     sim.logistics.prepare_cargo_arrivals(ready_day)
     sim.logistics.settle_cargo_arrivals(ready_day)
     waiting = next(
-        row for row in sim.logistics.arrival_waiting.values() if row.demand_id == requirement.id
+        row for row in sim.logistics.arrival_waiting.values() if row.requirement_id == requirement.id
     )
     assert flow.id not in sim.logistics.cargo_flows
     projected = next(
@@ -403,7 +403,7 @@ def test_unchanged_daily_dispatches_extend_one_cargo_flow_segment():
 
     flows = [
         row for row in sim.logistics.cargo_flows.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     ]
     assert len(flows) == 1
     segment = flows[0]
@@ -430,7 +430,7 @@ def test_multistage_arrival_direct_handoff_preserves_logistics_ownership():
     _advance_logistics(sim, 0, (requirement,))
     first = next(
         row for row in sim.logistics.cargo_flows.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     )
     assert first.remaining_legs
     handoff_node = first.destination_id
@@ -441,15 +441,15 @@ def test_multistage_arrival_direct_handoff_preserves_logistics_ownership():
 
     assert not [
         row for row in sim.logistics.arrival_waiting.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     ]
     assert not [
         row for row in sim.logistics.handoff_staging.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     ]
     downstream = next(
         row for row in sim.logistics.cargo_flows.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     )
     assert downstream.source_id == handoff_node
     assert sim.inventory.amount(handoff_node, MACHINERY) == pytest.approx(stock_before)
@@ -472,7 +472,7 @@ def test_multistage_arrival_can_unload_to_inventory_reservation_then_reload():
     _advance_logistics(sim, 0, (requirement,))
     first = next(
         row for row in sim.logistics.cargo_flows.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     )
     handoff_node = first.destination_id
     stock_before = sim.inventory.amount(handoff_node, MACHINERY)
@@ -482,11 +482,11 @@ def test_multistage_arrival_can_unload_to_inventory_reservation_then_reload():
 
     staging = next(
         row for row in sim.logistics.handoff_staging.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     )
     assert not [
         row for row in sim.logistics.arrival_waiting.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     ]
     assert sim.inventory.amount(handoff_node, MACHINERY) == pytest.approx(
         stock_before + staging.amount_t
@@ -502,11 +502,11 @@ def test_multistage_arrival_can_unload_to_inventory_reservation_then_reload():
     logistics_owned = sum(
         row.amount_t
         for row in sim.logistics.cargo_flows.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     ) + sum(
         row.amount_t
         for row in sim.logistics.arrival_waiting.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     )
     assert logistics_owned == pytest.approx(0.0)
 
@@ -516,7 +516,7 @@ def test_multistage_arrival_can_unload_to_inventory_reservation_then_reload():
     assert sim.inventory.amount(handoff_node, MACHINERY) == pytest.approx(stock_before)
     downstream = next(
         row for row in sim.logistics.cargo_flows.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     )
     assert downstream.source_id == handoff_node
 
@@ -534,13 +534,13 @@ def test_arrival_waiting_reduces_reusable_transport_capacity_until_cleared():
     _advance_logistics(sim, 0, (requirement,))
     flow = next(
         row for row in sim.logistics.cargo_flows.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     )
     ready_day = flow.first_arrival_day
     _settle_cargo_boundary(sim, ready_day)
     waiting = next(
         row for row in sim.logistics.arrival_waiting.values()
-        if row.demand_id == requirement.id
+        if row.requirement_id == requirement.id
     )
 
     blocked = sim.logistics.current_transport_capacity_snapshot(

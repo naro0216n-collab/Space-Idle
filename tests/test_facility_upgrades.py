@@ -127,7 +127,7 @@ def test_facility_upgrade_is_a_resource_backed_construction_project():
     for requirement, resource in zip(recipe.resources, completed.resources, strict=True):
         assert resource.resource_id == str(requirement.resource_id)
         assert resource.committed_t >= requirement.amount_t - 1e-9
-        assert resource.demand_id is None
+        assert resource.requirement_id is None
         after = app._simulation.inventory.amount(
             facility.operational_node_id, requirement.resource_id
         )

@@ -4,7 +4,7 @@ from .app_contracts.catalog_views import (
     RequirementConditionRow, CapabilityRequirementRow, ServiceCapacityRequirementRow,
     SiteRequirementsDefinitionRow,
     OperationCapabilityDefinitionRow, ResourceDefinitionRow, FacilityDefinitionRow,
-    ProcessDefinitionRow, ResearchDefinitionRow, VehicleDefinitionRow, RouteDefinitionRow,
+    ProcessDefinitionRow, ResearchDefinitionRow, VehicleDefinitionRow, MovementPlanDefinitionRow,
     TransportServiceDefinitionRow, ProcurementServiceDefinitionRow, CelestialBodyDefinitionRow, OperationalNodeDefinitionRow,
     CatalogView, OperationalNodeSummary, WorldView,
 )
@@ -18,13 +18,13 @@ from .app_contracts.location_views import (
     EnvironmentFacetRow, ExtractionRow, ExtractionResourceRow, OperationalNodeView,
 )
 from .app_contracts.logistics_views import (
-    InfrastructureRequirementRow, RouteEndpointRow, RouteModeRow, RouteRow, DirectionalCapacityRow, FleetPoolRow, TransportAllocationRow,
+    InfrastructureRequirementRow, MovementEndpointRow, MovementServiceModeRow, MovementPlanRow, DirectionalCapacityRow, FleetPoolRow, TransportAllocationRow,
     FleetRelocationResourceRequirementRow, FleetRelocationRow, FleetReleaseRow, CargoFlowRow, ExternalSupplyRow, VehicleProductionOptionRow, VehicleProductionRow,
     SupplyRequirementRow, SupplyPolicyRow, TargetStockRow, LogisticsView, TransportAllocationOptionRow,
     TransportAllocationOptionsView,
 )
 from .app_contracts.logistics_reports import (
-    LogisticsSummaryView, RoutesView, FleetView, FleetRelocationPreviewView, TransportAllocationsView,
+    LogisticsSummaryView, MovementPlansView, FleetView, FleetRelocationPreviewView, TransportAllocationsView,
     CargoFlowsView,
 )
 from .app_contracts.progression_views import (
@@ -47,7 +47,7 @@ QueryResult: TypeAlias = (
     CatalogView | WorldView | SurfaceMapView | OperationalNodeView | FlowReportView | BottlenecksView |
     DependencyAnalyticsView |
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
-    RoutesView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |
+    MovementPlansView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |
     TransportAllocationOptionsView | ResearchView |
     ScientificExplorationsView | SurveysView | ContractsView | ExternalEconomyView
 )

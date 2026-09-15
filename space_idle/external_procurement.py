@@ -57,7 +57,7 @@ class ExternalSupplyBatch:
 
     id: EntityId
     service_id: DefinitionId
-    demand_id: EntityId
+    requirement_id: EntityId
     owner_kind: str
     owner_id: EntityId
     supply_node_id: SpatialNodeId
@@ -77,7 +77,7 @@ class ExternalSupplyBatch:
 @dataclass(frozen=True)
 class ProcurementOrder:
     service_id: DefinitionId
-    demand: SupplyRequirement
+    requirement: SupplyRequirement
     supply_node_id: SpatialNodeId
     amount_t: float
     requested_amount_t: float

@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 from ..power import PowerSnapshot
-from ..shared import DefinitionId, RouteId, SpatialNodeId, SurfaceCellId
+from ..shared import DefinitionId, MovementPlanId, SpatialNodeId, SurfaceCellId
 from ..site import evaluate_environment_requirements, evaluate_site_requirements
 from ..spatial import AtmosphereField, GravityField, SpatialNodeKind, SurfaceField
 from .endpoints import great_circle_distance_km, movement_geometry, resolve_movement_endpoint
@@ -168,16 +168,16 @@ class TransportCompatibilityMixin:
                 )
         return tuple(dict.fromkeys(failures))
 
-    def movement_plan_failures(self, route_id: RouteId, day: int = 0) -> tuple[str, ...]:
+    def movement_plan_failures(self, movement_plan_id: MovementPlanId, day: int = 0) -> tuple[str, ...]:
         """Return endpoint/site blockers intrinsic to the Movement Plan itself.
 
         Research IDs are deliberately not Movement gates. Whether a destination can
         actually be reached is derived from endpoint requirements plus a real
         vehicle/service performance profile and its operational support.
         """
-        plan = self.movement_plan(route_id)
+        plan = self.movement_plan(movement_plan_id)
         if plan is None:
-            return (f"movement_plan:{route_id}:unknown",)
+            return (f"movement_plan:{movement_plan_id}:unknown",)
         failures: list[str] = []
         for prefix, endpoint, requirements in (
             ("origin", plan.origin, plan.origin_requirements),
@@ -221,13 +221,13 @@ class TransportCompatibilityMixin:
                     failures.append(f"{prefix}:{failure.code}:{failure.detail}")
         return tuple(failures)
 
-    def movement_plan_available(self, route_id: RouteId, day: int = 0) -> bool:
-        return not self.movement_plan_failures(route_id, day)
+    def movement_plan_available(self, movement_plan_id: MovementPlanId, day: int = 0) -> bool:
+        return not self.movement_plan_failures(movement_plan_id, day)
 
-    def movement_geometry(self, route_id: RouteId):
-        plan = self.movement_plan(route_id)
+    def movement_geometry(self, movement_plan_id: MovementPlanId):
+        plan = self.movement_plan(movement_plan_id)
         if plan is None:
-            raise KeyError(route_id)
+            raise KeyError(movement_plan_id)
         return movement_geometry(plan, self.facilities)
 
     def performance_movement_transit_days(
@@ -324,7 +324,7 @@ class TransportCompatibilityMixin:
         return tuple(failures)
 
     def vehicle_movement_physical_failures(
-        self, plan_id: RouteId, vehicle_definition_id: DefinitionId, day: int = 0
+        self, plan_id: MovementPlanId, vehicle_definition_id: DefinitionId, day: int = 0
     ) -> tuple[str, ...]:
         plan = self.movement_plan(plan_id)
         if plan is None:
@@ -337,7 +337,7 @@ class TransportCompatibilityMixin:
         )
 
     def vehicle_movement_failures(
-        self, plan_id: RouteId, vehicle_definition_id: DefinitionId, day: int = 0
+        self, plan_id: MovementPlanId, vehicle_definition_id: DefinitionId, day: int = 0
     ) -> tuple[str, ...]:
         plan = self.movement_plan(plan_id)
         if plan is None:
@@ -347,11 +347,11 @@ class TransportCompatibilityMixin:
         )
 
     def service_movement_failures(
-        self, route_id: RouteId, service_id: DefinitionId, day: int = 0
+        self, movement_plan_id: MovementPlanId, service_id: DefinitionId, day: int = 0
     ) -> tuple[str, ...]:
-        plan = self.movement_plan(route_id)
+        plan = self.movement_plan(movement_plan_id)
         if plan is None:
-            return (f"movement_plan:{route_id}:unknown",)
+            return (f"movement_plan:{movement_plan_id}:unknown",)
         service = self.external_services[service_id]
         failures = list(
             self.performance_movement_failures(

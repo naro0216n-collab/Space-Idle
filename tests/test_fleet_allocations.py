@@ -6,7 +6,7 @@ from dataclasses import replace
 from space_idle import GetFleet, build_game_application
 from space_idle.composition.base_simulation import build_base_simulation
 from space_idle.content import base_ids as ids
-from space_idle.shared import EntityId, RouteId
+from space_idle.shared import EntityId, MovementPlanId
 from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
 from space_idle.validation import validate_runtime_state
 from space_idle.validation_support import ConfigurationError
@@ -432,7 +432,7 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     )
     sim.inventory.add(ids.EARTH, ids.PROPELLANT, required)
     demand = SupplyRequirement(
-        EntityId("demand.boundary-relocation-propellant"),
+        EntityId("requirement.boundary-relocation-propellant"),
         "test",
         EntityId("owner.boundary-relocation-propellant"),
         ids.LEO,
@@ -454,7 +454,7 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     )
     flow = next(
         row for row in sim.logistics.cargo_flows.values()
-        if row.demand_id == demand.id
+        if row.requirement_id == demand.id
     )
     ready_day = flow.first_arrival_day
     assert ready_day > 0
@@ -840,7 +840,7 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
     cargo_amount = physical.nominal.forward_t_per_day
     sim.inventory.add(ids.LEO, ids.MACHINERY, cargo_amount)
     demand = SupplyRequirement(
-        EntityId("demand.shared-transport-resource"),
+        EntityId("requirement.shared-transport-resource"),
         "test",
         EntityId("owner.shared-transport-resource"),
         ids.LUNAR_ORBIT,
@@ -880,7 +880,7 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
     assert actual == pytest.approx(
         {key: amount / 2.0 for key, amount in forward_full.items()}
     )
-    assert next(row for row in logistics_plan.dispatches if row.demand.id == demand.id).amount_t > 0
+    assert next(row for row in logistics_plan.dispatches if row.requirement.id == demand.id).amount_t > 0
 
 
 def test_relocation_waits_for_shared_resource_claim_allocation_before_departure():

@@ -8,7 +8,7 @@ from ..validation_support import (
     require as _require,
     validate_site_requirements as _validate_site_requirements,
 )
-from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId, SurfaceCellId
+from ..shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
 from .models import (
     DirectionalCapacity,
     FleetPool,
@@ -102,7 +102,7 @@ def _restore_movement_execution(data: dict[str, Any]) -> MovementExecution:
         units=int(data["units"]),
         legs=tuple(
             MovementExecutionLeg(
-                movement_plan_id=RouteId(leg["movement_plan_id"]),
+                movement_plan_id=MovementPlanId(leg["movement_plan_id"]),
                 origin=_restore_movement_endpoint(leg["origin"]),
                 destination=_restore_movement_endpoint(leg["destination"]),
                 operations=tuple(
@@ -178,7 +178,7 @@ def capture_transport(sim: Any) -> dict[str, Any]:
                     "forward_t_per_day": row.target_capacity.forward_t_per_day,
                     "reverse_t_per_day": row.target_capacity.reverse_t_per_day,
                 },
-                "path": None if row.path is None else [str(route_id) for route_id in row.path],
+                "path": None if row.path is None else [str(movement_plan_id) for movement_plan_id in row.path],
                 "path_policy": row.path_policy.value,
                 "paused": row.paused,
                 "last_operated_day": row.last_operated_day,
@@ -193,7 +193,7 @@ def capture_transport(sim: Any) -> dict[str, Any]:
                 "source_id": str(row.source_id),
                 "destination_id": str(row.destination_id),
                 "requested_day": row.requested_day,
-                "path": [str(route_id) for route_id in row.path],
+                "path": [str(movement_plan_id) for movement_plan_id in row.path],
                 "priority": int(row.priority),
                 "movement_execution_id": None if row.movement_execution_id is None else str(row.movement_execution_id),
                 "resource_needs": [
@@ -265,7 +265,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
             provisioning_priority=int(row["provisioning_priority"]), control_mode=TransportControlMode(row["control_mode"]),
             target_units=None if row.get("target_units") is None else int(row["target_units"]),
             target_capacity=None if target is None else DirectionalCapacity(float(target["forward_t_per_day"]), float(target["reverse_t_per_day"])),
-            path=None if row.get("path") is None else tuple(RouteId(value) for value in row["path"]),
+            path=None if row.get("path") is None else tuple(MovementPlanId(value) for value in row["path"]),
             path_policy=PathPolicy(row.get("path_policy", "fastest")), paused=bool(row.get("paused", False)),
             last_operated_day=None if row.get("last_operated_day") is None else int(row["last_operated_day"]),
         )
@@ -274,7 +274,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
         EntityId(row["id"]): FleetRelocation(
             EntityId(row["id"]), DefinitionId(row["vehicle_definition_id"]), int(row["units"]),
             SpatialNodeId(row["source_id"]), SpatialNodeId(row["destination_id"]), int(row["requested_day"]),
-            tuple(RouteId(value) for value in row["path"]),
+            tuple(MovementPlanId(value) for value in row["path"]),
             tuple(
                 FleetRelocationResourceNeed(SpatialNodeId(need["operational_node_id"]), DefinitionId(need["resource_id"]), float(need["required_t"]))
                 for need in row.get("resource_needs", [])

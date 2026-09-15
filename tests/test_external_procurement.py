@@ -17,7 +17,7 @@ from space_idle.shared import EntityId
 
 def _demand(*, destination=ids.EARTH, amount=4.0, source=None) -> SupplyRequirement:
     return SupplyRequirement(
-        EntityId("demand.external-procurement"),
+        EntityId("requirement.external-procurement"),
         "test_owner",
         EntityId("owner.external-procurement"),
         destination,

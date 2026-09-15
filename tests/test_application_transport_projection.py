@@ -19,7 +19,7 @@ from space_idle import (
     GetLogisticsSummary,
     GetProjects,
     GetResearch,
-    GetRoutes,
+    GetMovementPlans,
     GetScientificExplorations,
     GetSurveys,
     GetTransportAllocations,
@@ -44,17 +44,17 @@ from space_idle.content.base_game import EARTH, LEO
 from space_idle.content import base_ids as ids
 
 
-def test_vehicle_definition_identity_is_consistent_across_catalog_fleet_and_route_modes():
+def test_vehicle_definition_identity_is_consistent_across_catalog_fleet_and_movement_modes():
     app = build_game_application()
     catalog = app.query(GetCatalog())
     fleet = app.query(GetFleet())
-    routes = app.query(GetRoutes(include_modes=True))
+    movement_plans = app.query(GetMovementPlans(include_modes=True))
 
     definitions = {row.id: row for row in catalog.vehicles}
     assert definitions
     assert all(pool.vehicle_definition_id in definitions for pool in fleet.pools)
-    for route in routes.items:
-        for mode in route.modes:
+    for movement_plan in movement_plans.items:
+        for mode in movement_plan.modes:
             if mode.vehicle_definition_id is not None:
                 assert mode.vehicle_definition_id in definitions
 
@@ -66,7 +66,7 @@ def test_application_decision_queries_are_observational():
 
     for query in (
         GetWorld(),
-        GetRoutes(include_modes=True),
+        GetMovementPlans(include_modes=True),
         GetFleet(),
         GetTransportAllocations(),
         GetTransportAllocationOptions(str(ids.LEO), str(ids.LUNAR_ORBIT)),
@@ -212,6 +212,7 @@ def test_supply_policy_and_target_stock_update_player_planning_intent_without_tr
     assert target.target_quantity_t == 3.5
     assert target.priority == 4
     assert requirement.priority == 4
+    assert requirement.forecast_requirement_day == app.query(GetWorld()).day
     assert app.query(GetTransportAllocations()).items == before_allocations
 
     app.execute(DeleteSupplyPolicy(str(LEO), str(ids.MACHINERY)))
@@ -279,7 +280,7 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
         "world": GetWorld(), "global_issues": GetBottlenecks(), "research": GetResearch(),
         "scientific_explorations": GetScientificExplorations(), "contracts": GetContracts(),
         "logistics_summary": GetLogisticsSummary(), "logistics": GetLogistics(),
-        "routes": GetRoutes(include_modes=True), "fleet": GetFleet(),
+        "movement_plans": GetMovementPlans(include_modes=True), "fleet": GetFleet(),
         "transport_allocations": GetTransportAllocations(), "cargo_flows": GetCargoFlows(),
 "operational_node": GetOperationalNode(location_id),
         "flow": GetFlowReport(location_id), "projects": GetProjects(location_id),
@@ -306,7 +307,9 @@ def test_construction_queries_expose_authoritative_project_controls():
     assert project_id is not None
     row = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
     assert row.settings_editable and row.sourcing_editable
+    assert row.projected_material_readiness_day is None
     app.execute(SetProjectPriority(project_id, 5))
     app.execute(SetProjectSourcingPolicy(project_id, "import_now")); app.execute(SetProjectImportSource(project_id, None))
     updated = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
     assert (updated.priority, updated.sourcing_policy, updated.import_source_id) == (5, "import_now", None)
+    assert updated.projected_material_readiness_day == app.query(GetWorld()).day

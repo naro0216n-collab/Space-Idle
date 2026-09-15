@@ -6,7 +6,7 @@ from math import ceil
 from typing import Iterable
 
 from ..facilities import FacilityBook
-from ..shared import CelestialBodyId, DefinitionId, EntityId, RouteId, SpatialNodeId, SurfaceCellId
+from ..shared import CelestialBodyId, DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 from ..spatial import SpatialGraph
 from .endpoints import great_circle_distance_km, resolve_movement_endpoint
@@ -75,7 +75,7 @@ class SpaceflightMovementRule:
 
 def _stable_plan_id(
     rule_ids: tuple[DefinitionId, ...], origin: MovementEndpoint, destination: MovementEndpoint
-) -> RouteId:
+) -> MovementPlanId:
     payload = "\0".join(
         (
             *(str(rule_id) for rule_id in rule_ids),
@@ -87,7 +87,7 @@ def _stable_plan_id(
             destination.locator_id,
         )
     ).encode("utf-8")
-    return RouteId(MOVEMENT_PLAN_ID_PREFIX + sha256(payload).hexdigest()[:24])
+    return MovementPlanId(MOVEMENT_PLAN_ID_PREFIX + sha256(payload).hexdigest()[:24])
 
 
 def _gateways(
@@ -199,7 +199,7 @@ class MovementResolver:
                     plans.extend(self.direct_plans(origin_id, destination_id))
         return tuple(sorted(plans, key=lambda row: str(row.id)))
 
-    def plan_by_id(self, plan_id: RouteId) -> MovementPlan | None:
+    def plan_by_id(self, plan_id: MovementPlanId) -> MovementPlan | None:
         for plan in self.all_direct_plans():
             if plan.id == plan_id:
                 return plan

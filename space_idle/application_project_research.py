@@ -226,7 +226,7 @@ class ResearchProgressionProjectorMixin:
                             except KeyError:
                                 allocated = 0.0
                             pipeline = sim.logistics.cargo_flow_pipeline_t(
-                                sim.research.prototype_demand_id(definition.id, resource_id)
+                                sim.research.prototype_requirement_id(definition.id, resource_id)
                             )
                     prototype_resources.append(ResearchPrototypeResourceRow(
                         str(resource_id),

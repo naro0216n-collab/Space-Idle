@@ -9,7 +9,7 @@ from space_idle import (
     GetFleet,
     GetLogistics,
     GetProjects,
-    GetRoutes,
+    GetMovementPlans,
     PauseTransportAllocation,
     PlanBuild,
     SetTargetStock,
@@ -82,13 +82,13 @@ def test_paused_transport_capacity_keeps_supply_requirement_visible_without_disp
     assert not allocation.paused and allocation.used.forward_t_per_day > 0
 
 
-def test_vehicle_route_eligibility_is_derived_from_operation_capability_not_vehicle_name():
+def test_vehicle_movement_eligibility_is_derived_from_operation_capability_not_vehicle_name():
     app = build_game_application()
     sim = app._simulation
     plan = sim.transport.movement_plan_candidates(ids.EARTH, ids.LEO)[0]
 
-    route_view = app.query(GetRoutes(route_id=str(plan.id), include_modes=True)).items[0]
-    lander_mode = next(mode for mode in route_view.modes if mode.id == str(ids.REUSABLE_SURFACE_CARGO_LANDER))
+    movement_plan_view = app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=True)).items[0]
+    lander_mode = next(mode for mode in movement_plan_view.modes if mode.id == str(ids.REUSABLE_SURFACE_CARGO_LANDER))
     assert not lander_mode.service_feasible
     assert any("operation:powered_ascent" in blocker for blocker in lander_mode.blockers)
 
@@ -111,7 +111,7 @@ def test_vehicle_route_eligibility_is_derived_from_operation_capability_not_vehi
     sim.transport.add_fleet_units(definition_id, 1, ids.EARTH)
     assert not sim.transport.vehicle_movement_failures(plan.id, definition_id, sim.day)
     mode = next(
-        row for row in app.query(GetRoutes(route_id=str(plan.id), include_modes=True)).items[0].modes
+        row for row in app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=True)).items[0].modes
         if row.id == str(definition_id)
     )
     assert mode.fleet_total_units == 1

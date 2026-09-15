@@ -38,7 +38,7 @@ class ResourceClaimRow:
     unmet: float
     minimum: float
     atomic: bool
-    demand_id: str | None
+    requirement_id: str | None
 
 
 @dataclass(frozen=True)

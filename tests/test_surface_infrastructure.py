@@ -322,7 +322,7 @@ def test_surface_gateway_handling_service_uses_location_surface_infrastructure()
     ).enabled_rate > 0.0
 
 
-def test_remote_surface_route_available_capacity_uses_location_surface_infrastructure():
+def test_remote_surface_movement_capacity_uses_location_surface_infrastructure():
     from space_idle.shared import SpatialNodeId
     app = build_game_application()
     sim = app._simulation

@@ -84,8 +84,8 @@ def test_founding_transport_path_and_site_requirements_follow_staging_and_target
     cross_body = sim.founding.planning_failures(
         ids.LEO, ids.MOON, cell, package.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day
     )
-    # Movement capability, not a package-authored route tag, determines whether
-    # the cross-body deployment is physically possible. This lander supports the
+    # Movement capability determines whether the cross-body deployment is
+    # physically possible. This lander supports the
     # derived spaceflight + landing plan; the LEO staging context itself is what
     # remains unsuitable here.
     assert not any(row.code == "deployment_vehicle" for row in cross_body)
