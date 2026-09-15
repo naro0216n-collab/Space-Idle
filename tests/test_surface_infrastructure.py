@@ -77,37 +77,46 @@ def test_surface_distribution_facility_supplies_nominal_and_available_capacity()
     assert degraded.limiting_factors == ("surface_infrastructure",)
 
 
-def test_remote_resource_opportunity_and_limiting_factor_follow_surface_infrastructure():
+def test_remote_resource_opportunity_is_static_while_surface_infrastructure_limits_execution_once():
     sim = build_game_application()._simulation
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
     decision = sim.tick_decision_projection()
     power = decision.allocations.power_by_location[ids.EARTH]
 
-    core_only = sim.graph.surface_cells[ids.EARTH_CELL_INDUSTRIAL].resource_potential_by_resource[ids.METAL_ORE]
-    constrained = sim.extraction.effective_opportunity(
+    core = sim.graph.surface_cells[ids.EARTH_CELL_INDUSTRIAL].resource_potential_by_resource[ids.METAL_ORE]
+    remote = sim.graph.surface_cells[ids.EARTH_CELL_COASTAL].resource_potential_by_resource[ids.METAL_ORE]
+    opportunity = sim.extraction.effective_opportunity(
         ids.EARTH, ids.METAL_ORE, sim.facilities, power, sim.day,
         decision.allocations.services,
     )
-    assert constrained == pytest.approx(core_only)
-    mine = next(
-        row
-        for row in sim.extraction.snapshots(
+    assert opportunity == pytest.approx(core + remote)
+    constrained = next(
+        row for row in sim.extraction.snapshots(
             ids.EARTH, sim.facilities, sim.inventory, power, sim.day,
-            decision.allocations.services,
+            decision.allocations.execution,
         )
         if row.facility_def_id == ids.METAL_ORE_MINE
     )
-    assert "surface_infrastructure" in mine.limiting_factors
+    assert 0.0 < constrained.scale < 1.0
+    assert constrained.effective_opportunity == pytest.approx(core + remote)
+    assert "service_capacity" in constrained.limiting_factors
 
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
+    sim.facilities.install(
+        ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH,
+        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+    )
     decision = sim.tick_decision_projection()
     power = decision.allocations.power_by_location[ids.EARTH]
-    supplied = sim.extraction.effective_opportunity(
-        ids.EARTH, ids.METAL_ORE, sim.facilities, power, sim.day,
-        decision.allocations.services,
+    supplied = next(
+        row for row in sim.extraction.snapshots(
+            ids.EARTH, sim.facilities, sim.inventory, power, sim.day,
+            decision.allocations.execution,
+        )
+        if row.facility_def_id == ids.METAL_ORE_MINE
     )
-    remote = sim.graph.surface_cells[ids.EARTH_CELL_COASTAL].resource_potential_by_resource[ids.METAL_ORE]
-    assert supplied == pytest.approx(core_only + remote)
+    assert supplied.effective_opportunity == pytest.approx(core + remote)
+    assert supplied.scale == pytest.approx(1.0)
+    assert supplied.limiting_factors == ()
 
 
 def test_location_query_exposes_surface_infrastructure_decision_state_and_improvement():
@@ -197,7 +206,7 @@ def test_remote_surface_survey_supply_is_enabled_by_shared_surface_dependency_al
     assert supplied.limiting_factors == ()
 
 
-def test_surface_cell_development_progress_is_limited_by_surface_infrastructure():
+def test_surface_cell_development_execution_reports_shared_bundle_fulfillment():
     app = build_game_application()
     sim = app._simulation
     project_id = app.execute(DevelopSurfaceCell(
@@ -212,12 +221,19 @@ def test_surface_cell_development_progress_is_limited_by_surface_infrastructure(
     assert project.limiting_factors == ("surface_infrastructure",)
     assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
 
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
-    app.execute(AdvanceTime(12))
+    sim.facilities.install(
+        ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH,
+        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+    )
+    decision = sim.tick_decision_projection()
+    bundle_id = sim.projects.construction_execution_bundle_id(project_id)
+    projected = decision.allocations.execution.fulfillment(bundle_id)
+    assert projected > 0.0
+    app.execute(AdvanceTime(1))
     project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
     assert project.construction_done > 0.0
-    assert project.construction_fulfillment == 1.0
-    assert project.limiting_factors == ()
+    assert project.construction_fulfillment > 0.0
+    assert "surface_infrastructure" not in project.limiting_factors
 
 
 def test_surface_map_exposes_projected_infrastructure_limit_for_cell_development():
@@ -234,7 +250,7 @@ def test_surface_map_exposes_projected_infrastructure_limit_for_cell_development
 
 
 
-def test_concurrent_surface_development_projects_share_surface_infrastructure_capacity():
+def test_concurrent_surface_development_projects_share_the_common_execution_allocator():
     app = build_game_application()
     sim = app._simulation
     coastal_id = app.execute(DevelopSurfaceCell(
@@ -243,34 +259,31 @@ def test_concurrent_surface_development_projects_share_surface_infrastructure_ca
     inland_id = app.execute(DevelopSurfaceCell(
         str(ids.EARTH), str(ids.EARTH_CELL_INLAND), sourcing_policy="import_now"
     )).created_id
-    assert coastal_id is not None
-    assert inland_id is not None
+    assert coastal_id is not None and inland_id is not None
 
     app.execute(AdvanceTime(12))
     sim.facilities.install(
-        ids.SURFACE_DISTRIBUTION_HUB,
-        ids.EARTH,
+        ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH,
         site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
     )
     decision = sim.tick_decision_projection()
-    requests = {
-        str(request.owner_id): request
-        for request in sim.projects.surface_infrastructure_service_requests(sim.day)
+    execution = decision.allocations.execution
+    bundles = {
+        str(bundle.owner_id): bundle
+        for bundle in execution.bundles
+        if bundle.owner_kind == "construction"
     }
-    coastal_request = requests[coastal_id]
-    inland_request = requests[inland_id]
-    coastal_allocated = decision.allocations.services.allocated(coastal_request.id)
-    inland_allocated = decision.allocations.services.allocated(inland_request.id)
-
-    assert coastal_request.requested_rate == pytest.approx(1.0)
-    assert inland_request.requested_rate == pytest.approx(1.0)
-    assert coastal_allocated == pytest.approx(0.5)
-    assert inland_allocated == pytest.approx(0.5)
-    assert coastal_allocated + inland_allocated == pytest.approx(1.0)
+    coastal = bundles[coastal_id]
+    inland = bundles[inland_id]
+    surface_type = sim.surface_infrastructure.service_type
+    assert any(key.kind == "service" and key.name == surface_type for key, _ in coastal.coefficients())
+    assert any(key.kind == "service" and key.name == surface_type for key, _ in inland.coefficients())
+    assert execution.allocated(coastal.id) == pytest.approx(execution.allocated(inland.id))
 
     rows = {row.id: row for row in app.query(GetProjects()).items}
-    assert rows[coastal_id].construction_fulfillment == pytest.approx(0.5)
-    assert rows[inland_id].construction_fulfillment == pytest.approx(0.5)
+    assert rows[coastal_id].construction_fulfillment == pytest.approx(execution.fulfillment(coastal.id))
+    assert rows[inland_id].construction_fulfillment == pytest.approx(execution.fulfillment(inland.id))
+
 
 def test_surface_infrastructure_is_derived_after_save_load(tmp_path):
     app = build_game_application()

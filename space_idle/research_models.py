@@ -128,6 +128,9 @@ class ResearchState:
     paused: bool = False
     prototype_operational_node_id: SpatialNodeId | None = None
     demonstration_operational_node_id: SpatialNodeId | None = None
+    stage_started_day: int = 0
 
     def __post_init__(self) -> None:
         self.priority = ActivityPriority(self.priority)
+        if self.stage_started_day < 0:
+            raise ValueError("research stage start day must be non-negative")

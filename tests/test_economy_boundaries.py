@@ -97,11 +97,11 @@ def test_extraction_stops_when_output_storage_service_is_full():
     sim = app._simulation
     decision = sim.tick_decision_projection()
     power = decision.allocations.power_by_location[EARTH]
-    services = decision.allocations.services
+    execution = decision.allocations.execution
     initial = next(
         row
         for row in sim.extraction.snapshots(
-            EARTH, sim.facilities, sim.inventory, power, sim.day, services
+            EARTH, sim.facilities, sim.inventory, power, sim.day, execution
         )
         if row.output_t_per_day > 0
     )
@@ -111,10 +111,13 @@ def test_extraction_stops_when_output_storage_service_is_full():
 
     sim.inventory.add(EARTH, spec.output_resource_id, free)
     before = sim.inventory.amount(EARTH, spec.output_resource_id)
+    decision = sim.tick_decision_projection()
+    power = decision.allocations.power_by_location[EARTH]
+    execution = decision.allocations.execution
     blocked = next(
         row
         for row in sim.extraction.snapshots(
-            EARTH, sim.facilities, sim.inventory, power, sim.day, services
+            EARTH, sim.facilities, sim.inventory, power, sim.day, execution
         )
         if row.facility_id == initial.facility_id
     )
@@ -122,6 +125,6 @@ def test_extraction_stops_when_output_storage_service_is_full():
     assert any(reason.startswith("storage:") for reason in blocked.limiting_factors)
 
     sim.extraction.advance_day(
-        EARTH, sim.facilities, sim.inventory, power, sim.day, services
+        EARTH, sim.facilities, sim.inventory, power, sim.day, execution
     )
     assert sim.inventory.amount(EARTH, spec.output_resource_id) == before

@@ -1,144 +1,137 @@
 from __future__ import annotations
 
+from .execution_requirements import ExecutionAllocationPlan
 from .power import PowerSnapshot
-from .resource_claim import ResourceAllocationPlan
-from .service_capacity import ServiceCapacityAllocationPlan
 from .shared import DefinitionId, SpatialNodeId
 from .research_models import ResearchStage
 
 
 class ResearchExecutionMixin:
-    def service_allocation_totals(
+    def execution_allocation_totals(
         self,
         research_id: DefinitionId,
         stage: ResearchStage,
-        service_allocations: ServiceCapacityAllocationPlan,
+        execution_allocations: ExecutionAllocationPlan,
     ) -> tuple[float, float]:
         owner_id = self._project_owner_id(research_id)
-        request_ids = {
-            request.id
-            for request in service_allocations.requests
-            if request.owner_kind == "research_project"
-            and request.owner_id == owner_id
-            and request.purpose == stage.value
+        bundle_ids = {
+            bundle.id
+            for bundle in execution_allocations.bundles
+            if bundle.owner_kind == "research_project"
+            and bundle.owner_id == owner_id
+            and bundle.purpose == stage.value
         }
         requested = sum(
-            request.requested_rate
-            for request in service_allocations.requests
-            if request.id in request_ids
+            bundle.requested_execution
+            for bundle in execution_allocations.bundles
+            if bundle.id in bundle_ids
         )
         allocated = sum(
-            row.allocated_rate
-            for row in service_allocations.allocations
-            if row.request_id in request_ids
+            row.allocated_execution
+            for row in execution_allocations.allocations
+            if row.bundle_id in bundle_ids
         )
         return requested, allocated
 
-    def _stage_services_fulfilled(
-        self,
-        research_id: DefinitionId,
-        stage: ResearchStage,
-        service_allocations: ServiceCapacityAllocationPlan,
-    ) -> bool:
-        state = self.active[research_id]
-        definition = self.definitions[research_id]
-        spec = (
-            definition.prototype
-            if stage is ResearchStage.PROTOTYPE
-            else definition.demonstration
-        )
-        if spec is None:
-            return False
-        location_id = (
-            state.prototype_operational_node_id
-            if stage is ResearchStage.PROTOTYPE
-            else state.demonstration_operational_node_id
-        )
-        if location_id is None:
-            return False
-        for requirement in spec.site_requirements.service_capacity_requirements:
-            request_id = self._stage_service_request_id(
-                research_id, stage, requirement.service_type, location_id
-            )
-            try:
-                allocated = service_allocations.allocated(request_id)
-            except KeyError:
-                allocated = 0.0
-            if allocated + 1e-9 < requirement.minimum_rate:
-                return False
-        return True
-
     def point_allocation_projection(
-        self, service_allocations: ServiceCapacityAllocationPlan
+        self, execution_allocations: ExecutionAllocationPlan
     ) -> tuple[dict[DefinitionId, float], dict[DefinitionId, float]]:
-        requests: dict[DefinitionId, float] = {}
+        requested: dict[DefinitionId, float] = {}
+        allocated: dict[DefinitionId, float] = {}
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
             if state.paused or state.stage is not ResearchStage.THEORY:
                 continue
-            _requested_execution, allocated_execution = self.service_allocation_totals(
-                research_id, state.stage, service_allocations
+            req, alloc = self.execution_allocation_totals(
+                research_id, ResearchStage.THEORY, execution_allocations
             )
-            remaining = max(
-                0.0,
-                self.definitions[research_id].research_point_cost - state.stage_progress,
-            )
-            requests[research_id] = min(remaining, max(0.0, allocated_execution))
+            requested[research_id] = req
+            allocated[research_id] = alloc
+        return requested, allocated
 
-        available = max(0.0, self.stored_points)
-        allocated: dict[DefinitionId, float] = {rid: 0.0 for rid in requests}
-        by_priority: dict[int, list[DefinitionId]] = {}
-        for research_id in requests:
-            by_priority.setdefault(self.active[research_id].priority, []).append(research_id)
-        for priority in sorted(by_priority, reverse=True):
-            ids = sorted(by_priority[priority], key=str)
-            total_need = sum(requests[rid] for rid in ids)
-            if available <= 1e-12 or total_need <= 1e-12:
+    def finalize_reservation_acquisition(
+        self, execution_allocations: ExecutionAllocationPlan
+    ) -> None:
+        for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
+            if (
+                state.paused
+                or state.stage is not ResearchStage.PROTOTYPE
+                or state.prototype_operational_node_id is None
+            ):
                 continue
-            take = min(available, total_need)
-            for research_id in ids:
-                if requests[research_id] > 1e-12:
-                    allocated[research_id] = take * requests[research_id] / total_need
-            available -= take
-        return requests, allocated
+            prototype = self.definitions[research_id].prototype
+            if prototype is None:
+                raise RuntimeError(
+                    f"prototype state has no prototype definition: {research_id}"
+                )
+            owner_id = self._prototype_reservation_owner_id(research_id)
+            location_id = state.prototype_operational_node_id
+            for resource_id, required in sorted(
+                prototype.resources.items(), key=lambda row: str(row[0])
+            ):
+                missing = max(
+                    0.0,
+                    required
+                    - self.prototype_reserved_t(research_id, location_id, resource_id),
+                )
+                if missing <= 1e-12:
+                    continue
+                requirement_id = self.prototype_reservation_requirement_id(
+                    research_id, resource_id
+                )
+                try:
+                    allocated = execution_allocations.allocated(requirement_id)
+                except KeyError:
+                    allocated = 0.0
+                amount = min(missing, max(0.0, allocated))
+                if amount <= 1e-12:
+                    continue
+                reserved = self.inventory.reserve(
+                    owner_id, location_id, resource_id, amount
+                )
+                if reserved + 1e-9 < amount:
+                    raise RuntimeError(
+                        "allocated prototype reservation stock changed before execution"
+                    )
 
-    def _allocate_theory_points(
-        self, service_allocations: ServiceCapacityAllocationPlan
-    ) -> dict[DefinitionId, float]:
+    def _refresh_allocation_projections(
+        self, execution_allocations: ExecutionAllocationPlan
+    ) -> None:
         self.last_execution_requests = {}
         self.last_execution_allocations = {}
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
             if state.paused:
                 continue
-            requested, allocated = self.service_allocation_totals(
-                research_id, state.stage, service_allocations
+            requested, allocated = self.execution_allocation_totals(
+                research_id, state.stage, execution_allocations
             )
             self.last_execution_requests[research_id] = requested
             self.last_execution_allocations[research_id] = allocated
-
-        requests, allocated = self.point_allocation_projection(service_allocations)
-        self.last_point_requests = requests
-        self.last_point_allocations = allocated
-        return allocated
+        self.last_point_requests, self.last_point_allocations = (
+            self.point_allocation_projection(execution_allocations)
+        )
 
     def advance_day(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
-        resource_allocations: ResourceAllocationPlan,
-        service_allocations: ServiceCapacityAllocationPlan,
+        execution_allocations: ExecutionAllocationPlan,
         day: int = 0,
     ) -> None:
-        for state in list(self.active.values()):
-            self._stage_prototype_allocations(state, resource_allocations)
+        # Reservation acquisition is an execution result, but newly acquired
+        # material cannot make a prototype executable retroactively in this tick:
+        # prototype execution bundles were created from the start-of-tick snapshot.
+        self.finalize_reservation_acquisition(execution_allocations)
+        self._refresh_allocation_projections(execution_allocations)
 
-        point_allocations = self._allocate_theory_points(service_allocations)
-        consumed = sum(point_allocations.values())
-        if consumed > self.stored_points + 1e-8:
-            raise RuntimeError("research point allocation exceeded stored pool")
-        self.stored_points = max(0.0, self.stored_points - consumed)
-        for research_id, amount in point_allocations.items():
+        theory_consumed = 0.0
+        for research_id, amount in self.last_point_allocations.items():
             state = self.active.get(research_id)
-            if state is not None and state.stage is ResearchStage.THEORY:
-                state.stage_progress += amount
+            if state is None or state.stage is not ResearchStage.THEORY:
+                continue
+            theory_consumed += amount
+            state.stage_progress += amount
+        if theory_consumed > self.stored_points + 1e-8:
+            raise RuntimeError("research point allocation exceeded stored pool")
+        self.stored_points = max(0.0, self.stored_points - theory_consumed)
 
         for research_id, state in list(self.active.items()):
             if state.paused:
@@ -152,13 +145,21 @@ class ResearchExecutionMixin:
                 if self.prototype_failures(research_id, location_id, day, snapshot):
                     continue
                 resources_ready = all(
-                    self.prototype_staged_t(research_id, location_id, resource_id)
-                    + 1e-9 >= required
+                    self.prototype_reserved_t(research_id, location_id, resource_id)
+                    + 1e-9
+                    >= required
                     for resource_id, required in prototype.resources.items()
                 )
-                if resources_ready and self._stage_services_fulfilled(
-                    research_id, ResearchStage.PROTOTYPE, service_allocations
-                ):
+                if not resources_ready:
+                    continue
+                bundle_id = self._stage_bundle_id(
+                    research_id, ResearchStage.PROTOTYPE, location_id
+                )
+                try:
+                    allocated = execution_allocations.allocated(bundle_id)
+                except KeyError:
+                    allocated = 0.0
+                if allocated + 1e-9 >= 1.0:
                     state.stage_progress = 1.0
             elif state.stage is ResearchStage.DEMONSTRATION:
                 location_id = state.demonstration_operational_node_id
@@ -168,19 +169,24 @@ class ResearchExecutionMixin:
                 snapshot = power_by_location[location_id]
                 if self.demonstration_failures(research_id, location_id, day, snapshot):
                     continue
-                if self._stage_services_fulfilled(
-                    research_id, ResearchStage.DEMONSTRATION, service_allocations
-                ):
+                bundle_id = self._stage_bundle_id(
+                    research_id, ResearchStage.DEMONSTRATION, location_id
+                )
+                try:
+                    allocated = execution_allocations.allocated(bundle_id)
+                except KeyError:
+                    allocated = 0.0
+                if allocated + 1e-9 >= 1.0:
                     state.stage_progress += 1.0
 
-        # Generation is an execution output.  It is stored only after Theory has
-        # consumed the start-of-tick RP pool, so it cannot feed the same tick.
+        # Generation is an execution output. It is stored only after Theory has
+        # consumed the start-of-tick pool, so it cannot feed the same tick.
         generated = self.generation_rate(power_by_location, day)
         self.store_generated_points(
             generated, power_by_location=power_by_location, day=day
         )
 
-    def settle_completions(self) -> None:
+    def settle_completions(self, day: int) -> None:
         """Advance completed stages only at the tick state-transition boundary."""
         for research_id in sorted(tuple(self.active), key=str):
             while research_id in self.active:
@@ -189,16 +195,21 @@ class ResearchExecutionMixin:
                 if state.paused:
                     break
                 if state.stage is ResearchStage.THEORY:
-                    complete = state.stage_progress + 1e-9 >= definition.research_point_cost
+                    complete = (
+                        state.stage_progress + 1e-9 >= definition.research_point_cost
+                    )
                 elif state.stage is ResearchStage.PROTOTYPE:
                     complete = state.stage_progress + 1e-9 >= 1.0
                 elif state.stage is ResearchStage.DEMONSTRATION:
                     spec = definition.demonstration
-                    complete = spec is not None and state.stage_progress + 1e-9 >= spec.days
+                    complete = (
+                        spec is not None
+                        and state.stage_progress + 1e-9 >= spec.days
+                    )
                 elif state.stage is ResearchStage.OPERATIONAL_EXPERIENCE:
                     complete = not self.operational_experience_blockers(research_id)
                 else:
                     complete = False
                 if not complete:
                     break
-                self._advance_stage(research_id)
+                self._advance_stage(research_id, day)

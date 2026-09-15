@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from ..execution_requirements import (
+    ExecutionAllocationPlan,
+    ExecutionRequirementBundle,
+    ServiceCapacityRequirement,
+)
 from ..power import PowerSnapshot
-from ..service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
-from ..shared import EntityId
-from ..shared import SpatialNodeId
+from ..shared import EntityId, SpatialNodeId
 from .models import (
     CONSTRUCTION_SERVICE_TYPE, ConstructionProject, FacilityUpgradeTarget, NewFacilityTarget,
     ProjectStatus, SurfaceCellDevelopmentTarget,
@@ -52,59 +55,26 @@ class ConstructionExecutionMixin:
         return True
 
     @staticmethod
-    def construction_service_request_id(project_id) -> EntityId:
-        return EntityId(f"service.construction:{project_id}")
+    def construction_execution_bundle_id(project_id) -> EntityId:
+        return EntityId(f"execution.construction:{project_id}")
 
-    @staticmethod
-    def surface_development_service_request_id(project_id) -> EntityId:
-        return EntityId(f"service.surface_distribution.development:{project_id}")
-
-    def surface_infrastructure_service_requests(
-        self, day: int = 0
-    ) -> tuple[ServiceCapacityRequest, ...]:
+    def _surface_development_incremental_service(self, project: ConstructionProject) -> float:
         service = self.surface_infrastructure
-        if service is None:
-            return ()
-        requests: list[ServiceCapacityRequest] = []
-        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
-            if (
-                project.paused
-                or project.status not in {ProjectStatus.READY, ProjectStatus.BUILDING}
-                or not isinstance(project.target, SurfaceCellDevelopmentTarget)
-                or not self._target_ready_for_execution(project)
-            ):
-                continue
-            location = service.graph.locations[project.operational_node_id]
-            cells = set(location.developed_cell_ids)
-            cells.add(project.target.cell_id)
-            prospective = sum(
-                row.demand
-                for row in service.load_sources_for_cells(
-                    project.operational_node_id, cells
-                )
-            )
-            incremental = max(0.0, prospective - service.demand(project.operational_node_id))
-            if incremental <= 1e-12:
-                continue
-            requests.append(
-                ServiceCapacityRequest(
-                    self.surface_development_service_request_id(project.id),
-                    project.operational_node_id,
-                    service.service_type,
-                    incremental,
-                    project.priority,
-                    "surface_development",
-                    EntityId(str(project.id)),
-                    "territory_expansion",
-                )
-            )
-        return tuple(requests)
+        if service is None or not isinstance(project.target, SurfaceCellDevelopmentTarget):
+            return 0.0
+        location = service.graph.locations[project.operational_node_id]
+        cells = set(location.developed_cell_ids)
+        cells.add(project.target.cell_id)
+        prospective = sum(
+            row.demand
+            for row in service.load_sources_for_cells(project.operational_node_id, cells)
+        )
+        return max(0.0, prospective - service.demand(project.operational_node_id))
 
-    def construction_service_requests(
-        self,
-        day: int = 0,
-    ) -> tuple[ServiceCapacityRequest, ...]:
-        requests: list[ServiceCapacityRequest] = []
+    def execution_requirement_bundles(
+        self, day: int = 0
+    ) -> tuple[ExecutionRequirementBundle, ...]:
+        rows: list[ExecutionRequirementBundle] = []
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
             if (
                 project.paused
@@ -117,30 +87,33 @@ class ConstructionExecutionMixin:
                 continue
             if self.project_site_failures(project, day, None):
                 continue
-            remaining_work = max(
-                0.0, recipe.construction_work - project.construction_done
-            )
+            remaining_work = max(0.0, recipe.construction_work - project.construction_done)
             if remaining_work <= 1e-12:
                 continue
-            requests.append(
-                ServiceCapacityRequest(
-                    self.construction_service_request_id(project.id),
-                    project.operational_node_id,
-                    CONSTRUCTION_SERVICE_TYPE,
-                    remaining_work,
-                    project.priority,
-                    "construction",
-                    EntityId(str(project.id)),
-                    "construction_work",
+            requirements = [
+                ServiceCapacityRequirement(CONSTRUCTION_SERVICE_TYPE, remaining_work)
+            ]
+            incremental = self._surface_development_incremental_service(project)
+            if incremental > 1e-12 and self.surface_infrastructure is not None:
+                requirements.append(
+                    ServiceCapacityRequirement(self.surface_infrastructure.service_type, incremental)
                 )
-            )
-
-        return tuple(requests)
+            rows.append(ExecutionRequirementBundle(
+                id=self.construction_execution_bundle_id(project.id),
+                owner_kind="construction",
+                owner_id=EntityId(str(project.id)),
+                purpose="construction_work",
+                operational_node_id=project.operational_node_id,
+                requested_execution=1.0,
+                priority=project.priority,
+                requirements=tuple(requirements),
+            ))
+        return tuple(rows)
 
     def advance_construction(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
-        service_allocations: ServiceCapacityAllocationPlan,
+        execution_allocations: ExecutionAllocationPlan,
         day: int = 0,
     ) -> None:
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
@@ -156,21 +129,16 @@ class ConstructionExecutionMixin:
             power = power_by_location[project.operational_node_id]
             if self.project_site_failures(project, day, power):
                 continue
-            fulfillment = self.project_construction_fulfillment(project, power, service_allocations, day)
-            if fulfillment <= 1e-12:
-                continue
             try:
-                allocated_capacity = service_allocations.allocated(
-                    self.construction_service_request_id(project.id)
+                scale = execution_allocations.allocated(
+                    self.construction_execution_bundle_id(project.id)
                 )
             except KeyError:
-                allocated_capacity = 0.0
-            if allocated_capacity <= 1e-12:
+                scale = 0.0
+            if scale <= 1e-12:
                 continue
-            remaining_work = max(
-                0.0, recipe.construction_work - project.construction_done
-            )
-            work = min(remaining_work, allocated_capacity * fulfillment)
+            remaining_work = max(0.0, recipe.construction_work - project.construction_done)
+            work = min(remaining_work, remaining_work * min(1.0, scale))
             if work <= 1e-12:
                 continue
             self._commit_materials(project)
@@ -184,7 +152,6 @@ class ConstructionExecutionMixin:
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
         day: int = 0,
     ) -> None:
-        """Apply completed project side effects in the state-transition phase."""
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
             if (
                 project.paused

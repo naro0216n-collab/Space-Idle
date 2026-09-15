@@ -66,7 +66,7 @@ def test_parallel_theory_same_priority_is_proportional_and_registration_order_in
     first_rows = {rid: _research_row(first, rid) for rid in (a, b)}
     second_rows = {rid: _research_row(second, rid) for rid in (a, b)}
     for rid in (a, b):
-        assert first_rows[rid].execution_allocated == 10.0
+        assert first_rows[rid].execution_allocated == 0.5
         assert first_rows[rid].rp_requested == 10.0
         assert first_rows[rid].rp_allocated == 0.5
         assert second_rows[rid].rp_allocated == first_rows[rid].rp_allocated
@@ -84,7 +84,7 @@ def test_parallel_theory_execution_capacity_is_shared_independently_of_start_ord
         assert first_rows[rid].execution_requested == 10.0
         assert first_rows[rid].execution_allocated == 0.5
         assert second_rows[rid].execution_allocated == first_rows[rid].execution_allocated
-        assert first_rows[rid].rp_requested == 0.5
+        assert first_rows[rid].rp_requested == 10.0
         assert first_rows[rid].rp_allocated == 0.5
 
 
@@ -100,8 +100,10 @@ def test_research_priority_controls_shared_execution_capacity_before_rp_consumpt
     low = _research_row(app, b)
     assert high.execution_allocated == 1.0
     assert low.execution_allocated == 0.0
-    assert high.rp_requested == 1.0
-    assert low.rp_requested == 0.0
+    assert high.rp_requested == 10.0
+    assert low.rp_requested == 10.0
+    assert high.rp_allocated == 1.0
+    assert low.rp_allocated == 0.0
 
 
 def test_research_priority_controls_shared_rp_allocation_without_project_order():

@@ -89,10 +89,9 @@ class ResearchProgressionProjectorMixin:
         generation = sim.research.generation_rate(power_by_location, sim.day)
         capacity = sim.research.storage_capacity(power_by_location, sim.day)
         providers = self._research_provider_rows(power_by_location)
-        service_allocations = decision.allocations.services
-        resource_allocations = decision.allocations.resources
+        execution_allocations = decision.allocations.execution
         point_requests, point_allocations = sim.research.point_allocation_projection(
-            service_allocations
+            execution_allocations
         )
         knowledge = tuple(
             ResearchKnowledgeRow(category, value)
@@ -125,7 +124,7 @@ class ResearchProgressionProjectorMixin:
                 definition.id, day=sim.day, power_by_location=power_by_location
             )
             current_blockers = current_blockers + sim.research.allocation_blockers(
-                definition.id, service_allocations, point_requests, point_allocations
+                definition.id, execution_allocations
             )
             priority = 3 if state is None else state.priority
             stage_progress = 0.0
@@ -134,8 +133,8 @@ class ResearchProgressionProjectorMixin:
             execution_allocated = 0.0
             if state is not None:
                 execution_requested, execution_allocated = (
-                    sim.research.service_allocation_totals(
-                        definition.id, state.stage, service_allocations
+                    sim.research.execution_allocation_totals(
+                        definition.id, state.stage, execution_allocations
                     )
                 )
                 if state.stage is ResearchStage.THEORY:
@@ -208,19 +207,21 @@ class ResearchProgressionProjectorMixin:
                 for resource_id, required in sorted(
                     definition.prototype.resources.items(), key=lambda row: str(row[0])
                 ):
-                    staged = 0.0
+                    reserved = 0.0
                     requested = 0.0
                     allocated = 0.0
                     pipeline = 0.0
                     if location_id is not None:
-                        staged = sim.research.prototype_staged_t(
+                        reserved = sim.research.prototype_reserved_t(
                             definition.id, location_id, resource_id
                         )
                         if state is not None and state.stage is ResearchStage.PROTOTYPE:
-                            requested = max(0.0, required - staged)
+                            requested = max(0.0, required - reserved)
                             try:
-                                allocated = resource_allocations.allocated(
-                                    sim.research.prototype_claim_id(definition.id, resource_id)
+                                allocated = execution_allocations.allocated(
+                                    sim.research.prototype_reservation_requirement_id(
+                                        definition.id, resource_id
+                                    )
                                 )
                             except KeyError:
                                 allocated = 0.0
@@ -230,7 +231,7 @@ class ResearchProgressionProjectorMixin:
                     prototype_resources.append(ResearchPrototypeResourceRow(
                         str(resource_id),
                         required,
-                        staged,
+                        reserved,
                         requested,
                         allocated,
                         pipeline,

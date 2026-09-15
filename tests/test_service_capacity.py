@@ -40,27 +40,6 @@ def test_higher_priority_service_request_is_allocated_before_lower_priority():
     assert plan.allocated(low.id) == pytest.approx(1.0)
 
 
-def test_industry_and_extraction_publish_requests_into_shared_service_plan():
-    from space_idle import build_game_application
-    from space_idle.content import base_ids as ids
-
-    sim = build_game_application()._simulation
-    plan = sim.service_capacity_allocation_projection()
-
-    industry = tuple(
-        request for request in plan.requests
-        if request.operational_node_id == ids.EARTH and request.owner_kind == "industry_process"
-    )
-    extraction = tuple(
-        request for request in plan.requests
-        if request.operational_node_id == ids.EARTH and request.owner_kind == "extraction"
-    )
-    assert industry
-    assert extraction
-    assert all(request.service_type.startswith("process:") for request in industry)
-    assert all(request.service_type.startswith("extraction:") for request in extraction)
-    assert all(plan.allocated(request.id) == pytest.approx(request.requested_rate) for request in industry + extraction)
-
 
 def test_service_capacity_requirement_is_distinct_from_capability_requirement():
     from space_idle import build_game_application

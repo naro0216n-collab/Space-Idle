@@ -3,11 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
+from .execution_requirements import (
+    ExecutionAllocationPlan,
+    ExecutionRequirementBundle,
+    ServiceCapacityRequirement,
+    StockOrPoolAdmissionRequirement,
+)
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .knowledge import DomainActivity
 from .power import PowerSnapshot
-from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .spatial import SpatialGraph
 from .surface_infrastructure import SurfaceInfrastructureService
@@ -18,25 +23,20 @@ from .exploration_models import ExtractionResourceSnapshot, ExtractionSpec, Extr
 class ExtractionService:
     SERVICE_TYPE_PREFIX = "extraction:"
 
+    specs: dict[DefinitionId, ExtractionSpec]
+    graph: SpatialGraph
+    surface_infrastructure: SurfaceInfrastructureService
+
     @classmethod
     def service_type(cls, resource_id: DefinitionId) -> str:
         return f"{cls.SERVICE_TYPE_PREFIX}{resource_id}"
 
     @staticmethod
-    def _service_request_id(facility_id: EntityId) -> EntityId:
-        return EntityId(f"service.extraction:{facility_id}")
-
-    specs: dict[DefinitionId, ExtractionSpec]
-    graph: SpatialGraph
-    surface_infrastructure: SurfaceInfrastructureService
+    def execution_bundle_id(facility_id: EntityId) -> EntityId:
+        return EntityId(f"execution.extraction:{facility_id}")
 
     @staticmethod
     def diminishing_response(installed_capacity: float, effective_opportunity: float) -> float:
-        """Generic soft-saturation response with no hard throughput ceiling.
-
-        Opportunity defines the capacity scale over which marginal productivity declines.
-        Throughput remains monotonic and unbounded as installed capacity grows.
-        """
         capacity = max(0.0, installed_capacity)
         opportunity = max(0.0, effective_opportunity)
         if capacity <= 1e-12 or opportunity <= 1e-12:
@@ -60,55 +60,28 @@ class ExtractionService:
             for cell_id in sorted(location.developed_cell_ids, key=str)
         )
 
-    def service_requests(
-        self,
-        location_id: SpatialNodeId,
-        facilities: FacilityBook,
-        day: int = 0,
-    ) -> tuple[ServiceCapacityRequest, ...]:
-        requests: list[ServiceCapacityRequest] = []
-        for facility in sorted(
-            facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)
-        ):
-            spec = self.specs.get(facility.definition_id)
-            if spec is None:
-                continue
-            nominal = spec.nominal_capacity_t_per_day * facility.level
-            if nominal <= 1e-12:
-                continue
-            requests.append(ServiceCapacityRequest(
-                self._service_request_id(facility.id),
-                location_id,
-                self.service_type(spec.resource_id),
-                nominal,
-                facility.activity_priority,
-                "extraction",
-                facility.id,
-                f"resource:{spec.resource_id}",
-            ))
-        return tuple(requests)
+    def surface_distribution_factor(
+        self, location_id: SpatialNodeId, resource_id: DefinitionId, fulfillment: float
+    ) -> float:
+        """Return the operational fraction enabled by intra-Location distribution.
 
-    def service_supply(
-        self,
-        location_id: SpatialNodeId,
-        facilities: FacilityBook,
-        power: PowerSnapshot,
-        day: int = 0,
-        *,
-        provider_factors: dict[EntityId, float] | None = None,
-    ) -> tuple[dict[tuple[SpatialNodeId, str], float], dict[tuple[SpatialNodeId, str], float]]:
-        spec_by, nominal_by, fulfillment_by, _reasons = self._facility_inputs(
-            location_id, facilities, power, day
+        Static Resource Opportunity remains geological state.  The core cell is
+        locally usable without remote distribution; only the developed-cell
+        opportunity beyond it depends on Surface Infrastructure.  This factor is
+        applied to extraction Service supply exactly once.
+        """
+        location = self.graph.locations.get(location_id)
+        if location is None:
+            return 1.0
+        total = self.static_opportunity(location_id, resource_id)
+        if total <= 1e-12:
+            return 1.0
+        core = self.graph.surface_cells[location.core_cell_id].resource_potential_by_resource.get(
+            resource_id, 0.0
         )
-        nominal: dict[tuple[SpatialNodeId, str], float] = {}
-        enabled: dict[tuple[SpatialNodeId, str], float] = {}
-        for facility_id, spec in spec_by.items():
-            key = (location_id, self.service_type(spec.resource_id))
-            amount = nominal_by.get(facility_id, 0.0)
-            nominal[key] = nominal.get(key, 0.0) + amount
-            upstream = (provider_factors or {}).get(facility_id, 1.0)
-            enabled[key] = enabled.get(key, 0.0) + amount * fulfillment_by.get(facility_id, 0.0) * upstream
-        return nominal, enabled
+        remote = max(0.0, total - core)
+        enabled = core + remote * max(0.0, min(1.0, fulfillment))
+        return max(0.0, min(1.0, enabled / total))
 
     def effective_opportunity(
         self,
@@ -117,19 +90,13 @@ class ExtractionService:
         facilities: FacilityBook,
         power: PowerSnapshot,
         day: int = 0,
-        service_allocations: ServiceCapacityAllocationPlan | None = None,
+        service_allocations=None,
     ) -> float:
-        location = self.graph.locations.get(location_id)
-        if location is None:
-            return 0.0
-        infrastructure = self.surface_infrastructure.snapshot(
-            location_id, facilities, power, day, allocation_plan=service_allocations
-        )
-        return math.fsum(
-            self.graph.surface_cells[cell_id].resource_potential_by_resource.get(resource_id, 0.0)
-            * (1.0 if cell_id == location.core_cell_id else infrastructure.fulfillment)
-            for cell_id in sorted(location.developed_cell_ids, key=str)
-        )
+        del facilities, power, day, service_allocations
+        # Surface-distribution fulfillment constrains extraction service supply.
+        # Opportunity itself is the physical/geological opportunity and must not
+        # apply the same infrastructure limitation a second time.
+        return self.static_opportunity(location_id, resource_id)
 
     def _facility_inputs(
         self,
@@ -137,16 +104,11 @@ class ExtractionService:
         facilities: FacilityBook,
         power: PowerSnapshot,
         day: int,
-    ) -> tuple[
-        dict[object, ExtractionSpec],
-        dict[object, float],
-        dict[object, float],
-        dict[object, list[str]],
-    ]:
-        spec_by: dict[object, ExtractionSpec] = {}
-        nominal_by: dict[object, float] = {}
-        fulfillment_by: dict[object, float] = {}
-        reasons: dict[object, list[str]] = {}
+    ):
+        spec_by = {}
+        nominal_by = {}
+        fulfillment_by = {}
+        reasons = {}
         for facility in sorted(facilities.all_at(location_id), key=lambda item: str(item.id)):
             spec = self.specs.get(facility.definition_id)
             if spec is None:
@@ -160,13 +122,7 @@ class ExtractionService:
                 reasons[facility.id] = [f"facility:{code}" for code, _ in failures]
                 continue
             power_factor = max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
-            maintenance_factor = max(
-                0.0,
-                min(
-                    1.0,
-                    power.maintenance_factor_by_facility.get(facility.id, 1.0),
-                ),
-            )
+            maintenance_factor = max(0.0, min(1.0, power.maintenance_factor_by_facility.get(facility.id, 1.0)))
             fulfillment_by[facility.id] = power_factor * maintenance_factor
             reasons[facility.id] = []
             if power_factor < 1.0 - 1e-9:
@@ -175,67 +131,133 @@ class ExtractionService:
                 reasons[facility.id].append("maintenance")
         return spec_by, nominal_by, fulfillment_by, reasons
 
+    def service_supply(
+        self,
+        location_id: SpatialNodeId,
+        facilities: FacilityBook,
+        power: PowerSnapshot,
+        day: int = 0,
+        *,
+        provider_factors: dict[EntityId, float] | None = None,
+    ):
+        spec_by, nominal_by, fulfillment_by, _ = self._facility_inputs(
+            location_id, facilities, power, day
+        )
+        nominal = {}
+        enabled = {}
+        for facility_id, spec in spec_by.items():
+            key = (location_id, self.service_type(spec.resource_id))
+            amount = nominal_by.get(facility_id, 0.0)
+            nominal[key] = nominal.get(key, 0.0) + amount
+            upstream = (provider_factors or {}).get(facility_id, 1.0)
+            enabled[key] = enabled.get(key, 0.0) + amount * fulfillment_by.get(facility_id, 0.0) * upstream
+        return nominal, enabled
+
+    def _full_output_by_facility(
+        self, location_id: SpatialNodeId, facilities: FacilityBook, day: int
+    ) -> dict[EntityId, float]:
+        active = [
+            facility
+            for facility in facilities.active_compatible_at(location_id, day)
+            if facility.definition_id in self.specs
+        ]
+        result: dict[EntityId, float] = {}
+        resources = sorted({self.specs[f.definition_id].resource_id for f in active}, key=str)
+        for resource_id in resources:
+            rows = [f for f in active if self.specs[f.definition_id].resource_id == resource_id]
+            installed = math.fsum(
+                self.specs[f.definition_id].nominal_capacity_t_per_day * f.level for f in rows
+            )
+            response = self.diminishing_response(
+                installed, self.static_opportunity(location_id, resource_id)
+            )
+            for facility in rows:
+                nominal = self.specs[facility.definition_id].nominal_capacity_t_per_day * facility.level
+                result[facility.id] = 0.0 if installed <= 1e-12 else response * nominal / installed
+        return result
+
+    def execution_requirement_bundles(
+        self,
+        location_id: SpatialNodeId,
+        facilities: FacilityBook,
+        inventory: InventoryBook,
+        day: int = 0,
+    ) -> tuple[ExecutionRequirementBundle, ...]:
+        full_output = self._full_output_by_facility(location_id, facilities, day)
+        rows = []
+        for facility in sorted(facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)):
+            spec = self.specs.get(facility.definition_id)
+            if spec is None:
+                continue
+            nominal = spec.nominal_capacity_t_per_day * facility.level
+            if nominal <= 1e-12:
+                continue
+            requirements = [ServiceCapacityRequirement(self.service_type(spec.resource_id), nominal)]
+            output = full_output.get(facility.id, 0.0)
+            storage_class = inventory.resource_storage_class.get(spec.output_resource_id)
+            if storage_class is not None and output > 1e-12:
+                requirements.append(StockOrPoolAdmissionRequirement(storage_class, output))
+            rows.append(ExecutionRequirementBundle(
+                id=self.execution_bundle_id(facility.id),
+                owner_kind="extraction",
+                owner_id=facility.id,
+                purpose=f"resource:{spec.resource_id}",
+                operational_node_id=location_id,
+                requested_execution=1.0,
+                priority=facility.activity_priority,
+                requirements=tuple(requirements),
+            ))
+        return tuple(rows)
+
     def resource_snapshots(
         self,
         location_id: SpatialNodeId,
         facilities: FacilityBook,
         power: PowerSnapshot,
         day: int = 0,
-        service_allocations: ServiceCapacityAllocationPlan | None = None,
+        execution_allocations: ExecutionAllocationPlan | None = None,
     ) -> tuple[ExtractionResourceSnapshot, ...]:
-        spec_by, nominal_by, fulfillment_by, _reasons = self._facility_inputs(
-            location_id, facilities, power, day
-        )
-        if service_allocations is None:
-            raise ValueError("extraction planning requires the shared ServiceCapacityAllocationPlan")
-        shared_service_allocations = service_allocations
-        allocation_plan = service_allocations
-        resource_ids = {
-            spec.resource_id for spec in spec_by.values()
-        }
+        if execution_allocations is None:
+            raise ValueError("extraction planning requires the shared ExecutionAllocationPlan")
+        full_output = self._full_output_by_facility(location_id, facilities, day)
+        resource_ids = set()
         location = self.graph.locations.get(location_id)
         if location is not None:
             for cell_id in location.developed_cell_ids:
-                resource_ids.update(
-                    self.graph.surface_cells[cell_id].resource_potential_by_resource
-                )
-        rows: list[ExtractionResourceSnapshot] = []
+                resource_ids.update(self.graph.surface_cells[cell_id].resource_potential_by_resource)
+        for facility in facilities.all_at(location_id):
+            spec = self.specs.get(facility.definition_id)
+            if spec is not None:
+                resource_ids.add(spec.resource_id)
+        rows = []
         for resource_id in sorted(resource_ids, key=str):
-            facility_ids = [
-                facility_id
-                for facility_id, spec in spec_by.items()
-                if spec.resource_id == resource_id
+            active = [
+                f for f in facilities.active_compatible_at(location_id, day)
+                if (spec := self.specs.get(f.definition_id)) is not None and spec.resource_id == resource_id
             ]
-            active_ids = [
-                facility_id
-                for facility_id in facility_ids
-                if not any(reason.startswith("facility:") for reason in _reasons.get(facility_id, ()))
-            ]
-            ordered_active_ids = sorted(active_ids, key=str)
-            installed = math.fsum(nominal_by[facility_id] for facility_id in ordered_active_ids)
-            allocated = math.fsum(
-                allocation_plan.allocated(self._service_request_id(facility_id))
-                for facility_id in ordered_active_ids
-            )
-            operational = 0.0 if installed <= 1e-12 else allocated / installed
-            opportunity = self.effective_opportunity(
-                location_id, resource_id, facilities, power, day,
-                shared_service_allocations,
-            )
+            installed = math.fsum(self.specs[f.definition_id].nominal_capacity_t_per_day * f.level for f in active)
+            output = 0.0
+            weighted_scale = 0.0
+            for facility in active:
+                try:
+                    scale = execution_allocations.fulfillment(self.execution_bundle_id(facility.id))
+                except KeyError:
+                    scale = 0.0
+                nominal = self.specs[facility.definition_id].nominal_capacity_t_per_day * facility.level
+                weighted_scale += nominal * scale
+                output += full_output.get(facility.id, 0.0) * scale
+            operational = 0.0 if installed <= 1e-12 else weighted_scale / installed
+            opportunity = self.static_opportunity(location_id, resource_id)
             response = self.diminishing_response(installed, opportunity)
-            output = response * operational
-            diminishing_efficiency = 0.0 if installed <= 1e-12 else response / installed
-            rows.append(
-                ExtractionResourceSnapshot(
-                    resource_id,
-                    opportunity,
-                    installed,
-                    operational,
-                    diminishing_efficiency,
-                    self.marginal_response(installed, opportunity) * operational,
-                    output,
-                )
-            )
+            rows.append(ExtractionResourceSnapshot(
+                resource_id,
+                opportunity,
+                installed,
+                operational,
+                0.0 if installed <= 1e-12 else response / installed,
+                self.marginal_response(installed, opportunity) * operational,
+                output,
+            ))
         return tuple(rows)
 
     def snapshots(
@@ -245,118 +267,49 @@ class ExtractionService:
         inventory: InventoryBook,
         power: PowerSnapshot,
         day: int = 0,
-        service_allocations: ServiceCapacityAllocationPlan | None = None,
+        execution_allocations: ExecutionAllocationPlan | None = None,
     ) -> tuple[ExtractionSnapshot, ...]:
-        spec_by, nominal_by, fulfillment_by, reasons = self._facility_inputs(
-            location_id, facilities, power, day
-        )
-        if service_allocations is None:
-            raise ValueError("extraction planning requires the shared ServiceCapacityAllocationPlan")
-        allocation_plan = service_allocations
+        del inventory
+        if execution_allocations is None:
+            raise ValueError("extraction planning requires the shared ExecutionAllocationPlan")
+        full_output = self._full_output_by_facility(location_id, facilities, day)
         resource_summary = {
             row.resource_id: row
-            for row in self.resource_snapshots(
-                location_id, facilities, power, day, service_allocations
-            )
+            for row in self.resource_snapshots(location_id, facilities, power, day, execution_allocations)
         }
-        infrastructure = self.surface_infrastructure.snapshot(
-            location_id, facilities, power, day, allocation_plan=service_allocations
-        ) if location_id in self.graph.locations else None
-
-        pre_storage: dict[object, float] = {}
-        for resource_id, summary in resource_summary.items():
-            ids = [
-                facility_id
-                for facility_id, spec in spec_by.items()
-                if spec.resource_id == resource_id
-                and not any(reason.startswith("facility:") for reason in reasons.get(facility_id, ()))
-            ]
-            ordered_ids = sorted(ids, key=str)
-            allocated_by_id = {
-                facility_id: allocation_plan.allocated(
-                    self._service_request_id(facility_id)
-                )
-                for facility_id in ordered_ids
-            }
-            weighted = math.fsum(allocated_by_id.values())
-            if summary.effective_opportunity <= 1e-12 and any(
-                nominal_by[facility_id] > 1e-12 for facility_id in ids
-            ):
-                for facility_id in ordered_ids:
-                    reasons.setdefault(facility_id, []).append(f"resource_opportunity:{resource_id}")
-            for facility_id in ordered_ids:
-                contribution = allocated_by_id[facility_id]
-                pre_storage[facility_id] = (
-                    0.0 if weighted <= 1e-12 else summary.output_t_per_day * contribution / weighted
-                )
-
-        storage_classes = sorted({
-            storage_class
-            for facility_id, amount in pre_storage.items()
-            if amount > 1e-12
-            for storage_class in (inventory.resource_storage_class.get(spec_by[facility_id].output_resource_id),)
-            if storage_class is not None
-        })
-        demand_by_class = {
-            storage_class: math.fsum(
-                amount
-                for facility_id, amount in pre_storage.items()
-                if amount > 1e-12
-                and inventory.resource_storage_class.get(spec_by[facility_id].output_resource_id) == storage_class
-            )
-            for storage_class in storage_classes
-        }
-        class_ratio: dict[str, float] = {}
-        for storage_class in storage_classes:
-            demand = demand_by_class[storage_class]
-            capacity = inventory.usable_storage_capacity_t.get((location_id, storage_class), 0.0)
-            free = max(0.0, capacity - inventory.stored_in_class(location_id, storage_class))
-            class_ratio[storage_class] = min(1.0, free / demand) if demand > 1e-12 else 1.0
-
-        rows: list[ExtractionSnapshot] = []
+        rows = []
         for facility in sorted(facilities.all_at(location_id), key=lambda item: str(item.id)):
             spec = self.specs.get(facility.definition_id)
             if spec is None:
                 continue
-            nominal = nominal_by.get(facility.id, spec.nominal_capacity_t_per_day * facility.level)
-            amount = pre_storage.get(facility.id, 0.0)
-            storage_class = inventory.resource_storage_class.get(spec.output_resource_id)
-            storage_ratio = 1.0 if storage_class is None else class_ratio.get(storage_class, 1.0)
-            output = amount * storage_ratio
-            if storage_ratio < 1.0 - 1e-9:
-                reasons.setdefault(facility.id, []).append(f"storage:{storage_class}")
+            nominal = spec.nominal_capacity_t_per_day * facility.level
+            reasons = [f"facility:{code}" for code, _ in facilities.activation_failures(facility, day)]
             try:
-                service_allocation = allocation_plan.allocation(
-                    self._service_request_id(facility.id)
-                )
+                allocation = execution_allocations.allocation(self.execution_bundle_id(facility.id))
+                scale = allocation.fulfillment
+                for key in allocation.limiting_constraints:
+                    if key.kind == "service":
+                        reasons.append("service_capacity")
+                    elif key.kind == "admission":
+                        reasons.append(f"storage:{key.name}")
             except KeyError:
-                service_allocation = None
-            if service_allocation is not None and service_allocation.unmet_rate > 1e-9:
-                reasons.setdefault(facility.id, []).append("service_capacity")
+                scale = 0.0
             summary = resource_summary.get(spec.resource_id)
-            opportunity = 0.0 if summary is None else summary.effective_opportunity
-            marginal = 0.0 if summary is None else summary.marginal_efficiency
-            if (
-                infrastructure is not None
-                and infrastructure.fulfillment < 1.0 - 1e-9
-                and self.static_opportunity(location_id, spec.resource_id) > opportunity + 1e-12
-            ):
-                reasons.setdefault(facility.id, []).append("surface_infrastructure")
-            scale = 0.0 if nominal <= 1e-12 else max(0.0, min(1.0, output / nominal))
-            rows.append(
-                ExtractionSnapshot(
-                    facility.id,
-                    facility.definition_id,
-                    spec.resource_id,
-                    spec.output_resource_id,
-                    nominal,
-                    opportunity,
-                    marginal,
-                    scale,
-                    output,
-                    tuple(dict.fromkeys(reasons.get(facility.id, []))),
-                )
-            )
+            opportunity = self.static_opportunity(location_id, spec.resource_id)
+            if opportunity <= 1e-12 and nominal > 1e-12:
+                reasons.append(f"resource_opportunity:{spec.resource_id}")
+            rows.append(ExtractionSnapshot(
+                facility.id,
+                facility.definition_id,
+                spec.resource_id,
+                spec.output_resource_id,
+                nominal,
+                opportunity,
+                0.0 if summary is None else summary.marginal_efficiency,
+                scale,
+                full_output.get(facility.id, 0.0) * scale,
+                tuple(dict.fromkeys(reasons)),
+            ))
         return tuple(rows)
 
     def advance_day(
@@ -366,19 +319,14 @@ class ExtractionService:
         inventory: InventoryBook,
         power: PowerSnapshot,
         day: int = 0,
-        service_allocations: ServiceCapacityAllocationPlan | None = None,
+        execution_allocations: ExecutionAllocationPlan | None = None,
     ) -> tuple[DomainActivity, ...]:
         snapshots = self.snapshots(
-            location_id, facilities, inventory, power, day, service_allocations
+            location_id, facilities, inventory, power, day, execution_allocations
         )
-        resource_ids = sorted(
-            {snapshot.output_resource_id for snapshot in snapshots},
-            key=str,
-        )
-        for resource_id in resource_ids:
+        for resource_id in sorted({snapshot.output_resource_id for snapshot in snapshots}, key=str):
             output = math.fsum(
-                snapshot.output_t_per_day
-                for snapshot in snapshots
+                snapshot.output_t_per_day for snapshot in snapshots
                 if snapshot.output_resource_id == resource_id
             )
             if output > 1e-12:
@@ -388,6 +336,5 @@ class ExtractionService:
                 "extraction", snapshot.output_t_per_day, "extraction_facility",
                 snapshot.facility_id, location_id
             )
-            for snapshot in snapshots
-            if snapshot.output_t_per_day > 1e-12
+            for snapshot in snapshots if snapshot.output_t_per_day > 1e-12
         )

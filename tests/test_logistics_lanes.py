@@ -271,11 +271,12 @@ def test_selected_research_prototype_site_declares_material_demand_until_stock_a
     )
     assert demand.owner_kind == "research"
     assert demand.destination_id == EARTH
-    claim = next(
-        item for item in sim.research.resource_claims(sim.day)
+    reservation = next(
+        item for item in sim.research.reservation_acquisition_requirements(sim.day)
         if item.resource_id == PRECISION_ELECTRONICS
     )
-    assert claim.requested_amount > 0
+    assert reservation.requested_amount > 0
+    assert reservation.operational_node_id == EARTH
 
 
 def test_available_capacity_uses_shared_propellant_allocation_without_changing_required_units():

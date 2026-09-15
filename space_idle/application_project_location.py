@@ -126,6 +126,7 @@ class LocationProjectorMixin:
         research_power = decision.allocations.power_by_location
         service_allocations = decision.allocations.services
         resource_allocations = decision.allocations.resources
+        execution_allocations = decision.allocations.execution
 
         facilities = []
         for facility in sorted(
@@ -235,8 +236,8 @@ class LocationProjectorMixin:
         snapshots = {
             snap.facility_id: snap
             for snap in sim.industry.snapshots(
-                location_id, sim.facilities, sim.inventory, power, sim.day,
-                resource_allocations, service_allocations,
+                location_id, sim.facilities, sim.inventory, sim.day,
+                execution_allocations,
             )
         }
         for facility in sorted(sim.facilities.all_at(location_id), key=lambda row: str(row.id)):
@@ -297,7 +298,7 @@ class LocationProjectorMixin:
         if sim.extraction is not None:
             for snap in sim.extraction.snapshots(
                 location_id, sim.facilities, sim.inventory, power, sim.day,
-                service_allocations,
+                execution_allocations,
             ):
                 definition = sim.facilities.definitions[snap.facility_def_id]
                 extraction.append(
@@ -329,7 +330,7 @@ class LocationProjectorMixin:
                     row.output_t_per_day,
                 )
                 for row in sim.extraction.resource_snapshots(
-                    location_id, sim.facilities, power, sim.day, service_allocations
+                    location_id, sim.facilities, power, sim.day, execution_allocations
                 )
             )
 

@@ -118,34 +118,34 @@ def validate_runtime(sim: Any) -> None:
                 _require(reservation.operational_node_id == definition.origin_id, f"scientific exploration reservation location mismatch: {definition_id}")
                 _require(reservation.units == state.reserved_units, f"scientific exploration reservation unit mismatch: {definition_id}")
         for resource_id, required_t in definition.consumable_resources:
-            staged = service._staged_input_t(definition_id, resource_id)
+            reserved = service._reserved_input_t(definition_id, resource_id)
             if (
                 state.phase is ScientificExplorationPhase.ACTIVE
                 and state.vehicle_definition_id is not None
                 and not state.inputs_consumed
             ):
                 _require(
-                    -1e-9 <= staged <= required_t + 1e-9,
-                    f"scientific exploration staged input outside requirement: {definition_id}/{resource_id}",
+                    -1e-9 <= reserved <= required_t + 1e-9,
+                    f"scientific exploration reserved input outside requirement: {definition_id}/{resource_id}",
                 )
             else:
                 _require(
-                    staged <= 1e-9,
-                    f"scientific exploration retains staged input outside procurement: {definition_id}/{resource_id}",
+                    reserved <= 1e-9,
+                    f"scientific exploration retains reservation outside procurement: {definition_id}/{resource_id}",
                 )
         if state.phase is ScientificExplorationPhase.COMPLETE:
             _require(state.progress_days + 1e-8 >= definition.duration_days, f"completed exploration lacks duration: {definition_id}")
             _require(state.research_points_awarded + 1e-8 >= definition.research_points_total, f"completed exploration lacks RP reward: {definition_id}")
 
-    known_staging_owners = {
-        service._input_staging_owner_id(definition_id)
+    known_reservation_owners = {
+        service._input_reservation_owner_id(definition_id)
         for definition_id in service.campaigns
     }
-    for owner_id, _location_id, _resource_id in sim.inventory.external_occupancy:
+    for owner_id, _location_id, _resource_id in sim.inventory.reserved:
         if str(owner_id).startswith("scientific_exploration.inputs:"):
             _require(
-                owner_id in known_staging_owners,
-                f"orphaned scientific exploration staging: {owner_id}",
+                owner_id in known_reservation_owners,
+                f"orphaned scientific exploration reservation: {owner_id}",
             )
 
 

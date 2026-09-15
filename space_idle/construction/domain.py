@@ -199,12 +199,12 @@ def validate_runtime(sim: Any) -> None:
         _require(-1e-9 <= project.construction_done <= recipe.construction_work + 1e-8, f"invalid construction progress: {project_id}")
         _require(not project.paused or project.pause_started_day is not None, f"paused project missing pause day: {project_id}")
         _require(project.paused or project.pause_started_day is None, f"active project retains pause day: {project_id}")
-        staging_owner_id = sim.projects._resource_staging_owner_id(project_id)
+        reservation_owner_id = sim.projects._resource_reservation_owner_id(project_id)
         if project.materials_committed:
             _require(project.status in {ProjectStatus.BUILDING, ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}, f"materials committed before construction: {project_id}")
             _require(
-                not any(owner == staging_owner_id for owner, _location, _resource in sim.inventory.external_occupancy),
-                f"committed project retains staged materials: {project_id}",
+                not any(owner == reservation_owner_id for owner, _location, _resource in sim.inventory.reserved),
+                f"committed project retains material reservations: {project_id}",
             )
         else:
             recipe_requirements = {
@@ -212,15 +212,15 @@ def validate_runtime(sim: Any) -> None:
                 for requirement in recipe.resources
             }
             for resource_id, amount in recipe_requirements.items():
-                staged = sim.projects._staged_resource_t(project, resource_id)
+                reserved = sim.projects._reserved_resource_t(project, resource_id)
                 _require(
-                    -1e-9 <= staged <= amount + 1e-9,
-                    f"project staged material out of range: {project_id}/{resource_id}",
+                    -1e-9 <= reserved <= amount + 1e-9,
+                    f"project reserved material out of range: {project_id}/{resource_id}",
                 )
             if project.status is ProjectStatus.CANCELLED:
                 _require(
-                    not any(owner == staging_owner_id for owner, _location, _resource in sim.inventory.external_occupancy),
-                    f"cancelled project retains staged materials: {project_id}",
+                    not any(owner == reservation_owner_id for owner, _location, _resource in sim.inventory.reserved),
+                    f"cancelled project retains material reservations: {project_id}",
                 )
         if isinstance(target, (NewFacilityTarget, FacilityUpgradeTarget)):
             if project.status is ProjectStatus.COMPLETE:

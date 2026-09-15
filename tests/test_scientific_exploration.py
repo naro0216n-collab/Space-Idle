@@ -99,6 +99,10 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performan
     assert fleet.free_units == fleet_before.free_units - required_units
 
     app.execute(AdvanceTime(1))
+    # Reservation acquisition is a separate tick result; newly reserved inputs
+    # cannot make the campaign execute retroactively in the same tick.
+    assert _row(app).can_unassign is True
+    app.execute(AdvanceTime(1))
     assert _row(app).can_unassign is False
     assert capture_state(sim)["survey"] == before_survey
 
@@ -282,7 +286,7 @@ def test_full_rp_storage_constrains_reward_retention_but_does_not_freeze_campaig
         exploration_id, day=sim.day
     )
     before_points = sim.research.stored_points
-    app.execute(AdvanceTime(1))
+    app.execute(AdvanceTime(2))
 
     assert state.inputs_consumed is True
     assert state.progress_days > 0.0
@@ -291,7 +295,7 @@ def test_full_rp_storage_constrains_reward_retention_but_does_not_freeze_campaig
     assert _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == _row(app).required_units
 
 
-def test_partial_exploration_inputs_are_staged_and_unassign_restores_them():
+def test_partial_exploration_inputs_are_reserved_and_unassign_releases_them():
     app = build_game_application()
     sim = app._simulation
     exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
@@ -308,8 +312,10 @@ def test_partial_exploration_inputs_are_staged_and_unassign_restores_them():
     app.execute(AdvanceTime(1))
 
     initial_stock = 0.05
-    staged_stock = sim.inventory.amount(definition.origin_id, machinery)
-    assert staged_stock < initial_stock
+    owner_id = sim.scientific_exploration._input_reservation_owner_id(exploration_id)
+    assert sim.inventory.amount(definition.origin_id, machinery) == pytest.approx(initial_stock)
+    assert sim.inventory.reserved_for(owner_id, definition.origin_id, machinery) == pytest.approx(initial_stock)
+    assert sim.inventory.available(definition.origin_id, machinery) == pytest.approx(0.0)
     state = sim.scientific_exploration.campaigns[exploration_id]
     assert state.inputs_consumed is False
     assert state.progress_days == 0.0
@@ -317,3 +323,5 @@ def test_partial_exploration_inputs_are_staged_and_unassign_restores_them():
     app.execute(UnassignExplorationFleet(str(exploration_id)))
 
     assert sim.inventory.amount(definition.origin_id, machinery) == pytest.approx(initial_stock)
+    assert sim.inventory.reserved_for(owner_id, definition.origin_id, machinery) == pytest.approx(0.0)
+    assert sim.inventory.available(definition.origin_id, machinery) == pytest.approx(initial_stock)

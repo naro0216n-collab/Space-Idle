@@ -8,7 +8,11 @@ from .power import PowerSnapshot
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .spatial import SpatialGraph
-from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
+from .execution_requirements import (
+    ExecutionAllocationPlan,
+    ExecutionRequirementBundle,
+    ServiceCapacityRequirement,
+)
 from .exploration_models import KnowledgeLevel, SurveyCoverage, SurveyTarget, SurveyProviderSpec, SurveyCampaign
 
 
@@ -150,7 +154,7 @@ class SurveyService:
         resource_id: DefinitionId,
         power: PowerSnapshot | None = None,
         day: int = 0,
-        service_allocations: ServiceCapacityAllocationPlan | None = None,
+        execution_allocations: ExecutionAllocationPlan | None = None,
     ) -> tuple[str, ...]:
         key = (cell_id, resource_id)
         campaign = self.campaigns.get(key)
@@ -163,10 +167,10 @@ class SurveyService:
             campaign.provider_operational_node_id, cell_id, resource_id, power, day
         ) <= 1e-12:
             blockers.append("survey_capacity")
-        elif service_allocations is not None and not campaign.paused:
+        elif execution_allocations is not None and not campaign.paused:
             try:
-                allocated = service_allocations.allocated(
-                    self.service_request_id(cell_id, resource_id)
+                allocated = execution_allocations.allocated(
+                    self.execution_bundle_id(cell_id, resource_id)
                 )
             except KeyError:
                 allocated = 0.0
@@ -338,11 +342,13 @@ class SurveyService:
         return points
 
     @staticmethod
-    def service_request_id(cell_id: SurfaceCellId, resource_id: DefinitionId) -> EntityId:
-        return EntityId(f"service.survey:{cell_id}:{resource_id}")
+    def execution_bundle_id(cell_id: SurfaceCellId, resource_id: DefinitionId) -> EntityId:
+        return EntityId(f"execution.survey:{cell_id}:{resource_id}")
 
-    def service_requests(self, day: int = 0) -> tuple[ServiceCapacityRequest, ...]:
-        requests: list[ServiceCapacityRequest] = []
+    def execution_requirement_bundles(
+        self, day: int = 0
+    ) -> tuple[ExecutionRequirementBundle, ...]:
+        bundles: list[ExecutionRequirementBundle] = []
         for key, campaign in sorted(
             self.campaigns.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
         ):
@@ -354,22 +360,24 @@ class SurveyService:
             if remaining <= 1e-12:
                 continue
             if self.capacity_for_target(
-                campaign.provider_operational_node_id, campaign.cell_id, campaign.resource_id, None, day
+                campaign.provider_operational_node_id,
+                campaign.cell_id,
+                campaign.resource_id,
+                None,
+                day,
             ) <= 1e-12:
                 continue
-            requests.append(
-                ServiceCapacityRequest(
-                    self.service_request_id(campaign.cell_id, campaign.resource_id),
-                    campaign.provider_operational_node_id,
-                    self.SERVICE_TYPE,
-                    remaining,
-                    campaign.priority,
-                    "survey",
-                    EntityId(f"{campaign.cell_id}:{campaign.resource_id}"),
-                    "survey_observation",
-                )
-            )
-        return tuple(requests)
+            bundles.append(ExecutionRequirementBundle(
+                self.execution_bundle_id(campaign.cell_id, campaign.resource_id),
+                "survey",
+                EntityId(f"{campaign.cell_id}:{campaign.resource_id}"),
+                "survey_observation",
+                campaign.provider_operational_node_id,
+                remaining,
+                campaign.priority,
+                (ServiceCapacityRequirement(self.SERVICE_TYPE, 1.0),),
+            ))
+        return tuple(bundles)
 
     def nominal_service_capacity_at(self, provider_operational_node_id: SpatialNodeId, day: int = 0) -> float:
         return sum(
@@ -398,7 +406,7 @@ class SurveyService:
     def advance_day(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
-        service_allocations: ServiceCapacityAllocationPlan,
+        execution_allocations: ExecutionAllocationPlan,
         day: int = 0,
     ) -> None:
         by_provider: dict[SpatialNodeId, list[SurveyCampaign]] = {}
@@ -433,9 +441,9 @@ class SurveyService:
                 ),
             )
             for campaign in ordered_campaigns:
-                request_id = self.service_request_id(campaign.cell_id, campaign.resource_id)
+                bundle_id = self.execution_bundle_id(campaign.cell_id, campaign.resource_id)
                 try:
-                    remaining_allocation = service_allocations.allocated(request_id)
+                    remaining_allocation = execution_allocations.allocated(bundle_id)
                 except KeyError:
                     remaining_allocation = 0.0
                 if remaining_allocation <= 1e-12:

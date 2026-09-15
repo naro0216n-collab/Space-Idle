@@ -176,7 +176,7 @@ def test_prototype_resources_stage_durably_and_complete_without_manual_funding()
     row = _research_row(app, research_id)
     assert row.status == "prototype"
     resource = row.prototype_resources[0]
-    assert resource.staged_t == 1.0
+    assert resource.reserved_t == 1.0
     assert resource.requested_t == 0.0
     assert not any(code == "prototype_resource" for code, _detail in row.current_blockers)
 
@@ -237,14 +237,16 @@ def test_partial_prototype_staging_returns_to_previous_site_when_site_changes():
     app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
     app.execute(AdvanceTime(1))
 
-    assert sim.research.prototype_staged_t(research_id, EARTH, resource_id) == 0.25
-    assert sim.inventory.amount(EARTH, resource_id) == 0.0
+    assert sim.research.prototype_reserved_t(research_id, EARTH, resource_id) == 0.25
+    assert sim.inventory.amount(EARTH, resource_id) == pytest.approx(0.25)
+    assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.0)
 
     app.execute(SetResearchPrototypeSite(str(research_id), str(LEO)))
 
-    assert sim.research.prototype_staged_t(research_id, EARTH, resource_id) == 0.0
-    assert sim.inventory.amount(EARTH, resource_id) == 0.25
-    assert sim.research.prototype_staged_t(research_id, LEO, resource_id) == 0.0
+    assert sim.research.prototype_reserved_t(research_id, EARTH, resource_id) == 0.0
+    assert sim.inventory.amount(EARTH, resource_id) == pytest.approx(0.25)
+    assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.25)
+    assert sim.research.prototype_reserved_t(research_id, LEO, resource_id) == 0.0
 
 
 def test_demonstration_progress_requires_allocated_research_execution_service():

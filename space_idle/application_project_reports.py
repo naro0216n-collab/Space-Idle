@@ -46,6 +46,7 @@ class ApplicationReportProjectorMixin:
         powers = decision.allocations.power_by_location
         resource_allocations = decision.allocations.resources
         service_allocations = decision.allocations.services
+        execution_allocations = decision.allocations.execution
         logistics_execution = sim.logistics.capacity_logistics_execution_projection(
             decision.allocations.transport
         )
@@ -66,8 +67,8 @@ class ApplicationReportProjectorMixin:
         for node_id in nodes:
             power = powers[node_id]
             for snap in sim.industry.snapshots(
-                node_id, sim.facilities, sim.inventory, power, sim.day,
-                resource_allocations, service_allocations,
+                node_id, sim.facilities, sim.inventory, sim.day,
+                execution_allocations,
             ):
                 for resource_id, amount in snap.output_rates_per_day.items():
                     production[resource_id] += amount
@@ -76,13 +77,13 @@ class ApplicationReportProjectorMixin:
             if sim.extraction is not None:
                 for snap in sim.extraction.snapshots(
                     node_id, sim.facilities, sim.inventory, power, sim.day,
-                    service_allocations,
+                    execution_allocations,
                 ):
                     production[snap.output_resource_id] += snap.output_t_per_day
 
         if sim.maintenance is not None:
             for node_id, resource_id, amount in sim.maintenance.resource_consumption_projection(
-                resource_allocations
+                execution_allocations
             ):
                 if node_id in scope:
                     consumption[resource_id] += amount
@@ -320,11 +321,12 @@ class ApplicationReportProjectorMixin:
 
         resource_allocations = decision.allocations.resources
         service_allocations = decision.allocations.services
+        execution_allocations = decision.allocations.execution
         snapshots = {
             snap.facility_id: snap
             for snap in sim.industry.snapshots(
-                location_id, sim.facilities, sim.inventory, power, sim.day,
-                resource_allocations, service_allocations,
+                location_id, sim.facilities, sim.inventory, sim.day,
+                execution_allocations,
             )
         }
         for facility in sorted(sim.facilities.all_at(location_id), key=lambda row: str(row.id)):
@@ -351,7 +353,7 @@ class ApplicationReportProjectorMixin:
         if sim.extraction is not None:
             for snap in sim.extraction.snapshots(
                 location_id, sim.facilities, sim.inventory, power, sim.day,
-                service_allocations,
+                execution_allocations,
             ):
                 if snap.scale >= 1.0 - 1e-9:
                     continue
@@ -578,9 +580,10 @@ class ApplicationReportProjectorMixin:
 
         resource_allocations = decision.allocations.resources
         service_allocations = decision.allocations.services
+        execution_allocations = decision.allocations.execution
         for snap in sim.industry.snapshots(
-            location_id, sim.facilities, sim.inventory, power, sim.day,
-            resource_allocations, service_allocations,
+            location_id, sim.facilities, sim.inventory, sim.day,
+            execution_allocations,
         ):
             for resource_id, amount in snap.output_rates_per_day.items():
                 production[resource_id] += amount
@@ -592,7 +595,7 @@ class ApplicationReportProjectorMixin:
         # requirement remains visible through Facility maintenance demand/query.
         if sim.maintenance is not None:
             for node_id, resource_id, amount in sim.maintenance.resource_consumption_projection(
-                resource_allocations
+                execution_allocations
             ):
                 if node_id == location_id:
                     consumption[resource_id] += amount
@@ -600,7 +603,7 @@ class ApplicationReportProjectorMixin:
         if sim.extraction is not None:
             for snap in sim.extraction.snapshots(
                 location_id, sim.facilities, sim.inventory, power, sim.day,
-                service_allocations,
+                execution_allocations,
             ):
                 production[snap.output_resource_id] += snap.output_t_per_day
 

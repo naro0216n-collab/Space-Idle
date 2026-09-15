@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..execution_requirements import ExecutionAllocationPlan
 from ..power import PowerSnapshot
 from ..service_capacity import ServiceCapacityAllocationPlan
 from ..shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
@@ -208,57 +209,64 @@ class ConstructionRulesMixin:
         self,
         project: ConstructionProject,
         power: PowerSnapshot,
+        execution_allocations: ExecutionAllocationPlan,
         service_allocations: ServiceCapacityAllocationPlan,
         day: int = 0,
     ) -> float:
-        """Return the spatial service factor applied to construction work.
-
-        Ordinary facility construction and Location founding use the host's
-        construction capacity directly. Expanding an existing surface Location
-        additionally depends on the aggregate Surface Infrastructure needed by
-        the prospective territory. The factor is derived, never persisted.
-        """
+        """Return current or projected Construction execution fulfillment."""
+        del power, day
         if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
             return 1.0
+        if project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}:
+            try:
+                return max(0.0, min(1.0, execution_allocations.fulfillment(
+                    self.construction_execution_bundle_id(project.id)
+                )))
+            except KeyError:
+                return 0.0
         if not isinstance(project.target, SurfaceCellDevelopmentTarget):
             return 1.0
         service = self.surface_infrastructure
         if service is None:
             return 1.0
-        if project.status not in {ProjectStatus.READY, ProjectStatus.BUILDING}:
-            try:
-                snapshot = service.prospective_development_snapshot(
-                    project.operational_node_id, project.target.cell_id, service_allocations
-                )
-            except (KeyError, ValueError):
-                return 0.0
-            return max(0.0, min(1.0, snapshot.fulfillment))
-
         try:
-            base_fulfillment = service.fulfillment_from_plan(
-                project.operational_node_id, service_allocations
+            snapshot = service.prospective_development_snapshot(
+                project.operational_node_id, project.target.cell_id, service_allocations
             )
-            request_id = self.surface_development_service_request_id(project.id)
-            request = service_allocations.request(request_id)
-            allocated = service_allocations.allocated(request_id)
         except (KeyError, ValueError):
             return 0.0
-        expansion_fulfillment = (
-            1.0
-            if request.requested_rate <= 1e-12
-            else max(0.0, min(1.0, allocated / request.requested_rate))
-        )
-        return min(base_fulfillment, expansion_fulfillment)
+        return max(0.0, min(1.0, snapshot.fulfillment))
 
     def project_limiting_factors(
         self,
         project: ConstructionProject,
         power: PowerSnapshot,
+        execution_allocations: ExecutionAllocationPlan,
         service_allocations: ServiceCapacityAllocationPlan,
         day: int = 0,
     ) -> tuple[str, ...]:
+        if project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}:
+            try:
+                allocation = execution_allocations.allocation(
+                    self.construction_execution_bundle_id(project.id)
+                )
+            except KeyError:
+                return ()
+            factors: list[str] = []
+            for key in allocation.limiting_constraints:
+                if (
+                    key.kind == "service"
+                    and self.surface_infrastructure is not None
+                    and key.name == self.surface_infrastructure.service_type
+                ):
+                    factors.append("surface_infrastructure")
+                elif key.kind == "service":
+                    factors.append(f"service:{key.name}")
+                else:
+                    factors.append(f"{key.kind}:{key.name}")
+            return tuple(dict.fromkeys(factors))
         if self.project_construction_fulfillment(
-            project, power, service_allocations, day
+            project, power, execution_allocations, service_allocations, day
         ) < 1.0 - 1e-9:
             return ("surface_infrastructure",)
         return ()

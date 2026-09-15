@@ -8,6 +8,7 @@ from ..priority import ActivityPriority, ProvisioningPriority
 class ProjectResourceRow:
     resource_id: str
     required_t: float
+    reserved_t: float
     staged_t: float
     committed_t: float
     shortage_t: float

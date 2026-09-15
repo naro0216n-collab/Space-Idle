@@ -165,13 +165,13 @@ class ProjectProjectorMixin:
             resources = []
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
-                staged_t = sim.projects.staged_resource_t(project, requirement.resource_id)
-                shortage = max(0.0, requirement.amount_t - staged_t - state.committed_t)
+                reserved_t = sim.projects.reserved_resource_t(project, requirement.resource_id)
+                shortage = max(0.0, requirement.amount_t - reserved_t - state.committed_t)
                 demand_id = None
                 if state.import_committed_t is not None and shortage > 1e-9:
                     demand_id = f"demand.project:{project.id}:{requirement.resource_id}"
                 resources.append(ProjectResourceRow(
-                    str(requirement.resource_id), requirement.amount_t, staged_t, state.committed_t,
+                    str(requirement.resource_id), requirement.amount_t, reserved_t, 0.0, state.committed_t,
                     shortage, state.import_committed_t, demand_id,
                 ))
 
@@ -198,10 +198,12 @@ class ProjectProjectorMixin:
                 display_name = recipe.display_name
 
             construction_fulfillment = sim.projects.project_construction_fulfillment(
-                project, project_power, decision.allocations.services, sim.day
+                project, project_power, decision.allocations.execution,
+                decision.allocations.services, sim.day
             )
             limiting_factors = sim.projects.project_limiting_factors(
-                project, project_power, decision.allocations.services, sim.day
+                project, project_power, decision.allocations.execution,
+                decision.allocations.services, sim.day
             )
 
             rows.append(ProjectRow(
@@ -230,6 +232,7 @@ class ProjectProjectorMixin:
                     ProjectResourceRow(
                         str(status.resource_id),
                         status.required_t,
+                        0.0,
                         status.staged_t,
                         status.committed_t,
                         status.shortage_t,

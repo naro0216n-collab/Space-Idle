@@ -10,36 +10,34 @@ from space_idle.extraction_service import ExtractionService
 from space_idle.facilities import FacilityBook
 from space_idle.persistence import save_game
 from space_idle.power import PowerSnapshot
-from space_idle.service_capacity import allocate_service_capacity
+from space_idle.execution_requirements import allocate_execution_requirements
 
 
-def _service_plan(sim, facilities, power):
-    surface_request = sim.surface_infrastructure.service_request(ids.EARTH)
-    requests = (surface_request,) + sim.extraction.service_requests(
-        ids.EARTH, facilities, sim.day
+def _execution_plan(sim, facilities, power):
+    bundles = sim.extraction.execution_requirement_bundles(
+        ids.EARTH, facilities, sim.inventory, sim.day
     )
-    nominal, enabled = sim.extraction.service_supply(
+    _nominal, enabled = sim.extraction.service_supply(
         ids.EARTH, facilities, power, sim.day
     )
-    surface_key = (ids.EARTH, sim.surface_infrastructure.service_type)
-    nominal[surface_key] = facilities.nominal_service_capacity_at(
-        ids.EARTH, sim.surface_infrastructure.service_type, sim.day
-    )
-    enabled[surface_key] = sim.surface_infrastructure.provider_available_capacity(
-        ids.EARTH, facilities, power, sim.day
-    )
-    return allocate_service_capacity(
-        requests, nominal_supply=nominal, enabled_supply=enabled
-    )
+    capacities = {}
+    for bundle in bundles:
+        for requirement in bundle.requirements:
+            key = requirement.constraint_key(bundle.operational_node_id)
+            if key.kind == "service":
+                capacities[key] = enabled.get((bundle.operational_node_id, key.name), 0.0)
+            elif key.kind == "admission":
+                capacities[key] = float("inf")
+    return allocate_execution_requirements(bundles, capacities)
 
 
 def _resource_snapshot(sim, resource_id):
-    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
-    services = _service_plan(sim, sim.facilities, power)
+    decision = sim.tick_decision_projection()
+    power = decision.allocations.power_by_location[ids.EARTH]
     return next(
         row
         for row in sim.extraction.resource_snapshots(
-            ids.EARTH, sim.facilities, power, sim.day, services
+            ids.EARTH, sim.facilities, power, sim.day, decision.allocations.execution
         )
         if row.resource_id == resource_id
     )
@@ -52,14 +50,14 @@ def test_extraction_does_not_consume_static_resource_potential():
         cell_id: dict(cell.resource_potential_by_resource)
         for cell_id, cell in sim.graph.surface_cells.items()
     }
-    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+    decision = sim.tick_decision_projection()
+    power = decision.allocations.power_by_location[ids.EARTH]
     before_stock = sim.inventory.amount(ids.EARTH, ids.AGGREGATE)
-    services = _service_plan(sim, sim.facilities, power)
     aggregate = _resource_snapshot(sim, ids.AGGREGATE)
     assert aggregate.output_t_per_day > 0.0
 
     sim.extraction.advance_day(
-        ids.EARTH, sim.facilities, sim.inventory, power, sim.day, services
+        ids.EARTH, sim.facilities, sim.inventory, power, sim.day, decision.allocations.execution
     )
 
     assert sim.inventory.amount(ids.EARTH, ids.AGGREGATE) > before_stock
@@ -88,7 +86,7 @@ def test_higher_opportunity_preserves_more_expansion_value_at_same_capacity():
     assert ExtractionService.marginal_response(capacity, 50.0) > ExtractionService.marginal_response(capacity, 5.0)
 
 
-def test_effective_opportunity_uses_surface_infrastructure_for_remote_cells():
+def test_physical_opportunity_is_not_scaled_by_surface_infrastructure_twice():
     app = build_game_application()
     sim = app._simulation
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
@@ -104,7 +102,7 @@ def test_effective_opportunity_uses_surface_infrastructure_for_remote_cells():
         ids.EARTH, ids.METAL_ORE, sim.facilities, constrained_power, sim.day,
         constrained_decision.allocations.services,
     )
-    assert constrained == pytest.approx(before)
+    assert constrained == pytest.approx(before + added)
 
     sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
     supplied_decision = sim.tick_decision_projection()
@@ -113,7 +111,7 @@ def test_effective_opportunity_uses_surface_infrastructure_for_remote_cells():
         ids.EARTH, ids.METAL_ORE, sim.facilities, supplied_power, sim.day,
         supplied_decision.allocations.services,
     )
-    assert supplied == pytest.approx(before + added)
+    assert supplied == pytest.approx(constrained)
 
 
 def test_operational_fulfillment_scales_soft_saturation_output():
@@ -123,17 +121,17 @@ def test_operational_fulfillment_scales_soft_saturation_output():
     full_power = PowerSnapshot(0.0, 0.0, 0.0, {facility_id: 1.0}, {facility_id: 1.0})
     half_power = PowerSnapshot(0.0, 0.0, 0.0, {facility_id: 0.5}, {facility_id: 1.0})
 
-    full_services = _service_plan(base, facilities, full_power)
-    half_services = _service_plan(base, facilities, half_power)
+    full_execution = _execution_plan(base, facilities, full_power)
+    half_execution = _execution_plan(base, facilities, half_power)
     full = next(
         row for row in base.extraction.resource_snapshots(
-            ids.EARTH, facilities, full_power, base.day, full_services
+            ids.EARTH, facilities, full_power, base.day, full_execution
         )
         if row.resource_id == ids.METAL_ORE
     )
     half = next(
         row for row in base.extraction.resource_snapshots(
-            ids.EARTH, facilities, half_power, base.day, half_services
+            ids.EARTH, facilities, half_power, base.day, half_execution
         )
         if row.resource_id == ids.METAL_ORE
     )
@@ -169,11 +167,11 @@ def test_new_extraction_capacity_changes_throughput_and_registration_order_does_
         facilities = FacilityBook(definitions, base.facilities.environment)
         for level in levels:
             facilities.install(ids.METAL_ORE_MINE, ids.EARTH, level=level)
-        services = _service_plan(base, facilities, power)
+        execution = _execution_plan(base, facilities, power)
         return next(
             row
             for row in base.extraction.resource_snapshots(
-                ids.EARTH, facilities, power, base.day, services
+                ids.EARTH, facilities, power, base.day, execution
             )
             if row.resource_id == ids.METAL_ORE
         )

@@ -9,7 +9,9 @@ from .inventory import InventoryBook
 from .power import PowerService, PowerSnapshot
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .research import ResearchService
-from .resource_claim import ResourceAllocationPlan, ResourceClaim
+from .execution_requirements import (
+    ExecutionAllocationPlan, ExecutionRequirementBundle, ReservationAcquisitionRequirement,
+)
 from .resource_demand import ResourceDemand
 from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
@@ -301,8 +303,7 @@ class ScientificExplorationService:
             return
         if not self.can_unassign_fleet(definition_id):
             raise ValueError("started scientific exploration cannot release its Fleet")
-        definition = self.definitions[definition_id]
-        self._restore_staged_inputs(definition)
+        self.inventory.release_reservation(self._input_reservation_owner_id(definition_id))
         reservation_id = EntityId(f"scientific_exploration:{definition_id}")
         self.transport.release_fleet_reservation(reservation_id, day=day)
         state.vehicle_definition_id = None
@@ -314,60 +315,39 @@ class ScientificExplorationService:
         return EntityId(f"demand.scientific_exploration:{definition_id}:{resource_id}")
 
     @staticmethod
-    def _resource_claim_id(definition_id: DefinitionId, resource_id: DefinitionId) -> EntityId:
-        return EntityId(f"claim.scientific_exploration:{definition_id}:{resource_id}")
-
-    @staticmethod
-    def _input_staging_owner_id(definition_id: DefinitionId) -> EntityId:
+    def _input_reservation_owner_id(definition_id: DefinitionId) -> EntityId:
         return EntityId(f"scientific_exploration.inputs:{definition_id}")
 
-    def _staged_input_t(
+    @staticmethod
+    def _reservation_acquisition_id(
+        definition_id: DefinitionId, resource_id: DefinitionId
+    ) -> EntityId:
+        return EntityId(f"reservation.scientific_exploration:{definition_id}:{resource_id}")
+
+    @staticmethod
+    def execution_bundle_id(definition_id: DefinitionId) -> EntityId:
+        return EntityId(f"execution.scientific_exploration:{definition_id}")
+
+    def _reserved_input_t(
         self, definition_id: DefinitionId, resource_id: DefinitionId
     ) -> float:
         definition = self.definitions[definition_id]
-        return self.inventory.staged_for(
-            self._input_staging_owner_id(definition_id),
+        return self.inventory.reserved_for(
+            self._input_reservation_owner_id(definition_id),
             definition.origin_id,
             resource_id,
         )
 
-    def _stage_input_allocations(
-        self,
-        definition: ScientificExplorationDefinition,
-        allocations: ResourceAllocationPlan,
-    ) -> None:
-        staging_owner = self._input_staging_owner_id(definition.id)
-        for resource_id, amount_t in definition.consumable_resources:
-            if amount_t <= 1e-12:
-                continue
-            staged = self._staged_input_t(definition.id, resource_id)
-            missing = max(0.0, amount_t - staged)
-            if missing <= 1e-12:
-                continue
-            try:
-                allocated = allocations.allocated(
-                    self._resource_claim_id(definition.id, resource_id)
-                )
-            except KeyError:
-                allocated = 0.0
-            amount = min(missing, max(0.0, allocated))
-            if amount > 1e-12:
-                self.inventory.stage_allocated(
-                    staging_owner, definition.origin_id, resource_id, amount
-                )
-
-    def _restore_staged_inputs(
-        self, definition: ScientificExplorationDefinition
-    ) -> None:
-        staging_owner = self._input_staging_owner_id(definition.id)
-        for resource_id, _amount_t in definition.consumable_resources:
-            staged = self._staged_input_t(definition.id, resource_id)
-            if staged > 1e-12:
-                self.inventory.unstage_to_stock(
-                    staging_owner, definition.origin_id, resource_id, staged
-                )
+    def _inputs_ready(self, definition_id: DefinitionId) -> bool:
+        definition = self.definitions[definition_id]
+        return all(
+            self._reserved_input_t(definition_id, resource_id) + 1e-9 >= amount_t
+            for resource_id, amount_t in definition.consumable_resources
+            if amount_t > 1e-12
+        )
 
     def resource_demands(self, day: int = 0) -> tuple[ResourceDemand, ...]:
+        del day
         demands: list[ResourceDemand] = []
         for definition_id, state in sorted(self.campaigns.items(), key=lambda row: str(row[0])):
             if (
@@ -379,9 +359,7 @@ class ScientificExplorationService:
                 continue
             definition = self.definitions[definition_id]
             for resource_id, amount_t in sorted(definition.consumable_resources, key=lambda row: str(row[0])):
-                remaining = max(
-                    0.0, amount_t - self._staged_input_t(definition_id, resource_id)
-                )
+                remaining = max(0.0, amount_t - self._reserved_input_t(definition_id, resource_id))
                 if remaining <= 1e-12:
                     continue
                 demands.append(ResourceDemand(
@@ -396,8 +374,11 @@ class ScientificExplorationService:
                 ))
         return tuple(demands)
 
-    def resource_claims(self, day: int = 0) -> tuple[ResourceClaim, ...]:
-        claims: list[ResourceClaim] = []
+    def reservation_acquisition_requirements(
+        self, day: int = 0
+    ) -> tuple[ReservationAcquisitionRequirement, ...]:
+        del day
+        rows: list[ReservationAcquisitionRequirement] = []
         for definition_id, state in sorted(self.campaigns.items(), key=lambda row: str(row[0])):
             if (
                 state.phase is not ScientificExplorationPhase.ACTIVE
@@ -407,25 +388,70 @@ class ScientificExplorationService:
             ):
                 continue
             definition = self.definitions[definition_id]
-            for resource_id, amount_t in sorted(
-                definition.consumable_resources, key=lambda row: str(row[0])
-            ):
-                staged = self._staged_input_t(definition_id, resource_id)
-                remaining = max(0.0, amount_t - staged)
-                if remaining <= 1e-12:
+            owner_id = self._input_reservation_owner_id(definition_id)
+            for resource_id, amount_t in sorted(definition.consumable_resources, key=lambda row: str(row[0])):
+                missing = max(0.0, amount_t - self._reserved_input_t(definition_id, resource_id))
+                if missing <= 1e-12:
                     continue
-                claims.append(ResourceClaim(
-                    self._resource_claim_id(definition_id, resource_id),
-                    definition.origin_id,
-                    resource_id,
-                    remaining,
-                    state.priority,
-                    "scientific_exploration",
-                    EntityId(f"scientific_exploration:{definition_id}"),
-                    "campaign_consumables",
-                    demand_id=self._resource_demand_id(definition_id, resource_id),
+                rows.append(ReservationAcquisitionRequirement(
+                    id=self._reservation_acquisition_id(definition_id, resource_id),
+                    owner_id=owner_id,
+                    operational_node_id=definition.origin_id,
+                    resource_id=resource_id,
+                    requested_amount=missing,
+                    priority=state.priority,
+                    purpose="campaign_consumables",
                 ))
-        return tuple(claims)
+        return tuple(rows)
+
+    def execution_requirement_bundles(
+        self, day: int = 0
+    ) -> tuple[ExecutionRequirementBundle, ...]:
+        del day
+        rows: list[ExecutionRequirementBundle] = []
+        for definition_id, state in sorted(self.campaigns.items(), key=lambda row: str(row[0])):
+            if (
+                state.phase is not ScientificExplorationPhase.ACTIVE
+                or state.paused
+                or state.vehicle_definition_id is None
+                or (not state.inputs_consumed and not self._inputs_ready(definition_id))
+            ):
+                continue
+            definition = self.definitions[definition_id]
+            remaining = max(0.0, definition.duration_days - state.progress_days)
+            requested = min(1.0, remaining)
+            if requested <= 1e-12:
+                continue
+            rows.append(ExecutionRequirementBundle(
+                id=self.execution_bundle_id(definition_id),
+                owner_kind="scientific_exploration",
+                owner_id=EntityId(f"scientific_exploration:{definition_id}"),
+                purpose="campaign_execution",
+                operational_node_id=definition.origin_id,
+                requested_execution=requested,
+                priority=state.priority,
+            ))
+        return tuple(rows)
+
+    def _finalize_reservation_acquisition(
+        self, execution_allocations: ExecutionAllocationPlan
+    ) -> None:
+        for requirement in self.reservation_acquisition_requirements():
+            try:
+                allocated = execution_allocations.allocated(requirement.id)
+            except KeyError:
+                allocated = 0.0
+            amount = min(requirement.requested_amount, max(0.0, allocated))
+            if amount <= 1e-12:
+                continue
+            taken = self.inventory.reserve(
+                requirement.owner_id,
+                requirement.operational_node_id,
+                requirement.resource_id,
+                amount,
+            )
+            if taken + 1e-9 < amount:
+                raise RuntimeError("allocated exploration reservation stock changed before execution")
 
     def _consume_inputs_if_ready(
         self,
@@ -434,18 +460,13 @@ class ScientificExplorationService:
     ) -> bool:
         if state.inputs_consumed:
             return True
-        resources = tuple((rid, amount) for rid, amount in definition.consumable_resources if amount > 1e-12)
-        if not all(
-            self._staged_input_t(definition.id, rid) + 1e-9 >= amount
-            for rid, amount in resources
-        ):
+        if not self._inputs_ready(definition.id):
             return False
-        staging_owner = self._input_staging_owner_id(definition.id)
-        for resource_id, _amount_t in resources:
-            staged = self._staged_input_t(definition.id, resource_id)
-            if staged > 1e-12:
-                self.inventory.release_storage_occupancy(
-                    staging_owner, definition.origin_id, resource_id, staged
+        owner_id = self._input_reservation_owner_id(definition.id)
+        for resource_id, amount_t in definition.consumable_resources:
+            if amount_t > 1e-12:
+                self.inventory.consume_reserved(
+                    owner_id, definition.origin_id, resource_id, amount_t
                 )
         state.inputs_consumed = True
         return True
@@ -471,7 +492,7 @@ class ScientificExplorationService:
             return tuple(blockers)
         if not state.inputs_consumed:
             for resource_id, amount_t in definition.consumable_resources:
-                allocated = self._staged_input_t(definition_id, resource_id)
+                allocated = self._reserved_input_t(definition_id, resource_id)
                 if allocated + 1e-9 < amount_t:
                     blockers.append(f"resource:{resource_id}:{allocated:g}/{amount_t:g}")
         blockers.extend(
@@ -487,19 +508,29 @@ class ScientificExplorationService:
     def advance_day(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
-        resource_allocations: ResourceAllocationPlan,
+        execution_allocations: ExecutionAllocationPlan,
         day: int,
     ) -> None:
+        # Newly acquired reservations do not make the campaign executable
+        # retroactively: execution bundles were generated from the tick-start snapshot.
+        self._finalize_reservation_acquisition(execution_allocations)
         for definition_id, state in sorted(self.campaigns.items(), key=lambda row: str(row[0])):
             if state.phase is not ScientificExplorationPhase.ACTIVE or state.paused or state.vehicle_definition_id is None:
                 continue
             definition = self.definitions[definition_id]
-            self._stage_input_allocations(definition, resource_allocations)
             if self.blockers(
                 definition_id,
                 day=day,
                 power_by_location=power_by_location,
             ):
+                continue
+            try:
+                allocated_execution = execution_allocations.allocated(
+                    self.execution_bundle_id(definition_id)
+                )
+            except KeyError:
+                allocated_execution = 0.0
+            if allocated_execution <= 1e-12:
                 continue
             if not self._consume_inputs_if_ready(definition, state):
                 continue
@@ -509,7 +540,7 @@ class ScientificExplorationService:
             if remaining_days <= 1e-9 or remaining_points <= 1e-9:
                 self._complete(definition, state, day)
                 continue
-            intended_day_fraction = min(1.0, remaining_days)
+            intended_day_fraction = min(allocated_execution, remaining_days)
             requested_points = min(remaining_points, definition.points_per_day * intended_day_fraction)
             self.research.store_generated_points(
                 requested_points,

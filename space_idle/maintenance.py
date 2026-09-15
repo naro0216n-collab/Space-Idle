@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from .facilities import FacilityBook
 from .inventory import InventoryBook
-from .resource_claim import ResourceAllocationPlan, ResourceClaim
+from .execution_requirements import ExecutionAllocationPlan, ExecutionRequirementBundle, ResourceRequirement
 from .resource_demand import ResourceDemand
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
@@ -17,8 +17,8 @@ class FacilityMaintenanceService:
     with a player-visible priority. The shared resource allocator may therefore
     starve a lower-priority facility when local stock and transport capacity are
     insufficient. ``target_stock_days`` and ``reorder_point_days`` are planning
-    targets for replenishment only; one day's requirement is emitted separately
-    as a transient Resource Claim for current consumption.
+    targets for replenishment only; one day's current consumption is settled as
+    one facility-level Execution Requirement Bundle.
     """
 
     facilities: FacilityBook
@@ -48,7 +48,7 @@ class FacilityMaintenanceService:
                 continue
             location_id, resource_id = key
             # Replenishment planning depends on physical site stock, not on
-            # current-tick Resource Claim allocation, which is transient.
+            # current-tick execution allocation, which is transient.
             site_stock = self.inventory.amount(location_id, resource_id)
             if site_stock <= daily_required * self.reorder_point_days + 1e-9:
                 refill.add(key)
@@ -90,57 +90,54 @@ class FacilityMaintenanceService:
         return tuple(rows)
 
     @staticmethod
-    def _claim_id(facility_id: EntityId, resource_id: DefinitionId) -> EntityId:
-        return EntityId(f"claim.maintenance:{facility_id}:{resource_id}")
+    def _execution_bundle_id(facility_id: EntityId) -> EntityId:
+        return EntityId(f"execution.maintenance:{facility_id}")
 
-    def resource_claims(self, day: int = 0) -> tuple[ResourceClaim, ...]:
-        rows: list[ResourceClaim] = []
+    def execution_requirement_bundles(self, day: int = 0) -> tuple[ExecutionRequirementBundle, ...]:
+        del day
+        rows: list[ExecutionRequirementBundle] = []
         for facility in sorted(self.facilities.facilities.values(), key=lambda row: str(row.id)):
-            for resource_id, required in sorted(
-                self.facilities.maintenance_requirements_per_day(facility.id).items(),
-                key=lambda row: str(row[0]),
-            ):
-                if required <= 1e-12:
-                    continue
-                rows.append(ResourceClaim(
-                    self._claim_id(facility.id, resource_id),
-                    facility.operational_node_id,
-                    resource_id,
-                    required,
-                    facility.maintenance_priority,
-                    "facility_maintenance",
-                    facility.id,
-                    "daily_maintenance",
-                    demand_id=self._demand_id(facility.id, resource_id),
-                ))
+            requirements = tuple(
+                ResourceRequirement(resource_id, required)
+                for resource_id, required in sorted(
+                    self.facilities.maintenance_requirements_per_day(facility.id).items(),
+                    key=lambda row: str(row[0]),
+                )
+                if required > 1e-12
+            )
+            if not requirements:
+                continue
+            rows.append(ExecutionRequirementBundle(
+                id=self._execution_bundle_id(facility.id),
+                owner_kind="facility_maintenance",
+                owner_id=facility.id,
+                purpose="daily_maintenance",
+                operational_node_id=facility.operational_node_id,
+                requested_execution=1.0,
+                priority=facility.maintenance_priority,
+                requirements=requirements,
+            ))
         return tuple(rows)
 
     def satisfaction_projection(
-        self, allocations: ResourceAllocationPlan
+        self, allocations: ExecutionAllocationPlan
     ) -> dict[EntityId, float]:
-        """Project facility maintenance fulfillment from shared allocation."""
+        """Project facility maintenance fulfillment from one common bundle."""
         satisfaction: dict[EntityId, float] = {}
-        for facility in sorted(
-            self.facilities.facilities.values(), key=lambda row: str(row.id)
-        ):
-            requirements = self.facilities.maintenance_requirements_per_day(facility.id)
-            ratios: list[float] = []
-            for resource_id, required in sorted(
-                requirements.items(), key=lambda row: str(row[0])
-            ):
-                if required <= 1e-12:
-                    continue
-                claim_id = self._claim_id(facility.id, resource_id)
-                try:
-                    allocated = allocations.allocated(claim_id)
-                except KeyError:
-                    allocated = 0.0
-                ratios.append(min(1.0, max(0.0, allocated) / required))
-            satisfaction[facility.id] = min(ratios) if ratios else 1.0
+        for facility in sorted(self.facilities.facilities.values(), key=lambda row: str(row.id)):
+            if not self.facilities.maintenance_requirements_per_day(facility.id):
+                satisfaction[facility.id] = 1.0
+                continue
+            try:
+                satisfaction[facility.id] = allocations.fulfillment(
+                    self._execution_bundle_id(facility.id)
+                )
+            except KeyError:
+                satisfaction[facility.id] = 0.0
         return satisfaction
 
     def resource_consumption_projection(
-        self, allocations: ResourceAllocationPlan
+        self, allocations: ExecutionAllocationPlan
     ) -> tuple[tuple[SpatialNodeId, DefinitionId, float], ...]:
         """Project actual recurring maintenance resource consumption.
 
@@ -171,7 +168,7 @@ class FacilityMaintenanceService:
         )
 
     def advance_day(
-        self, allocations: ResourceAllocationPlan, day: int = 0
+        self, allocations: ExecutionAllocationPlan, day: int = 0
     ) -> None:
         for node_id, resource_id, amount in self.resource_consumption_projection(allocations):
             self.inventory.consume_allocated(node_id, resource_id, amount)

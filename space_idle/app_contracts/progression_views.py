@@ -29,7 +29,7 @@ class ResearchProviderRow:
 class ResearchPrototypeResourceRow:
     resource_id: str
     required_t: float
-    staged_t: float
+    reserved_t: float
     requested_t: float
     allocated_t: float
     pipeline_t: float

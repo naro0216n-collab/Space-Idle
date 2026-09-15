@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .execution_requirements import pool_constraint
 from .power import PowerSnapshot
 from .shared import SpatialNodeId
 
@@ -55,6 +56,10 @@ class ResearchCapacityMixin:
             for facility in self.facilities.facilities.values()
             if facility.definition_id in self.providers
         )
+
+    def allocation_pool_capacities(self):
+        """Expose organization-owned finite pools to the common allocator."""
+        return {pool_constraint("research_points", scope_id="organization"): self.stored_points}
 
 
     def store_generated_points(

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from ..resource_claim import ResourceAllocationPlan, ResourceClaim
+from ..execution_requirements import (
+    ExecutionAllocationPlan,
+    ReservationAcquisitionRequirement,
+)
 from ..resource_demand import ResourceDemand
 from ..shared import EntityId
 from .models import ProjectStatus, FacilityUpgradeTarget
@@ -20,11 +23,9 @@ class ConstructionProcurementMixin:
             recipe = self._recipe_for_project(project)
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
-                staged = self._staged_resource_t(project, requirement.resource_id)
-                missing = max(0.0, requirement.amount_t - state.committed_t - staged)
-                if missing <= 1e-9:
-                    continue
-                if state.import_committed_t is None:
+                reserved = self._reserved_resource_t(project, requirement.resource_id)
+                missing = max(0.0, requirement.amount_t - state.committed_t - reserved)
+                if missing <= 1e-9 or state.import_committed_t is None:
                     continue
                 demands.append(ResourceDemand(
                     self._resource_demand_id(project.id, requirement.resource_id),
@@ -38,8 +39,11 @@ class ConstructionProcurementMixin:
                 ))
         return tuple(demands)
 
-    def resource_claims(self, day: int) -> tuple[ResourceClaim, ...]:
-        claims: list[ResourceClaim] = []
+    def reservation_acquisition_requirements(
+        self, day: int
+    ) -> tuple[ReservationAcquisitionRequirement, ...]:
+        del day
+        rows: list[ReservationAcquisitionRequirement] = []
         for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
             if (
                 project.paused
@@ -49,25 +53,23 @@ class ConstructionProcurementMixin:
                 continue
             recipe = self._recipe_for_project(project)
             for requirement in recipe.resources:
-                staged = self._staged_resource_t(project, requirement.resource_id)
-                missing = max(0.0, requirement.amount_t - staged)
+                reserved = self._reserved_resource_t(project, requirement.resource_id)
+                missing = max(0.0, requirement.amount_t - reserved)
                 if missing <= 1e-9:
                     continue
-                claims.append(ResourceClaim(
-                    self._resource_claim_id(project.id, requirement.resource_id),
-                    project.operational_node_id,
-                    requirement.resource_id,
-                    missing,
-                    project.priority,
-                    "project",
-                    EntityId(str(project.id)),
-                    "procurement",
-                    demand_id=self._resource_demand_id(project.id, requirement.resource_id),
+                rows.append(ReservationAcquisitionRequirement(
+                    id=self._reservation_acquisition_id(project.id, requirement.resource_id),
+                    owner_id=self._resource_reservation_owner_id(project.id),
+                    operational_node_id=project.operational_node_id,
+                    resource_id=requirement.resource_id,
+                    requested_amount=missing,
+                    priority=project.priority,
+                    purpose="construction_materials",
                 ))
-        return tuple(claims)
+        return tuple(rows)
 
     def advance_procurement(self, day: int) -> None:
-        """Advance sourcing policy without independently claiming shared stock."""
+        """Advance sourcing policy without consuming or reserving inventory."""
         ordered = sorted(self.projects.values(), key=lambda project: (-project.priority, str(project.id)))
         for project in ordered:
             if project.paused or project.status in {
@@ -80,9 +82,6 @@ class ConstructionProcurementMixin:
             recipe = self._recipe_for_project(project)
             if not recipe.prerequisite_technologies.issubset(self.unlocked_technologies):
                 continue
-            # Boundary policy maturation only checks structural/nominal site
-            # viability.  Current Power availability is an allocation result
-            # and cannot be recomputed here before the tick DAG runs.
             if self.project_site_failures(project, day, None):
                 continue
             if isinstance(project.target, FacilityUpgradeTarget) and any(
@@ -100,16 +99,16 @@ class ConstructionProcurementMixin:
                 continue
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
-                staged = self._staged_resource_t(project, requirement.resource_id)
-                if state.import_committed_t is None and state.committed_t + staged + 1e-9 < requirement.amount_t:
+                reserved = self._reserved_resource_t(project, requirement.resource_id)
+                if state.import_committed_t is None and state.committed_t + reserved + 1e-9 < requirement.amount_t:
                     state.import_committed_t = max(
-                        0.0, requirement.amount_t - state.committed_t - staged
+                        0.0, requirement.amount_t - state.committed_t - reserved
                     )
 
     def finalize_procurement(
-        self, allocations: ResourceAllocationPlan, day: int
+        self, allocations: ExecutionAllocationPlan, day: int
     ) -> None:
-        """Commit this tick's ResourceAllocation into durable project staging."""
+        del day
         ordered = sorted(self.projects.values(), key=lambda project: (-project.priority, str(project.id)))
         for project in ordered:
             if (
@@ -119,9 +118,9 @@ class ConstructionProcurementMixin:
             ):
                 continue
             recipe = self._recipe_for_project(project)
-            self._stage_project_allocations(project, allocations)
+            self._acquire_project_reservations(project, allocations)
             ready = all(
-                self._staged_resource_t(project, requirement.resource_id) + 1e-9
+                self._reserved_resource_t(project, requirement.resource_id) + 1e-9
                 >= requirement.amount_t
                 for requirement in recipe.resources
             )

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .execution_requirements import (
+    ExecutionRequirementBundle,
+    ResourceRequirement,
+    ServiceCapacityRequirement,
+    StockOrPoolAdmissionRequirement,
+)
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .power import PowerSnapshot
-from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .resource_demand import ResourceDemand
-from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .production import (
     ProcessSpec, ProcessSnapshot, ProcessSelectionMixin,
@@ -27,39 +31,49 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         return f"{cls.SERVICE_TYPE_PREFIX}{process_id}"
 
     @staticmethod
-    def _service_request_id(facility_id: EntityId) -> EntityId:
-        return EntityId(f"service.industry:{facility_id}")
+    def execution_bundle_id(facility_id: EntityId) -> EntityId:
+        return EntityId(f"execution.industry:{facility_id}")
 
-    def service_requests(
+    def execution_requirement_bundles(
         self,
         location_id: SpatialNodeId,
         facilities: FacilityBook,
+        inventory: InventoryBook,
         day: int = 0,
-    ) -> tuple[ServiceCapacityRequest, ...]:
-        """Request one unit of selected Process Capacity per active facility.
-
-        Process input/output rates are defined at full-scale operation.  A
-        facility therefore requests one unit of its selected process service;
-        the shared allocation determines the executable fraction for the tick.
-        """
-        requests: list[ServiceCapacityRequest] = []
+    ) -> tuple[ExecutionRequirementBundle, ...]:
+        rows: list[ExecutionRequirementBundle] = []
         for facility in sorted(
             facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)
         ):
             process = self.process_for(facility)
             if process is None:
                 continue
-            requests.append(ServiceCapacityRequest(
-                self._service_request_id(facility.id),
-                location_id,
-                self.process_service_type(process.id),
-                1.0,
-                facility.activity_priority,
-                "industry_process",
-                facility.id,
-                f"process:{process.id}",
+            requirements = [
+                ResourceRequirement(resource_id, amount)
+                for resource_id, amount in sorted(process.inputs_per_day.items(), key=lambda row: str(row[0]))
+                if amount > 1e-12
+            ]
+            requirements.append(
+                ServiceCapacityRequirement(self.process_service_type(process.id), 1.0)
+            )
+            for storage_class, delta in sorted(
+                self._storage_delta_per_scale(process, inventory).items()
+            ):
+                if delta > 1e-12:
+                    requirements.append(
+                        StockOrPoolAdmissionRequirement(storage_class, delta)
+                    )
+            rows.append(ExecutionRequirementBundle(
+                id=self.execution_bundle_id(facility.id),
+                owner_kind="industry_process",
+                owner_id=facility.id,
+                purpose=f"process:{process.id}",
+                operational_node_id=location_id,
+                requested_execution=1.0,
+                priority=facility.activity_priority,
+                requirements=tuple(requirements),
             ))
-        return tuple(requests)
+        return tuple(rows)
 
     def service_supply(
         self,
@@ -70,7 +84,6 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         *,
         provider_factors: dict[EntityId, float] | None = None,
     ) -> tuple[dict[tuple[SpatialNodeId, str], float], dict[tuple[SpatialNodeId, str], float]]:
-        """Return nominal and dependency-enabled Process Capacity supply."""
         nominal: dict[tuple[SpatialNodeId, str], float] = {}
         enabled: dict[tuple[SpatialNodeId, str], float] = {}
         for facility in sorted(
@@ -101,11 +114,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         inventory: InventoryBook,
         day: int = 0,
     ) -> tuple[ResourceDemand, ...]:
-        """Declare one-day input replenishment needs for active processes.
-
-        Demand aggregation preserves the root Activity Priority.  Facilities in
-        different bands therefore never collapse into one logistics intent.
-        """
+        del inventory
         required: dict[tuple[DefinitionId, int], float] = {}
         for facility in facilities.active_compatible_at(location_id, day):
             process = self.process_for(facility)
@@ -138,44 +147,6 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 target_t,
             ))
         return tuple(demands)
-
-    @staticmethod
-    def _resource_claim_id(facility_id: EntityId, resource_id: DefinitionId) -> EntityId:
-        return EntityId(f"claim.industry:{facility_id}:{resource_id}")
-
-    def resource_claims(
-        self,
-        location_id: SpatialNodeId,
-        facilities: FacilityBook,
-        day: int = 0,
-    ) -> tuple[ResourceClaim, ...]:
-        claims: list[ResourceClaim] = []
-        for facility in sorted(
-            facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)
-        ):
-            process = self.process_for(facility)
-            if process is None:
-                continue
-            for resource_id, requested in sorted(
-                process.inputs_per_day.items(), key=lambda row: str(row[0])
-            ):
-                if requested <= 1e-12:
-                    continue
-                claims.append(ResourceClaim(
-                    self._resource_claim_id(facility.id, resource_id),
-                    location_id,
-                    resource_id,
-                    requested,
-                    facility.activity_priority,
-                    "industry_process",
-                    facility.id,
-                    f"process:{process.id}",
-                    demand_id=EntityId(
-                        f"demand.industry:{location_id}:{resource_id}:priority-{int(facility.activity_priority)}"
-                    ),
-                ))
-
-        return tuple(claims)
 
 
 __all__ = ["ProcessSpec", "ProcessSnapshot", "IndustryService"]

@@ -253,7 +253,7 @@ class ConstructionPlanningMixin:
         if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
             raise ValueError("project cannot be cancelled")
         if not project.materials_committed:
-                self._restore_staged_resources(project)
+                self._release_material_reservations(project)
         project.status = ProjectStatus.CANCELLED
         project.paused = False
         project.pause_started_day = None
@@ -315,7 +315,7 @@ class ConstructionPlanningMixin:
             wait_limit = self.sourcing_wait_days[project.sourcing_policy]
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
-                if self.staged_resource_t(project, requirement.resource_id) + 1e-9 >= requirement.amount_t:
+                if self.reserved_resource_t(project, requirement.resource_id) + 1e-9 >= requirement.amount_t:
                     continue
                 if state.import_committed_t is None:
                     if waited < wait_limit:

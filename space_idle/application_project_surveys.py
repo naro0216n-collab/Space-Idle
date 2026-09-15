@@ -15,7 +15,7 @@ class SurveyProgressionProjectorMixin:
             else sim.graph.operational_node(provider_operational_node_id).body_id
         )
         decision = sim.tick_decision_projection()
-        service_plan = decision.allocations.services
+        execution_plan = decision.allocations.execution
         powers = decision.allocations.power_by_location
         rows = []
         for (cell_id, resource_id), target in sorted(
@@ -56,14 +56,15 @@ class SurveyProgressionProjectorMixin:
             requested_service = 0.0
             allocated_service = 0.0
             if campaign is not None:
-                request_id = sim.survey.service_request_id(cell_id, resource_id)
+                bundle_id = sim.survey.execution_bundle_id(cell_id, resource_id)
                 try:
-                    requested_service = service_plan.request(request_id).requested_rate
-                    allocated_service = service_plan.allocated(request_id)
+                    bundle = execution_plan.bundle(bundle_id)
+                    requested_service = bundle.requested_execution
+                    allocated_service = execution_plan.allocated(bundle_id)
                 except KeyError:
                     pass
                 blockers = sim.survey.blockers(
-                    cell_id, resource_id, power, sim.day, service_plan
+                    cell_id, resource_id, power, sim.day, execution_plan
                 )
             elif provider_operational_node_id is not None and not complete:
                 blockers = sim.survey.start_blockers(

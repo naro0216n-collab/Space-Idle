@@ -4,7 +4,7 @@ import pytest
 
 from space_idle import GetFlowReport, GetOperationalNode, GetLogistics, SetMaintenancePriority, build_game_application
 from space_idle.content import base_ids as ids
-from space_idle.resource_claim import allocate_resource_claims
+from space_idle.execution_requirements import allocate_execution_requirements, resource_constraint
 from space_idle.shared import EntityId
 
 
@@ -53,8 +53,12 @@ def test_maintenance_shortage_can_starve_lower_priority_facility_without_auto_re
         sim.inventory.stock[(ids.EARTH, resource_id)] = 100.0
     sim.inventory.stock[(ids.EARTH, common)] = high_req[common]
 
-    claims = sim.maintenance.resource_claims(sim.day)
-    allocations = allocate_resource_claims(claims, sim.inventory)
+    bundles = sim.maintenance.execution_requirement_bundles(sim.day)
+    capacities = {
+        resource_constraint(ids.EARTH, resource_id): sim.inventory.available(ids.EARTH, resource_id)
+        for resource_id in all_resources
+    }
+    allocations = allocate_execution_requirements(bundles, capacities)
     satisfaction = sim.maintenance.satisfaction_projection(allocations)
     sim.maintenance.advance_day(allocations, sim.day)
 
@@ -154,10 +158,9 @@ def test_flow_report_includes_current_facility_maintenance_consumption():
     power = decision.allocations.power_by_location[ids.EARTH]
 
     expected = {}
-    allocations = decision.allocations.resources
+    allocations = decision.allocations.execution
     for snap in sim.industry.snapshots(
-        ids.EARTH, sim.facilities, sim.inventory, power, sim.day, allocations,
-        decision.allocations.services
+        ids.EARTH, sim.facilities, sim.inventory, sim.day, allocations
     ):
         for resource_id, amount in snap.input_rates_per_day.items():
             expected[resource_id] = expected.get(resource_id, 0.0) + amount

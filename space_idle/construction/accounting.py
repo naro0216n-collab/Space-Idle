@@ -1,32 +1,34 @@
 from __future__ import annotations
 
-from ..resource_claim import ResourceAllocationPlan
+from ..execution_requirements import ExecutionAllocationPlan
 from ..shared import EntityId
 from .models import ConstructionProject
 
 
 class ConstructionAccountingMixin:
-    """Owns construction material staging/commit accounting.
-
-    Procurement decides when a project is fully supplied; execution consumes
-    committed work. Both use this lower-level accounting service so neither
-    implementation layer depends on the other.
-    """
+    """Own authoritative project material reservations and commitment."""
 
     @staticmethod
     def _resource_demand_id(project_id, resource_id) -> EntityId:
         return EntityId(f"demand.project:{project_id}:{resource_id}")
 
     @staticmethod
-    def _resource_staging_owner_id(project_id) -> EntityId:
+    def _resource_reservation_owner_id(project_id) -> EntityId:
         return EntityId(f"project.materials:{project_id}")
 
-    def _staged_resource_t(self, project: ConstructionProject, resource_id) -> float:
-        return self.inventory.staged_for(
-            self._resource_staging_owner_id(project.id),
+    @staticmethod
+    def _reservation_acquisition_id(project_id, resource_id) -> EntityId:
+        return EntityId(f"reservation.project:{project_id}:{resource_id}")
+
+    def _reserved_resource_t(self, project: ConstructionProject, resource_id) -> float:
+        return self.inventory.reserved_for(
+            self._resource_reservation_owner_id(project.id),
             project.operational_node_id,
             resource_id,
         )
+
+    def reserved_resource_t(self, project: ConstructionProject, resource_id) -> float:
+        return self._reserved_resource_t(project, resource_id)
 
     def _committed_resources(self, project: ConstructionProject) -> dict:
         return {
@@ -35,63 +37,53 @@ class ConstructionAccountingMixin:
             if state.committed_t > 1e-12
         }
 
-    def staged_resource_t(self, project: ConstructionProject, resource_id) -> float:
-        """Durable material already staged for this project."""
-        return self._staged_resource_t(project, resource_id)
-
-    @staticmethod
-    def _resource_claim_id(project_id, resource_id) -> EntityId:
-        return EntityId(f"claim.project:{project_id}:{resource_id}")
-
-    def _stage_project_allocations(
-        self, project: ConstructionProject, allocations: ResourceAllocationPlan
+    def _acquire_project_reservations(
+        self, project: ConstructionProject, allocations: ExecutionAllocationPlan
     ) -> None:
-        """Move this tick's allocated material into durable project staging."""
         if project.materials_committed:
             return
         recipe = self._recipe_for_project(project)
-        owner_id = self._resource_staging_owner_id(project.id)
+        owner_id = self._resource_reservation_owner_id(project.id)
         for requirement in recipe.resources:
             resource_id = requirement.resource_id
-            staged = self._staged_resource_t(project, resource_id)
-            missing = max(0.0, requirement.amount_t - staged)
+            reserved = self._reserved_resource_t(project, resource_id)
+            missing = max(0.0, requirement.amount_t - reserved)
             if missing <= 1e-12:
                 continue
             try:
                 allocated = allocations.allocated(
-                    self._resource_claim_id(project.id, resource_id)
+                    self._reservation_acquisition_id(project.id, resource_id)
                 )
             except KeyError:
                 allocated = 0.0
             amount = min(missing, max(0.0, allocated))
             if amount <= 1e-12:
                 continue
-            self.inventory.stage_allocated(
+            taken = self.inventory.reserve(
                 owner_id, project.operational_node_id, resource_id, amount
             )
+            if taken + 1e-9 < amount:
+                raise RuntimeError("allocated reservation stock changed before execution")
 
-    def _restore_staged_resources(self, project: ConstructionProject) -> None:
-        owner_id = self._resource_staging_owner_id(project.id)
-        for resource_id in project.resources:
-            staged = self._staged_resource_t(project, resource_id)
-            if staged > 1e-12:
-                self.inventory.unstage_to_stock(
-                    owner_id, project.operational_node_id, resource_id, staged
-                )
+    def _release_material_reservations(self, project: ConstructionProject) -> None:
+        self.inventory.release_reservation(self._resource_reservation_owner_id(project.id))
 
     def _commit_materials(self, project: ConstructionProject) -> None:
         if project.materials_committed:
             return
         recipe = self._recipe_for_project(project)
-        owner_id = self._resource_staging_owner_id(project.id)
+        owner_id = self._resource_reservation_owner_id(project.id)
         for requirement in recipe.resources:
             state = project.resources[requirement.resource_id]
-            staged = self._staged_resource_t(project, requirement.resource_id)
-            if staged + 1e-9 < requirement.amount_t:
-                raise RuntimeError("construction materials are not fully allocated")
-            if staged > 1e-12:
-                self.inventory.release_storage_occupancy(
-                    owner_id, project.operational_node_id, requirement.resource_id, staged
+            reserved = self._reserved_resource_t(project, requirement.resource_id)
+            if reserved + 1e-9 < requirement.amount_t:
+                raise RuntimeError("construction materials are not fully reserved")
+            if requirement.amount_t > 1e-12:
+                self.inventory.consume_reserved(
+                    owner_id,
+                    project.operational_node_id,
+                    requirement.resource_id,
+                    requirement.amount_t,
                 )
             state.committed_t = requirement.amount_t
         project.materials_committed = True

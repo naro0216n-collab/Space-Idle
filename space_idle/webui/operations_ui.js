@@ -249,7 +249,12 @@
     if(p.completed_facility_id)targetRows.push(['反映設備',esc(p.completed_facility_id)]);
     const foundingProject=p.target_kind==='location_founding_deployment';
     const committedLabel=foundingProject?'準備済':'投入済';
-    const resourceRows=(p.resources||[]).map((r)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div><div class="cell-sub">ステージ済み ${fmt(r.staged_t)} t · ${committedLabel} ${fmt(r.committed_t)} t · 不足 ${fmt(r.shortage_t)} t</div></div>`).join('');
+    const resourceRows=(p.resources||[]).map((r)=>{
+      const securedLabel=p.target_kind==="location_founding_deployment"
+        ? `展開payload ${fmt(r.staged_t||0)} t`
+        : `予約済み ${fmt(r.reserved_t||0)} t`;
+      return `<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div><div class="cell-sub">${securedLabel} · ${committedLabel} ${fmt(r.committed_t)} t · 不足 ${fmt(r.shortage_t)} t</div></div>`;
+    }).join('');
     const demands=(state.demands||[]).filter((d)=>d.owner_kind===(foundingProject?'founding':'project')&&d.owner_id===p.id);
     const demandHtml=demands.length?demands.map((d)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(d.resource_id))}</span><span>${fmt(d.remaining_t)} t 待ち</span></div><div class="cell-sub">${d.source_id?esc(locationName(d.source_id)):'Laneが供給元を選択'} → ${esc(locationName(d.destination_id))} · 輸送系内 ${fmt(d.pipeline_t)} t</div></div>`).join(''):'<div class="empty-state">現在の物流Demandなし</div>';
     const settingsDisabled=p.settings_editable?'':'disabled';
@@ -287,7 +292,7 @@
   function prototypeResourceHtml(r){
     const rows=r.prototype_resources||[];
     if(!rows.length)return '<div class="empty-state">追加試作資材なし</div>';
-    return rows.map((x)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(x.resource_id))}</span><span>${fmt(x.staged_t)} / ${fmt(x.required_t)} t staged</span></div><div class="cell-sub">current claim ${fmt(x.requested_t)} t · allocated ${fmt(x.allocated_t)} t · unmet ${fmt(x.unmet_t)} t · pipeline ${fmt(x.pipeline_t)} t</div></div>`).join('');
+    return rows.map((x)=>`<div class="route-mode-card"><div class="mode-title"><span>${esc(resourceName(x.resource_id))}</span><span>${fmt(x.reserved_t)} / ${fmt(x.required_t)} t reserved</span></div><div class="cell-sub">current claim ${fmt(x.requested_t)} t · allocated ${fmt(x.allocated_t)} t · unmet ${fmt(x.unmet_t)} t · pipeline ${fmt(x.pipeline_t)} t</div></div>`).join('');
   }
   function experienceHtml(r){
     const rows=r.operational_experience||[];

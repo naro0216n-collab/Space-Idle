@@ -28,18 +28,20 @@ def test_partial_construction_procurement_is_project_owned_until_cancelled():
     sim.inventory.add(ids.EARTH, ids.STRUCTURAL_COMPONENTS, 0.5)
 
     app.execute(AdvanceTime(1))
-    staged = sim.projects.staged_resource_t(project, ids.STRUCTURAL_COMPONENTS)
+    staged = sim.projects.reserved_resource_t(project, ids.STRUCTURAL_COMPONENTS)
     assert staged > 0.0
-    assert sim.projects.staged_resource_t(project, ids.STRUCTURAL_COMPONENTS) >= staged
+    assert sim.projects.reserved_resource_t(project, ids.STRUCTURAL_COMPONENTS) >= staged
     assert project.resources[ids.STRUCTURAL_COMPONENTS].committed_t == pytest.approx(0.0)
 
     app.execute(PauseBuild(result.created_id))
     app.execute(AdvanceTime(1))
-    assert sim.projects.staged_resource_t(project, ids.STRUCTURAL_COMPONENTS) == pytest.approx(staged)
+    assert sim.projects.reserved_resource_t(project, ids.STRUCTURAL_COMPONENTS) == pytest.approx(staged)
     stock_before_cancel = sim.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
+    available_before_cancel = sim.inventory.available(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
     app.execute(CancelBuild(result.created_id))
-    assert sim.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS) == pytest.approx(
-        stock_before_cancel + staged
+    assert sim.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS) == pytest.approx(stock_before_cancel)
+    assert sim.inventory.available(ids.EARTH, ids.STRUCTURAL_COMPONENTS) == pytest.approx(
+        available_before_cancel + staged
     )
     validate_runtime_state(sim)
 
@@ -57,7 +59,7 @@ def test_planned_project_with_unmet_technology_does_not_claim_inventory():
     assert project.status is ProjectStatus.PLANNED
     assert "technology" in {blocker.code for blocker in sim.projects.blockers(project.id, sim.day)}
     assert all(
-        sim.projects.staged_resource_t(project, requirement.resource_id)
+        sim.projects.reserved_resource_t(project, requirement.resource_id)
         == pytest.approx(0.0)
         for requirement in recipe.resources
     )

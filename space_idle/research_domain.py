@@ -31,6 +31,7 @@ def capture_research(sim: Any) -> dict[str, Any]:
                 "demonstration_operational_node_id": (
                     None if r.demonstration_operational_node_id is None else str(r.demonstration_operational_node_id)
                 ),
+                "stage_started_day": r.stage_started_day,
             }
             for r in sorted(sim.research.active.values(), key=lambda row: str(row.definition_id))
         ],
@@ -53,17 +54,22 @@ def restore_research(sim: Any, data: dict[str, Any]) -> None:
     for r in data.get("active", []):
         rid = DefinitionId(r["definition_id"])
         sim.research.active[rid] = ResearchState(
-            rid,
-            ResearchStage(r["stage"]),
-            float(r.get("stage_progress", 0.0)),
-            r["priority"],
-            bool(r["paused"]),
-            None
-            if r["prototype_operational_node_id"] is None
-            else SpatialNodeId(r["prototype_operational_node_id"]),
-            None
-            if r.get("demonstration_operational_node_id") is None
-            else SpatialNodeId(r["demonstration_operational_node_id"]),
+            definition_id=rid,
+            stage=ResearchStage(r["stage"]),
+            stage_progress=float(r.get("stage_progress", 0.0)),
+            priority=r["priority"],
+            paused=bool(r["paused"]),
+            prototype_operational_node_id=(
+                None
+                if r["prototype_operational_node_id"] is None
+                else SpatialNodeId(r["prototype_operational_node_id"])
+            ),
+            demonstration_operational_node_id=(
+                None
+                if r.get("demonstration_operational_node_id") is None
+                else SpatialNodeId(r["demonstration_operational_node_id"])
+            ),
+            stage_started_day=int(r.get("stage_started_day", 0)),
         )
 
 
@@ -218,6 +224,7 @@ def validate_runtime(sim: Any) -> None:
             f"invalid active research stage: {research_id}/{state.stage}",
         )
         _require(state.stage_progress >= -1e-9, f"negative research stage progress: {research_id}")
+        _require(state.stage_started_day >= 0, f"negative research stage start day: {research_id}")
         if state.stage is ResearchStage.THEORY:
             _require(
                 state.stage_progress <= definition.research_point_cost + 1e-7,
@@ -247,39 +254,44 @@ def validate_runtime(sim: Any) -> None:
             f"research demonstration references unknown location: {research_id}",
         )
 
-    allowed_staging: dict[EntityId, tuple[DefinitionId, SpatialNodeId]] = {}
+    allowed_reservations: dict[EntityId, tuple[DefinitionId, SpatialNodeId]] = {}
     for research_id, state in sim.research.active.items():
-        if state.stage is ResearchStage.PROTOTYPE and state.prototype_operational_node_id is not None:
-            allowed_staging[sim.research._prototype_staging_owner_id(research_id)] = (
-                research_id,
-                state.prototype_operational_node_id,
-            )
-    for (owner_id, location_id, resource_id), amount in sim.inventory.external_occupancy.items():
+        if (
+            state.stage is ResearchStage.PROTOTYPE
+            and state.prototype_operational_node_id is not None
+        ):
+            allowed_reservations[
+                sim.research._prototype_reservation_owner_id(research_id)
+            ] = (research_id, state.prototype_operational_node_id)
+    for (owner_id, location_id, resource_id), amount in sim.inventory.reserved.items():
         if not str(owner_id).startswith("research.prototype:"):
             continue
-        _require(owner_id in allowed_staging, f"orphaned research prototype staging: {owner_id}")
-        if owner_id not in allowed_staging:
+        _require(
+            owner_id in allowed_reservations,
+            f"orphaned research prototype reservation: {owner_id}",
+        )
+        if owner_id not in allowed_reservations:
             continue
-        research_id, expected_location_id = allowed_staging[owner_id]
+        research_id, expected_location_id = allowed_reservations[owner_id]
         prototype = sim.research.definitions[research_id].prototype
         _require(
             prototype is not None,
-            f"research prototype staging lacks prototype definition: {research_id}",
+            f"research prototype reservation lacks prototype definition: {research_id}",
         )
         if prototype is None:
             continue
         _require(
             location_id == expected_location_id,
-            f"research prototype staging at wrong location: {research_id}",
+            f"research prototype reservation at wrong location: {research_id}",
         )
         _require(
             resource_id in prototype.resources,
-            f"research prototype stages unexpected resource: {research_id}/{resource_id}",
+            f"research prototype reserves unexpected resource: {research_id}/{resource_id}",
         )
         if resource_id in prototype.resources:
             _require(
                 -1e-9 <= amount <= prototype.resources[resource_id] + 1e-9,
-                f"research prototype staged resource outside requirement: {research_id}/{resource_id}",
+                f"research prototype reserved resource outside requirement: {research_id}/{resource_id}",
             )
     _require(
         sim.research.completed.issubset(sim.research.definitions),
