@@ -383,7 +383,7 @@ def test_relocation_plan_is_the_execution_contract_for_time_and_resources():
         day=sim.day,
     )
     relocation = lg.fleet_relocations[relocation_id]
-    assert relocation.arrival_day is None
+    assert relocation.movement_execution_id is None
     for row in plan.resource_requirements:
         assert lg.inventory.available(row.operational_node_id, row.resource_id) == pytest.approx(
             before[(row.operational_node_id, row.resource_id)]
@@ -391,8 +391,10 @@ def test_relocation_plan_is_the_execution_contract_for_time_and_resources():
 
     sim.advance_days(1)
     relocation = lg.fleet_relocations[relocation_id]
-    assert relocation.departure_day == 0
-    assert relocation.arrival_day == plan.arrival_day
+    assert relocation.movement_execution_id is not None
+    execution = lg.movement_executions[relocation.movement_execution_id]
+    assert execution.started_day == 0
+    assert execution.completion_day == plan.arrival_day
     for row in plan.resource_requirements:
         assert lg.inventory.available(row.operational_node_id, row.resource_id) == pytest.approx(
             before[(row.operational_node_id, row.resource_id)] - row.required_t
@@ -464,13 +466,15 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     sim.advance_to_day(flow.ready_day)
     # The externally visible state rests after Boundary settlement for ready_day:
     # Cargo is already admitted, while that day's Allocation has not yet run.
-    assert relocation.departure_day is None
+    assert relocation.movement_execution_id is None
     assert sim.inventory.available(ids.LEO, ids.PROPELLANT) == pytest.approx(required)
 
     sim.advance_days(1)
 
-    assert relocation.departure_day == flow.ready_day
-    assert relocation.arrival_day == flow.ready_day + relocation.travel_days
+    assert relocation.movement_execution_id is not None
+    execution = lg.movement_executions[relocation.movement_execution_id]
+    assert execution.started_day == flow.ready_day
+    assert execution.completion_day == flow.ready_day + execution.latency_days
     assert flow.id not in sim.logistics.cargo_flows
 
 
@@ -602,6 +606,12 @@ def test_relocation_keeps_units_exclusive_until_arrival():
     lg = sim.transport
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 10.0)
+    source_before = lg.fleet_pool(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO
+    ).total_units
+    destination_before = lg.fleet_pool(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
+    ).total_units
     relocation_id = lg.relocate_fleet(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         2,
@@ -611,13 +621,26 @@ def test_relocation_keeps_units_exclusive_until_arrival():
     )
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 1
     sim.advance_days(1)
-    assert lg.fleet_relocations[relocation_id].departure_day == 0
-    lg.advance_fleet_state(4)
+    relocation = lg.fleet_relocations[relocation_id]
+    assert relocation.movement_execution_id is not None
+    execution = lg.movement_executions[relocation.movement_execution_id]
+    assert execution.started_day == 0
+    assert lg.fleet_pool(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO
+    ).total_units == source_before - 2
+    assert lg.fleet_pool(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
+    ).total_units == destination_before
+    lg.advance_fleet_state(execution.completion_day - 1)
     assert relocation_id in lg.fleet_relocations
-    lg.advance_fleet_state(5)
+    lg.advance_fleet_state(execution.completion_day)
     assert relocation_id not in lg.fleet_relocations
-    assert lg.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).total_units == 1
-    assert lg.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT).total_units == 2
+    assert lg.fleet_pool(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO
+    ).total_units == source_before - 2
+    assert lg.fleet_pool(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
+    ).total_units == destination_before + 2
 
 
 def test_same_priority_allocation_result_does_not_depend_on_registration_order():
@@ -880,7 +903,7 @@ def test_relocation_waits_for_shared_resource_claim_allocation_before_departure(
     assert claims
     empty = allocate_resource_claims(claims, sim.inventory)
     lg.advance_fleet_relocations(empty, 0)
-    assert relocation.departure_day is None
+    assert relocation.movement_execution_id is None
 
     required = sum(
         need.required_t for need in relocation.resource_needs
@@ -890,6 +913,8 @@ def test_relocation_waits_for_shared_resource_claim_allocation_before_departure(
     funded = allocate_resource_claims(lg.fleet_relocation_resource_claims(0), sim.inventory)
     lg.advance_fleet_relocations(funded, 0)
 
-    assert relocation.departure_day == 0
-    assert relocation.arrival_day == relocation.travel_days
+    assert relocation.movement_execution_id is not None
+    execution = lg.movement_executions[relocation.movement_execution_id]
+    assert execution.started_day == 0
+    assert execution.completion_day == execution.latency_days
     assert sim.inventory.amount(ids.LEO, ids.PROPELLANT) == pytest.approx(0.0)

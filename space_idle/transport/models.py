@@ -127,12 +127,10 @@ class FleetRelocation:
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
     requested_day: int
-    travel_days: int
     path: tuple[RouteId, ...]
     resource_needs: tuple[FleetRelocationResourceNeed, ...] = ()
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    departure_day: int | None = None
-    arrival_day: int | None = None
+    movement_execution_id: EntityId | None = None
 
     def __post_init__(self) -> None:
         self.priority = ActivityPriority(self.priority)
@@ -140,16 +138,12 @@ class FleetRelocation:
             raise ValueError("fleet relocation units must be positive")
         if self.source_id == self.destination_id:
             raise ValueError("fleet relocation endpoints must differ")
-        if self.travel_days <= 0:
-            raise ValueError("fleet relocation travel days must be positive")
-        if (self.departure_day is None) != (self.arrival_day is None):
-            raise ValueError("fleet relocation timing must be both pending or both active")
-        if self.departure_day is not None and self.arrival_day <= self.departure_day:
-            raise ValueError("fleet relocation arrival must follow departure")
+        if not self.path:
+            raise ValueError("fleet relocation requires a movement path")
 
     @property
     def started(self) -> bool:
-        return self.departure_day is not None
+        return self.movement_execution_id is not None
 
 
 @dataclass(frozen=True)
@@ -483,6 +477,98 @@ class MovementPlan:
     @property
     def delta_v_km_s(self) -> float:
         return sum(operation.delta_v_km_s for operation in self.operations)
+
+
+class MovementExecutionKind(str, Enum):
+    FLEET_RELOCATION = "fleet_relocation"
+    FOUNDING_DEPLOYMENT = "founding_deployment"
+    SCIENTIFIC_EXPLORATION = "scientific_exploration"
+
+
+@dataclass(frozen=True)
+class MovementExecutionResourceRequirement:
+    """Frozen physical resource requirement for one started Movement leg."""
+
+    operational_node_id: SpatialNodeId
+    resource_id: DefinitionId
+    required_t: float
+
+    def __post_init__(self) -> None:
+        if self.required_t < -1e-9:
+            raise ValueError("movement execution resource requirement must be non-negative")
+
+
+@dataclass(frozen=True)
+class MovementExecutionLeg:
+    """Frozen movement conditions captured when a one-shot execution starts."""
+
+    movement_plan_id: RouteId
+    origin: MovementEndpoint
+    destination: MovementEndpoint
+    operations: tuple[TransportOperationRequirement, ...]
+    latency_days: int
+    payload_capacity_t: float
+    propellant_t_per_unit: float
+    asset_disposition: OperationAssetDisposition
+    resource_requirements: tuple[MovementExecutionResourceRequirement, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.latency_days <= 0:
+            raise ValueError("movement execution leg latency must be positive")
+        if self.payload_capacity_t < -1e-9:
+            raise ValueError("movement execution payload capacity must be non-negative")
+        if self.propellant_t_per_unit < -1e-9:
+            raise ValueError("movement execution propellant must be non-negative")
+        if not self.operations:
+            raise ValueError("movement execution leg requires operations")
+
+
+@dataclass
+class MovementExecution:
+    """Authoritative snapshot of a started finite Movement.
+
+    MovementPlan candidates remain derived. Once dispatch starts, this state owns
+    the conditions that must not change retroactively when Spatial, Infrastructure,
+    Technology, or current Vehicle definitions change.
+    """
+
+    id: EntityId
+    owner_id: EntityId
+    kind: MovementExecutionKind
+    vehicle_definition_id: DefinitionId
+    units: int
+    legs: tuple[MovementExecutionLeg, ...]
+    payload_t_per_unit: float
+    started_day: int
+    completion_day: int
+
+    def __post_init__(self) -> None:
+        if self.units <= 0:
+            raise ValueError("movement execution units must be positive")
+        if not self.legs:
+            raise ValueError("movement execution requires at least one leg")
+        if self.payload_t_per_unit < -1e-9:
+            raise ValueError("movement execution payload must be non-negative")
+        if self.completion_day <= self.started_day:
+            raise ValueError("movement execution completion must follow start")
+        if self.payload_t_per_unit > min(leg.payload_capacity_t for leg in self.legs) + 1e-9:
+            raise ValueError("movement execution payload exceeds frozen capacity")
+
+    @property
+    def latency_days(self) -> int:
+        return sum(leg.latency_days for leg in self.legs)
+
+    @property
+    def origin(self) -> MovementEndpoint:
+        return self.legs[0].origin
+
+    @property
+    def destination(self) -> MovementEndpoint:
+        return self.legs[-1].destination
+
+    @property
+    def final_asset_disposition(self) -> OperationAssetDisposition:
+        return self.legs[-1].asset_disposition
 
 @dataclass(frozen=True)
 class PoweredAscentCapability:

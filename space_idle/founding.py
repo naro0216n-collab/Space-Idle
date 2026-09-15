@@ -18,9 +18,7 @@ from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialN
 from .site import SiteRequirements, evaluate_environment_requirements, evaluate_site_requirements
 from .storage import StorageService
 from .transport.models import (
-    FleetReservationKind,
-    OperationAssetDisposition,
-    TransportOperationRequirement,
+    FleetReservationKind, MovementExecutionKind, OperationAssetDisposition,
 )
 
 
@@ -48,8 +46,6 @@ class FoundingPackageDefinition:
     deployed_facilities: tuple[FoundingFacilityDeployment, ...]
     preparation_work: float
     preparation_service_type: str
-    operations: tuple[TransportOperationRequirement, ...]
-    transit_days: int
     initial_inventory: tuple[FoundingResourceRequirement, ...] = ()
     staging_requirements: SiteRequirements = SiteRequirements()
     target_requirements: SiteRequirements = SiteRequirements()
@@ -63,8 +59,6 @@ class FoundingPackageDefinition:
             raise ValueError("founding preparation work must be non-negative")
         if not self.preparation_service_type:
             raise ValueError("founding preparation capability must not be empty")
-        if self.transit_days <= 0:
-            raise ValueError("founding transit must be positive")
         if not 0 <= self.minimum_survey_knowledge_level <= 4:
             raise ValueError("founding survey knowledge must be within 0..4")
         if self.required_units <= 0:
@@ -128,8 +122,7 @@ class LocationFoundingProject:
     preparation_done: float = 0.0
     inputs_consumed: bool = False
     paused: bool = False
-    departure_day: int | None = None
-    arrival_day: int | None = None
+    movement_execution_id: EntityId | None = None
     completed_day: int | None = None
 
     def __post_init__(self) -> None:
@@ -262,18 +255,26 @@ class LocationFoundingService:
         if self.transport.vehicle_definition(vehicle_definition_id) is None:
             failures.append(FoundingBlocker("vehicle_definition", str(vehicle_definition_id)))
             return tuple(failures)
-        failures.extend(
-            FoundingBlocker("deployment_vehicle", detail)
-            for detail in self.transport.deployment_vehicle_failures(
-                vehicle_definition_id,
+        try:
+            movement_plan = self.transport.movement_plan_to_physical_target_for_vehicle(
                 staging_node_id,
                 cell_id,
-                package.operations,
-                package.payload_t_per_unit,
-                package.transit_days,
+                vehicle_definition_id,
+                payload_t_per_unit=package.payload_t_per_unit,
                 day=day,
             )
-        )
+        except ValueError as exc:
+            failures.append(FoundingBlocker("deployment_vehicle", str(exc)))
+        else:
+            failures.extend(
+                FoundingBlocker("deployment_vehicle", detail)
+                for detail in (
+                    *self.transport.movement_plan_failures(movement_plan.id, day),
+                    *self.transport.vehicle_movement_failures(
+                        movement_plan.id, vehicle_definition_id, day
+                    ),
+                )
+            )
         free = self.transport.fleet_free_units(vehicle_definition_id, staging_node_id)
         if free < package.required_units:
             failures.append(FoundingBlocker("fleet_units", f"{free}/{package.required_units}"))
@@ -329,7 +330,13 @@ class LocationFoundingService:
         return project_id
 
     def resource_requirements_for(
-        self, package_id: DefinitionId, vehicle_definition_id: DefinitionId
+        self,
+        package_id: DefinitionId,
+        vehicle_definition_id: DefinitionId,
+        staging_node_id: SpatialNodeId,
+        target_cell_id: SurfaceCellId,
+        *,
+        day: int = 0,
     ) -> tuple[FoundingResourceRequirement, ...]:
         """Return the complete staging-side resource requirement for a deployment.
 
@@ -341,14 +348,19 @@ class LocationFoundingService:
         totals: dict[DefinitionId, float] = {
             req.resource_id: req.amount_t for req in package.payload_resources
         }
-        propellant = self.transport.deployment_propellant_t(
+        movement_plan = self.transport.movement_plan_to_physical_target_for_vehicle(
+            staging_node_id,
+            target_cell_id,
             vehicle_definition_id,
-            package.operations,
-            package.payload_t_per_unit,
-        ) * package.required_units
+            payload_t_per_unit=package.payload_t_per_unit,
+            day=day,
+        )
         vehicle = self.transport.vehicle_definition(vehicle_definition_id)
         if vehicle is None:
             raise KeyError(vehicle_definition_id)
+        propellant = vehicle.propellant_t(
+            movement_plan, package.payload_t_per_unit
+        ) * package.required_units
         if vehicle.propellant_resource_id is not None and propellant > 1e-12:
             totals[vehicle.propellant_resource_id] = (
                 totals.get(vehicle.propellant_resource_id, 0.0) + propellant
@@ -364,7 +376,10 @@ class LocationFoundingService:
     ) -> tuple[FoundingResourceRequirement, ...]:
         project = self.projects[project_id]
         return self.resource_requirements_for(
-            project.founding_package_id, project.vehicle_definition_id
+            project.founding_package_id,
+            project.vehicle_definition_id,
+            project.staging_node_id,
+            project.target_core_cell_id,
         )
 
     def staged_payload_t(self, project_id: ProjectId, resource_id: DefinitionId) -> float:
@@ -623,19 +638,54 @@ class LocationFoundingService:
                 )
                 if project.preparation_done + 1e-9 >= package.preparation_work:
                     project.preparation_done = package.preparation_work
+                    movement_plan = self.transport.movement_plan_to_physical_target_for_vehicle(
+                        project.staging_node_id,
+                        project.target_core_cell_id,
+                        project.vehicle_definition_id,
+                        payload_t_per_unit=package.payload_t_per_unit,
+                        day=day,
+                    )
+                    execution_id = EntityId(f"movement.founding:{project.id}")
+                    execution = self.transport.start_movement_execution_for_plan(
+                        execution_id,
+                        EntityId(str(project.id)),
+                        MovementExecutionKind.FOUNDING_DEPLOYMENT,
+                        project.vehicle_definition_id,
+                        package.required_units,
+                        movement_plan,
+                        payload_t_per_unit=package.payload_t_per_unit,
+                        day=day,
+                    )
+                    reservation_id = self.fleet_reservation_id(project.id)
+                    try:
+                        dispatched = self.transport.dispatch_fleet_reservation(
+                            reservation_id, day=day
+                        )
+                    except Exception:
+                        self.transport.finish_movement_execution(execution.id)
+                        raise
+                    if (
+                        dispatched.vehicle_definition_id != project.vehicle_definition_id
+                        or dispatched.units != package.required_units
+                        or dispatched.operational_node_id != project.staging_node_id
+                    ):
+                        self.transport.finish_movement_execution(execution.id)
+                        raise RuntimeError("founding Fleet dispatch mismatch")
                     self._release_prepared_payload(project)
                     project.status = FoundingStatus.DEPLOYING
-                    project.departure_day = day
-                    project.arrival_day = day + package.transit_days
+                    project.movement_execution_id = execution.id
 
     def settle_arrivals(self, day: int) -> None:
         """Complete deployments whose arrival time was reached before this tick."""
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
-            if (
-                project.status is FoundingStatus.DEPLOYING
-                and project.arrival_day is not None
-                and project.arrival_day <= day
-            ):
+            if project.status is not FoundingStatus.DEPLOYING:
+                continue
+            if project.movement_execution_id is None:
+                raise RuntimeError(f"deploying founding lacks MovementExecution: {project.id}")
+            execution = self.transport.movement_executions.get(project.movement_execution_id)
+            if execution is None:
+                raise RuntimeError(f"founding MovementExecution missing: {project.id}")
+            if execution.completion_day <= day:
                 self._complete(project, day)
 
     def _complete(self, project: LocationFoundingProject, day: int) -> None:
@@ -674,19 +724,22 @@ class LocationFoundingService:
                     raise RuntimeError(
                         f"founding manifest exceeds Inventory Admission: {req.resource_id}"
                     )
-        reservation_id = self.fleet_reservation_id(project.id)
-        if self.transport.fleet_reservation_snapshot(reservation_id) is not None:
-            disposition = self.transport.deployment_asset_disposition(
-                project.vehicle_definition_id, package.operations
-            )
-            final_location = (
-                project.new_location_id
-                if disposition is OperationAssetDisposition.DESTINATION
-                else project.staging_node_id
-            )
-            self.transport.complete_fleet_reservation(
-                reservation_id, final_location_id=final_location, day=day
-            )
+        execution_id = project.movement_execution_id
+        if execution_id is None:
+            raise RuntimeError(f"founding completion lacks MovementExecution: {project.id}")
+        execution = self.transport.movement_executions.get(execution_id)
+        if execution is None:
+            raise RuntimeError(f"founding completion MovementExecution missing: {project.id}")
+        final_location = (
+            project.new_location_id
+            if execution.final_asset_disposition is OperationAssetDisposition.DESTINATION
+            else project.staging_node_id
+        )
+        self.transport.add_fleet_units(
+            execution.vehicle_definition_id, execution.units, final_location, day=day
+        )
+        self.transport.finish_movement_execution(execution_id)
+        project.movement_execution_id = None
         project.status = FoundingStatus.COMPLETE
         project.completed_day = day
         project.paused = False

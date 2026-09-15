@@ -48,6 +48,27 @@ def _advance_until_complete(app, exploration_id, *, max_days: int = 200) -> int:
     raise AssertionError(f"scientific exploration did not complete within {max_days} days: {exploration_id}")
 
 
+def _seed_exploration_movement_resources(app, *, returning: bool = False) -> None:
+    sim = app._simulation
+    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
+    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
+    definition = sim.scientific_exploration.definitions[exploration_id]
+    plans = sim.scientific_exploration.movement_path(
+        definition, vehicle_id, sim.day, reverse=returning
+    )
+    for requirement in sim.transport.movement_resource_requirements_for_plans(
+        vehicle_id,
+        definition.required_units,
+        plans,
+        payload_t_per_unit=definition.minimum_payload_t,
+    ):
+        sim.inventory.add(
+            requirement.operational_node_id,
+            requirement.resource_id,
+            requirement.required_t,
+        )
+
+
 def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performance():
     app = build_game_application()
     sim = app._simulation
@@ -62,12 +83,12 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performan
         option for option in row.fleet_options
         if option.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
     )
-    assert any("spaceflight:unsupported" in blocker for blocker in launch_vehicle.blockers)
+    assert any(blocker.startswith("movement_path:") for blocker in launch_vehicle.blockers)
     assert tug.blockers == ()
+    assert tug.outbound_latency_days is not None and tug.outbound_latency_days > 0
     assert tug.can_assign is False  # Campaign state must exist first.
 
     definition = sim.scientific_exploration.definitions[ids.CISLUNAR_SCIENCE_EXPLORATION]
-    assert row.mission_duration_days == definition.mission_duration_days
     assert row.minimum_payload_t == definition.minimum_payload_t
     assert row.required_vehicle_capabilities == definition.required_vehicle_capabilities
     assert row.research_points_per_day == pytest.approx(definition.points_per_day)
@@ -97,6 +118,10 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performan
     fleet = _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
     assert fleet.exploration_units == required_units
     assert fleet.free_units == fleet_before.free_units - required_units
+    assert assigned.outbound_latency_days == tug.outbound_latency_days
+    assert assigned.movement_operations
+
+    _seed_exploration_movement_resources(app)
 
     app.execute(AdvanceTime(1))
     # Reservation acquisition is a separate tick result; newly reserved inputs
@@ -114,10 +139,14 @@ def test_scientific_exploration_fleet_contract_checks_usable_payload_and_generic
     vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
     definition = sim.scientific_exploration.definitions[exploration_id]
     vehicle = sim.transport.vehicle_defs[vehicle_id]
+    plan = sim.scientific_exploration.movement_path(
+        definition, vehicle_id, sim.day
+    )[0]
+    usable_payload = vehicle.max_cargo_for_movement(plan)
 
     sim.scientific_exploration.definitions[exploration_id] = replace(
         definition,
-        minimum_payload_t=vehicle.max_cargo_for_movement(definition.compatibility_movement_plan()) + 0.1,
+        minimum_payload_t=usable_payload + 0.1,
         required_vehicle_capabilities=("docking",),
     )
     failures = sim.scientific_exploration.fleet_failures(
@@ -132,7 +161,7 @@ def test_scientific_exploration_fleet_contract_checks_usable_payload_and_generic
     )
     sim.scientific_exploration.definitions[exploration_id] = replace(
         definition,
-        minimum_payload_t=vehicle.max_cargo_for_movement(definition.compatibility_movement_plan()),
+        minimum_payload_t=usable_payload,
         required_vehicle_capabilities=("docking",),
     )
     row = _row(app)
@@ -141,9 +170,7 @@ def test_scientific_exploration_fleet_contract_checks_usable_payload_and_generic
         if option.vehicle_definition_id == str(vehicle_id)
     )
     assert tug.blockers == ()
-    assert row.minimum_payload_t == pytest.approx(
-        vehicle.max_cargo_for_movement(definition.compatibility_movement_plan())
-    )
+    assert row.minimum_payload_t == pytest.approx(usable_payload)
     assert row.required_vehicle_capabilities == ("docking",)
 
 
@@ -181,6 +208,7 @@ def test_exploration_reservation_excludes_transport_and_release_refills_target()
 
 def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future_result(tmp_path):
     app = build_game_application()
+    _seed_exploration_movement_resources(app)
     app.execute(StartScientificExploration(str(ids.CISLUNAR_SCIENCE_EXPLORATION)))
     app.execute(AssignExplorationFleet(
         str(ids.CISLUNAR_SCIENCE_EXPLORATION),
@@ -274,6 +302,7 @@ def test_full_rp_storage_constrains_reward_retention_but_does_not_freeze_campaig
     definition = sim.scientific_exploration.definitions[exploration_id]
     for resource_id, amount_t in definition.consumable_resources:
         sim.inventory.add(definition.origin_id, resource_id, amount_t)
+    _seed_exploration_movement_resources(app)
     app.execute(StartScientificExploration(str(exploration_id)))
     app.execute(AssignExplorationFleet(
         str(exploration_id), str(ids.REUSABLE_ORBITAL_CARGO_TUG)
@@ -286,13 +315,49 @@ def test_full_rp_storage_constrains_reward_retention_but_does_not_freeze_campaig
         exploration_id, day=sim.day
     )
     before_points = sim.research.stored_points
-    app.execute(AdvanceTime(2))
+    app.execute(AdvanceTime(7))
 
     assert state.inputs_consumed is True
     assert state.progress_days > 0.0
     assert state.research_points_awarded > 0.0
     assert sim.research.stored_points == pytest.approx(before_points)
-    assert _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == _row(app).required_units
+    assert _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT).exploration_units == _row(app).required_units
+
+
+def test_started_exploration_movement_keeps_frozen_latency_after_vehicle_definition_change():
+    app = build_game_application()
+    sim = app._simulation
+    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
+    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
+    _seed_exploration_movement_resources(app)
+    app.execute(StartScientificExploration(str(exploration_id)))
+    app.execute(AssignExplorationFleet(str(exploration_id), str(vehicle_id)))
+    app.execute(AdvanceTime(2))
+
+    state = sim.scientific_exploration.campaigns[exploration_id]
+    execution = sim.transport.movement_executions[state.movement_execution_id]
+    frozen_completion = execution.completion_day
+    frozen_latency = execution.latency_days
+    frozen_operations = tuple(
+        (operation.operation_type, operation.delta_v_km_s)
+        for leg in execution.legs
+        for operation in leg.operations
+    )
+    vehicle = sim.transport.vehicle_defs[vehicle_id]
+    sim.transport.vehicle_defs[vehicle_id] = replace(
+        vehicle,
+        performance=replace(vehicle.performance, transit_time_multiplier=9.0),
+    )
+    sim.transport.invalidate_movement_plans()
+
+    row = _row(app)
+    assert row.outbound_latency_days == frozen_latency
+    assert row.movement_operations == frozen_operations
+
+    app.execute(AdvanceTime(frozen_completion - sim.day))
+    assert state.phase.value == "active"
+    assert state.movement_execution_id is None
+    assert _fleet_row(app, vehicle_id, ids.LUNAR_ORBIT).exploration_units == state.reserved_units
 
 
 def test_partial_exploration_inputs_are_reserved_and_unassign_releases_them():

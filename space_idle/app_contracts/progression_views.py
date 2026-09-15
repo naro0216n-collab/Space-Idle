@@ -104,6 +104,8 @@ class ScientificExplorationFleetOptionRow:
     free_units: int
     required_units: int
     blockers: tuple[str, ...]
+    outbound_latency_days: int | None = None
+    return_latency_days: int | None = None
     can_assign: bool = False
 
 
@@ -117,8 +119,9 @@ class ScientificExplorationRow:
     can_set_priority: bool
     origin_id: str
     destination_id: str
-    operations: tuple[tuple[str, float], ...]
-    mission_duration_days: int
+    movement_operations: tuple[tuple[str, float], ...]
+    outbound_latency_days: int | None
+    return_latency_days: int | None
     origin_requirements: SiteRequirementsDefinitionRow
     destination_requirements: SiteRequirementsDefinitionRow
     duration_days: float

@@ -77,7 +77,16 @@ class LogisticsStateProjectorMixin:
                 str(row.id), str(row.vehicle_definition_id),
                 self._vehicle_definition(row.vehicle_definition_id).display_name,
                 row.units, str(row.source_id), str(row.destination_id),
-                row.departure_day, row.arrival_day,
+                (
+                    None
+                    if row.movement_execution_id is None
+                    else sim.transport.movement_executions[row.movement_execution_id].started_day
+                ),
+                (
+                    None
+                    if row.movement_execution_id is None
+                    else sim.transport.movement_executions[row.movement_execution_id].completion_day
+                ),
             )
             for row in sim.transport.fleet_relocation_snapshots()
             if (vehicle_definition_id is None or str(row.vehicle_definition_id) == vehicle_definition_id)

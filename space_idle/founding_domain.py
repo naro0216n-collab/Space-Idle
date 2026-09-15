@@ -4,8 +4,8 @@ from typing import Any
 
 from .domain import DomainExtension, StateCodec
 from .founding import FoundingStatus, LocationFoundingProject
-from .shared import CelestialBodyId, DefinitionId, ProjectId, SpatialNodeId, SurfaceCellId
-from .transport.models import FleetReservationKind
+from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
+from .transport.models import FleetReservationKind, MovementExecutionKind
 from .validation_support import ValidationContext, require as _require, validate_site_requirements
 
 
@@ -31,8 +31,7 @@ def capture_founding(sim: Any) -> dict[str, Any]:
                 "preparation_done": p.preparation_done,
                 "inputs_consumed": p.inputs_consumed,
                 "paused": p.paused,
-                "departure_day": p.departure_day,
-                "arrival_day": p.arrival_day,
+                "movement_execution_id": None if p.movement_execution_id is None else str(p.movement_execution_id),
                 "completed_day": p.completed_day,
             }
             for p in sorted(service.projects.values(), key=lambda row: str(row.id))
@@ -62,8 +61,7 @@ def restore_founding(sim: Any, data: dict[str, Any]) -> None:
             preparation_done=float(row.get("preparation_done", 0.0)),
             inputs_consumed=bool(row.get("inputs_consumed", False)),
             paused=bool(row.get("paused", False)),
-            departure_day=None if row.get("departure_day") is None else int(row["departure_day"]),
-            arrival_day=None if row.get("arrival_day") is None else int(row["arrival_day"]),
+            movement_execution_id=None if row.get("movement_execution_id") is None else EntityId(row["movement_execution_id"]),
             completed_day=None if row.get("completed_day") is None else int(row["completed_day"]),
         )
         service.projects[p.id] = p
@@ -81,8 +79,6 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         return
     for package_id, package in service.packages.items():
         _require(package_id == package.id, f"founding package key mismatch: {package_id}")
-        _require(bool(package.operations), f"founding package has no deployment operation: {package_id}")
-        _require(package.transit_days > 0, f"founding package has invalid transit: {package_id}")
         _require(package.required_units > 0, f"founding package has invalid fleet units: {package_id}")
         validate_site_requirements(package.staging_requirements, ctx.known_capabilities, f"founding:{package_id}:staging", ctx.known_service_types)
         validate_site_requirements(package.target_requirements, ctx.known_capabilities, f"founding:{package_id}:target", ctx.known_service_types)
@@ -145,21 +141,35 @@ def validate_runtime(sim: Any) -> None:
             _require(p.new_location_id not in active_locations, f"duplicate active founding location id: {p.new_location_id}")
             active_cells.add(p.target_core_cell_id)
             active_locations.add(p.new_location_id)
-            _require(reservation is not None, f"active founding missing fleet reservation: {project_id}")
+            _require(p.new_location_id not in sim.graph.locations, f"active founding location already exists: {project_id}")
+        if p.status is FoundingStatus.PREPARING:
+            _require(reservation is not None, f"preparing founding missing fleet reservation: {project_id}")
             if reservation is not None and package is not None:
                 _require(reservation.kind is FleetReservationKind.SPECIAL_MISSION, f"founding reservation kind mismatch: {project_id}")
                 _require(reservation.vehicle_definition_id == p.vehicle_definition_id, f"founding reservation vehicle mismatch: {project_id}")
                 _require(reservation.operational_node_id == p.staging_node_id, f"founding reservation staging mismatch: {project_id}")
                 _require(reservation.units == package.required_units, f"founding reservation units mismatch: {project_id}")
-            _require(p.new_location_id not in sim.graph.locations, f"active founding location already exists: {project_id}")
         else:
-            _require(reservation is None, f"inactive founding retains fleet reservation: {project_id}")
+            _require(reservation is None, f"non-preparing founding retains fleet reservation: {project_id}")
         if p.status is FoundingStatus.PREPARING:
-            _require(p.departure_day is None and p.arrival_day is None, f"preparing founding has transit dates: {project_id}")
+            _require(p.movement_execution_id is None, f"preparing founding has MovementExecution: {project_id}")
         elif p.status is FoundingStatus.DEPLOYING:
-            _require(p.departure_day is not None and p.arrival_day is not None, f"deploying founding lacks transit dates: {project_id}")
+            _require(p.movement_execution_id is not None, f"deploying founding lacks MovementExecution: {project_id}")
             _require(not p.paused, f"deploying founding cannot be paused: {project_id}")
+            if p.movement_execution_id is not None:
+                execution = sim.transport.movement_executions.get(p.movement_execution_id)
+                _require(execution is not None, f"deploying founding MovementExecution missing: {project_id}")
+                if execution is not None:
+                    _require(execution.kind is MovementExecutionKind.FOUNDING_DEPLOYMENT, f"founding MovementExecution kind mismatch: {project_id}")
+                    _require(execution.owner_id == EntityId(str(project_id)), f"founding MovementExecution owner mismatch: {project_id}")
+                    _require(execution.vehicle_definition_id == p.vehicle_definition_id, f"founding MovementExecution vehicle mismatch: {project_id}")
+                    _require(execution.origin.operational_node_id == p.staging_node_id, f"founding MovementExecution origin mismatch: {project_id}")
+                    _require(execution.destination.physical_target_cell_id == p.target_core_cell_id, f"founding MovementExecution target mismatch: {project_id}")
+                    if package is not None:
+                        _require(execution.units == package.required_units, f"founding MovementExecution unit mismatch: {project_id}")
+                        _require(abs(execution.payload_t_per_unit - package.payload_t_per_unit) <= 1e-9, f"founding MovementExecution payload mismatch: {project_id}")
         elif p.status is FoundingStatus.COMPLETE:
+            _require(p.movement_execution_id is None, f"completed founding retains MovementExecution: {project_id}")
             _require(p.new_location_id in sim.graph.locations, f"completed founding location missing: {project_id}")
             if p.new_location_id in sim.graph.locations:
                 loc = sim.graph.locations[p.new_location_id]

@@ -8,7 +8,7 @@ from ..validation_support import (
     require as _require,
     validate_site_requirements as _validate_site_requirements,
 )
-from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
+from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId, SurfaceCellId
 from .models import (
     DirectionalCapacity,
     FleetPool,
@@ -17,11 +17,114 @@ from .models import (
     FleetRelease,
     FleetReservation,
     FleetReservationKind,
+    MovementEndpoint,
+    MovementExecution,
+    MovementExecutionKind,
+    MovementExecutionLeg,
+    MovementExecutionResourceRequirement,
+    OperationAssetDisposition,
     PathPolicy,
+    TransportOperationRequirement,
     TransportAllocation,
     TransportControlMode,
 )
 from .production import VehicleProductionPhase, VehicleProductionState
+
+
+def _capture_movement_endpoint(endpoint: MovementEndpoint) -> dict[str, Any]:
+    return {
+        "operational_node_id": None if endpoint.operational_node_id is None else str(endpoint.operational_node_id),
+        "surface_interface_id": None if endpoint.surface_interface_id is None else str(endpoint.surface_interface_id),
+        "access_cell_id": None if endpoint.access_cell_id is None else str(endpoint.access_cell_id),
+        "non_surface_interface": endpoint.non_surface_interface,
+        "physical_target_cell_id": None if endpoint.physical_target_cell_id is None else str(endpoint.physical_target_cell_id),
+    }
+
+
+def _restore_movement_endpoint(data: dict[str, Any]) -> MovementEndpoint:
+    return MovementEndpoint(
+        operational_node_id=None if data.get("operational_node_id") is None else SpatialNodeId(data["operational_node_id"]),
+        surface_interface_id=None if data.get("surface_interface_id") is None else EntityId(data["surface_interface_id"]),
+        access_cell_id=None if data.get("access_cell_id") is None else SurfaceCellId(data["access_cell_id"]),
+        non_surface_interface=data.get("non_surface_interface"),
+        physical_target_cell_id=None if data.get("physical_target_cell_id") is None else SurfaceCellId(data["physical_target_cell_id"]),
+    )
+
+
+def _capture_movement_execution(row: MovementExecution) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "owner_id": str(row.owner_id),
+        "kind": row.kind.value,
+        "vehicle_definition_id": str(row.vehicle_definition_id),
+        "units": row.units,
+        "payload_t_per_unit": row.payload_t_per_unit,
+        "started_day": row.started_day,
+        "completion_day": row.completion_day,
+        "legs": [
+            {
+                "movement_plan_id": str(leg.movement_plan_id),
+                "origin": _capture_movement_endpoint(leg.origin),
+                "destination": _capture_movement_endpoint(leg.destination),
+                "operations": [
+                    {"operation_type": operation.operation_type, "delta_v_km_s": operation.delta_v_km_s}
+                    for operation in leg.operations
+                ],
+                "latency_days": leg.latency_days,
+                "payload_capacity_t": leg.payload_capacity_t,
+                "propellant_t_per_unit": leg.propellant_t_per_unit,
+                "asset_disposition": leg.asset_disposition.value,
+                "resource_requirements": [
+                    {
+                        "operational_node_id": str(requirement.operational_node_id),
+                        "resource_id": str(requirement.resource_id),
+                        "required_t": requirement.required_t,
+                    }
+                    for requirement in leg.resource_requirements
+                ],
+            }
+            for leg in row.legs
+        ],
+    }
+
+
+def _restore_movement_execution(data: dict[str, Any]) -> MovementExecution:
+    return MovementExecution(
+        id=EntityId(data["id"]),
+        owner_id=EntityId(data["owner_id"]),
+        kind=MovementExecutionKind(data["kind"]),
+        vehicle_definition_id=DefinitionId(data["vehicle_definition_id"]),
+        units=int(data["units"]),
+        legs=tuple(
+            MovementExecutionLeg(
+                movement_plan_id=RouteId(leg["movement_plan_id"]),
+                origin=_restore_movement_endpoint(leg["origin"]),
+                destination=_restore_movement_endpoint(leg["destination"]),
+                operations=tuple(
+                    TransportOperationRequirement(
+                        operation["operation_type"], float(operation.get("delta_v_km_s", 0.0))
+                    )
+                    for operation in leg.get("operations", [])
+                ),
+                latency_days=int(leg["latency_days"]),
+                payload_capacity_t=float(leg["payload_capacity_t"]),
+                propellant_t_per_unit=float(leg.get("propellant_t_per_unit", 0.0)),
+                asset_disposition=OperationAssetDisposition(leg["asset_disposition"]),
+                resource_requirements=tuple(
+                    MovementExecutionResourceRequirement(
+                        SpatialNodeId(requirement["operational_node_id"]),
+                        DefinitionId(requirement["resource_id"]),
+                        float(requirement["required_t"]),
+                    )
+                    for requirement in leg.get("resource_requirements", [])
+                ),
+            )
+            for leg in data.get("legs", [])
+        ),
+        payload_t_per_unit=float(data.get("payload_t_per_unit", 0.0)),
+        started_day=int(data["started_day"]),
+        completion_day=int(data["completion_day"]),
+    )
 
 
 def capture_transport(sim: Any) -> dict[str, Any]:
@@ -78,11 +181,9 @@ def capture_transport(sim: Any) -> dict[str, Any]:
                 "source_id": str(row.source_id),
                 "destination_id": str(row.destination_id),
                 "requested_day": row.requested_day,
-                "travel_days": row.travel_days,
                 "path": [str(route_id) for route_id in row.path],
-                "priority": row.priority,
-                "departure_day": row.departure_day,
-                "arrival_day": row.arrival_day,
+                "priority": int(row.priority),
+                "movement_execution_id": None if row.movement_execution_id is None else str(row.movement_execution_id),
                 "resource_needs": [
                     {
                         "operational_node_id": str(need.operational_node_id),
@@ -93,6 +194,10 @@ def capture_transport(sim: Any) -> dict[str, Any]:
                 ],
             }
             for row in sorted(tr.fleet_relocations.values(), key=lambda row: str(row.id))
+        ],
+        "movement_executions": [
+            _capture_movement_execution(row)
+            for row in sorted(tr.movement_executions.values(), key=lambda row: str(row.id))
         ],
         "fleet_releases": [
             {
@@ -157,16 +262,21 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
         EntityId(row["id"]): FleetRelocation(
             EntityId(row["id"]), DefinitionId(row["vehicle_definition_id"]), int(row["units"]),
             SpatialNodeId(row["source_id"]), SpatialNodeId(row["destination_id"]), int(row["requested_day"]),
-            int(row["travel_days"]), tuple(RouteId(value) for value in row["path"]),
+            tuple(RouteId(value) for value in row["path"]),
             tuple(
                 FleetRelocationResourceNeed(SpatialNodeId(need["operational_node_id"]), DefinitionId(need["resource_id"]), float(need["required_t"]))
                 for need in row.get("resource_needs", [])
             ),
             int(row["priority"]),
-            None if row.get("departure_day") is None else int(row["departure_day"]),
-            None if row.get("arrival_day") is None else int(row["arrival_day"]),
+            None if row.get("movement_execution_id") is None else EntityId(row["movement_execution_id"]),
         )
         for row in data.get("fleet_relocations", [])
+    }
+    tr.movement_executions = {
+        execution.id: execution
+        for execution in (
+            _restore_movement_execution(row) for row in data.get("movement_executions", [])
+        )
     }
     tr.fleet_releases = {
         EntityId(row["id"]): FleetRelease(
@@ -403,10 +513,30 @@ def validate_transport_runtime(sim: Any) -> None:
         _require(relocation.vehicle_definition_id in tr.vehicle_defs, f"fleet relocation references unknown vehicle definition: {relocation_id}")
         _require(sim.graph.has_operational_node(relocation.source_id) and sim.graph.has_operational_node(relocation.destination_id), f"fleet relocation references unknown endpoint: {relocation_id}")
         _require(bool(relocation.path), f"fleet relocation has empty path: {relocation_id}")
-        _require(relocation.travel_days > 0, f"fleet relocation has invalid travel time: {relocation_id}")
-        if relocation.started:
-            assert relocation.departure_day is not None and relocation.arrival_day is not None
-            _require(relocation.arrival_day > relocation.departure_day, f"invalid fleet relocation timing: {relocation_id}")
+        if relocation.movement_execution_id is not None:
+            execution = tr.movement_executions.get(relocation.movement_execution_id)
+            _require(execution is not None, f"fleet relocation missing MovementExecution: {relocation_id}")
+            if execution is not None:
+                _require(execution.owner_id == relocation.id, f"fleet relocation MovementExecution owner mismatch: {relocation_id}")
+                _require(execution.kind is MovementExecutionKind.FLEET_RELOCATION, f"fleet relocation MovementExecution kind mismatch: {relocation_id}")
+                _require(execution.vehicle_definition_id == relocation.vehicle_definition_id, f"fleet relocation MovementExecution vehicle mismatch: {relocation_id}")
+                _require(execution.units == relocation.units, f"fleet relocation MovementExecution units mismatch: {relocation_id}")
+                _require(execution.origin.operational_node_id == relocation.source_id, f"fleet relocation MovementExecution origin mismatch: {relocation_id}")
+                _require(execution.destination.operational_node_id == relocation.destination_id, f"fleet relocation MovementExecution destination mismatch: {relocation_id}")
+    known_execution_owners: set[tuple[MovementExecutionKind, EntityId]] = set()
+    for execution_id, execution in tr.movement_executions.items():
+        _require(execution_id == execution.id, f"movement execution key mismatch: {execution_id}")
+        _require(execution.vehicle_definition_id in tr.vehicle_defs, f"movement execution references unknown vehicle definition: {execution_id}")
+        _require(execution.started_day < execution.completion_day, f"movement execution has invalid timing: {execution_id}")
+        _require(bool(execution.legs), f"movement execution has no legs: {execution_id}")
+        _require(execution.latency_days == execution.completion_day - execution.started_day, f"movement execution latency mismatch: {execution_id}")
+        owner_key = (execution.kind, execution.owner_id)
+        _require(owner_key not in known_execution_owners, f"duplicate active movement execution owner: {execution.kind.value}/{execution.owner_id}")
+        known_execution_owners.add(owner_key)
+        for leg in execution.legs:
+            _require(bool(leg.operations), f"movement execution leg has no operations: {execution_id}")
+            _require(leg.latency_days > 0, f"movement execution leg has invalid latency: {execution_id}")
+            _require(leg.payload_capacity_t + 1e-9 >= execution.payload_t_per_unit, f"movement execution payload exceeds frozen leg capacity: {execution_id}")
     for release_id, release in tr.fleet_releases.items():
         _require(release_id == release.id, f"fleet release key mismatch: {release_id}")
         # The source allocation may have been deleted while its units are still

@@ -5,7 +5,7 @@ from typing import Any
 from .domain import DomainExtension, StateCodec
 from .scientific_exploration import ScientificExplorationPhase, ScientificExplorationState
 from .shared import DefinitionId, EntityId
-from .transport.models import FleetReservationKind
+from .transport.models import FleetReservationKind, MovementExecutionKind
 from .validation_support import ValidationContext, require as _require, validate_site_requirements
 
 
@@ -24,6 +24,9 @@ def capture_scientific_exploration(sim: Any) -> dict[str, Any]:
                 "paused": state.paused,
                 "created_day": state.created_day,
                 "priority": int(state.priority),
+                "movement_execution_id": (
+                    None if state.movement_execution_id is None else str(state.movement_execution_id)
+                ),
             }
             for state in sorted(service.campaigns.values(), key=lambda row: str(row.definition_id))
         ]
@@ -35,7 +38,7 @@ def restore_scientific_exploration(sim: Any, data: dict[str, Any]) -> None:
     service.campaigns = {
         DefinitionId(row["definition_id"]): ScientificExplorationState(
             definition_id=DefinitionId(row["definition_id"]),
-            phase=ScientificExplorationPhase(row.get("phase", "awaiting_vehicle")),
+            phase=ScientificExplorationPhase(row.get("phase", "awaiting_fleet")),
             vehicle_definition_id=(
                 None if row.get("vehicle_definition_id") is None
                 else DefinitionId(row["vehicle_definition_id"])
@@ -47,6 +50,10 @@ def restore_scientific_exploration(sim: Any, data: dict[str, Any]) -> None:
             paused=bool(row.get("paused", False)),
             created_day=int(row.get("created_day", 0)),
             priority=row["priority"],
+            movement_execution_id=(
+                None if row.get("movement_execution_id") is None
+                else EntityId(row["movement_execution_id"])
+            ),
         )
         for row in data.get("campaigns", [])
     }
@@ -66,7 +73,6 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     for definition_id, definition in sim.scientific_exploration.definitions.items():
         _require(definition_id == definition.id, f"scientific exploration key mismatch: {definition_id}")
         _require(definition.origin_id in nodes and definition.destination_id in nodes, f"scientific exploration references unknown endpoint: {definition_id}")
-        _require(definition.mission_duration_days > 0, f"scientific exploration has non-positive mission duration: {definition_id}")
         _require(definition.duration_days > 0, f"scientific exploration has non-positive campaign duration: {definition_id}")
         _require(definition.research_points_total > 0, f"scientific exploration has non-positive RP reward: {definition_id}")
         _require(definition.required_units > 0, f"scientific exploration has non-positive Fleet requirement: {definition_id}")
@@ -86,8 +92,6 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             len(consumable_ids) == len(set(consumable_ids)),
             f"scientific exploration has duplicate consumable resource: {definition_id}",
         )
-        for operation in definition.operations:
-            _require(sim.transport.operation_registry.supports(operation.operation_type), f"scientific exploration references unknown operation: {definition_id}/{operation.operation_type}")
         validate_site_requirements(definition.origin_requirements, capabilities, f"scientific_exploration:{definition_id}:origin", ctx.known_service_types)
         validate_site_requirements(definition.destination_requirements, capabilities, f"scientific_exploration:{definition_id}:destination", ctx.known_service_types)
 
@@ -100,52 +104,86 @@ def validate_runtime(sim: Any) -> None:
         definition = service.definitions[definition_id]
         _require(-1e-9 <= state.progress_days <= definition.duration_days + 1e-8, f"invalid scientific exploration progress: {definition_id}")
         _require(-1e-9 <= state.research_points_awarded <= definition.research_points_total + 1e-8, f"invalid scientific exploration RP award: {definition_id}")
+
         reservation_id = EntityId(f"scientific_exploration:{definition_id}")
         reservation = sim.transport.fleet_reservation_snapshot(reservation_id)
         if state.vehicle_definition_id is None:
+            _require(state.phase is ScientificExplorationPhase.AWAITING_FLEET, f"unassigned scientific exploration has invalid phase: {definition_id}")
             _require(state.reserved_units == 0, f"unassigned scientific exploration retains reserved units: {definition_id}")
             _require(reservation is None, f"unassigned scientific exploration retains Fleet reservation: {definition_id}")
         elif state.phase is ScientificExplorationPhase.COMPLETE:
-            _require(state.reserved_units > 0, f"completed scientific exploration lost Fleet usage record: {definition_id}")
+            _require(state.reserved_units == 0, f"completed scientific exploration retains reserved units: {definition_id}")
             _require(reservation is None, f"completed scientific exploration retains Fleet reservation: {definition_id}")
         else:
             _require(sim.transport.vehicle_definition(state.vehicle_definition_id) is not None, f"scientific exploration references unknown vehicle definition: {definition_id}")
             _require(state.reserved_units == definition.required_units, f"scientific exploration Fleet unit mismatch: {definition_id}")
-            _require(reservation is not None, f"scientific exploration lacks Fleet reservation: {definition_id}")
-            if reservation is not None:
-                _require(reservation.kind is FleetReservationKind.SCIENTIFIC_EXPLORATION, f"scientific exploration reservation kind mismatch: {definition_id}")
-                _require(reservation.vehicle_definition_id == state.vehicle_definition_id, f"scientific exploration reservation vehicle mismatch: {definition_id}")
-                _require(reservation.operational_node_id == definition.origin_id, f"scientific exploration reservation location mismatch: {definition_id}")
-                _require(reservation.units == state.reserved_units, f"scientific exploration reservation unit mismatch: {definition_id}")
-        for resource_id, required_t in definition.consumable_resources:
-            reserved = service._reserved_input_t(definition_id, resource_id)
-            if (
-                state.phase is ScientificExplorationPhase.ACTIVE
-                and state.vehicle_definition_id is not None
-                and not state.inputs_consumed
-            ):
-                _require(
-                    -1e-9 <= reserved <= required_t + 1e-9,
-                    f"scientific exploration reserved input outside requirement: {definition_id}/{resource_id}",
-                )
+            stationary = state.phase in {
+                ScientificExplorationPhase.PREPARING,
+                ScientificExplorationPhase.ACTIVE,
+                ScientificExplorationPhase.RETURN_PREPARING,
+            }
+            if stationary:
+                _require(reservation is not None, f"stationary scientific exploration lacks Fleet reservation: {definition_id}")
+                if reservation is not None:
+                    _require(reservation.kind is FleetReservationKind.SCIENTIFIC_EXPLORATION, f"scientific exploration reservation kind mismatch: {definition_id}")
+                    _require(reservation.vehicle_definition_id == state.vehicle_definition_id, f"scientific exploration reservation vehicle mismatch: {definition_id}")
+                    expected_node = (
+                        definition.origin_id
+                        if state.phase is ScientificExplorationPhase.PREPARING
+                        else definition.destination_id
+                    )
+                    _require(reservation.operational_node_id == expected_node, f"scientific exploration reservation location mismatch: {definition_id}")
+                    _require(reservation.units == state.reserved_units, f"scientific exploration reservation unit mismatch: {definition_id}")
             else:
-                _require(
-                    reserved <= 1e-9,
-                    f"scientific exploration retains reservation outside procurement: {definition_id}/{resource_id}",
-                )
+                _require(reservation is None, f"moving scientific exploration retains node Fleet reservation: {definition_id}")
+
+        if state.phase in {ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.RETURNING}:
+            _require(state.movement_execution_id is not None, f"moving scientific exploration lacks MovementExecution: {definition_id}")
+            execution = (
+                None if state.movement_execution_id is None
+                else sim.transport.movement_executions.get(state.movement_execution_id)
+            )
+            _require(execution is not None, f"scientific exploration MovementExecution missing: {definition_id}")
+            if execution is not None:
+                _require(execution.kind is MovementExecutionKind.SCIENTIFIC_EXPLORATION, f"scientific exploration MovementExecution kind mismatch: {definition_id}")
+                _require(execution.owner_id == reservation_id, f"scientific exploration MovementExecution owner mismatch: {definition_id}")
+                _require(execution.vehicle_definition_id == state.vehicle_definition_id, f"scientific exploration MovementExecution vehicle mismatch: {definition_id}")
+                _require(execution.units == definition.required_units, f"scientific exploration MovementExecution units mismatch: {definition_id}")
+                if state.phase is ScientificExplorationPhase.OUTBOUND:
+                    _require(execution.origin.operational_node_id == definition.origin_id, f"scientific exploration outbound origin mismatch: {definition_id}")
+                    _require(execution.destination.operational_node_id == definition.destination_id, f"scientific exploration outbound destination mismatch: {definition_id}")
+                else:
+                    _require(execution.origin.operational_node_id == definition.destination_id, f"scientific exploration return origin mismatch: {definition_id}")
+                    _require(execution.destination.operational_node_id == definition.origin_id, f"scientific exploration return destination mismatch: {definition_id}")
+        else:
+            _require(state.movement_execution_id is None, f"stationary scientific exploration retains MovementExecution: {definition_id}")
+
         if state.phase is ScientificExplorationPhase.COMPLETE:
             _require(state.progress_days + 1e-8 >= definition.duration_days, f"completed exploration lacks duration: {definition_id}")
             _require(state.research_points_awarded + 1e-8 >= definition.research_points_total, f"completed exploration lacks RP reward: {definition_id}")
 
-    known_reservation_owners = {
-        service._input_reservation_owner_id(definition_id)
-        for definition_id in service.campaigns
-    }
+    allowed_reservation_owners: set[EntityId] = set()
+    known_reservation_owners: set[EntityId] = set()
+    for definition_id, state in service.campaigns.items():
+        outbound_owner = service._input_reservation_owner_id(definition_id)
+        return_owner = service._input_reservation_owner_id(definition_id, returning=True)
+        known_reservation_owners.update((outbound_owner, return_owner))
+        if (
+            state.phase is ScientificExplorationPhase.PREPARING
+            and not state.inputs_consumed
+        ):
+            allowed_reservation_owners.add(outbound_owner)
+        if state.phase is ScientificExplorationPhase.RETURN_PREPARING:
+            allowed_reservation_owners.add(return_owner)
     for owner_id, _location_id, _resource_id in sim.inventory.reserved:
         if str(owner_id).startswith("scientific_exploration.inputs:"):
             _require(
                 owner_id in known_reservation_owners,
                 f"orphaned scientific exploration reservation: {owner_id}",
+            )
+            _require(
+                owner_id in allowed_reservation_owners,
+                f"scientific exploration retains reservation outside preparation: {owner_id}",
             )
 
 

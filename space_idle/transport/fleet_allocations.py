@@ -16,6 +16,7 @@ from .models import (
     FleetRelocationPlan,
     FleetRelocationResourceNeed,
     FleetRelocationResourceRequirement,
+    MovementExecutionKind,
     FleetRelease,
     FleetReservation,
     FleetReservationKind,
@@ -145,6 +146,7 @@ class FleetAllocationMixin:
             for relocation in self.fleet_relocations.values()
             if relocation.vehicle_definition_id == vehicle_definition_id
             and relocation.source_id == location_id
+            and not relocation.started
         )
 
     def _releasing_units_at(
@@ -331,38 +333,70 @@ class FleetAllocationMixin:
         # this Fleet-domain state transition, not a responsibility of the caller.
         self.reconcile_fleet_allocations(day)
 
-    def complete_fleet_reservation(
-        self,
-        reservation_id: EntityId,
-        *,
-        final_location_id: SpatialNodeId | None = None,
-        day: int = 0,
-    ) -> None:
-        """Finish an exclusive Fleet use and atomically place its units.
+    def dispatch_fleet_reservation(
+        self, reservation_id: EntityId, *, day: int = 0
+    ) -> FleetReservationSnapshot:
+        """Move an exclusive node reservation into in-transit ownership.
 
-        Owning domains choose the final location implied by their operation but do
-        not mutate Fleet pools.  Releasing the reservation, moving aggregate Fleet
-        quantity, and refilling allocation targets are one Fleet-domain transition.
+        The Fleet disappears from the source Operational Node at dispatch.  The
+        owning MovementExecution then represents those units until a later Boundary
+        settlement places them at an Operational Node again.
         """
         reservation = self.fleet_reservations.get(reservation_id)
         if reservation is None:
             raise KeyError(reservation_id)
-        destination_id = final_location_id or reservation.operational_node_id
-        if not self.facilities.environment.graph.has_operational_node(destination_id):
-            raise KeyError(destination_id)
-
-        if destination_id != reservation.operational_node_id:
-            source = self.fleet_pool(
-                reservation.vehicle_definition_id, reservation.operational_node_id
-            )
-            if source.total_units < reservation.units:
-                raise RuntimeError("fleet reservation exceeds source pool")
-            source.total_units -= reservation.units
-            self.fleet_pool(
-                reservation.vehicle_definition_id, destination_id
-            ).total_units += reservation.units
-
+        source = self.fleet_pool(
+            reservation.vehicle_definition_id, reservation.operational_node_id
+        )
+        if source.total_units < reservation.units:
+            raise RuntimeError("fleet reservation exceeds source pool")
+        snapshot = FleetReservationSnapshot(
+            reservation.id,
+            reservation.owner_id,
+            reservation.kind,
+            reservation.vehicle_definition_id,
+            reservation.operational_node_id,
+            reservation.units,
+        )
+        source.total_units -= reservation.units
         del self.fleet_reservations[reservation_id]
+        self.reconcile_fleet_allocations(day)
+        return snapshot
+
+    def receive_reserved_fleet_units(
+        self,
+        reservation_id: EntityId,
+        owner_id: EntityId,
+        kind: FleetReservationKind,
+        vehicle_definition_id: DefinitionId,
+        location_id: SpatialNodeId,
+        units: int,
+        *,
+        day: int = 0,
+    ) -> None:
+        """Place arrived in-transit Fleet directly into an exclusive reservation.
+
+        Pool quantity and the exclusive reservation are created atomically so the
+        arriving units cannot transiently satisfy an unrelated Transport target.
+        """
+        if reservation_id in self.fleet_reservations:
+            raise ValueError(f"fleet reservation already exists: {reservation_id}")
+        if units <= 0:
+            raise ValueError("fleet reservation units must be positive")
+        if vehicle_definition_id not in self.vehicle_defs:
+            raise KeyError(vehicle_definition_id)
+        if not self.facilities.environment.graph.has_operational_node(location_id):
+            raise KeyError(location_id)
+        pool = self.fleet_pool(vehicle_definition_id, location_id)
+        pool.total_units += units
+        self.fleet_reservations[reservation_id] = FleetReservation(
+            reservation_id,
+            owner_id,
+            kind,
+            vehicle_definition_id,
+            location_id,
+            units,
+        )
         self.reconcile_fleet_allocations(day)
 
     def _movement_path_for_vehicle(
@@ -928,20 +962,20 @@ class FleetAllocationMixin:
         ):
             del self.fleet_releases[release_id]
 
-        # Relocations remain committed against the source pool until arrival,
-        # then atomically move their quantity into the destination pool.
-        for relocation_id in sorted(
-            [
-                rid for rid, row in self.fleet_relocations.items()
-                if row.arrival_day is not None and row.arrival_day <= day
-            ],
-            key=str,
-        ):
+        # Started relocations are owned by MovementExecution while in transit.
+        # Boundary completion places the units at the destination pool.
+        for relocation_id in sorted(self.fleet_relocations, key=str):
+            relocation = self.fleet_relocations[relocation_id]
+            execution_id = relocation.movement_execution_id
+            if execution_id is None:
+                continue
+            execution = self.movement_executions.get(execution_id)
+            if execution is None:
+                raise RuntimeError(f"fleet relocation missing movement execution: {relocation_id}")
+            if execution.completion_day > day:
+                continue
+            self.finish_movement_execution(execution_id)
             relocation = self.fleet_relocations.pop(relocation_id)
-            source = self.fleet_pool(relocation.vehicle_definition_id, relocation.source_id)
-            if source.total_units < relocation.units:
-                raise RuntimeError("fleet relocation exceeds source pool")
-            source.total_units -= relocation.units
             self.fleet_pool(
                 relocation.vehicle_definition_id, relocation.destination_id
             ).total_units += relocation.units
@@ -1114,7 +1148,6 @@ class FleetAllocationMixin:
             source_id,
             destination_id,
             day,
-            max(1, plan.travel_days),
             plan.path,
             needs,
         )
@@ -1217,8 +1250,27 @@ class FleetAllocationMixin:
                 self.inventory.release_storage_occupancy(
                     relocation.id, need.operational_node_id, need.resource_id, need.required_t
                 )
-            relocation.departure_day = day
-            relocation.arrival_day = day + relocation.travel_days
+            execution_id = EntityId(f"movement.fleet_relocation:{relocation.id}")
+            execution = self.start_movement_execution_for_path(
+                execution_id,
+                relocation.id,
+                MovementExecutionKind.FLEET_RELOCATION,
+                relocation.vehicle_definition_id,
+                relocation.units,
+                relocation.path,
+                day=day,
+            )
+            if execution.destination.operational_node_id != relocation.destination_id:
+                self.finish_movement_execution(execution_id)
+                raise RuntimeError("fleet relocation MovementExecution destination mismatch")
+            source = self.fleet_pool(
+                relocation.vehicle_definition_id, relocation.source_id
+            )
+            if source.total_units < relocation.units:
+                self.finish_movement_execution(execution_id)
+                raise RuntimeError("fleet relocation exceeds source pool")
+            source.total_units -= relocation.units
+            relocation.movement_execution_id = execution_id
 
 
     @staticmethod

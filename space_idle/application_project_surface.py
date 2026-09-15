@@ -157,6 +157,23 @@ class SurfaceProjectorMixin:
                             failures = sim.founding.planning_failures(
                                 staging_id, body_id, cell.id, package.id, vehicle.id, sim.day
                             )
+                            try:
+                                movement_plan = sim.transport.movement_plan_to_physical_target_for_vehicle(
+                                    staging_id,
+                                    cell.id,
+                                    vehicle.id,
+                                    payload_t_per_unit=package.payload_t_per_unit,
+                                    day=sim.day,
+                                )
+                                transit_days = sim.transport.performance_movement_transit_days(
+                                    movement_plan, vehicle.performance
+                                )
+                                founding_resources = sim.founding.resource_requirements_for(
+                                    package.id, vehicle.id, staging_id, cell.id, day=sim.day
+                                )
+                            except (KeyError, ValueError):
+                                transit_days = 0
+                                founding_resources = package.payload_resources
                             foundation_rows.append(SurfaceCellFoundationOption(
                                 staging_node_id=str(staging_id),
                                 founding_package_id=str(package.id),
@@ -164,13 +181,13 @@ class SurfaceProjectorMixin:
                                 vehicle_definition_id=str(vehicle.id),
                                 vehicle_display_name=vehicle.display_name,
                                 preparation_work=package.preparation_work,
-                                transit_days=package.transit_days,
+                                transit_days=transit_days,
                                 payload_t=package.payload_t,
                                 payload_t_per_unit=package.payload_t_per_unit,
                                 required_units=package.required_units,
                                 resources=tuple(
                                     (str(req.resource_id), req.amount_t)
-                                    for req in sim.founding.resource_requirements_for(package.id, vehicle.id)
+                                    for req in founding_resources
                                 ),
                                 blockers=tuple((failure.code, failure.detail) for failure in failures),
                                 can_plan=not failures,

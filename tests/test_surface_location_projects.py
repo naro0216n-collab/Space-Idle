@@ -84,10 +84,12 @@ def test_founding_transport_path_and_site_requirements_follow_staging_and_target
     cross_body = sim.founding.planning_failures(
         ids.LEO, ids.MOON, cell, package.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day
     )
-    assert any(
-        row.code == "deployment_vehicle" and row.detail == "deployment_path:spaceflight_required"
-        for row in cross_body
-    )
+    # Movement capability, not a package-authored route tag, determines whether
+    # the cross-body deployment is physically possible. This lander supports the
+    # derived spaceflight + landing plan; the LEO staging context itself is what
+    # remains unsuitable here.
+    assert not any(row.code == "deployment_vehicle" for row in cross_body)
+    assert any(row.code == "staging_service" for row in cross_body)
 
     earth_target = sim.founding.planning_failures(
         ids.LUNAR_ORBIT, ids.EARTH_BODY, ids.EARTH_CELL_COASTAL, package.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day
@@ -310,6 +312,8 @@ def test_surface_map_exposes_founding_package_vehicle_and_blockers():
         for row in app._simulation.founding.resource_requirements_for(
             ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE,
             ids.REUSABLE_SURFACE_CARGO_LANDER,
+                ids.LUNAR_ORBIT,
+                cell_id,
         )
     }
     assert displayed_resources == expected_resources

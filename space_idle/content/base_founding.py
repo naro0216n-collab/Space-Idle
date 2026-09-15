@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ..founding import FoundingFacilityDeployment, FoundingPackageDefinition, FoundingResourceRequirement
 from . import base_requirements as req
-from ..transport.models import TransportOperationKind, TransportOperationRequirement
 from . import base_ids as ids
 
 
@@ -35,8 +34,6 @@ def build_founding_packages() -> dict:
         ),
         preparation_work=3.0,
         preparation_service_type="cargo_transfer",
-        operations=(TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),),
-        transit_days=3,
         staging_requirements=req.ORBIT_SITE,
         target_requirements=req.VACUUM_SURFACE_SITE,
         minimum_survey_knowledge_level=2,

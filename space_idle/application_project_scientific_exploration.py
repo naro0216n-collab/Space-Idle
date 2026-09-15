@@ -45,6 +45,64 @@ class ScientificExplorationProjectorMixin:
                     power_by_location=power_by_location,
                 )
 
+            movement_operations: tuple[tuple[str, float], ...] = ()
+            outbound_latency_days: int | None = None
+            return_latency_days: int | None = None
+            movement_execution = (
+                None
+                if state is None or state.movement_execution_id is None
+                else sim.transport.movement_execution_snapshot(state.movement_execution_id)
+            )
+            if movement_execution is not None:
+                # A started one-shot Movement is authoritative.  Query output must
+                # not drift when current Vehicle/Infrastructure definitions change.
+                movement_operations = tuple(
+                    (operation.operation_type, operation.delta_v_km_s)
+                    for leg in movement_execution.legs
+                    for operation in leg.operations
+                )
+                if state.phase.value == "outbound":
+                    outbound_latency_days = movement_execution.latency_days
+                elif state.phase.value == "returning":
+                    return_latency_days = movement_execution.latency_days
+
+            if assigned_vehicle_definition_id is not None:
+                vehicle_id = state.vehicle_definition_id
+                assert vehicle_id is not None
+                try:
+                    vehicle = sim.transport.vehicle_definition(vehicle_id)
+                    assert vehicle is not None
+                    if outbound_latency_days is None:
+                        outbound_plans = service.movement_path(
+                            definition, vehicle_id, sim.day
+                        )
+                        outbound_latency_days = sum(
+                            sim.transport.performance_movement_transit_days(
+                                plan, vehicle.performance
+                            )
+                            for plan in outbound_plans
+                        )
+                        if movement_execution is None:
+                            movement_operations = tuple(
+                                (operation.operation_type, operation.delta_v_km_s)
+                                for plan in outbound_plans
+                                for operation in plan.operations
+                            )
+                    if definition.return_to_origin and return_latency_days is None:
+                        return_plans = service.movement_path(
+                            definition, vehicle_id, sim.day, reverse=True
+                        )
+                        return_latency_days = sum(
+                            sim.transport.performance_movement_transit_days(
+                                plan, vehicle.performance
+                            )
+                            for plan in return_plans
+                        )
+                except ValueError:
+                    # A future/unstarted leg may cease to be feasible.  The active
+                    # MovementExecution, when present, remains visible above.
+                    pass
+
             fleet_options: list[ScientificExplorationFleetOptionRow] = []
             for vehicle_definition in sim.transport.vehicle_definitions():
                 fleet = sim.transport.fleet_pool_snapshot(
@@ -58,6 +116,30 @@ class ScientificExplorationProjectorMixin:
                 )
                 if state is not None and state.vehicle_definition_id == vehicle_definition.id:
                     option_blockers = ()
+                option_outbound_latency: int | None = None
+                option_return_latency: int | None = None
+                try:
+                    option_outbound = service.movement_path(
+                        definition, vehicle_definition.id, sim.day
+                    )
+                    option_outbound_latency = sum(
+                        sim.transport.performance_movement_transit_days(
+                            plan, vehicle_definition.performance
+                        )
+                        for plan in option_outbound
+                    )
+                    if definition.return_to_origin:
+                        option_return = service.movement_path(
+                            definition, vehicle_definition.id, sim.day, reverse=True
+                        )
+                        option_return_latency = sum(
+                            sim.transport.performance_movement_transit_days(
+                                plan, vehicle_definition.performance
+                            )
+                            for plan in option_return
+                        )
+                except ValueError:
+                    pass
                 fleet_options.append(
                     ScientificExplorationFleetOptionRow(
                         vehicle_definition_id=str(vehicle_definition.id),
@@ -67,6 +149,8 @@ class ScientificExplorationProjectorMixin:
                         free_units=fleet.free_units,
                         required_units=definition.required_units,
                         blockers=option_blockers,
+                        outbound_latency_days=option_outbound_latency,
+                        return_latency_days=option_return_latency,
                         can_assign=service.can_assign_fleet(
                             definition.id,
                             vehicle_definition.id,
@@ -85,11 +169,9 @@ class ScientificExplorationProjectorMixin:
                     can_set_priority=can_set_priority,
                     origin_id=str(definition.origin_id),
                     destination_id=str(definition.destination_id),
-                    operations=tuple(
-                        (operation.operation_type, operation.delta_v_km_s)
-                        for operation in definition.operations
-                    ),
-                    mission_duration_days=definition.mission_duration_days,
+                    movement_operations=movement_operations,
+                    outbound_latency_days=outbound_latency_days,
+                    return_latency_days=return_latency_days,
                     origin_requirements=site_requirements_definition(definition.origin_requirements),
                     destination_requirements=site_requirements_definition(definition.destination_requirements),
                     duration_days=definition.duration_days,

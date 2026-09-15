@@ -9,12 +9,14 @@ from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId, SurfaceCell
 from ..technology import TechnologyState
 from .compatibility import TransportCompatibilityMixin
 from .fleet_allocations import FleetAllocationMixin
+from .executions import MovementExecutionMixin
 from .models import (
     ExternalTransportServiceDef,
     FleetPool,
     FleetRelocation,
     FleetRelease,
     FleetReservation,
+    MovementExecution,
     MovementPlan,
     TransportAllocation,
     VehicleDef,
@@ -28,6 +30,7 @@ from .supply import TransportSupplyMixin
 @dataclass
 class TransportService(
     TransportCompatibilityMixin,
+    MovementExecutionMixin,
     FleetAllocationMixin,
     VehicleProductionMixin,
     TransportSupplyMixin,
@@ -53,6 +56,7 @@ class TransportService(
     fleet_reservations: dict[EntityId, FleetReservation] = field(default_factory=dict)
     transport_allocations: dict[EntityId, TransportAllocation] = field(default_factory=dict)
     fleet_relocations: dict[EntityId, FleetRelocation] = field(default_factory=dict)
+    movement_executions: dict[EntityId, MovementExecution] = field(default_factory=dict)
     fleet_releases: dict[EntityId, FleetRelease] = field(default_factory=dict)
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     vehicle_production_projects: dict[EntityId, VehicleProductionState] = field(default_factory=dict)
@@ -95,6 +99,71 @@ class TransportService(
         plans = self.movement_resolver().plans_to_physical_target(origin_id, target_cell_id)
         self._movement_plan_cache.update((plan.id, plan) for plan in plans)
         return plans
+
+    def movement_path_for_vehicle(
+        self,
+        origin_id: SpatialNodeId,
+        destination_id: SpatialNodeId,
+        vehicle_definition_id: DefinitionId,
+        *,
+        day: int = 0,
+        path_policy=None,
+        explicit_path: tuple[RouteId, ...] | None = None,
+        require_destination_disposition: bool = False,
+    ) -> tuple[MovementPlan, ...]:
+        from .models import PathPolicy
+
+        policy = PathPolicy.FASTEST if path_policy is None else PathPolicy(path_policy)
+        path = self._movement_path_for_vehicle(
+            origin_id,
+            destination_id,
+            vehicle_definition_id,
+            day,
+            policy,
+            explicit_path,
+            require_destination_disposition=require_destination_disposition,
+        )
+        return tuple(self.require_movement_plan(plan_id) for plan_id in path)
+
+    def movement_plan_to_physical_target_for_vehicle(
+        self,
+        origin_id: SpatialNodeId,
+        target_cell_id: SurfaceCellId,
+        vehicle_definition_id: DefinitionId,
+        *,
+        payload_t_per_unit: float = 0.0,
+        day: int = 0,
+        require_destination_disposition: bool = True,
+    ) -> MovementPlan:
+        if vehicle_definition_id not in self.vehicle_defs:
+            raise KeyError(vehicle_definition_id)
+        vehicle = self.vehicle_defs[vehicle_definition_id]
+        candidates = []
+        for plan in self.movement_plans_to_physical_target(origin_id, target_cell_id):
+            failures = self.vehicle_movement_physical_failures(
+                plan.id, vehicle_definition_id, day
+            )
+            if failures:
+                continue
+            if vehicle.max_cargo_for_movement(plan) + 1e-9 < payload_t_per_unit:
+                continue
+            if (
+                require_destination_disposition
+                and vehicle.movement_asset_disposition(plan).value != "destination"
+            ):
+                continue
+            candidates.append(plan)
+        if not candidates:
+            raise ValueError(
+                f"no executable movement plan {origin_id} -> physical target {target_cell_id}"
+            )
+        return min(
+            candidates,
+            key=lambda plan: (
+                self.performance_movement_transit_days(plan, vehicle.performance),
+                str(plan.id),
+            ),
+        )
 
     def outbound_movement_plans(self, origin_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
         return self.movement_resolver().outbound_plans(origin_id)

@@ -658,6 +658,8 @@ class Simulation:
         """Settle state whose completion time was reached before this tick."""
         self.external_economy.settle_periods(self.day)
         self.transport.advance_fleet_state(self.day)
+        if self.scientific_exploration is not None:
+            self.scientific_exploration.settle_movement_arrivals(self.day)
         if self.founding is not None:
             self.founding.settle_arrivals(self.day)
         self.transport.invalidate_movement_plans()
