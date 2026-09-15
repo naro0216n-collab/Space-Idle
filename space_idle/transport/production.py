@@ -6,7 +6,7 @@ from enum import Enum
 from ..power import PowerSnapshot
 from ..priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from ..resource_claim import ResourceAllocationPlan, ResourceClaim
-from ..resource_demand import ResourceDemand
+from ..supply import SupplyRequirement
 from ..service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from ..shared import DefinitionId, EntityId, SpatialNodeId
 from ..site import SiteRequirementFailure, evaluate_site_requirements
@@ -234,10 +234,10 @@ class VehicleProductionMixin:
                     staging_owner, state.operational_node_id, resource_id, staged
                 )
 
-    def vehicle_production_resource_demands(
+    def vehicle_production_supplys(
         self, day: int = 0
-    ) -> tuple[ResourceDemand, ...]:
-        demands: list[ResourceDemand] = []
+    ) -> tuple[SupplyRequirement, ...]:
+        demands: list[SupplyRequirement] = []
         for state in sorted(
             self.vehicle_production_projects.values(), key=lambda row: str(row.id)
         ):
@@ -255,7 +255,7 @@ class VehicleProductionMixin:
                 if remaining <= 1e-12:
                     continue
                 demands.append(
-                    ResourceDemand(
+                    SupplyRequirement(
                         self._vehicle_production_demand_id(state.id, resource_id),
                         "vehicle_production",
                         state.id,

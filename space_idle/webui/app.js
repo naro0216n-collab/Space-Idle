@@ -5,7 +5,7 @@
     revision:null, session:null, world:null, catalog:null, operationalNodeId:null, operationalNode:null,
     flow:null, dependencyAnalytics:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, routes:null,
-    fleet:null, transportAllocations:null, cargoFlows:null, lanes:null, demands:[], externalEconomy:null,
+    fleet:null, transportAllocations:null, cargoFlows:null, externalEconomy:null,
     selectedRouteId:null, activeView:'operations', activeTab:'overview', inspector:null,
     busy:false, syncInFlight:null,
   };
@@ -180,7 +180,7 @@
     state.session=data.session; state.world=data.world; state.globalIssues=data.global_issues;
     state.research=data.research; state.scientificExplorations=data.scientific_explorations; state.contracts=data.contracts; state.logisticsSummary=data.logistics_summary; state.logistics=data.logistics;
     state.routes=data.routes; state.fleet=data.fleet; state.transportAllocations=data.transport_allocations; state.cargoFlows=data.cargo_flows;
-    state.lanes=data.lanes??state.lanes; state.demands=state.lanes?.demands||[]; state.externalEconomy=data.external_economy??state.externalEconomy;
+    state.externalEconomy=data.external_economy??state.externalEconomy;
     if(data.operational_node!==undefined)state.operationalNode=data.operational_node;
     if(data.flow!==undefined)state.flow=data.flow;
     if(data.dependency_analytics!==undefined)state.dependencyAnalytics=data.dependency_analytics;

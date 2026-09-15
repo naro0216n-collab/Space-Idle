@@ -8,7 +8,7 @@ from .execution_requirements import (
     ReservationAcquisitionRequirement,
     ServiceCapacityRequirement as ExecutionServiceRequirement,
 )
-from .resource_demand import ResourceDemand
+from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .site import SiteRequirementFailure, evaluate_site_requirements
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
@@ -204,8 +204,8 @@ class ResearchWorkflowMixin:
             self._release_prototype_reservations(research_id)
         state.prototype_operational_node_id = location_id
 
-    def resource_demands(self, day: int = 0) -> tuple[ResourceDemand, ...]:
-        demands: list[ResourceDemand] = []
+    def supplys(self, day: int = 0) -> tuple[SupplyRequirement, ...]:
+        demands: list[SupplyRequirement] = []
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
             if state.paused or state.stage is not ResearchStage.PROTOTYPE:
                 continue
@@ -226,7 +226,7 @@ class ResearchWorkflowMixin:
                 )
                 if remaining <= 1e-9:
                     continue
-                demands.append(ResourceDemand(
+                demands.append(SupplyRequirement(
                     self.prototype_demand_id(research_id, resource_id),
                     "research",
                     self._project_owner_id(research_id),

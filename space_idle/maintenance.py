@@ -5,15 +5,15 @@ from dataclasses import dataclass
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .execution_requirements import ExecutionAllocationPlan, ExecutionRequirementBundle, ResourceRequirement
-from .resource_demand import ResourceDemand
+from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
 
 @dataclass
 class FacilityMaintenanceService:
-    """Turns facility investment history into ordinary physical Resource Demand.
+    """Turns facility investment history into an ordinary physical Supply Requirement.
 
-    Maintenance is not a safety guarantee. Each facility publishes its own demand
+    Maintenance is not a safety guarantee. Each facility publishes its own requirement
     with a player-visible priority. The shared resource allocator may therefore
     starve a lower-priority facility when local stock and transport capacity are
     insufficient. ``target_stock_days`` and ``reorder_point_days`` are planning
@@ -54,7 +54,7 @@ class FacilityMaintenanceService:
                 refill.add(key)
         return refill
 
-    def resource_demands(self, day: int = 0) -> tuple[ResourceDemand, ...]:
+    def supplys(self, day: int = 0) -> tuple[SupplyRequirement, ...]:
         per_facility: dict[EntityId, dict[DefinitionId, float]] = {}
         totals: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
         for facility in self.facilities.facilities.values():
@@ -65,7 +65,7 @@ class FacilityMaintenanceService:
                 totals[key] = totals.get(key, 0.0) + amount
 
         refill_keys = self._site_refill_required(totals)
-        rows: list[ResourceDemand] = []
+        rows: list[SupplyRequirement] = []
         for facility in sorted(self.facilities.facilities.values(), key=lambda row: str(row.id)):
             for resource_id, required in sorted(
                 per_facility[facility.id].items(), key=lambda row: str(row[0])
@@ -76,7 +76,7 @@ class FacilityMaintenanceService:
                 planning_amount = (
                     required * self.target_stock_days if key in refill_keys else required
                 )
-                rows.append(ResourceDemand(
+                rows.append(SupplyRequirement(
                     self._demand_id(facility.id, resource_id),
                     "facility_maintenance",
                     facility.id,

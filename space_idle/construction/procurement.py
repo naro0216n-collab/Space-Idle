@@ -4,7 +4,7 @@ from ..execution_requirements import (
     ExecutionAllocationPlan,
     ReservationAcquisitionRequirement,
 )
-from ..resource_demand import ResourceDemand
+from ..supply import SupplyRequirement
 from ..shared import EntityId
 from .models import ProjectStatus, FacilityUpgradeTarget
 
@@ -57,8 +57,8 @@ class ConstructionProcurementMixin:
                     0.0, requirement.amount_t - state.committed_t - reserved
                 )
 
-    def resource_demands(self, day: int) -> tuple[ResourceDemand, ...]:
-        demands: list[ResourceDemand] = []
+    def supplys(self, day: int) -> tuple[SupplyRequirement, ...]:
+        demands: list[SupplyRequirement] = []
         for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
             if (
                 project.paused
@@ -78,8 +78,8 @@ class ConstructionProcurementMixin:
                     and not self._procurement_policy_due(project, day)
                 ):
                     continue
-                demands.append(ResourceDemand(
-                    self._resource_demand_id(project.id, requirement.resource_id),
+                demands.append(SupplyRequirement(
+                    self._supply_id(project.id, requirement.resource_id),
                     "project",
                     EntityId(str(project.id)),
                     project.operational_node_id,

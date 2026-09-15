@@ -10,7 +10,7 @@ from .external_procurement import (
     ProcurementDeliveryStatus,
     ProcurementOrder,
 )
-from .resource_demand import ResourceDemand
+from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
 if TYPE_CHECKING:
@@ -54,7 +54,7 @@ class ExternalProcurementMixin:
 
     def _procurement_service_for(
         self,
-        demand: ResourceDemand,
+        demand: SupplyRequirement,
         delivery_node_id: SpatialNodeId,
     ):
         candidates = []
@@ -78,24 +78,23 @@ class ExternalProcurementMixin:
     def _source_procurement_needs(
         self,
         logistics_plan: "LogisticsResourcePlan",
-    ) -> tuple[tuple[ResourceDemand, SpatialNodeId, float], ...]:
+    ) -> tuple[tuple[SupplyRequirement, SpatialNodeId, float], ...]:
         """Return source-stock shortages for already selected Logistics dispatches.
 
         Current source Inventory is shared across planned dispatches by priority
         and proportionally within equal priority.  This is planning credit only;
         current-tick Resource allocation remains authoritative for dispatch.
         """
-        planned: dict[tuple[EntityId, SpatialNodeId], tuple[ResourceDemand, float]] = {}
+        planned: dict[tuple[EntityId, SpatialNodeId], tuple[SupplyRequirement, float]] = {}
         for row in logistics_plan.dispatches:
-            lane = self.lanes[row.lane_id]
-            key = (row.demand.id, lane.source_id)
+            key = (row.demand.id, row.source_id)
             existing = planned.get(key)
             planned[key] = (
                 row.demand,
                 row.amount_t + (0.0 if existing is None else existing[1]),
             )
 
-        remaining_rows: list[tuple[ResourceDemand, SpatialNodeId, float]] = []
+        remaining_rows: list[tuple[SupplyRequirement, SpatialNodeId, float]] = []
         for (demand_id, source_id), (demand, amount_t) in planned.items():
             pipeline = self.procurement_pipeline_t(
                 demand_id, delivery_node_id=source_id
@@ -134,17 +133,16 @@ class ExternalProcurementMixin:
     def plan_external_procurement(
         self,
         day: int,
-        demands: tuple[ResourceDemand, ...],
+        demands: tuple[SupplyRequirement, ...],
         logistics_plan: "LogisticsResourcePlan",
     ) -> ExternalProcurementPlan:
-        del day  # Planning is snapshot-based; latency starts only on execution.
         planned_transport_by_demand: dict[EntityId, float] = {}
         for row in logistics_plan.dispatches:
             planned_transport_by_demand[row.demand.id] = (
                 planned_transport_by_demand.get(row.demand.id, 0.0) + row.amount_t
             )
 
-        needs: list[tuple[ResourceDemand, SpatialNodeId, float]] = []
+        needs: list[tuple[SupplyRequirement, SpatialNodeId, float]] = []
         for demand in demands:
             if demand.source_id is not None:
                 continue
@@ -174,6 +172,12 @@ class ExternalProcurementMixin:
             if resolved is None:
                 continue
             service, policy = resolved
+            if (
+                delivery_node_id == demand.destination_id
+                and demand.forecast_requirement_day is not None
+                and day + service.delivery_latency_days < demand.forecast_requirement_day
+            ):
+                continue
             unit_price = service.unit_price_musd_per_t(demand.resource_id)
             assert unit_price is not None
             request_id = self._procurement_request_id(

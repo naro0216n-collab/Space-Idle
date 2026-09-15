@@ -105,7 +105,7 @@ class TransportAllocationRow:
     cycle_days: float
     forward_latency_days: int
     reverse_latency_days: int | None
-    operational_resource_demand: tuple[tuple[str, str, float], ...]
+    operational_supply: tuple[tuple[str, str, float], ...]
     infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
     blockers: tuple[str, ...]
     limiting_factors: tuple[str, ...]
@@ -150,7 +150,6 @@ class CargoFlowRow:
     amount_t: float
     source_id: str
     destination_id: str
-    lane_id: str | None
     demand_id: str | None
     owner_kind: str
     owner_id: str
@@ -212,7 +211,7 @@ class VehicleProductionRow:
 
 
 @dataclass(frozen=True)
-class ResourceDemandRow:
+class SupplyRequirementRow:
     id: str
     owner_kind: str
     owner_id: str
@@ -229,27 +228,30 @@ class ResourceDemandRow:
     local_runway_days: float | None = None
     earliest_confirmed_arrival_day: int | None = None
     projected_gap_days: float | None = None
-    eligible_lane_count: int = 0
-    operational_lane_count: int = 0
+    candidate_source_count: int = 0
+    operational_source_count: int = 0
     stocked_source_count: int = 0
     supply_state: str = "covered"
     blockers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
-class LogisticsLaneRow:
+class SupplyPolicyRow:
     id: str
-    source_id: str
     destination_id: str
-    requested_capacity_t_per_day: float
-    effective_capacity_t_per_day: float
-    used_t: float
-    queued_t: float
-    priority: ActivityPriority
-    path: tuple[str, ...] | None
+    resource_id: str
+    preferred_source_id: str | None
     path_policy: str
-    paused: bool
-    blockers: tuple[str, ...]
+    explicit_path: tuple[str, ...] | None
+
+
+@dataclass(frozen=True)
+class TargetStockRow:
+    id: str
+    destination_id: str
+    resource_id: str
+    target_quantity_t: float
+    priority: ActivityPriority
 
 
 @dataclass(frozen=True)
@@ -263,8 +265,9 @@ class LogisticsView:
     vehicle_production: tuple[VehicleProductionRow, ...]
     cargo_flows: tuple[CargoFlowRow, ...]
     procurement_deliveries: tuple[ProcurementDeliveryRow, ...]
-    lanes: tuple[LogisticsLaneRow, ...]
-    demands: tuple[ResourceDemandRow, ...]
+    supply_policies: tuple[SupplyPolicyRow, ...]
+    target_stocks: tuple[TargetStockRow, ...]
+    requirements: tuple[SupplyRequirementRow, ...]
 
 
 @dataclass(frozen=True)
@@ -282,7 +285,7 @@ class TransportAllocationOptionRow:
     nominal_capacity: DirectionalCapacityRow
     fleet_total_units: int
     fleet_free_units: int
-    operational_resource_demand_at_full_unit: tuple[tuple[str, str, float], ...]
+    operational_supply_at_full_unit: tuple[tuple[str, str, float], ...]
     infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
     blockers: tuple[str, ...]
 

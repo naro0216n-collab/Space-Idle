@@ -20,12 +20,12 @@ from .app_contracts.location_views import (
 from .app_contracts.logistics_views import (
     InfrastructureRequirementRow, RouteEndpointRow, RouteModeRow, RouteRow, DirectionalCapacityRow, FleetPoolRow, TransportAllocationRow,
     FleetRelocationResourceRequirementRow, FleetRelocationRow, FleetReleaseRow, CargoFlowRow, ProcurementDeliveryRow, VehicleProductionOptionRow, VehicleProductionRow,
-    ResourceDemandRow, LogisticsLaneRow, LogisticsView, TransportAllocationOptionRow,
+    SupplyRequirementRow, SupplyPolicyRow, TargetStockRow, LogisticsView, TransportAllocationOptionRow,
     TransportAllocationOptionsView,
 )
 from .app_contracts.logistics_reports import (
     LogisticsSummaryView, RoutesView, FleetView, FleetRelocationPreviewView, TransportAllocationsView,
-    CargoFlowsView, LogisticsLanesView,
+    CargoFlowsView,
 )
 from .app_contracts.progression_views import (
     ResearchProviderRow, ResearchPrototypeResourceRow, ResearchExperienceRow, ResearchKnowledgeRow,
@@ -48,7 +48,7 @@ QueryResult: TypeAlias = (
     DependencyAnalyticsView |
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     RoutesView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |
-    LogisticsLanesView | TransportAllocationOptionsView | ResearchView |
+    TransportAllocationOptionsView | ResearchView |
     ScientificExplorationsView | SurveysView | ContractsView | ExternalEconomyView
 )
 

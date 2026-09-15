@@ -92,11 +92,11 @@ class ApplicationReportProjectorMixin:
             if node_id in scope:
                 consumption[resource_id] += amount
 
-        # Recurring ResourceDemand is the structural daily requirement before
+        # Recurring SupplyRequirement is the structural daily requirement before
         # current stock/pipeline masks a dependency. Transport operation demand is
         # created during Logistics planning, so its current-tick claims are the
         # authoritative recurring requirement for that service usage.
-        for demand in decision.intents.resource_demands:
+        for demand in decision.intents.supplys:
             if demand.destination_id not in scope or demand.recurring_rate_t_per_day is None:
                 continue
             recurring_demand[demand.resource_id] += demand.recurring_rate_t_per_day
@@ -169,14 +169,21 @@ class ApplicationReportProjectorMixin:
             if remaining <= 1e-12:
                 continue
             unmet[demand.resource_id] += remaining
-            if demand.source_id is not None and demand.source_id not in scope:
-                dependency_sources[demand.resource_id].add(demand.source_id)
-            for lane in sim.logistics.lane_definitions():
-                if (
-                    lane.source_id not in scope
-                    and sim.logistics.lane_accepts_demand(lane, demand)
-                ):
-                    dependency_sources[demand.resource_id].add(lane.source_id)
+            policy = sim.logistics.supply_policy_for(demand)
+            preferred_source = demand.source_id or (
+                None if policy is None else policy.preferred_source_id
+            )
+            if preferred_source is not None and preferred_source not in scope:
+                dependency_sources[demand.resource_id].add(preferred_source)
+            if preferred_source is None:
+                options = sim.logistics.supply_planning_options(
+                    demand,
+                    sim.day,
+                    execution_allocation=decision.allocations.transport,
+                )
+                for source_id in options.stocked_source_ids:
+                    if source_id not in scope:
+                        dependency_sources[demand.resource_id].add(source_id)
 
         resource_ids = (
             set(production) | set(consumption) | set(recurring_demand) |
@@ -442,38 +449,22 @@ class ApplicationReportProjectorMixin:
                     definition_id=str(state.vehicle_definition_id), resource_id=resource_id,
                 ))
 
-        demands = decision.plan.external_demands
-        lane_snapshot = sim.logistics.lane_snapshot(
-            demands,
-            sim.day,
+        for requirement in self._requirement_rows(
             execution_allocation=decision.allocations.transport,
-        )
-        for lane in self._lane_rows(demands, lane_snapshot, decision):
-            if location_filter is not None and location_filter not in {
-                lane.source_id, lane.destination_id
-            }:
-                continue
-            for blocker in lane.blockers:
-                issues.append(self._issue(
-                    blocker, blocker, category="logistics", source="logistics_lane",
-                    operational_node_id=location_filter, entity_id=lane.id,
-                ))
-
-        for demand in self._demand_rows(
-            demands, lane_snapshot, decision.allocations.transport
+            resolutions=decision.plan.demand_resolutions,
         ):
-            if location_filter is not None and location_filter != demand.destination_id:
+            if location_filter is not None and location_filter != requirement.destination_id:
                 continue
-            if demand.owner_kind == "project" or demand.remaining_t <= 1e-9:
+            if requirement.owner_kind == "project" or requirement.remaining_t <= 1e-9:
                 continue
-            if demand.eligible_lane_count > 0:
+            if requirement.candidate_source_count > 0:
                 continue
             issues.append(self._issue(
-                "demand_unassigned",
-                f"未割当需要 {demand.remaining_t:g} t",
-                category="logistics", source="resource_demand",
-                operational_node_id=demand.destination_id, entity_id=demand.id,
-                resource_id=demand.resource_id, impact="limited",
+                "supply_source_unavailable",
+                f"供給元未確定 {requirement.remaining_t:g} t",
+                category="logistics", source="supply",
+                operational_node_id=requirement.destination_id, entity_id=requirement.id,
+                resource_id=requirement.resource_id, impact="limited",
             ))
         return tuple(issues)
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .external_economy import FundsRequest
-from .resource_demand import ResourceDemand
+from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
 
@@ -74,7 +74,7 @@ class ProcurementDeliveryBatch:
 @dataclass(frozen=True)
 class ProcurementOrder:
     service_id: DefinitionId
-    demand: ResourceDemand
+    demand: SupplyRequirement
     delivery_node_id: SpatialNodeId
     amount_t: float
     requested_amount_t: float

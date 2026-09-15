@@ -1,25 +1,19 @@
 from __future__ import annotations
 
-from .application_project_logistics_lanes import LogisticsLaneProjectorMixin
 from .application_project_logistics_routes import LogisticsRouteProjectorMixin
 from .application_project_logistics_state import LogisticsStateProjectorMixin
+from .application_project_supply import SupplyPlanningProjectorMixin
 from .application_views import LogisticsSummaryView, LogisticsView
 
 
 class LogisticsProjectorMixin(
     LogisticsRouteProjectorMixin,
     LogisticsStateProjectorMixin,
-    LogisticsLaneProjectorMixin,
+    SupplyPlanningProjectorMixin,
 ):
     def _logistics_view(self) -> LogisticsView:
         sim = self._simulation
         decision = sim.tick_decision_projection()
-        demands = decision.plan.external_demands
-        snapshot = sim.logistics.lane_snapshot(
-            demands,
-            sim.day,
-            execution_allocation=decision.allocations.transport,
-        )
         return LogisticsView(
             routes=self._route_rows(),
             fleet_pools=self._fleet_pool_rows(),
@@ -30,9 +24,11 @@ class LogisticsProjectorMixin(
             vehicle_production=self._vehicle_production_rows(),
             cargo_flows=self._cargo_flow_rows(),
             procurement_deliveries=self._procurement_delivery_rows(),
-            lanes=self._lane_rows(demands, snapshot, decision),
-            demands=self._demand_rows(
-                demands, snapshot, decision.allocations.transport
+            supply_policies=self._supply_policy_rows(),
+            target_stocks=self._target_stock_rows(),
+            requirements=self._requirement_rows(
+                execution_allocation=decision.allocations.transport,
+                resolutions=decision.plan.demand_resolutions,
             ),
         )
 
@@ -44,15 +40,9 @@ class LogisticsProjectorMixin(
         flows = self._cargo_flow_rows()
         procurement_deliveries = self._procurement_delivery_rows()
         decision = sim.tick_decision_projection()
-        demands = decision.plan.external_demands
-        snapshot = sim.logistics.lane_snapshot(
-            demands,
-            sim.day,
+        requirement_rows = self._requirement_rows(
             execution_allocation=decision.allocations.transport,
-        )
-        lanes = self._lane_rows(demands, snapshot, decision)
-        demand_rows = self._demand_rows(
-            demands, snapshot, decision.allocations.transport
+            resolutions=decision.plan.demand_resolutions,
         )
         return LogisticsSummaryView(
             route_count=len(routes),
@@ -62,10 +52,10 @@ class LogisticsProjectorMixin(
             allocation_count=len(allocations),
             unfilled_allocation_units=sum(row.unfilled_units for row in allocations),
             cargo_flow_count=len(flows) + len(procurement_deliveries),
-            lane_count=len(lanes),
-            paused_lane_count=sum(1 for row in lanes if row.paused),
-            demand_count=len(demand_rows),
-            queued_demand_t=sum(row.remaining_t for row in demand_rows),
+            supply_policy_count=len(sim.logistics.supply_policy_rows()),
+            target_stock_count=len(sim.logistics.target_stock_policies()),
+            requirement_count=len(requirement_rows),
+            queued_supply_t=sum(row.remaining_t for row in requirement_rows),
             in_transit_t=(
                 sum(row.amount_t for row in flows if row.status == "in_transit")
                 + sum(row.amount_t for row in procurement_deliveries if row.status == "in_transit")

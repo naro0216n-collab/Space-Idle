@@ -63,7 +63,7 @@ def test_planned_project_with_unmet_technology_does_not_claim_inventory():
         == pytest.approx(0.0)
         for requirement in recipe.resources
     )
-    assert sim.projects.resource_demands(sim.day) == ()
+    assert sim.projects.supplys(sim.day) == ()
     validate_runtime_state(sim)
 
 

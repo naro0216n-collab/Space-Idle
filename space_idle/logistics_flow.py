@@ -6,11 +6,11 @@ import heapq
 from .external_economy import FundsAllocationPlan, FundsRequest
 from .knowledge import DomainActivity
 from .resource_claim import ResourceAllocationPlan, ResourceClaim
-from .resource_demand import ResourceDemand
+from .supply import SupplyRequirement
 from .service_capacity import ServiceCapacityAllocationPlan
 from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
-from .logistics_lanes import DemandSupplyOptions, LaneRuntimeMetrics, LogisticsLaneSnapshot
-from .logistics_models import CargoFlowBatch, CargoFlowStatus, LogisticsLane
+from .supply_planning import SupplyPlanningOptions
+from .logistics_models import CargoFlowBatch, CargoFlowStatus
 from .transport.models import (
     DirectionalCapacity,
     PathPolicy,
@@ -22,8 +22,8 @@ from .transport.models import (
 
 @dataclass(frozen=True)
 class _PlannedDispatch:
-    lane_id: EntityId
-    demand: ResourceDemand
+    source_id: SpatialNodeId
+    demand: SupplyRequirement
     path: tuple[TransportServiceSupply, ...]
     amount_t: float
     cargo_claim_id: EntityId
@@ -45,7 +45,6 @@ class LogisticsResourcePlan:
 
 @dataclass(frozen=True)
 class LogisticsDispatchProjection:
-    lane_id: EntityId
     demand_id: EntityId
     resource_id: DefinitionId
     source_id: SpatialNodeId
@@ -161,37 +160,64 @@ class LogisticsFlowMixin:
 
         result = search(source_id, 0)
         if result is None:
-            raise ValueError("explicit lane path has no matching transport services")
+            raise ValueError("explicit supply path has no matching transport services")
         return result
 
-    def lane_service_path(
+    def _transport_edges_for_demand(
         self,
-        lane: LogisticsLane,
+        demand: SupplyRequirement,
+        edges: tuple[TransportServiceSupply, ...],
+        *,
+        enforce_external_policy: bool = True,
+    ) -> tuple[TransportServiceSupply, ...]:
+        if not enforce_external_policy:
+            return edges
+        return tuple(
+            edge
+            for edge in edges
+            if edge.external_service_id is None
+            or self.external_economy.service_allowed(
+                edge.external_service_id, demand.owner_kind, demand.owner_id
+            )
+        )
+
+    def _supply_path_preferences(
+        self, demand: SupplyRequirement
+    ) -> tuple[SpatialNodeId | None, PathPolicy, tuple[RouteId, ...] | None]:
+        policy = self.supply_policy_for(demand)
+        source_id = demand.source_id
+        if source_id is None and policy is not None:
+            source_id = policy.preferred_source_id
+        path_policy = PathPolicy.FASTEST if policy is None else policy.path_policy
+        explicit_path = None
+        if (
+            policy is not None
+            and policy.explicit_path is not None
+            and source_id == policy.preferred_source_id
+        ):
+            explicit_path = policy.explicit_path
+        return source_id, path_policy, explicit_path
+
+    def supply_service_path(
+        self,
+        demand: SupplyRequirement,
+        source_id: SpatialNodeId,
         day: int,
         edges: tuple[TransportServiceSupply, ...] | None = None,
         *,
         enforce_external_policy: bool = True,
     ) -> tuple[TransportServiceSupply, ...]:
         available = self._service_edges(day) if edges is None else edges
-        if enforce_external_policy:
-            available = tuple(
-                edge
-                for edge in available
-                if edge.external_service_id is None
-                or self.external_economy.service_allowed(
-                    edge.external_service_id, "lane", lane.id
-                )
-            )
-        if lane.path is None:
+        available = self._transport_edges_for_demand(
+            demand, available, enforce_external_policy=enforce_external_policy
+        )
+        _source, path_policy, explicit_path = self._supply_path_preferences(demand)
+        if explicit_path is None:
             return self._automatic_service_path(
-                lane.source_id, lane.destination_id, available, lane.path_policy
+                source_id, demand.destination_id, available, path_policy
             )
         return self._explicit_service_path(
-            lane.source_id,
-            lane.destination_id,
-            lane.path,
-            available,
-            lane.path_policy,
+            source_id, demand.destination_id, explicit_path, available, path_policy
         )
 
     @staticmethod
@@ -200,53 +226,46 @@ class LogisticsFlowMixin:
     ) -> tuple[TransportServiceSupply, ...]:
         return tuple(edge for edge in edges if remaining.get(edge.key, 0.0) > 1e-12)
 
-    def _lane_transport_capacity(
+    def _candidate_supply_paths(
         self,
-        lane: LogisticsLane,
+        demand: SupplyRequirement,
         day: int,
         edges: tuple[TransportServiceSupply, ...],
-        remaining: dict[str, float],
-    ) -> float:
-        """Return capacity available to one Lane across parallel Service paths.
+    ) -> tuple[tuple[SpatialNodeId, tuple[TransportServiceSupply, ...]], ...]:
+        constrained_source, path_policy, _explicit_path = self._supply_path_preferences(demand)
+        if constrained_source is not None:
+            source_ids = (constrained_source,)
+        else:
+            source_ids = tuple(
+                node_id
+                for node_id in self.facilities.environment.graph.operational_node_ids()
+                if node_id != demand.destination_id
+                and self.inventory.available(node_id, demand.resource_id) > 1e-12
+            )
 
-        Successive policy-ordered augmenting paths let a Lane consume a second
-        Fleet Allocation or External Service after the preferred path is full,
-        while every underlying Service edge remains a shared capacity budget.
-        """
-        scratch = dict(remaining)
-        total = 0.0
-        limit = lane.requested_capacity_t_per_day
-        while total + 1e-12 < limit:
-            available_edges = self._edges_with_remaining(edges, scratch)
-            if not available_edges:
-                break
+        rows: list[tuple[float, str, SpatialNodeId, tuple[TransportServiceSupply, ...]]] = []
+        for source_id in source_ids:
+            if source_id == demand.destination_id:
+                continue
             try:
-                path = self.lane_service_path(lane, day, available_edges)
+                path = self.supply_service_path(demand, source_id, day, edges)
             except ValueError:
-                break
+                continue
             if not path:
-                break
-            bottleneck = min(scratch[edge.key] for edge in path)
-            amount = min(limit - total, bottleneck)
-            if amount <= 1e-12:
-                break
-            total += amount
-            for edge in path:
-                scratch[edge.key] -= amount
-        return total
+                continue
+            score = sum(self._edge_score(edge, path_policy) for edge in path)
+            rows.append((score, str(source_id), source_id, path))
+        rows.sort(key=lambda row: (row[0], row[1], tuple(edge.key for edge in row[3])))
+        return tuple((source_id, path) for _score, _key, source_id, path in rows)
 
     @staticmethod
-    def _lane_execution_key(lane: LogisticsLane) -> tuple:
-        """Order equal-priority Lane work by configuration, not creation order."""
-        return (
-            -lane.priority,
-            str(lane.source_id),
-            str(lane.destination_id),
-            lane.path_policy.value,
-            tuple(str(route_id) for route_id in (lane.path or ())),
-            lane.requested_capacity_t_per_day,
-            str(lane.id),
-        )
+    def _dispatch_is_due(
+        demand: SupplyRequirement, day: int, path: tuple[TransportServiceSupply, ...]
+    ) -> bool:
+        if demand.forecast_requirement_day is None:
+            return True
+        arrival_day = day + sum(edge.latency_days for edge in path)
+        return arrival_day >= demand.forecast_requirement_day
 
     def _flow_pipeline_by_demand(self, demand_ids: set[EntityId]) -> dict[EntityId, float]:
         pipeline = {demand_id: 0.0 for demand_id in demand_ids}
@@ -298,25 +317,25 @@ class LogisticsFlowMixin:
             snapshot = self.transport.transport_capacity_snapshot(
                 allocation_id, day=day, used=directional
             )
-            for location_id, resource_id, amount in snapshot.operational_resource_demand:
+            for location_id, resource_id, amount in snapshot.operational_supply:
                 key = (location_id, resource_id)
                 totals[key] = totals.get(key, 0.0) + amount
         return totals
 
     @staticmethod
-    def _cargo_claim_id(lane_id: EntityId, demand_id: EntityId) -> EntityId:
-        return EntityId(f"claim.logistics.cargo:{lane_id}:{demand_id}")
+    def _cargo_claim_id(source_id: SpatialNodeId, demand_id: EntityId) -> EntityId:
+        return EntityId(f"claim.logistics.cargo:{source_id}:{demand_id}")
 
     @staticmethod
     def _spending_request_id(
-        lane_id: EntityId,
+        source_id: SpatialNodeId,
         demand_id: EntityId,
         service_id: DefinitionId,
         edge_key: str,
         dispatch_index: int,
     ) -> EntityId:
         return EntityId(
-            f"funds.logistics:{lane_id}:{demand_id}:{service_id}:{edge_key}:{dispatch_index}"
+            f"funds.logistics:{source_id}:{demand_id}:{service_id}:{edge_key}:{dispatch_index}"
         )
 
     @staticmethod
@@ -337,19 +356,26 @@ class LogisticsFlowMixin:
             snapshot = self.transport.transport_capacity_snapshot(
                 allocation_id, day=day, used=directional
             )
-            for location_id, resource_id, amount in snapshot.operational_resource_demand:
+            for location_id, resource_id, amount in snapshot.operational_supply:
                 key = (allocation_id, location_id, resource_id)
                 totals[key] = totals.get(key, 0.0) + amount
         return totals
 
     def plan_capacity_logistics(
-        self, day: int, demands: tuple[ResourceDemand, ...]
+        self, day: int, demands: tuple[SupplyRequirement, ...]
     ) -> LogisticsResourcePlan:
-        """Plan transport and expose all current inventory use as ResourceClaims.
+        """Resolve current shipping demand from Supply Requirements.
 
-        Transport capacity and routing are resolved without spending source stock.
-        Cargo and owned-fleet operational resources then compete in the shared
-        Resource allocator with every local Domain consumer.
+        Supply Planning consumes only already-provisioned Transport Capacity. It
+        never changes Fleet Allocation targets. Source stock is represented as
+        Resource Claims so Logistics competes with local execution in the shared
+        allocation graph instead of pre-consuming Inventory during planning.
+
+        Within one Activity Priority band, Transport Capacity is allocated by
+        progressive max-min on normalized requirement fulfillment. A requirement
+        whose current best path reaches a saturated edge is frozen only when no
+        alternate path remains; independent requirements may continue to use
+        unrelated residual capacity.
         """
         edges = self._service_edges(day)
         operation_dependencies = {
@@ -363,42 +389,83 @@ class LogisticsFlowMixin:
         dispatches: list[_PlannedDispatch] = []
         spending_requests: list[FundsRequest] = []
 
-        for lane in sorted(self.lanes.values(), key=self._lane_execution_key):
-            if lane.paused:
-                continue
-            lane_capacity = self._lane_transport_capacity(lane, day, edges, remaining)
-            if lane_capacity <= 1e-12:
-                continue
-            used_lane = 0.0
-            for demand in demand_rows:
-                if used_lane + 1e-9 >= lane_capacity:
-                    break
-                if not self._lane_accepts_demand(lane, demand):
-                    continue
-                while used_lane + 1e-9 < lane_capacity:
-                    gap = max(0.0, demand.amount_t - pipeline[demand.id])
-                    if gap <= 1e-9:
-                        break
-                    available_edges = self._edges_with_remaining(edges, remaining)
-                    if not available_edges:
-                        break
-                    try:
-                        path = self.lane_service_path(lane, day, available_edges)
-                    except ValueError:
-                        break
-                    if not path:
-                        break
-                    path_capacity = min(remaining[edge.key] for edge in path)
-                    upper = min(gap, lane_capacity - used_lane, path_capacity)
-                    amount = upper
-                    if amount <= 1e-9:
-                        break
+        by_priority: dict[int, list[SupplyRequirement]] = {}
+        for demand in demand_rows:
+            by_priority.setdefault(int(demand.priority), []).append(demand)
 
+        for priority in sorted(by_priority, reverse=True):
+            band = tuple(sorted(by_priority[priority], key=lambda row: str(row.id)))
+            original_need = {
+                demand.id: max(0.0, demand.amount_t - pipeline[demand.id])
+                for demand in band
+            }
+            allocated = {demand.id: 0.0 for demand in band}
+
+            while True:
+                available_edges = self._edges_with_remaining(edges, remaining)
+                if not available_edges:
+                    break
+
+                selected: dict[
+                    EntityId,
+                    tuple[SupplyRequirement, SpatialNodeId, tuple[TransportServiceSupply, ...]],
+                ] = {}
+                for demand in band:
+                    need = original_need[demand.id]
+                    if need <= 1e-12 or allocated[demand.id] >= need - 1e-12:
+                        continue
+                    candidates = self._candidate_supply_paths(
+                        demand, day, available_edges
+                    )
+                    if not candidates:
+                        continue
+                    source_id, path = candidates[0]
+                    if not self._dispatch_is_due(demand, day, path):
+                        continue
+                    selected[demand.id] = (demand, source_id, path)
+
+                if not selected:
+                    break
+
+                edge_load: dict[str, float] = {}
+                completion_delta = 1.0
+                for demand_id, (_demand, _source_id, path) in selected.items():
+                    need = original_need[demand_id]
+                    completion_delta = min(
+                        completion_delta,
+                        max(0.0, 1.0 - allocated[demand_id] / need),
+                    )
+                    for edge in path:
+                        edge_load[edge.key] = edge_load.get(edge.key, 0.0) + need
+
+                edge_delta = min(
+                    (
+                        remaining[edge_key] / coefficient
+                        for edge_key, coefficient in edge_load.items()
+                        if coefficient > 1e-12
+                    ),
+                    default=1.0,
+                )
+                delta = min(completion_delta, edge_delta)
+                if delta <= 1e-12:
+                    break
+
+                for demand_id in sorted(selected, key=str):
+                    demand, source_id, path = selected[demand_id]
+                    amount = min(
+                        original_need[demand_id] - allocated[demand_id],
+                        original_need[demand_id] * delta,
+                    )
+                    if amount <= 1e-12:
+                        continue
+                    allocated[demand_id] += amount
+                    pipeline[demand_id] += amount
                     used = self._allocation_used_after(used, path, amount)
                     for edge in path:
-                        remaining[edge.key] -= amount
-                    used_lane += amount
-                    pipeline[demand.id] += amount
+                        remaining[edge.key] = max(
+                            0.0, remaining[edge.key] - amount
+                        )
+
                     spending_ids: list[EntityId] = []
                     for edge in path:
                         if (
@@ -407,14 +474,14 @@ class LogisticsFlowMixin:
                         ):
                             continue
                         policy = self.external_economy.resolve_policy(
-                            edge.external_service_id, "lane", lane.id
+                            edge.external_service_id, demand.owner_kind, demand.owner_id
                         )
                         if policy is None:
                             raise RuntimeError(
                                 "external service entered plan without policy authorization"
                             )
                         request_id = self._spending_request_id(
-                            lane.id,
+                            source_id,
                             demand.id,
                             edge.external_service_id,
                             edge.key,
@@ -427,62 +494,70 @@ class LogisticsFlowMixin:
                                 policy.id,
                                 edge.external_service_id,
                                 amount * edge.cost_musd_per_t,
-                                lane.priority,
-                                "lane",
-                                lane.id,
+                                demand.priority,
+                                demand.owner_kind,
+                                demand.owner_id,
                                 f"transport:{demand.id}",
                             )
                         )
-                    dispatches.append(_PlannedDispatch(
-                        lane.id,
-                        demand,
-                        path,
-                        amount,
-                        self._cargo_claim_id(lane.id, demand.id),
-                        tuple(spending_ids),
-                        amount,
-                    ))
+                    dispatches.append(
+                        _PlannedDispatch(
+                            source_id,
+                            demand,
+                            path,
+                            amount,
+                            self._cargo_claim_id(source_id, demand.id),
+                            tuple(spending_ids),
+                            amount,
+                        )
+                    )
 
         cargo_totals: dict[EntityId, float] = {}
         cargo_meta: dict[EntityId, _PlannedDispatch] = {}
         for row in dispatches:
-            cargo_totals[row.cargo_claim_id] = cargo_totals.get(row.cargo_claim_id, 0.0) + row.amount_t
+            cargo_totals[row.cargo_claim_id] = (
+                cargo_totals.get(row.cargo_claim_id, 0.0) + row.amount_t
+            )
             cargo_meta.setdefault(row.cargo_claim_id, row)
 
         claims: list[ResourceClaim] = []
         for claim_id, requested in sorted(cargo_totals.items(), key=lambda row: str(row[0])):
             row = cargo_meta[claim_id]
             demand = row.demand
-            lane = self.lanes[row.lane_id]
-            claims.append(ResourceClaim(
-                claim_id,
-                lane.source_id,
-                demand.resource_id,
-                requested,
-                demand.priority,
-                "logistics_dispatch",
-                demand.owner_id,
-                f"lane:{lane.id}",
-                demand_id=demand.id,
-            ))
+            claims.append(
+                ResourceClaim(
+                    claim_id,
+                    row.source_id,
+                    demand.resource_id,
+                    requested,
+                    demand.priority,
+                    "logistics_dispatch",
+                    demand.owner_id,
+                    f"supply:{demand.id}",
+                    demand_id=demand.id,
+                )
+            )
 
         operational = self._operational_resource_totals_by_allocation(used, day)
         for (allocation_id, location_id, resource_id), requested in sorted(
-            operational.items(), key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2]))
+            operational.items(),
+            key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2])),
         ):
             if requested <= 1e-12:
                 continue
             dependency = operation_dependencies[allocation_id]
-            claims.append(ResourceClaim(
-                self._operation_claim_id(allocation_id, location_id, resource_id),
-                location_id,
-                resource_id,
-                requested,
-                dependency.priority,
-                "transport_operation",
-                allocation_id,
-                "sustained_transport",
-            ))
+            claims.append(
+                ResourceClaim(
+                    self._operation_claim_id(allocation_id, location_id, resource_id),
+                    location_id,
+                    resource_id,
+                    requested,
+                    dependency.priority,
+                    "transport_operation",
+                    allocation_id,
+                    "sustained_transport",
+                )
+            )
 
         return LogisticsResourcePlan(
             tuple(dispatches),
@@ -525,7 +600,7 @@ class LogisticsFlowMixin:
                 continue
             dispatches.append(
                 _PlannedDispatch(
-                    row.lane_id,
+                    row.source_id,
                     row.demand,
                     row.path,
                     amount,
@@ -548,17 +623,16 @@ class LogisticsFlowMixin:
         for claim_id, requested in sorted(cargo_totals.items(), key=lambda row: str(row[0])):
             row = cargo_meta[claim_id]
             demand = row.demand
-            lane = self.lanes[row.lane_id]
             claims.append(
                 ResourceClaim(
                     claim_id,
-                    lane.source_id,
+                    row.source_id,
                     demand.resource_id,
                     requested,
                     demand.priority,
                     "logistics_dispatch",
                     demand.owner_id,
-                    f"lane:{lane.id}",
+                    f"supply:{demand.id}",
                     demand_id=demand.id,
                 )
             )
@@ -659,14 +733,6 @@ class LogisticsFlowMixin:
             limiting_factors=tuple(
                 dict.fromkeys(snapshot.limiting_factors + allocation_limits)
             ),
-        )
-
-    def _derived_lane_usage(self, lane_id: EntityId, day: int) -> float:
-        departure_day = self._latest_completed_transport_day(day)
-        return sum(
-            flow.amount_t
-            for flow in self.cargo_flows.values()
-            if flow.departure_day == departure_day and flow.lane_id == lane_id
         )
 
     def settle_cargo_arrivals(self, day: int) -> None:
@@ -855,11 +921,10 @@ class LogisticsFlowMixin:
     ) -> LogisticsExecutionProjection:
         dispatches = tuple(
             LogisticsDispatchProjection(
-                row.lane_id,
                 row.demand.id,
                 row.demand.resource_id,
-                self.lanes[row.lane_id].source_id,
-                self.lanes[row.lane_id].destination_id,
+                row.source_id,
+                row.demand.destination_id,
                 amount,
             )
             for row, amount in allocation.executable_dispatches
@@ -882,9 +947,8 @@ class LogisticsFlowMixin:
         activities: list[DomainActivity] = []
         requests_by_id = {request.id: request for request in plan.spending_requests}
         for row, amount in execution.executable_dispatches:
-            lane = self.lanes[row.lane_id]
             demand = row.demand
-            self.inventory.consume_allocated(lane.source_id, demand.resource_id, amount)
+            self.inventory.consume_allocated(row.source_id, demand.resource_id, amount)
             if row.spending_request_ids:
                 raw_amount = row.planned_amount_t
                 execution_factor = 0.0 if raw_amount <= 1e-12 else amount / raw_amount
@@ -904,16 +968,15 @@ class LogisticsFlowMixin:
             flow_id = EntityId(f"cargo.flow.{self._cargo_flow_counter}")
             activities.append(
                 DomainActivity(
-                    "transport", amount, "logistics_lane", row.lane_id, lane.source_id
+                    "transport", amount, "supply_dispatch", demand.id, row.source_id
                 )
             )
             self.cargo_flows[flow_id] = CargoFlowBatch(
                 flow_id,
                 demand.resource_id,
                 amount,
-                lane.source_id,
-                lane.destination_id,
-                lane.id,
+                row.source_id,
+                demand.destination_id,
                 demand.id,
                 demand.owner_kind,
                 demand.owner_id,
@@ -937,12 +1000,16 @@ class LogisticsFlowMixin:
                 self.transport.record_transport_operation(allocation_id, day)
         return tuple(activities)
 
-    def _external_policy_blockers_for_lane(
-        self, lane: LogisticsLane, day: int, edges: tuple[TransportServiceSupply, ...]
+    def _external_policy_blockers_for_source(
+        self,
+        demand: SupplyRequirement,
+        source_id: SpatialNodeId,
+        day: int,
+        edges: tuple[TransportServiceSupply, ...],
     ) -> tuple[str, ...]:
         try:
-            physical_path = self.lane_service_path(
-                lane, day, edges, enforce_external_policy=False
+            physical_path = self.supply_service_path(
+                demand, source_id, day, edges, enforce_external_policy=False
             )
         except ValueError:
             return ()
@@ -951,7 +1018,7 @@ class LogisticsFlowMixin:
             for edge in physical_path
             if edge.external_service_id is not None
             and not self.external_economy.service_allowed(
-                edge.external_service_id, "lane", lane.id
+                edge.external_service_id, demand.owner_kind, demand.owner_id
             )
         }
         return tuple(
@@ -980,97 +1047,65 @@ class LogisticsFlowMixin:
             for edge in edges
         )
 
-    def lane_snapshot(
+    def supply_planning_options(
         self,
-        demands: tuple[ResourceDemand, ...],
+        demand: SupplyRequirement,
         day: int = 0,
         *,
         execution_allocation: LogisticsExecutionAllocation | None = None,
-    ) -> LogisticsLaneSnapshot:
-        pipeline = self._flow_pipeline_by_demand({demand.id for demand in demands})
-        rows: list[LaneRuntimeMetrics] = []
+    ) -> SupplyPlanningOptions:
         edges = self._service_edges_for_execution_allocation(
             day, execution_allocation
         )
-        for lane in sorted(self.lanes.values(), key=lambda row: str(row.id)):
-            blockers: list[str] = []
-            try:
-                remaining = {edge.key: edge.capacity_t_per_day for edge in edges}
-                effective = (
-                    self._lane_transport_capacity(lane, day, edges, remaining)
-                    if not lane.paused else 0.0
-                )
-                if effective <= 1e-12 and not lane.paused:
-                    blockers.extend(
-                        self._external_policy_blockers_for_lane(lane, day, edges)
-                    )
-            except ValueError as exc:
-                effective = 0.0
-                policy_blockers = self._external_policy_blockers_for_lane(
-                    lane, day, edges
-                )
-                blockers.extend(policy_blockers)
-                if not policy_blockers:
-                    blockers.append(f"transport_capacity:{exc}")
-            if lane.paused:
-                blockers.append("manual_pause")
-            queued = sum(
-                max(0.0, demand.amount_t - pipeline[demand.id])
-                for demand in demands
-                if self._lane_accepts_demand(lane, demand)
-            )
-            rows.append(
-                LaneRuntimeMetrics(
-                    lane.id,
-                    effective,
-                    self._derived_lane_usage(lane.id, day),
-                    queued,
-                    tuple(blockers),
-                )
-            )
-        return LogisticsLaneSnapshot(
-            tuple(sorted(pipeline.items(), key=lambda row: str(row[0]))),
-            tuple(rows),
+        constrained_source, _path_policy, _explicit_path = (
+            self._supply_path_preferences(demand)
         )
+        if constrained_source is not None:
+            source_ids = (constrained_source,)
+        else:
+            source_ids = tuple(
+                node_id
+                for node_id in self.facilities.environment.graph.operational_node_ids()
+                if node_id != demand.destination_id
+            )
 
-    def demand_supply_options(
-        self,
-        demand: ResourceDemand,
-        day: int = 0,
-        *,
-        execution_allocation: LogisticsExecutionAllocation | None = None,
-    ) -> DemandSupplyOptions:
-        edges = self._service_edges_for_execution_allocation(
-            day, execution_allocation
-        )
-        eligible = tuple(
-            lane for lane in sorted(self.lanes.values(), key=lambda row: str(row.id))
-            if self._lane_accepts_demand(lane, demand)
-        )
-        operational: list[EntityId] = []
+        candidates: list[SpatialNodeId] = []
+        operational: list[SpatialNodeId] = []
+        stocked: list[SpatialNodeId] = []
         blockers: list[str] = []
-        stocked_sources: set[SpatialNodeId] = set()
-        for lane in eligible:
-            if self.inventory.available(lane.source_id, demand.resource_id) > 1e-9:
-                stocked_sources.add(lane.source_id)
+        for source_id in sorted(source_ids, key=str):
             try:
-                path = self.lane_service_path(lane, day, edges)
-                if path and not lane.paused:
-                    operational.append(lane.id)
+                physical_path = self.supply_service_path(
+                    demand, source_id, day, edges, enforce_external_policy=False
+                )
+            except ValueError:
+                continue
+            if not physical_path:
+                continue
+            candidates.append(source_id)
+            if self.inventory.available(source_id, demand.resource_id) > 1e-9:
+                stocked.append(source_id)
+            try:
+                path = self.supply_service_path(demand, source_id, day, edges)
             except ValueError as exc:
-                policy_blockers = self._external_policy_blockers_for_lane(
-                    lane, day, edges
+                policy_blockers = self._external_policy_blockers_for_source(
+                    demand, source_id, day, edges
                 )
                 blockers.extend(policy_blockers or (f"transport_capacity:{exc}",))
+                continue
+            if path and min(edge.capacity_t_per_day for edge in path) > 1e-12:
+                operational.append(source_id)
+
         arrivals = [
             flow.ready_day
             for flow in self.cargo_flows.values()
-            if flow.demand_id == demand.id and flow.status is CargoFlowStatus.IN_TRANSIT
+            if flow.demand_id == demand.id
+            and flow.status is CargoFlowStatus.IN_TRANSIT
         ]
-        return DemandSupplyOptions(
-            tuple(lane.id for lane in eligible),
+        return SupplyPlanningOptions(
+            tuple(candidates),
             tuple(operational),
-            tuple(sorted(stocked_sources, key=str)),
+            tuple(stocked),
             tuple(dict.fromkeys(blockers)),
             min(arrivals) if arrivals else None,
         )

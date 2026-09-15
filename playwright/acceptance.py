@@ -357,7 +357,7 @@ def run() -> dict[str, object]:
             _assert(exploration_rows.count() > 0, "scientific exploration campaign must be visible")
             exploration_rows.first.click()
             exploration_text = page.locator("#inspectorContent").inner_text()
-            _assert("Mission Duration要件" in exploration_text, "exploration inspector must expose mission duration without redefining it as transit time")
+            _assert("Campaign所要期間" in exploration_text, "exploration inspector must expose activity duration separately from Movement latency")
             _assert("Minimum Payload" in exploration_text, "exploration inspector must expose minimum payload requirement")
             _assert("Vehicle Capability" in exploration_text, "exploration inspector must expose generic vehicle capability requirements")
             _assert("RP/日" in exploration_text, "exploration inspector must expose application-projected RP rate")

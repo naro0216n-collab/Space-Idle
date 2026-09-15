@@ -6,7 +6,6 @@ import pytest
 
 from space_idle import (
     AdvanceTime,
-    CreateLogisticsLane,
     CreateTransportAllocation,
     DevelopSurfaceCell,
     GetOperationalNode,
@@ -14,18 +13,18 @@ from space_idle import (
     GetWorld,
     PauseBuild,
     PauseFacility,
-    PauseLogisticsLane,
     PauseResearch,
     PauseTransportAllocation,
     ResumeBuild,
     ResumeFacility,
-    ResumeLogisticsLane,
     ResumeResearch,
     ResumeTransportAllocation,
     PlanBuild,
     ProduceVehicle,
     StartResearch,
     StartSurvey,
+    SetSupplyPolicy,
+    SetTargetStock,
     build_game_application,
 )
 from space_idle.content.base_game import (
@@ -40,7 +39,7 @@ from space_idle.content.base_game import (
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.resource_claim import allocate_resource_claims
-from space_idle.resource_demand import ResourceDemand
+from space_idle.supply import SupplyRequirement
 from space_idle.shared import EntityId, CelestialBodyId, DefinitionId
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
@@ -63,14 +62,15 @@ def _make_nontrivial_state():
         str(LEO), str(ORBITAL_LOGISTICS_NODE),
         sourcing_policy="import_now", import_source_id=str(EARTH),
     )).created_id
-    lane_id = app.execute(CreateLogisticsLane(
-        str(EARTH), str(LEO), requested_capacity_t_per_day=1.0
-    )).created_id
+    app.execute(SetSupplyPolicy(
+        str(LEO), str(ids.MACHINERY), preferred_source_id=str(EARTH),
+    ))
+    app.execute(SetTargetStock(str(LEO), str(ids.MACHINERY), 1.0, priority=4))
     allocation_id = app.execute(CreateTransportAllocation(
         str(REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO), target_units=1
     )).created_id
     app.execute(AdvanceTime(1))
-    assert project_id is not None and lane_id is not None and allocation_id is not None
+    assert project_id is not None and allocation_id is not None
     lab_id = next(
         row.id for row in app.query(GetOperationalNode(str(EARTH))).facilities
         if row.definition_id == str(EARTH_RESEARCH_LAB)
@@ -83,7 +83,6 @@ def _make_nontrivial_state():
     app.execute(PauseFacility(lab_id))
     app.execute(PauseResearch(str(TECH_ORBITAL_OPERATIONS)))
     app.execute(PauseBuild(project_id))
-    app.execute(PauseLogisticsLane(lane_id))
     app.execute(PauseTransportAllocation(allocation_id))
     app._simulation.research.knowledge_state.add(ids.EXPERIENCE_TRANSPORT_OPERATIONS, 2.5)
     return app
@@ -154,9 +153,6 @@ def test_offline_progress_uses_the_same_active_simulation_path_as_normal_time(tm
     for project in tuple(sim.projects.projects.values()):
         if project.paused:
             original.execute(ResumeBuild(str(project.id)))
-    for lane in tuple(sim.logistics.lanes.values()):
-        if lane.paused:
-            original.execute(ResumeLogisticsLane(str(lane.id)))
     for allocation in tuple(sim.transport.transport_allocations.values()):
         if allocation.paused:
             original.execute(ResumeTransportAllocation(str(allocation.id)))
@@ -203,13 +199,10 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO), target_units=1
     )).created_id
-    lane_id = app.execute(CreateLogisticsLane(
-        str(ids.EARTH), str(ids.LEO), 0.5
-    )).created_id
-    assert allocation_id is not None and lane_id is not None
+    assert allocation_id is not None
 
     sim.inventory.add(ids.EARTH, ids.MACHINERY, 1.0)
-    demand = ResourceDemand(
+    demand = SupplyRequirement(
         EntityId("demand.persistence"), "test", EntityId("owner.persistence"),
         ids.LEO, ids.MACHINERY, 0.5, 5, ids.EARTH,
     )

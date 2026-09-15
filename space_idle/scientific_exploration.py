@@ -12,7 +12,7 @@ from .research import ResearchService
 from .execution_requirements import (
     ExecutionAllocationPlan, ExecutionRequirementBundle, ReservationAcquisitionRequirement,
 )
-from .resource_demand import ResourceDemand
+from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
 from .transport.models import FleetReservationKind, MovementExecutionKind, PathPolicy
@@ -352,7 +352,7 @@ class ScientificExplorationService:
         state.phase = ScientificExplorationPhase.AWAITING_FLEET
 
     @staticmethod
-    def _resource_demand_id(
+    def _supply_id(
         definition_id: DefinitionId,
         operational_node_id: SpatialNodeId,
         resource_id: DefinitionId,
@@ -489,8 +489,8 @@ class ScientificExplorationService:
     def _inputs_ready(self, definition_id: DefinitionId, day: int = 0) -> bool:
         return self._preparation_ready(definition_id, day)
 
-    def resource_demands(self, day: int = 0) -> tuple[ResourceDemand, ...]:
-        demands: list[ResourceDemand] = []
+    def supplys(self, day: int = 0) -> tuple[SupplyRequirement, ...]:
+        demands: list[SupplyRequirement] = []
         for definition_id, state in sorted(self.campaigns.items(), key=lambda row: str(row[0])):
             returning = state.phase is ScientificExplorationPhase.RETURN_PREPARING
             if (
@@ -515,8 +515,8 @@ class ScientificExplorationService:
                 )
                 if remaining <= 1e-12:
                     continue
-                demands.append(ResourceDemand(
-                    self._resource_demand_id(
+                demands.append(SupplyRequirement(
+                    self._supply_id(
                         definition_id, node_id, resource_id, returning=returning
                     ),
                     "scientific_exploration",

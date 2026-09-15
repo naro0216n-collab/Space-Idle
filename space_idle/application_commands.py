@@ -20,8 +20,10 @@ from .app_contracts.transport import (
     ProduceVehicle, PauseVehicleProduction, ResumeVehicleProduction,
     SetVehicleProductionSettings, CreateTransportAllocation, UpdateTransportAllocation,
     ChangeTransportAllocationMode, PauseTransportAllocation, ResumeTransportAllocation,
-    DeleteTransportAllocation, RelocateFleet, CreateLogisticsLane,
-    UpdateLogisticsLane, PauseLogisticsLane, ResumeLogisticsLane, DeleteLogisticsLane,
+    DeleteTransportAllocation, RelocateFleet,
+)
+from .app_contracts.logistics import (
+    SetTargetStock, DeleteTargetStock, SetSupplyPolicy, DeleteSupplyPolicy,
 )
 from .app_contracts.contracts import AcceptContract, DeclineContract
 from .app_contracts.economy import (
@@ -30,7 +32,7 @@ from .app_contracts.economy import (
 from .app_contracts.queries import (
     GetCatalog, GetWorld, GetSurfaceMap, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetBottlenecks, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetRoutes, GetFleet,
-    GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetLogisticsLanes, GetTransportAllocationOptions,
+    GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions,
     GetResearch, GetScientificExplorations, GetSurveys, GetContracts, GetExternalEconomy,
 )
 
@@ -45,15 +47,14 @@ Command: TypeAlias = (
     ProduceVehicle | PauseVehicleProduction | ResumeVehicleProduction | SetVehicleProductionSettings |
     CreateTransportAllocation | UpdateTransportAllocation | ChangeTransportAllocationMode |
     PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |
-    CreateLogisticsLane | UpdateLogisticsLane | PauseLogisticsLane |
-    ResumeLogisticsLane | DeleteLogisticsLane | AcceptContract |
+    SetTargetStock | DeleteTargetStock | SetSupplyPolicy | DeleteSupplyPolicy | AcceptContract |
     DeclineContract | CreateExternalServicePolicy | SetExternalServicePolicy |
     DeleteExternalServicePolicy | AdvanceTime
 )
 Query: TypeAlias = (
     GetCatalog | GetWorld | GetSurfaceMap | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetBottlenecks | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetRoutes | GetFleet |
-    GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetLogisticsLanes | GetTransportAllocationOptions |
+    GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions |
     GetResearch | GetScientificExplorations | GetSurveys | GetContracts | GetExternalEconomy
 )
 

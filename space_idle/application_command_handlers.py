@@ -6,6 +6,7 @@ from .application_handle_construction import ConstructionCommandHandlerMixin
 from .application_handle_operations import OperationsCommandHandlerMixin
 from .application_handle_progression import ProgressionCommandHandlerMixin
 from .application_handle_transport import TransportCommandHandlerMixin
+from .application_handle_logistics import LogisticsCommandHandlerMixin
 from .application_handle_contracts import ContractCommandHandlerMixin
 from .application_handle_economy import ExternalEconomyCommandHandlerMixin
 
@@ -16,6 +17,7 @@ class ApplicationCommandMixin(
     OperationsCommandHandlerMixin,
     ProgressionCommandHandlerMixin,
     TransportCommandHandlerMixin,
+    LogisticsCommandHandlerMixin,
     ContractCommandHandlerMixin,
     ExternalEconomyCommandHandlerMixin,
 ):
@@ -25,6 +27,7 @@ class ApplicationCommandMixin(
             self._handle_operations_command,
             self._handle_progression_command,
             self._handle_transport_command,
+            self._handle_logistics_command,
             self._handle_contract_command,
             self._handle_external_economy_command,
         ):

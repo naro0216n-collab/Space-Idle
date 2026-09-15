@@ -405,7 +405,7 @@ def test_relocation_plan_is_the_execution_contract_for_time_and_resources():
 
 def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     from space_idle.resource_claim import allocate_resource_claims
-    from space_idle.resource_demand import ResourceDemand
+    from space_idle.supply import SupplyRequirement
 
     sim = _fleet_sim(1)
     lg = sim.transport
@@ -425,14 +425,13 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     )
     assert required > 0.0
 
-    lane_id = sim.logistics.create_lane(ids.EARTH, ids.LEO, required, 5)
     sim.external_economy.create_policy(
         enabled=True,
         allowed_service_ids=tuple(lg.external_services),
         day=sim.day,
     )
     sim.inventory.add(ids.EARTH, ids.PROPELLANT, required)
-    demand = ResourceDemand(
+    demand = SupplyRequirement(
         EntityId("demand.boundary-relocation-propellant"),
         "test",
         EntityId("owner.boundary-relocation-propellant"),
@@ -455,13 +454,12 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     )
     flow = next(
         row for row in sim.logistics.cargo_flows.values()
-        if row.lane_id == lane_id and row.demand_id == demand.id
+        if row.demand_id == demand.id
     )
     assert flow.ready_day > 0
 
-    # Prevent the normal planner from creating another shipment while time moves
-    # to the boundary where this seeded Cargo Flow becomes ready.
-    sim.logistics.lanes[lane_id].paused = True
+    # Prevent another physical path from being available while time moves to the
+    # boundary where this seeded Cargo Flow becomes ready.
     lg.external_services.clear()
     sim.advance_to_day(flow.ready_day)
     # The externally visible state rests after Boundary settlement for ready_day:
@@ -556,9 +554,10 @@ def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execut
     assert snapshot.nominal.forward_t_per_day > 0
     assert snapshot.available.forward_t_per_day == 0
     assert snapshot.available.reverse_t_per_day == 0
-    lane_id = sim.logistics.create_lane(ids.LEO, ids.LUNAR_ORBIT, 1.0, 3)
-    lane = next(row for row in sim.logistics.lane_snapshot((), sim.day).lanes if row.lane_id == lane_id)
-    assert lane.effective_capacity_t_per_day == 0
+    constrained = sim.logistics.current_transport_capacity_snapshot(
+        allocation_id, day=sim.day
+    )
+    assert constrained.available.forward_t_per_day == 0
 
 
 def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
@@ -800,14 +799,14 @@ def test_bidirectional_service_resource_use_counts_empty_return_not_loaded_retur
         key: empty.get(key, 0.0) + forward_increment.get(key, 0.0)
         for key in set(empty) | set(forward_increment)
     }
-    actual = {(loc, rid): amount for loc, rid, amount in snapshot.operational_resource_demand}
+    actual = {(loc, rid): amount for loc, rid, amount in snapshot.operational_supply}
     assert actual == pytest.approx(expected)
     assert snapshot.utilization == pytest.approx(1.0)
 
 
 def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_utilization():
     from space_idle.resource_claim import allocate_resource_claims
-    from space_idle.resource_demand import ResourceDemand
+    from space_idle.supply import SupplyRequirement
 
     sim = _fleet_sim(1)
     lg = sim.transport
@@ -837,12 +836,9 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
             sim.inventory.consume_allocated(location_id, resource_id, stocked)
         sim.inventory.add(location_id, resource_id, amount / 2.0)
 
-    lane_id = sim.logistics.create_lane(
-        ids.LEO, ids.LUNAR_ORBIT, physical.nominal.forward_t_per_day, 5
-    )
     cargo_amount = physical.nominal.forward_t_per_day
     sim.inventory.add(ids.LEO, ids.MACHINERY, cargo_amount)
-    demand = ResourceDemand(
+    demand = SupplyRequirement(
         EntityId("demand.shared-transport-resource"),
         "test",
         EntityId("owner.shared-transport-resource"),
@@ -878,12 +874,12 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
     assert snapshot.utilization == pytest.approx(0.5)
     actual = {
         (loc, rid): amount
-        for loc, rid, amount in snapshot.operational_resource_demand
+        for loc, rid, amount in snapshot.operational_supply
     }
     assert actual == pytest.approx(
         {key: amount / 2.0 for key, amount in forward_full.items()}
     )
-    assert lane_id in sim.logistics.lanes
+    assert next(row for row in logistics_plan.dispatches if row.demand.id == demand.id).amount_t > 0
 
 
 def test_relocation_waits_for_shared_resource_claim_allocation_before_departure():

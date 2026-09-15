@@ -12,7 +12,7 @@ from .transport.service import TransportService
 from .power import PowerService, PowerSnapshot
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .resource_claim import ResourceAllocationPlan, ResourceClaim
-from .resource_demand import ResourceDemand
+from .supply import SupplyRequirement
 from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .site import SiteRequirements, evaluate_environment_requirements, evaluate_site_requirements
@@ -414,8 +414,8 @@ class LocationFoundingService:
             ))
         return tuple(rows)
 
-    def resource_demands(self) -> tuple[ResourceDemand, ...]:
-        rows: list[ResourceDemand] = []
+    def supplys(self) -> tuple[SupplyRequirement, ...]:
+        rows: list[SupplyRequirement] = []
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
             if project.status is not FoundingStatus.PREPARING or project.inputs_consumed or project.paused:
                 continue
@@ -425,7 +425,7 @@ class LocationFoundingService:
                 remaining = max(0.0, amount - self.staged_payload_t(project.id, resource_id))
                 if remaining <= 1e-9:
                     continue
-                rows.append(ResourceDemand(
+                rows.append(SupplyRequirement(
                     self.demand_id(project.id, resource_id),
                     "founding",
                     EntityId(project.id),

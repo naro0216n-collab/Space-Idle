@@ -9,7 +9,7 @@ class ConstructionAccountingMixin:
     """Own authoritative project material reservations and commitment."""
 
     @staticmethod
-    def _resource_demand_id(project_id, resource_id) -> EntityId:
+    def _supply_id(project_id, resource_id) -> EntityId:
         return EntityId(f"demand.project:{project_id}:{resource_id}")
 
     @staticmethod

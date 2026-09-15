@@ -11,7 +11,7 @@ from .execution_requirements import (
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .power import PowerSnapshot
-from .resource_demand import ResourceDemand
+from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .production import (
     ProcessSpec, ProcessSnapshot, ProcessSelectionMixin,
@@ -107,13 +107,13 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             enabled[key] = enabled.get(key, 0.0) + factor
         return nominal, enabled
 
-    def resource_demands(
+    def supplys(
         self,
         location_id: SpatialNodeId,
         facilities: FacilityBook,
         inventory: InventoryBook,
         day: int = 0,
-    ) -> tuple[ResourceDemand, ...]:
+    ) -> tuple[SupplyRequirement, ...]:
         del inventory
         required: dict[tuple[DefinitionId, int], float] = {}
         for facility in facilities.active_compatible_at(location_id, day):
@@ -126,7 +126,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                     required[key] = required.get(key, 0.0) + amount_t
 
         owner_id = EntityId(f"industry.site:{location_id}")
-        demands: list[ResourceDemand] = []
+        demands: list[SupplyRequirement] = []
         for (resource_id, priority), target_t in sorted(
             required.items(), key=lambda row: (str(row[0][0]), -row[0][1])
         ):
@@ -135,7 +135,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             demand_id = EntityId(
                 f"demand.industry:{location_id}:{resource_id}:priority-{priority}"
             )
-            demands.append(ResourceDemand(
+            demands.append(SupplyRequirement(
                 demand_id,
                 "industry",
                 owner_id,

@@ -10,13 +10,13 @@ from space_idle.content import base_ids as ids
 from space_idle.external_procurement import ProcurementDeliveryStatus
 from space_idle.persistence import load_game, save_game
 from space_idle.resource_claim import allocate_resource_claims
-from space_idle.resource_demand import ResourceDemand
+from space_idle.supply import SupplyRequirement
 from space_idle.service_capacity import ServiceCapacityAllocationPlan
 from space_idle.shared import EntityId
 
 
-def _demand(*, destination=ids.EARTH, amount=4.0, source=None) -> ResourceDemand:
-    return ResourceDemand(
+def _demand(*, destination=ids.EARTH, amount=4.0, source=None) -> SupplyRequirement:
+    return SupplyRequirement(
         EntityId("demand.external-procurement"),
         "test_owner",
         EntityId("owner.external-procurement"),
@@ -28,7 +28,7 @@ def _demand(*, destination=ids.EARTH, amount=4.0, source=None) -> ResourceDemand
     )
 
 
-def _enable_for_demand(sim, demand: ResourceDemand, *, period_budget_musd=None):
+def _enable_for_demand(sim, demand: SupplyRequirement, *, period_budget_musd=None):
     return sim.external_economy.create_policy(
         enabled=True,
         allowed_service_ids=(ids.EARTH_INDUSTRIAL_MARKET,),
@@ -39,7 +39,7 @@ def _enable_for_demand(sim, demand: ResourceDemand, *, period_budget_musd=None):
     )
 
 
-def _plan_and_authorize_procurement(sim, demand: ResourceDemand):
+def _plan_and_authorize_procurement(sim, demand: SupplyRequirement):
     raw_logistics = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
     raw_procurement = sim.logistics.plan_external_procurement(
         sim.day, (demand,), raw_logistics
@@ -191,7 +191,6 @@ def test_remote_procurement_replenishes_logistics_source_without_bypassing_trans
         ),
         day=sim.day,
     )
-    sim.logistics.create_lane(ids.EARTH, ids.LEO, 1.0, 4)
 
     raw_logistics, raw_procurement, logistics, procurement, funds = (
         _plan_and_authorize_procurement(sim, demand)

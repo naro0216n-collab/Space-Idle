@@ -14,6 +14,7 @@ from pathlib import Path
 from threading import Thread
 import tempfile
 import time
+import urllib.request
 
 from space_idle import AdvanceTime, PlanBuild, build_game_application
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
@@ -21,15 +22,14 @@ from space_idle.content import base_ids as ids
 from space_idle.simulation import OfflineProgressPolicy
 
 
-
 EARTH = str(ids.EARTH)
 LEO = str(ids.LEO)
+MACHINERY = str(ids.MACHINERY)
+PROPELLANT = str(ids.PROPELLANT)
 OWNED_LAUNCH_VEHICLE = str(ids.REUSABLE_LAUNCH_VEHICLE)
 
 
 def _wait_for_server(origin: str, timeout: float = 10.0) -> None:
-    import urllib.request
-
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
     while time.monotonic() < deadline:
@@ -73,8 +73,7 @@ def run() -> None:
         )
     ).data.created_id
     assert project_id is not None
-    # Establish source-constrained Resource Demand before the UI configures the
-    # Fleet Allocation and Lane that will satisfy it.
+    # Establish source-constrained Supply Requirements before Fleet capacity exists.
     runtime.execute(AdvanceTime(1))
 
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
@@ -86,24 +85,42 @@ def run() -> None:
         _wait_for_server(origin)
         with isolated_browser_context(
             browser_name,
-                viewport={"width": 1194, "height": 834},
-                has_touch=True,
-                locale="ja-JP",
-                timezone_id="Asia/Tokyo",
-            ) as context:
+            viewport={"width": 1194, "height": 834},
+            has_touch=True,
+            locale="ja-JP",
+            timezone_id="Asia/Tokyo",
+        ) as context:
             page = context.new_page()
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
             page.get_by_role("button", name="物流ネットワーク").click()
 
-            demand_row = page.locator("#demandTable tbody tr", has_text=project_id).first
-            demand_row.wait_for(timeout=10000)
-            assert "Lane未設定" in demand_row.inner_text(), (
-                "project demand must remain visible before a Lane is configured"
+            requirement_row = page.locator("#demandTable tbody tr", has_text=project_id).first
+            requirement_row.wait_for(timeout=10000)
+            assert "輸送能力阻害" in requirement_row.inner_text(), (
+                "Supply Requirement must remain visible while Transport Capacity is unavailable"
+            )
+            assert "明示Supply Policyなし" in page.locator("#supplyPolicyTable").inner_text()
+
+            # Supply Policy is source/path intent only. It must not provision Fleet.
+            page.get_by_role("button", name="Supply Policyを設定").click()
+            page.locator("#supplyPolicyDialog").wait_for(state="visible", timeout=10000)
+            page.locator("#supplyPolicyDestination").select_option(LEO)
+            page.locator("#supplyPolicyResource").select_option(MACHINERY)
+            page.locator("#supplyPolicySource").select_option(EARTH)
+            page.locator("#supplyPolicyPathPolicy").select_option("fastest")
+            page.get_by_role("button", name="方針を保存").click()
+            page.locator("#supplyPolicyDialog").wait_for(state="hidden", timeout=10000)
+            policy_delete = page.locator(
+                f'[data-supply-policy-delete="{LEO}"][data-resource-id="{MACHINERY}"]'
+            )
+            policy_delete.wait_for(timeout=10000)
+            assert "最速" in page.locator("#supplyPolicyTable").inner_text()
+            assert page.locator("#allocationTable [data-allocation-row]").count() == 0, (
+                "Supply Policy must not create or resize Transport Allocation"
             )
 
-            # Player Fleet investment is explicit: create an authoritative UNITS
-            # allocation and verify target, fulfillment, and sustained capacity.
+            # Player Fleet provisioning is explicit and remains a separate decision.
             page.get_by_role("button", name="Transport Allocationを作成").click()
             page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
             page.locator("#allocationVehicle").select_option(OWNED_LAUNCH_VEHICLE)
@@ -122,90 +139,43 @@ def run() -> None:
             assert "1 / 1" in allocation_text and "unfilled 0" in allocation_text
             nominal_text = allocation_row.locator("td").nth(3).inner_text()
             available_text = allocation_row.locator("td").nth(4).inner_text()
-            assert "t/日" in nominal_text and not nominal_text.startswith("0 / 0"), (
-                "Fleet allocation must expose positive derived nominal sustained capacity"
-            )
-            assert "t/日" in available_text and not available_text.startswith("0 / 0"), (
-                "operable Fleet allocation must expose available sustained capacity"
-            )
-
-            # Lane is only the capacity consumer. Creating it must not change the
-            # Fleet target; the existing project demand becomes serviceable.
-            page.get_by_role("button", name="Laneを作成").click()
-            page.locator("#laneDialog").wait_for(state="visible", timeout=10000)
-            page.locator("#laneSource").select_option(EARTH)
-            page.locator("#laneDestination").select_option(LEO)
-            page.locator("#laneCapacity").fill("20")
-            page.locator("#lanePriority").select_option("5")
-            page.get_by_role("button", name="Lane作成").click()
-            page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
-            lane_row = page.locator(
-                f'#laneTable tbody tr[data-lane-source="{EARTH}"][data-lane-destination="{LEO}"]'
-            ).first
-            lane_row.wait_for(timeout=10000)
-            assert "20 t/日" in lane_row.inner_text()
-            assert "稼働" in lane_row.inner_text()
+            assert "t/日" in nominal_text and not nominal_text.startswith("0 / 0")
+            assert "t/日" in available_text and not available_text.startswith("0 / 0")
             assert "1 unit" in allocation_row.inner_text(), (
-                "Lane demand must not resize the authoritative Fleet allocation"
+                "Supply Policy must not resize authoritative Fleet provisioning"
             )
 
-            page.wait_for_function(
-                """projectId => {
-                  const row=[...document.querySelectorAll('#demandTable tbody tr')]
-                    .find(row=>row.innerText.includes(projectId));
-                  return row?.innerText.includes('Lane 1/1');
-                }""",
-                arg=project_id,
-                timeout=10000,
-            )
-
-            # Advance the authoritative application one tick. The browser must
-            # then expose Cargo Flow using owned Fleet-derived capacity, rather
-            # than any individual-vehicle mission path.
+            # A canonical day lets Supply Planning consume the now-available capacity.
             runtime.execute(AdvanceTime(1))
             page.wait_for_function(
                 """projectId => [...document.querySelectorAll('#cargoTable tbody tr')]
-                  .some(row => row.innerText.includes(projectId)
-                    && row.innerText.includes('allocation:transport.allocation.'))""",
+                  .some(row => row.innerText.includes(projectId))""",
                 arg=project_id,
                 timeout=10000,
             )
             cargo_text = page.locator("#cargoTable").inner_text()
             assert "in_transit" in cargo_text
-            assert "allocation:transport.allocation." in cargo_text
-
-            page.wait_for_function(
-                """() => {
-                  const row=document.querySelector('#allocationTable [data-allocation-row]');
-                  if(!row)return false;
-                  const cells=row.querySelectorAll('td');
-                  return cells.length >= 6 && !cells[5].innerText.startsWith('0 / 0');
-                }""",
-                timeout=10000,
-            )
-            page.wait_for_function(
-                """ids => {
-                  const row=[...document.querySelectorAll('#laneTable tbody tr[data-lane-row]')]
-                    .find(row => row.dataset.laneSource === ids.source && row.dataset.laneDestination === ids.destination);
-                  if(!row)return false;
-                  const cells=row.querySelectorAll('td');
-                  return cells.length >= 5 && parseFloat(cells[4].innerText) > 0;
-                }""",
-                arg={"source": EARTH, "destination": LEO},
-                timeout=10000,
-            )
-
-            # Preserve transport latency: flows remain in transit until their
-            # arrival tick, then leave the Cargo Flow table after inventory
-            # admission while the Fleet allocation itself remains configured.
-            runtime.execute(AdvanceTime(2))
-            page.wait_for_function(
-                """projectId => ![...document.querySelectorAll('#cargoTable tbody tr')]
-                  .some(row => row.innerText.includes(projectId))""",
-                arg=project_id,
-                timeout=10000,
-            )
             assert "1 unit" in allocation_row.inner_text()
+
+            # Target Stock is a persistent Supply Planning intent with Activity Priority.
+            page.get_by_role("button", name="Target Stockを設定").click()
+            page.locator("#targetStockDialog").wait_for(state="visible", timeout=10000)
+            page.locator("#targetStockDestination").select_option(LEO)
+            page.locator("#targetStockResource").select_option(PROPELLANT)
+            page.locator("#targetStockQuantity").fill("2")
+            page.locator("#targetStockPriority").select_option("4")
+            page.get_by_role("button", name="Target Stockを保存").click()
+            page.locator("#targetStockDialog").wait_for(state="hidden", timeout=10000)
+            target_delete = page.locator(
+                f'[data-target-stock-delete="{LEO}"][data-resource-id="{PROPELLANT}"]'
+            )
+            target_delete.wait_for(timeout=10000)
+            target_row = target_delete.locator("xpath=ancestor::tr")
+            target_text = target_row.inner_text()
+            assert "2" in target_text and "高" in target_text
+            assert "1 unit" in allocation_row.inner_text(), (
+                "Target Stock must not mutate Transport Allocation target"
+            )
 
     finally:
         server.shutdown()

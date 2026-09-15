@@ -5,7 +5,7 @@ import math
 
 from ..priority import DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PROVISIONING_PRIORITY, ProvisioningPriority
 from ..resource_claim import ResourceAllocationPlan, ResourceClaim
-from ..resource_demand import ResourceDemand
+from ..supply import SupplyRequirement
 from ..service_capacity import ServiceCapacityRequest
 from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .models import (
@@ -1195,8 +1195,8 @@ class FleetAllocationMixin:
                 ))
         return tuple(claims)
 
-    def fleet_relocation_resource_demands(self, day: int) -> tuple[ResourceDemand, ...]:
-        demands: list[ResourceDemand] = []
+    def fleet_relocation_supplys(self, day: int) -> tuple[SupplyRequirement, ...]:
+        demands: list[SupplyRequirement] = []
         for relocation in sorted(self.fleet_relocations.values(), key=lambda row: str(row.id)):
             if relocation.started:
                 continue
@@ -1207,7 +1207,7 @@ class FleetAllocationMixin:
                 missing = max(0.0, need.required_t - staged)
                 if missing <= 1e-12:
                     continue
-                demands.append(ResourceDemand(
+                demands.append(SupplyRequirement(
                     self._relocation_demand_id(
                         relocation.id, need.operational_node_id, need.resource_id
                     ),

@@ -37,10 +37,10 @@ from .service_capacity import (
     merge_service_capacity_plans,
     service_capacity_dependency_order,
 )
-from .resource_demand import (
-    ResourceDemand,
-    resolve_local_resource_supply,
-    ResourceDemandResolution,
+from .supply import (
+    SupplyRequirement,
+    resolve_local_supply,
+    SupplyRequirementResolution,
 )
 from .shared import EntityId, SpatialNodeId
 from .spatial import EnvironmentResolver, SpatialGraph
@@ -84,7 +84,7 @@ class TickPhysicalSnapshot:
 
 @dataclass(frozen=True)
 class TickIntents:
-    resource_demands: tuple[ResourceDemand, ...]
+    supplys: tuple[SupplyRequirement, ...]
     execution_requirements: tuple[AllocationIntent, ...]
     resource_claims: tuple[ResourceClaim, ...]
     service_requests: tuple[ServiceCapacityRequest, ...]
@@ -92,8 +92,8 @@ class TickIntents:
 
 @dataclass(frozen=True)
 class TickPlan:
-    demand_resolutions: tuple[ResourceDemandResolution, ...]
-    external_demands: tuple[ResourceDemand, ...]
+    demand_resolutions: tuple[SupplyRequirementResolution, ...]
+    external_demands: tuple[SupplyRequirement, ...]
     logistics: LogisticsResourcePlan
     procurement: ExternalProcurementPlan
 
@@ -233,39 +233,40 @@ class Simulation:
             )
         self.storage.refresh(self.day, power_by_location)
 
-    def _gross_resource_demands(self) -> tuple[ResourceDemand, ...]:
+    def _gross_supplys(self) -> tuple[SupplyRequirement, ...]:
         """Collect pre-allocation physical need from every active Domain."""
         locations = self._active_locations()
-        demands: list[ResourceDemand] = list(self.projects.resource_demands(self.day))
+        demands: list[SupplyRequirement] = list(self.projects.supplys(self.day))
+        demands.extend(self.logistics.target_stock_requirements(self.day))
         if self.founding is not None:
-            demands.extend(self.founding.resource_demands())
+            demands.extend(self.founding.supplys())
         for location_id in sorted(locations, key=str):
             demands.extend(
-                self.industry.resource_demands(
+                self.industry.supplys(
                     location_id, self.facilities, self.inventory, self.day
                 )
             )
         if self.research is not None:
-            demands.extend(self.research.resource_demands(self.day))
+            demands.extend(self.research.supplys(self.day))
         if self.maintenance is not None:
-            demands.extend(self.maintenance.resource_demands(self.day))
-        demands.extend(self.transport.vehicle_production_resource_demands(self.day))
-        demands.extend(self.transport.fleet_relocation_resource_demands(self.day))
+            demands.extend(self.maintenance.supplys(self.day))
+        demands.extend(self.transport.vehicle_production_supplys(self.day))
+        demands.extend(self.transport.fleet_relocation_supplys(self.day))
         if self.scientific_exploration is not None:
-            demands.extend(self.scientific_exploration.resource_demands(self.day))
+            demands.extend(self.scientific_exploration.supplys(self.day))
         seen: set[object] = set()
         for demand in demands:
             if demand.id in seen:
-                raise RuntimeError(f"duplicate resource demand id: {demand.id}")
+                raise RuntimeError(f"duplicate supply requirement id: {demand.id}")
             seen.add(demand.id)
         return tuple(demands)
 
-    def resource_demand_resolutions(self) -> tuple[ResourceDemandResolution, ...]:
-        """Return local/external Resource Demand from the shared tick plan."""
+    def supply_resolutions(self) -> tuple[SupplyRequirementResolution, ...]:
+        """Return local/external Supply Requirement coverage from the shared tick plan."""
         return self.tick_decision_projection().plan.demand_resolutions
 
-    def resource_demands(self) -> tuple[ResourceDemand, ...]:
-        """Return external Resource Demand from the shared tick plan."""
+    def supplys(self) -> tuple[SupplyRequirement, ...]:
+        """Return off-site Supply Requirements from the shared tick plan."""
         return self.tick_decision_projection().plan.external_demands
 
     def _execution_requirements(self) -> tuple[AllocationIntent, ...]:
@@ -683,15 +684,15 @@ class Simulation:
 
     def _generate_tick_intents(self, snapshot: TickPhysicalSnapshot) -> TickIntents:
         return TickIntents(
-            resource_demands=self._gross_resource_demands(),
+            supplys=self._gross_supplys(),
             execution_requirements=self._execution_requirements(),
             resource_claims=self._resource_claims(),
             service_requests=self._service_capacity_requests(),
         )
 
     def _plan_tick(self, intents: TickIntents) -> TickPlan:
-        demand_resolutions = resolve_local_resource_supply(
-            intents.resource_demands, self.inventory
+        demand_resolutions = resolve_local_supply(
+            intents.supplys, self.inventory
         )
         external_demands = tuple(
             demand

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from .logistics_views import (
     CargoFlowRow, FleetPoolRow, FleetRelocationResourceRequirementRow,
     FleetRelocationRow, FleetReleaseRow, InfrastructureRequirementRow,
-    LogisticsLaneRow, ResourceDemandRow, RouteRow, TransportAllocationRow,
+    SupplyRequirementRow, RouteRow, TransportAllocationRow,
 )
 
 
@@ -16,10 +16,10 @@ class LogisticsSummaryView:
     allocation_count: int
     unfilled_allocation_units: int
     cargo_flow_count: int
-    lane_count: int
-    paused_lane_count: int
-    demand_count: int
-    queued_demand_t: float
+    supply_policy_count: int
+    target_stock_count: int
+    requirement_count: int
+    queued_supply_t: float
     in_transit_t: float
     arrival_waiting_t: float
 
@@ -62,9 +62,3 @@ class TransportAllocationsView:
 @dataclass(frozen=True)
 class CargoFlowsView:
     items: tuple[CargoFlowRow, ...]
-
-
-@dataclass(frozen=True)
-class LogisticsLanesView:
-    items: tuple[LogisticsLaneRow, ...]
-    demands: tuple[ResourceDemandRow, ...]

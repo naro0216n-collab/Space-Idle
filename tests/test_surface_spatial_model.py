@@ -152,7 +152,7 @@ def test_non_surface_spatial_context_is_not_operational_until_explicitly_promote
     assert node_id not in graph.operational_node_ids()
 
 
-def test_non_operational_spatial_context_cannot_own_facility_lane_or_inventory_state():
+def test_non_operational_spatial_context_cannot_own_facility_supply_policy_or_inventory_state():
     app = build_game_application()
     sim = app._simulation
     dormant = SpatialNodeId("test.node.dormant")
@@ -173,7 +173,7 @@ def test_non_operational_spatial_context_cannot_own_facility_lane_or_inventory_s
     with pytest.raises(KeyError):
         sim.facilities.install(facility_definition_id, dormant)
     with pytest.raises(KeyError):
-        sim.logistics.create_lane(ids.EARTH, dormant, 1.0, 3)
+        sim.logistics.set_supply_policy(dormant, ids.WATER, preferred_source_id=ids.EARTH)
 
     sim.inventory.stock[(dormant, ids.WATER)] = 1.0
     with pytest.raises(ValueError, match="inventory references unknown location"):

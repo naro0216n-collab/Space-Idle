@@ -4,17 +4,16 @@ import pytest
 
 from space_idle import (
     AdvanceTime,
-    CreateLogisticsLane,
     CreateTransportAllocation,
     GetCargoFlows,
     GetFleet,
     GetLogistics,
-    GetLogisticsLanes,
     GetProjects,
     GetRoutes,
-    PauseLogisticsLane,
+    PauseTransportAllocation,
     PlanBuild,
-    ResumeLogisticsLane,
+    SetTargetStock,
+    ResumeTransportAllocation,
     build_game_application,
 )
 from space_idle.content import base_ids as ids
@@ -23,7 +22,7 @@ from space_idle.shared import DefinitionId
 from space_idle.spatial import AtmosphereField, GravityField
 
 
-def test_transport_fleet_investment_is_explicit_and_lane_demand_does_not_resize_it():
+def test_transport_fleet_investment_is_explicit_and_supply_demand_does_not_resize_it():
     app = build_game_application()
     before = next(
         row for row in app.query(GetFleet()).pools
@@ -34,13 +33,13 @@ def test_transport_fleet_investment_is_explicit_and_lane_demand_does_not_resize_
     assert before.free_units == before.total_units
     assert app.query(GetLogistics()).allocations == ()
 
-    app.execute(CreateLogisticsLane(str(ids.EARTH), str(ids.LEO), 100.0, priority=5))
-    after_lane = next(
+    app.execute(SetTargetStock(str(ids.LEO), str(ids.MACHINERY), 100.0, priority=5))
+    after_supply = next(
         row for row in app.query(GetFleet()).pools
         if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
         and row.operational_node_id == str(ids.EARTH)
     )
-    assert after_lane.free_units == before.free_units
+    assert after_supply.free_units == before.free_units
 
     app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
@@ -55,35 +54,32 @@ def test_transport_fleet_investment_is_explicit_and_lane_demand_does_not_resize_
     assert allocated.free_units == before.free_units - 1
 
 
-def test_paused_lane_keeps_project_demand_visible_without_dispatching_cargo_flow():
+def test_paused_transport_capacity_keeps_supply_requirement_visible_without_dispatching_cargo_flow():
     app = build_game_application()
     sim = app._simulation
     sim.technology.completed.update({ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS})
-    app.execute(CreateTransportAllocation(
+    allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
         control_mode="units", target_units=1, provisioning_priority=5,
-    ))
-    lane_id = app.execute(CreateLogisticsLane(
-        str(ids.EARTH), str(ids.LEO), 20.0, priority=5
     )).created_id
-    assert lane_id is not None
+    assert allocation_id is not None
     project_id = app.execute(PlanBuild(
         str(ids.LEO), str(ids.ORBITAL_LOGISTICS_NODE), priority=5,
         sourcing_policy="import_now", import_source_id=str(ids.EARTH),
     )).created_id
     assert project_id is not None
 
-    app.execute(PauseLogisticsLane(lane_id))
+    app.execute(PauseTransportAllocation(allocation_id))
     app.execute(AdvanceTime(1))
-    demands = [row for row in app.query(GetLogistics()).demands if row.owner_id == project_id]
-    assert demands and all(row.operational_lane_count == 0 for row in demands)
+    requirements = [row for row in app.query(GetLogistics()).requirements if row.owner_id == project_id]
+    assert requirements and all(row.operational_source_count == 0 for row in requirements)
     assert app.query(GetCargoFlows()).items == ()
 
-    app.execute(ResumeLogisticsLane(lane_id))
+    app.execute(ResumeTransportAllocation(allocation_id))
     app.execute(AdvanceTime(1))
     assert app.query(GetCargoFlows()).items
-    lane = next(row for row in app.query(GetLogisticsLanes()).items if row.id == lane_id)
-    assert not lane.paused and lane.used_t > 0
+    allocation = next(row for row in app.query(GetLogistics()).allocations if row.id == allocation_id)
+    assert not allocation.paused and allocation.used.forward_t_per_day > 0
 
 
 def test_vehicle_route_eligibility_is_derived_from_operation_capability_not_vehicle_name():
@@ -122,7 +118,7 @@ def test_vehicle_route_eligibility_is_derived_from_operation_capability_not_vehi
     assert mode.nominal_capacity.forward_t_per_day > 0
 
 
-def test_capacity_mode_target_is_not_auto_increased_by_lane_demand():
+def test_capacity_mode_target_is_not_auto_increased_by_supply_demand():
     app = build_game_application()
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
@@ -132,7 +128,7 @@ def test_capacity_mode_target_is_not_auto_increased_by_lane_demand():
     assert allocation_id is not None
     before = next(row for row in app.query(GetLogistics()).allocations if row.id == allocation_id)
 
-    app.execute(CreateLogisticsLane(str(ids.EARTH), str(ids.LEO), 100.0, priority=5))
+    app.execute(SetTargetStock(str(ids.LEO), str(ids.MACHINERY), 100.0, priority=5))
     after = next(row for row in app.query(GetLogistics()).allocations if row.id == allocation_id)
 
     assert after.target_capacity == before.target_capacity

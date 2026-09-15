@@ -6,7 +6,7 @@ import json
 from space_idle import (
     AdvanceTime,
     DevelopSurfaceCell,
-    GetLogisticsLanes,
+    GetLogistics,
     GetOperationalNode,
     GetProjects,
     build_game_application,
@@ -356,10 +356,9 @@ def test_remote_surface_route_available_capacity_uses_location_surface_infrastru
     assert 0.0 < constrained.available.forward_t_per_day < constrained.nominal.forward_t_per_day
     assert any(factor.startswith("surface_infrastructure:") for factor in constrained.limiting_factors)
 
-    lane_id = sim.logistics.create_lane(a, b, 1.0, 5)
-    lane = next(
-        row for row in app.query(GetLogisticsLanes()).items if row.id == str(lane_id)
+    allocation = next(
+        row for row in app.query(GetLogistics()).allocations if row.id == str(allocation_id)
     )
-    assert lane.effective_capacity_t_per_day == pytest.approx(
+    assert allocation.available.forward_t_per_day == pytest.approx(
         constrained.available.forward_t_per_day
     )

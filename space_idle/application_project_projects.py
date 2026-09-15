@@ -68,8 +68,8 @@ class ProjectProjectorMixin:
         """Translate Logistics demand state into an owning-project blocker.
 
         Finite project domains own their resource need and sourcing preference;
-        Logistics owns whether residual off-site demand has a usable lane, source
-        stock and active pipeline.  The Application layer combines those public
+        Logistics owns whether residual off-site demand has a usable source/path,
+        source stock and active pipeline.  The Application layer combines those public
         contracts without making either domain inspect the other's state.
         """
         sim = self._simulation
@@ -77,18 +77,18 @@ class ProjectProjectorMixin:
         if sim.logistics.demand_remaining_t(demand) <= 1e-9:
             return ("import_transit", resource_id)
 
-        options = sim.logistics.demand_supply_options(
+        options = sim.logistics.supply_planning_options(
             demand,
             sim.day,
             execution_allocation=execution_allocation,
         )
-        if not options.eligible_lane_ids:
-            return ("import_lane", resource_id)
-        if not options.operational_lane_ids:
+        if not options.candidate_source_ids:
+            return ("import_source", resource_id)
+        if not options.operational_source_ids:
             detail = resource_id
             if options.blockers:
                 detail += ":" + ";".join(options.blockers)
-            return ("import_lane_blocked", detail)
+            return ("import_transport_blocked", detail)
         if not options.stocked_source_ids:
             return ("import_stock", resource_id)
         return ("import_transit", resource_id)
@@ -97,7 +97,7 @@ class ProjectProjectorMixin:
         return {
             str(demand.id): demand
             for demand in (
-                self._simulation.resource_demands()
+                self._simulation.supplys()
                 if demands is None else demands
             )
             if demand.owner_kind == owner_kind

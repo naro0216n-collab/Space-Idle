@@ -20,7 +20,6 @@ class CargoFlowBatch:
     amount_t: float
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
-    lane_id: EntityId | None
     demand_id: EntityId | None
     owner_kind: str
     owner_id: EntityId
@@ -37,22 +36,3 @@ class CargoFlowBatch:
             raise ValueError("cargo flow amount must be positive")
         if not self.service_ids or len(self.service_ids) != len(self.service_destinations):
             raise ValueError("cargo flow requires aligned service path")
-
-
-@dataclass
-class LogisticsLane:
-    id: EntityId
-    source_id: SpatialNodeId
-    destination_id: SpatialNodeId
-    requested_capacity_t_per_day: float
-    priority: ActivityPriority
-    path: tuple[RouteId, ...] | None = None
-    path_policy: PathPolicy = PathPolicy.FASTEST
-    paused: bool = False
-
-    def __post_init__(self) -> None:
-        self.priority = ActivityPriority(self.priority)
-        if self.source_id == self.destination_id:
-            raise ValueError("logistics lane endpoints must differ")
-        if self.requested_capacity_t_per_day <= 0:
-            raise ValueError("logistics lane requested capacity must be positive")

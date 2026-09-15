@@ -5,7 +5,6 @@ import pytest
 from space_idle import (
     AdvanceTime,
     ApplicationError,
-    CreateLogisticsLane,
     CreateTransportAllocation,
     GetBottlenecks,
     GetBuildOptions,
@@ -17,7 +16,6 @@ from space_idle import (
     GetFlowReport,
     GetOperationalNode,
     GetLogistics,
-    GetLogisticsLanes,
     GetLogisticsSummary,
     GetProjects,
     GetResearch,
@@ -27,16 +25,15 @@ from space_idle import (
     GetTransportAllocations,
     GetTransportAllocationOptions,
     GetWorld,
-    PauseLogisticsLane,
     PlanBuild,
     ProduceVehicle,
     SetProjectImportSource,
     SetProjectPriority,
     SetProjectSourcingPolicy,
     SetVehicleProductionSettings,
-    UpdateLogisticsLane,
     UpdateTransportAllocation,
     RelocateFleet,
+    SetSupplyPolicy, SetTargetStock, DeleteSupplyPolicy, DeleteTargetStock,
     build_game_application,
 )
 from space_idle.simulation import OfflineProgressPolicy
@@ -123,7 +120,7 @@ def test_transport_service_requirements_are_projected_from_the_same_plan_for_opt
         and resource_id == str(ids.PROPELLANT)
         and amount > 0
         for location_id, resource_id, amount
-        in option.operational_resource_demand_at_full_unit
+        in option.operational_supply_at_full_unit
     )
 
     allocation_id = app.execute(CreateTransportAllocation(
@@ -192,25 +189,36 @@ def test_transport_allocation_priority_and_routing_policy_update_through_applica
     assert row.target_units == 1
 
 
-def test_lane_capacity_and_priority_can_be_updated_without_replacing_lane():
+def test_supply_policy_and_target_stock_update_player_planning_intent_without_transport_reprovisioning():
     app = build_game_application()
-    lane_id = app.execute(CreateLogisticsLane(str(EARTH), str(LEO), 1.0, priority=2)).created_id
-    assert lane_id is not None
-    app.execute(PauseLogisticsLane(lane_id))
+    before_allocations = app.query(GetTransportAllocations()).items
 
-    before = next(row for row in app.query(GetLogisticsLanes()).items if row.id == lane_id)
-    app.execute(UpdateLogisticsLane(lane_id, 3.5, priority=4, path_policy="lowest_propellant"))
-    after = next(row for row in app.query(GetLogisticsLanes()).items if row.id == lane_id)
+    policy_id = app.execute(SetSupplyPolicy(
+        str(LEO), str(ids.MACHINERY), preferred_source_id=str(EARTH),
+        path_policy="lowest_propellant",
+    )).created_id
+    target_id = app.execute(SetTargetStock(
+        str(LEO), str(ids.MACHINERY), 3.5, priority=4,
+    )).created_id
+    assert policy_id is not None and target_id is not None
 
-    assert after.id == before.id
-    assert after.source_id == before.source_id
-    assert after.destination_id == before.destination_id
-    assert after.path == before.path
-    assert before.path_policy == "fastest"
-    assert after.path_policy == "lowest_propellant"
-    assert after.paused is True
-    assert after.requested_capacity_t_per_day == 3.5
-    assert after.priority == 4
+    view = app.query(GetLogistics())
+    policy = next(row for row in view.supply_policies if row.id == policy_id)
+    target = next(row for row in view.target_stocks if row.id == target_id)
+    requirement = next(row for row in view.requirements if row.owner_kind == "target_stock" and row.owner_id == target_id)
+    assert policy.preferred_source_id == str(EARTH)
+    assert policy.destination_id == str(LEO)
+    assert policy.path_policy == "lowest_propellant"
+    assert target.target_quantity_t == 3.5
+    assert target.priority == 4
+    assert requirement.priority == 4
+    assert app.query(GetTransportAllocations()).items == before_allocations
+
+    app.execute(DeleteSupplyPolicy(str(LEO), str(ids.MACHINERY)))
+    app.execute(DeleteTargetStock(str(LEO), str(ids.MACHINERY)))
+    cleared = app.query(GetLogistics())
+    assert not cleared.supply_policies
+    assert not cleared.target_stocks
 
 
 def test_vehicle_production_option_separates_plan_acceptance_from_runtime_blockers():
@@ -242,7 +250,7 @@ def test_vehicle_production_exposes_resource_and_service_priority_control():
     assert row.priority == 2
     assert row.priority_editable is True
     assert row.production_service_type == "vehicle_assembly"
-    demands = tuple(d for d in app.query(GetLogistics()).demands if d.owner_kind == "vehicle_production" and d.owner_id == production_id)
+    demands = tuple(d for d in app.query(GetLogistics()).requirements if d.owner_kind == "vehicle_production" and d.owner_id == production_id)
     assert demands and {d.priority for d in demands} == {2}
 
     app.execute(SetVehicleProductionSettings(production_id, priority=5))
@@ -273,7 +281,7 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
         "logistics_summary": GetLogisticsSummary(), "logistics": GetLogistics(),
         "routes": GetRoutes(include_modes=True), "fleet": GetFleet(),
         "transport_allocations": GetTransportAllocations(), "cargo_flows": GetCargoFlows(),
-        "lanes": GetLogisticsLanes(), "operational_node": GetOperationalNode(location_id),
+"operational_node": GetOperationalNode(location_id),
         "flow": GetFlowReport(location_id), "projects": GetProjects(location_id),
         "build_options": GetBuildOptions(location_id), "bottlenecks": GetBottlenecks(location_id),
         "surveys": GetSurveys(location_id),

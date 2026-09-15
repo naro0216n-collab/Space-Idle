@@ -137,27 +137,27 @@ def test_duplicate_same_scope_policy_for_same_service_fails_closed():
         state.create_policy(enabled=True, allowed_service_ids=(service,))
 
 
-def test_lane_projection_exposes_policy_denial_until_authorized():
+def test_supply_planning_exposes_policy_denial_until_authorized():
     app = build_game_application()
     sim = app._simulation
     sim.transport.transport_allocations.clear()
-    lane_id = sim.logistics.create_lane(ids.EARTH, ids.LEO, 1.0, 3)
-    demand = __import__('space_idle.resource_demand', fromlist=['ResourceDemand']).ResourceDemand(
+    demand = __import__('space_idle.supply', fromlist=['SupplyRequirement']).SupplyRequirement(
         EntityId("demand.policy-blocker"), "test", EntityId("owner.policy-blocker"),
         ids.LEO, ids.MACHINERY, 1.0, 3, ids.EARTH,
     )
-    metric = next(row for row in sim.logistics.lane_snapshot((demand,), sim.day).lanes if row.lane_id == lane_id)
-    assert metric.effective_capacity_t_per_day == 0.0
-    assert any(value.startswith("external_policy_denied:") for value in metric.blockers)
+    options = sim.logistics.supply_planning_options(demand, sim.day)
+    assert ids.EARTH in options.candidate_source_ids
+    assert ids.EARTH not in options.operational_source_ids
+    assert any(value.startswith("external_policy_denied:") for value in options.blockers)
 
     sim.external_economy.create_policy(
         enabled=True,
         allowed_service_ids=(ids.EARTH_LEO_LAUNCH_SERVICE,),
         day=sim.day,
     )
-    metric = next(row for row in sim.logistics.lane_snapshot((demand,), sim.day).lanes if row.lane_id == lane_id)
-    assert metric.effective_capacity_t_per_day > 0.0
-    assert not any(value.startswith("external_policy_denied:") for value in metric.blockers)
+    options = sim.logistics.supply_planning_options(demand, sim.day)
+    assert ids.EARTH in options.operational_source_ids
+    assert not any(value.startswith("external_policy_denied:") for value in options.blockers)
 
 
 def test_load_rederives_same_external_spending_authorization(tmp_path):
@@ -178,7 +178,6 @@ def test_load_rederives_same_external_spending_authorization(tmp_path):
         import_source_id=EARTH,
     )
     sim.projects.advance_procurement(sim.day)
-    sim.logistics.create_lane(EARTH, LEO, 1.0, 3)
     app.execute(CreateExternalServicePolicy(
         enabled=True,
         allowed_service_ids=(str(ids.EARTH_LEO_LAUNCH_SERVICE),),
@@ -198,7 +197,7 @@ def test_load_rederives_same_external_spending_authorization(tmp_path):
 def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
     from space_idle.content.base_game import EARTH, LUNAR_ORBIT, MACHINERY
     from space_idle.resource_claim import allocate_resource_claims
-    from space_idle.resource_demand import ResourceDemand
+    from space_idle.supply import SupplyRequirement
 
     app = build_game_application()
     sim = app._simulation
@@ -209,9 +208,8 @@ def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
         spending_cap_musd=0.5,
         day=sim.day,
     )
-    lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 1.0, 3)
     sim.inventory.add(EARTH, MACHINERY, 1.0)
-    demand = ResourceDemand(
+    demand = SupplyRequirement(
         EntityId("demand.multiedge-spend"), "test", EntityId("owner.multiedge-spend"),
         LUNAR_ORBIT, MACHINERY, 1.0, 3, EARTH,
     )
@@ -219,7 +217,7 @@ def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
     assert len(raw.spending_requests) == 2
     funds = sim.external_economy.allocate(raw.spending_requests, sim.day)
     plan = sim.logistics.authorize_capacity_logistics(raw, funds, sim.day)
-    row = next(item for item in plan.dispatches if item.lane_id == lane_id)
+    row = next(item for item in plan.dispatches if item.demand.id == demand.id)
     assert row.amount_t == pytest.approx(0.1)
     resources = allocate_resource_claims(plan.claims, sim.inventory)
     services = _transport_service_allocations(sim, sim.day, plan)

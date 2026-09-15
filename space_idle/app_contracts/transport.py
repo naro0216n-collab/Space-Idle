@@ -87,36 +87,3 @@ class RelocateFleet:
     destination_id: str
     path: tuple[str, ...] | None = None
     path_policy: PathPolicyLiteral = "fastest"
-
-
-@dataclass(frozen=True)
-class CreateLogisticsLane:
-    source_id: str
-    destination_id: str
-    requested_capacity_t_per_day: float
-    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    path: tuple[str, ...] | None = None
-    path_policy: PathPolicyLiteral = "fastest"
-
-
-@dataclass(frozen=True)
-class UpdateLogisticsLane:
-    lane_id: str
-    requested_capacity_t_per_day: float
-    priority: ActivityPriority
-    path_policy: PathPolicyLiteral | None = None
-
-
-@dataclass(frozen=True)
-class PauseLogisticsLane:
-    lane_id: str
-
-
-@dataclass(frozen=True)
-class ResumeLogisticsLane:
-    lane_id: str
-
-
-@dataclass(frozen=True)
-class DeleteLogisticsLane:
-    lane_id: str

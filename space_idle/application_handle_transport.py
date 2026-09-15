@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from .application_commands import (
-    ChangeTransportAllocationMode, Command, CommandResult, CreateLogisticsLane,
-    CreateTransportAllocation, DeleteLogisticsLane, DeleteTransportAllocation,
-    PauseLogisticsLane, PauseTransportAllocation, ProduceVehicle,
-    PauseVehicleProduction, RelocateFleet, ResumeVehicleProduction,
-    ResumeLogisticsLane, ResumeTransportAllocation, SetVehicleProductionSettings,
-    UpdateLogisticsLane, UpdateTransportAllocation,
+    ChangeTransportAllocationMode, Command, CommandResult,
+    CreateTransportAllocation, DeleteTransportAllocation,
+    PauseTransportAllocation, ProduceVehicle, PauseVehicleProduction, RelocateFleet,
+    ResumeVehicleProduction, ResumeTransportAllocation, SetVehicleProductionSettings,
+    UpdateTransportAllocation,
 )
 from .transport.models import PathPolicy
 from .shared import DefinitionId, EntityId, RouteId
@@ -97,26 +96,4 @@ class TransportCommandHandlerMixin:
                 path_policy=PathPolicy(command.path_policy), day=sim.day,
             )
             return CommandResult(str(relocation_id))
-        if isinstance(command, CreateLogisticsLane):
-            lane_id = sim.logistics.create_lane(
-                self._require_operational_node(command.source_id), self._require_operational_node(command.destination_id),
-                command.requested_capacity_t_per_day, command.priority,
-                None if command.path is None else tuple(RouteId(value) for value in command.path),
-                PathPolicy(command.path_policy),
-            )
-            return CommandResult(str(lane_id))
-        if isinstance(command, UpdateLogisticsLane):
-            sim.logistics.update_lane(
-                EntityId(command.lane_id),
-                command.requested_capacity_t_per_day,
-                command.priority,
-                None if command.path_policy is None else PathPolicy(command.path_policy),
-            )
-            return CommandResult()
-        if isinstance(command, PauseLogisticsLane):
-            sim.logistics.pause_lane(EntityId(command.lane_id)); return CommandResult()
-        if isinstance(command, ResumeLogisticsLane):
-            sim.logistics.resume_lane(EntityId(command.lane_id)); return CommandResult()
-        if isinstance(command, DeleteLogisticsLane):
-            sim.logistics.delete_lane(EntityId(command.lane_id)); return CommandResult()
         return NotImplemented

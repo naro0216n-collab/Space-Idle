@@ -267,7 +267,7 @@ class TransportCapacitySnapshot:
     used: DirectionalCapacity
     spare: DirectionalCapacity
     utilization: float
-    operational_resource_demand: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+    operational_supply: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
     blockers: tuple[str, ...] = ()
     limiting_factors: tuple[str, ...] = ()
 

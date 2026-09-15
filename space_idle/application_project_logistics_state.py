@@ -156,9 +156,9 @@ class LogisticsStateProjectorMixin:
                     cycle_days=plan.cycle_days,
                     forward_latency_days=plan.forward_latency_days,
                     reverse_latency_days=plan.reverse_latency_days,
-                    operational_resource_demand=tuple(
+                    operational_supply=tuple(
                         (str(location), str(resource_id), amount)
-                        for location, resource_id, amount in snapshot.operational_resource_demand
+                        for location, resource_id, amount in snapshot.operational_supply
                     ),
                     infrastructure_requirements=infrastructure_requirement_rows(plan),
                     blockers=snapshot.blockers,
@@ -173,7 +173,6 @@ class LogisticsStateProjectorMixin:
             CargoFlowRow(
                 id=str(flow.id), resource_id=str(flow.resource_id), amount_t=flow.amount_t,
                 source_id=str(flow.source_id), destination_id=str(flow.destination_id),
-                lane_id=None if flow.lane_id is None else str(flow.lane_id),
                 demand_id=None if flow.demand_id is None else str(flow.demand_id),
                 owner_kind=flow.owner_kind, owner_id=str(flow.owner_id), priority=flow.priority,
                 service_ids=flow.service_ids,

@@ -46,7 +46,7 @@ def test_domain_authoritative_state_is_not_read_directly_across_domain_boundarie
             "fleet_releases",
             "vehicle_production_projects",
         },
-        "logistics": {"lanes", "cargo_flows", "procurement_deliveries"},
+        "logistics": {"target_stocks", "supply_policies", "cargo_flows", "procurement_deliveries"},
     }
     service_fields = {
         "transport": set(TransportService.__dataclass_fields__),
@@ -96,7 +96,7 @@ def test_domain_authoritative_state_is_not_read_directly_across_domain_boundarie
             )
         )
         assert not offenders, (
-            f"{path.relative_to(PACKAGE)} bypasses Resource Demand / Claim boundary: {offenders}"
+            f"{path.relative_to(PACKAGE)} bypasses Supply Requirement / Execution Claim boundary: {offenders}"
         )
 
 

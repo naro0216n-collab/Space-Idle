@@ -77,8 +77,8 @@
         <div class="workspace-heading logistics-heading"><div><div class="eyebrow">LOGISTICS NETWORK</div><h1>物流ネットワーク</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
         <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
         <div class="logistics-bottom-grid">
-          <section class="card"><div class="card-heading"><h3>物流Lane</h3><span id="laneCountBadge" class="badge"></span></div><div id="laneTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Resource Demand</h3><span id="demandCountBadge" class="badge"></span></div><div id="demandTable" class="table-wrap"></div></section>
+          <section class="card"><div class="card-heading"><h3>Supply Policy / Target Stock</h3><span id="supplyPolicyCountBadge" class="badge"></span></div><div id="supplyPolicyTable" class="table-wrap"></div></section>
+          <section class="card"><div class="card-heading"><h3>Supply Requirement</h3><span id="demandCountBadge" class="badge"></span></div><div id="demandTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Fleet</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Transport Allocation</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Vehicle Production</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
@@ -93,18 +93,27 @@
       </aside>
     </main>
 
-    <dialog id="laneDialog" class="modal-dialog">
-      <form method="dialog" id="laneForm">
-        <div class="dialog-heading"><div><div class="eyebrow">LOGISTICS LANE</div><h2>物流Laneを作成</h2></div><button type="button" class="icon-button" id="laneCloseButton">×</button></div>
-        <label>供給元<select id="laneSource" required></select></label>
-        <label>需要地<select id="laneDestination" required></select></label>
-        <div class="field-pair"><label>要求容量 (t/日)<input id="laneCapacity" type="number" min="0.01" step="0.01" value="1" required></label><label>活動優先度<select id="lanePriority" required><option value="1">1 最低</option><option value="2">2 低</option><option value="3" selected>3 標準</option><option value="4">4 高</option><option value="5">5 最高</option></select></label></div>
-        <label>経路方針<select id="lanePolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
-        <div class="cell-sub">Laneは資源を指定しません。この供給元→需要地の容量を、建設・研究・産業が生成するResource Demandへ割り当てます。</div>
-        <div class="dialog-actions"><button type="button" class="secondary" id="laneCancelButton">取消</button><button type="submit" class="primary">Lane作成</button></div>
+    <dialog id="supplyPolicyDialog" class="modal-dialog">
+      <form method="dialog" id="supplyPolicyForm">
+        <div class="dialog-heading"><div><div class="eyebrow">SUPPLY POLICY</div><h2>供給方針を設定</h2></div><button type="button" class="icon-button" id="supplyPolicyCloseButton">×</button></div>
+        <label>需要地<select id="supplyPolicyDestination" required></select></label>
+        <label>資源<select id="supplyPolicyResource" required></select></label>
+        <label>優先供給元<select id="supplyPolicySource"><option value="">自動選択</option></select></label>
+        <label>経路方針<select id="supplyPolicyPathPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
+        <div class="cell-sub">供給方針はsource/pathのPlayer Policyです。Transport CapacityやFleet配備量は変更しません。</div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="supplyPolicyCancelButton">取消</button><button type="submit" class="primary">方針を保存</button></div>
       </form>
     </dialog>
 
+    <dialog id="targetStockDialog" class="modal-dialog">
+      <form method="dialog" id="targetStockForm">
+        <div class="dialog-heading"><div><div class="eyebrow">TARGET STOCK</div><h2>Target Stockを設定</h2></div><button type="button" class="icon-button" id="targetStockCloseButton">×</button></div>
+        <label>需要地<select id="targetStockDestination" required></select></label>
+        <label>資源<select id="targetStockResource" required></select></label>
+        <div class="field-pair"><label>目標在庫 (t)<input id="targetStockQuantity" type="number" min="0" step="0.01" value="1" required></label><label>活動優先度<select id="targetStockPriority" required><option value="1">1 最低</option><option value="2">2 低</option><option value="3" selected>3 標準</option><option value="4">4 高</option><option value="5">5 最高</option></select></label></div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="targetStockCancelButton">取消</button><button type="submit" class="primary">Target Stockを保存</button></div>
+      </form>
+    </dialog>
 
     <dialog id="relocationDialog" class="modal-dialog">
       <form method="dialog" id="relocationForm">

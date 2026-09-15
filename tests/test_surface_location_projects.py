@@ -168,19 +168,19 @@ def test_surface_cell_development_changes_territory_only_after_project_completio
     assert ids.EARTH_CELL_COASTAL in sim.graph.locations[ids.EARTH].developed_cell_ids
 
 
-def test_founding_resource_shortage_reports_logistics_lane_blocker():
+def test_founding_resource_shortage_reports_supply_transport_blocker():
     app = build_game_application()
     sim = app._simulation
     cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
     _survey_cell_to_l2(sim, cell)
-    project_id = app.execute(_found_command("No Supply Lane", cell)).created_id
+    project_id = app.execute(_found_command("No Supply Transport", cell)).created_id
     assert project_id is not None
 
     row = next(
         item for item in app.query(GetProjects(str(ids.LUNAR_ORBIT))).items
         if item.id == project_id
     )
-    assert any(code == "import_lane" for code, _detail in row.blockers)
+    assert any(code in {"import_source", "import_transport_blocked"} for code, _detail in row.blockers)
     assert any(code == "resource_shortage" for code, _detail in row.blockers)
 
 

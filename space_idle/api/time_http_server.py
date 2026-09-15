@@ -13,7 +13,6 @@ from ..application_commands import (
     GetFlowReport,
     GetOperationalNode,
     GetLogistics,
-    GetLogisticsLanes,
     GetLogisticsSummary,
     GetProjects,
     GetResearch,
@@ -62,7 +61,6 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             "fleet": GetFleet(),
             "transport_allocations": GetTransportAllocations(),
             "cargo_flows": GetCargoFlows(),
-            "lanes": GetLogisticsLanes(),
             "external_economy": GetExternalEconomy(),
         }
         if operational_node_id:

@@ -48,8 +48,6 @@ class GetTransportAllocations: pass
 @dataclass(frozen=True)
 class GetCargoFlows: pass
 @dataclass(frozen=True)
-class GetLogisticsLanes: pass
-@dataclass(frozen=True)
 class GetTransportAllocationOptions:
     source_id: str
     destination_id: str

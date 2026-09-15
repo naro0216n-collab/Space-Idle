@@ -32,7 +32,7 @@ def configure_initial_inventory(inventory) -> None:
 
     # Existing orbital assets begin with a finite service stock. This is not an
     # external market: once consumed it must be replenished through normal
-    # logistics lanes from industrial inventory.
+    # supply planning from industrial inventory.
     inventory.add(ids.LEO, ids.STRUCTURAL_COMPONENTS, 1.0)
     inventory.add(ids.LEO, ids.MACHINERY, 1.0)
     inventory.add(ids.LEO, ids.PRECISION_ELECTRONICS, 1.0)

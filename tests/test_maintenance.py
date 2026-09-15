@@ -84,7 +84,7 @@ def test_maintenance_runway_reports_actual_site_stock_not_one_day_planning_amoun
         sim.inventory.stock[(ids.LEO, rid)] = rate * 20.0
 
     row = next(
-        demand for demand in app.query(GetLogistics()).demands
+        demand for demand in app.query(GetLogistics()).requirements
         if demand.owner_id == str(facility.id) and demand.resource_id == str(resource_id)
     )
 
@@ -134,7 +134,7 @@ def test_maintenance_replenishment_plan_is_independent_of_transient_reservations
 
     baseline = {
         demand.resource_id: demand.amount_t
-        for demand in sim.maintenance.resource_demands(sim.day)
+        for demand in sim.maintenance.supplys(sim.day)
     }
     sim.inventory.reserve(
         EntityId('test.transient'),
@@ -144,7 +144,7 @@ def test_maintenance_replenishment_plan_is_independent_of_transient_reservations
     )
     after_reservation = {
         demand.resource_id: demand.amount_t
-        for demand in sim.maintenance.resource_demands(sim.day)
+        for demand in sim.maintenance.supplys(sim.day)
     }
 
     assert baseline == after_reservation

@@ -219,7 +219,7 @@ class LogisticsRouteProjectorMixin:
                         ),
                         fleet_total_units=fleet.total_units,
                         fleet_free_units=fleet.free_units,
-                        operational_resource_demand_at_full_unit=tuple(
+                        operational_supply_at_full_unit=tuple(
                             (str(location_id), str(resource_id), amount)
                             for location_id, resource_id, amount
                             in plan.resource_t_per_full_utilization_day
