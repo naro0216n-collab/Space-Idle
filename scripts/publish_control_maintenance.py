@@ -211,7 +211,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     repo = _repo()
     manifest = _load_manifest(repo)
     publish_state = _load_publish_state(repo)
-    base_commit = _require_sha(args.target_remote_head, name="observed publish HEAD")
+    base_commit = _require_sha(args.publish_head, name="observed publish HEAD")
     if base_commit != publish_state["publish_commit"]:
         raise ControlMaintenanceError(
             f"publish HEAD moved from recorded source state: expected {publish_state['publish_commit']}, got {base_commit}"
@@ -416,7 +416,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("prepare").set_defaults(func=cmd_prepare)
     plan = sub.add_parser("connector-plan")
-    plan.add_argument("--target-remote-head", required=True)
+    plan.add_argument("--publish-head", required=True)
     plan.set_defaults(func=cmd_connector_plan)
     tree = sub.add_parser("connector-tree")
     tree.add_argument("--blob", action="append", required=True, help="Observed create_blob result as PATH=SHA")

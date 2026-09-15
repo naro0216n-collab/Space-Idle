@@ -112,8 +112,8 @@ GitHub反映の入口は差分種別で決める。
 ```bash
 python scripts/publish_request.py prepare
 python scripts/publish_request.py connector-plan \
-  --target-remote-head <current-develop-head> \
-  --publish-remote-head <current-publish-head>
+  --develop-head <current-develop-head> \
+  --publish-head <current-publish-head>
 python scripts/publish_request.py connector-blob \
   --blob-sha <create-blob-result-sha>
 # helperが次chunkを返す間、同じ手順を繰り返す。SHA不一致時だけ後述の転記retryへ入る。
@@ -140,8 +140,8 @@ active transactionが存在する場合は、そのstageから続行する。pre
 
 ```bash
 python scripts/publish_request.py cancel \
-  --target-remote-head <current-develop-head> \
-  --publish-remote-head <current-publish-head>
+  --develop-head <current-develop-head> \
+  --publish-head <current-publish-head>
 ```
 
 #### Pre-ref transport retry
@@ -167,7 +167,7 @@ ref更新後の一時的なGateway障害では、同じtransport commitのworkfl
 ```bash
 python scripts/workflow_maintenance.py prepare
 python scripts/workflow_maintenance.py connector-plan \
-  --target-remote-head <current-develop-head>
+  --develop-head <current-develop-head>
 python scripts/workflow_maintenance.py connector-tree
 python scripts/workflow_maintenance.py connector-commit \
   --tree-sha <create-tree-result-sha>
@@ -176,8 +176,8 @@ python scripts/workflow_maintenance.py connector-update \
   --commit-tree-sha <fetched-commit-tree-sha> \
   --commit-parent-sha <fetched-commit-parent-sha>
 python scripts/workflow_maintenance.py verify-remote \
-  --remote-head <develop-head-after-update> \
-  --remote-tree <develop-tree-after-update>
+  --develop-head <develop-head-after-update> \
+  --develop-tree <develop-tree-after-update>
 ```
 
 各stageではhelperが生成したpacketと、直前stageが要求する観測値だけを次へ渡す。
@@ -195,7 +195,7 @@ Publish Gateway control plane (`.github/workflows/publish-gateway.yml` とvalida
 ```bash
 python scripts/publish_control_maintenance.py prepare
 python scripts/publish_control_maintenance.py connector-plan \
-  --target-remote-head <current-publish-head>
+  --publish-head <current-publish-head>
 python scripts/publish_control_maintenance.py connector-tree \
   --blob '<control-path>=<create-blob-result-sha>' \
   --blob '<control-path>=<create-blob-result-sha>'

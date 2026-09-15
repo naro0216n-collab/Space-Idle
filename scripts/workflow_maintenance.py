@@ -280,8 +280,8 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     repo = _repo_from_cwd()
     manifest_path = _manifest_path(repo)
     manifest = _load_manifest(manifest_path)
-    _require_hex_sha(args.target_remote_head, name="target remote HEAD")
-    if args.target_remote_head != manifest["base_commit"]:
+    _require_hex_sha(args.develop_head, name="observed develop HEAD")
+    if args.develop_head != manifest["base_commit"]:
         raise WorkflowMaintenanceError(
             "develop HEAD moved since workflow maintenance prepare; do not create connector packets"
         )
@@ -480,23 +480,23 @@ def cmd_verify_remote(args: argparse.Namespace) -> int:
         raise WorkflowMaintenanceError(
             f"verify-remote requires stage update-packet-ready, found {state['stage']}"
         )
-    _require_hex_sha(args.remote_head, name="remote develop HEAD")
-    _require_hex_sha(args.remote_tree, name="remote develop tree")
-    if args.remote_head != state["published_commit_candidate"]:
+    _require_hex_sha(args.develop_head, name="remote develop HEAD")
+    _require_hex_sha(args.develop_tree, name="remote develop tree")
+    if args.develop_head != state["published_commit_candidate"]:
         raise WorkflowMaintenanceError(
-            f"remote develop HEAD mismatch: expected {state['published_commit_candidate']}, got {args.remote_head}"
+            f"remote develop HEAD mismatch: expected {state['published_commit_candidate']}, got {args.develop_head}"
         )
-    if args.remote_tree != state["target_tree"]:
+    if args.develop_tree != state["target_tree"]:
         raise WorkflowMaintenanceError(
-            f"remote develop tree mismatch: expected {state['target_tree']}, got {args.remote_tree}"
+            f"remote develop tree mismatch: expected {state['target_tree']}, got {args.develop_tree}"
         )
     state["stage"] = "remote-verified"
     _write_connector_state(plan_dir, state)
     _rehydrate_marker_path(repo).write_text(
         json.dumps(
             {
-                "published_commit": args.remote_head,
-                "published_tree": args.remote_tree,
+                "published_commit": args.develop_head,
+                "published_tree": args.develop_tree,
                 "local_target_commit": state["local_target_commit"],
             },
             sort_keys=True,
@@ -507,8 +507,8 @@ def cmd_verify_remote(args: argparse.Namespace) -> int:
     summary = _write_summary(
         plan_dir,
         state,
-        remote_head=args.remote_head,
-        remote_tree=args.remote_tree,
+        develop_head=args.develop_head,
+        develop_tree=args.develop_tree,
         verified=True,
         rehydrate_required=True,
         next="restore the new develop source-snapshot and run publish_request.py init before normal development/publish",
@@ -533,7 +533,7 @@ def build_parser() -> argparse.ArgumentParser:
         "connector-plan", help="after one develop HEAD check, generate workflow blob upload packets only"
     )
     connector_plan.add_argument(
-        "--target-remote-head",
+        "--develop-head",
         required=True,
         help="observed develop HEAD from the single pre-maintenance remote check; verification input, not a target selector",
     )
@@ -575,11 +575,11 @@ def build_parser() -> argparse.ArgumentParser:
         "verify-remote", help="verify develop ref/tree after update and require source-snapshot rehydration"
     )
     verify_remote.add_argument(
-        "--remote-head", required=True,
+        "--develop-head", required=True,
         help="develop HEAD observed after the non-force ref update; verification input",
     )
     verify_remote.add_argument(
-        "--remote-tree", required=True,
+        "--develop-tree", required=True,
         help="develop tree observed after the non-force ref update; verification input",
     )
     verify_remote.set_defaults(func=cmd_verify_remote)

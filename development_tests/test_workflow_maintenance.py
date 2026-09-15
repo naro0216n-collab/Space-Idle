@@ -127,7 +127,7 @@ def test_workflow_maintenance_stages_exact_git_data_and_requires_rehydration(tmp
     assert maintenance_manifest(repo).exists()
 
     plan = json.loads(run(
-        MAINTENANCE, repo, "connector-plan", "--target-remote-head", base
+        MAINTENANCE, repo, "connector-plan", "--develop-head", base
     ).stdout)
     plan_path = maintenance_plan(repo)
     assert plan["stage"] == "uploads-planned"
@@ -162,8 +162,8 @@ def test_workflow_maintenance_stages_exact_git_data_and_requires_rehydration(tmp
     assert update_packet["action_args"]["force"] is False
 
     verified = json.loads(run(
-        MAINTENANCE, repo, "verify-remote", "--remote-head", created_commit,
-        "--remote-tree", target_tree,
+        MAINTENANCE, repo, "verify-remote", "--develop-head", created_commit,
+        "--develop-tree", target_tree,
     ).stdout)
     assert verified["verified"] is True
     assert verified["rehydrate_required"] is True
@@ -202,8 +202,8 @@ def test_workflow_stage_machine_rejects_skips_replanning_and_wrong_sha(tmp_path:
     assert skipped.returncode != 0
     assert "uploads-planned" in skipped.stderr or "state" in skipped.stderr
 
-    run(MAINTENANCE, repo, "connector-plan", "--target-remote-head", base)
-    replan = run(MAINTENANCE, repo, "connector-plan", "--target-remote-head", base, check=False)
+    run(MAINTENANCE, repo, "connector-plan", "--develop-head", base)
+    replan = run(MAINTENANCE, repo, "connector-plan", "--develop-head", base, check=False)
     assert replan.returncode != 0
     assert "already exists" in replan.stderr
 
@@ -242,7 +242,7 @@ def test_workflow_plan_refuses_moved_develop_before_any_packets(tmp_path: Path) 
     commit_all(repo, "Update CI workflow")
     run(MAINTENANCE, repo, "prepare")
     result = run(
-        MAINTENANCE, repo, "connector-plan", "--target-remote-head", "3" * 40, check=False
+        MAINTENANCE, repo, "connector-plan", "--develop-head", "3" * 40, check=False
     )
     assert result.returncode != 0
     assert "develop HEAD moved" in result.stderr

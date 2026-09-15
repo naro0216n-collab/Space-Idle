@@ -908,11 +908,11 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     verified = _verify_prepared_request(repo, manifest)
     prepared = _read_prepared_request(manifest)
     state_base = _read_state(repo)
-    target_head = _require_hex_sha(args.target_remote_head, name="observed develop HEAD")
-    publish_head = _require_hex_sha(args.publish_remote_head, name="observed publish HEAD")
-    if target_head != prepared["base_sha"] or target_head != state_base["remote_commit"]:
+    develop_head = _require_hex_sha(args.develop_head, name="observed develop HEAD")
+    publish_head = _require_hex_sha(args.publish_head, name="observed publish HEAD")
+    if develop_head != prepared["base_sha"] or develop_head != state_base["remote_commit"]:
         raise PublishStateError(
-            f"develop HEAD moved since prepare: expected={prepared['base_sha']} actual={target_head}"
+            f"develop HEAD moved since prepare: expected={prepared['base_sha']} actual={develop_head}"
         )
     if publish_head != state_base["publish_commit"]:
         raise PublishStateError(
@@ -931,7 +931,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "version": CONNECTOR_STATE_VERSION,
         "stage": "blob-ready",
         "request_id": prepared["request_id"],
-        "target_remote_head": target_head,
+        "develop_head": develop_head,
         "publish_base_head": publish_head,
         "publish_base_tree": state_base["publish_tree"],
         "blob_chunk_index": 0,
@@ -1134,16 +1134,16 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     connector = _read_connector_state(repo)
     if connector.get("stage") == "update-packet-ready":
         raise PublishStateError("cannot cancel after a publish ref update may have occurred; inspect the Gateway run")
-    target_head = _require_hex_sha(args.target_remote_head, name="observed develop HEAD")
-    publish_head = _require_hex_sha(args.publish_remote_head, name="observed publish HEAD")
-    if target_head != prepared["base_sha"] or target_head != state["remote_commit"]:
+    develop_head = _require_hex_sha(args.develop_head, name="observed develop HEAD")
+    publish_head = _require_hex_sha(args.publish_head, name="observed publish HEAD")
+    if develop_head != prepared["base_sha"] or develop_head != state["remote_commit"]:
         raise PublishStateError("cannot cancel after develop moved")
     if publish_head != connector["publish_base_head"] or publish_head != state["publish_commit"]:
         raise PublishStateError("cannot cancel after publish transport moved")
     shutil.rmtree(_transaction_dir(repo))
     print(json.dumps({
         "cancelled": True, "request_id": prepared["request_id"],
-        "target_remote_head": target_head, "publish_remote_head": publish_head, "verified": True,
+        "develop_head": develop_head, "publish_head": publish_head, "verified": True,
     }, indent=2))
     return 0
 
@@ -1206,8 +1206,8 @@ def build_parser() -> argparse.ArgumentParser:
         "connector-plan",
         help="plan fixed-slot publish transport after one combined develop/publish ref observation",
     )
-    plan.add_argument("--target-remote-head", required=True)
-    plan.add_argument("--publish-remote-head", required=True)
+    plan.add_argument("--develop-head", required=True)
+    plan.add_argument("--publish-head", required=True)
     plan.set_defaults(func=cmd_connector_plan)
 
     blob = sub.add_parser(
@@ -1232,8 +1232,8 @@ def build_parser() -> argparse.ArgumentParser:
     commit.set_defaults(func=cmd_connector_commit)
 
     cancel = sub.add_parser("cancel", help="cancel a pre-ref active transaction after one combined ref observation")
-    cancel.add_argument("--target-remote-head", required=True)
-    cancel.add_argument("--publish-remote-head", required=True)
+    cancel.add_argument("--develop-head", required=True)
+    cancel.add_argument("--publish-head", required=True)
     cancel.set_defaults(func=cmd_cancel)
 
     record = sub.add_parser("record", help="close the transaction from one successful Publish Gateway run observation")

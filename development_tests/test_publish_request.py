@@ -89,8 +89,8 @@ def prepare_change(repo: Path, text: str = "changed\n") -> dict[str, object]:
 def plan(repo: Path, develop_head: str, publish_head: str) -> dict[str, object]:
     return json.loads(run_request(
         repo, "connector-plan",
-        "--target-remote-head", develop_head,
-        "--publish-remote-head", publish_head,
+        "--develop-head", develop_head,
+        "--publish-head", publish_head,
     ).stdout)
 
 
@@ -364,13 +364,13 @@ def test_combined_preflight_rejects_moved_develop_or_publish(tmp_path: Path) -> 
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     prepare_change(repo)
     moved_target = run_request(
-        repo, "connector-plan", "--target-remote-head", "c" * 40,
-        "--publish-remote-head", publish_head, check=False,
+        repo, "connector-plan", "--develop-head", "c" * 40,
+        "--publish-head", publish_head, check=False,
     )
     assert moved_target.returncode != 0
     moved_publish = run_request(
-        repo, "connector-plan", "--target-remote-head", base,
-        "--publish-remote-head", "d" * 40, check=False,
+        repo, "connector-plan", "--develop-head", base,
+        "--publish-head", "d" * 40, check=False,
     )
     assert moved_publish.returncode != 0
 
@@ -381,8 +381,8 @@ def test_cancel_uses_heads_only_and_never_needs_publish_tree_read(tmp_path: Path
     plan(repo, base, publish_head)
     cancelled = json.loads(run_request(
         repo, "cancel",
-        "--target-remote-head", base,
-        "--publish-remote-head", publish_head,
+        "--develop-head", base,
+        "--publish-head", publish_head,
     ).stdout)
     assert cancelled["cancelled"] is True
     assert not transaction(repo).exists()

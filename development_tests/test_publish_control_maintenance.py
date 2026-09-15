@@ -62,7 +62,7 @@ def test_control_maintenance_uses_recorded_publish_base_and_exact_current_paths(
     repo, base, base_tree = init_repo(tmp_path)
     prepared = json.loads(run(repo, "prepare").stdout)
     assert prepared["control_paths"] == list(CONTROL_PATHS)
-    plan = json.loads(run(repo, "connector-plan", "--target-remote-head", base).stdout)
+    plan = json.loads(run(repo, "connector-plan", "--publish-head", base).stdout)
     assert plan["base_tree"] == base_tree
     assert len(plan["upload_packets"]) == 2
     assert "expected_tree" in plan
@@ -99,7 +99,7 @@ def test_control_maintenance_uses_recorded_publish_base_and_exact_current_paths(
 def test_control_tree_rejects_blob_transfer_mismatch_before_tree_creation(tmp_path: Path) -> None:
     repo, base, _ = init_repo(tmp_path)
     run(repo, "prepare")
-    run(repo, "connector-plan", "--target-remote-head", base)
+    run(repo, "connector-plan", "--publish-head", base)
     oids = expected_oids(repo)
     args: list[str] = []
     for index, (path, oid) in enumerate(oids.items()):
@@ -112,6 +112,6 @@ def test_control_tree_rejects_blob_transfer_mismatch_before_tree_creation(tmp_pa
 def test_control_plan_rejects_moved_publish_head(tmp_path: Path) -> None:
     repo, _, _ = init_repo(tmp_path)
     run(repo, "prepare")
-    failed = run(repo, "connector-plan", "--target-remote-head", "e" * 40, check=False)
+    failed = run(repo, "connector-plan", "--publish-head", "e" * 40, check=False)
     assert failed.returncode != 0
     assert "publish HEAD moved" in failed.stderr
