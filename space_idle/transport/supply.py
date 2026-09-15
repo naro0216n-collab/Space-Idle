@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..shared import SpatialNodeId
+from ..priority import DEFAULT_ACTIVITY_PRIORITY
 from .models import (
     TransportOperationDependencyProjection,
     TransportServiceSupply,
@@ -135,7 +136,7 @@ class TransportSupplyMixin:
             rows.append(
                 TransportOperationDependencyProjection(
                     allocation_id=allocation.id,
-                    priority=allocation.priority,
+                    priority=DEFAULT_ACTIVITY_PRIORITY,
                     anchor_node_id=allocation.anchor_node_id,
                     turnaround_service_type=definition.turnaround_service_type,
                     turnaround_request_id=(

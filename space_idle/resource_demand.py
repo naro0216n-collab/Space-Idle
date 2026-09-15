@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterable
 
+from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
 if TYPE_CHECKING:
@@ -25,11 +26,12 @@ class ResourceDemand:
     destination_id: SpatialNodeId
     resource_id: DefinitionId
     amount_t: float
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     source_id: SpatialNodeId | None = None
     recurring_rate_t_per_day: float | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "priority", ActivityPriority(self.priority))
         if self.amount_t < 0:
             raise ValueError("resource demand amount must be non-negative")
         if self.source_id is not None and self.source_id == self.destination_id:

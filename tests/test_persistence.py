@@ -58,7 +58,7 @@ def _advance_until_research_startable(app, research_id, max_days=2000):
 def _make_nontrivial_state():
     app = build_game_application()
     _advance_until_research_startable(app, TECH_ORBITAL_OPERATIONS)
-    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS), priority=77))
+    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS), priority=4))
     project_id = app.execute(PlanBuild(
         str(LEO), str(ORBITAL_LOGISTICS_NODE),
         sourcing_policy="import_now", import_source_id=str(EARTH),
@@ -120,7 +120,7 @@ def test_save_load_preserves_survey_knowledge_campaign_and_future_behavior(tmp_p
     active_key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.WATER)
     target = sim.survey.targets[active_key]
 
-    app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(active_key[0]), str(active_key[1]), priority=75))
+    app.execute(StartSurvey(str(ids.LUNAR_ORBIT), str(active_key[0]), str(active_key[1]), priority=4))
     sim.survey.knowledge_progress[active_key] = target.thresholds[0] / 2.0
     target_level = sim.survey.campaigns[active_key].target_knowledge_level
 
@@ -209,7 +209,7 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
     sim.inventory.add(ids.EARTH, ids.MACHINERY, 1.0)
     demand = ResourceDemand(
         EntityId("demand.persistence"), "test", EntityId("owner.persistence"),
-        ids.LEO, ids.MACHINERY, 0.5, 100, ids.EARTH,
+        ids.LEO, ids.MACHINERY, 0.5, 5, ids.EARTH,
     )
     logistics_plan = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
     funds = sim.external_economy.allocate(logistics_plan.spending_requests, sim.day)

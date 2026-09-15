@@ -26,7 +26,7 @@ def test_location_facility_does_not_require_cell_and_rejects_cell_selection():
     project_id = sim.projects.plan_build(
         ids.WATER_STORAGE,
         ids.EARTH,
-        50,
+        3,
         "mixed",
     )
     assert sim.projects.projects[project_id].site_cell_id is None
@@ -35,7 +35,7 @@ def test_location_facility_does_not_require_cell_and_rejects_cell_selection():
         sim.projects.plan_build(
             ids.WATER_STORAGE,
             ids.EARTH,
-            50,
+            3,
             "mixed",
             site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
         )
@@ -50,7 +50,7 @@ def test_surface_cell_facility_requires_a_developed_cell_owned_by_location():
         sim.projects.plan_build(
             ids.ROBOTIC_GEOLOGY_STATION,
             ids.EARTH,
-            50,
+            3,
             "mixed",
         )
 
@@ -58,7 +58,7 @@ def test_surface_cell_facility_requires_a_developed_cell_owned_by_location():
         sim.projects.plan_build(
             ids.ROBOTIC_GEOLOGY_STATION,
             ids.EARTH,
-            50,
+            3,
             "mixed",
             site_cell_id=ids.EARTH_CELL_COASTAL,
         )
@@ -66,7 +66,7 @@ def test_surface_cell_facility_requires_a_developed_cell_owned_by_location():
     project_id = sim.projects.plan_build(
         ids.ROBOTIC_GEOLOGY_STATION,
         ids.EARTH,
-        50,
+        3,
         "mixed",
         site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
     )

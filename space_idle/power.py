@@ -27,7 +27,6 @@ GenerationModel: TypeAlias = FixedGeneration | SolarGeneration
 class PowerSpec:
     generation: GenerationModel | None = None
     load_mw: float = 0.0
-    default_priority: int = 50
     # Load required even while the facility is manually paused (e.g.
     # cryogenic hold, containment, safe-state control). It never produces
     # active domain output or capability while paused.
@@ -108,11 +107,7 @@ class PowerService:
                 )
             load = spec.standby_load_mw if facility.paused else spec.load_mw
             if load > 0:
-                priority = (
-                    facility.power_priority
-                    if facility.power_priority is not None
-                    else spec.default_priority
-                )
+                priority = facility.activity_priority
                 requests.append(ServiceCapacityRequest(
                     self._request_id(facility.id),
                     operational_node_id,

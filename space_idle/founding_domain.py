@@ -56,7 +56,7 @@ def restore_founding(sim: Any, data: dict[str, Any]) -> None:
             new_location_id=SpatialNodeId(row["new_location_id"]),
             founding_package_id=DefinitionId(row["founding_package_id"]),
             vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
-            priority=int(row.get("priority", 50)),
+            priority=row["priority"],
             preferred_source_id=None if row.get("preferred_source_id") is None else SpatialNodeId(row["preferred_source_id"]),
             status=FoundingStatus(row.get("status", FoundingStatus.PREPARING.value)),
             preparation_done=float(row.get("preparation_done", 0.0)),

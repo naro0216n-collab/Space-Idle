@@ -6,6 +6,7 @@ from .resource_demand import ResourceDemand
 from .service_capacity import ServiceCapacityRequest
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .site import SiteRequirementFailure, evaluate_site_requirements
+from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .research_models import ResearchStage, ResearchState
 
 
@@ -139,7 +140,7 @@ class ResearchWorkflowMixin:
         )
 
     def start(
-        self, research_id: DefinitionId, *, day: int = 0, priority: int = 50
+        self, research_id: DefinitionId, *, day: int = 0, priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     ) -> None:
         blockers = self.start_blockers(research_id, day=day)
         if blockers:
@@ -149,10 +150,10 @@ class ResearchWorkflowMixin:
             research_id, definition.stages[0], priority=priority
         )
 
-    def set_priority(self, research_id: DefinitionId, priority: int) -> None:
+    def set_priority(self, research_id: DefinitionId, priority: ActivityPriority) -> None:
         if research_id not in self.active:
             raise ValueError("研究は進行中ではありません")
-        self.active[research_id].priority = int(priority)
+        self.active[research_id].priority = ActivityPriority(priority)
 
     def pause_blockers(self, research_id: DefinitionId) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)

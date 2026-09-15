@@ -56,7 +56,7 @@ def capture_transport(sim: Any) -> dict[str, Any]:
                 "vehicle_definition_id": str(row.vehicle_definition_id),
                 "anchor_node_id": str(row.anchor_node_id),
                 "destination_id": str(row.destination_id),
-                "priority": row.priority,
+                "provisioning_priority": int(row.provisioning_priority),
                 "control_mode": row.control_mode.value,
                 "target_units": row.target_units,
                 "target_capacity": None if row.target_capacity is None else {
@@ -145,7 +145,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
         allocation = TransportAllocation(
             id=EntityId(row["id"]), vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
             anchor_node_id=SpatialNodeId(row["anchor_node_id"]), destination_id=SpatialNodeId(row["destination_id"]),
-            priority=int(row["priority"]), control_mode=TransportControlMode(row["control_mode"]),
+            provisioning_priority=int(row["provisioning_priority"]), control_mode=TransportControlMode(row["control_mode"]),
             target_units=None if row.get("target_units") is None else int(row["target_units"]),
             target_capacity=None if target is None else DirectionalCapacity(float(target["forward_t_per_day"]), float(target["reverse_t_per_day"])),
             path=None if row.get("path") is None else tuple(RouteId(value) for value in row["path"]),
@@ -162,7 +162,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
                 FleetRelocationResourceNeed(SpatialNodeId(need["operational_node_id"]), DefinitionId(need["resource_id"]), float(need["required_t"]))
                 for need in row.get("resource_needs", [])
             ),
-            int(row.get("priority", 50)),
+            int(row["priority"]),
             None if row.get("departure_day") is None else int(row["departure_day"]),
             None if row.get("arrival_day") is None else int(row["arrival_day"]),
         )
@@ -180,7 +180,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
     tr.vehicle_production_projects = {
         EntityId(row["id"]): VehicleProductionState(
             id=EntityId(row["id"]), vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
-            operational_node_id=SpatialNodeId(row["operational_node_id"]), priority=int(row.get("priority", 50)),
+            operational_node_id=SpatialNodeId(row["operational_node_id"]), priority=int(row["priority"]),
             progress_days=float(row.get("progress_days", 0.0)),
             phase=VehicleProductionPhase(row.get("phase", "awaiting_inputs")), paused=bool(row.get("paused", False)),
             completed_units=int(row.get("completed_units", 0)), created_day=int(row.get("created_day", 0)),

@@ -10,6 +10,7 @@ from .facilities import FacilityBook, FacilityPlacementScope
 from .inventory import InventoryBook
 from .transport.service import TransportService
 from .power import PowerService, PowerSnapshot
+from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .resource_demand import ResourceDemand
 from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
@@ -121,7 +122,7 @@ class LocationFoundingProject:
     new_location_id: SpatialNodeId
     founding_package_id: DefinitionId
     vehicle_definition_id: DefinitionId
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     preferred_source_id: SpatialNodeId | None = None
     status: FoundingStatus = FoundingStatus.PREPARING
     preparation_done: float = 0.0
@@ -130,6 +131,9 @@ class LocationFoundingProject:
     departure_day: int | None = None
     arrival_day: int | None = None
     completed_day: int | None = None
+
+    def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
 
 
 @dataclass(frozen=True)
@@ -284,7 +288,7 @@ class LocationFoundingService:
         package_id: DefinitionId,
         vehicle_definition_id: DefinitionId,
         *,
-        priority: int = 50,
+        priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
         preferred_source_id: SpatialNodeId | None = None,
         day: int = 0,
     ) -> ProjectId:
@@ -541,11 +545,11 @@ class LocationFoundingService:
             raise ValueError("founding can only resume during preparation")
         project.paused = False
 
-    def set_priority(self, project_id: ProjectId, priority: int) -> None:
+    def set_priority(self, project_id: ProjectId, priority: ActivityPriority) -> None:
         project = self.projects[project_id]
         if project.status is not FoundingStatus.PREPARING:
             raise ValueError("founding priority can only change during preparation")
-        project.priority = priority
+        project.priority = ActivityPriority(priority)
 
     def cancel(self, project_id: ProjectId, day: int = 0) -> None:
         project = self.projects[project_id]

@@ -21,8 +21,8 @@ def _claim(claim_id: str, amount: float, priority: int, owner_kind: str = "test"
 def test_cross_domain_priority_allocation_uses_one_inventory_budget():
     inventory = InventoryBook()
     inventory.add(SITE, RESOURCE, 5.0)
-    maintenance = _claim("claim.maintenance", 4.0, 80, "maintenance")
-    industry = _claim("claim.industry", 4.0, 50, "industry")
+    maintenance = _claim("claim.maintenance", 4.0, 4, "maintenance")
+    industry = _claim("claim.industry", 4.0, 3, "industry")
 
     plan = allocate_resource_claims((industry, maintenance), inventory)
 
@@ -35,8 +35,8 @@ def test_cross_domain_priority_allocation_uses_one_inventory_budget():
 def test_equal_priority_shortage_is_proportional_and_registration_order_independent():
     inventory = InventoryBook()
     inventory.add(SITE, RESOURCE, 3.0)
-    first = _claim("claim.a", 2.0, 50, "industry")
-    second = _claim("claim.b", 4.0, 50, "maintenance")
+    first = _claim("claim.a", 2.0, 3, "industry")
+    second = _claim("claim.b", 4.0, 3, "maintenance")
 
     forward = allocate_resource_claims((first, second), inventory)
     reverse = allocate_resource_claims((second, first), inventory)
@@ -49,8 +49,8 @@ def test_equal_priority_shortage_is_proportional_and_registration_order_independ
 def test_unmet_minimum_receives_no_partial_allocation():
     inventory = InventoryBook()
     inventory.add(SITE, RESOURCE, 2.0)
-    threshold = _claim("claim.threshold", 4.0, 50, minimum=3.0)
-    continuous = _claim("claim.continuous", 4.0, 50)
+    threshold = _claim("claim.threshold", 4.0, 3, minimum=3.0)
+    continuous = _claim("claim.continuous", 4.0, 3)
 
     plan = allocate_resource_claims((threshold, continuous), inventory)
 
@@ -61,8 +61,8 @@ def test_unmet_minimum_receives_no_partial_allocation():
 def test_atomic_claim_is_all_or_nothing():
     inventory = InventoryBook()
     inventory.add(SITE, RESOURCE, 3.0)
-    atomic = _claim("claim.atomic", 4.0, 60, atomic=True)
-    lower = _claim("claim.lower", 3.0, 50)
+    atomic = _claim("claim.atomic", 4.0, 3, atomic=True)
+    lower = _claim("claim.lower", 3.0, 3)
 
     plan = allocate_resource_claims((atomic, lower), inventory)
 
@@ -88,7 +88,7 @@ def test_real_maintenance_and_industry_claims_compete_in_the_same_allocator():
     )
     assert maintenance_claims
     for claim in maintenance_claims:
-        sim.facilities.facilities[claim.owner_id].maintenance_priority = 80
+        sim.facilities.facilities[claim.owner_id].maintenance_priority = 4
     maintenance_claims = tuple(
         claim for claim in sim.maintenance.resource_claims(sim.day)
         if claim.operational_node_id == ids.EARTH
@@ -127,7 +127,7 @@ def test_operational_node_query_exposes_shared_resource_claim_allocation_decisio
     )
     assert maintenance_claims and industry_claims
     for claim in maintenance_claims:
-        sim.facilities.facilities[claim.owner_id].maintenance_priority = 80
+        sim.facilities.facilities[claim.owner_id].maintenance_priority = 4
     maintenance_claims = tuple(
         claim for claim in sim.maintenance.resource_claims(sim.day)
         if claim.operational_node_id == ids.EARTH
@@ -149,5 +149,5 @@ def test_operational_node_query_exposes_shared_resource_claim_allocation_decisio
     industry_rows = tuple(row for row in rows if row.owner_kind == "industry_process")
     assert sum(row.allocated for row in maintenance_rows) == pytest.approx(maintenance_total)
     assert sum(row.allocated for row in industry_rows) == pytest.approx(0.0)
-    assert all(row.priority == 80 for row in maintenance_rows)
+    assert all(row.priority == 4 for row in maintenance_rows)
     assert all(row.unmet > 0.0 for row in industry_rows)

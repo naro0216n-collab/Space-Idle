@@ -34,7 +34,7 @@ def test_transport_fleet_investment_is_explicit_and_lane_demand_does_not_resize_
     assert before.free_units == before.total_units
     assert app.query(GetLogistics()).allocations == ()
 
-    app.execute(CreateLogisticsLane(str(ids.EARTH), str(ids.LEO), 100.0, priority=100))
+    app.execute(CreateLogisticsLane(str(ids.EARTH), str(ids.LEO), 100.0, priority=5))
     after_lane = next(
         row for row in app.query(GetFleet()).pools
         if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
@@ -44,7 +44,7 @@ def test_transport_fleet_investment_is_explicit_and_lane_demand_does_not_resize_
 
     app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
-        control_mode="units", target_units=1, priority=50,
+        control_mode="units", target_units=1, provisioning_priority=3,
     ))
     allocated = next(
         row for row in app.query(GetFleet()).pools
@@ -61,14 +61,14 @@ def test_paused_lane_keeps_project_demand_visible_without_dispatching_cargo_flow
     sim.technology.completed.update({ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS})
     app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
-        control_mode="units", target_units=1, priority=100,
+        control_mode="units", target_units=1, provisioning_priority=5,
     ))
     lane_id = app.execute(CreateLogisticsLane(
-        str(ids.EARTH), str(ids.LEO), 20.0, priority=100
+        str(ids.EARTH), str(ids.LEO), 20.0, priority=5
     )).created_id
     assert lane_id is not None
     project_id = app.execute(PlanBuild(
-        str(ids.LEO), str(ids.ORBITAL_LOGISTICS_NODE), priority=100,
+        str(ids.LEO), str(ids.ORBITAL_LOGISTICS_NODE), priority=5,
         sourcing_policy="import_now", import_source_id=str(ids.EARTH),
     )).created_id
     assert project_id is not None
@@ -127,12 +127,12 @@ def test_capacity_mode_target_is_not_auto_increased_by_lane_demand():
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
         control_mode="capacity", target_forward_t_per_day=1.0,
-        target_reverse_t_per_day=0.0, priority=70,
+        target_reverse_t_per_day=0.0, provisioning_priority=4,
     )).created_id
     assert allocation_id is not None
     before = next(row for row in app.query(GetLogistics()).allocations if row.id == allocation_id)
 
-    app.execute(CreateLogisticsLane(str(ids.EARTH), str(ids.LEO), 100.0, priority=100))
+    app.execute(CreateLogisticsLane(str(ids.EARTH), str(ids.LEO), 100.0, priority=5))
     after = next(row for row in app.query(GetLogistics()).allocations if row.id == allocation_id)
 
     assert after.target_capacity == before.target_capacity

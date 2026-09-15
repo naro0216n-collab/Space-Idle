@@ -21,14 +21,14 @@ def test_facility_maintenance_priority_is_player_visible_and_command_driven():
     app = build_game_application()
     facility = _earth_facilities_with_maintenance(app._simulation)[0]
 
-    app.execute(SetMaintenancePriority(str(facility.id), 73))
+    app.execute(SetMaintenancePriority(str(facility.id), 5))
     row = next(
         item for item in app.query(GetOperationalNode(str(ids.EARTH))).facilities
         if item.id == str(facility.id)
     )
 
-    assert facility.maintenance_priority == 73
-    assert row.maintenance_priority == 73
+    assert facility.maintenance_priority == 5
+    assert row.maintenance_priority == 5
 
 
 def test_maintenance_shortage_can_starve_lower_priority_facility_without_auto_rescue():
@@ -39,8 +39,8 @@ def test_maintenance_shortage_can_starve_lower_priority_facility_without_auto_re
     # Keep only two facilities in the maintenance competition so the expected
     # allocation is independent of unrelated initial content.
     sim.facilities.facilities = {high.id: high, low.id: low}
-    high.maintenance_priority = 80
-    low.maintenance_priority = 20
+    high.maintenance_priority = 4
+    low.maintenance_priority = 1
 
     high_req = sim.facilities.maintenance_requirements_per_day(high.id)
     low_req = sim.facilities.maintenance_requirements_per_day(low.id)

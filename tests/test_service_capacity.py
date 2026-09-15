@@ -9,7 +9,7 @@ from space_idle.service_capacity import (
 from space_idle.shared import EntityId, SpatialNodeId
 
 
-def _request(name: str, requested: float, priority: int = 50) -> ServiceCapacityRequest:
+def _request(name: str, requested: float, priority: int = 3) -> ServiceCapacityRequest:
     return ServiceCapacityRequest(
         EntityId(f"request.{name}"), SpatialNodeId("node.test"), "test_service",
         requested, priority, "test", EntityId(name), "work",
@@ -31,8 +31,8 @@ def test_same_priority_service_scarcity_is_proportional_and_registration_order_i
 
 
 def test_higher_priority_service_request_is_allocated_before_lower_priority():
-    high = _request("high", 3.0, 100)
-    low = _request("low", 3.0, 10)
+    high = _request("high", 3.0, 5)
+    low = _request("low", 3.0, 1)
     supply = {(SpatialNodeId("node.test"), "test_service"): 4.0}
     plan = allocate_service_capacity((low, high), nominal_supply=supply)
 

@@ -52,7 +52,7 @@ def test_upgrade_query_separates_plan_eligibility_from_runtime_blockers():
     assert any(code == "technology" for code, _detail in option.blockers)
 
     result = app.execute(PlanFacilityUpgrade(
-        before_row.id, priority=50, sourcing_policy="mixed"
+        before_row.id, priority=3, sourcing_policy="mixed"
     ))
     assert result.created_id is not None
 
@@ -89,7 +89,7 @@ def test_facility_upgrade_is_a_resource_backed_construction_project():
     result = app.execute(
         PlanFacilityUpgrade(
             before_row.id,
-            priority=100,
+            priority=5,
             sourcing_policy="import_now",
         )
     )
@@ -165,7 +165,7 @@ def test_active_upgrade_roundtrips_without_applying_level_early(tmp_path):
     _unlock_next_upgrade(app, facility)
 
     result = app.execute(
-        PlanFacilityUpgrade(row.id, priority=100, sourcing_policy="import_now")
+        PlanFacilityUpgrade(row.id, priority=5, sourcing_policy="import_now")
     )
     assert result.created_id is not None
     project_id = result.created_id

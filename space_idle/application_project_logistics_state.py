@@ -129,7 +129,7 @@ class LogisticsStateProjectorMixin:
                     display_name=self._vehicle_definition(allocation.vehicle_definition_id).display_name,
                     anchor_node_id=str(allocation.anchor_node_id),
                     destination_id=str(allocation.destination_id),
-                    priority=allocation.priority,
+                    provisioning_priority=allocation.provisioning_priority,
                     control_mode=allocation.control_mode.value,
                     target_units=allocation.target_units,
                     target_capacity=None if allocation.target_capacity is None else self._capacity_row(allocation.target_capacity),

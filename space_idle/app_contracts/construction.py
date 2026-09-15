@@ -2,6 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from ..priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
+
 SourcingPolicyValue = Literal["import_now", "mixed", "local_priority"]
 
 
@@ -9,7 +11,7 @@ SourcingPolicyValue = Literal["import_now", "mixed", "local_priority"]
 class PlanBuild:
     operational_node_id: str
     facility_id: str
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     sourcing_policy: SourcingPolicyValue = "mixed"
     import_source_id: str | None = None
     site_cell_id: str | None = None
@@ -18,7 +20,7 @@ class PlanBuild:
 @dataclass(frozen=True)
 class PlanFacilityUpgrade:
     facility_id: str
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     sourcing_policy: SourcingPolicyValue = "mixed"
     import_source_id: str | None = None
 
@@ -31,7 +33,7 @@ class FoundLocation:
     core_cell_id: str
     founding_package_id: str
     vehicle_definition_id: str
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     preferred_source_id: str | None = None
 
 
@@ -53,14 +55,14 @@ class ResumeFounding:
 @dataclass(frozen=True)
 class SetFoundingPriority:
     project_id: str
-    priority: int
+    priority: ActivityPriority
 
 
 @dataclass(frozen=True)
 class DevelopSurfaceCell:
     location_id: str
     cell_id: str
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     sourcing_policy: SourcingPolicyValue = "mixed"
     import_source_id: str | None = None
 
@@ -83,7 +85,7 @@ class ResumeBuild:
 @dataclass(frozen=True)
 class SetProjectPriority:
     project_id: str
-    priority: int
+    priority: ActivityPriority
 
 
 @dataclass(frozen=True)

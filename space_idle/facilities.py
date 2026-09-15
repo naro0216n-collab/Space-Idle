@@ -5,6 +5,7 @@ from enum import Enum
 import math
 from typing import TYPE_CHECKING, Mapping
 
+from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .site import EnvironmentCondition
 from .spatial import EnvironmentResolver, SpatialContextId
@@ -67,13 +68,15 @@ class FacilityState:
     definition_id: DefinitionId
     operational_node_id: SpatialNodeId
     paused: bool = False
-    power_priority: int | None = None
-    maintenance_priority: int = 50
+    activity_priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+    maintenance_priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     level: int = 1
     invested_resources: dict[DefinitionId, float] = field(default_factory=dict)
     site_cell_id: SurfaceCellId | None = None
 
     def __post_init__(self) -> None:
+        self.activity_priority = ActivityPriority(self.activity_priority)
+        self.maintenance_priority = ActivityPriority(self.maintenance_priority)
         if self.level < 1:
             raise ValueError("facility level must be positive")
         if any(amount < 0 for amount in self.invested_resources.values()):
@@ -140,8 +143,8 @@ class FacilityBook:
         operational_node_id: SpatialNodeId,
         *,
         site_cell_id: SurfaceCellId | None = None,
-        power_priority: int | None = None,
-        maintenance_priority: int = 50,
+        activity_priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
+        maintenance_priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
         level: int = 1,
         invested_resources: Mapping[DefinitionId, float] | None = None,
     ) -> EntityId:
@@ -166,7 +169,7 @@ class FacilityBook:
             definition_id=definition_id,
             operational_node_id=operational_node_id,
             paused=False,
-            power_priority=power_priority,
+            activity_priority=activity_priority,
             maintenance_priority=maintenance_priority,
             level=level,
             invested_resources=investment,
@@ -199,11 +202,11 @@ class FacilityBook:
     def resume(self, facility_id: EntityId) -> None:
         self.facilities[facility_id].paused = False
 
-    def set_power_priority(self, facility_id: EntityId, priority: int | None) -> None:
-        self.facilities[facility_id].power_priority = priority
+    def set_activity_priority(self, facility_id: EntityId, priority: ActivityPriority) -> None:
+        self.facilities[facility_id].activity_priority = ActivityPriority(priority)
 
-    def set_maintenance_priority(self, facility_id: EntityId, priority: int) -> None:
-        self.facilities[facility_id].maintenance_priority = priority
+    def set_maintenance_priority(self, facility_id: EntityId, priority: ActivityPriority) -> None:
+        self.facilities[facility_id].maintenance_priority = ActivityPriority(priority)
 
     def all_at(self, operational_node_id: SpatialNodeId) -> list[FacilityState]:
         return [f for f in self.facilities.values() if f.operational_node_id == operational_node_id]

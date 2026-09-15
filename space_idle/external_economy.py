@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .priority import ActivityPriority
 from .shared import AccountState, DefinitionId, EntityId
 
 
@@ -70,12 +71,13 @@ class FundsRequest:
     policy_id: EntityId
     service_id: DefinitionId
     requested_musd: float
-    priority: int
+    priority: ActivityPriority
     owner_kind: str
     owner_id: EntityId
     purpose: str
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "priority", ActivityPriority(self.priority))
         if self.requested_musd < -1e-9:
             raise ValueError("funds request amount must be non-negative")
 
@@ -88,7 +90,7 @@ class FundsAuthorization:
     requested_musd: float
     authorized_musd: float
     unmet_musd: float
-    priority: int
+    priority: ActivityPriority
     owner_kind: str
     owner_id: EntityId
     purpose: str

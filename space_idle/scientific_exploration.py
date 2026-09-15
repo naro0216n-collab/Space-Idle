@@ -7,6 +7,7 @@ from enum import Enum
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .power import PowerService, PowerSnapshot
+from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .research import ResearchService
 from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .resource_demand import ResourceDemand
@@ -92,6 +93,10 @@ class ScientificExplorationState:
     inputs_consumed: bool = False
     paused: bool = False
     created_day: int = 0
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+
+    def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
 
 
 @dataclass
@@ -104,7 +109,10 @@ class ScientificExplorationService:
     research: ResearchService
     campaigns: dict[DefinitionId, ScientificExplorationState] = field(default_factory=dict)
 
-    def start(self, definition_id: DefinitionId, *, day: int = 0) -> None:
+    def start(
+        self, definition_id: DefinitionId, *, day: int = 0,
+        priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
+    ) -> None:
         if definition_id not in self.definitions:
             raise KeyError(definition_id)
         if not self.can_start(definition_id):
@@ -112,7 +120,14 @@ class ScientificExplorationService:
         self.campaigns[definition_id] = ScientificExplorationState(
             definition_id=definition_id,
             created_day=day,
+            priority=priority,
         )
+
+    def set_priority(self, definition_id: DefinitionId, priority: ActivityPriority) -> None:
+        state = self.campaigns[definition_id]
+        if state.phase is ScientificExplorationPhase.COMPLETE:
+            raise ValueError("completed scientific exploration priority cannot change")
+        state.priority = ActivityPriority(priority)
 
     def pause(self, definition_id: DefinitionId) -> None:
         state = self.campaigns[definition_id]
@@ -376,7 +391,7 @@ class ScientificExplorationService:
                     definition.origin_id,
                     resource_id,
                     remaining,
-                    70,
+                    state.priority,
                     None,
                 ))
         return tuple(demands)
@@ -404,7 +419,7 @@ class ScientificExplorationService:
                     definition.origin_id,
                     resource_id,
                     remaining,
-                    70,
+                    state.priority,
                     "scientific_exploration",
                     EntityId(f"scientific_exploration:{definition_id}"),
                     "campaign_consumables",

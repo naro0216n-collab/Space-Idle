@@ -91,12 +91,12 @@ def test_research_start_creates_theory_project_without_upfront_rp_payment():
     sim.research.stored_points = 10.0
     before = app.query(GetResearch()).stored_points
 
-    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS), priority=80))
+    app.execute(StartResearch(str(TECH_ORBITAL_OPERATIONS), priority=4))
 
     started = _research_row(app, TECH_ORBITAL_OPERATIONS)
     assert app.query(GetResearch()).stored_points == before
     assert started.status == "theory"
-    assert started.priority == 80
+    assert started.priority == 4
     assert started.rp_remaining == started.research_point_cost
     assert started.execution_requested > 0
     assert started.execution_allocated > 0

@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, runtime_checkable
 
+from ..priority import (
+    ActivityPriority, DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PROVISIONING_PRIORITY, ProvisioningPriority,
+)
 from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 
@@ -127,11 +130,12 @@ class FleetRelocation:
     travel_days: int
     path: tuple[RouteId, ...]
     resource_needs: tuple[FleetRelocationResourceNeed, ...] = ()
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     departure_day: int | None = None
     arrival_day: int | None = None
 
     def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
         if self.units <= 0:
             raise ValueError("fleet relocation units must be positive")
         if self.source_id == self.destination_id:
@@ -195,7 +199,7 @@ class TransportAllocation:
     vehicle_definition_id: DefinitionId
     anchor_node_id: SpatialNodeId
     destination_id: SpatialNodeId
-    priority: int
+    provisioning_priority: ProvisioningPriority
     control_mode: TransportControlMode
     target_units: int | None = None
     target_capacity: DirectionalCapacity | None = None
@@ -205,6 +209,7 @@ class TransportAllocation:
     last_operated_day: int | None = None
 
     def __post_init__(self) -> None:
+        self.provisioning_priority = ProvisioningPriority(self.provisioning_priority)
         if self.anchor_node_id == self.destination_id:
             raise ValueError("transport allocation endpoints must differ")
         if self.control_mode is TransportControlMode.UNITS:
@@ -309,7 +314,7 @@ class TransportOperationDependencyProjection:
     """Transport-owned dependencies Logistics must submit to shared allocators."""
 
     allocation_id: EntityId
-    priority: int
+    priority: ActivityPriority
     anchor_node_id: SpatialNodeId
     turnaround_service_type: str | None
     turnaround_request_id: EntityId | None

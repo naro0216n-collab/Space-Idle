@@ -1,6 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+from ..priority import ActivityPriority, ProvisioningPriority
+
 from .catalog_views import SiteRequirementsDefinitionRow
 
 
@@ -55,7 +57,7 @@ class ResearchRow:
     status: str
     stages: tuple[str, ...]
     paused: bool
-    priority: int
+    priority: ActivityPriority
     can_start: bool
     can_pause: bool
     can_resume: bool
@@ -111,6 +113,8 @@ class ScientificExplorationRow:
     display_name: str
     status: str
     paused: bool
+    priority: ActivityPriority
+    can_set_priority: bool
     origin_id: str
     destination_id: str
     operations: tuple[tuple[str, float], ...]
@@ -161,7 +165,7 @@ class SurveyRow:
     progress_fraction: float
     target_knowledge_level: int
     target_threshold: float
-    priority: int
+    priority: ActivityPriority
     requested_service_points_per_day: float
     allocated_service_points_per_day: float
     knowledge_level: int

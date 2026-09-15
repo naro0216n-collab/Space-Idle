@@ -61,8 +61,8 @@ def test_funds_allocation_is_same_priority_registration_order_independent():
     def run(order: tuple[str, ...]):
         state, service, policy = _economy(10.0)
         rows = {
-            "a": _request("funds.a", policy, service, 8.0, 50),
-            "b": _request("funds.b", policy, service, 12.0, 50),
+            "a": _request("funds.a", policy, service, 8.0, 3),
+            "b": _request("funds.b", policy, service, 12.0, 3),
         }
         plan = state.allocate(tuple(rows[key] for key in order), 0)
         return {str(row.request_id): row.authorized_musd for row in plan.rows}
@@ -78,8 +78,8 @@ def test_higher_priority_authorization_reserves_period_budget_within_tick():
     state.policies[policy].period_budget_musd = 10.0
     plan = state.allocate(
         (
-            _request("funds.high", policy, service, 8.0, 100),
-            _request("funds.low", policy, service, 8.0, 10),
+            _request("funds.high", policy, service, 8.0, 5),
+            _request("funds.low", policy, service, 8.0, 1),
         ),
         0,
     )
@@ -92,7 +92,7 @@ def test_minimum_reserve_and_spending_cap_limit_authorization():
     state, service, policy = _economy(20.0)
     state.policies[policy].minimum_reserve_musd = 7.0
     state.policies[policy].spending_cap_musd = 15.0
-    plan = state.allocate((_request("funds.one", policy, service, 30.0, 50),), 0)
+    plan = state.allocate((_request("funds.one", policy, service, 30.0, 3),), 0)
     row = plan.authorization(EntityId("funds.one"))
     assert row.authorized_musd == pytest.approx(13.0)
     assert set(row.limiting_factors) == {"funds", "minimum_reserve", "spending_cap"}
@@ -141,10 +141,10 @@ def test_lane_projection_exposes_policy_denial_until_authorized():
     app = build_game_application()
     sim = app._simulation
     sim.transport.transport_allocations.clear()
-    lane_id = sim.logistics.create_lane(ids.EARTH, ids.LEO, 1.0, 50)
+    lane_id = sim.logistics.create_lane(ids.EARTH, ids.LEO, 1.0, 3)
     demand = __import__('space_idle.resource_demand', fromlist=['ResourceDemand']).ResourceDemand(
         EntityId("demand.policy-blocker"), "test", EntityId("owner.policy-blocker"),
-        ids.LEO, ids.MACHINERY, 1.0, 50, ids.EARTH,
+        ids.LEO, ids.MACHINERY, 1.0, 3, ids.EARTH,
     )
     metric = next(row for row in sim.logistics.lane_snapshot((demand,), sim.day).lanes if row.lane_id == lane_id)
     assert metric.effective_capacity_t_per_day == 0.0
@@ -172,13 +172,13 @@ def test_load_rederives_same_external_spending_authorization(tmp_path):
     sim.projects.plan_build(
         ORBITAL_LOGISTICS_NODE,
         LEO,
-        50,
+        3,
         "import_now",
         day=sim.day,
         import_source_id=EARTH,
     )
     sim.projects.advance_procurement(sim.day)
-    sim.logistics.create_lane(EARTH, LEO, 1.0, 50)
+    sim.logistics.create_lane(EARTH, LEO, 1.0, 3)
     app.execute(CreateExternalServicePolicy(
         enabled=True,
         allowed_service_ids=(str(ids.EARTH_LEO_LAUNCH_SERVICE),),
@@ -209,11 +209,11 @@ def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
         spending_cap_musd=0.5,
         day=sim.day,
     )
-    lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 1.0, 50)
+    lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 1.0, 3)
     sim.inventory.add(EARTH, MACHINERY, 1.0)
     demand = ResourceDemand(
         EntityId("demand.multiedge-spend"), "test", EntityId("owner.multiedge-spend"),
-        LUNAR_ORBIT, MACHINERY, 1.0, 50, EARTH,
+        LUNAR_ORBIT, MACHINERY, 1.0, 3, EARTH,
     )
     raw = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
     assert len(raw.spending_requests) == 2

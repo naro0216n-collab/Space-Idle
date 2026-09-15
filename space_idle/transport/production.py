@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from ..power import PowerSnapshot
+from ..priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from ..resource_claim import ResourceAllocationPlan, ResourceClaim
 from ..resource_demand import ResourceDemand
 from ..service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
@@ -22,7 +23,7 @@ class VehicleProductionState:
     id: EntityId
     vehicle_definition_id: DefinitionId
     operational_node_id: SpatialNodeId
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     progress_days: float = 0.0
     phase: VehicleProductionPhase = VehicleProductionPhase.AWAITING_INPUTS
     paused: bool = False
@@ -30,6 +31,7 @@ class VehicleProductionState:
     created_day: int = 0
 
     def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
         if self.progress_days < -1e-9:
             raise ValueError("vehicle production progress must be non-negative")
 
@@ -42,7 +44,7 @@ class VehicleProductionMixin:
         vehicle_definition_id: DefinitionId,
         location_id: SpatialNodeId,
         *,
-        priority: int = 50,
+        priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
         day: int = 0,
     ) -> EntityId:
         if vehicle_definition_id not in self.vehicle_defs:
@@ -98,7 +100,7 @@ class VehicleProductionMixin:
         self,
         project_id: EntityId,
         *,
-        priority: int | None = None,
+        priority: ActivityPriority | None = None,
     ) -> None:
         state = self.vehicle_production_projects[project_id]
         if priority is not None:
@@ -106,7 +108,7 @@ class VehicleProductionMixin:
                 raise ValueError(
                     "vehicle production priority can only change before inputs are consumed"
                 )
-            state.priority = priority
+            state.priority = ActivityPriority(priority)
 
     def vehicle_production_plan_failures(
         self,

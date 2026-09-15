@@ -25,7 +25,7 @@ def test_scope_boundary_changes_import_export_without_double_counting_internal_f
     sim = app._simulation
     sim.logistics.cargo_flows[EntityId("flow.analytics.scope")] = CargoFlowBatch(
         EntityId("flow.analytics.scope"), ids.WATER, 12.0,
-        EARTH, LEO, None, None, "test", EntityId("analytics.owner"), 50,
+        EARTH, LEO, None, None, "test", EntityId("analytics.owner"), 3,
         ("analytics.service",), (LEO,), sim.day, sim.day + 2,
     )
 
@@ -128,9 +128,9 @@ def test_current_authorized_transport_is_projected_as_boundary_flow_and_operatio
     sim.transport.create_transport_allocation(
         ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
     )
-    sim.logistics.create_lane(EARTH, LEO, 100.0, 100)
+    sim.logistics.create_lane(EARTH, LEO, 100.0, 5)
     sim.projects.plan_build(
-        ids.ORBITAL_LOGISTICS_NODE, LEO, 50, "import_now", day=sim.day,
+        ids.ORBITAL_LOGISTICS_NODE, LEO, 3, "import_now", day=sim.day,
         import_source_id=EARTH,
     )
     sim.projects.advance_procurement(sim.day)
@@ -165,9 +165,9 @@ def test_partial_current_dispatch_reduces_but_does_not_hide_unmet_demand():
     sim.transport.create_transport_allocation(
         ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
     )
-    sim.logistics.create_lane(EARTH, LEO, 100.0, 100)
+    sim.logistics.create_lane(EARTH, LEO, 100.0, 5)
     sim.projects.plan_build(
-        ids.ORBITAL_LOGISTICS_NODE, LEO, 50, "import_now", day=sim.day,
+        ids.ORBITAL_LOGISTICS_NODE, LEO, 3, "import_now", day=sim.day,
         import_source_id=EARTH,
     )
     sim.projects.advance_procurement(sim.day)
@@ -190,7 +190,7 @@ def test_authorized_external_procurement_is_current_inflow_and_not_unmet():
     app = build_game_application()
     sim = app._simulation
     project_id = sim.projects.plan_build(
-        ids.CARGO_WAREHOUSE, EARTH, 70, "import_now", day=sim.day
+        ids.CARGO_WAREHOUSE, EARTH, 4, "import_now", day=sim.day
     )
     sim.projects.advance_procurement(sim.day)
     project_demands = tuple(
@@ -241,7 +241,7 @@ def test_external_procurement_delivery_to_destination_reduces_unmet_and_is_pipel
     app = build_game_application()
     sim = app._simulation
     project_id = sim.projects.plan_build(
-        ids.CARGO_WAREHOUSE, EARTH, 70, "import_now", day=sim.day
+        ids.CARGO_WAREHOUSE, EARTH, 4, "import_now", day=sim.day
     )
     sim.projects.advance_procurement(sim.day)
     demand = next(
@@ -289,7 +289,7 @@ def test_external_procurement_delivery_is_pipeline_only_at_its_delivery_scope():
         {ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS}
     )
     project_id = sim.projects.plan_build(
-        ids.ORBITAL_LOGISTICS_NODE, LEO, 70, "import_now",
+        ids.ORBITAL_LOGISTICS_NODE, LEO, 4, "import_now",
         day=sim.day, import_source_id=EARTH,
     )
     sim.projects.advance_procurement(sim.day)
@@ -367,7 +367,7 @@ def test_dependency_analytics_is_derived_again_after_load(tmp_path):
     sim = app._simulation
     sim.logistics.cargo_flows[EntityId("flow.analytics.persist")] = CargoFlowBatch(
         EntityId("flow.analytics.persist"), ids.WATER, 7.0,
-        EARTH, LEO, None, None, "test", EntityId("analytics.owner"), 50,
+        EARTH, LEO, None, None, "test", EntityId("analytics.owner"), 3,
         ("analytics.service",), (LEO,), sim.day, sim.day + 2,
     )
     before = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),)))

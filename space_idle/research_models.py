@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .shared import DefinitionId, SpatialNodeId
 from .site import SiteRequirements
 
@@ -123,7 +124,10 @@ class ResearchState:
     definition_id: DefinitionId
     stage: ResearchStage
     stage_progress: float = 0.0
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     paused: bool = False
     prototype_operational_node_id: SpatialNodeId | None = None
     demonstration_operational_node_id: SpatialNodeId | None = None
+
+    def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)

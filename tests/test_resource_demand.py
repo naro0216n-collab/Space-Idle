@@ -32,8 +32,8 @@ def _demand(demand_id: str, amount_t: float, priority: int, source_id=None) -> R
 def test_local_supply_is_planning_credit_before_external_transport_by_priority():
     inventory = InventoryBook()
     inventory.add(SITE, RESOURCE, 5.0)
-    high = _demand("demand.high", 4.0, 80)
-    low = _demand("demand.low", 4.0, 50)
+    high = _demand("demand.high", 4.0, 5)
+    low = _demand("demand.low", 4.0, 3)
 
     resolutions = resolve_local_resource_supply((low, high), inventory)
     by_id = {row.demand.id: row for row in resolutions}
@@ -48,8 +48,8 @@ def test_local_supply_is_planning_credit_before_external_transport_by_priority()
 def test_local_netting_is_registration_order_independent_and_preserves_source_constraint():
     inventory = InventoryBook()
     inventory.add(SITE, RESOURCE, 2.0)
-    first = _demand("demand.a", 3.0, 60, SOURCE)
-    second = _demand("demand.b", 3.0, 60)
+    first = _demand("demand.a", 3.0, 3, SOURCE)
+    second = _demand("demand.b", 3.0, 3)
 
     forward = external_resource_demands((first, second), inventory)
     reverse = external_resource_demands((second, first), inventory)
@@ -68,7 +68,7 @@ def test_durable_inventory_reservation_is_unavailable_to_future_demand_planning(
     inventory.add(SITE, RESOURCE, 5.0)
     inventory.reserve(EntityId("project"), SITE, RESOURCE, 4.0)
 
-    demand = _demand("demand.other", 3.0, 50)
+    demand = _demand("demand.other", 3.0, 3)
     resolution = resolve_local_resource_supply((demand,), inventory)[0]
 
     assert resolution.local_supply_t == pytest.approx(1.0)

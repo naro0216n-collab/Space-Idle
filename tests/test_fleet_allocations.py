@@ -195,7 +195,7 @@ def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
         ids.LUNAR_ORBIT,
-        priority=10,
+        provisioning_priority=1,
         target_units=3,
         day=sim.day,
     )
@@ -203,7 +203,7 @@ def test_allocation_priority_is_deterministic_and_preserves_unfilled_target():
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
         ids.LUNAR_ORBIT,
-        priority=100,
+        provisioning_priority=5,
         target_units=2,
         day=sim.day,
     )
@@ -423,7 +423,7 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     )
     assert required > 0.0
 
-    lane_id = sim.logistics.create_lane(ids.EARTH, ids.LEO, required, 100)
+    lane_id = sim.logistics.create_lane(ids.EARTH, ids.LEO, required, 5)
     sim.external_economy.create_policy(
         enabled=True,
         allowed_service_ids=tuple(lg.external_services),
@@ -437,7 +437,7 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
         ids.LEO,
         ids.PROPELLANT,
         required,
-        100,
+        5,
         ids.EARTH,
     )
     plan = sim.logistics.plan_capacity_logistics(0, (demand,))
@@ -547,7 +547,7 @@ def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execut
     assert snapshot.nominal.forward_t_per_day > 0
     assert snapshot.available.forward_t_per_day == 0
     assert snapshot.available.reverse_t_per_day == 0
-    lane_id = sim.logistics.create_lane(ids.LEO, ids.LUNAR_ORBIT, 1.0, 50)
+    lane_id = sim.logistics.create_lane(ids.LEO, ids.LUNAR_ORBIT, 1.0, 3)
     lane = next(row for row in sim.logistics.lane_snapshot((), sim.day).lanes if row.lane_id == lane_id)
     assert lane.effective_capacity_t_per_day == 0
 
@@ -629,7 +629,7 @@ def test_same_priority_allocation_result_does_not_depend_on_registration_order()
         for destination in actual:
             lg.create_transport_allocation(
                 ids.REUSABLE_SURFACE_CARGO_LANDER, ids.LUNAR_ORBIT, destination,
-                priority=50, target_units=1, day=0,
+                provisioning_priority=3, target_units=1, day=0,
             )
         return {str(a.destination_id): lg.transport_active_units(a.id) for a in lg.transport_allocations.values()}
 
@@ -647,7 +647,7 @@ def test_same_priority_same_relation_with_different_targets_is_registration_orde
                 ids.REUSABLE_ORBITAL_CARGO_TUG,
                 ids.LEO,
                 ids.LUNAR_ORBIT,
-                priority=50,
+                provisioning_priority=3,
                 target_units=target,
                 day=0,
             )
@@ -810,7 +810,7 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
         sim.inventory.add(location_id, resource_id, amount / 2.0)
 
     lane_id = sim.logistics.create_lane(
-        ids.LEO, ids.LUNAR_ORBIT, physical.nominal.forward_t_per_day, 100
+        ids.LEO, ids.LUNAR_ORBIT, physical.nominal.forward_t_per_day, 5
     )
     cargo_amount = physical.nominal.forward_t_per_day
     sim.inventory.add(ids.LEO, ids.MACHINERY, cargo_amount)
@@ -821,7 +821,7 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
         ids.LUNAR_ORBIT,
         ids.MACHINERY,
         cargo_amount,
-        100,
+        5,
         ids.LEO,
     )
     raw = sim.logistics.plan_capacity_logistics(0, (demand,))

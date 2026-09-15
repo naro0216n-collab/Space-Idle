@@ -17,10 +17,10 @@ from .application import (
     ResumeBuild, ResumeFacility, ResumeLogisticsLane, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
     ResumeVehicleProduction, SetFacilityProcess,
-    SetMaintenancePriority, SetPowerPriority, SetProjectImportSource, SetProjectPriority,
+    SetMaintenancePriority, SetFacilityActivityPriority, SetProjectImportSource, SetProjectPriority,
     SetProjectSourcingPolicy, SetResearchDemonstrationSite, SetResearchPrototypeSite,
     SetSurveyPriority, SetTimeControl, SetVehicleProductionSettings, StartResearch,
-    StartScientificExploration, StartSurvey, UnassignExplorationFleet,
+    StartScientificExploration, SetScientificExplorationPriority, StartSurvey, UnassignExplorationFleet,
     UpdateLogisticsLane, UpdateTransportAllocation,
 )
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..priority import ActivityPriority, ProvisioningPriority
+
 
 @dataclass(frozen=True)
 class ExternalServicePolicyRow:
@@ -27,7 +29,7 @@ class FundsAuthorizationRow:
     requested_musd: float
     authorized_musd: float
     unmet_musd: float
-    priority: int
+    priority: ActivityPriority
     owner_kind: str
     owner_id: str
     purpose: str

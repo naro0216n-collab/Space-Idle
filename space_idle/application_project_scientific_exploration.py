@@ -26,6 +26,8 @@ class ScientificExplorationProjectorMixin:
                 assigned_vehicle_definition_id = None
                 reserved_units = 0
                 blockers: tuple[str, ...] = ()
+                priority = 3
+                can_set_priority = False
             else:
                 status = state.phase.value
                 paused = state.paused
@@ -35,6 +37,8 @@ class ScientificExplorationProjectorMixin:
                     None if state.vehicle_definition_id is None else str(state.vehicle_definition_id)
                 )
                 reserved_units = state.reserved_units
+                priority = state.priority
+                can_set_priority = state.phase.value != "complete"
                 blockers = service.blockers(
                     definition.id,
                     day=sim.day,
@@ -77,6 +81,8 @@ class ScientificExplorationProjectorMixin:
                     display_name=definition.display_name,
                     status=status,
                     paused=paused,
+                    priority=priority,
+                    can_set_priority=can_set_priority,
                     origin_id=str(definition.origin_id),
                     destination_id=str(definition.destination_id),
                     operations=tuple(

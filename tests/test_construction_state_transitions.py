@@ -68,10 +68,10 @@ def test_planned_project_with_unmet_technology_does_not_claim_inventory():
 def test_parallel_same_priority_projects_share_construction_service_capacity():
     app = build_game_application()
     first = app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.WATER_STORAGE), priority=100, sourcing_policy="local_priority")
+        PlanBuild(str(ids.EARTH), str(ids.WATER_STORAGE), priority=5, sourcing_policy="local_priority")
     ).created_id
     second = app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.BULK_STORAGE), priority=100, sourcing_policy="local_priority")
+        PlanBuild(str(ids.EARTH), str(ids.BULK_STORAGE), priority=5, sourcing_policy="local_priority")
     ).created_id
     assert first is not None and second is not None
 

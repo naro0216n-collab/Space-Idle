@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Iterable, Mapping
 
 from .allocation_graph import AllocationDependency, allocation_dependency_order
+from .priority import ActivityPriority
 from .shared import EntityId, SpatialNodeId
 
 
@@ -20,7 +21,7 @@ class ServiceCapacityRequest:
     operational_node_id: SpatialNodeId
     service_type: str
     requested_rate: float
-    priority: int
+    priority: ActivityPriority
     owner_kind: str
     owner_id: EntityId
     purpose: str
@@ -28,6 +29,7 @@ class ServiceCapacityRequest:
     atomic: bool = False
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "priority", ActivityPriority(self.priority))
         if not self.service_type:
             raise ValueError("service type must not be empty")
         if self.requested_rate < -1e-9:

@@ -18,7 +18,7 @@ def capture_facilities(sim: Any) -> dict[str, Any]:
                 "operational_node_id": str(f.operational_node_id),
                 "site_cell_id": None if f.site_cell_id is None else str(f.site_cell_id),
                 "paused": f.paused,
-                "power_priority": f.power_priority,
+                "activity_priority": int(f.activity_priority),
                 "maintenance_priority": f.maintenance_priority,
                 "level": f.level,
                 "invested_resources": {str(resource_id): amount for resource_id, amount in sorted(f.invested_resources.items(), key=lambda row: str(row[0]))},
@@ -38,8 +38,8 @@ def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
             operational_node_id=SpatialNodeId(row["operational_node_id"]),
             site_cell_id=None if row["site_cell_id"] is None else SurfaceCellId(row["site_cell_id"]),
             paused=bool(row["paused"]),
-            power_priority=row["power_priority"],
-            maintenance_priority=int(row["maintenance_priority"]),
+            activity_priority=row["activity_priority"],
+            maintenance_priority=row["maintenance_priority"],
             level=int(row["level"]),
             invested_resources={DefinitionId(key): float(value) for key, value in row["invested_resources"].items()},
         )
@@ -101,7 +101,8 @@ def validate_runtime(sim: Any) -> None:
         _require(sim.graph.has_operational_node(facility.operational_node_id), f"facility state has unknown operational node: {facility_id}")
         _require(not sim.facilities.placement_failures(facility.definition_id, facility.operational_node_id, facility.site_cell_id), f"facility state has invalid placement: {facility_id}")
         _require(facility.level >= 1, f"facility state has invalid level: {facility_id}")
-        _require(isinstance(facility.maintenance_priority, int), f"facility maintenance priority must be an integer: {facility_id}")
+        _require(1 <= int(facility.activity_priority) <= 5, f"facility activity priority must be 1..5: {facility_id}")
+        _require(1 <= int(facility.maintenance_priority) <= 5, f"facility maintenance priority must be 1..5: {facility_id}")
         _require(all(amount >= -1e-9 for amount in facility.invested_resources.values()), f"facility has negative invested resource: {facility_id}")
         if sim.research is not None and facility.definition_id in sim.research.providers:
             provider = sim.research.providers[facility.definition_id]

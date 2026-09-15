@@ -43,7 +43,7 @@ def test_owned_transport_is_physical_while_external_transport_requires_policy_an
     def demand():
         return ResourceDemand(
             EntityId("demand.economy"), "test", EntityId("owner.economy"),
-            LEO, WATER, 1.0, 100, EARTH,
+            LEO, WATER, 1.0, 5, EARTH,
         )
 
     def execute(sim):
@@ -65,7 +65,7 @@ def test_owned_transport_is_physical_while_external_transport_requires_policy_an
     owned_sim.transport.create_transport_allocation(
         REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=owned_sim.day
     )
-    owned_sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
+    owned_sim.logistics.create_lane(EARTH, LEO, 1.0, 5)
     owned_sim.inventory.add(EARTH, WATER, 1.0)
     owned_before = owned.query(GetWorld()).funds_musd
     execute(owned_sim)
@@ -75,7 +75,7 @@ def test_owned_transport_is_physical_while_external_transport_requires_policy_an
     commercial = build_game_application()
     commercial_sim = commercial._simulation
     commercial_sim.transport.transport_allocations.clear()
-    commercial_sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
+    commercial_sim.logistics.create_lane(EARTH, LEO, 1.0, 5)
     commercial_sim.inventory.add(EARTH, WATER, 2.0)
     commercial_before = commercial.query(GetWorld()).funds_musd
 

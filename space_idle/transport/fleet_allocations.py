@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import math
 
+from ..priority import DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PROVISIONING_PRIORITY, ProvisioningPriority
 from ..resource_claim import ResourceAllocationPlan, ResourceClaim
 from ..resource_demand import ResourceDemand
 from ..service_capacity import ServiceCapacityRequest
@@ -517,7 +518,7 @@ class FleetAllocationMixin:
             vehicle_definition_id=vehicle_definition_id,
             anchor_node_id=anchor_node_id,
             destination_id=destination_id,
-            priority=0,
+            provisioning_priority=DEFAULT_PROVISIONING_PRIORITY,
             control_mode=TransportControlMode.UNITS,
             target_units=0,
             path=path,
@@ -751,7 +752,7 @@ class FleetAllocationMixin:
         anchor_node_id: SpatialNodeId,
         destination_id: SpatialNodeId,
         *,
-        priority: int = 50,
+        provisioning_priority: ProvisioningPriority = DEFAULT_PROVISIONING_PRIORITY,
         control_mode: TransportControlMode = TransportControlMode.UNITS,
         target_units: int | None = 0,
         target_capacity: DirectionalCapacity | None = None,
@@ -773,7 +774,7 @@ class FleetAllocationMixin:
             vehicle_definition_id=vehicle_definition_id,
             anchor_node_id=anchor_node_id,
             destination_id=destination_id,
-            priority=priority,
+            provisioning_priority=provisioning_priority,
             control_mode=control_mode,
             target_units=target_units,
             target_capacity=target_capacity,
@@ -801,7 +802,7 @@ class FleetAllocationMixin:
         self,
         allocation_id: EntityId,
         *,
-        priority: int | None = None,
+        provisioning_priority: ProvisioningPriority | None = None,
         target_units: int | None = None,
         target_capacity: DirectionalCapacity | None = None,
         path_policy: PathPolicy | None = None,
@@ -814,7 +815,11 @@ class FleetAllocationMixin:
                 raise ValueError("UNITS allocation cannot accept capacity target")
             updated = replace(
                 current,
-                priority=current.priority if priority is None else priority,
+                provisioning_priority=(
+                    current.provisioning_priority
+                    if provisioning_priority is None
+                    else ProvisioningPriority(provisioning_priority)
+                ),
                 target_units=current.target_units if target_units is None else target_units,
                 path_policy=current.path_policy if path_policy is None else path_policy,
                 paused=current.paused if paused is None else paused,
@@ -824,7 +829,11 @@ class FleetAllocationMixin:
                 raise ValueError("CAPACITY allocation cannot accept unit target")
             updated = replace(
                 current,
-                priority=current.priority if priority is None else priority,
+                provisioning_priority=(
+                    current.provisioning_priority
+                    if provisioning_priority is None
+                    else ProvisioningPriority(provisioning_priority)
+                ),
                 target_capacity=current.target_capacity if target_capacity is None else target_capacity,
                 path_policy=current.path_policy if path_policy is None else path_policy,
                 paused=current.paused if paused is None else paused,
@@ -1224,7 +1233,7 @@ class FleetAllocationMixin:
             target = allocation.target_capacity or DirectionalCapacity()
             target_key = (0, target.forward_t_per_day, target.reverse_t_per_day)
         return (
-            -allocation.priority,
+            -allocation.provisioning_priority,
             str(allocation.vehicle_definition_id),
             str(allocation.anchor_node_id),
             str(allocation.destination_id),
@@ -1387,7 +1396,7 @@ class FleetAllocationMixin:
                     allocation.anchor_node_id,
                     service_type,
                     requested,
-                    allocation.priority,
+                    DEFAULT_ACTIVITY_PRIORITY,
                     "transport",
                     allocation.id,
                     "turnaround_servicing",

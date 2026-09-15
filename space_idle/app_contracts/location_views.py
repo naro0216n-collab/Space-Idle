@@ -1,5 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
+
+from ..priority import ActivityPriority, ProvisioningPriority
 from .project_views import FacilityUpgradeOption, ProjectRow
 
 
@@ -26,7 +28,7 @@ class ResourceClaimRow:
     owner_kind: str
     owner_id: str
     purpose: str
-    priority: int
+    priority: ActivityPriority
     requested: float
     allocated: float
     unmet: float
@@ -55,8 +57,8 @@ class FacilityRow:
     paused: bool
     active_and_site_compatible: bool
     activation_blockers: tuple[tuple[str, str], ...]
-    power_priority: int | None
-    maintenance_priority: int
+    activity_priority: ActivityPriority
+    maintenance_priority: ActivityPriority
     capabilities: tuple[str, ...]
     power_utilization: float
     research_tier: int | None

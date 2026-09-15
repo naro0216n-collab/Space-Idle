@@ -3,7 +3,7 @@ from __future__ import annotations
 from .application_commands import (
     Command, CommandResult, SetResearchPriority, PauseResearch, PauseSurvey,
     ResumeResearch, ResumeSurvey, SetResearchDemonstrationSite,
-    SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, StartScientificExploration, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
+    SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
 )
 from .shared import DefinitionId, SurfaceCellId
 
@@ -32,14 +32,16 @@ class ProgressionCommandHandlerMixin:
                 sim.research.set_demonstration_site(rid, self._require_operational_node(command.operational_node_id), sim.day)
             return CommandResult()
         if isinstance(command, (
-            StartScientificExploration, PauseScientificExploration, ResumeScientificExploration,
+            StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration,
             AssignExplorationFleet, UnassignExplorationFleet,
         )):
             if sim.scientific_exploration is None:
                 raise RuntimeError("scientific exploration is not configured")
             exploration_id = DefinitionId(command.exploration_id)
             if isinstance(command, StartScientificExploration):
-                sim.scientific_exploration.start(exploration_id, day=sim.day)
+                sim.scientific_exploration.start(exploration_id, day=sim.day, priority=command.priority)
+            elif isinstance(command, SetScientificExplorationPriority):
+                sim.scientific_exploration.set_priority(exploration_id, command.priority)
             elif isinstance(command, PauseScientificExploration):
                 sim.scientific_exploration.pause(exploration_id)
             elif isinstance(command, ResumeScientificExploration):

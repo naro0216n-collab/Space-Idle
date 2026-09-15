@@ -5,6 +5,7 @@ import math
 
 from .facilities import FacilityBook
 from .power import PowerSnapshot
+from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .spatial import SpatialGraph
 from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
@@ -14,7 +15,7 @@ from .exploration_models import KnowledgeLevel, SurveyCoverage, SurveyTarget, Su
 @dataclass
 class SurveyService:
     SERVICE_TYPE = "survey_observation"
-    DEFAULT_PRIORITY = 50
+    DEFAULT_PRIORITY = DEFAULT_ACTIVITY_PRIORITY
 
     targets: dict[tuple[SurfaceCellId, DefinitionId], SurveyTarget]
     providers: dict[DefinitionId, SurveyProviderSpec]
@@ -179,7 +180,7 @@ class SurveyService:
         cell_id: SurfaceCellId,
         resource_id: DefinitionId,
         *,
-        priority: int = DEFAULT_PRIORITY,
+        priority: ActivityPriority = DEFAULT_PRIORITY,
         day: int = 0,
     ) -> None:
         blockers = self.start_blockers(provider_operational_node_id, cell_id, resource_id, day)
@@ -205,11 +206,11 @@ class SurveyService:
         )
         self.campaigns.pop(key, None)
 
-    def set_priority(self, cell_id: SurfaceCellId, resource_id: DefinitionId, priority: int) -> None:
+    def set_priority(self, cell_id: SurfaceCellId, resource_id: DefinitionId, priority: ActivityPriority) -> None:
         blockers = self.priority_blockers(cell_id, resource_id)
         if blockers:
             raise ValueError("; ".join(blockers))
-        self.campaigns[(cell_id, resource_id)].priority = int(priority)
+        self.campaigns[(cell_id, resource_id)].priority = ActivityPriority(priority)
 
     def pause(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> None:
         blockers = self.pause_blockers(cell_id, resource_id)

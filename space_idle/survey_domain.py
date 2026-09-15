@@ -148,7 +148,7 @@ def validate_survey_runtime(sim: Any) -> None:
             sim.survey.knowledge_level(*key) < campaign.target_knowledge_level,
             f"survey campaign already reached its provider knowledge target: {key}",
         )
-        _require(isinstance(campaign.priority, int), f"invalid survey priority: {key}")
+        _require(1 <= int(campaign.priority) <= 5, f"survey priority must be 1..5: {key}")
 
 
 def validate_extraction_runtime(sim: Any) -> None:

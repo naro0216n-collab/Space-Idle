@@ -87,7 +87,7 @@ def test_transport_allocation_projection_exposes_target_fulfillment_and_derived_
     app = build_game_application()
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
-        priority=70, control_mode="units", target_units=2,
+        provisioning_priority=4, control_mode="units", target_units=2,
     )).created_id
     assert allocation_id is not None
 
@@ -179,27 +179,27 @@ def test_transport_allocation_priority_and_routing_policy_update_through_applica
     app = build_game_application()
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(LEO), str(ids.LUNAR_ORBIT),
-        priority=30, control_mode="units", target_units=1, path_policy="fastest",
+        provisioning_priority=2, control_mode="units", target_units=1, path_policy="fastest",
     )).created_id
     assert allocation_id is not None
 
     app.execute(UpdateTransportAllocation(
-        allocation_id, priority=85, target_units=1, path_policy="lowest_propellant"
+        allocation_id, provisioning_priority=5, target_units=1, path_policy="lowest_propellant"
     ))
     row = next(item for item in app.query(GetTransportAllocations()).items if item.id == allocation_id)
-    assert row.priority == 85
+    assert row.provisioning_priority == 5
     assert row.path_policy == "lowest_propellant"
     assert row.target_units == 1
 
 
 def test_lane_capacity_and_priority_can_be_updated_without_replacing_lane():
     app = build_game_application()
-    lane_id = app.execute(CreateLogisticsLane(str(EARTH), str(LEO), 1.0, priority=40)).created_id
+    lane_id = app.execute(CreateLogisticsLane(str(EARTH), str(LEO), 1.0, priority=2)).created_id
     assert lane_id is not None
     app.execute(PauseLogisticsLane(lane_id))
 
     before = next(row for row in app.query(GetLogisticsLanes()).items if row.id == lane_id)
-    app.execute(UpdateLogisticsLane(lane_id, 3.5, priority=80, path_policy="lowest_propellant"))
+    app.execute(UpdateLogisticsLane(lane_id, 3.5, priority=4, path_policy="lowest_propellant"))
     after = next(row for row in app.query(GetLogisticsLanes()).items if row.id == lane_id)
 
     assert after.id == before.id
@@ -210,7 +210,7 @@ def test_lane_capacity_and_priority_can_be_updated_without_replacing_lane():
     assert after.path_policy == "lowest_propellant"
     assert after.paused is True
     assert after.requested_capacity_t_per_day == 3.5
-    assert after.priority == 80
+    assert after.priority == 4
 
 
 def test_vehicle_production_option_separates_plan_acceptance_from_runtime_blockers():
@@ -226,7 +226,7 @@ def test_vehicle_production_option_separates_plan_acceptance_from_runtime_blocke
     assert option.can_plan is True
 
     result = app.execute(
-        ProduceVehicle(str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(LEO), priority=44)
+        ProduceVehicle(str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(LEO), priority=3)
     )
     assert result.created_id is not None
 
@@ -234,27 +234,27 @@ def test_vehicle_production_option_separates_plan_acceptance_from_runtime_blocke
 def test_vehicle_production_exposes_resource_and_service_priority_control():
     app = build_game_application()
     production_id = app.execute(ProduceVehicle(
-        str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(EARTH), priority=37,
+        str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(EARTH), priority=2,
     )).created_id
     assert production_id is not None
 
     row = next(item for item in app.query(GetLogistics()).vehicle_production if item.id == production_id)
-    assert row.priority == 37
+    assert row.priority == 2
     assert row.priority_editable is True
     assert row.production_service_type == "vehicle_assembly"
     demands = tuple(d for d in app.query(GetLogistics()).demands if d.owner_kind == "vehicle_production" and d.owner_id == production_id)
-    assert demands and {d.priority for d in demands} == {37}
+    assert demands and {d.priority for d in demands} == {2}
 
-    app.execute(SetVehicleProductionSettings(production_id, priority=81))
+    app.execute(SetVehicleProductionSettings(production_id, priority=5))
     updated = next(item for item in app.query(GetLogistics()).vehicle_production if item.id == production_id)
-    assert updated.priority == 81
+    assert updated.priority == 5
 
     app.execute(AdvanceTime(1))
     building = next(item for item in app.query(GetLogistics()).vehicle_production if item.id == production_id)
     assert building.phase == "building"
     assert building.priority_editable is False
     with pytest.raises(ApplicationError, match="priority can only change before inputs are consumed"):
-        app.execute(SetVehicleProductionSettings(production_id, priority=10))
+        app.execute(SetVehicleProductionSettings(production_id, priority=1))
 
 
 def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(tmp_path):
@@ -294,11 +294,11 @@ def test_construction_queries_expose_authoritative_project_controls():
     assert str(EARTH) not in build_options.import_source_options
     assert str(LEO) in build_options.import_source_options
 
-    project_id = app.execute(PlanBuild(str(EARTH), str(ids.SURFACE_POWER_GRID), priority=37, sourcing_policy="local_priority", import_source_id=str(LEO))).created_id
+    project_id = app.execute(PlanBuild(str(EARTH), str(ids.SURFACE_POWER_GRID), priority=2, sourcing_policy="local_priority", import_source_id=str(LEO))).created_id
     assert project_id is not None
     row = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
     assert row.settings_editable and row.sourcing_editable
-    app.execute(SetProjectPriority(project_id, 81))
+    app.execute(SetProjectPriority(project_id, 5))
     app.execute(SetProjectSourcingPolicy(project_id, "import_now")); app.execute(SetProjectImportSource(project_id, None))
     updated = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
-    assert (updated.priority, updated.sourcing_policy, updated.import_source_id) == (81, "import_now", None)
+    assert (updated.priority, updated.sourcing_policy, updated.import_source_id) == (5, "import_now", None)

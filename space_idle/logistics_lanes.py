@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 
 from .resource_demand import ResourceDemand
 from .shared import EntityId, RouteId, SpatialNodeId
+from .priority import ActivityPriority
 from .logistics_models import LogisticsLane
 from .transport.models import PathPolicy
 
@@ -47,7 +48,7 @@ class LogisticsLaneMixin:
         source_id: SpatialNodeId,
         destination_id: SpatialNodeId,
         requested_capacity_t_per_day: float,
-        priority: int,
+        priority: ActivityPriority,
         path: tuple[RouteId, ...] | None = None,
         path_policy: PathPolicy = PathPolicy.FASTEST,
     ) -> EntityId:
@@ -76,14 +77,14 @@ class LogisticsLaneMixin:
         self,
         lane_id: EntityId,
         requested_capacity_t_per_day: float,
-        priority: int,
+        priority: ActivityPriority,
         path_policy: PathPolicy | None = None,
     ) -> None:
         if requested_capacity_t_per_day <= 0:
             raise ValueError("logistics lane requested capacity must be positive")
         lane = self.lanes[lane_id]
         lane.requested_capacity_t_per_day = requested_capacity_t_per_day
-        lane.priority = priority
+        lane.priority = ActivityPriority(priority)
         if path_policy is not None:
             lane.path_policy = path_policy
 

@@ -25,7 +25,7 @@ def test_survey_stops_at_provider_knowledge_limit_and_reveals_comparison_value()
     assert candidate is not None, "base content must expose a provider-limited survey target"
     provider_id, key, target, limit = candidate
 
-    sim.survey.start(provider_id, *key, priority=80, day=sim.day)
+    sim.survey.start(provider_id, *key, priority=4, day=sim.day)
     assert key in sim.survey.campaigns
     assert sim.survey.campaigns[key].target_knowledge_level == limit
 

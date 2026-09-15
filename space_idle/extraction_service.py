@@ -81,7 +81,7 @@ class ExtractionService:
                 location_id,
                 self.service_type(spec.resource_id),
                 nominal,
-                50,
+                facility.activity_priority,
                 "extraction",
                 facility.id,
                 f"resource:{spec.resource_id}",

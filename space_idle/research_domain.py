@@ -56,7 +56,7 @@ def restore_research(sim: Any, data: dict[str, Any]) -> None:
             rid,
             ResearchStage(r["stage"]),
             float(r.get("stage_progress", 0.0)),
-            int(r.get("priority", 50)),
+            r["priority"],
             bool(r["paused"]),
             None
             if r["prototype_operational_node_id"] is None

@@ -1,6 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+from ..priority import ActivityPriority, ProvisioningPriority
+
 
 @dataclass(frozen=True)
 class ProjectResourceRow:
@@ -59,7 +61,7 @@ class ProjectRow:
     display_name: str
     status: str
     paused: bool
-    priority: int
+    priority: ActivityPriority
     sourcing_policy: str
     import_source_id: str | None
     settings_editable: bool

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, TypeAlias
 
+from ..priority import ActivityPriority
 from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 
@@ -146,7 +147,7 @@ class ConstructionProject:
     # construction flow. For surface-cell development this is the Location being
     # expanded; for founding it is the explicit staging/provider Operational Node.
     operational_node_id: SpatialNodeId
-    priority: int
+    priority: ActivityPriority
     sourcing_policy: SourcingPolicy
     import_source_id: SpatialNodeId | None
     status: ProjectStatus = ProjectStatus.PLANNED
@@ -160,6 +161,9 @@ class ConstructionProject:
     # Facility placement state only. Geographic project target cells live on
     # their target type so one cell never has two authoritative fields.
     site_cell_id: SurfaceCellId | None = None
+
+    def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
 
 
 @dataclass(frozen=True)

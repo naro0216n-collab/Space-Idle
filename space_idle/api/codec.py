@@ -116,6 +116,13 @@ def _coerce(value: Any, annotation: Any, path: str) -> Any:
         if isinstance(value, bool) or not isinstance(value, int):
             raise ApiPayloadError(f"{path}: expected integer")
         return value
+    if isinstance(annotation, type) and issubclass(annotation, int) and annotation is not bool:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ApiPayloadError(f"{path}: expected integer")
+        try:
+            return annotation(value)
+        except ValueError as exc:
+            raise ApiPayloadError(f"{path}: {exc}") from exc
     if annotation is float:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ApiPayloadError(f"{path}: expected number")

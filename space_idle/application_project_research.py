@@ -127,7 +127,7 @@ class ResearchProgressionProjectorMixin:
             current_blockers = current_blockers + sim.research.allocation_blockers(
                 definition.id, service_allocations, point_requests, point_allocations
             )
-            priority = 50 if state is None else state.priority
+            priority = 3 if state is None else state.priority
             stage_progress = 0.0
             stage_required = 0.0
             execution_requested = 0.0

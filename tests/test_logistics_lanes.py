@@ -27,7 +27,7 @@ from space_idle.shared import DefinitionId, EntityId
 def _demand(amount_t: float, *, demand_id: str = "demand.test", destination=LEO, source=EARTH, resource=MACHINERY) -> ResourceDemand:
     return ResourceDemand(
         EntityId(demand_id), "test", EntityId("test.owner"), destination,
-        resource, amount_t, 50, source,
+        resource, amount_t, 3, source,
     )
 
 
@@ -76,7 +76,7 @@ def _transport_service_allocations(sim, day, plan):
 def test_lane_is_resource_agnostic_and_requested_capacity_limits_daily_cargo_flow():
     sim = build_game_application()._simulation
     _owned_earth_leo_capacity(sim)
-    lane_id = sim.logistics.create_lane(EARTH, LEO, 1.0, 50)
+    lane_id = sim.logistics.create_lane(EARTH, LEO, 1.0, 3)
 
     sim.inventory.add(EARTH, MACHINERY, 1.0)
     sim.inventory.add(EARTH, WATER, 1.0)
@@ -103,7 +103,7 @@ def test_lane_uses_parallel_transport_services_until_requested_capacity_is_fille
         base, id=second_id, display_name="Parallel Earth-LEO", capacity_t_per_day=0.4
     )
     _allow_external_transport(sim)
-    lane_id = sim.logistics.create_lane(EARTH, LEO, 2.0, 100)
+    lane_id = sim.logistics.create_lane(EARTH, LEO, 2.0, 5)
     sim.inventory.add(EARTH, MACHINERY, 2.0)
     demand = _demand(2.0, demand_id="demand.parallel-services")
 
@@ -120,13 +120,13 @@ def test_parallel_lanes_share_transport_capacity_without_double_consumption():
     sim = build_game_application()._simulation
     sim.transport.transport_allocations.clear()
     _allow_external_transport(sim)
-    high_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
-    low_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 50)
+    high_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 5)
+    low_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 3)
     sim.inventory.add(EARTH, MACHINERY, 2.0)
     high_demand = _demand(1.0, demand_id="demand.high")
     low_demand = ResourceDemand(
         EntityId("demand.low"), "test-low", EntityId("owner.low"),
-        LEO, MACHINERY, 1.0, 40, EARTH,
+        LEO, MACHINERY, 1.0, 2, EARTH,
     )
 
     _advance_logistics(sim, sim.day, (high_demand, low_demand))
@@ -151,7 +151,7 @@ def test_same_priority_lane_capacity_allocation_is_registration_order_independen
         _allow_external_transport(sim)
         sim.inventory.add(EARTH, MACHINERY, 3.0)
         lanes = {
-            capacity: sim.logistics.create_lane(EARTH, LEO, capacity, 50)
+            capacity: sim.logistics.create_lane(EARTH, LEO, capacity, 3)
             for capacity in capacities
         }
         demand = _demand(3.0, demand_id="demand.same-priority-lanes")
@@ -180,8 +180,8 @@ def test_demand_without_lane_creates_no_cargo_flow():
 def test_one_demand_is_not_duplicated_across_multiple_matching_lanes():
     sim = build_game_application()._simulation
     _owned_earth_leo_capacity(sim)
-    first = sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
-    second = sim.logistics.create_lane(EARTH, LEO, 1.0, 50)
+    first = sim.logistics.create_lane(EARTH, LEO, 1.0, 5)
+    second = sim.logistics.create_lane(EARTH, LEO, 1.0, 3)
     sim.inventory.add(EARTH, MACHINERY, 2.0)
     demand = _demand(1.5)
 
@@ -204,7 +204,7 @@ def test_construction_declares_source_constrained_import_demand_and_uses_matchin
     _unlock_orbital_logistics(sim)
     _owned_earth_leo_capacity(sim)
     project_id = sim.projects.plan_build(
-        ORBITAL_LOGISTICS_NODE, LEO, 50, "import_now", day=sim.day,
+        ORBITAL_LOGISTICS_NODE, LEO, 3, "import_now", day=sim.day,
         import_source_id=EARTH,
     )
     sim.projects.advance_procurement(sim.day)
@@ -219,7 +219,7 @@ def test_construction_declares_source_constrained_import_demand_and_uses_matchin
     ]
     assert "import_lane" in {issue.code for issue in location_issues}
 
-    lane_id = sim.logistics.create_lane(EARTH, LEO, 100.0, 100)
+    lane_id = sim.logistics.create_lane(EARTH, LEO, 100.0, 5)
     _advance_logistics(sim, sim.day, demands)
     generated = [flow for flow in sim.logistics.cargo_flows.values() if flow.lane_id == lane_id]
     assert generated
@@ -233,13 +233,13 @@ def test_construction_without_source_constraint_allows_lane_to_choose_supply_sou
     _unlock_orbital_logistics(sim)
     _owned_earth_leo_capacity(sim)
     project_id = sim.projects.plan_build(
-        ORBITAL_LOGISTICS_NODE, LEO, 50, "import_now", day=sim.day,
+        ORBITAL_LOGISTICS_NODE, LEO, 3, "import_now", day=sim.day,
         import_source_id=None,
     )
     sim.projects.advance_procurement(sim.day)
     demands = sim.projects.resource_demands(sim.day)
     assert demands and all(demand.source_id is None for demand in demands)
-    lane_id = sim.logistics.create_lane(EARTH, LEO, 100.0, 100)
+    lane_id = sim.logistics.create_lane(EARTH, LEO, 100.0, 5)
     _advance_logistics(sim, sim.day, demands)
     generated = [
         flow for flow in sim.logistics.cargo_flows.values()
@@ -284,7 +284,7 @@ def test_available_capacity_uses_shared_propellant_allocation_without_changing_r
     unconstrained = sim.transport.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert unconstrained.available.forward_t_per_day > 0
     required = unconstrained.required_units
-    sim.logistics.create_lane(EARTH, LEO, 1.0, 50)
+    sim.logistics.create_lane(EARTH, LEO, 1.0, 3)
     sim.inventory.add(EARTH, MACHINERY, 1.0)
 
     available_propellant = sim.inventory.available(EARTH, PROPELLANT)
@@ -319,7 +319,7 @@ def test_multistage_lane_requires_capacity_on_every_handoff_leg():
     sim.transport.create_transport_allocation(
         REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
     )
-    lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 10.0, 100)
+    lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 10.0, 5)
     demand = _demand(1.0, demand_id="demand.multistage", destination=LUNAR_ORBIT, source=EARTH)
     blocked = sim.logistics.lane_snapshot((demand,), sim.day)
     assert next(row for row in blocked.lanes if row.lane_id == lane_id).effective_capacity_t_per_day == 0
@@ -344,7 +344,7 @@ def test_multistage_cargo_flow_records_handoffs_and_cumulative_latency():
     _allow_external_transport(sim)
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
     sim.refresh_storage()
-    lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 1.0, 100)
+    lane_id = sim.logistics.create_lane(EARTH, LUNAR_ORBIT, 1.0, 5)
     lane = sim.logistics.lanes[lane_id]
     planned_path = sim.logistics.lane_service_path(lane, sim.day)
     assert len(planned_path) > 1
@@ -401,8 +401,8 @@ def test_transport_capacity_uses_only_cargo_settled_at_tick_boundary():
         sim.inventory.consume_allocated(LEO, PROPELLANT, leo_propellant)
 
     _allow_external_transport(sim)
-    inbound_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
-    outbound_lane = sim.logistics.create_lane(LEO, LUNAR_ORBIT, 1.0, 100)
+    inbound_lane = sim.logistics.create_lane(EARTH, LEO, 1.0, 5)
+    outbound_lane = sim.logistics.create_lane(LEO, LUNAR_ORBIT, 1.0, 5)
     sim.inventory.add(EARTH, PROPELLANT, 1.0)
     inbound = ResourceDemand(
         EntityId("demand.propellant-inbound"),
@@ -411,7 +411,7 @@ def test_transport_capacity_uses_only_cargo_settled_at_tick_boundary():
         LEO,
         PROPELLANT,
         1.0,
-        100,
+        5,
         EARTH,
     )
     _advance_logistics(sim, 0, (inbound,))
@@ -457,7 +457,7 @@ def test_transport_capacity_uses_only_cargo_settled_at_tick_boundary():
 def test_cargo_arrival_waits_for_destination_storage_admission():
     sim = build_game_application()._simulation
     _allow_external_transport(sim)
-    lane_id = sim.logistics.create_lane(EARTH, LEO, 1.0, 100)
+    lane_id = sim.logistics.create_lane(EARTH, LEO, 1.0, 5)
     free_before = sim.inventory.free_capacity(LEO, MACHINERY)
     assert free_before is not None and free_before > 0
     sim.inventory.add(LEO, PRECISION_ELECTRONICS, free_before)
@@ -491,13 +491,13 @@ def test_dispatch_source_claim_competes_with_higher_priority_local_use():
 
     sim = build_game_application()._simulation
     _owned_earth_leo_capacity(sim)
-    sim.logistics.create_lane(EARTH, LEO, 1.0, 50)
+    sim.logistics.create_lane(EARTH, LEO, 1.0, 3)
     sim.inventory.stock[(EARTH, MACHINERY)] = 1.0
     demand = _demand(1.0, demand_id="demand.source-competition")
     plan = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
     cargo_claim = next(claim for claim in plan.claims if claim.owner_kind == "logistics_dispatch")
     local_claim = ResourceClaim(
-        EntityId("claim.local-use"), EARTH, MACHINERY, 1.0, 80,
+        EntityId("claim.local-use"), EARTH, MACHINERY, 1.0, 5,
         "test_local_use", EntityId("owner.local-use"), "local_use",
     )
 

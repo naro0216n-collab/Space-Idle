@@ -6,13 +6,13 @@ from .app_contracts.construction import (
     SetProjectSourcingPolicy, SetProjectImportSource,
 )
 from .app_contracts.operations import (
-    PauseFacility, ResumeFacility, SetFacilityProcess, SetPowerPriority,
+    PauseFacility, ResumeFacility, SetFacilityProcess, SetFacilityActivityPriority,
     SetMaintenancePriority, SetTimeControl, AdvanceTime,
 )
 from .app_contracts.progression import (
     StartResearch, PauseResearch, ResumeResearch, SetResearchPrototypeSite,
     SetResearchPriority, SetResearchDemonstrationSite, StartSurvey,
-    PauseSurvey, ResumeSurvey, SetSurveyPriority, StartScientificExploration,
+    PauseSurvey, ResumeSurvey, SetSurveyPriority, StartScientificExploration, SetScientificExplorationPriority,
     PauseScientificExploration, ResumeScientificExploration,
     AssignExplorationFleet, UnassignExplorationFleet,
 )
@@ -37,10 +37,10 @@ from .app_contracts.queries import (
 Command: TypeAlias = (
     PlanBuild | PlanFacilityUpgrade | FoundLocation | CancelFounding | PauseFounding | ResumeFounding | SetFoundingPriority | DevelopSurfaceCell | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
     SetProjectSourcingPolicy | SetProjectImportSource |
-    PauseFacility | ResumeFacility | SetFacilityProcess | SetPowerPriority | SetMaintenancePriority |
+    PauseFacility | ResumeFacility | SetFacilityProcess | SetFacilityActivityPriority | SetMaintenancePriority |
     SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
     SetResearchPriority | SetResearchDemonstrationSite | StartSurvey | PauseSurvey |
-    ResumeSurvey | SetSurveyPriority | StartScientificExploration | PauseScientificExploration |
+    ResumeSurvey | SetSurveyPriority | StartScientificExploration | SetScientificExplorationPriority | PauseScientificExploration |
     ResumeScientificExploration | AssignExplorationFleet | UnassignExplorationFleet |
     ProduceVehicle | PauseVehicleProduction | ResumeVehicleProduction | SetVehicleProductionSettings |
     CreateTransportAllocation | UpdateTransportAllocation | ChangeTransportAllocationMode |

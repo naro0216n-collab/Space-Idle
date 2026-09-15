@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal
 
+from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .shared import DefinitionId, SpatialNodeId, SurfaceCellId
 
 KnowledgeLevel = Literal[0, 1, 2, 3, 4]
@@ -50,8 +51,11 @@ class SurveyCampaign:
     cell_id: SurfaceCellId
     resource_id: DefinitionId
     target_knowledge_level: KnowledgeLevel = 4
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     paused: bool = False
+
+    def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
 
 
 @dataclass(frozen=True)

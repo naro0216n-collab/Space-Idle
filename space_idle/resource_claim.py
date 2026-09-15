@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from .inventory import InventoryBook
+from .priority import ActivityPriority
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
 
@@ -22,7 +23,7 @@ class ResourceClaim:
     operational_node_id: SpatialNodeId
     resource_id: DefinitionId
     requested_amount: float
-    priority: int
+    priority: ActivityPriority
     owner_kind: str
     owner_id: EntityId
     purpose: str
@@ -31,6 +32,7 @@ class ResourceClaim:
     demand_id: EntityId | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "priority", ActivityPriority(self.priority))
         if self.requested_amount < -1e-9:
             raise ValueError("resource claim requested amount must be non-negative")
         if self.minimum_amount < -1e-9:

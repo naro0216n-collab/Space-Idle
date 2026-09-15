@@ -6,6 +6,7 @@ import math
 
 from .facilities import FacilityBook
 from .power import PowerSnapshot
+from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import EntityId, SpatialNodeId, SurfaceCellId
 from .spatial import SpatialGraph
@@ -127,7 +128,7 @@ class SurfaceInfrastructureService:
         location_id: SpatialNodeId,
         *,
         requested_rate: float | None = None,
-        priority: int = 50,
+        priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
     ) -> ServiceCapacityRequest:
         demand = self.demand(location_id) if requested_rate is None else requested_rate
         return ServiceCapacityRequest(

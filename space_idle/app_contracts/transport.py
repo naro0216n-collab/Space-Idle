@@ -2,6 +2,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from ..priority import (
+    ActivityPriority, DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PROVISIONING_PRIORITY, ProvisioningPriority,
+)
+
 PathPolicyLiteral = Literal["fastest", "lowest_cost", "lowest_propellant"]
 TransportControlModeLiteral = Literal["units", "capacity"]
 
@@ -10,7 +14,7 @@ TransportControlModeLiteral = Literal["units", "capacity"]
 class ProduceVehicle:
     vehicle_definition_id: str
     operational_node_id: str
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
 
 
 @dataclass(frozen=True)
@@ -26,7 +30,7 @@ class ResumeVehicleProduction:
 @dataclass(frozen=True)
 class SetVehicleProductionSettings:
     production_id: str
-    priority: int | None = None
+    priority: ActivityPriority | None = None
 
 
 @dataclass(frozen=True)
@@ -34,7 +38,7 @@ class CreateTransportAllocation:
     vehicle_definition_id: str
     anchor_node_id: str
     destination_id: str
-    priority: int = 50
+    provisioning_priority: ProvisioningPriority = DEFAULT_PROVISIONING_PRIORITY
     control_mode: TransportControlModeLiteral = "units"
     target_units: int | None = None
     target_forward_t_per_day: float | None = None
@@ -47,7 +51,7 @@ class CreateTransportAllocation:
 @dataclass(frozen=True)
 class UpdateTransportAllocation:
     allocation_id: str
-    priority: int | None = None
+    provisioning_priority: ProvisioningPriority | None = None
     target_units: int | None = None
     target_forward_t_per_day: float | None = None
     target_reverse_t_per_day: float | None = None
@@ -90,7 +94,7 @@ class CreateLogisticsLane:
     source_id: str
     destination_id: str
     requested_capacity_t_per_day: float
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     path: tuple[str, ...] | None = None
     path_policy: PathPolicyLiteral = "fastest"
 
@@ -99,7 +103,7 @@ class CreateLogisticsLane:
 class UpdateLogisticsLane:
     lane_id: str
     requested_capacity_t_per_day: float
-    priority: int
+    priority: ActivityPriority
     path_policy: PathPolicyLiteral | None = None
 
 

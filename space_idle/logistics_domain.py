@@ -96,6 +96,7 @@ def validate_logistics_runtime(sim: Any) -> None:
         _require(sim.graph.has_operational_node(flow.source_id) and sim.graph.has_operational_node(flow.destination_id), f"cargo flow references unknown endpoint: {flow_id}")
         _require(flow.amount_t > 0, f"cargo flow has non-positive amount: {flow_id}")
         _require(flow.ready_day >= flow.departure_day, f"cargo flow arrives before departure: {flow_id}")
+        _require(1 <= int(flow.priority) <= 5, f"cargo flow priority must be 1..5: {flow_id}")
         if flow.lane_id is not None:
             _require(flow.lane_id in lg.lanes, f"cargo flow references unknown lane: {flow_id}/{flow.lane_id}")
     for delivery_id, delivery in lg.procurement_deliveries.items():
@@ -113,6 +114,7 @@ def validate_logistics_runtime(sim: Any) -> None:
         _require(sim.graph.has_operational_node(lane.source_id) and sim.graph.has_operational_node(lane.destination_id), f"lane references unknown endpoint: {lane_id}")
         _require(lane.source_id != lane.destination_id, f"lane loops to same location: {lane_id}")
         _require(lane.requested_capacity_t_per_day > 0, f"lane has non-positive requested capacity: {lane_id}")
+        _require(1 <= int(lane.priority) <= 5, f"lane priority must be 1..5: {lane_id}")
         if lane.path is not None:
             tr.validate_path_structure(lane.source_id, lane.destination_id, lane.path)
 

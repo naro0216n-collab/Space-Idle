@@ -23,7 +23,7 @@ def _demand(*, destination=ids.EARTH, amount=4.0, source=None) -> ResourceDemand
         destination,
         ids.MACHINERY,
         amount,
-        70,
+        4,
         source,
     )
 
@@ -191,7 +191,7 @@ def test_remote_procurement_replenishes_logistics_source_without_bypassing_trans
         ),
         day=sim.day,
     )
-    sim.logistics.create_lane(ids.EARTH, ids.LEO, 1.0, 70)
+    sim.logistics.create_lane(ids.EARTH, ids.LEO, 1.0, 4)
 
     raw_logistics, raw_procurement, logistics, procurement, funds = (
         _plan_and_authorize_procurement(sim, demand)

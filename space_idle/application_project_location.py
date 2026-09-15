@@ -177,7 +177,7 @@ class LocationProjectorMixin:
                     facility.paused,
                     active_and_compatible,
                     tuple(activation_failures),
-                    facility.power_priority,
+                    facility.activity_priority,
                     facility.maintenance_priority,
                     tuple(sorted(supply.id for supply in definition.capability_supplies)),
                     power_utilization,

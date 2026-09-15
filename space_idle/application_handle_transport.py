@@ -61,7 +61,7 @@ class TransportCommandHandlerMixin:
                 DefinitionId(command.vehicle_definition_id),
                 self._require_operational_node(command.anchor_node_id),
                 self._require_operational_node(command.destination_id),
-                priority=command.priority, control_mode=mode,
+                provisioning_priority=command.provisioning_priority, control_mode=mode,
                 target_units=target_units, target_capacity=target_capacity,
                 path=None if command.path is None else tuple(RouteId(value) for value in command.path),
                 path_policy=PathPolicy(command.path_policy), paused=command.paused, day=sim.day,
@@ -72,7 +72,7 @@ class TransportCommandHandlerMixin:
                 command.target_forward_t_per_day, command.target_reverse_t_per_day
             )
             sim.transport.update_transport_allocation(
-                EntityId(command.allocation_id), priority=command.priority,
+                EntityId(command.allocation_id), provisioning_priority=command.provisioning_priority,
                 target_units=command.target_units, target_capacity=target_capacity,
                 path_policy=None if command.path_policy is None else PathPolicy(command.path_policy),
                 day=sim.day,

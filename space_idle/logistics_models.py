@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from .priority import ActivityPriority
 from .shared import DefinitionId, EntityId, RouteId, SpatialNodeId
 from .transport.models import PathPolicy
 
@@ -23,7 +24,7 @@ class CargoFlowBatch:
     demand_id: EntityId | None
     owner_kind: str
     owner_id: EntityId
-    priority: int
+    priority: ActivityPriority
     service_ids: tuple[str, ...]
     service_destinations: tuple[SpatialNodeId, ...]
     departure_day: int
@@ -31,6 +32,7 @@ class CargoFlowBatch:
     status: CargoFlowStatus = CargoFlowStatus.IN_TRANSIT
 
     def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
         if self.amount_t <= 0:
             raise ValueError("cargo flow amount must be positive")
         if not self.service_ids or len(self.service_ids) != len(self.service_destinations):
@@ -43,12 +45,13 @@ class LogisticsLane:
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
     requested_capacity_t_per_day: float
-    priority: int
+    priority: ActivityPriority
     path: tuple[RouteId, ...] | None = None
     path_policy: PathPolicy = PathPolicy.FASTEST
     paused: bool = False
 
     def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
         if self.source_id == self.destination_id:
             raise ValueError("logistics lane endpoints must differ")
         if self.requested_capacity_t_per_day <= 0:

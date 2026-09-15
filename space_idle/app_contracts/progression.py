@@ -1,10 +1,12 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+from ..priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
+
 @dataclass(frozen=True)
 class StartResearch:
     research_id: str
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
 @dataclass(frozen=True)
 class PauseResearch: research_id: str
 @dataclass(frozen=True)
@@ -15,7 +17,7 @@ class SetResearchPrototypeSite:
 @dataclass(frozen=True)
 class SetResearchPriority:
     research_id: str
-    priority: int
+    priority: ActivityPriority
 @dataclass(frozen=True)
 class SetResearchDemonstrationSite:
     research_id: str; operational_node_id: str
@@ -25,7 +27,7 @@ class StartSurvey:
     provider_operational_node_id: str
     cell_id: str
     resource_id: str
-    priority: int = 50
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
 @dataclass(frozen=True)
 class PauseSurvey:
     cell_id: str
@@ -38,11 +40,16 @@ class ResumeSurvey:
 class SetSurveyPriority:
     cell_id: str
     resource_id: str
-    priority: int
+    priority: ActivityPriority
 
 @dataclass(frozen=True)
 class StartScientificExploration:
     exploration_id: str
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+@dataclass(frozen=True)
+class SetScientificExplorationPriority:
+    exploration_id: str
+    priority: ActivityPriority
 @dataclass(frozen=True)
 class PauseScientificExploration:
     exploration_id: str

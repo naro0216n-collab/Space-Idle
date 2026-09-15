@@ -53,7 +53,7 @@ def _parallel_projection(
         )
     sim.research.stored_points = stored_points
     for research_id in start_order:
-        app.execute(StartResearch(str(research_id), priority=50))
+        app.execute(StartResearch(str(research_id), priority=3))
     return app
 
 
@@ -93,8 +93,8 @@ def test_research_priority_controls_shared_execution_capacity_before_rp_consumpt
     b = DefinitionId("test.research.execution.priority.b")
     app = _parallel_projection((a, b), execution_rate=1.0, stored_points=100.0)
 
-    app.execute(SetResearchPriority(str(a), 100))
-    app.execute(SetResearchPriority(str(b), 10))
+    app.execute(SetResearchPriority(str(a), 5))
+    app.execute(SetResearchPriority(str(b), 1))
 
     high = _research_row(app, a)
     low = _research_row(app, b)
@@ -109,13 +109,13 @@ def test_research_priority_controls_shared_rp_allocation_without_project_order()
     b = DefinitionId("test.research.priority.b")
     app = _parallel_projection((a, b))
 
-    app.execute(SetResearchPriority(str(a), 100))
-    app.execute(SetResearchPriority(str(b), 10))
+    app.execute(SetResearchPriority(str(a), 5))
+    app.execute(SetResearchPriority(str(b), 1))
 
     high = _research_row(app, a)
     low = _research_row(app, b)
-    assert high.priority == 100
-    assert low.priority == 10
+    assert high.priority == 5
+    assert low.priority == 1
     assert high.rp_requested == 10.0
     assert low.rp_requested == 10.0
     assert high.rp_allocated == 1.0

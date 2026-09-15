@@ -1,6 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+from ..priority import ActivityPriority, ProvisioningPriority
+
 
 @dataclass(frozen=True)
 class DirectionalCapacityRow:
@@ -85,7 +87,7 @@ class TransportAllocationRow:
     display_name: str
     anchor_node_id: str
     destination_id: str
-    priority: int
+    provisioning_priority: ProvisioningPriority
     control_mode: str
     target_units: int | None
     target_capacity: DirectionalCapacityRow | None
@@ -152,7 +154,7 @@ class CargoFlowRow:
     demand_id: str | None
     owner_kind: str
     owner_id: str
-    priority: int
+    priority: ActivityPriority
     service_ids: tuple[str, ...]
     service_destinations: tuple[str, ...]
     departure_day: int
@@ -201,7 +203,7 @@ class VehicleProductionRow:
     estimated_completion_day: float | None
     production_service_type: str | None
     resources: tuple[tuple[str, float], ...]
-    priority: int
+    priority: ActivityPriority
     priority_editable: bool
     blockers: tuple[str, ...]
     completed_units: int
@@ -220,7 +222,7 @@ class ResourceDemandRow:
     external_required_t: float
     pipeline_t: float
     remaining_t: float
-    priority: int
+    priority: ActivityPriority
     recurring_rate_t_per_day: float | None = None
     local_runway_days: float | None = None
     earliest_confirmed_arrival_day: int | None = None
@@ -241,7 +243,7 @@ class LogisticsLaneRow:
     effective_capacity_t_per_day: float
     used_t: float
     queued_t: float
-    priority: int
+    priority: ActivityPriority
     path: tuple[str, ...] | None
     path_policy: str
     paused: bool

@@ -145,7 +145,7 @@ def test_non_operational_spatial_context_cannot_own_facility_lane_or_inventory_s
     with pytest.raises(KeyError):
         sim.facilities.install(facility_definition_id, dormant)
     with pytest.raises(KeyError):
-        sim.logistics.create_lane(ids.EARTH, dormant, 1.0, 50)
+        sim.logistics.create_lane(ids.EARTH, dormant, 1.0, 3)
 
     sim.inventory.stock[(dormant, ids.WATER)] = 1.0
     with pytest.raises(ValueError, match="inventory references unknown location"):

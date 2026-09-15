@@ -54,7 +54,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 location_id,
                 self.process_service_type(process.id),
                 1.0,
-                50,
+                facility.activity_priority,
                 "industry_process",
                 facility.id,
                 f"process:{process.id}",
@@ -103,31 +103,37 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
     ) -> tuple[ResourceDemand, ...]:
         """Declare one-day input replenishment needs for active processes.
 
-        Industry owns the desired input rate. Logistics only sees material need
-        at a destination and may satisfy it through any eligible lane.
+        Demand aggregation preserves the root Activity Priority.  Facilities in
+        different bands therefore never collapse into one logistics intent.
         """
-        required: dict[DefinitionId, float] = {}
+        required: dict[tuple[DefinitionId, int], float] = {}
         for facility in facilities.active_compatible_at(location_id, day):
             process = self.process_for(facility)
             if process is None:
                 continue
             for resource_id, amount_t in process.inputs_per_day.items():
                 if amount_t > 1e-12:
-                    required[resource_id] = required.get(resource_id, 0.0) + amount_t
+                    key = (resource_id, int(facility.activity_priority))
+                    required[key] = required.get(key, 0.0) + amount_t
 
         owner_id = EntityId(f"industry.site:{location_id}")
         demands: list[ResourceDemand] = []
-        for resource_id, target_t in sorted(required.items(), key=lambda row: str(row[0])):
+        for (resource_id, priority), target_t in sorted(
+            required.items(), key=lambda row: (str(row[0][0]), -row[0][1])
+        ):
             if target_t <= 1e-9:
                 continue
+            demand_id = EntityId(
+                f"demand.industry:{location_id}:{resource_id}:priority-{priority}"
+            )
             demands.append(ResourceDemand(
-                EntityId(f"demand.industry:{location_id}:{resource_id}"),
+                demand_id,
                 "industry",
                 owner_id,
                 location_id,
                 resource_id,
                 target_t,
-                50,
+                priority,
                 None,
                 target_t,
             ))
@@ -160,11 +166,13 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                     location_id,
                     resource_id,
                     requested,
-                    50,
+                    facility.activity_priority,
                     "industry_process",
                     facility.id,
                     f"process:{process.id}",
-                    demand_id=EntityId(f"demand.industry:{location_id}:{resource_id}"),
+                    demand_id=EntityId(
+                        f"demand.industry:{location_id}:{resource_id}:priority-{int(facility.activity_priority)}"
+                    ),
                 ))
 
         return tuple(claims)

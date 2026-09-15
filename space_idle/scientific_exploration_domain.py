@@ -23,6 +23,7 @@ def capture_scientific_exploration(sim: Any) -> dict[str, Any]:
                 "inputs_consumed": state.inputs_consumed,
                 "paused": state.paused,
                 "created_day": state.created_day,
+                "priority": int(state.priority),
             }
             for state in sorted(service.campaigns.values(), key=lambda row: str(row.definition_id))
         ]
@@ -45,6 +46,7 @@ def restore_scientific_exploration(sim: Any, data: dict[str, Any]) -> None:
             inputs_consumed=bool(row.get("inputs_consumed", False)),
             paused=bool(row.get("paused", False)),
             created_day=int(row.get("created_day", 0)),
+            priority=row["priority"],
         )
         for row in data.get("campaigns", [])
     }
@@ -93,6 +95,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 def validate_runtime(sim: Any) -> None:
     service = sim.scientific_exploration
     for definition_id, state in service.campaigns.items():
+        _require(1 <= int(state.priority) <= 5, f"scientific exploration priority must be 1..5: {definition_id}")
         _require(definition_id in service.definitions, f"scientific exploration state references unknown definition: {definition_id}")
         definition = service.definitions[definition_id]
         _require(-1e-9 <= state.progress_days <= definition.duration_days + 1e-8, f"invalid scientific exploration progress: {definition_id}")

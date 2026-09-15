@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..power import PowerSnapshot
+from ..priority import ActivityPriority
 from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .models import (
     ConstructionProject,
@@ -61,7 +62,7 @@ class ConstructionPlanningMixin:
         self,
         target: ConstructionTarget,
         location_id: SpatialNodeId,
-        priority: int,
+        priority: ActivityPriority,
         sourcing_policy: SourcingPolicy,
         import_source_id: SpatialNodeId | None,
         site_cell_id: SurfaceCellId | None = None,
@@ -114,7 +115,7 @@ class ConstructionPlanningMixin:
         self,
         facility_def_id: DefinitionId,
         location_id: SpatialNodeId,
-        priority: int,
+        priority: ActivityPriority,
         sourcing_policy: SourcingPolicy,
         day: int = 0,
         import_source_id: SpatialNodeId | None = None,
@@ -134,7 +135,7 @@ class ConstructionPlanningMixin:
     def plan_upgrade(
         self,
         facility_id: EntityId,
-        priority: int,
+        priority: ActivityPriority,
         sourcing_policy: SourcingPolicy,
         day: int = 0,
         import_source_id: SpatialNodeId | None = None,
@@ -160,7 +161,7 @@ class ConstructionPlanningMixin:
         self,
         location_id: SpatialNodeId,
         cell_id: SurfaceCellId,
-        priority: int,
+        priority: ActivityPriority,
         sourcing_policy: SourcingPolicy,
         day: int = 0,
         import_source_id: SpatialNodeId | None = None,
@@ -185,10 +186,10 @@ class ConstructionPlanningMixin:
     def settings_mutable(self, project_id: ProjectId) -> bool:
         return self.projects[project_id].status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
 
-    def set_priority(self, project_id: ProjectId, priority: int) -> None:
+    def set_priority(self, project_id: ProjectId, priority: ActivityPriority) -> None:
         if not self.settings_mutable(project_id):
             raise ValueError("completed or cancelled project settings cannot change")
-        self.projects[project_id].priority = priority
+        self.projects[project_id].priority = ActivityPriority(priority)
 
     def sourcing_mutable(self, project_id: ProjectId) -> bool:
         project = self.projects[project_id]
