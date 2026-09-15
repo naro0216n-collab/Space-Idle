@@ -667,7 +667,13 @@ class LocationFoundingService:
             # allocation graph after the boundary.
             self.storage.refresh(day, {})
             for req in package.initial_inventory:
-                self.inventory.add(project.new_location_id, req.resource_id, req.amount_t)
+                admission = self.inventory.admit(
+                    project.new_location_id, req.resource_id, req.amount_t
+                )
+                if not admission.fully_admitted:
+                    raise RuntimeError(
+                        f"founding manifest exceeds Inventory Admission: {req.resource_id}"
+                    )
         reservation_id = self.fleet_reservation_id(project.id)
         if self.transport.fleet_reservation_snapshot(reservation_id) is not None:
             disposition = self.transport.deployment_asset_disposition(

@@ -160,6 +160,7 @@ class CargoFlowRow:
     departure_day: int
     ready_day: int
     status: str
+    admission_blockers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,7 @@ class ProcurementDeliveryRow:
     order_day: int
     ready_day: int
     status: str
+    admission_blockers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

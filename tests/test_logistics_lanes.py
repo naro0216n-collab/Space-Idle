@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from space_idle import GetBottlenecks, GetProjects, build_game_application
+from space_idle import GetBottlenecks, GetCargoFlows, GetProjects, build_game_application
 from space_idle.content.base_game import (
     EARTH,
     LEO,
@@ -456,7 +456,8 @@ def test_transport_capacity_uses_only_cargo_settled_at_tick_boundary():
     )
 
 def test_cargo_arrival_waits_for_destination_storage_admission():
-    sim = build_game_application()._simulation
+    app = build_game_application()
+    sim = app._simulation
     _allow_external_transport(sim)
     lane_id = sim.logistics.create_lane(EARTH, LEO, 1.0, 5)
     free_before = sim.inventory.free_capacity(LEO, MACHINERY)
@@ -480,6 +481,9 @@ def test_cargo_arrival_waits_for_destination_storage_admission():
     assert flow.status.value == "arrival_waiting"
     assert flow.amount_t == pytest.approx(1.0)
     assert sim.inventory.amount(LEO, MACHINERY) == pytest.approx(destination_before)
+    projected = next(item for item in app.query(GetCargoFlows()).items if item.id == str(flow.id))
+    assert projected.admission_blockers
+    assert any("storage" in blocker for blocker in projected.admission_blockers)
 
     sim.inventory.consume_allocated(LEO, PRECISION_ELECTRONICS, 1.0)
     sim.logistics.settle_cargo_arrivals(flow.ready_day + 1)

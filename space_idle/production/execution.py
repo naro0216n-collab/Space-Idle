@@ -44,7 +44,9 @@ class IndustryExecutionMixin:
                 for snapshot in plan if snapshot.scale > 1e-12
             )
             if amount > 1e-12:
-                inventory.add(location_id, resource_id, amount)
+                admission = inventory.admit(location_id, resource_id, amount)
+                if not admission.fully_admitted:
+                    raise RuntimeError("allocated industry output exceeded Inventory Admission")
 
         activities: list[DomainActivity] = []
         for snapshot in plan:

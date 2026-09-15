@@ -330,7 +330,9 @@ class ExtractionService:
                 if snapshot.output_resource_id == resource_id
             )
             if output > 1e-12:
-                inventory.add(location_id, resource_id, output)
+                admission = inventory.admit(location_id, resource_id, output)
+                if not admission.fully_admitted:
+                    raise RuntimeError("allocated extraction output exceeded Inventory Admission")
         return tuple(
             DomainActivity(
                 "extraction", snapshot.output_t_per_day, "extraction_facility",

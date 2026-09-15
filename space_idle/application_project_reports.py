@@ -636,7 +636,7 @@ class ApplicationReportProjectorMixin:
                 sim.inventory.amount(location_id, resource_id),
                 sim.inventory.reserved_total(location_id, resource_id),
                 sim.inventory.available(location_id, resource_id),
-                sim.inventory.free_capacity(location_id, resource_id),
+                sim.inventory.admission_state(location_id, resource_id).admission_capacity_t,
                 outbound_waiting[resource_id], outbound_transit[resource_id],
                 inbound_transit[resource_id], arrival_waiting[resource_id],
             ))

@@ -73,6 +73,10 @@
     text=text.replace(/external_funds/g,'External Service用Funds不足');
     text=text.replace(/unmet_demand/g,'未充足需要');
     text=text.replace(/external_dependency/g,'外部依存');
+    text=text.replace(/storage_over_capacity/g,'Usable Storage Capacity超過');
+    text=text.replace(/physical_storage_full/g,'Physical Storage Capacity満杯');
+    text=text.replace(/usable_storage_full/g,'Usable Storage Capacity満杯');
+    text=text.replace(/storage_conditioning_required/g,'Storage Conditioning不足');
     for(const map of definitionMaps()){
       for(const [id,item] of Object.entries(map)){
         if(text.includes(id)&&item?.display_name)text=text.split(id).join(item.display_name);

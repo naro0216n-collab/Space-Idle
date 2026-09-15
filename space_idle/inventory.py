@@ -6,6 +6,38 @@ from .shared import DefinitionId, EntityId, SpatialNodeId
 
 StorageClass = str
 
+_EPS = 1e-9
+
+
+@dataclass(frozen=True)
+class InventoryAdmissionState:
+    operational_node_id: SpatialNodeId
+    storage_class: StorageClass | None
+    physical_capacity_t: float | None
+    usable_capacity_t: float | None
+    occupied_t: float
+    admission_capacity_t: float | None
+    over_capacity_t: float
+    conditioning_required: bool
+    blockers: tuple[str, ...] = ()
+
+    @property
+    def unlimited(self) -> bool:
+        return self.storage_class is None
+
+
+@dataclass(frozen=True)
+class InventoryAdmissionResult:
+    requested_t: float
+    admitted_t: float
+    rejected_t: float
+    state_before: InventoryAdmissionState
+    state_after: InventoryAdmissionState
+
+    @property
+    def fully_admitted(self) -> bool:
+        return self.rejected_t <= _EPS
+
 
 @dataclass
 class InventoryBook:
@@ -85,7 +117,8 @@ class InventoryBook:
     def occupy_storage(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
         if amount < -1e-9:
             raise ValueError("negative storage occupancy")
-        free = self.free_capacity(operational_node_id, resource_id)
+        state = self.admission_state(operational_node_id, resource_id)
+        free = state.admission_capacity_t
         accepted = amount if free is None else min(amount, free)
         if accepted <= 1e-12:
             return 0.0
@@ -106,12 +139,45 @@ class InventoryBook:
         else:
             self.external_occupancy[key] = left
 
-    def free_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
+    def admission_state_for_class(
+        self, operational_node_id: SpatialNodeId, storage_class: StorageClass
+    ) -> InventoryAdmissionState:
+        key = (operational_node_id, storage_class)
+        physical = max(0.0, self.physical_storage_capacity_t.get(key, 0.0))
+        usable = min(physical, max(0.0, self.usable_storage_capacity_t.get(key, 0.0)))
+        occupied = self.stored_in_class(operational_node_id, storage_class)
+        admission = max(0.0, usable - occupied)
+        over_capacity = max(0.0, occupied - usable)
+        conditioning_required = usable + _EPS < physical
+        blockers: list[str] = []
+        if over_capacity > _EPS:
+            blockers.append("storage_over_capacity")
+        if admission <= _EPS:
+            if occupied + _EPS >= physical:
+                blockers.append("physical_storage_full")
+            elif occupied + _EPS >= usable:
+                blockers.append("usable_storage_full")
+        if conditioning_required:
+            blockers.append("storage_conditioning_required")
+        return InventoryAdmissionState(
+            operational_node_id, storage_class, physical, usable, occupied, admission,
+            over_capacity, conditioning_required, tuple(dict.fromkeys(blockers)),
+        )
+
+    def admission_state(
+        self, operational_node_id: SpatialNodeId, resource_id: DefinitionId
+    ) -> InventoryAdmissionState:
         storage_class = self.resource_storage_class.get(resource_id)
         if storage_class is None:
-            return None
-        capacity = self.usable_storage_capacity_t.get((operational_node_id, storage_class), 0.0)
-        return max(0.0, capacity - self.stored_in_class(operational_node_id, storage_class))
+            return InventoryAdmissionState(
+                operational_node_id, None, None, None,
+                self.amount(operational_node_id, resource_id), None, 0.0, False, (),
+            )
+        return self.admission_state_for_class(operational_node_id, storage_class)
+
+    def free_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
+        """Compatibility projection of the canonical Inventory Admission state."""
+        return self.admission_state(operational_node_id, resource_id).admission_capacity_t
 
     def amount(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return self.stock.get((operational_node_id, resource_id), 0.0)
@@ -126,20 +192,31 @@ class InventoryBook:
     def available(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return max(0.0, self.amount(operational_node_id, resource_id) - self.reserved_total(operational_node_id, resource_id))
 
+    def admit(
+        self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float
+    ) -> InventoryAdmissionResult:
+        if amount < -_EPS:
+            raise ValueError("negative admission")
+        requested = max(0.0, amount)
+        before = self.admission_state(operational_node_id, resource_id)
+        accepted = requested if before.admission_capacity_t is None else min(
+            requested, before.admission_capacity_t
+        )
+        if accepted > _EPS:
+            key = (operational_node_id, resource_id)
+            self.stock[key] = self.stock.get(key, 0.0) + accepted
+        after = self.admission_state(operational_node_id, resource_id)
+        return InventoryAdmissionResult(
+            requested, accepted, max(0.0, requested - accepted), before, after
+        )
+
     def add_up_to(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
-        if amount < -1e-9:
-            raise ValueError("negative add")
-        free = self.free_capacity(operational_node_id, resource_id)
-        accepted = amount if free is None else min(amount, free)
-        if accepted <= 1e-12:
-            return 0.0
-        key = (operational_node_id, resource_id)
-        self.stock[key] = self.stock.get(key, 0.0) + accepted
-        return accepted
+        """Compatibility projection. New physical inflow should use :meth:`admit`."""
+        return self.admit(operational_node_id, resource_id, amount).admitted_t
 
     def add(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
-        accepted = self.add_up_to(operational_node_id, resource_id, amount)
-        if accepted + 1e-9 < amount:
+        result = self.admit(operational_node_id, resource_id, amount)
+        if not result.fully_admitted:
             raise ValueError(f"storage capacity exceeded: {resource_id}")
 
     def consume_allocated(

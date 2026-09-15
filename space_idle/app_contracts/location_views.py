@@ -17,6 +17,10 @@ class InventoryRow:
     physical_capacity: float | None
     usable_capacity: float | None
     free_capacity: float | None
+    admission_capacity: float | None = None
+    over_capacity: float = 0.0
+    conditioning_required: bool = False
+    admission_blockers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,8 @@ class StorageRow:
     usable_capacity_t: float
     free_usable_t: float
     unusable_occupied_t: float
+    conditioning_required: bool = False
+    admission_blockers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

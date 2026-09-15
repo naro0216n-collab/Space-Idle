@@ -170,6 +170,10 @@ class LogisticsStateProjectorMixin:
                 service_ids=flow.service_ids,
                 service_destinations=tuple(str(value) for value in flow.service_destinations),
                 departure_day=flow.departure_day, ready_day=flow.ready_day, status=flow.status.value,
+                admission_blockers=(
+                    sim.inventory.admission_state(flow.destination_id, flow.resource_id).blockers
+                    if flow.status.value == "arrival_waiting" else ()
+                ),
             )
             for flow in sorted(sim.logistics.cargo_flow_snapshots(), key=lambda row: str(row.id))
         )
@@ -189,6 +193,10 @@ class LogisticsStateProjectorMixin:
                 order_day=row.order_day,
                 ready_day=row.ready_day,
                 status=row.status.value,
+                admission_blockers=(
+                    sim.inventory.admission_state(row.delivery_node_id, row.resource_id).blockers
+                    if row.status.value == "arrival_waiting" else ()
+                ),
             )
             for row in sorted(
                 sim.logistics.procurement_delivery_snapshots(), key=lambda row: str(row.id)

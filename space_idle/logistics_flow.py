@@ -682,10 +682,10 @@ class LogisticsFlowMixin:
                 flow.status = CargoFlowStatus.ARRIVAL_WAITING
             if flow.status is not CargoFlowStatus.ARRIVAL_WAITING:
                 continue
-            accepted = self.inventory.add_up_to(
+            admission = self.inventory.admit(
                 flow.destination_id, flow.resource_id, flow.amount_t
             )
-            flow.amount_t = max(0.0, flow.amount_t - accepted)
+            flow.amount_t = max(0.0, flow.amount_t - admission.admitted_t)
             if flow.amount_t <= 1e-9:
                 del self.cargo_flows[flow_id]
 

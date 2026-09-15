@@ -30,10 +30,11 @@ class LocationProjectorMixin:
         for resource_id in sorted(resource_ids, key=str):
             amount = sim.inventory.amount(location_id, resource_id)
             reserved = sim.inventory.reserved_total(location_id, resource_id)
-            storage_class = sim.inventory.resource_storage_class.get(resource_id)
-            physical_capacity = sim.inventory.physical_capacity(location_id, resource_id)
-            usable_capacity = sim.inventory.usable_capacity(location_id, resource_id)
-            free = sim.inventory.free_capacity(location_id, resource_id)
+            admission = sim.inventory.admission_state(location_id, resource_id)
+            storage_class = admission.storage_class
+            physical_capacity = admission.physical_capacity_t
+            usable_capacity = admission.usable_capacity_t
+            free = admission.admission_capacity_t
             if amount <= 1e-12 and reserved <= 1e-12 and physical_capacity in (None, 0.0):
                 continue
             definition = self._catalog.resources.get(resource_id)
@@ -49,6 +50,10 @@ class LocationProjectorMixin:
                     physical_capacity,
                     usable_capacity,
                     free,
+                    admission.admission_capacity_t,
+                    admission.over_capacity_t,
+                    admission.conditioning_required,
+                    admission.blockers,
                 )
             )
         return tuple(rows)
@@ -76,7 +81,7 @@ class LocationProjectorMixin:
                 if occ_loc == location_id
                 and sim.inventory.resource_storage_class.get(resource_id) == storage_class
             )
-            occupied = stock + staging
+            admission = sim.inventory.admission_state_for_class(location_id, storage_class)
             rows.append(
                 StorageRow(
                     storage_class,
@@ -84,8 +89,10 @@ class LocationProjectorMixin:
                     staging,
                     physical,
                     usable,
-                    max(0.0, usable - occupied),
-                    max(0.0, occupied - usable),
+                    0.0 if admission.admission_capacity_t is None else admission.admission_capacity_t,
+                    admission.over_capacity_t,
+                    admission.conditioning_required,
+                    admission.blockers,
                 )
             )
         return tuple(rows)

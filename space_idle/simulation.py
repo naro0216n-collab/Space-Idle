@@ -767,19 +767,10 @@ class Simulation:
                         )
                         capacities[key] = max(0.0, summary.spare_rate)
                 elif isinstance(requirement, StockOrPoolAdmissionRequirement):
-                    node_id = bundle.operational_node_id
-                    storage_class = requirement.pool_id
-                    usable = self.inventory.usable_storage_capacity_t.get(
-                        (node_id, storage_class)
+                    state = self.inventory.admission_state_for_class(
+                        bundle.operational_node_id, requirement.pool_id
                     )
-                    if usable is None:
-                        # No registered finite storage class means this admission
-                        # pool is not physically constrained in current content.
-                        capacities[key] = float("inf")
-                    else:
-                        capacities[key] = max(
-                            0.0, usable - self.inventory.stored_in_class(node_id, storage_class)
-                        )
+                    capacities[key] = state.admission_capacity_t or 0.0
                 elif isinstance(requirement, FundsOrPoolRequirement):
                     if key not in pool_capacities:
                         raise KeyError(f"no allocation pool owner for {key}")

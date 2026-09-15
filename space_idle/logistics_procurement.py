@@ -268,9 +268,9 @@ class ExternalProcurementMixin:
                 row.status = ProcurementDeliveryStatus.ARRIVAL_WAITING
             if row.status is not ProcurementDeliveryStatus.ARRIVAL_WAITING:
                 continue
-            accepted = self.inventory.add_up_to(
+            admission = self.inventory.admit(
                 row.delivery_node_id, row.resource_id, row.amount_t
             )
-            row.amount_t = max(0.0, row.amount_t - accepted)
+            row.amount_t = max(0.0, row.amount_t - admission.admitted_t)
             if row.amount_t <= 1e-9:
                 del self.procurement_deliveries[delivery_id]
