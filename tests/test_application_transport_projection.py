@@ -43,11 +43,15 @@ from space_idle.api import GameRuntime
 from space_idle.api.codec import to_jsonable
 from space_idle.content.base_game import EARTH, LEO
 from space_idle.content import base_ids as ids
+from space_idle.shared import DefinitionId
+from space_idle.spatial import AtmosphereField, GravityField
+from space_idle.transport import PoweredAscentCapability, TransportPerformanceProfile, VehicleDef
 from space_idle.transport.movement import MovementResolver
 
 
-def test_vehicle_definition_identity_is_consistent_across_catalog_fleet_and_movement_modes():
+def test_vehicle_catalog_and_movement_modes_follow_definition_and_capability_contracts():
     app = build_game_application()
+    sim = app._simulation
     catalog = app.query(GetCatalog())
     fleet = app.query(GetFleet())
     movement_plans = app.query(GetMovementPlans(include_modes=True))
@@ -59,6 +63,51 @@ def test_vehicle_definition_identity_is_consistent_across_catalog_fleet_and_move
         for mode in movement_plan.modes:
             if mode.vehicle_definition_id is not None:
                 assert mode.vehicle_definition_id in definitions
+
+    plan = min(
+        sim.transport.movement_plan_candidates(ids.EARTH, ids.LEO),
+        key=lambda row: str(row.id),
+    )
+    movement_plan_view = app.query(
+        GetMovementPlans(movement_plan_id=str(plan.id), include_modes=True)
+    ).items[0]
+    lander_mode = next(
+        mode
+        for mode in movement_plan_view.modes
+        if mode.id == str(ids.REUSABLE_SURFACE_CARGO_LANDER)
+    )
+    assert not lander_mode.service_feasible
+    assert any("operation:powered_ascent" in blocker for blocker in lander_mode.blockers)
+
+    origin_context = sim.transport.movement_geometry(plan.id).origin.environment_context_id
+    gravity = sim.environment.require(origin_context, GravityField).local_acceleration_m_s2
+    pressure = sim.environment.require(origin_context, AtmosphereField).pressure_pa
+    definition_id = DefinitionId("test.vehicle.integrated_spacecraft")
+    sim.transport.vehicle_defs[definition_id] = VehicleDef(
+        id=definition_id,
+        display_name="統合型試験宇宙船",
+        performance=TransportPerformanceProfile(
+            dry_mass_t=10.0,
+            payload_t=2.0,
+            endurance_days=30.0,
+            operation_capabilities=(
+                PoweredAscentCapability(
+                    plan.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0
+                ),
+            ),
+        ),
+    )
+    sim.transport.add_fleet_units(definition_id, 1, ids.EARTH)
+    assert not sim.transport.vehicle_movement_failures(plan.id, definition_id, sim.day)
+    mode = next(
+        row
+        for row in app.query(
+            GetMovementPlans(movement_plan_id=str(plan.id), include_modes=True)
+        ).items[0].modes
+        if row.id == str(definition_id)
+    )
+    assert mode.fleet_total_units == 1
+    assert mode.nominal_capacity.forward_t_per_day > 0
 
 
 def test_movement_plan_derived_index_is_reused_until_physical_invalidation(monkeypatch):
@@ -134,11 +183,12 @@ def test_application_decision_queries_are_observational():
     assert capture_state(sim) == before
 
 
-def test_transport_allocation_projection_exposes_target_fulfillment_and_derived_capacity():
+def test_transport_allocation_projection_exposes_authoritative_target_policy_and_derived_capacity():
     app = build_game_application()
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
         provisioning_priority=4, control_mode="units", target_units=2,
+        path_policy="fastest",
     )).created_id
     assert allocation_id is not None
 
@@ -153,6 +203,20 @@ def test_transport_allocation_projection_exposes_target_fulfillment_and_derived_
     assert row.spare.forward_t_per_day == pytest.approx(
         row.available.forward_t_per_day - row.used.forward_t_per_day
     )
+
+    app.execute(UpdateTransportAllocation(
+        allocation_id, provisioning_priority=5, target_units=1,
+        path_policy="lowest_propellant",
+    ))
+    updated = next(
+        item for item in app.query(GetTransportAllocations()).items
+        if item.id == allocation_id
+    )
+    assert updated.provisioning_priority == 5
+    assert updated.path_policy == "lowest_propellant"
+    assert updated.target_units == 1
+    assert updated.required_units == updated.target_units
+    assert updated.active_units + updated.unfilled_units == updated.required_units
 
 
 def test_transport_service_requirements_are_projected_from_the_same_plan_for_options_and_allocations():
@@ -226,23 +290,6 @@ def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
     assert relocation.arrival_day == preview.arrival_day
 
 
-def test_transport_allocation_priority_and_routing_policy_update_through_application():
-    app = build_game_application()
-    allocation_id = app.execute(CreateTransportAllocation(
-        str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(LEO), str(ids.LUNAR_ORBIT),
-        provisioning_priority=2, control_mode="units", target_units=1, path_policy="fastest",
-    )).created_id
-    assert allocation_id is not None
-
-    app.execute(UpdateTransportAllocation(
-        allocation_id, provisioning_priority=5, target_units=1, path_policy="lowest_propellant"
-    ))
-    row = next(item for item in app.query(GetTransportAllocations()).items if item.id == allocation_id)
-    assert row.provisioning_priority == 5
-    assert row.path_policy == "lowest_propellant"
-    assert row.target_units == 1
-
-
 def test_supply_policy_and_target_stock_update_planning_intent_without_transport_reprovisioning():
     app = build_game_application()
     allocation_id = app.execute(CreateTransportAllocation(
@@ -305,7 +352,7 @@ def test_supply_policy_and_target_stock_update_planning_intent_without_transport
     assert not cleared.target_stocks
 
 
-def test_vehicle_production_option_separates_plan_acceptance_from_runtime_blockers():
+def test_vehicle_production_application_contract_exposes_planning_blockers_and_priority_lifecycle():
     app = build_game_application()
     option = next(
         row
@@ -313,39 +360,48 @@ def test_vehicle_production_option_separates_plan_acceptance_from_runtime_blocke
         if row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
         and row.operational_node_id == str(LEO)
     )
-
     assert any(blocker.startswith("service:enabled:") for blocker in option.blockers)
     assert option.can_plan is True
-
-    result = app.execute(
+    assert app.execute(
         ProduceVehicle(str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(LEO), priority=3)
-    )
-    assert result.created_id is not None
+    ).created_id is not None
 
-
-def test_vehicle_production_exposes_resource_and_service_priority_control():
-    app = build_game_application()
     production_id = app.execute(ProduceVehicle(
         str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(EARTH), priority=2,
     )).created_id
     assert production_id is not None
 
-    row = next(item for item in app.query(GetLogistics()).vehicle_production if item.id == production_id)
+    row = next(
+        item for item in app.query(GetLogistics()).vehicle_production
+        if item.id == production_id
+    )
     assert row.priority == 2
     assert row.priority_editable is True
     assert row.production_service_type == "vehicle_assembly"
-    demands = tuple(d for d in app.query(GetLogistics()).requirements if d.owner_kind == "vehicle_production" and d.owner_id == production_id)
+    demands = tuple(
+        demand
+        for demand in app.query(GetLogistics()).requirements
+        if demand.owner_kind == "vehicle_production" and demand.owner_id == production_id
+    )
     assert demands and {d.priority for d in demands} == {2}
 
     app.execute(SetVehicleProductionSettings(production_id, priority=5))
-    updated = next(item for item in app.query(GetLogistics()).vehicle_production if item.id == production_id)
+    updated = next(
+        item for item in app.query(GetLogistics()).vehicle_production
+        if item.id == production_id
+    )
     assert updated.priority == 5
 
     app.execute(AdvanceTime(1))
-    building = next(item for item in app.query(GetLogistics()).vehicle_production if item.id == production_id)
+    building = next(
+        item for item in app.query(GetLogistics()).vehicle_production
+        if item.id == production_id
+    )
     assert building.phase == "building"
     assert building.priority_editable is False
-    with pytest.raises(ApplicationError, match="priority can only change before inputs are consumed"):
+    with pytest.raises(
+        ApplicationError, match="priority can only change before inputs are consumed"
+    ):
         app.execute(SetVehicleProductionSettings(production_id, priority=1))
 
 

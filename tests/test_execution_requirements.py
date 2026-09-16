@@ -37,7 +37,7 @@ def bundle(name: str, requested: float, *requirements, priority: int = 3, **kwar
     )
 
 
-def test_bundle_settles_resource_service_and_admission_at_one_execution_rate():
+def test_execution_bundle_settlement_uses_one_rate_and_requires_explicit_capacities():
     row = bundle(
         "process",
         10,
@@ -58,46 +58,48 @@ def test_bundle_settles_resource_service_and_admission_at_one_execution_rate():
     assert plan.used_by_constraint[service_constraint(NODE, "power")] == pytest.approx(4)
     assert plan.used_by_constraint[admission_constraint(NODE, "bulk")] == pytest.approx(6)
 
+    missing = bundle("missing", 1, ServiceCapacityRequirement("lab", 1))
+    with pytest.raises(KeyError, match="missing allocation capacities"):
+        allocate_execution_requirements([missing], {})
 
-def test_higher_priority_band_is_allocated_first():
+
+def test_allocator_preserves_priority_progressive_fairness_and_registration_independence():
     high = bundle("high", 10, ResourceRequirement(ORE, 1), priority=5)
     low = bundle("low", 10, ResourceRequirement(ORE, 1), priority=1)
-    plan = allocate_execution_requirements(
+    priority_plan = allocate_execution_requirements(
         [low, high], {resource_constraint(NODE, ORE): 12}
     )
-    assert plan.allocated(high.id) == pytest.approx(10)
-    assert plan.allocated(low.id) == pytest.approx(2)
+    assert priority_plan.allocated(high.id) == pytest.approx(10)
+    assert priority_plan.allocated(low.id) == pytest.approx(2)
 
-
-def test_progressive_max_min_freezes_only_bundles_on_saturated_constraint():
     copper = DefinitionId("copper")
     a = bundle("a", 10, ResourceRequirement(ORE, 1))
     b = bundle("b", 10, ResourceRequirement(ORE, 1), ResourceRequirement(copper, 1))
     c = bundle("c", 10, ResourceRequirement(copper, 1))
-    plan = allocate_execution_requirements(
+    progressive = allocate_execution_requirements(
         [a, b, c],
         {
             resource_constraint(NODE, ORE): 10,
             resource_constraint(NODE, copper): 20,
         },
     )
-    # Ore freezes A/B at 50%; C can continue on independent residual copper.
-    assert plan.allocated(a.id) == pytest.approx(5)
-    assert plan.allocated(b.id) == pytest.approx(5)
-    assert plan.allocated(c.id) == pytest.approx(10)
+    assert progressive.allocated(a.id) == pytest.approx(5)
+    assert progressive.allocated(b.id) == pytest.approx(5)
+    assert progressive.allocated(c.id) == pytest.approx(10)
 
-
-def test_same_band_result_is_registration_order_independent():
-    rows = [bundle(name, 10, ResourceRequirement(ORE, 1)) for name in ("a", "b", "c")]
+    rows = [bundle(name, 10, ResourceRequirement(ORE, 1)) for name in ("d", "e", "f")]
     capacity = {resource_constraint(NODE, ORE): 12}
-    first = allocate_execution_requirements(rows, capacity)
-    second = allocate_execution_requirements(reversed(rows), capacity)
-    assert {r.bundle_id: r.allocated_execution for r in first.allocations} == {
-        r.bundle_id: r.allocated_execution for r in second.allocations
+    forward = allocate_execution_requirements(rows, capacity)
+    reverse = allocate_execution_requirements(reversed(rows), capacity)
+    assert {r.bundle_id: r.allocated_execution for r in forward.allocations} == {
+        r.bundle_id: r.allocated_execution for r in reverse.allocations
     }
 
 
-def test_atomic_admission_uses_persistent_wait_age_then_stable_key():
+def test_atomic_admission_requires_persistent_age_and_uses_age_then_stable_key():
+    with pytest.raises(ValueError, match="wait_started_day"):
+        bundle("atomic", 1, ResourceRequirement(ORE, 1), atomic=True)
+
     older = bundle(
         "older", 1, ResourceRequirement(ORE, 1), atomic=True, wait_started_day=3
     )
@@ -111,12 +113,7 @@ def test_atomic_admission_uses_persistent_wait_age_then_stable_key():
     assert plan.allocated(newer.id) == pytest.approx(0)
 
 
-def test_atomic_bundle_requires_persistent_fairness_age():
-    with pytest.raises(ValueError, match="wait_started_day"):
-        bundle("atomic", 1, ResourceRequirement(ORE, 1), atomic=True)
-
-
-def test_reservation_acquisition_is_a_normal_resource_constraint_bundle():
+def test_common_allocator_handles_reservation_acquisition_and_shared_owner_pools():
     intent = ReservationAcquisitionRequirement(
         id=EntityId("reserve"),
         owner_id=EntityId("project"),
@@ -125,28 +122,20 @@ def test_reservation_acquisition_is_a_normal_resource_constraint_bundle():
         requested_amount=7,
         priority=ActivityPriority(3),
     )
-    plan = allocate_execution_requirements(
+    reservation = allocate_execution_requirements(
         [intent], {resource_constraint(NODE, ORE): 3}
     )
-    assert plan.allocated(intent.id) == pytest.approx(3)
+    assert reservation.allocated(intent.id) == pytest.approx(3)
 
-
-def test_shared_owner_pool_does_not_require_a_fake_operational_node():
-    row = bundle(
+    shared_pool = bundle(
         "research",
         10,
         FundsOrPoolRequirement("research_points", 1, scope_id="organization"),
     )
-    plan = allocate_execution_requirements(
-        [row], {pool_constraint("research_points", "organization"): 4}
+    pool_plan = allocate_execution_requirements(
+        [shared_pool], {pool_constraint("research_points", "organization"): 4}
     )
-    assert plan.allocated(row.id) == pytest.approx(4)
-
-
-def test_missing_constraint_capacity_is_rejected_instead_of_assumed_infinite():
-    row = bundle("x", 1, ServiceCapacityRequirement("lab", 1))
-    with pytest.raises(KeyError, match="missing allocation capacities"):
-        allocate_execution_requirements([row], {})
+    assert pool_plan.allocated(shared_pool.id) == pytest.approx(4)
 
 
 def test_canonical_tick_shares_resource_constraint_across_maintenance_and_industry_priority():

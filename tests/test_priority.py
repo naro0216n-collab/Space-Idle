@@ -12,7 +12,7 @@ from space_idle.priority import (
 )
 
 
-def test_priority_contract_has_five_ordinal_bands_defaults_and_distinct_roles():
+def test_priority_contract_has_five_distinct_ordinal_roles_and_pause_is_orthogonal_state():
     assert tuple(int(level) for level in PriorityLevel) == (1, 2, 3, 4, 5)
     assert DEFAULT_PRIORITY_LEVEL is PriorityLevel.NORMAL
     assert int(DEFAULT_ACTIVITY_PRIORITY) == 3
@@ -33,7 +33,6 @@ def test_priority_contract_has_five_ordinal_bands_defaults_and_distinct_roles():
     with pytest.raises(ValueError, match="different priority role"):
         ActivityPriority(provisioning)
 
-def test_pause_is_state_not_a_priority_level():
     app = build_game_application()
     sim = app._simulation
     definition_id = DefinitionId("test.facility.priority_pause")
