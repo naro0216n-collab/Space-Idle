@@ -4,7 +4,7 @@ from typing import Any
 
 from .domain import DomainExtension, StateCodec
 from .validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
-from .facilities import FacilityPlacementScope, FacilityState
+from .facilities import FacilityLifecycle, FacilityPlacementScope, FacilityState
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 
 
@@ -21,6 +21,7 @@ def capture_facilities(sim: Any) -> dict[str, Any]:
                 "activity_priority": int(f.activity_priority),
                 "maintenance_priority": f.maintenance_priority,
                 "level": f.level,
+                "lifecycle": f.lifecycle.value,
                 "invested_resources": {str(resource_id): amount for resource_id, amount in sorted(f.invested_resources.items(), key=lambda row: str(row[0]))},
             }
             for f in sorted(sim.facilities.facilities.values(), key=lambda row: str(row.id))
@@ -41,6 +42,7 @@ def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
             activity_priority=row["activity_priority"],
             maintenance_priority=row["maintenance_priority"],
             level=int(row["level"]),
+            lifecycle=FacilityLifecycle(row.get("lifecycle", "NORMAL")),
             invested_resources={DefinitionId(key): float(value) for key, value in row["invested_resources"].items()},
         )
     sim.facilities._counter = int(data["counter"])
@@ -63,6 +65,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     for key, definition in facility_defs.items():
         _require(key == definition.id, f"facility definition key mismatch: {key}")
         _require(definition.maintenance_fraction_per_year >= 0, f"negative maintenance fraction: {definition.id}")
+        _require(0 <= definition.decommission_recovery_fraction <= 1, f"invalid decommission recovery fraction: {definition.id}")
         _require(isinstance(definition.placement_scope, FacilityPlacementScope), f"invalid facility placement scope: {definition.id}")
         seen_caps: set[str] = set()
         for supply in definition.capability_supplies:
@@ -85,6 +88,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(facility.operational_node_id in nodes, f"facility references unknown operational node: {facility.id}")
         _require(not sim.facilities.placement_failures(facility.definition_id, facility.operational_node_id, facility.site_cell_id), f"facility has invalid placement: {facility.id}")
         _require(facility.level >= 1, f"facility has invalid level: {facility.id}")
+        _require(isinstance(facility.lifecycle, FacilityLifecycle), f"facility has invalid lifecycle: {facility.id}")
     for definition_id, spec in sim.power.specs.items():
         _require(definition_id in facility_defs, f"power spec references unknown facility: {definition_id}")
         _require(spec.load_mw >= 0, f"negative power load: {definition_id}")

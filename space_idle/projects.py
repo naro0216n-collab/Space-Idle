@@ -9,11 +9,13 @@ from .power import PowerService
 from .shared import DefinitionId, EntityId, ProjectId, SurfaceCellId
 from .technology import TechnologyState
 from .surface_infrastructure import SurfaceInfrastructureService
+from .storage import StorageService
 from .construction.models import (
     ProjectStatus,
     BuildResourceRequirement,
     ConstructionRecipe,
     FacilityUpgradeRecipe,
+    FacilityDecommissionRecipe,
     SpatialDevelopmentRecipe,
     ConstructionProviderSpec,
     ConstructionResourceProviderSpec,
@@ -21,6 +23,7 @@ from .construction.models import (
     ConstructionProject,
     NewFacilityTarget,
     FacilityUpgradeTarget,
+    FacilityDecommissionTarget,
     SurfaceCellDevelopmentTarget,
     ProjectBlocker,
     SourcingPolicy,
@@ -36,14 +39,18 @@ from .construction.execution import ConstructionExecutionMixin
 class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, ConstructionPlanningMixin, ConstructionProcurementMixin, ConstructionExecutionMixin):
     recipes: dict[DefinitionId, ConstructionRecipe]
     upgrade_recipes: dict[tuple[DefinitionId, int], FacilityUpgradeRecipe]
+    decommission_recipes: dict[DefinitionId, FacilityDecommissionRecipe]
     construction_providers: dict[DefinitionId, ConstructionProviderSpec]
     inventory: InventoryBook
     facilities: FacilityBook
     power: PowerService
     sourcing_wait_days: dict[SourcingPolicy, int]
+    storage: StorageService | None = None
     surface_infrastructure: SurfaceInfrastructureService | None = None
     surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
     external_surface_cell_claim_provider: Callable[[SurfaceCellId], EntityId | None] | None = None
+    external_decommission_blockers: Callable[[EntityId], tuple[ProjectBlocker, ...]] | None = None
+    decommission_finalizer: Callable[[EntityId], None] | None = None
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     construction_resource_providers: dict[DefinitionId, ConstructionResourceProviderSpec] = field(default_factory=dict)
     spatial_recipes: dict[DefinitionId, SpatialDevelopmentRecipe] = field(default_factory=dict)

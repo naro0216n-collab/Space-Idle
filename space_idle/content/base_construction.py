@@ -5,6 +5,7 @@ from ..projects import (
     ConstructionRecipe,
     ConstructionResourceProviderSpec,
     FacilityUpgradeRecipe,
+    FacilityDecommissionRecipe,
     SpatialDevelopmentRecipe,
     BuildResourceRequirement,
 )
@@ -167,6 +168,21 @@ def build_facility_upgrade_recipes() -> dict:
         ),
     )
     return {(recipe.facility_def_id, recipe.target_level): recipe for recipe in recipes}
+
+
+def build_facility_decommission_recipes(facility_definition_ids) -> dict:
+    """Base content uses the common construction-work service for dismantling.
+
+    The exact work value is balance content.  No Facility identity receives a
+    special Core path; newly added Facility definitions can opt in by inclusion.
+    """
+    return {
+        facility_definition_id: FacilityDecommissionRecipe(
+            facility_def_id=facility_definition_id,
+            construction_work=12.0,
+        )
+        for facility_definition_id in facility_definition_ids
+    }
 
 
 def build_construction_providers() -> dict:

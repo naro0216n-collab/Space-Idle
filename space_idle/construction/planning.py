@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from ..power import PowerSnapshot
+from ..facilities import FacilityLifecycle
 from ..priority import ActivityPriority
 from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .models import (
     ConstructionProject,
     ConstructionTarget,
     FacilityUpgradeTarget,
+    FacilityDecommissionTarget,
     NewFacilityTarget,
     SurfaceCellDevelopmentTarget,
     ProjectBlocker,
@@ -58,6 +60,58 @@ class ConstructionPlanningMixin:
             return (ProjectBlocker("active_upgrade_project", str(active.id)),)
         return ()
 
+    def decommission_plan_failures(self, facility_id: EntityId) -> tuple[ProjectBlocker, ...]:
+        facility = self.facilities.facilities.get(facility_id)
+        if facility is None:
+            return (ProjectBlocker("unknown_facility", f"unknown facility: {facility_id}"),)
+        if facility.lifecycle is not FacilityLifecycle.NORMAL:
+            return (ProjectBlocker("facility_lifecycle", "facility is already decommissioning"),)
+        if facility.definition_id not in self.decommission_recipes:
+            return (ProjectBlocker("decommission_recipe", "facility has no decommission recipe"),)
+        active = next((
+            project
+            for project in self.projects.values()
+            if isinstance(project.target, (FacilityUpgradeTarget, FacilityDecommissionTarget))
+            and project.target.facility_id == facility_id
+            and project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
+        ), None)
+        if active is not None:
+            return (ProjectBlocker("active_facility_project", str(active.id)),)
+        return self._decommission_irreversible_blockers(facility_id)
+
+    def _decommission_irreversible_blockers(self, facility_id: EntityId) -> tuple[ProjectBlocker, ...]:
+        facility = self.facilities.facilities.get(facility_id)
+        if facility is None:
+            return (ProjectBlocker("decommission_target_missing", str(facility_id)),)
+        blockers: list[ProjectBlocker] = []
+        # Active upgrades are durable facility-local commitments once construction
+        # has begun. Planned/future intent does not permanently pin the facility.
+        for project in self.projects.values():
+            if (
+                isinstance(project.target, FacilityUpgradeTarget)
+                and project.target.facility_id == facility_id
+                and project.status is ProjectStatus.BUILDING
+            ):
+                blockers.append(ProjectBlocker("active_upgrade_commitment", str(project.id)))
+
+        if self.external_decommission_blockers is not None:
+            blockers.extend(self.external_decommission_blockers(facility_id))
+
+        if self.storage is not None:
+            provider = self.storage.providers.get(facility.definition_id)
+            if provider is not None:
+                node_id = facility.operational_node_id
+                for storage_class, target_capacity in provider.capacity_t_by_class.items():
+                    physical = self.inventory.physical_storage_capacity_t.get((node_id, storage_class), 0.0)
+                    remaining = max(0.0, physical - target_capacity)
+                    occupied = self.inventory.stored_in_class(node_id, storage_class)
+                    if occupied > remaining + 1e-9:
+                        blockers.append(ProjectBlocker(
+                            "storage_stock",
+                            f"{storage_class}: occupied={occupied:g}, remaining_physical={remaining:g}",
+                        ))
+        return tuple(blockers)
+
     def _create_project(
         self,
         target: ConstructionTarget,
@@ -89,6 +143,13 @@ class ConstructionPlanningMixin:
                 raise ValueError("upgrade project must not duplicate facility site cell")
             facility = self.facilities.facilities[target.facility_id]
             recipe = self.upgrade_recipes[(facility.definition_id, target.target_level)]
+        elif isinstance(target, FacilityDecommissionTarget):
+            if site_cell_id is not None:
+                raise ValueError("decommission project uses the installed facility site")
+            facility = self.facilities.facilities[target.facility_id]
+            if facility.operational_node_id != location_id:
+                raise ValueError("decommission target location mismatch")
+            recipe = self.decommission_recipes[facility.definition_id]
         else:
             if site_cell_id is not None:
                 raise ValueError("spatial development target owns its cell directly")
@@ -153,6 +214,29 @@ class ConstructionPlanningMixin:
         target_level = facility.level + 1
         return self._create_project(
             FacilityUpgradeTarget(facility_id, target_level),
+            facility.operational_node_id,
+            priority,
+            sourcing_policy,
+            import_source_id,
+            day=day,
+        )
+
+    def plan_decommission(
+        self,
+        facility_id: EntityId,
+        priority: ActivityPriority,
+        sourcing_policy: SourcingPolicy = "mixed",
+        day: int = 0,
+        import_source_id: SpatialNodeId | None = None,
+    ) -> ProjectId:
+        failures = self.decommission_plan_failures(facility_id)
+        if failures:
+            if failures[0].code == "unknown_facility":
+                raise KeyError(facility_id)
+            raise ValueError("; ".join(f"{failure.code}: {failure.detail}" for failure in failures))
+        facility = self.facilities.facilities[facility_id]
+        return self._create_project(
+            FacilityDecommissionTarget(facility_id, facility.definition_id),
             facility.operational_node_id,
             priority,
             sourcing_policy,
@@ -259,6 +343,8 @@ class ConstructionPlanningMixin:
         project = self.projects[project_id]
         if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
             raise ValueError("project cannot be cancelled")
+        if isinstance(project.target, FacilityDecommissionTarget) and project.irreversible_started:
+            raise ValueError("decommission project cannot be cancelled after irreversible work begins")
         if not project.materials_committed:
                 self._release_material_reservations(project)
         project.status = ProjectStatus.CANCELLED
@@ -311,6 +397,12 @@ class ConstructionPlanningMixin:
                     "upgrade_level_conflict",
                     f"current={facility.level}, target={project.target.target_level}",
                 ))
+        if isinstance(project.target, FacilityDecommissionTarget):
+            facility = self.facilities.facilities.get(project.target.facility_id)
+            if facility is None:
+                blockers.append(ProjectBlocker("decommission_target_missing", str(project.target.facility_id)))
+            elif not project.irreversible_started:
+                blockers.extend(self._decommission_irreversible_blockers(project.target.facility_id))
         missing_tech = recipe.prerequisite_technologies - self.unlocked_technologies
         if missing_tech:
             blockers.append(ProjectBlocker("technology", ",".join(sorted(map(str, missing_tech)))))

@@ -82,6 +82,8 @@ class ProjectRow:
     construction_fulfillment: float = 1.0
     limiting_factors: tuple[str, ...] = ()
     projected_material_readiness_day: int | None = None
+    irreversible_started: bool = False
+    expected_salvage: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)

@@ -26,6 +26,14 @@ class PlanFacilityUpgrade:
 
 
 @dataclass(frozen=True)
+class PlanFacilityDecommission:
+    facility_id: str
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+    sourcing_policy: SourcingPolicyValue = "mixed"
+    import_source_id: str | None = None
+
+
+@dataclass(frozen=True)
 class FoundLocation:
     staging_node_id: str
     display_name: str

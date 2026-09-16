@@ -79,6 +79,9 @@ class FacilityRow:
     placement_scope: str = "OPERATIONAL_NODE"
     site_cell_id: str | None = None
     service_capacity_supplies: tuple[tuple[str, float], ...] = ()
+    lifecycle: str = "NORMAL"
+    decommission_blockers: tuple[tuple[str, str], ...] = ()
+    expected_salvage: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)

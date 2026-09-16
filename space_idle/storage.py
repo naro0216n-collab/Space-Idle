@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .facilities import FacilityBook
+from .facilities import FacilityBook, FacilityLifecycle
 from .inventory import InventoryBook, StorageClass
 from .power import PowerSnapshot
 from .shared import DefinitionId, SpatialNodeId
@@ -49,6 +49,8 @@ class StorageService:
         usable = dict(self.inventory.base_storage_capacity_t)
 
         for facility in self.facilities.facilities.values():
+            if facility.lifecycle is FacilityLifecycle.DECOMMISSIONING:
+                continue
             provider = self.providers.get(facility.definition_id)
             if provider is None:
                 continue

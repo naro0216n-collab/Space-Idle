@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from ..facilities import FacilityDef, FacilityPlacementScope
 from . import base_ids as ids
 from . import base_requirements as req
@@ -65,6 +67,10 @@ def build_facility_definitions() -> dict:
                 placement_scope=definition.placement_scope,
                 service_capacity_supplies=definition.service_capacity_supplies,
             )
+    definitions = {
+        definition_id: replace(definition, decommission_recovery_fraction=0.5)
+        for definition_id, definition in definitions.items()
+    }
     return definitions
 
 

@@ -75,6 +75,20 @@ class TransportService(
     def vehicle_definitions(self) -> tuple[VehicleDef, ...]:
         """Return immutable Vehicle definitions in deterministic order."""
         return tuple(sorted(self.vehicle_defs.values(), key=lambda row: str(row.id)))
+    def facility_decommission_blockers(self, facility_id: EntityId):
+        """Return durable Movement commitments that still require a gateway facility."""
+        from ..construction.models import ProjectBlocker
+
+        blockers = []
+        for execution in sorted(self.movement_executions.values(), key=lambda row: str(row.id)):
+            if any(
+                leg.origin.surface_interface_id == facility_id
+                or leg.destination.surface_interface_id == facility_id
+                for leg in execution.legs
+            ):
+                blockers.append(ProjectBlocker("active_movement_commitment", str(execution.id)))
+        return tuple(blockers)
+
     def movement_resolver(self) -> MovementResolver:
         return MovementResolver(
             self.facilities.environment.graph,

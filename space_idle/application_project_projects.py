@@ -9,7 +9,7 @@ from .application_views import (
     ProjectRow,
 )
 from .construction.models import (
-    FacilityUpgradeTarget, NewFacilityTarget,
+    FacilityUpgradeTarget, FacilityDecommissionTarget, NewFacilityTarget,
     ProjectStatus, SurfaceCellDevelopmentTarget,
 )
 from .facilities import FacilityPlacementScope
@@ -222,6 +222,12 @@ class ProjectProjectorMixin:
                 target_level = target.target_level
                 definition = sim.facilities.definitions[facility_definition_id]
                 display_name = definition.display_name
+            elif isinstance(target, FacilityDecommissionTarget):
+                target_kind = "facility_decommission"
+                target_facility_id = str(target.facility_id)
+                facility_definition_id = target.facility_definition_id
+                definition = sim.facilities.definitions[target.facility_definition_id]
+                display_name = definition.display_name
             else:
                 target_kind = "surface_cell_development"
                 target_cell_id = str(target.cell_id)
@@ -259,6 +265,13 @@ class ProjectProjectorMixin:
                     owner_id=str(project.id),
                     resources=resources,
                     requirement_rows=requirement_rows,
+                ),
+                project.irreversible_started,
+                tuple(
+                    (str(resource_id), amount)
+                    for resource_id, amount in sorted(
+                        sim.projects._decommission_salvage(project).items(), key=lambda row: str(row[0])
+                    )
                 ),
             ))
         if sim.founding is not None:

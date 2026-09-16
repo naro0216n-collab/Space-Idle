@@ -20,6 +20,11 @@ class FacilityPlacementScope(str, Enum):
     SURFACE_CELL = "SURFACE_CELL"
 
 
+class FacilityLifecycle(str, Enum):
+    NORMAL = "NORMAL"
+    DECOMMISSIONING = "DECOMMISSIONING"
+
+
 @dataclass(frozen=True)
 class CapabilitySupply:
     """Categorical function/interface supplied by a facility."""
@@ -58,12 +63,15 @@ class FacilityDef:
     maintenance_fraction_per_year: float = 0.0
     placement_scope: FacilityPlacementScope = FacilityPlacementScope.OPERATIONAL_NODE
     service_capacity_supplies: tuple[ServiceCapacitySupply, ...] = ()
+    decommission_recovery_fraction: float = 0.0
 
     def __post_init__(self) -> None:
         if self.maintenance_fraction_per_year < 0:
             raise ValueError("facility maintenance fraction must be non-negative")
         if not isinstance(self.placement_scope, FacilityPlacementScope):
             raise ValueError("facility placement scope must be a FacilityPlacementScope")
+        if not 0.0 <= self.decommission_recovery_fraction <= 1.0:
+            raise ValueError("facility decommission recovery fraction must be within 0..1")
 
 
 @dataclass
@@ -77,6 +85,7 @@ class FacilityState:
     level: int = 1
     invested_resources: dict[DefinitionId, float] = field(default_factory=dict)
     site_cell_id: SurfaceCellId | None = None
+    lifecycle: FacilityLifecycle = FacilityLifecycle.NORMAL
 
     def __post_init__(self) -> None:
         self.activity_priority = ActivityPriority(self.activity_priority)
@@ -85,6 +94,8 @@ class FacilityState:
             raise ValueError("facility level must be positive")
         if any(amount < 0 for amount in self.invested_resources.values()):
             raise ValueError("facility invested resources must be non-negative")
+        if not isinstance(self.lifecycle, FacilityLifecycle):
+            self.lifecycle = FacilityLifecycle(self.lifecycle)
 
 
 @dataclass
@@ -201,10 +212,38 @@ class FacilityBook:
         facility.level = target_level
 
     def pause(self, facility_id: EntityId) -> None:
+        if self.facilities[facility_id].lifecycle is FacilityLifecycle.DECOMMISSIONING:
+            raise ValueError("decommissioning facility cannot change normal operation state")
         self.facilities[facility_id].paused = True
 
     def resume(self, facility_id: EntityId) -> None:
+        if self.facilities[facility_id].lifecycle is FacilityLifecycle.DECOMMISSIONING:
+            raise ValueError("decommissioning facility cannot resume normal operation")
         self.facilities[facility_id].paused = False
+
+    def begin_decommission(self, facility_id: EntityId) -> None:
+        facility = self.facilities[facility_id]
+        if facility.lifecycle is not FacilityLifecycle.NORMAL:
+            raise ValueError("facility is already decommissioning")
+        facility.lifecycle = FacilityLifecycle.DECOMMISSIONING
+        facility.paused = False
+
+    def decommission_salvage(self, facility_id: EntityId) -> dict[DefinitionId, float]:
+        facility = self.facilities[facility_id]
+        fraction = self.definitions[facility.definition_id].decommission_recovery_fraction
+        if fraction <= 1e-12:
+            return {}
+        return {
+            resource_id: amount * fraction
+            for resource_id, amount in facility.invested_resources.items()
+            if amount * fraction > 1e-12
+        }
+
+    def finalize_decommission(self, facility_id: EntityId) -> FacilityState:
+        facility = self.facilities[facility_id]
+        if facility.lifecycle is not FacilityLifecycle.DECOMMISSIONING:
+            raise ValueError("facility is not decommissioning")
+        return self.facilities.pop(facility_id)
 
     def set_activity_priority(self, facility_id: EntityId, priority: ActivityPriority) -> None:
         self.facilities[facility_id].activity_priority = ActivityPriority(priority)
@@ -216,7 +255,10 @@ class FacilityBook:
         return [f for f in self.facilities.values() if f.operational_node_id == operational_node_id]
 
     def active_at(self, operational_node_id: SpatialNodeId) -> list[FacilityState]:
-        return [f for f in self.all_at(operational_node_id) if not f.paused]
+        return [
+            f for f in self.all_at(operational_node_id)
+            if not f.paused and f.lifecycle is FacilityLifecycle.NORMAL
+        ]
 
     def operating_site_failures(self, facility: FacilityState, day: int) -> tuple[tuple[str, str], ...]:
         definition = self.definitions[facility.definition_id]
@@ -233,6 +275,8 @@ class FacilityBook:
 
     def activation_failures(self, facility: FacilityState, day: int) -> tuple[tuple[str, str], ...]:
         failures: list[tuple[str, str]] = []
+        if facility.lifecycle is FacilityLifecycle.DECOMMISSIONING:
+            failures.append(("decommissioning", "設備は解体中"))
         if facility.paused:
             failures.append(("manual_pause", "設備が手動停止中"))
         failures.extend(self.operating_site_failures(facility, day))
@@ -268,6 +312,7 @@ class FacilityBook:
         return any(
             self._definition_has_capability(self.definitions[facility.definition_id], capability_id)
             for facility in self.all_at(operational_node_id)
+            if facility.lifecycle is FacilityLifecycle.NORMAL
         )
 
     def active_capability_at(self, operational_node_id: SpatialNodeId, capability_id: str, day: int = 0) -> bool:

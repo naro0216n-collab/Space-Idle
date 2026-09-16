@@ -7,6 +7,7 @@ from ..shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirementFailure, SiteRequirements, evaluate_site_requirements
 from .models import (
     ConstructionProject,
+    FacilityDecommissionTarget,
     FacilityUpgradeRecipe,
     FacilityUpgradeTarget,
     NewFacilityTarget,
@@ -32,6 +33,8 @@ class ConstructionRulesMixin:
             if facility is None:
                 raise KeyError(target.facility_id)
             return facility.definition_id
+        if isinstance(target, FacilityDecommissionTarget):
+            return target.facility_definition_id
         return None
 
     def _recipe_for_project(self, project: ConstructionProject) -> ProjectRecipe:
@@ -43,6 +46,8 @@ class ConstructionRulesMixin:
             if facility is None:
                 raise KeyError(target.facility_id)
             return self.upgrade_recipes[(facility.definition_id, target.target_level)]
+        if isinstance(target, FacilityDecommissionTarget):
+            return self.decommission_recipes[target.facility_definition_id]
         return self.spatial_recipes[target.recipe_id]
 
     def next_upgrade_recipe(self, facility_id: EntityId) -> FacilityUpgradeRecipe | None:
@@ -197,6 +202,20 @@ class ConstructionRulesMixin:
             return self._facility_site_failures_for_recipe(
                 self._recipe_for_project(project), project.operational_node_id, day, power,
                 existing_facility_id=project.target.facility_id,
+            )
+        if isinstance(project.target, FacilityDecommissionTarget):
+            facility = self.facilities.facilities.get(project.target.facility_id)
+            if facility is None:
+                return (SiteRequirementFailure("decommission_target_missing", str(project.target.facility_id)),)
+            recipe = self._recipe_for_project(project)
+            return evaluate_site_requirements(
+                recipe.site_requirements,
+                project.operational_node_id,
+                day,
+                self.facilities.environment,
+                self.facilities,
+                power,
+                environment_context_id=self.facilities.facility_environment_context(facility),
             )
         if isinstance(project.target, NewFacilityTarget):
             return self._facility_site_failures_for_recipe(

@@ -3,6 +3,7 @@ from .models import (
     BuildResourceRequirement,
     ConstructionRecipe,
     FacilityUpgradeRecipe,
+    FacilityDecommissionRecipe,
     SpatialDevelopmentRecipe,
     ConstructionProviderSpec,
     ConstructionResourceProviderSpec,
@@ -10,6 +11,7 @@ from .models import (
     ConstructionProject,
     NewFacilityTarget,
     FacilityUpgradeTarget,
+    FacilityDecommissionTarget,
     SurfaceCellDevelopmentTarget,
     ProjectBlocker,
 )
@@ -19,6 +21,7 @@ __all__ = [
     "BuildResourceRequirement",
     "ConstructionRecipe",
     "FacilityUpgradeRecipe",
+    "FacilityDecommissionRecipe",
     "SpatialDevelopmentRecipe",
     "ConstructionProviderSpec",
     "ConstructionResourceProviderSpec",
@@ -26,6 +29,7 @@ __all__ = [
     "ConstructionProject",
     "NewFacilityTarget",
     "FacilityUpgradeTarget",
+    "FacilityDecommissionTarget",
     "SurfaceCellDevelopmentTarget",
     "ProjectBlocker",
 ]

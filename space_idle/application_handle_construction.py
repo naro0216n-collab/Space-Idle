@@ -7,6 +7,7 @@ from .application_commands import (
     PauseBuild,
     PlanBuild,
     PlanFacilityUpgrade,
+    PlanFacilityDecommission,
     FoundLocation,
     CancelFounding,
     PauseFounding,
@@ -39,6 +40,17 @@ class ConstructionCommandHandlerMixin:
             return CommandResult(str(pid))
         if isinstance(command, PlanFacilityUpgrade):
             pid = sim.projects.plan_upgrade(
+                EntityId(command.facility_id),
+                command.priority,
+                command.sourcing_policy,
+                day=sim.day,
+                import_source_id=(
+                    None if command.import_source_id is None else self._require_operational_node(command.import_source_id)
+                ),
+            )
+            return CommandResult(str(pid))
+        if isinstance(command, PlanFacilityDecommission):
+            pid = sim.projects.plan_decommission(
                 EntityId(command.facility_id),
                 command.priority,
                 command.sourcing_policy,

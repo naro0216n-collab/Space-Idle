@@ -75,6 +75,15 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             ))
         return tuple(rows)
 
+
+    def release_facility_reference(self, facility_id: EntityId) -> None:
+        """Drop mutable future intent tied to a facility being removed.
+
+        Process selection is not a durable execution commitment: once the
+        facility is gone it must not remain as a live cross-domain reference.
+        """
+        self.selected_process_by_facility.pop(facility_id, None)
+
     def service_supply(
         self,
         location_id: SpatialNodeId,

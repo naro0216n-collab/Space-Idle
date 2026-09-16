@@ -69,6 +69,24 @@ class FacilityUpgradeRecipe:
 
 
 @dataclass(frozen=True)
+class FacilityDecommissionRecipe:
+    """Physical work/resources needed to dismantle an installed facility."""
+
+    facility_def_id: DefinitionId
+    resources: tuple[BuildResourceRequirement, ...] = ()
+    construction_work: float = 0.0
+    site_requirements: SiteRequirements = SiteRequirements()
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
+    self_deploying: bool = False
+
+    def __post_init__(self) -> None:
+        if self.construction_work <= 0:
+            raise ValueError("facility decommission work must be positive")
+        if self.self_deploying:
+            raise ValueError("facility decommission cannot self-deploy")
+
+
+@dataclass(frozen=True)
 class SpatialDevelopmentRecipe:
     """Physical inputs and work for expanding an established surface Location."""
 
@@ -90,7 +108,9 @@ class SpatialDevelopmentRecipe:
             raise ValueError("spatial development survey knowledge level must be within 0..4")
 
 
-ProjectRecipe: TypeAlias = ConstructionRecipe | FacilityUpgradeRecipe | SpatialDevelopmentRecipe
+ProjectRecipe: TypeAlias = (
+    ConstructionRecipe | FacilityUpgradeRecipe | FacilityDecommissionRecipe | SpatialDevelopmentRecipe
+)
 
 
 @dataclass(frozen=True)
@@ -109,12 +129,20 @@ class FacilityUpgradeTarget:
 
 
 @dataclass(frozen=True)
+class FacilityDecommissionTarget:
+    facility_id: EntityId
+    facility_definition_id: DefinitionId
+
+
+@dataclass(frozen=True)
 class SurfaceCellDevelopmentTarget:
     recipe_id: DefinitionId
     cell_id: SurfaceCellId
 
 
-ConstructionTarget: TypeAlias = NewFacilityTarget | FacilityUpgradeTarget | SurfaceCellDevelopmentTarget
+ConstructionTarget: TypeAlias = (
+    NewFacilityTarget | FacilityUpgradeTarget | FacilityDecommissionTarget | SurfaceCellDevelopmentTarget
+)
 
 
 @dataclass(frozen=True)
@@ -158,6 +186,7 @@ class ConstructionProject:
     resources: dict[DefinitionId, ProjectResourceState] = field(default_factory=dict)
     materials_committed: bool = False
     completed_facility_id: EntityId | None = None
+    irreversible_started: bool = False
     # Facility placement state only. Geographic project target cells live on
     # their target type so one cell never has two authoritative fields.
     site_cell_id: SurfaceCellId | None = None

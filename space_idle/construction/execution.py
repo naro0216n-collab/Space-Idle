@@ -4,16 +4,40 @@ from ..execution_requirements import (
     ExecutionAllocationPlan,
     ExecutionRequirementBundle,
     ServiceCapacityRequirement,
+    StockOrPoolAdmissionRequirement,
 )
 from ..power import PowerSnapshot
 from ..shared import EntityId, SpatialNodeId
 from .models import (
-    CONSTRUCTION_SERVICE_TYPE, ConstructionProject, FacilityUpgradeTarget, NewFacilityTarget,
+    CONSTRUCTION_SERVICE_TYPE, ConstructionProject, FacilityDecommissionTarget, FacilityUpgradeTarget, NewFacilityTarget,
     ProjectStatus, SurfaceCellDevelopmentTarget,
 )
 
 
 class ConstructionExecutionMixin:
+
+    @staticmethod
+    def decommission_salvage_bundle_id(project_id) -> EntityId:
+        return EntityId(f"execution.decommission_salvage:{project_id}")
+
+    def _decommission_salvage(self, project: ConstructionProject) -> dict:
+        if not isinstance(project.target, FacilityDecommissionTarget):
+            return {}
+        if project.target.facility_id not in self.facilities.facilities:
+            return {}
+        return self.facilities.decommission_salvage(project.target.facility_id)
+
+    def _decommission_admission_requirements(self, project: ConstructionProject):
+        by_class: dict[str, float] = {}
+        for resource_id, amount in self._decommission_salvage(project).items():
+            storage_class = self.inventory.resource_storage_class.get(resource_id)
+            if storage_class is None or amount <= 1e-12:
+                continue
+            by_class[storage_class] = by_class.get(storage_class, 0.0) + amount
+        return tuple(
+            StockOrPoolAdmissionRequirement(storage_class, amount)
+            for storage_class, amount in sorted(by_class.items())
+        )
 
     def _finish_project(self, project: ConstructionProject) -> None:
         self._commit_materials(project)
@@ -33,6 +57,16 @@ class ConstructionExecutionMixin:
                 invested_resources=invested,
             )
             project.completed_facility_id = target.facility_id
+        elif isinstance(target, FacilityDecommissionTarget):
+            facility = self.facilities.facilities[target.facility_id]
+            salvage = self.facilities.decommission_salvage(target.facility_id)
+            for resource_id, amount in salvage.items():
+                result = self.inventory.admit(facility.operational_node_id, resource_id, amount)
+                if not result.fully_admitted:
+                    raise RuntimeError("allocated decommission salvage admission changed before settlement")
+            if self.decommission_finalizer is not None:
+                self.decommission_finalizer(target.facility_id)
+            self.facilities.finalize_decommission(target.facility_id)
         else:
             self.facilities.environment.graph.develop_surface_cell(
                 project.operational_node_id, target.cell_id
@@ -52,6 +86,9 @@ class ConstructionExecutionMixin:
             return not self.facilities.environment.graph.surface_cell_development_failures(
                 project.operational_node_id, target.cell_id
             )
+        if isinstance(target, FacilityDecommissionTarget):
+            facility = self.facilities.facilities.get(target.facility_id)
+            return facility is not None and facility.operational_node_id == project.operational_node_id
         return True
 
     @staticmethod
@@ -89,6 +126,21 @@ class ConstructionExecutionMixin:
                 continue
             remaining_work = max(0.0, recipe.construction_work - project.construction_done)
             if remaining_work <= 1e-12:
+                if isinstance(project.target, FacilityDecommissionTarget) and project.irreversible_started:
+                    requirements = self._decommission_admission_requirements(project)
+                    rows.append(ExecutionRequirementBundle(
+                        id=self.decommission_salvage_bundle_id(project.id),
+                        owner_kind="construction",
+                        owner_id=EntityId(str(project.id)),
+                        purpose="decommission_salvage_admission",
+                        operational_node_id=project.operational_node_id,
+                        requested_execution=1.0,
+                        priority=project.priority,
+                        requirements=requirements,
+                        minimum_execution=1.0,
+                        atomic=True,
+                        wait_started_day=day,
+                    ))
                 continue
             requirements = [
                 ServiceCapacityRequirement(CONSTRUCTION_SERVICE_TYPE, remaining_work)
@@ -137,6 +189,12 @@ class ConstructionExecutionMixin:
                 scale = 0.0
             if scale <= 1e-12:
                 continue
+            if isinstance(project.target, FacilityDecommissionTarget) and not project.irreversible_started:
+                blockers = self._decommission_irreversible_blockers(project.target.facility_id)
+                if blockers:
+                    continue
+                self.facilities.begin_decommission(project.target.facility_id)
+                project.irreversible_started = True
             remaining_work = max(0.0, recipe.construction_work - project.construction_done)
             work = min(remaining_work, remaining_work * min(1.0, scale))
             if work <= 1e-12:
@@ -150,6 +208,7 @@ class ConstructionExecutionMixin:
     def settle_completions(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        execution_allocations: ExecutionAllocationPlan,
         day: int = 0,
     ) -> bool:
         physical_state_changed = False
@@ -169,6 +228,17 @@ class ConstructionExecutionMixin:
                 physical_state_changed = True
                 continue
             if project.construction_done + 1e-9 >= recipe.construction_work:
+                if isinstance(project.target, FacilityDecommissionTarget):
+                    if not project.irreversible_started:
+                        continue
+                    try:
+                        admitted = execution_allocations.allocated(
+                            self.decommission_salvage_bundle_id(project.id)
+                        )
+                    except KeyError:
+                        admitted = 0.0
+                    if admitted < 1.0 - 1e-9:
+                        continue
                 self._finish_project(project)
                 physical_state_changed = True
         return physical_state_changed

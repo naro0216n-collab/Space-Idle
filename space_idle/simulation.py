@@ -1477,7 +1477,9 @@ class Simulation:
     def _settle_tick_state_transitions(self, allocations: TickAllocations) -> None:
         if self.research is not None:
             self.research.settle_completions(self.day + 1)
-        if self.projects.settle_completions(allocations.power_by_location, self.day):
+        if self.projects.settle_completions(
+            allocations.power_by_location, allocations.execution, self.day
+        ):
             self.transport.invalidate_movement_plans()
         next_day = self.day + 1
         if self.contracts is not None:

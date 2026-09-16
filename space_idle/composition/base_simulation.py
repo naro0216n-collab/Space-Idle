@@ -27,6 +27,7 @@ from ..content.base_construction import (
     build_construction_recipes,
     build_construction_resource_providers,
     build_facility_upgrade_recipes,
+    build_facility_decommission_recipes,
     build_spatial_development_recipes,
     sourcing_wait_days,
 )
@@ -62,7 +63,8 @@ def build_base_simulation() -> Simulation:
     """Compose the base-game domain services from content-owned definitions."""
     graph, environment = build_spatial_model()
 
-    facilities = FacilityBook(build_facility_definitions(), environment)
+    facility_definitions = build_facility_definitions()
+    facilities = FacilityBook(facility_definitions, environment)
     initial_investments = initial_facility_investments()
     for facility_id, location_id, site_cell_id in initial_facility_placements():
         facilities.install(
@@ -109,14 +111,18 @@ def build_base_simulation() -> Simulation:
     for cell_id, resource_id in initial_known_surface_resource_knowledge():
         survey.initialize_known(cell_id, resource_id)
 
+    storage = StorageService(build_storage_provider_specs(), inventory, facilities)
+
     projects = ProjectService(
         recipes=build_construction_recipes(),
         upgrade_recipes=build_facility_upgrade_recipes(),
+        decommission_recipes=build_facility_decommission_recipes(facility_definitions),
         construction_providers=build_construction_providers(),
         inventory=inventory,
         facilities=facilities,
         power=power,
         sourcing_wait_days=sourcing_wait_days(),
+        storage=storage,
         surface_infrastructure=surface_infrastructure,
         surface_knowledge_level_provider=survey.cell_knowledge_level,
         technology_state=technology,
@@ -125,8 +131,6 @@ def build_base_simulation() -> Simulation:
         surface_cell_development_recipe_id=ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
     )
 
-    storage = StorageService(build_storage_provider_specs(), inventory, facilities)
-
     founding = LocationFoundingService(
         build_founding_packages(), facilities, inventory, power, transport, storage,
         surface_knowledge_level_provider=survey.cell_knowledge_level,
@@ -134,6 +138,8 @@ def build_base_simulation() -> Simulation:
     projects.external_surface_cell_claim_provider = lambda cell_id: (
         None if (project := founding.active_project_for_cell(cell_id)) is None else EntityId(project.id)
     )
+    projects.external_decommission_blockers = transport.facility_decommission_blockers
+    projects.decommission_finalizer = industry.release_facility_reference
     founding.external_cell_claim_provider = lambda cell_id: (
         None if (project := projects.active_spatial_project_for_cell(cell_id)) is None else EntityId(project.id)
     )

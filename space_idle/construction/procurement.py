@@ -6,7 +6,7 @@ from ..execution_requirements import (
 )
 from ..supply import SupplyRequirement
 from ..shared import EntityId
-from .models import ProjectStatus, FacilityUpgradeTarget
+from .models import ProjectStatus, FacilityDecommissionTarget, FacilityUpgradeTarget
 
 
 class ConstructionProcurementMixin:
@@ -28,6 +28,11 @@ class ConstructionProcurementMixin:
             return False
         if isinstance(project.target, FacilityUpgradeTarget) and any(
             blocker.code.startswith("upgrade_") for blocker in self.blockers(project.id, day)
+        ):
+            return False
+        if isinstance(project.target, FacilityDecommissionTarget) and any(
+            blocker.code in {"decommission_target_missing", "active_upgrade_commitment", "storage_stock"}
+            for blocker in self.blockers(project.id, day)
         ):
             return False
         project.status = ProjectStatus.PROCURING

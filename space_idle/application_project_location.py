@@ -273,6 +273,17 @@ class LocationProjectorMixin:
                             for supply in definition.service_capacity_supplies
                         )
                     ),
+                    facility.lifecycle.value,
+                    tuple(
+                        (blocker.code, blocker.detail)
+                        for blocker in sim.projects.decommission_plan_failures(facility.id)
+                    ),
+                    tuple(
+                        (str(resource_id), amount)
+                        for resource_id, amount in sorted(
+                            sim.facilities.decommission_salvage(facility.id).items(), key=lambda row: str(row[0])
+                        )
+                    ),
                 )
             )
 
