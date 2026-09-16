@@ -123,7 +123,7 @@ def test_resource_group_does_not_use_one_resource_surplus_to_cover_another_resou
     )
 
 
-def test_current_authorized_transport_is_projected_as_boundary_flow_and_operation_consumption():
+def test_current_authorized_transport_projects_boundary_flow_consumption_and_partial_unmet():
     app = build_game_application()
     sim = app._simulation
     sim.technology.completed.update({ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS})
@@ -136,9 +136,20 @@ def test_current_authorized_transport_is_projected_as_boundary_flow_and_operatio
         import_source_id=EARTH,
     )
     sim.projects.advance_procurement(sim.day)
-    for demand in sim.projects.supplys(sim.day):
-        sim.inventory.add(EARTH, demand.resource_id, demand.amount_t + 5.0)
+    demands = sim.projects.supplys(sim.day)
+    for demand in demands:
+        sim.inventory.stock[(EARTH, demand.resource_id)] = demand.amount_t + 5.0
 
+    machinery = next(demand for demand in demands if demand.resource_id == ids.MACHINERY)
+    sim.inventory.stock[(EARTH, machinery.resource_id)] = machinery.amount_t / 2.0
+    partial = _resource(
+        app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),))),
+        ids.MACHINERY,
+    )
+    assert partial.external_inflow_per_day > 0
+    assert 0 < partial.unmet_demand < machinery.amount_t
+
+    sim.inventory.stock[(EARTH, machinery.resource_id)] = machinery.amount_t + 5.0
     leo = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),)))
     earth = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),)))
     combined = app.query(GetDependencyAnalytics(
@@ -156,36 +167,6 @@ def test_current_authorized_transport_is_projected_as_boundary_flow_and_operatio
     propellant = _resource(earth, ids.PROPELLANT)
     assert propellant.local_demand_per_day > 0
     assert propellant.local_consumption_per_day > 0
-
-
-
-def test_partial_current_dispatch_reduces_but_does_not_hide_unmet_demand():
-    app = build_game_application()
-    sim = app._simulation
-    sim.technology.completed.update({ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS})
-    sim.transport.external_services.clear()
-    sim.transport.create_transport_allocation(
-        ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
-    )
-    sim.projects.plan_build(
-        ids.ORBITAL_LOGISTICS_NODE, LEO, 3, "import_now", day=sim.day,
-        import_source_id=EARTH,
-    )
-    sim.projects.advance_procurement(sim.day)
-    demands = sim.projects.supplys(sim.day)
-    for demand in demands:
-        sim.inventory.stock[(EARTH, demand.resource_id)] = demand.amount_t + 5.0
-    machinery = next(demand for demand in demands if demand.resource_id == ids.MACHINERY)
-    sim.inventory.stock[(EARTH, machinery.resource_id)] = machinery.amount_t / 2.0
-
-    view = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),)))
-    row = _resource(view, ids.MACHINERY)
-
-    assert row.external_inflow_per_day > 0
-    assert row.unmet_demand > 0
-    assert row.unmet_demand < machinery.amount_t
-
-
 
 def test_authorized_external_procurement_is_current_inflow_and_not_unmet():
     app = build_game_application()
@@ -238,7 +219,9 @@ def test_authorized_external_procurement_is_current_inflow_and_not_unmet():
 
 
 
-def test_external_supply_at_destination_reduces_unmet_and_is_pipeline():
+def test_external_supply_pipeline_applies_only_at_its_supply_endpoint_scope():
+    # When the supply endpoint is also the demand scope, in-flight external
+    # supply is pipeline credit against unmet demand.
     app = build_game_application()
     sim = app._simulation
     project_id = sim.projects.plan_build(
@@ -270,7 +253,6 @@ def test_external_supply_at_destination_reduces_unmet_and_is_pipeline():
             sim.day + 2,
         )
     )
-
     after = app.query(
         GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),))
     )
@@ -283,75 +265,61 @@ def test_external_supply_at_destination_reduces_unmet_and_is_pipeline():
         pipeline_amount
     )
 
-def test_external_supply_is_pipeline_only_at_its_supply_endpoint_scope():
-    app = build_game_application()
-    sim = app._simulation
-    sim.technology.completed.update(
+    # For a remote final demand, that same external batch still exists only at
+    # its physical supply endpoint until transport carries it onward.
+    remote_app = build_game_application()
+    remote = remote_app._simulation
+    remote.technology.completed.update(
         {ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS}
     )
-    project_id = sim.projects.plan_build(
+    remote_project_id = remote.projects.plan_build(
         ids.ORBITAL_LOGISTICS_NODE, LEO, 4, "import_now",
-        day=sim.day, import_source_id=EARTH,
+        day=remote.day, import_source_id=EARTH,
     )
-    sim.projects.advance_procurement(sim.day)
-    demand = next(
+    remote.projects.advance_procurement(remote.day)
+    remote_demand = next(
         demand
-        for demand in sim.projects.supplys(sim.day)
-        if demand.owner_id == EntityId(str(project_id))
+        for demand in remote.projects.supplys(remote.day)
+        if demand.owner_id == EntityId(str(remote_project_id))
         and demand.resource_id == ids.MACHINERY
     )
-    sim.inventory.stock[(LEO, ids.MACHINERY)] = 0.0
-    earth_before = app.query(
+    remote.inventory.stock[(LEO, ids.MACHINERY)] = 0.0
+    earth_before = remote_app.query(
         GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),))
     )
-    leo_before = app.query(
+    leo_before = remote_app.query(
         GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),))
     )
-    sim.logistics.external_supply_batches[EntityId("external.supply.analytics")] = (
+    remote.logistics.external_supply_batches[EntityId("external.supply.analytics")] = (
         ExternalSupplyBatch(
             EntityId("external.supply.analytics"),
             ids.EARTH_INDUSTRIAL_MARKET,
-            demand.id,
-            demand.owner_kind,
-            demand.owner_id,
+            remote_demand.id,
+            remote_demand.owner_kind,
+            remote_demand.owner_id,
             EARTH,
-            demand.resource_id,
-            demand.amount_t,
-            sim.day,
-            sim.day + 2,
+            remote_demand.resource_id,
+            remote_demand.amount_t,
+            remote.day,
+            remote.day + 2,
         )
     )
-
-    earth = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),)))
-    leo = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),)))
-
+    earth = remote_app.query(
+        GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),))
+    )
+    leo = remote_app.query(
+        GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),))
+    )
     assert (
         _resource(earth, ids.MACHINERY).imports_pipeline
         - _resource(earth_before, ids.MACHINERY).imports_pipeline
-    ) == pytest.approx(demand.amount_t)
+    ) == pytest.approx(remote_demand.amount_t)
     assert _resource(leo, ids.MACHINERY).imports_pipeline == pytest.approx(
         _resource(leo_before, ids.MACHINERY).imports_pipeline
     )
     assert _resource(leo, ids.MACHINERY).unmet_demand == pytest.approx(
         _resource(leo_before, ids.MACHINERY).unmet_demand
     )
-
-def test_dependency_analytics_query_is_observational():
-    app = build_game_application()
-    sim = app._simulation
-    stock_before = dict(sim.inventory.stock)
-    reserved_before = dict(sim.inventory.reserved)
-    flows_before = dict(sim.logistics.cargo_flows)
-    funds_before = sim.external_economy.account.funds_musd
-    day_before = sim.day
-
-    app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),)))
-
-    assert sim.day == day_before
-    assert sim.inventory.stock == stock_before
-    assert sim.inventory.reserved == reserved_before
-    assert sim.logistics.cargo_flows == flows_before
-    assert sim.external_economy.account.funds_musd == pytest.approx(funds_before)
 
 def test_resource_group_definition_fails_closed_when_member_resource_is_missing():
     app = build_game_application()

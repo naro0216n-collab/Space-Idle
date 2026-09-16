@@ -16,7 +16,7 @@ def _request(name: str, requested: float, priority: int = 3) -> ServiceCapacityR
     )
 
 
-def test_same_priority_service_scarcity_is_proportional_and_registration_order_independent():
+def test_service_capacity_allocator_honors_priority_and_is_order_independent_within_band():
     first = _request("first", 6.0)
     second = _request("second", 3.0)
     supply = {(SpatialNodeId("node.test"), "test_service"): 3.0}
@@ -29,17 +29,13 @@ def test_same_priority_service_scarcity_is_proportional_and_registration_order_i
     assert reverse.allocated(first.id) == pytest.approx(2.0)
     assert reverse.allocated(second.id) == pytest.approx(1.0)
 
-
-def test_higher_priority_service_request_is_allocated_before_lower_priority():
     high = _request("high", 3.0, 5)
     low = _request("low", 3.0, 1)
-    supply = {(SpatialNodeId("node.test"), "test_service"): 4.0}
-    plan = allocate_service_capacity((low, high), nominal_supply=supply)
+    priority_supply = {(SpatialNodeId("node.test"), "test_service"): 4.0}
+    priority_plan = allocate_service_capacity((low, high), nominal_supply=priority_supply)
 
-    assert plan.allocated(high.id) == pytest.approx(3.0)
-    assert plan.allocated(low.id) == pytest.approx(1.0)
-
-
+    assert priority_plan.allocated(high.id) == pytest.approx(3.0)
+    assert priority_plan.allocated(low.id) == pytest.approx(1.0)
 
 def test_service_capacity_requirement_is_distinct_from_capability_requirement():
     from space_idle import build_game_application

@@ -20,9 +20,10 @@ from space_idle.shared import SpatialNodeId
 from space_idle.validation import validate_runtime_state
 
 
-def test_location_facility_does_not_require_cell_and_rejects_cell_selection():
+def test_facility_placement_scope_controls_surface_cell_requirement():
     sim = build_game_application()._simulation
 
+    # Operational-node facilities neither require nor accept a surface cell.
     project_id = sim.projects.plan_build(
         ids.WATER_STORAGE,
         ids.EARTH,
@@ -30,7 +31,6 @@ def test_location_facility_does_not_require_cell_and_rejects_cell_selection():
         "mixed",
     )
     assert sim.projects.projects[project_id].site_cell_id is None
-
     with pytest.raises(ValueError, match="must not specify"):
         sim.projects.plan_build(
             ids.WATER_STORAGE,
@@ -40,12 +40,9 @@ def test_location_facility_does_not_require_cell_and_rejects_cell_selection():
             site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
         )
 
-
-def test_surface_cell_facility_requires_a_developed_cell_owned_by_location():
-    sim = build_game_application()._simulation
+    # Surface-cell facilities require a developed cell owned by the location.
     definition = sim.facilities.definitions[ids.ROBOTIC_GEOLOGY_STATION]
     assert definition.placement_scope is FacilityPlacementScope.SURFACE_CELL
-
     with pytest.raises(ValueError, match="requires a surface cell"):
         sim.projects.plan_build(
             ids.ROBOTIC_GEOLOGY_STATION,
@@ -53,7 +50,6 @@ def test_surface_cell_facility_requires_a_developed_cell_owned_by_location():
             3,
             "mixed",
         )
-
     with pytest.raises(ValueError, match="not developed"):
         sim.projects.plan_build(
             ids.ROBOTIC_GEOLOGY_STATION,
@@ -71,7 +67,6 @@ def test_surface_cell_facility_requires_a_developed_cell_owned_by_location():
         site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
     )
     assert sim.projects.projects[project_id].site_cell_id == ids.EARTH_CELL_INDUSTRIAL
-
 
 def test_surface_cell_facility_uses_site_environment_while_remaining_location_owned():
     base = build_game_application()._simulation

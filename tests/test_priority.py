@@ -9,7 +9,7 @@ from space_idle.priority import (
 )
 
 
-def test_priority_contract_is_five_ordinal_bands_with_normal_default():
+def test_priority_contract_has_five_ordinal_bands_defaults_and_distinct_roles():
     assert tuple(int(level) for level in PriorityLevel) == (1, 2, 3, 4, 5)
     assert DEFAULT_PRIORITY_LEVEL is PriorityLevel.NORMAL
     assert int(DEFAULT_ACTIVITY_PRIORITY) == 3
@@ -21,8 +21,6 @@ def test_priority_contract_is_five_ordinal_bands_with_normal_default():
         with pytest.raises(ValueError):
             ProvisioningPriority(value)
 
-
-def test_activity_and_provisioning_priority_are_distinct_semantic_types():
     activity = ActivityPriority(4)
     provisioning = ProvisioningPriority(4)
     assert type(activity) is ActivityPriority
@@ -31,7 +29,6 @@ def test_activity_and_provisioning_priority_are_distinct_semantic_types():
         ProvisioningPriority(activity)
     with pytest.raises(ValueError, match="different priority role"):
         ActivityPriority(provisioning)
-
 
 def test_pause_is_state_not_a_priority_level():
     app = build_game_application()

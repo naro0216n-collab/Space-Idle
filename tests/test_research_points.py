@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from math import isclose
 
 from space_idle import AdvanceTime, GetResearch, PauseFacility, ResumeFacility, StartResearch, build_game_application
@@ -22,7 +21,7 @@ def _advance_until_startable(app, research_id, max_days=2000):
     raise AssertionError(f"research never became startable: {research_id}")
 
 
-def test_research_points_generate_and_clip_at_current_storage_capacity():
+def test_research_point_storage_limits_generation_without_discarding_overcapacity():
     app = build_game_application()
     initial = app.query(GetResearch())
     assert initial.generation_points_per_day > 0
@@ -33,6 +32,8 @@ def test_research_points_generate_and_clip_at_current_storage_capacity():
     assert after_one_day.stored_points > initial.stored_points
     assert after_one_day.stored_points <= after_one_day.storage_capacity_points + 1e-9
 
+    # Fill the aggregate capacity once. All following assertions exercise the
+    # same storage invariant as provider capacity changes around the stored pool.
     for _ in range(5000):
         current = app.query(GetResearch())
         if current.storage_capacity_points - current.stored_points <= 1e-9:
@@ -43,33 +44,18 @@ def test_research_points_generate_and_clip_at_current_storage_capacity():
 
     full = app.query(GetResearch())
     app.execute(AdvanceTime(10))
-    later = app.query(GetResearch())
-    assert isclose(later.stored_points, full.stored_points, abs_tol=1e-9)
-    assert later.stored_points <= later.storage_capacity_points + 1e-9
+    clipped = app.query(GetResearch())
+    assert isclose(clipped.stored_points, full.stored_points, abs_tol=1e-9)
+    assert clipped.stored_points <= clipped.storage_capacity_points + 1e-9
 
-
-def test_capacity_drop_preserves_stored_points_and_overcap_blocks_generation():
-    app = build_game_application()
-
-    # Fill whatever aggregate capacity the current provider set supplies. The
-    # invariant must hold regardless of how many research assets contribute.
-    for _ in range(5000):
-        current = app.query(GetResearch())
-        if current.storage_capacity_points - current.stored_points <= 1e-9:
-            break
-        app.execute(AdvanceTime(1))
-    else:
-        raise AssertionError("research storage never filled")
-
-    before = app.query(GetResearch())
-    provider_ids = tuple(row.facility_id for row in before.providers)
-    assert provider_ids and before.stored_points > 0
-
+    provider_ids = tuple(row.facility_id for row in clipped.providers)
+    assert provider_ids and clipped.stored_points > 0
     for facility_id in provider_ids:
         app.execute(PauseFacility(facility_id))
+
     paused = app.query(GetResearch())
-    assert paused.stored_points == before.stored_points
-    assert paused.storage_capacity_points < before.storage_capacity_points
+    assert paused.stored_points == clipped.stored_points
+    assert paused.storage_capacity_points < clipped.storage_capacity_points
     assert paused.over_capacity
     assert paused.generation_points_per_day == 0
 
@@ -83,7 +69,6 @@ def test_capacity_drop_preserves_stored_points_and_overcap_blocks_generation():
     assert resumed.storage_capacity_points > paused.storage_capacity_points
     assert resumed.generation_points_per_day > 0
     assert resumed.stored_points == paused.stored_points
-
 
 def test_research_start_creates_theory_project_without_upfront_rp_payment():
     app = build_game_application()

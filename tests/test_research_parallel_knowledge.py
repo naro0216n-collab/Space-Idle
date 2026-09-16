@@ -57,73 +57,56 @@ def _parallel_projection(
     return app
 
 
-def test_parallel_theory_same_priority_is_proportional_and_registration_order_independent():
-    a = DefinitionId("test.research.parallel.a")
-    b = DefinitionId("test.research.parallel.b")
-    first = _parallel_projection((a, b))
-    second = _parallel_projection((b, a))
+def test_parallel_theory_same_priority_is_fair_and_registration_order_independent_across_constraints():
+    for suffix, execution_rate, stored_points, blocker_code in (
+        ("rp", 20.0, 1.0, "research_points:allocation"),
+        ("execution", 1.0, 100.0, "service:allocation"),
+    ):
+        a = DefinitionId(f"test.research.parallel.{suffix}.a")
+        b = DefinitionId(f"test.research.parallel.{suffix}.b")
+        first = _parallel_projection(
+            (a, b), execution_rate=execution_rate, stored_points=stored_points
+        )
+        second = _parallel_projection(
+            (b, a), execution_rate=execution_rate, stored_points=stored_points
+        )
 
-    first_rows = {rid: _research_row(first, rid) for rid in (a, b)}
-    second_rows = {rid: _research_row(second, rid) for rid in (a, b)}
-    for rid in (a, b):
-        assert first_rows[rid].execution_allocated == 0.5
-        assert first_rows[rid].rp_requested == 10.0
-        assert first_rows[rid].rp_allocated == 0.5
-        assert second_rows[rid].rp_allocated == first_rows[rid].rp_allocated
-
-
-def test_parallel_theory_execution_capacity_is_shared_independently_of_start_order():
-    a = DefinitionId("test.research.execution.parallel.a")
-    b = DefinitionId("test.research.execution.parallel.b")
-    first = _parallel_projection((a, b), execution_rate=1.0, stored_points=100.0)
-    second = _parallel_projection((b, a), execution_rate=1.0, stored_points=100.0)
-
-    first_rows = {rid: _research_row(first, rid) for rid in (a, b)}
-    second_rows = {rid: _research_row(second, rid) for rid in (a, b)}
-    for rid in (a, b):
-        assert first_rows[rid].execution_requested == 10.0
-        assert first_rows[rid].execution_allocated == 0.5
-        assert second_rows[rid].execution_allocated == first_rows[rid].execution_allocated
-        assert first_rows[rid].rp_requested == 10.0
-        assert first_rows[rid].rp_allocated == 0.5
+        first_rows = {rid: _research_row(first, rid) for rid in (a, b)}
+        second_rows = {rid: _research_row(second, rid) for rid in (a, b)}
+        for rid in (a, b):
+            row = first_rows[rid]
+            assert row.execution_requested == 10.0
+            assert row.execution_allocated == 0.5
+            assert row.rp_requested == 10.0
+            assert row.rp_allocated == 0.5
+            assert second_rows[rid].execution_allocated == row.execution_allocated
+            assert second_rows[rid].rp_allocated == row.rp_allocated
+            assert any(code == blocker_code for code, _ in row.current_blockers)
 
 
-def test_research_priority_controls_shared_execution_capacity_before_rp_consumption():
-    a = DefinitionId("test.research.execution.priority.a")
-    b = DefinitionId("test.research.execution.priority.b")
-    app = _parallel_projection((a, b), execution_rate=1.0, stored_points=100.0)
+def test_research_priority_controls_shared_execution_and_rp_constraints():
+    for suffix, execution_rate, stored_points, blocker_code in (
+        ("execution", 1.0, 100.0, "service:allocation"),
+        ("rp", 20.0, 1.0, "research_points:allocation"),
+    ):
+        a = DefinitionId(f"test.research.priority.{suffix}.a")
+        b = DefinitionId(f"test.research.priority.{suffix}.b")
+        app = _parallel_projection(
+            (a, b), execution_rate=execution_rate, stored_points=stored_points
+        )
+        app.execute(SetResearchPriority(str(a), 5))
+        app.execute(SetResearchPriority(str(b), 1))
 
-    app.execute(SetResearchPriority(str(a), 5))
-    app.execute(SetResearchPriority(str(b), 1))
-
-    high = _research_row(app, a)
-    low = _research_row(app, b)
-    assert high.execution_allocated == 1.0
-    assert low.execution_allocated == 0.0
-    assert high.rp_requested == 10.0
-    assert low.rp_requested == 10.0
-    assert high.rp_allocated == 1.0
-    assert low.rp_allocated == 0.0
-
-
-def test_research_priority_controls_shared_rp_allocation_without_project_order():
-    a = DefinitionId("test.research.priority.a")
-    b = DefinitionId("test.research.priority.b")
-    app = _parallel_projection((a, b))
-
-    app.execute(SetResearchPriority(str(a), 5))
-    app.execute(SetResearchPriority(str(b), 1))
-
-    high = _research_row(app, a)
-    low = _research_row(app, b)
-    assert high.priority == 5
-    assert low.priority == 1
-    assert high.rp_requested == 10.0
-    assert low.rp_requested == 10.0
-    assert high.rp_allocated == 1.0
-    assert low.rp_allocated == 0.0
-    assert any(code == "research_points:allocation" for code, _ in low.current_blockers)
-
+        high = _research_row(app, a)
+        low = _research_row(app, b)
+        assert high.priority == 5
+        assert low.priority == 1
+        assert high.execution_allocated == 1.0
+        assert low.execution_allocated == 0.0
+        assert high.rp_requested == low.rp_requested == 10.0
+        assert high.rp_allocated == 1.0
+        assert low.rp_allocated == 0.0
+        assert any(code == blocker_code for code, _ in low.current_blockers)
 
 def test_operational_experience_does_not_accumulate_from_research_time_itself():
     app = build_game_application()

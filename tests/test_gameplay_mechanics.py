@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import pytest
 
 from space_idle import (
     AdvanceTime,
     CreateTransportAllocation,
     GetCargoFlows,
-    GetFleet,
     GetLogistics,
-    GetProjects,
     GetMovementPlans,
     PauseTransportAllocation,
     PlanBuild,
-    SetTargetStock,
     ResumeTransportAllocation,
     build_game_application,
 )
@@ -20,38 +16,6 @@ from space_idle.content import base_ids as ids
 from space_idle.transport import PoweredAscentCapability, TransportPerformanceProfile, VehicleDef
 from space_idle.shared import DefinitionId
 from space_idle.spatial import AtmosphereField, GravityField
-
-
-def test_transport_fleet_investment_is_explicit_and_supply_demand_does_not_resize_it():
-    app = build_game_application()
-    before = next(
-        row for row in app.query(GetFleet()).pools
-        if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
-        and row.operational_node_id == str(ids.EARTH)
-    )
-    assert before.total_units > 0
-    assert before.free_units == before.total_units
-    assert app.query(GetLogistics()).allocations == ()
-
-    app.execute(SetTargetStock(str(ids.LEO), str(ids.MACHINERY), 100.0, priority=5))
-    after_supply = next(
-        row for row in app.query(GetFleet()).pools
-        if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
-        and row.operational_node_id == str(ids.EARTH)
-    )
-    assert after_supply.free_units == before.free_units
-
-    app.execute(CreateTransportAllocation(
-        str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
-        control_mode="units", target_units=1, provisioning_priority=3,
-    ))
-    allocated = next(
-        row for row in app.query(GetFleet()).pools
-        if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
-        and row.operational_node_id == str(ids.EARTH)
-    )
-    assert allocated.transport_units == 1
-    assert allocated.free_units == before.free_units - 1
 
 
 def test_paused_transport_capacity_keeps_supply_requirement_visible_without_dispatching_cargo_flow():
@@ -116,20 +80,3 @@ def test_vehicle_movement_eligibility_is_derived_from_operation_capability_not_v
     )
     assert mode.fleet_total_units == 1
     assert mode.nominal_capacity.forward_t_per_day > 0
-
-
-def test_capacity_mode_target_is_not_auto_increased_by_supply_demand():
-    app = build_game_application()
-    allocation_id = app.execute(CreateTransportAllocation(
-        str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
-        control_mode="capacity", target_forward_t_per_day=1.0,
-        target_reverse_t_per_day=0.0, provisioning_priority=4,
-    )).created_id
-    assert allocation_id is not None
-    before = next(row for row in app.query(GetLogistics()).allocations if row.id == allocation_id)
-
-    app.execute(SetTargetStock(str(ids.LEO), str(ids.MACHINERY), 100.0, priority=5))
-    after = next(row for row in app.query(GetLogistics()).allocations if row.id == allocation_id)
-
-    assert after.target_capacity == before.target_capacity
-    assert after.required_units == before.required_units

@@ -269,11 +269,12 @@ def test_runtime_blocker_prevents_input_consumption_and_keeps_fleet_reserved():
     assert fleet.free_units == fleet.total_units - required_units
 
 
-def test_scientific_exploration_rejects_duplicate_consumable_resources():
+def test_scientific_exploration_definition_rejects_duplicate_resource_and_capability_requirements():
     app = build_game_application()
     sim = app._simulation
     exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
     definition = sim.scientific_exploration.definitions[exploration_id]
+
     sim.scientific_exploration.definitions[exploration_id] = replace(
         definition,
         consumable_resources=((ids.MACHINERY, 0.1), (ids.MACHINERY, 0.2)),
@@ -281,19 +282,14 @@ def test_scientific_exploration_rejects_duplicate_consumable_resources():
     with pytest.raises(ConfigurationError, match="duplicate consumable resource"):
         validate_simulation_configuration(sim)
 
-
-def test_scientific_exploration_rejects_invalid_vehicle_capability_requirements():
-    app = build_game_application()
-    sim = app._simulation
-    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
-    definition = sim.scientific_exploration.definitions[exploration_id]
     sim.scientific_exploration.definitions[exploration_id] = replace(
         definition,
         required_vehicle_capabilities=("docking", "docking"),
     )
-    with pytest.raises(ConfigurationError, match="duplicate vehicle capability requirement"):
+    with pytest.raises(
+        ConfigurationError, match="duplicate vehicle capability requirement"
+    ):
         validate_simulation_configuration(sim)
-
 
 def test_full_rp_storage_constrains_reward_retention_but_does_not_freeze_campaign():
     app = build_game_application()

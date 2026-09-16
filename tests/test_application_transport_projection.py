@@ -11,6 +11,7 @@ from space_idle import (
     GetCargoFlows,
     GetCatalog,
     GetContracts,
+    GetDependencyAnalytics,
     GetFleet,
     GetFleetRelocationPreview,
     GetFlowReport,
@@ -126,6 +127,7 @@ def test_application_decision_queries_are_observational():
         GetScientificExplorations(),
         GetResearch(),
         GetBottlenecks(),
+        GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),)),
     ):
         app.query(query)
 
@@ -241,9 +243,22 @@ def test_transport_allocation_priority_and_routing_policy_update_through_applica
     assert row.target_units == 1
 
 
-def test_supply_policy_and_target_stock_update_player_planning_intent_without_transport_reprovisioning():
+def test_supply_policy_and_target_stock_update_planning_intent_without_transport_reprovisioning():
     app = build_game_application()
+    allocation_id = app.execute(CreateTransportAllocation(
+        str(ids.REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
+        control_mode="capacity", target_forward_t_per_day=1.0,
+        target_reverse_t_per_day=0.0, provisioning_priority=4,
+    )).created_id
+    assert allocation_id is not None
+
     before_allocations = app.query(GetTransportAllocations()).items
+    before_allocation = next(row for row in before_allocations if row.id == allocation_id)
+    before_pool = next(
+        row for row in app.query(GetFleet()).pools
+        if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
+        and row.operational_node_id == str(EARTH)
+    )
 
     policy_id = app.execute(SetSupplyPolicy(
         str(LEO), str(ids.MACHINERY), preferred_source_id=str(EARTH),
@@ -257,7 +272,18 @@ def test_supply_policy_and_target_stock_update_player_planning_intent_without_tr
     view = app.query(GetLogistics())
     policy = next(row for row in view.supply_policies if row.id == policy_id)
     target = next(row for row in view.target_stocks if row.id == target_id)
-    requirement = next(row for row in view.requirements if row.owner_kind == "target_stock" and row.owner_id == target_id)
+    requirement = next(
+        row for row in view.requirements
+        if row.owner_kind == "target_stock" and row.owner_id == target_id
+    )
+    after_allocations = app.query(GetTransportAllocations()).items
+    after_allocation = next(row for row in after_allocations if row.id == allocation_id)
+    after_pool = next(
+        row for row in app.query(GetFleet()).pools
+        if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
+        and row.operational_node_id == str(EARTH)
+    )
+
     assert policy.preferred_source_id == str(EARTH)
     assert policy.destination_id == str(LEO)
     assert policy.path_policy == "lowest_propellant"
@@ -265,7 +291,12 @@ def test_supply_policy_and_target_stock_update_player_planning_intent_without_tr
     assert target.priority == 4
     assert requirement.priority == 4
     assert requirement.forecast_requirement_day == app.query(GetWorld()).day
-    assert app.query(GetTransportAllocations()).items == before_allocations
+    assert {row.id for row in after_allocations} == {row.id for row in before_allocations}
+    assert after_allocation.target_capacity == before_allocation.target_capacity
+    assert after_allocation.required_units == before_allocation.required_units
+    assert after_allocation.active_units == before_allocation.active_units
+    assert after_pool.transport_units == before_pool.transport_units
+    assert after_pool.free_units == before_pool.free_units
 
     app.execute(DeleteSupplyPolicy(str(LEO), str(ids.MACHINERY)))
     app.execute(DeleteTargetStock(str(LEO), str(ids.MACHINERY)))

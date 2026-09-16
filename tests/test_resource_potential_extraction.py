@@ -67,24 +67,26 @@ def test_extraction_does_not_consume_static_resource_potential():
     } == before_potential
 
 
-def test_soft_saturation_is_monotonic_with_diminishing_marginal_return():
+def test_soft_saturation_response_is_monotonic_diminishing_and_opportunity_sensitive():
     opportunity = 10.0
-    outputs = [ExtractionService.diminishing_response(capacity, opportunity) for capacity in (1.0, 2.0, 3.0)]
+    outputs = [
+        ExtractionService.diminishing_response(capacity, opportunity)
+        for capacity in (1.0, 2.0, 3.0)
+    ]
     assert outputs[0] < outputs[1] < outputs[2]
     assert outputs[1] - outputs[0] > outputs[2] - outputs[1]
-    assert ExtractionService.marginal_response(1.0, opportunity) > ExtractionService.marginal_response(3.0, opportunity)
-
-    # This is soft saturation rather than a finite/hard extraction ceiling.
+    assert ExtractionService.marginal_response(1.0, opportunity) > (
+        ExtractionService.marginal_response(3.0, opportunity)
+    )
     assert ExtractionService.diminishing_response(1000.0, opportunity) > opportunity
 
-
-def test_higher_opportunity_preserves_more_expansion_value_at_same_capacity():
     capacity = 10.0
     low = ExtractionService.diminishing_response(capacity, 5.0)
     high = ExtractionService.diminishing_response(capacity, 50.0)
     assert high > low
-    assert ExtractionService.marginal_response(capacity, 50.0) > ExtractionService.marginal_response(capacity, 5.0)
-
+    assert ExtractionService.marginal_response(capacity, 50.0) > (
+        ExtractionService.marginal_response(capacity, 5.0)
+    )
 
 def test_physical_opportunity_is_not_scaled_by_surface_infrastructure_twice():
     app = build_game_application()

@@ -418,6 +418,8 @@ def cmd_init(_: argparse.Namespace) -> int:
         raise PublishStateError(f"restored repository branch must be {TARGET_BRANCH!r}, got {local_branch!r}")
     if local_commit != metadata["remote_commit"] or local_tree != metadata["remote_tree"]:
         raise PublishStateError("artifact/local develop commit or tree mismatch")
+    _git("config", "--local", "user.name", PUBLISH_IDENTITY_NAME, cwd=repo)
+    _git("config", "--local", "user.email", PUBLISH_IDENTITY_EMAIL, cwd=repo)
     subprocess.run(
         [
             "git", "fetch", "origin",
