@@ -18,18 +18,18 @@
 | 関心領域 | `design.md` | `architecture.md` |
 |---|---|---|
 | 中心ループ・進行・初期範囲 | §1–4 | §1–3 |
-| Resource / Inventory / Storage / Priority | §5 | §7 |
-| Facility / Construction / Maintenance | §6 | §6, §9 |
+| Resource / Inventory / Storage / Priority / Funds / External Resource Market | §5 | §7, §10.9 |
+| Facility / Construction / Maintenance / Decommission | §6 | §6, §9 |
 | Industry / Extraction / Resource Potential | §7 | §8 |
 | Spatial / Surface Location / Environment | §8 | §5 |
-| Movement / Transport / Logistics / Cargo | §9–10 | §10 |
+| Movement / Transport / Logistics / Cargo / Fleet Retirement | §9–10 | §10 |
 | Scientific Exploration / Research / Knowledge | §11–13 | §11–12 |
 | Resource Survey | §14 | §12.2 |
 | Location development / external-dependency analytics | §15 | §5.4, §8.4, §9.5 |
 | Automation / canonical day / Offline | §16, §19 | §3.4, §14 |
 | Application / UI | §18 | §3.3, §13, §16 |
 | Save / Load / Validation / Test | §19 | §14–15 |
-| Initial Content / gameplay evaluation | §20, §22 | Contentは§3.2、Validationは§15 |
+| World / Scenario / Initial Content / gameplay evaluation | §20, §22 | §3.2, §4, §14–15 |
 
 一つの概念が複数節から参照される場合も、詳細規則を重複定義しない。ゲーム上の意味は `design.md`、State ownership・処理順・契約は `architecture.md` の対応節を正本とする。
 
