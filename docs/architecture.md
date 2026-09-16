@@ -134,13 +134,18 @@ Applicationがtick間に受理したPlayer Commandは、次のPhysical snapshot�
 1. Boundary settlement
    前tickまでの経過によって到着・完了条件を満たしたCargo、Movement Execution、Project、
    Market Provider availability / replenishment、成熟したBuy Commitment等を確定する。
-   成熟Buy CommitmentはMarket Interface所在NodeのCargo Handling / Inventory Admissionが成立した量だけ
-   Resource ownership transferと対応Funds消費を同時にsettleする。入庫不能分は外部側のcommitmentとして残す。
+   Cargo arrival / arrival waiting、成熟Buy Commitment等の既に発生済みの物理的obligationがCargo Handling、
+   Conditioning、Inventory Admission等の有限constraintを必要とする場合は、通常Activityと同じconstraint key、
+   Activity Priority、同順位fairness semanticsを使うBoundary obligation allocationとして先に解決する。
+   成立した量だけhandoff / admission / Resource ownership transferと対応Funds消費をatomicにsettleし、
+   成立しない量はarrival waitingまたは外部側commitmentとして保持する。
 
 2. Physical snapshot
    on-hand Inventory、既存Reservation、Funds、Market availability / commitment、Environment、
    Facility / Fleet状態、Installed / Active Capability、Nominal Service Capacity、
    利用可能Stock / Pool headroom等の当日配分前状態を固定する。
+   Boundary obligation allocationが当日に消費したService Capacity / admission headroomはここで残余量へ反映し、
+   後続の通常Allocationが同じcapacityを再利用しない。
 
 3. Intent generation
    各DomainがActivityごとのExecution Requirement Bundle、Supply Requirement、Project work、
@@ -177,7 +182,7 @@ Applicationがtick間に受理したPlayer Commandは、次のPhysical snapshot�
    派生Query状態を再導出してtickを進める。
 ```
 
-Boundary settlement後のPhysical snapshotを当tick配分の物理的な正本とする。前tickまでに到着したCargoはBoundary settlementでhandoff / admission判定された後にsnapshotへ反映する。到着済みCargoは過去tickですでにdispatchされた物理的義務であるため、当日Productionより先にadmissionを試みる。入庫できない量はLogistics-owned arrival waitingに残し、Storageへ荷卸し済みResourceはInventoryだけがauthoritative ownershipを持つ。
+Boundary settlement後のPhysical snapshotを当tick配分の物理的な正本とする。前tickまでに到着したCargoはBoundary settlementでhandoff / admission判定された後にsnapshotへ反映する。到着済みCargoは過去tickですでにdispatchされた物理的義務であるため、当日Productionより先にadmissionを試みる。ただし専用の無制限pre-passとして処理せず、同じ有限constraint modelを使うBoundary obligation allocationで競合を解き、その使用量を当日capacityから控除する。入庫できない量はLogistics-owned arrival waitingに残し、Storageへ荷卸し済みResourceはInventoryだけがauthoritative ownershipを持つ。
 
 Market buyでは前tick以前に成立してlead timeを満たしたBuy CommitmentだけをBoundary settlementの対象とする。lead timeが0でも当tick snapshot後に新規作成したCommitmentを同tickの過去Boundaryへ遡及させない。Market sellではInterface所在Nodeにsnapshot時点で実際に存在する取引可能なPlayer Resourceだけを対象とし、そのResourceRequirementとprovider demand constraintを同じActivity executionとして当日Allocationへ参加させる。Domain executionでは確定量のownership transferと対応Funds加算をatomicにsettleする。成立しなかったResource / Funds / availabilityを消費した扱いにしない。
 
@@ -303,7 +308,7 @@ Surface LocationのCell数はOperational Node数を増やさない。Inventory�
 
 Surface Cellは静的地質・地形と可変Physical Environmentを分離する。Static geology / Resource Potentialを通常の採掘で消費・減少させない。Dynamic Physical Environmentはテラフォーミング、自然変化、明示的な地表改変等によって更新可能とする。
 
-Physical EnvironmentはCelestial Body global stateとSurface Cell local stateを合成して評価する。Surface Locationそのものには単一の代表Physical Environmentを持たせず、`core_cell_id` をEnvironment lookupのfallbackにしない。Location向けEnvironment表示はdeveloped cellsの範囲・extrema・分布等から作るderived summaryであり、Simulation判定の正本にはしない。
+Physical Environmentのfield definitionはscope / compositionを明示し、少なくとも `BODY_GLOBAL`、`SURFACE_CELL_LOCAL`、`BODY_WITH_CELL_OVERLAY` に相当する意味を表現できるようにする。Resolverは個別field名のallowlistでscopeを決めず、このDefinition contractからCelestial Body global stateとSurface Cell local stateを評価・合成する。Surface Locationそのものには単一の代表Physical Environmentを持たせず、`core_cell_id` をEnvironment lookupのfallbackにしない。Location向けEnvironment表示はdeveloped cellsの範囲・extrema・分布等から作るderived summaryであり、Simulation判定の正本にはしない。
 
 Non-surface Operational Nodeは結び付いたSpatial contextのPhysical Environmentを評価する。Surface Location上のOPERATIONAL_NODE FacilityはBody-globalなPhysical Environment、Spatial classification、Infrastructure Capability / Service Capacityを利用できるが、Cell-localな日照・地形・局所温度等を暗黙の代表Cellから取得しない。Cell-localな物理条件が必要なFacility / Operationは明示Surface Cell contextを要求する。
 
@@ -339,7 +344,7 @@ Installation RequirementsとOperating Requirementsを分離する。どちらも
 
 Facilityは同一Domainのまま配置種別を持つ。
 
-- `OPERATIONAL_NODE`: Operational Nodeへ所属し、個別Surface Cellを指定しない通常Facility。Surface Locationとnon-surface Operational Nodeの双方へ配置できる。
+- `OPERATIONAL_NODE`: Operational Nodeへ所属し、個別Surface Cellを指定しない通常Facility。Surface Locationとnon-surface Operational Nodeの双方へ配置できる。同じOperational Node内でCellを変えても局所Environment、Movement接続、性能、効果が変化しないFacilityはこちらを基本とする。
 - `SURFACE_CELL`: 物理的位置が性能、Movement接続、局所Environment、環境改変等へ本質的に影響する位置依存Facility。
 
 `SURFACE_CELL` Facilityだけ `site_cell_id` を要求し、所属Operational NodeはSurface Locationでなければならず、対象CellはそのLocationの開発済み領域でなければならない。別のSurface Installation Domainを作って建設・維持・Power・Capability / Service Capacityを重複実装しない。
@@ -369,9 +374,9 @@ maintenance_demand(resource, period)
 
 Facility lifecycleは少なくとも `NORMAL` と `DECOMMISSIONING` を区別する。Decommission Projectの計画・work allocationはConstruction系の共通Project能力を利用できるが、Facility lifecycle stateの所有者はFacility Domainとする。
 
-不可逆な解体開始前は取消可能とし、開始後はFacilityを通常operationへ戻さない。`DECOMMISSIONING` Facilityは通常のProcess、Active Capability、Service Capacity supplyを停止する。Storage等の受動的な物理能力をどこまで保持するかはFacility Definitionで表現できる。既に開始済みで、そのFacilityの現存を前提に安全にsettleする必要がある不可逆commitmentを破壊する場合はDecommission開始をblockする。一方、将来の反復Process、Transport Allocation等が能力へ依存するだけなら、それらは撤去後に通常blockerを持つ状態として残せるためDecommission blockerにはしない。
+不可逆な解体開始前は取消可能とし、開始後はFacilityを通常operationへ戻さない。`DECOMMISSIONING` Facilityは通常のProcess、Active Capability、Service Capacity supply、Storage admission等の新規Activity向け能力を停止する。既存stockや開始済みcommitmentを安全にsettleするため解体中にも残す必要がある受動能力だけはFacility Definitionが `retained during decommission` に相当する明示契約として定義できる。その保持能力は安全settlement専用であり、新規ActivityのCapability / Service / admission supplyへ数えない。既に開始済みで、そのFacilityの現存を前提に安全にsettleする必要がある不可逆commitmentを破壊する場合はDecommission開始をblockする。一方、将来の反復Process、Transport Allocation等が能力へ依存するだけなら、それらは撤去後に通常blockerを持つ状態として残せるためDecommission blockerにはしない。
 
-Storage Facilityの撤去により当該Storage Classの残存Physical Storage Capacityが現在stockを下回る場合は、Inventoryを消去・宙づりにせずDecommission開始をblockする。Usable Capacity低下による既存over-capacityとは区別する。
+Storage Facilityは、不可逆解体開始後も安全保持用として明示的に残る容量を除いた残存Physical Storage Capacityが現在stockを下回る場合、Inventoryを消去・宙づりにせずDecommission開始をblockする。Usable Capacity低下による既存over-capacityとは区別する。
 
 Decommission completionはFacility参照を原子的に整理し、Facilityをlive stateから除去する。完了済みConstruction / Upgrade履歴は対象Facilityの現存を要求しない。回収Resourceは通常Inventory Admissionを通し、撤去対象Facility自身が供給するStorage Capacityをsalvage受入headroomとして利用しない。回収Resourceを失わずにadmissionできない場合は最終removalをsettleせず、Projectを完了待ちとして保持する。
 
@@ -632,7 +637,7 @@ Vehicleは地球外を含む任意Operational NodeでProduction requirementsを�
 
 Vehicle ProductionはOperational Nodeを実行地点として持ち、必要Resource、Production Capability / Service Capacity、SiteRequirements、時間を満たして進行する。完成時にそのNodeのFleetPoolへunitを追加する。
 
-Fleet RetirementはTransport / Fleet Domainが所有する永続Intentとする。retirement対象unitは所在Operational Nodeのfree Fleetから排他的にreservationし、必要work / Resource処理を経て完了時にFleet総数を減らす。不可逆な解体開始前は取消可能、開始後は対象unitを他用途へ解放しない。salvage量はVehicle Definitionのretirement recovery定義とunit数から導出し、outputは通常Inventory Admissionを通す。回収Resourceをadmissionできない場合は対象unitをRetirement commitmentに保持し、Fleet総数減少とsalvage admissionを同じ最終settlementで確定する。
+Fleet RetirementはTransport / Fleet Domainが所有する永続Intentとする。retirement対象unitは所在Operational Nodeのfree Fleetから排他的にreservationし、所在Nodeで通常のService Capacity / Resource Requirementとして表現されるworkを経て完了時にFleet総数を減らす。Fleet Core専用の特殊解体capacityを必須にせず、Contentは既存のVehicle Production / workshop系Serviceを再利用できる。独立解体設備が戦略的に意味を持つ場合だけ通常Service typeとして追加する。不可逆な解体開始前は取消可能、開始後は対象unitを他用途へ解放しない。salvage量はVehicle Definitionのretirement recovery定義とunit数から導出し、outputは通常Inventory Admissionを通す。回収Resourceをadmissionできない場合は対象unitをRetirement commitmentに保持し、Fleet総数減少とsalvage admissionを同じ最終settlementで確定する。
 
 Fleet Relocation、Scientific Exploration等の有限操作はone-shot Movement Executionを利用し、開始時にFleet unitをsourceのfree poolから外し、完了時に定義されたdispositionへsettleする。in-transit unitをsource / destination Fleetへ同時に計上しない。
 
@@ -719,9 +724,9 @@ Playerが明示したVehicle / Service / pathが利用不能になった場合�
 
 Fundsは組織全体のResource売買決済Stateであり、Operational Node Inventoryへ混在させない。`FundsState` は総残高だけをauthoritativeに所有し、利用可能残高はactive Buy Commitmentのreserved Fundsを控除して導出する。FundsをResearch、Construction、Maintenance、Vehicle production / operation、Transport Capacity、一般Service等のExecution Requirementに利用しない。
 
-`MarketProviderDef` はMarket identityとResourceごとのbuy / sell offer、availability / replenishment rule、必要ならlead timeを定義する。有限の現在supply / demand availabilityとそのreplenishmentに必要な可変値は `MarketProviderState` がauthoritativeに所有する。Player世界との物理接続はOperational Node上の `MarketInterfaceState` が所有し、Provider能力を他Nodeへ自動的に拡張しない。
+`MarketProviderDef` はMarket identityとResourceごとのbuy / sell offer価格、有限availabilityのreplenishment rule、必要ならlead timeを定義する。現段階ではoffer価格はDefinition-backedな固定条件とし、`MarketProviderState` は内生的な価格Stateを持たない。有限の現在supply / demand availabilityと、決定論的なrate / interval等のreplenishmentに必要な可変値を `MarketProviderState` がauthoritativeに所有する。Player世界との物理接続はOperational Node上の `MarketInterfaceState` が所有し、Provider能力を他Nodeへ自動的に拡張しない。
 
-`TradeOrderState` はdirection、resource、Market Interface、Activity Priority、price conditionと、`QUANTITY` / `RATE` のcontrol modeを持つ。QUANTITYはtarget quantity、RATEはtarget rateだけをauthoritative targetとし、両方を同時正本にしない。Buyのprice conditionはmaximum buy price、Sellはminimum sell priceとして評価し、条件外offerでは新規commit / settlementを行わない。Order Stateはsettled quantityと未手配・in-flight / presented量を区別できる進捗を持つ。Buyの予約は別の `BuyCommitmentState` がorder_id、resource、unsettled committed quantity、commit時buy価格、reserved Funds、reserved provider supplyをauthoritativeに所有する。同じ予約量をTradeOrderState、MarketProviderState、FundsStateへ重複保存しない。利用可能Fundsとprovider supplyはactive Buy Commitmentを控除して導出する。
+`TradeOrderState` はdirection、resource、Market Interface、Activity Priority、price conditionと、`QUANTITY` / `RATE` のcontrol modeを持つ。QUANTITYはtarget quantity、RATEはtarget rateだけをauthoritative targetとし、両方を同時正本にしない。QUANTITYの未達量はremaining targetとして次tick以降へ保持する。RATEは各tickの現在throughput目標であり、そのtickの未達量を翌tickへbacklogとして加算しない。Buyのprice conditionはmaximum buy price、Sellはminimum sell priceとして評価し、条件外offerでは新規commit / settlementを行わない。Order Stateはsettled quantityと未手配・in-flight / presented量を区別できる進捗を持つ。Buyの予約は別の `BuyCommitmentState` がorder_id、resource、unsettled committed quantity、commit時buy価格、reserved Funds、reserved provider supplyをauthoritativeに所有する。同じ予約量をTradeOrderState、MarketProviderState、FundsStateへ重複保存しない。利用可能Fundsとprovider supplyはactive Buy Commitmentを控除して導出する。
 
 Buyでは、maximum buy price条件を満たすOrderに対してFundsとprovider supplyを同じcommitment acquisitionとして競合解決し、両方が成立した量だけBuy Commitmentへ予約する。Fundsだけ、またはprovider supplyだけを片側commitしない。commit時のoffer価格をCommitmentへ固定するため、その後のOrder価格条件変更や市場価格変動は既commit lotの価格を遡及変更しない。provider lead timeが満了し、Market Interface所在Operational Nodeで必要なCargo HandlingとInventory Admissionが成立した量だけMarketからPlayer InventoryへResource ownershipを移し、そのownership transfer、対応Funds消費、commitment減少をatomicにsettleする。commit済み未settled supplyを別Orderへ二重割当せず、取消可能な未settled commitmentはFunds / provider supplyの双方を解放する。
 
@@ -930,7 +935,7 @@ Runtime Validation：
 - Research Point負値・Pool capacity処理不整合
 - Technology State / Operational Experienceの重複正本
 - Funds負値・Buy Commitmentによる予約Funds超過・Resource Market以外からのFunds増減
-- Trade OrderのQUANTITY / RATE二重target、price condition、Buy Commitmentの二重commit / 二重settlement / provider supply予約不整合
+- Trade OrderのQUANTITY / RATE二重target、RATE backlog混入、price condition、Buy Commitmentの二重commit / 二重settlement / provider supply予約不整合
 - Facility Decommissionのdangling live reference / salvage admission不整合
 - Fleet Retirementのfree-unit超過 / 排他的commitment不整合
 - 孤立Reservation / Entity参照
@@ -949,6 +954,7 @@ Runtime Validation：
 - 将来まで余裕がある高Priority Requirementが現在必要な低Priority需要を直ちに先取りしない
 - Service Capacity / Stock admission / Pool admissionが複数Domainへ二重割当されない
 - 輸送中Cargoが目的地Storageを事前予約しない
+- Cargo arrival /成熟BuyがBoundary obligation allocationで同じ有限Cargo Handling / admission constraintを競合し、使用capacityを当日通常Allocationが再利用しない
 - Cargo arrivalがBoundary settlementでadmissionされ、入庫不能分がarrival waitingに残る
 - direct handoffとStorage経由handoffでResource ownershipが一貫する
 - snapshot後に当tick中に到着・生成されたResource / CapacityやPlayer Commandが過去phaseのallocationを遡及変更しない
@@ -997,7 +1003,7 @@ Runtime Validation：
 - Market buy / sellでResource ownership transferとFunds settlementがatomicである
 - Sell executionがInterface Inventory Resourceとprovider demandを同じexecution量として競合させ、他用途とResourceを二重利用しない
 - FundsがResource Market以外のExecution Requirementへ参加しない
-- Trade OrderのQUANTITY / RATE targetが単一正本で、未手配・in-flight / presented量、Buy CommitmentのFunds / provider supplyを二重利用しない
+- Trade OrderのQUANTITY / RATE targetが単一正本で、RATE未達量を翌tickへbacklog化せず、未手配・in-flight / presented量、Buy CommitmentのFunds / provider supplyを二重利用しない
 - Buy commitmentはcommit時価格を保持し、Sellはownership transfer時点の有効offerでsettleする
 - Market Resourceが通常Cargo / Transport / Inventory Admission契約を迂回しない
 - ロケーション産業自立Analyticsが保存正本を持たず、同じResource flowからNode scopeごとに再導出できる
