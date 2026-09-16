@@ -4,7 +4,7 @@ from .application_commands import (
     ChangeTransportAllocationMode, Command, CommandResult,
     CreateTransportAllocation, DeleteTransportAllocation,
     PauseTransportAllocation, ProduceVehicle, PauseVehicleProduction, RelocateFleet,
-    ResumeVehicleProduction, ResumeTransportAllocation, SetVehicleProductionSettings,
+    RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority, ResumeVehicleProduction, ResumeTransportAllocation, SetVehicleProductionSettings,
     UpdateTransportAllocation,
 )
 from .transport.models import PathPolicy
@@ -87,6 +87,19 @@ class TransportCommandHandlerMixin:
             sim.transport.update_transport_allocation(EntityId(command.allocation_id), paused=False, day=sim.day); return CommandResult()
         if isinstance(command, DeleteTransportAllocation):
             sim.transport.delete_transport_allocation(EntityId(command.allocation_id), day=sim.day); return CommandResult()
+        if isinstance(command, RetireFleet):
+            retirement_id = sim.transport.plan_fleet_retirement(
+                DefinitionId(command.vehicle_definition_id), command.units,
+                self._require_operational_node(command.operational_node_id),
+                priority=command.priority, day=sim.day,
+            )
+            return CommandResult(str(retirement_id))
+        if isinstance(command, CancelFleetRetirement):
+            sim.transport.cancel_fleet_retirement(EntityId(command.retirement_id))
+            return CommandResult()
+        if isinstance(command, SetFleetRetirementPriority):
+            sim.transport.set_fleet_retirement_priority(EntityId(command.retirement_id), command.priority)
+            return CommandResult()
         if isinstance(command, RelocateFleet):
             relocation_id = sim.transport.relocate_fleet(
                 DefinitionId(command.vehicle_definition_id), command.units,

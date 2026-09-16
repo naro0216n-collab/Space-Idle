@@ -17,6 +17,8 @@ from .models import (
     FleetRelease,
     FleetReservation,
     FleetReservationKind,
+    FleetRetirementPhase,
+    FleetRetirementState,
     MovementEndpoint,
     MovementExecution,
     MovementExecutionKind,
@@ -145,6 +147,7 @@ def capture_transport(sim: Any) -> dict[str, Any]:
         "transport_allocation_counter": tr._transport_allocation_counter,
         "fleet_relocation_counter": tr._fleet_relocation_counter,
         "fleet_release_counter": tr._fleet_release_counter,
+        "fleet_retirement_counter": tr._fleet_retirement_counter,
         "fleet_pools": [
             {
                 "vehicle_definition_id": str(pool.vehicle_definition_id),
@@ -222,6 +225,21 @@ def capture_transport(sim: Any) -> dict[str, Any]:
             }
             for row in sorted(tr.fleet_releases.values(), key=lambda row: str(row.id))
         ],
+        "fleet_retirements": [
+            {
+                "id": str(state.id),
+                "vehicle_definition_id": str(state.vehicle_definition_id),
+                "operational_node_id": str(state.operational_node_id),
+                "units": state.units,
+                "priority": int(state.priority),
+                "progress_work": state.progress_work,
+                "phase": state.phase.value,
+                "irreversible_started": state.irreversible_started,
+                "created_day": state.created_day,
+                "salvage_wait_started_day": state.salvage_wait_started_day,
+            }
+            for state in sorted(tr.fleet_retirements.values(), key=lambda row: str(row.id))
+        ],
         "vehicle_production": {
             "counter": tr._vehicle_production_counter,
             "projects": [
@@ -243,6 +261,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
     tr._transport_allocation_counter = int(data.get("transport_allocation_counter", 0))
     tr._fleet_relocation_counter = int(data.get("fleet_relocation_counter", 0))
     tr._fleet_release_counter = int(data.get("fleet_release_counter", 0))
+    tr._fleet_retirement_counter = int(data.get("fleet_retirement_counter", 0))
     tr.fleet_pools = {
         (DefinitionId(row["vehicle_definition_id"]), SpatialNodeId(row["operational_node_id"])): FleetPool(
             DefinitionId(row["vehicle_definition_id"]), SpatialNodeId(row["operational_node_id"]), int(row["total_units"])
@@ -297,6 +316,21 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
         )
         for row in data.get("fleet_releases", [])
     }
+    tr.fleet_retirements = {
+        EntityId(row["id"]): FleetRetirementState(
+            id=EntityId(row["id"]),
+            vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
+            operational_node_id=SpatialNodeId(row["operational_node_id"]),
+            units=int(row["units"]),
+            priority=int(row["priority"]),
+            progress_work=float(row.get("progress_work", 0.0)),
+            phase=FleetRetirementPhase(row.get("phase", "committed")),
+            irreversible_started=bool(row.get("irreversible_started", False)),
+            created_day=int(row.get("created_day", 0)),
+            salvage_wait_started_day=(None if row.get("salvage_wait_started_day") is None else int(row["salvage_wait_started_day"])),
+        )
+        for row in data.get("fleet_retirements", [])
+    }
     production_data = data.get("vehicle_production", {})
     tr._vehicle_production_counter = int(production_data.get("counter", 0))
     tr.vehicle_production_projects = {
@@ -325,6 +359,8 @@ def referenced_resources(sim: Any) -> set[DefinitionId]:
     for vehicle in sim.transport.vehicle_defs.values():
         result.update(resource_id for resource_id, _amount in vehicle.maintenance.resources)
         result.update(resource_id for resource_id, _amount in vehicle.production.resources)
+        result.update(resource_id for resource_id, _amount in vehicle.retirement.resources_per_unit)
+        result.update(resource_id for resource_id, _amount in vehicle.retirement.recovery_resources_per_unit)
     return result
 
 
@@ -450,6 +486,16 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(vehicle.production.days >= 0, f"negative vehicle production time: {vehicle_id}")
         _require(all(amount >= 0 for _resource, amount in vehicle.production.resources), f"negative vehicle production resource: {vehicle_id}")
         _validate_unique_resources(vehicle.production.resources, f"production:{vehicle_id}")
+        retirement = vehicle.retirement
+        _require(retirement.work_days_per_unit >= 0, f"negative vehicle retirement work: {vehicle_id}")
+        _require(all(amount >= 0 for _resource, amount in retirement.resources_per_unit), f"negative vehicle retirement resource: {vehicle_id}")
+        _require(all(amount >= 0 for _resource, amount in retirement.recovery_resources_per_unit), f"negative vehicle retirement recovery: {vehicle_id}")
+        _validate_unique_resources(retirement.resources_per_unit, f"retirement:{vehicle_id}")
+        _validate_unique_resources(retirement.recovery_resources_per_unit, f"retirement_recovery:{vehicle_id}")
+        if retirement.enabled:
+            _require(retirement.service_type is not None, f"vehicle retirement requires a service type: {vehicle_id}")
+            _require(retirement.service_type in known_service_types, f"vehicle retirement references unknown service type: {vehicle_id}/{retirement.service_type}")
+            _validate_site_requirements(retirement.site_requirements, known_capabilities, f"vehicle_retirement:{vehicle_id}", known_service_types)
         if vehicle.maintenance.service_type is not None:
             _require(
                 vehicle.maintenance.service_type in known_service_types,
@@ -495,6 +541,14 @@ def validate_transport_runtime(sim: Any) -> None:
                 reservation.operational_node_id == allocation.anchor_node_id,
                 f"transport fleet reservation location mismatch: {reservation_id}/{allocation.id}",
             )
+        if reservation.kind is FleetReservationKind.RETIREMENT:
+            state = tr.fleet_retirements.get(reservation.owner_id)
+            _require(state is not None, f"retirement fleet reservation references unknown retirement: {reservation_id}/{reservation.owner_id}")
+            if state is not None:
+                _require(reservation_id == tr._retirement_reservation_id(state.id), f"retirement fleet reservation id mismatch: {reservation_id}/{state.id}")
+                _require(reservation.vehicle_definition_id == state.vehicle_definition_id, f"retirement fleet reservation vehicle mismatch: {reservation_id}/{state.id}")
+                _require(reservation.operational_node_id == state.operational_node_id, f"retirement fleet reservation location mismatch: {reservation_id}/{state.id}")
+                _require(reservation.units == state.units, f"retirement fleet reservation unit mismatch: {reservation_id}/{state.id}")
     for allocation_id, allocation in tr.transport_allocations.items():
         _require(allocation_id == allocation.id, f"transport allocation key mismatch: {allocation_id}")
         _require(allocation.vehicle_definition_id in tr.vehicle_defs, f"transport allocation references unknown vehicle definition: {allocation_id}")
@@ -541,6 +595,25 @@ def validate_transport_runtime(sim: Any) -> None:
         _require(release.vehicle_definition_id in tr.vehicle_defs, f"fleet release references unknown vehicle definition: {release_id}")
         _require(sim.graph.has_operational_node(release.operational_node_id), f"fleet release references unknown location: {release_id}")
         _require(release.units > 0, f"fleet release has non-positive units: {release_id}")
+    for retirement_id, state in tr.fleet_retirements.items():
+        _require(retirement_id == state.id, f"fleet retirement state key mismatch: {retirement_id}")
+        _require(state.vehicle_definition_id in tr.vehicle_defs, f"fleet retirement references unknown vehicle definition: {retirement_id}")
+        _require(sim.graph.has_operational_node(state.operational_node_id), f"fleet retirement references unknown location: {retirement_id}")
+        _require(state.units > 0, f"fleet retirement has non-positive units: {retirement_id}")
+        definition = tr.vehicle_defs[state.vehicle_definition_id]
+        total_work = definition.retirement.work_days_per_unit * state.units
+        _require(state.progress_work >= -1e-9 and state.progress_work <= total_work + 1e-9, f"fleet retirement progress outside work requirement: {retirement_id}")
+        reservation = tr.fleet_reservations.get(tr._retirement_reservation_id(retirement_id))
+        if state.phase in {FleetRetirementPhase.COMMITTED, FleetRetirementPhase.DISMANTLING}:
+            _require(reservation is not None, f"active fleet retirement missing reservation: {retirement_id}")
+        else:
+            _require(reservation is None, f"inactive fleet retirement retains reservation: {retirement_id}")
+        if state.irreversible_started:
+            _require(state.phase is not FleetRetirementPhase.COMMITTED, f"irreversible fleet retirement remains committed: {retirement_id}")
+        if state.phase is FleetRetirementPhase.DISMANTLING:
+            _require(state.irreversible_started, f"dismantling retirement is reversible: {retirement_id}")
+        if state.salvage_wait_started_day is not None:
+            _require(state.progress_work + 1e-9 >= total_work, f"fleet retirement waits for salvage before work completion: {retirement_id}")
     for project_id, state in tr.vehicle_production_projects.items():
         _require(project_id == state.id, f"vehicle production state key mismatch: {project_id}")
         _require(state.vehicle_definition_id in tr.vehicle_defs, f"vehicle production references unknown definition: {project_id}")

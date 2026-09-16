@@ -4,7 +4,7 @@ from .application_transport_support import infrastructure_requirement_rows
 from .application_views import (
     CargoFlowRow, CargoFlowsView, DirectionalCapacityRow, FleetPoolRow,
     FleetRelocationPreviewView, FleetRelocationResourceRequirementRow,
-    FleetRelocationRow, FleetReleaseRow, FleetView, TransportAllocationRow,
+    FleetRelocationRow, FleetReleaseRow, FleetRetirementRow, FleetView, TransportAllocationRow,
     TransportAllocationsView, VehicleProductionOptionRow, VehicleProductionRow,
 )
 from .transport.models import PathPolicy
@@ -57,6 +57,7 @@ class LogisticsStateProjectorMixin:
                     snapshot.free_units,
                     snapshot.transport_units,
                     snapshot.exploration_units,
+                    snapshot.retirement_units,
                     snapshot.other_reserved_units,
                     snapshot.relocating_units,
                     snapshot.releasing_units,
@@ -270,6 +271,39 @@ class LogisticsStateProjectorMixin:
             )
         return tuple(rows)
 
+    def _fleet_retirement_rows(
+        self,
+        *,
+        location_id: str | None = None,
+        vehicle_definition_id: str | None = None,
+    ) -> tuple[FleetRetirementRow, ...]:
+        sim = self._simulation
+        rows: list[FleetRetirementRow] = []
+        for state in sim.transport.fleet_retirement_snapshots():
+            if location_id is not None and str(state.operational_node_id) != location_id:
+                continue
+            if vehicle_definition_id is not None and str(state.vehicle_definition_id) != vehicle_definition_id:
+                continue
+            definition = self._vehicle_definition(state.vehicle_definition_id)
+            rows.append(FleetRetirementRow(
+                id=str(state.id),
+                vehicle_definition_id=str(state.vehicle_definition_id),
+                display_name=definition.display_name,
+                operational_node_id=str(state.operational_node_id),
+                units=state.units,
+                phase=state.phase.value,
+                irreversible_started=state.irreversible_started,
+                progress_work=state.progress_work,
+                required_work=definition.retirement.work_days_per_unit * state.units,
+                priority=state.priority,
+                expected_salvage=tuple(
+                    (str(resource_id), amount * state.units)
+                    for resource_id, amount in definition.retirement.recovery_resources_per_unit
+                ),
+                blockers=sim.transport.fleet_retirement_blockers(state.id, day=sim.day),
+            ))
+        return tuple(rows)
+
     def _fleet_view(self, query) -> FleetView:
         return FleetView(
             self._fleet_pool_rows(
@@ -281,6 +315,10 @@ class LogisticsStateProjectorMixin:
                 vehicle_definition_id=query.vehicle_definition_id,
             ),
             self._fleet_release_rows(
+                location_id=query.operational_node_id,
+                vehicle_definition_id=query.vehicle_definition_id,
+            ),
+            self._fleet_retirement_rows(
                 location_id=query.operational_node_id,
                 vehicle_definition_id=query.vehicle_definition_id,
             ),

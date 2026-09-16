@@ -80,6 +80,25 @@ class DeleteTransportAllocation:
 
 
 @dataclass(frozen=True)
+class RetireFleet:
+    vehicle_definition_id: str
+    units: int
+    operational_node_id: str
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+
+
+@dataclass(frozen=True)
+class CancelFleetRetirement:
+    retirement_id: str
+
+
+@dataclass(frozen=True)
+class SetFleetRetirementPriority:
+    retirement_id: str
+    priority: ActivityPriority
+
+
+@dataclass(frozen=True)
 class RelocateFleet:
     vehicle_definition_id: str
     units: int

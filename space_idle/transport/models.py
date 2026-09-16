@@ -46,6 +46,7 @@ class FleetReservationKind(str, Enum):
     TRANSPORT = "transport"
     SCIENTIFIC_EXPLORATION = "scientific_exploration"
     SPECIAL_MISSION = "special_mission"
+    RETIREMENT = "retirement"
     OTHER = "other"
 
 
@@ -78,6 +79,7 @@ class FleetPoolSnapshot:
     free_units: int
     transport_units: int
     exploration_units: int
+    retirement_units: int
     other_reserved_units: int
     relocating_units: int
     releasing_units: int
@@ -723,6 +725,55 @@ class VehicleProductionSpec:
     site_requirements: SiteRequirements = SiteRequirements()
 
 
+class FleetRetirementPhase(str, Enum):
+    COMMITTED = "committed"
+    DISMANTLING = "dismantling"
+    COMPLETE = "complete"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class VehicleRetirementSpec:
+    service_type: str | None = None
+    work_days_per_unit: float = 0.0
+    resources_per_unit: tuple[tuple[DefinitionId, float], ...] = ()
+    recovery_resources_per_unit: tuple[tuple[DefinitionId, float], ...] = ()
+    site_requirements: SiteRequirements = SiteRequirements()
+
+    @property
+    def enabled(self) -> bool:
+        return self.work_days_per_unit > 0.0
+
+    def __post_init__(self) -> None:
+        if self.work_days_per_unit < 0:
+            raise ValueError("retirement work must be non-negative")
+        if any(amount < 0 for _resource_id, amount in self.resources_per_unit):
+            raise ValueError("retirement resource requirements must be non-negative")
+        if any(amount < 0 for _resource_id, amount in self.recovery_resources_per_unit):
+            raise ValueError("retirement recovery resources must be non-negative")
+
+
+@dataclass
+class FleetRetirementState:
+    id: EntityId
+    vehicle_definition_id: DefinitionId
+    operational_node_id: SpatialNodeId
+    units: int
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+    progress_work: float = 0.0
+    phase: FleetRetirementPhase = FleetRetirementPhase.COMMITTED
+    irreversible_started: bool = False
+    created_day: int = 0
+    salvage_wait_started_day: int | None = None
+
+    def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
+        if self.units <= 0:
+            raise ValueError("retirement units must be positive")
+        if self.progress_work < 0:
+            raise ValueError("retirement progress must be non-negative")
+
+
 @dataclass(frozen=True)
 class VehicleMaintenanceSpec:
     service_type: str | None = None
@@ -736,6 +787,7 @@ class VehicleDef:
     display_name: str
     performance: TransportPerformanceProfile
     production: VehicleProductionSpec = VehicleProductionSpec()
+    retirement: VehicleRetirementSpec = VehicleRetirementSpec()
     maintenance: VehicleMaintenanceSpec = VehicleMaintenanceSpec()
 
     @property

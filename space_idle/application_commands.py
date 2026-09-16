@@ -20,7 +20,7 @@ from .app_contracts.transport import (
     ProduceVehicle, PauseVehicleProduction, ResumeVehicleProduction,
     SetVehicleProductionSettings, CreateTransportAllocation, UpdateTransportAllocation,
     ChangeTransportAllocationMode, PauseTransportAllocation, ResumeTransportAllocation,
-    DeleteTransportAllocation, RelocateFleet,
+    DeleteTransportAllocation, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
 )
 from .app_contracts.logistics import (
     SetTargetStock, DeleteTargetStock, SetSupplyPolicy, DeleteSupplyPolicy,
@@ -47,6 +47,7 @@ Command: TypeAlias = (
     ProduceVehicle | PauseVehicleProduction | ResumeVehicleProduction | SetVehicleProductionSettings |
     CreateTransportAllocation | UpdateTransportAllocation | ChangeTransportAllocationMode |
     PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |
+    RetireFleet | CancelFleetRetirement | SetFleetRetirementPriority |
     SetTargetStock | DeleteTargetStock | SetSupplyPolicy | DeleteSupplyPolicy | AcceptContract |
     DeclineContract | CreateTradeOrder | UpdateTradeOrder | CancelTradeOrder | AdvanceTime
 )

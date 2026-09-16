@@ -74,6 +74,7 @@ class FleetPoolRow:
     free_units: int
     transport_units: int
     exploration_units: int
+    retirement_units: int
     other_reserved_units: int
     relocating_units: int
     releasing_units: int
@@ -132,6 +133,22 @@ class FleetReleaseRow:
     units: int
     release_day: int
     remaining_days: int
+
+
+@dataclass(frozen=True)
+class FleetRetirementRow:
+    id: str
+    vehicle_definition_id: str
+    display_name: str
+    operational_node_id: str
+    units: int
+    phase: str
+    irreversible_started: bool
+    progress_work: float
+    required_work: float
+    priority: ActivityPriority
+    expected_salvage: tuple[tuple[str, float], ...]
+    blockers: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -248,6 +265,7 @@ class LogisticsView:
     fleet_pools: tuple[FleetPoolRow, ...]
     relocations: tuple[FleetRelocationRow, ...]
     releases: tuple[FleetReleaseRow, ...]
+    retirements: tuple[FleetRetirementRow, ...]
     allocations: tuple[TransportAllocationRow, ...]
     vehicle_production_options: tuple[VehicleProductionOptionRow, ...]
     vehicle_production: tuple[VehicleProductionRow, ...]

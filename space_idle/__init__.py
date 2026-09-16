@@ -13,7 +13,7 @@ from .application import (
     GetScientificExplorations, GetSurveys, GetTransportAllocations, GetTransportAllocationOptions,
     GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseResearch,
     PauseScientificExploration, PauseSurvey, PauseTransportAllocation,
-    PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, FoundLocation, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet,
+    PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, FoundLocation, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
     ResumeBuild, ResumeFacility, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
     ResumeVehicleProduction, SetFacilityProcess,

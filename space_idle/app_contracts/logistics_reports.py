@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from .logistics_views import (
     CargoFlowRow, FleetPoolRow, FleetRelocationResourceRequirementRow,
-    FleetRelocationRow, FleetReleaseRow, InfrastructureRequirementRow,
+    FleetRelocationRow, FleetReleaseRow, FleetRetirementRow, InfrastructureRequirementRow,
     SupplyRequirementRow, MovementPlanRow, TransportAllocationRow,
 )
 
@@ -34,6 +34,7 @@ class FleetView:
     pools: tuple[FleetPoolRow, ...]
     relocations: tuple[FleetRelocationRow, ...]
     releases: tuple[FleetReleaseRow, ...]
+    retirements: tuple[FleetRetirementRow, ...]
 
 
 @dataclass(frozen=True)

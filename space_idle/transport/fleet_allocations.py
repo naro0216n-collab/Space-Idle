@@ -221,13 +221,21 @@ class FleetAllocationMixin:
             and reservation.operational_node_id == location_id
             and reservation.kind is FleetReservationKind.SCIENTIFIC_EXPLORATION
         )
+        retirement_units = sum(
+            reservation.units
+            for reservation in self.fleet_reservations.values()
+            if reservation.vehicle_definition_id == vehicle_definition_id
+            and reservation.operational_node_id == location_id
+            and reservation.kind is FleetReservationKind.RETIREMENT
+        )
         reserved_units = self._reserved_units_at(vehicle_definition_id, location_id)
         relocating_units = self._relocating_units_from(vehicle_definition_id, location_id)
         releasing_units = self._releasing_units_at(vehicle_definition_id, location_id)
         return FleetPoolSnapshot(
             vehicle_definition_id, location_id, total_units,
             self.fleet_free_units(vehicle_definition_id, location_id),
-            transport_units, exploration_units, max(0, reserved_units - transport_units - exploration_units),
+            transport_units, exploration_units, retirement_units,
+            max(0, reserved_units - transport_units - exploration_units - retirement_units),
             relocating_units, releasing_units,
         )
 

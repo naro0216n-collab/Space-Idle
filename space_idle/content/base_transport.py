@@ -16,6 +16,7 @@ from ..transport import (
     OperationAssetDisposition,
     VehicleMaintenanceSpec,
     VehicleProductionSpec,
+    VehicleRetirementSpec,
 )
 from ..transport.movement import SpaceflightMovementRule, SurfaceAccessMovementRule, SurfaceTransportMovementRule
 from . import base_ids as ids
@@ -103,6 +104,10 @@ def build_vehicle_definitions() -> dict:
                 service_type="vehicle_assembly", days=10.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 20.0), (ids.MACHINERY, 8.0), (ids.PRECISION_ELECTRONICS, 2.0)),
             ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=5.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 10.0), (ids.MACHINERY, 4.0), (ids.PRECISION_ELECTRONICS, 1.0)),
+            ),
             maintenance=VehicleMaintenanceSpec(service_type="launch_vehicle_servicing", turnaround_days=5.0),
         ),
         ids.REUSABLE_ORBITAL_CARGO_TUG: VehicleDef(
@@ -121,6 +126,10 @@ def build_vehicle_definitions() -> dict:
                 service_type="vehicle_assembly", days=4.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 4.0), (ids.MACHINERY, 2.0), (ids.PRECISION_ELECTRONICS, 1.0)),
             ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=2.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 2.0), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.5)),
+            ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
         ),
         ids.SURFACE_CARGO_HAULER: VehicleDef(
@@ -134,6 +143,10 @@ def build_vehicle_definitions() -> dict:
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=2.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 1.5), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.25)),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=1.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 0.75), (ids.MACHINERY, 0.5), (ids.PRECISION_ELECTRONICS, 0.125)),
             ),
             maintenance=VehicleMaintenanceSpec(turnaround_days=0.25),
         ),
@@ -152,6 +165,10 @@ def build_vehicle_definitions() -> dict:
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=3.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 2.5), (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 0.8)),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=1.5,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 1.25), (ids.MACHINERY, 0.75), (ids.PRECISION_ELECTRONICS, 0.4)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
         ),

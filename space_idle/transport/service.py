@@ -22,6 +22,8 @@ from .models import (
 )
 from .operations import OperationEvaluatorRegistry, build_default_operation_registry
 from .production import VehicleProductionMixin, VehicleProductionState
+from .retirement import FleetRetirementMixin
+from .models import FleetRetirementState
 from .movement import MovementResolver, SpaceflightMovementRule, SurfaceAccessMovementRule, SurfaceTransportMovementRule
 from .supply import TransportSupplyMixin
 
@@ -31,6 +33,7 @@ class TransportService(
     TransportCompatibilityMixin,
     MovementExecutionMixin,
     FleetAllocationMixin,
+    FleetRetirementMixin,
     VehicleProductionMixin,
     TransportSupplyMixin,
 ):
@@ -59,10 +62,12 @@ class TransportService(
     fleet_releases: dict[EntityId, FleetRelease] = field(default_factory=dict)
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     vehicle_production_projects: dict[EntityId, VehicleProductionState] = field(default_factory=dict)
+    fleet_retirements: dict[EntityId, FleetRetirementState] = field(default_factory=dict)
     _transport_allocation_counter: int = 0
     _fleet_relocation_counter: int = 0
     _fleet_release_counter: int = 0
     _vehicle_production_counter: int = 0
+    _fleet_retirement_counter: int = 0
 
     @property
     def unlocked_technologies(self) -> set[DefinitionId]:

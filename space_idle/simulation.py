@@ -371,6 +371,7 @@ class Simulation:
                 self.scientific_exploration.reservation_acquisition_requirements(self.day)
             )
             rows.extend(self.scientific_exploration.execution_requirement_bundles(self.day))
+        rows.extend(self.transport.fleet_retirement_execution_requirement_bundles(self.day))
         rows.extend(self.market.sell_execution_bundles())
         rows = [
             self._with_organization_service_envelopes(row)
@@ -1450,6 +1451,7 @@ class Simulation:
         self.transport.advance_vehicle_production_day(
             powers, allocations.resources, allocations.services, self.day
         )
+        self.transport.advance_fleet_retirements(allocations.execution, self.day)
         self.projects.finalize_procurement(allocations.execution, self.day)
         self.projects.advance_construction(powers, allocations.execution, self.day)
         if self.founding is not None:
