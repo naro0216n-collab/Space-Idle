@@ -31,19 +31,24 @@ class AllocationConstraintKey:
 class ResourceRequirement:
     resource_id: DefinitionId
     amount_per_execution: float
+    constraint_node_id: SpatialNodeId | None = None
 
     def __post_init__(self) -> None:
         if self.amount_per_execution < -_EPS:
             raise ValueError("resource requirement must be non-negative")
 
+    def constraint_node(self, operational_node_id: SpatialNodeId) -> SpatialNodeId:
+        return operational_node_id if self.constraint_node_id is None else self.constraint_node_id
+
     def constraint_key(self, operational_node_id: SpatialNodeId) -> AllocationConstraintKey:
-        return resource_constraint(operational_node_id, self.resource_id)
+        return resource_constraint(self.constraint_node(operational_node_id), self.resource_id)
 
 
 @dataclass(frozen=True)
 class ServiceCapacityRequirement:
     service_type: str
     amount_per_execution: float
+    constraint_node_id: SpatialNodeId | None = None
 
     def __post_init__(self) -> None:
         if not self.service_type:
@@ -51,8 +56,11 @@ class ServiceCapacityRequirement:
         if self.amount_per_execution < -_EPS:
             raise ValueError("service requirement must be non-negative")
 
+    def constraint_node(self, operational_node_id: SpatialNodeId) -> SpatialNodeId:
+        return operational_node_id if self.constraint_node_id is None else self.constraint_node_id
+
     def constraint_key(self, operational_node_id: SpatialNodeId) -> AllocationConstraintKey:
-        return service_constraint(operational_node_id, self.service_type)
+        return service_constraint(self.constraint_node(operational_node_id), self.service_type)
 
 
 @dataclass(frozen=True)

@@ -13,21 +13,9 @@ from space_idle.content.base_game import (
 )
 
 
-from space_idle.resource_claim import allocate_resource_claims
 from space_idle.supply import SupplyRequirement
 from space_idle.shared import EntityId
-
-
-
-
-def _transport_service_allocations(sim, day, plan):
-    requests = sim.transport.transport_service_capacity_requests(day, plan.planned_usage)
-    locations = sim._active_locations() | set(sim.graph.operational_node_ids())
-    powers = {
-        location_id: sim.power.snapshot(location_id, sim.facilities, day)
-        for location_id in locations
-    }
-    return sim._allocate_tick_services(powers, requests)
+from tests._logistics_support import resolve_authorized_logistics
 
 def test_time_progression_has_no_automatic_income():
     app = build_game_application()
@@ -50,10 +38,8 @@ def test_owned_transport_is_physical_while_external_transport_requires_policy_an
         raw = sim.logistics.plan_capacity_logistics(sim.day, (demand(),))
         funds = sim.external_economy.allocate(raw.spending_requests, sim.day)
         plan = sim.logistics.authorize_capacity_logistics(raw, funds, sim.day)
-        resources = allocate_resource_claims(plan.claims, sim.inventory)
-        services = _transport_service_allocations(sim, sim.day, plan)
-        execution = sim.logistics.allocate_capacity_logistics_execution(
-            sim.day, plan, resources, services
+        _shared, execution, _resources, _services = resolve_authorized_logistics(
+            sim, sim.day, plan
         )
         sim.logistics.advance_capacity_logistics(
             sim.day, plan, funds, execution,

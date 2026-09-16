@@ -10,6 +10,7 @@ from space_idle.shared import EntityId, MovementPlanId
 from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
 from space_idle.validation import validate_runtime_state
 from space_idle.validation_support import ConfigurationError
+from tests._logistics_support import resolve_authorized_logistics
 from space_idle.transport.models import (
     DirectionalCapacity,
     FleetReservationKind,
@@ -28,14 +29,11 @@ def _fleet_sim(count: int = 5):
 
 
 
-def _transport_service_allocations(sim, day, plan):
-    requests = sim.transport.transport_service_capacity_requests(day, plan.planned_usage)
-    locations = sim._active_locations() | set(sim.graph.operational_node_ids())
-    powers = {
-        location_id: sim.power.snapshot(location_id, sim.facilities, day)
-        for location_id in locations
-    }
-    return sim._allocate_tick_services(powers, requests)
+def _resolve_capacity_logistics(sim, day, plan):
+    shared, execution, _resources, _services = resolve_authorized_logistics(
+        sim, day, plan
+    )
+    return shared, execution
 
 
 
@@ -404,7 +402,6 @@ def test_relocation_plan_is_the_execution_contract_for_time_and_resources():
 
 
 def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
-    from space_idle.resource_claim import allocate_resource_claims
     from space_idle.supply import SupplyRequirement
 
     sim = _fleet_sim(1)
@@ -444,11 +441,7 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     plan = sim.logistics.plan_capacity_logistics(0, (demand,))
     funds = sim.external_economy.allocate(plan.spending_requests, 0)
     plan = sim.logistics.authorize_capacity_logistics(plan, funds, 0)
-    allocations = allocate_resource_claims(plan.claims, sim.inventory)
-    services = _transport_service_allocations(sim, 0, plan)
-    execution = sim.logistics.allocate_capacity_logistics_execution(
-        0, plan, allocations, services
-    )
+    _shared, execution = _resolve_capacity_logistics(sim, 0, plan)
     sim.logistics.advance_capacity_logistics(
         0, plan, funds, execution
     )
@@ -806,7 +799,6 @@ def test_bidirectional_service_resource_use_counts_empty_return_not_loaded_retur
 
 
 def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_utilization():
-    from space_idle.resource_claim import allocate_resource_claims
     from space_idle.supply import SupplyRequirement
 
     sim = _fleet_sim(1)
@@ -852,10 +844,11 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
     raw = sim.logistics.plan_capacity_logistics(0, (demand,))
     funds = sim.external_economy.allocate(raw.spending_requests, 0)
     logistics_plan = sim.logistics.authorize_capacity_logistics(raw, funds, 0)
-    resources = allocate_resource_claims(logistics_plan.claims, sim.inventory)
-    services = _transport_service_allocations(sim, 0, logistics_plan)
-    execution = sim.logistics.allocate_capacity_logistics_execution(
-        0, logistics_plan, resources, services
+    shared, execution, resource_projection, _services = resolve_authorized_logistics(
+        sim, 0, logistics_plan
+    )
+    dispatch = next(
+        row for row in logistics_plan.dispatches if row.requirement.id == demand.id
     )
     available = sim.logistics.current_transport_capacity_snapshot(
         allocation_id,
@@ -869,6 +862,11 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
         value.startswith("resource_allocation:")
         for value in available.limiting_factors
     )
+    assert shared.allocated(dispatch.cargo_claim_id) == pytest.approx(cargo_amount / 2.0)
+    assert resource_projection.allocated(dispatch.cargo_claim_id) == pytest.approx(
+        cargo_amount / 2.0
+    )
+    assert execution.executable_dispatches[0][1] == pytest.approx(cargo_amount / 2.0)
 
     used = DirectionalCapacity(available.available.forward_t_per_day, 0.0)
     snapshot = lg.transport_capacity_snapshot(allocation_id, day=0, used=used)

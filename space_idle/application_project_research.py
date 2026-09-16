@@ -84,7 +84,7 @@ class ResearchProgressionProjectorMixin:
         sim = self._simulation
         if sim.research is None:
             return ResearchView(0.0, 0.0, 0.0, False, (), (), ())
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         power_by_location = decision.allocations.power_by_location
         generation = sim.research.generation_rate(power_by_location, sim.day)
         capacity = sim.research.storage_capacity(power_by_location, sim.day)

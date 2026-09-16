@@ -9,10 +9,9 @@ from space_idle.composition.base_simulation import build_base_simulation
 from space_idle.content import base_ids as ids
 from space_idle.external_procurement import ExternalSupplyStatus
 from space_idle.persistence import load_game, save_game
-from space_idle.resource_claim import allocate_resource_claims
 from space_idle.supply import SupplyRequirement
-from space_idle.service_capacity import ServiceCapacityAllocationPlan
 from space_idle.shared import EntityId
+from tests._logistics_support import resolve_authorized_logistics
 
 
 def _demand(*, destination=ids.EARTH, amount=4.0, source=None) -> SupplyRequirement:
@@ -201,10 +200,8 @@ def test_remote_procurement_replenishes_logistics_source_without_bypassing_trans
     assert order.supply_node_id == ids.EARTH
     assert order.supply_node_id != demand.destination_id
 
-    resources = allocate_resource_claims(logistics.claims, sim.inventory)
-    no_services = ServiceCapacityAllocationPlan((), (), {}, {}, {})
-    transport = sim.logistics.allocate_capacity_logistics_execution(
-        sim.day, logistics, resources, no_services
+    _shared, transport, _resources, _services = resolve_authorized_logistics(
+        sim, sim.day, logistics
     )
     assert transport.executable_dispatches == ()
     sim.logistics.advance_external_procurement(sim.day, procurement, funds)
@@ -224,18 +221,8 @@ def test_remote_procurement_replenishes_logistics_source_without_bypassing_trans
     authorized = sim.logistics.authorize_capacity_logistics(
         raw, dispatch_funds, dispatch_day
     )
-    resources = allocate_resource_claims(authorized.claims, sim.inventory)
-    locations = sim._active_locations() | set(sim.graph.operational_node_ids())
-    powers = {
-        location_id: sim.power.snapshot(location_id, sim.facilities, dispatch_day)
-        for location_id in locations
-    }
-    service_requests = sim.transport.transport_service_capacity_requests(
-        dispatch_day, authorized.planned_usage
-    )
-    services = sim._allocate_tick_services(powers, service_requests)
-    execution = sim.logistics.allocate_capacity_logistics_execution(
-        dispatch_day, authorized, resources, services
+    _shared, execution, _resources, _services = resolve_authorized_logistics(
+        sim, dispatch_day, authorized
     )
     assert execution.executable_dispatches
     sim.logistics.advance_capacity_logistics(
@@ -285,7 +272,7 @@ def test_explicit_source_demand_is_not_replaced_by_destination_procurement():
     plan = sim.logistics.plan_external_procurement(
         sim.day,
         (demand,),
-        LogisticsResourcePlan((), (), (), ()),
+        LogisticsResourcePlan((), (), ()),
     )
     assert plan.orders == ()
 

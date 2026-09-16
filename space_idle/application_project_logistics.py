@@ -13,7 +13,7 @@ class LogisticsProjectorMixin(
 ):
     def _logistics_view(self) -> LogisticsView:
         sim = self._simulation
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         return LogisticsView(
             movement_plans=self._movement_plan_rows(),
             fleet_pools=self._fleet_pool_rows(),
@@ -38,7 +38,7 @@ class LogisticsProjectorMixin(
         pools = self._fleet_pool_rows()
         allocations = self._transport_allocation_rows()
         flows = self._cargo_flow_rows()
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         requirement_rows = self._requirement_rows(
             execution_allocation=decision.allocations.transport,
             resolutions=decision.plan.requirement_resolutions,

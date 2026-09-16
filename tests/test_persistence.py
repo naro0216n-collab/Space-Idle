@@ -38,11 +38,11 @@ from space_idle.content.base_game import (
 )
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
-from space_idle.resource_claim import allocate_resource_claims
 from space_idle.supply import SupplyRequirement
 from space_idle.shared import EntityId, CelestialBodyId, DefinitionId
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
+from tests._logistics_support import resolve_authorized_logistics
 
 
 def _advance_until_research_startable(app, research_id, max_days=2000):
@@ -88,15 +88,6 @@ def _make_nontrivial_state():
     return app
 
 
-
-def _transport_service_allocations(sim, day, plan):
-    requests = sim.transport.transport_service_capacity_requests(day, plan.planned_usage)
-    locations = sim._active_locations() | set(sim.graph.operational_node_ids())
-    powers = {
-        location_id: sim.power.snapshot(location_id, sim.facilities, day)
-        for location_id in locations
-    }
-    return sim._allocate_tick_services(powers, requests)
 
 def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
     app = _make_nontrivial_state()
@@ -211,10 +202,8 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
     logistics_plan = sim.logistics.authorize_capacity_logistics(
         logistics_plan, funds, sim.day
     )
-    resources = allocate_resource_claims(logistics_plan.claims, sim.inventory)
-    services = _transport_service_allocations(sim, sim.day, logistics_plan)
-    execution = sim.logistics.allocate_capacity_logistics_execution(
-        sim.day, logistics_plan, resources, services
+    _shared, execution, _resources, _services = resolve_authorized_logistics(
+        sim, sim.day, logistics_plan
     )
     sim.logistics.advance_capacity_logistics(
         sim.day, logistics_plan, funds, execution,
@@ -384,10 +373,8 @@ def test_save_load_preserves_unloaded_handoff_reservation_ownership(tmp_path):
     plan = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
     funds = sim.external_economy.allocate(plan.spending_requests, sim.day)
     plan = sim.logistics.authorize_capacity_logistics(plan, funds, sim.day)
-    resources = allocate_resource_claims(plan.claims, sim.inventory)
-    services = _transport_service_allocations(sim, sim.day, plan)
-    execution = sim.logistics.allocate_capacity_logistics_execution(
-        sim.day, plan, resources, services
+    _shared, execution, _resources, _services = resolve_authorized_logistics(
+        sim, sim.day, plan
     )
     sim.logistics.advance_capacity_logistics(sim.day, plan, funds, execution)
     first = next(

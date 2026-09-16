@@ -2,10 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import heapq
+from typing import Mapping
 
 from .external_economy import FundsAllocationPlan, FundsRequest
+from .execution_requirements import (
+    AllocationConstraintKey,
+    ExecutionAllocationPlan,
+    ExecutionRequirementBundle,
+    FundsOrPoolRequirement,
+    ResourceRequirement,
+    ServiceCapacityRequirement,
+    pool_constraint,
+)
 from .knowledge import DomainActivity
-from .resource_claim import ResourceAllocationPlan, ResourceClaim
+from .resource_claim import ResourceClaim
 from .supply import SupplyRequirement
 from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
@@ -43,7 +53,6 @@ class _PlannedDispatch:
 @dataclass(frozen=True)
 class LogisticsResourcePlan:
     dispatches: tuple[_PlannedDispatch, ...]
-    claims: tuple[ResourceClaim, ...]
     planned_usage: tuple[tuple[EntityId, DirectionalCapacity], ...]
     spending_requests: tuple[FundsRequest, ...] = ()
 
@@ -67,9 +76,10 @@ class LogisticsExecutionProjection:
 class LogisticsExecutionAllocation:
     """Final same-tick Transport/Logistics allocation result.
 
-    This transient object is resolved after Funds, Resource and Service
-    allocations. Execution and Application queries consume this same result;
-    neither may reinterpret upstream scarcity independently.
+    Cargo quantity is already fixed by the common Execution Requirement
+    allocation graph, including source Resource, Transport Capacity, Fleet
+    operation Resource and turnaround Service requirements.  This object only
+    freezes that result for execution and Application projection.
     """
 
     executable_dispatches: tuple[tuple[_PlannedDispatch, float], ...]
@@ -113,6 +123,445 @@ class LogisticsFlowMixin:
         return tuple(rows)
 
     @staticmethod
+    def _transport_capacity_pool_id(edge: TransportServiceSupply) -> str:
+        if edge.external_service_id is not None:
+            return f"external:{edge.external_service_id}"
+        return edge.key
+
+    def transport_capacity_pool_capacities(
+        self,
+        day: int,
+        availability_factors: Mapping[EntityId, float] | None = None,
+    ) -> dict[AllocationConstraintKey, float]:
+        """Expose directional Transport Capacity as shared allocation pools.
+
+        ``availability_factors`` applies only to owned Transport Allocations and
+        represents upstream operation-support availability already resolved by
+        the Simulation allocation graph. External service capacity has no owned
+        Fleet operation dependency and therefore remains unchanged.
+        """
+        factors = availability_factors or {}
+        capacities: dict[AllocationConstraintKey, float] = {}
+        for edge in self._service_edges(day):
+            factor = (
+                1.0
+                if edge.allocation_id is None
+                else max(0.0, min(1.0, factors.get(edge.allocation_id, 1.0)))
+            )
+            key = pool_constraint(
+                self._transport_capacity_pool_id(edge),
+                scope_id="transport_capacity",
+            )
+            capacity = edge.capacity_t_per_day * factor
+            existing = capacities.get(key)
+            if existing is not None and abs(existing - capacity) > 1e-9:
+                raise RuntimeError(
+                    f"transport capacity pool has inconsistent edge capacity: {key}"
+                )
+            capacities[key] = capacity
+        return capacities
+
+    def _operation_reference_usage(
+        self,
+        plan: LogisticsResourcePlan,
+        reference_usage: Mapping[EntityId, DirectionalCapacity] | None,
+    ) -> dict[EntityId, DirectionalCapacity]:
+        planned = dict(plan.planned_usage)
+        if reference_usage is None:
+            return planned
+        rows = dict(reference_usage)
+        # A zero allocation still needs operation coefficients in order to test
+        # whether Cargo can start on the next solve.  The planned mix supplies a
+        # deterministic reference without reserving anything when execution is 0.
+        for allocation_id, usage in planned.items():
+            current = rows.get(allocation_id, DirectionalCapacity())
+            if (
+                current.forward_t_per_day <= 1e-12
+                and current.reverse_t_per_day <= 1e-12
+            ):
+                rows[allocation_id] = usage
+        return rows
+
+    def dispatch_execution_requirements(
+        self,
+        day: int,
+        plan: LogisticsResourcePlan,
+        reference_usage: Mapping[EntityId, DirectionalCapacity] | None = None,
+    ) -> tuple[ExecutionRequirementBundle, ...]:
+        """Convert each planned Cargo dispatch into one complete root Bundle.
+
+        Source Resource, end-to-end Transport Capacity, Fleet operational
+        Resources and turnaround Service Capacity are all requirements of the
+        same dispatched tonne.  Shared empty-cycle/turnaround load is attributed
+        between directions from ``reference_usage`` by Transport; Simulation
+        iterates that reference until it matches the allocated Cargo mix.
+        """
+        usage_reference = self._operation_reference_usage(plan, reference_usage)
+        operation_by_allocation = {
+            allocation_id: self.transport.transport_operation_usage_requirements(
+                allocation_id, day, usage
+            )
+            for allocation_id, usage in usage_reference.items()
+        }
+
+        rows: list[ExecutionRequirementBundle] = []
+        seen: set[EntityId] = set()
+        for dispatch in plan.dispatches:
+            if dispatch.cargo_claim_id in seen:
+                raise RuntimeError(
+                    "planned dispatches must have one root bundle per cargo claim"
+                )
+            seen.add(dispatch.cargo_claim_id)
+
+            resources: dict[tuple[SpatialNodeId, DefinitionId], float] = {
+                (dispatch.source_id, dispatch.requirement.resource_id): 1.0
+            }
+            services: dict[tuple[SpatialNodeId, str], float] = {}
+            edge_counts: dict[str, int] = {}
+            for edge in dispatch.path:
+                key = self._transport_capacity_pool_id(edge)
+                edge_counts[key] = edge_counts.get(key, 0) + 1
+                if edge.allocation_id is None or edge.direction is None:
+                    continue
+                operation = operation_by_allocation.get(edge.allocation_id)
+                if operation is None:
+                    raise RuntimeError(
+                        f"owned transport edge lacks operation requirements: {edge.allocation_id}"
+                    )
+                if edge.direction == "forward":
+                    resource_rows = operation.forward_resource_per_t
+                    turnaround = operation.forward_turnaround_per_t
+                else:
+                    resource_rows = operation.reverse_resource_per_t
+                    turnaround = operation.reverse_turnaround_per_t
+                for node_id, resource_id, amount in resource_rows:
+                    resource_key = (node_id, resource_id)
+                    resources[resource_key] = resources.get(resource_key, 0.0) + amount
+                if (
+                    operation.turnaround_service_type is not None
+                    and turnaround > 1e-12
+                ):
+                    service_key = (
+                        operation.turnaround_node_id,
+                        operation.turnaround_service_type,
+                    )
+                    services[service_key] = services.get(service_key, 0.0) + turnaround
+
+            requirements = [
+                *(
+                    ResourceRequirement(
+                        resource_id, amount, constraint_node_id=node_id
+                    )
+                    for (node_id, resource_id), amount in sorted(
+                        resources.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
+                    )
+                    if amount > 1e-12
+                ),
+                *(
+                    ServiceCapacityRequirement(
+                        service_type, amount, constraint_node_id=node_id
+                    )
+                    for (node_id, service_type), amount in sorted(
+                        services.items(), key=lambda row: (str(row[0][0]), row[0][1])
+                    )
+                    if amount > 1e-12
+                ),
+                *(
+                    FundsOrPoolRequirement(
+                        pool_id,
+                        float(count),
+                        scope_id="transport_capacity",
+                    )
+                    for pool_id, count in sorted(edge_counts.items())
+                ),
+            ]
+            rows.append(
+                ExecutionRequirementBundle(
+                    id=dispatch.cargo_claim_id,
+                    owner_kind="logistics_dispatch",
+                    owner_id=dispatch.requirement.owner_id,
+                    purpose=f"supply:{dispatch.requirement.id}",
+                    operational_node_id=dispatch.source_id,
+                    requested_execution=dispatch.amount_t,
+                    priority=dispatch.requirement.priority,
+                    requirements=tuple(requirements),
+                )
+            )
+        return tuple(rows)
+
+    def dispatch_usage_from_execution(
+        self, plan: LogisticsResourcePlan, execution: ExecutionAllocationPlan
+    ) -> dict[EntityId, DirectionalCapacity]:
+        """Derive owned-Fleet directional use from allocated Cargo root Bundles."""
+        used: dict[EntityId, DirectionalCapacity] = {}
+        for dispatch in plan.dispatches:
+            try:
+                amount = execution.allocated(dispatch.cargo_claim_id)
+            except KeyError:
+                amount = 0.0
+            amount = min(dispatch.amount_t, max(0.0, amount))
+            if amount <= 1e-12:
+                continue
+            used = self._allocation_used_after(used, dispatch.path, amount)
+        return used
+
+    def transport_surface_availability(
+        self,
+        day: int,
+        service_allocations: ServiceCapacityAllocationPlan,
+    ) -> tuple[dict[EntityId, float], dict[EntityId, tuple[str, ...]]]:
+        """Project location-wide surface distribution fulfillment to Fleet service."""
+        factors: dict[EntityId, float] = {}
+        limits: dict[EntityId, tuple[str, ...]] = {}
+        for dependency in self.transport.transport_operation_dependencies(day):
+            ratios: list[float] = []
+            row_limits: list[str] = []
+            for location_id in dependency.surface_service_locations:
+                request_id = EntityId(f"service.surface_distribution:{location_id}")
+                try:
+                    request = service_allocations.request(request_id)
+                    allocated = service_allocations.allocated(request_id)
+                except KeyError:
+                    request = None
+                    allocated = 0.0
+                if request is None:
+                    ratio = 0.0
+                elif request.requested_rate <= 1e-12:
+                    ratio = 1.0
+                else:
+                    ratio = max(0.0, min(1.0, allocated / request.requested_rate))
+                ratios.append(ratio)
+                if ratio < 1.0 - 1e-12:
+                    row_limits.append(f"surface_infrastructure:{location_id}")
+            factors[dependency.allocation_id] = min(ratios) if ratios else 1.0
+            limits[dependency.allocation_id] = tuple(dict.fromkeys(row_limits))
+        return factors, limits
+
+    def transport_operation_constraint_keys(
+        self,
+        day: int,
+        plan: LogisticsResourcePlan,
+        reference_usage: Mapping[EntityId, DirectionalCapacity],
+    ) -> dict[EntityId, frozenset[AllocationConstraintKey]]:
+        """Return Resource/Service constraints that physically operate each Fleet."""
+        usage_reference = self._operation_reference_usage(plan, reference_usage)
+        result: dict[EntityId, frozenset[AllocationConstraintKey]] = {}
+        for allocation_id, usage in usage_reference.items():
+            operation = self.transport.transport_operation_usage_requirements(
+                allocation_id, day, usage
+            )
+            keys: set[AllocationConstraintKey] = set()
+            for rows in (
+                operation.forward_resource_per_t,
+                operation.reverse_resource_per_t,
+            ):
+                for node_id, resource_id, amount in rows:
+                    if amount > 1e-12:
+                        keys.add(
+                            ResourceRequirement(
+                                resource_id, amount, constraint_node_id=node_id
+                            ).constraint_key(node_id)
+                        )
+            if operation.turnaround_service_type is not None:
+                if (
+                    operation.forward_turnaround_per_t > 1e-12
+                    or operation.reverse_turnaround_per_t > 1e-12
+                ):
+                    keys.add(
+                        ServiceCapacityRequirement(
+                            operation.turnaround_service_type,
+                            1.0,
+                            constraint_node_id=operation.turnaround_node_id,
+                        ).constraint_key(operation.turnaround_node_id)
+                    )
+            result[allocation_id] = frozenset(keys)
+        return result
+
+    @staticmethod
+    def _operation_constraint_limit_label(key: AllocationConstraintKey) -> str:
+        if key.kind == "resource":
+            node_id = key.scope_id.removeprefix("node:")
+            return f"resource_allocation:{node_id}:{key.name}"
+        if key.kind == "service":
+            node_id = key.scope_id.removeprefix("node:")
+            return f"servicing_allocation:{node_id}:{key.name}"
+        return f"allocation:{key.kind}:{key.scope_id}:{key.name}"
+
+    def transport_operation_execution_projection(
+        self,
+        day: int,
+        plan: LogisticsResourcePlan,
+        execution: ExecutionAllocationPlan,
+        used_by_allocation: Mapping[EntityId, DirectionalCapacity],
+        reference_usage: Mapping[EntityId, DirectionalCapacity],
+        surface_factors: Mapping[EntityId, float],
+        surface_limits: Mapping[EntityId, tuple[str, ...]],
+    ) -> tuple[tuple[EntityId, float, tuple[str, ...]], ...]:
+        """Expose operation-induced Available-capacity factors for queries.
+
+        Cargo root Bundles already consumed the operation Requirements.  This
+        projection never changes execution; it only explains when those specific
+        constraints reduced the executable service.
+        """
+        operation_keys = self.transport_operation_constraint_keys(
+            day, plan, reference_usage
+        )
+        dispatch_by_id = {row.cargo_claim_id: row for row in plan.dispatches}
+        factors = {
+            dependency.allocation_id: max(
+                0.0, min(1.0, surface_factors.get(dependency.allocation_id, 1.0))
+            )
+            for dependency in self.transport.transport_operation_dependencies(day)
+        }
+        limits = {
+            allocation_id: list(surface_limits.get(allocation_id, ()))
+            for allocation_id in factors
+        }
+        support_limited: set[EntityId] = set()
+        for allocation in execution.allocations:
+            if allocation.allocated_execution >= allocation.requested_execution - 1e-10:
+                continue
+            dispatch = dispatch_by_id.get(allocation.bundle_id)
+            if dispatch is None:
+                continue
+            for edge in dispatch.path:
+                if edge.allocation_id is None:
+                    continue
+                hits = set(allocation.limiting_constraints) & set(
+                    operation_keys.get(edge.allocation_id, frozenset())
+                )
+                if not hits:
+                    continue
+                support_limited.add(edge.allocation_id)
+                limits.setdefault(edge.allocation_id, []).extend(
+                    self._operation_constraint_limit_label(key)
+                    for key in sorted(hits)
+                )
+
+        for allocation_id in support_limited:
+            usage = used_by_allocation.get(allocation_id, DirectionalCapacity())
+            snapshot = self.transport.transport_capacity_snapshot(
+                allocation_id, day=day, used=usage
+            )
+            ratios: list[float] = []
+            if snapshot.available.forward_t_per_day > 1e-12:
+                ratios.append(
+                    usage.forward_t_per_day / snapshot.available.forward_t_per_day
+                )
+            if snapshot.available.reverse_t_per_day > 1e-12:
+                ratios.append(
+                    usage.reverse_t_per_day / snapshot.available.reverse_t_per_day
+                )
+            factors[allocation_id] = min(
+                factors.get(allocation_id, 1.0),
+                max(0.0, min(1.0, max(ratios, default=0.0))),
+            )
+
+        return tuple(
+            (
+                allocation_id,
+                factors[allocation_id],
+                tuple(dict.fromkeys(limits.get(allocation_id, ()))),
+            )
+            for allocation_id in sorted(factors, key=str)
+        )
+
+    def transport_operation_allocation_overrides(
+        self,
+        day: int,
+        used_by_allocation: Mapping[EntityId, DirectionalCapacity],
+    ) -> tuple[dict[EntityId, float], dict[EntityId, float]]:
+        """Project already-allocated Fleet operation use into query views."""
+        usage = dict(used_by_allocation)
+        dynamic_resources = self._operational_resource_totals_by_allocation(usage, day)
+        resource_overrides = {
+            self._operation_claim_id(allocation_id, location_id, resource_id): amount
+            for (allocation_id, location_id, resource_id), amount
+            in dynamic_resources.items()
+        }
+
+        dynamic_turnaround = {
+            request.owner_id: request
+            for request in self.transport.transport_service_capacity_requests(
+                day, tuple(sorted(usage.items(), key=lambda row: str(row[0])))
+            )
+            if request.owner_kind == "transport"
+            and request.purpose == "turnaround_servicing"
+        }
+        service_overrides = {
+            request.id: request.requested_rate
+            for request in dynamic_turnaround.values()
+        }
+        return resource_overrides, service_overrides
+
+    def resource_allocation_projection_claims(
+        self,
+        day: int,
+        plan: LogisticsResourcePlan,
+        reference_usage: Mapping[EntityId, DirectionalCapacity] | None = None,
+    ) -> tuple[ResourceClaim, ...]:
+        """Build transient Resource rows for Application allocation reporting.
+
+        Logistics planning no longer owns ResourceClaim settlement.  These rows
+        only adapt root Cargo Bundles and Transport operation requirements to the
+        generic Resource allocation projection consumed by existing reports.
+        """
+        cargo_totals: dict[EntityId, float] = {}
+        cargo_meta: dict[EntityId, _PlannedDispatch] = {}
+        for row in plan.dispatches:
+            cargo_totals[row.cargo_claim_id] = (
+                cargo_totals.get(row.cargo_claim_id, 0.0) + row.amount_t
+            )
+            cargo_meta.setdefault(row.cargo_claim_id, row)
+
+        claims: list[ResourceClaim] = []
+        for claim_id, requested in sorted(cargo_totals.items(), key=lambda row: str(row[0])):
+            row = cargo_meta[claim_id]
+            requirement = row.requirement
+            claims.append(
+                ResourceClaim(
+                    claim_id,
+                    row.source_id,
+                    requirement.resource_id,
+                    requested,
+                    requirement.priority,
+                    "logistics_dispatch",
+                    requirement.owner_id,
+                    f"supply:{requirement.id}",
+                    requirement_id=requirement.id,
+                )
+            )
+
+        usage = dict(plan.planned_usage) if reference_usage is None else dict(reference_usage)
+        dependencies = {
+            row.allocation_id: row
+            for row in self.transport.transport_operation_dependencies(day)
+        }
+        operational = self._operational_resource_totals_by_allocation(usage, day)
+        for (allocation_id, location_id, resource_id), requested in sorted(
+            operational.items(),
+            key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2])),
+        ):
+            if requested <= 1e-12:
+                continue
+            dependency = dependencies.get(allocation_id)
+            if dependency is None:
+                continue
+            claims.append(
+                ResourceClaim(
+                    self._operation_claim_id(allocation_id, location_id, resource_id),
+                    location_id,
+                    resource_id,
+                    requested,
+                    dependency.priority,
+                    "transport_operation",
+                    allocation_id,
+                    "sustained_transport",
+                )
+            )
+        return tuple(claims)
+
+    @staticmethod
     def _cargo_service_leg(edge: TransportServiceSupply) -> CargoServiceLeg:
         return CargoServiceLeg(
             service_identity=edge.key,
@@ -130,7 +579,7 @@ class LogisticsFlowMixin:
         if leg.allocation_id is not None:
             return ("allocation", leg.allocation_id, leg.direction)
         if leg.external_service_id is not None:
-            return ("external", leg.external_service_id, leg.source_id, leg.destination_id)
+            return ("external", leg.external_service_id)
         return ("service", leg.service_identity)
 
     @staticmethod
@@ -138,7 +587,7 @@ class LogisticsFlowMixin:
         if edge.allocation_id is not None:
             return ("allocation", edge.allocation_id, edge.direction)
         if edge.external_service_id is not None:
-            return ("external", edge.external_service_id, edge.source_id, edge.destination_id)
+            return ("external", edge.external_service_id)
         return ("service", edge.key)
 
     def _arrival_backpressure_by_service(self) -> dict[tuple, float]:
@@ -439,204 +888,87 @@ class LogisticsFlowMixin:
     def plan_capacity_logistics(
         self, day: int, requirements: tuple[SupplyRequirement, ...]
     ) -> LogisticsResourcePlan:
-        """Resolve current shipping requirement from Supply Requirements.
+        """Plan due end-to-end dispatch intents without settling scarce capacity.
 
-        Supply Planning consumes only already-provisioned Transport Capacity. It
-        never changes Fleet Allocation targets. Source stock is represented as
-        Resource Claims so Logistics competes with local execution in the shared
-        allocation graph instead of pre-consuming Inventory during planning.
-
-        Within one Activity Priority band, Transport Capacity is allocated by
-        progressive max-min on normalized requirement fulfillment. A requirement
-        whose current best path reaches a saturated edge is frozen only when no
-        alternate path remains; independent requirements may continue to use
-        unrelated residual capacity.
+        Planning selects a source/path candidate and requested dispatch amount.
+        Source Inventory and every Transport Service edge remain finite
+        requirements of the resulting root execution Bundle, so Activity Priority
+        and progressive max-min are resolved once in the common allocation graph.
+        Planning therefore does not consume or pre-divide Transport Capacity.
         """
         edges = self._service_edges(day)
-        operation_dependencies = {
-            row.allocation_id: row
-            for row in self.transport.transport_operation_dependencies(day)
-        }
-        remaining = {edge.key: edge.capacity_t_per_day for edge in edges}
-        requirement_rows = tuple(sorted(requirements, key=lambda row: (-row.priority, str(row.id))))
+        requirement_rows = tuple(
+            sorted(requirements, key=lambda row: (-row.priority, str(row.id)))
+        )
         pipeline = self._flow_pipeline_by_requirement({row.id for row in requirement_rows})
         used: dict[EntityId, DirectionalCapacity] = {}
         dispatches: list[_PlannedDispatch] = []
         spending_requests: list[FundsRequest] = []
 
-        by_priority: dict[int, list[SupplyRequirement]] = {}
         for requirement in requirement_rows:
-            by_priority.setdefault(int(requirement.priority), []).append(requirement)
-
-        for priority in sorted(by_priority, reverse=True):
-            band = tuple(sorted(by_priority[priority], key=lambda row: str(row.id)))
-            original_need = {
-                requirement.id: max(0.0, requirement.amount_t - pipeline[requirement.id])
-                for requirement in band
-            }
-            allocated = {requirement.id: 0.0 for requirement in band}
-
-            while True:
-                available_edges = self._edges_with_remaining(edges, remaining)
-                if not available_edges:
-                    break
-
-                selected: dict[
-                    EntityId,
-                    tuple[SupplyRequirement, SpatialNodeId, tuple[TransportServiceSupply, ...]],
-                ] = {}
-                for requirement in band:
-                    need = original_need[requirement.id]
-                    if need <= 1e-12 or allocated[requirement.id] >= need - 1e-12:
-                        continue
-                    candidates = self._candidate_supply_paths(
-                        requirement, day, available_edges
-                    )
-                    if not candidates:
-                        continue
-                    source_id, path = candidates[0]
-                    if not self._dispatch_is_due(requirement, day, path):
-                        continue
-                    selected[requirement.id] = (requirement, source_id, path)
-
-                if not selected:
-                    break
-
-                edge_load: dict[str, float] = {}
-                completion_delta = 1.0
-                for requirement_id, (_requirement, _source_id, path) in selected.items():
-                    need = original_need[requirement_id]
-                    completion_delta = min(
-                        completion_delta,
-                        max(0.0, 1.0 - allocated[requirement_id] / need),
-                    )
-                    for edge in path:
-                        edge_load[edge.key] = edge_load.get(edge.key, 0.0) + need
-
-                edge_delta = min(
-                    (
-                        remaining[edge_key] / coefficient
-                        for edge_key, coefficient in edge_load.items()
-                        if coefficient > 1e-12
-                    ),
-                    default=1.0,
-                )
-                delta = min(completion_delta, edge_delta)
-                if delta <= 1e-12:
-                    break
-
-                for requirement_id in sorted(selected, key=str):
-                    requirement, source_id, path = selected[requirement_id]
-                    amount = min(
-                        original_need[requirement_id] - allocated[requirement_id],
-                        original_need[requirement_id] * delta,
-                    )
-                    if amount <= 1e-12:
-                        continue
-                    allocated[requirement_id] += amount
-                    pipeline[requirement_id] += amount
-                    used = self._allocation_used_after(used, path, amount)
-                    for edge in path:
-                        remaining[edge.key] = max(
-                            0.0, remaining[edge.key] - amount
-                        )
-
-                    spending_ids: list[EntityId] = []
-                    for edge in path:
-                        if (
-                            edge.external_service_id is None
-                            or edge.cost_musd_per_t <= 1e-12
-                        ):
-                            continue
-                        policy = self.external_economy.resolve_policy(
-                            edge.external_service_id, requirement.owner_kind, requirement.owner_id
-                        )
-                        if policy is None:
-                            raise RuntimeError(
-                                "external service entered plan without policy authorization"
-                            )
-                        request_id = self._spending_request_id(
-                            source_id,
-                            requirement.id,
-                            edge.external_service_id,
-                            edge.key,
-                            len(dispatches),
-                        )
-                        spending_ids.append(request_id)
-                        spending_requests.append(
-                            FundsRequest(
-                                request_id,
-                                policy.id,
-                                edge.external_service_id,
-                                amount * edge.cost_musd_per_t,
-                                requirement.priority,
-                                requirement.owner_kind,
-                                requirement.owner_id,
-                                f"transport:{requirement.id}",
-                            )
-                        )
-                    dispatches.append(
-                        _PlannedDispatch(
-                            source_id,
-                            requirement,
-                            path,
-                            amount,
-                            self._cargo_claim_id(source_id, requirement.id),
-                            tuple(spending_ids),
-                            amount,
-                        )
-                    )
-
-        cargo_totals: dict[EntityId, float] = {}
-        cargo_meta: dict[EntityId, _PlannedDispatch] = {}
-        for row in dispatches:
-            cargo_totals[row.cargo_claim_id] = (
-                cargo_totals.get(row.cargo_claim_id, 0.0) + row.amount_t
-            )
-            cargo_meta.setdefault(row.cargo_claim_id, row)
-
-        claims: list[ResourceClaim] = []
-        for claim_id, requested in sorted(cargo_totals.items(), key=lambda row: str(row[0])):
-            row = cargo_meta[claim_id]
-            requirement = row.requirement
-            claims.append(
-                ResourceClaim(
-                    claim_id,
-                    row.source_id,
-                    requirement.resource_id,
-                    requested,
-                    requirement.priority,
-                    "logistics_dispatch",
-                    requirement.owner_id,
-                    f"supply:{requirement.id}",
-                    requirement_id=requirement.id,
-                )
-            )
-
-        operational = self._operational_resource_totals_by_allocation(used, day)
-        for (allocation_id, location_id, resource_id), requested in sorted(
-            operational.items(),
-            key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2])),
-        ):
-            if requested <= 1e-12:
+            amount = max(0.0, requirement.amount_t - pipeline[requirement.id])
+            if amount <= 1e-12:
                 continue
-            dependency = operation_dependencies[allocation_id]
-            claims.append(
-                ResourceClaim(
-                    self._operation_claim_id(allocation_id, location_id, resource_id),
-                    location_id,
-                    resource_id,
-                    requested,
-                    dependency.priority,
-                    "transport_operation",
-                    allocation_id,
-                    "sustained_transport",
+            candidates = self._candidate_supply_paths(requirement, day, edges)
+            selected = next(
+                (
+                    (source_id, path)
+                    for source_id, path in candidates
+                    if self._dispatch_is_due(requirement, day, path)
+                ),
+                None,
+            )
+            if selected is None:
+                continue
+            source_id, path = selected
+
+            spending_ids: list[EntityId] = []
+            for edge in path:
+                if edge.external_service_id is None or edge.cost_musd_per_t <= 1e-12:
+                    continue
+                policy = self.external_economy.resolve_policy(
+                    edge.external_service_id, requirement.owner_kind, requirement.owner_id
+                )
+                if policy is None:
+                    raise RuntimeError(
+                        "external service entered plan without policy authorization"
+                    )
+                request_id = self._spending_request_id(
+                    source_id,
+                    requirement.id,
+                    edge.external_service_id,
+                    edge.key,
+                    len(dispatches),
+                )
+                spending_ids.append(request_id)
+                spending_requests.append(
+                    FundsRequest(
+                        request_id,
+                        policy.id,
+                        edge.external_service_id,
+                        amount * edge.cost_musd_per_t,
+                        requirement.priority,
+                        requirement.owner_kind,
+                        requirement.owner_id,
+                        f"transport:{requirement.id}",
+                    )
+                )
+
+            dispatches.append(
+                _PlannedDispatch(
+                    source_id,
+                    requirement,
+                    path,
+                    amount,
+                    self._cargo_claim_id(source_id, requirement.id),
+                    tuple(spending_ids),
+                    amount,
                 )
             )
+            used = self._allocation_used_after(used, path, amount)
 
         return LogisticsResourcePlan(
             tuple(dispatches),
-            tuple(claims),
             tuple(sorted(used.items(), key=lambda row: str(row[0]))),
             tuple(sorted(spending_requests, key=lambda row: str(row.id))),
         )
@@ -647,18 +979,14 @@ class LogisticsFlowMixin:
         funds: FundsAllocationPlan,
         day: int,
     ) -> LogisticsResourcePlan:
-        """Apply Funds authorization before Resource allocation.
+        """Apply Funds authorization before common execution allocation.
 
         External spending is an upstream dependency of dispatch. Reducing a paid
-        dispatch here prevents denied external work from reserving source stock or
-        owned-fleet operating resources later in the same allocation phase.
+        dispatch here prevents denied external work from entering the Resource /
+        Service / Transport Capacity competition later in the same allocation phase.
         """
         dispatches: list[_PlannedDispatch] = []
         used: dict[EntityId, DirectionalCapacity] = {}
-        operation_dependencies = {
-            row.allocation_id: row
-            for row in self.transport.transport_operation_dependencies(day)
-        }
         requests_by_id = {request.id: request for request in plan.spending_requests}
         for row in plan.dispatches:
             amount = row.amount_t
@@ -686,57 +1014,8 @@ class LogisticsFlowMixin:
             )
             used = self._allocation_used_after(used, row.path, amount)
 
-        cargo_totals: dict[EntityId, float] = {}
-        cargo_meta: dict[EntityId, _PlannedDispatch] = {}
-        for row in dispatches:
-            cargo_totals[row.cargo_claim_id] = (
-                cargo_totals.get(row.cargo_claim_id, 0.0) + row.amount_t
-            )
-            cargo_meta.setdefault(row.cargo_claim_id, row)
-
-        claims: list[ResourceClaim] = []
-        for claim_id, requested in sorted(cargo_totals.items(), key=lambda row: str(row[0])):
-            row = cargo_meta[claim_id]
-            requirement = row.requirement
-            claims.append(
-                ResourceClaim(
-                    claim_id,
-                    row.source_id,
-                    requirement.resource_id,
-                    requested,
-                    requirement.priority,
-                    "logistics_dispatch",
-                    requirement.owner_id,
-                    f"supply:{requirement.id}",
-                    requirement_id=requirement.id,
-                )
-            )
-
-        operational = self._operational_resource_totals_by_allocation(used, day)
-        for (allocation_id, location_id, resource_id), requested in sorted(
-            operational.items(),
-            key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2])),
-        ):
-            if requested <= 1e-12:
-                continue
-            dependency = operation_dependencies[allocation_id]
-            claims.append(
-                ResourceClaim(
-                    self._operation_claim_id(
-                        allocation_id, location_id, resource_id
-                    ),
-                    location_id,
-                    resource_id,
-                    requested,
-                    dependency.priority,
-                    "transport_operation",
-                    allocation_id,
-                    "sustained_transport",
-                )
-            )
         return LogisticsResourcePlan(
             tuple(dispatches),
-            tuple(claims),
             tuple(sorted(used.items(), key=lambda row: str(row[0]))),
             plan.spending_requests,
         )
@@ -1204,145 +1483,30 @@ class LogisticsFlowMixin:
             if waiting.amount_t <= 1e-9:
                 del self.arrival_waiting[waiting_id]
 
-    def _transport_operation_allocation_factor(
-        self,
-        dependency: TransportOperationDependencyProjection,
-        plan: LogisticsResourcePlan,
-        resource_allocations: ResourceAllocationPlan,
-        service_allocations: ServiceCapacityAllocationPlan,
-    ) -> tuple[float, tuple[str, ...]]:
-        """Resolve one Transport Allocation's shared dependency fulfillment.
-
-        Planning exposes operation Resource Claims and turnaround Service requests.
-        This method only interprets the shared allocation results; it never reads
-        Inventory or runs a Transport-local allocator.
-        """
-        allocation_id = dependency.allocation_id
-        ratios: list[float] = []
-        limiting: list[str] = []
-        for claim in plan.claims:
-            if claim.owner_kind != "transport_operation" or claim.owner_id != allocation_id:
-                continue
-            if claim.requested_amount <= 1e-12:
-                continue
-            try:
-                allocated = resource_allocations.allocated(claim.id)
-            except KeyError:
-                allocated = 0.0
-            ratio = max(0.0, min(1.0, allocated / claim.requested_amount))
-            ratios.append(ratio)
-            if ratio < 1.0 - 1e-12:
-                limiting.append(
-                    f"resource_allocation:{claim.operational_node_id}:{claim.resource_id}"
-                )
-
-        directional = dict(plan.planned_usage).get(allocation_id, DirectionalCapacity())
-        has_planned_usage = (
-            directional.forward_t_per_day > 1e-12
-            or directional.reverse_t_per_day > 1e-12
-        )
-        if has_planned_usage and dependency.turnaround_service_type is not None:
-            request_id = dependency.turnaround_request_id
-            if request_id is None:
-                raise RuntimeError(
-                    f"transport dependency missing turnaround request: {allocation_id}"
-                )
-            try:
-                request = service_allocations.request(request_id)
-                allocated = service_allocations.allocated(request_id)
-            except KeyError:
-                request = None
-                allocated = 0.0
-            if request is None or request.requested_rate <= 1e-12:
-                ratio = 0.0
-            else:
-                ratio = max(
-                    0.0, min(1.0, allocated / request.requested_rate)
-                )
-            ratios.append(ratio)
-            if ratio < 1.0 - 1e-12:
-                limiting.append(
-                    f"servicing_allocation:{dependency.anchor_node_id}:"
-                    f"{dependency.turnaround_service_type}"
-                )
-
-        for location_id in dependency.surface_service_locations:
-            request_id = EntityId(f"service.surface_distribution:{location_id}")
-            try:
-                request = service_allocations.request(request_id)
-                allocated = service_allocations.allocated(request_id)
-            except KeyError:
-                request = None
-                allocated = 0.0
-            if request is None:
-                ratio = 0.0
-            elif request.requested_rate <= 1e-12:
-                ratio = 1.0
-            else:
-                ratio = max(0.0, min(1.0, allocated / request.requested_rate))
-            ratios.append(ratio)
-            if ratio < 1.0 - 1e-12:
-                limiting.append(f"surface_infrastructure:{location_id}")
-
-        factor = min(ratios) if ratios else 1.0
-        return max(0.0, min(1.0, factor)), tuple(dict.fromkeys(limiting))
-
-    def allocate_capacity_logistics_execution(
+    def build_capacity_logistics_execution(
         self,
         day: int,
         plan: LogisticsResourcePlan,
-        allocations: ResourceAllocationPlan,
-        service_allocations: ServiceCapacityAllocationPlan,
+        execution: ExecutionAllocationPlan,
+        operation_factors: tuple[tuple[EntityId, float, tuple[str, ...]], ...],
     ) -> LogisticsExecutionAllocation:
-        """Resolve the final Transport/Logistics allocation without mutation.
+        """Build the immutable Logistics execution result from common allocation.
 
-        Upstream Funds authorization has already shaped ``plan``. Resource and
-        Service allocation results are interpreted exactly once here. The
-        returned object is then shared by queries and movement execution.
+        Every executable Cargo quantity is already the root Bundle allocation.
+        This method performs no secondary scarcity calculation and no ``min``
+        across independently settled Resource/Service plans.
         """
-        operation_factor: dict[EntityId, float] = {}
-        operation_limits: dict[EntityId, tuple[str, ...]] = {}
-        # Capacity queries must observe upstream Service scarcity even when no
-        # cargo happens to be scheduled for this allocation in the current
-        # tick. Resource and turnaround ratios below remain requirement-shaped by
-        # ``plan``; location-wide upstream services such as surface
-        # distribution are authoritative for the allocation regardless of
-        # current cargo requirement.
-        for dependency in self.transport.transport_operation_dependencies(day):
-            allocation_id = dependency.allocation_id
-            factor, limiting = self._transport_operation_allocation_factor(
-                dependency, plan, allocations, service_allocations
-            )
-            operation_factor[allocation_id] = factor
-            operation_limits[allocation_id] = limiting
-
-        cargo_budget: dict[EntityId, float] = {}
-        for claim in plan.claims:
-            if claim.owner_kind != "logistics_dispatch":
-                continue
-            try:
-                cargo_budget[claim.id] = allocations.allocated(claim.id)
-            except KeyError:
-                cargo_budget[claim.id] = 0.0
-
         used: dict[EntityId, DirectionalCapacity] = {}
         executable: list[tuple[_PlannedDispatch, float]] = []
         for row in plan.dispatches:
-            path_factor = min(
-                (
-                    operation_factor.get(edge.allocation_id, 1.0)
-                    for edge in row.path
-                    if edge.allocation_id is not None
-                ),
-                default=1.0,
-            )
-            allowed_by_operation = row.amount_t * max(0.0, min(1.0, path_factor))
-            allowed_by_cargo = cargo_budget.get(row.cargo_claim_id, 0.0)
-            amount = min(allowed_by_operation, allowed_by_cargo)
+            try:
+                amount = execution.allocated(row.cargo_claim_id)
+            except KeyError:
+                amount = 0.0
+            amount = min(row.amount_t, max(0.0, amount))
             if amount <= 1e-9:
                 continue
             executable.append((row, amount))
-            cargo_budget[row.cargo_claim_id] = max(0.0, allowed_by_cargo - amount)
             used = self._allocation_used_after(used, row.path, amount)
 
         operational = self._operational_resource_totals_by_allocation(used, day)
@@ -1359,10 +1523,7 @@ class LogisticsFlowMixin:
                 )
                 if amount > 1e-12
             ),
-            tuple(
-                (allocation_id, operation_factor[allocation_id], operation_limits[allocation_id])
-                for allocation_id in sorted(operation_factor, key=str)
-            ),
+            operation_factors,
         )
 
     def capacity_logistics_execution_projection(

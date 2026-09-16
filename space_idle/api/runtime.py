@@ -129,9 +129,7 @@ class GameRuntime:
         with self._lock:
             self._sync_clock_locked()
             data: dict[str, object] = {"session": self._metadata_locked()}
-            data.update(
-                {name: self._app.query(query) for name, query in queries.items()}
-            )
+            data.update(self._app.query_many(queries))
             return RuntimeResult(self._revision, data)
 
     def set_time_control(

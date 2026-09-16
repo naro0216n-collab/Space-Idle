@@ -29,6 +29,7 @@ from .models import (
     TransportControlMode,
     TransportServiceLeg,
     TransportServicePlan,
+    TransportOperationUsageRequirements,
 )
 
 
@@ -1393,6 +1394,115 @@ class FleetAllocationMixin:
             )
         allocation.last_operated_day = day
 
+    def transport_operation_usage_requirements(
+        self,
+        allocation_id: EntityId,
+        day: int,
+        reference_usage: DirectionalCapacity,
+    ) -> TransportOperationUsageRequirements:
+        """Derive per-tonne variable operation inputs for a reference direction mix.
+
+        The service plan's empty-cycle Resource and turnaround loads scale with
+        ``max(forward_utilization, reverse_utilization)``.  Attribute that shared
+        load across directions in proportion to the reference normalized usage;
+        at a self-consistent usage mix, summing Cargo Bundle requirements exactly
+        reproduces the Transport service plan's aggregate operational demand.
+        """
+        allocation = self.transport_allocations[allocation_id]
+        definition = self.vehicle_defs[allocation.vehicle_definition_id]
+        plan = self.derive_transport_service_plan(allocation_id, day)
+        active = self.transport_active_units(allocation_id)
+        nominal_forward = plan.nominal_per_unit.forward_t_per_day * active
+        nominal_reverse = plan.nominal_per_unit.reverse_t_per_day * active
+        forward_util = (
+            0.0
+            if nominal_forward <= 1e-12
+            else min(1.0, max(0.0, reference_usage.forward_t_per_day / nominal_forward))
+        )
+        reverse_util = (
+            0.0
+            if nominal_reverse <= 1e-12
+            else min(1.0, max(0.0, reference_usage.reverse_t_per_day / nominal_reverse))
+        )
+        utilization = max(forward_util, reverse_util)
+        utilization_sum = forward_util + reverse_util
+
+        def _resource_map(rows):
+            return {
+                (location_id, resource_id): amount
+                for location_id, resource_id, amount in rows
+            }
+
+        empty = _resource_map(plan.resource_t_per_empty_cycle_day)
+        forward_increment = _resource_map(
+            plan.resource_t_per_forward_payload_increment_day
+        )
+        reverse_increment = _resource_map(
+            plan.resource_t_per_reverse_payload_increment_day
+        )
+        keys = set(empty) | set(forward_increment) | set(reverse_increment)
+
+        shared_forward_scale = (
+            0.0
+            if forward_util <= 1e-12
+            or utilization_sum <= 1e-12
+            or nominal_forward <= 1e-12
+            else active * utilization / (utilization_sum * nominal_forward)
+        )
+        shared_reverse_scale = (
+            0.0
+            if reverse_util <= 1e-12
+            or utilization_sum <= 1e-12
+            or nominal_reverse <= 1e-12
+            else active * utilization / (utilization_sum * nominal_reverse)
+        )
+        forward_increment_scale = (
+            0.0 if nominal_forward <= 1e-12 else active / nominal_forward
+        )
+        reverse_increment_scale = (
+            0.0 if nominal_reverse <= 1e-12 else active / nominal_reverse
+        )
+
+        forward_resources = []
+        reverse_resources = []
+        for location_id, resource_id in sorted(
+            keys, key=lambda row: (str(row[0]), str(row[1]))
+        ):
+            key = (location_id, resource_id)
+            forward_amount = (
+                empty.get(key, 0.0) * shared_forward_scale
+                + forward_increment.get(key, 0.0) * forward_increment_scale
+            )
+            reverse_amount = (
+                empty.get(key, 0.0) * shared_reverse_scale
+                + reverse_increment.get(key, 0.0) * reverse_increment_scale
+            )
+            if forward_amount > 1e-12:
+                forward_resources.append((location_id, resource_id, forward_amount))
+            if reverse_amount > 1e-12:
+                reverse_resources.append((location_id, resource_id, reverse_amount))
+
+        servicing = plan.servicing_units_per_full_utilization_day
+        forward_turnaround = (
+            0.0
+            if servicing <= 1e-12
+            else servicing * shared_forward_scale
+        )
+        reverse_turnaround = (
+            0.0
+            if servicing <= 1e-12
+            else servicing * shared_reverse_scale
+        )
+        return TransportOperationUsageRequirements(
+            allocation_id,
+            tuple(forward_resources),
+            tuple(reverse_resources),
+            definition.turnaround_service_type,
+            allocation.anchor_node_id,
+            forward_turnaround,
+            reverse_turnaround,
+        )
+
     @staticmethod
     def transport_service_request_id(allocation_id: EntityId) -> EntityId:
         return EntityId(f"service.transport_turnaround:{allocation_id}")
@@ -1505,8 +1615,9 @@ class FleetAllocationMixin:
         forward_increments = _resource_map(plan.resource_t_per_forward_payload_increment_day)
         reverse_increments = _resource_map(plan.resource_t_per_reverse_payload_increment_day)
 
-        # Resource stock is allocated later through shared Resource Claims.
-        # Only non-scarcity support prerequisites belong in this physical snapshot.
+        # Scarce operation Resource participates later in the Cargo root
+        # Execution Requirement Bundle. Only non-scarcity support prerequisites
+        # belong in this physical snapshot.
         required_resource_keys = (
             set(empty_resources) | set(forward_increments) | set(reverse_increments)
         )

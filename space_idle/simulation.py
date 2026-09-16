@@ -16,6 +16,7 @@ from .inventory import InventoryBook
 from .knowledge import DomainActivity
 from .logistics import LogisticsService
 from .transport.service import TransportService
+from .transport.models import DirectionalCapacity
 from .maintenance import FacilityMaintenanceService
 from .power import PowerPhysicalSnapshot, PowerService, PowerSnapshot
 from .projects import ProjectService
@@ -805,7 +806,10 @@ class Simulation:
             seen.add(request.id)
         return rows
 
-    def _allocation_pool_capacities(self) -> dict[AllocationConstraintKey, float]:
+    def _allocation_pool_capacities(
+        self,
+        extra: dict[AllocationConstraintKey, float] | None = None,
+    ) -> dict[AllocationConstraintKey, float]:
         capacities: dict[AllocationConstraintKey, float] = {}
         for owner in (self.research,):
             if owner is None or not hasattr(owner, "allocation_pool_capacities"):
@@ -814,13 +818,17 @@ class Simulation:
                 if key in capacities:
                     raise RuntimeError(f"duplicate allocation pool capacity: {key}")
                 capacities[key] = amount
+        for key, amount in (extra or {}).items():
+            if key in capacities:
+                raise RuntimeError(f"duplicate allocation pool capacity: {key}")
+            capacities[key] = amount
         return capacities
 
     @staticmethod
     def _as_execution_bundle(intent: AllocationIntent) -> ExecutionRequirementBundle:
         return intent.as_bundle() if isinstance(intent, ReservationAcquisitionRequirement) else intent
 
-    def _legacy_resource_bundle(self, claim: ResourceClaim) -> ExecutionRequirementBundle:
+    def _resource_claim_execution_bundle(self, claim: ResourceClaim) -> ExecutionRequirementBundle:
         return ExecutionRequirementBundle(
             id=claim.id,
             owner_kind=claim.owner_kind,
@@ -835,7 +843,7 @@ class Simulation:
             wait_started_day=self.day if claim.effective_minimum_amount > 1e-12 else None,
         )
 
-    def _legacy_service_bundle(self, request: ServiceCapacityRequest) -> ExecutionRequirementBundle:
+    def _service_request_execution_bundle(self, request: ServiceCapacityRequest) -> ExecutionRequirementBundle:
         return ExecutionRequirementBundle(
             id=request.id,
             owner_kind=request.owner_kind,
@@ -856,10 +864,11 @@ class Simulation:
         *,
         resource_used: dict[AllocationConstraintKey, float] | None = None,
         service_supply: ServiceCapacityAllocationPlan | None = None,
+        extra_pool_capacities: dict[AllocationConstraintKey, float] | None = None,
     ) -> dict[AllocationConstraintKey, float]:
         bundles = tuple(self._as_execution_bundle(row) for row in intents)
         resource_used = resource_used or {}
-        pool_capacities = self._allocation_pool_capacities()
+        pool_capacities = self._allocation_pool_capacities(extra_pool_capacities)
         capacities: dict[AllocationConstraintKey, float] = {}
         for bundle in bundles:
             for requirement in bundle.requirements:
@@ -867,18 +876,18 @@ class Simulation:
                 if key in capacities:
                     continue
                 if isinstance(requirement, ResourceRequirement):
+                    node_id = requirement.constraint_node(bundle.operational_node_id)
                     capacities[key] = max(
                         0.0,
-                        self.inventory.available(bundle.operational_node_id, requirement.resource_id)
+                        self.inventory.available(node_id, requirement.resource_id)
                         - resource_used.get(key, 0.0),
                     )
                 elif isinstance(requirement, ServiceCapacityRequirement):
                     if service_supply is None:
                         capacities[key] = 0.0
                     else:
-                        summary = service_supply.summary(
-                            bundle.operational_node_id, requirement.service_type
-                        )
+                        node_id = requirement.constraint_node(bundle.operational_node_id)
+                        summary = service_supply.summary(node_id, requirement.service_type)
                         capacities[key] = max(0.0, summary.spare_rate)
                 elif isinstance(requirement, StockOrPoolAdmissionRequirement):
                     state = self.inventory.admission_state_for_class(
@@ -895,14 +904,20 @@ class Simulation:
 
     @staticmethod
     def _resource_plan_from_execution(
-        claims: tuple[ResourceClaim, ...], execution: ExecutionAllocationPlan
+        claims: tuple[ResourceClaim, ...],
+        execution: ExecutionAllocationPlan,
+        allocation_overrides: dict[EntityId, float] | None = None,
     ) -> ResourceAllocationPlan:
+        allocation_overrides = allocation_overrides or {}
         allocations = []
         for claim in claims:
-            try:
-                amount = execution.allocated(claim.id)
-            except KeyError:
-                amount = 0.0
+            if claim.id in allocation_overrides:
+                amount = allocation_overrides[claim.id]
+            else:
+                try:
+                    amount = execution.allocated(claim.id)
+                except KeyError:
+                    amount = 0.0
             amount = min(claim.requested_amount, max(0.0, amount))
             allocations.append(ResourceAllocation(
                 claim.id, claim.requested_amount, amount,
@@ -915,15 +930,20 @@ class Simulation:
         requests: tuple[ServiceCapacityRequest, ...],
         execution: ExecutionAllocationPlan,
         provider_plan: ServiceCapacityAllocationPlan,
+        allocation_overrides: dict[EntityId, float] | None = None,
     ) -> ServiceCapacityAllocationPlan:
+        allocation_overrides = allocation_overrides or {}
         provider_ids = {request.id for request in provider_plan.requests}
         consumer_requests = tuple(request for request in requests if request.id not in provider_ids)
         allocations = list(provider_plan.allocations)
         for request in consumer_requests:
-            try:
-                amount = execution.allocated(request.id)
-            except KeyError:
-                amount = 0.0
+            if request.id in allocation_overrides:
+                amount = allocation_overrides[request.id]
+            else:
+                try:
+                    amount = execution.allocated(request.id)
+                except KeyError:
+                    amount = 0.0
             amount = min(request.requested_rate, max(0.0, amount))
             allocations.append(ServiceCapacityAllocation(
                 request.id, request.requested_rate, amount,
@@ -936,6 +956,161 @@ class Simulation:
             provider_plan.supply_enabled,
             provider_plan.supply_limiting_factors,
         )
+
+    @staticmethod
+    def _directional_capacity_delta(
+        left: DirectionalCapacity,
+        right: DirectionalCapacity,
+    ) -> float:
+        values = (
+            (left.forward_t_per_day, right.forward_t_per_day),
+            (left.reverse_t_per_day, right.reverse_t_per_day),
+        )
+        return max(
+            (abs(a - b) / max(1.0, abs(a), abs(b)) for a, b in values),
+            default=0.0,
+        )
+
+    def _resolve_transport_execution_fixed_point(
+        self,
+        day: int,
+        logistics_plan: LogisticsResourcePlan,
+        static_intents: tuple[AllocationIntent | ExecutionRequirementBundle, ...],
+        provider_plan: ServiceCapacityAllocationPlan,
+        all_service_requests: tuple[ServiceCapacityRequest, ...],
+    ) -> tuple[
+        ExecutionAllocationPlan,
+        dict[EntityId, DirectionalCapacity],
+        dict[EntityId, DirectionalCapacity],
+        dict[EntityId, float],
+        dict[EntityId, tuple[str, ...]],
+    ]:
+        """Resolve Cargo and Fleet operation inputs through one allocation graph."""
+        dependencies = self.transport.transport_operation_dependencies(day)
+        surface_factors = {row.allocation_id: 1.0 for row in dependencies}
+        reference_usage = dict(logistics_plan.planned_usage)
+        tolerance = 1e-8
+        damping = 0.5
+
+        def resolve(reference, surface):
+            dispatch_intents = self.logistics.dispatch_execution_requirements(
+                day, logistics_plan, reference
+            )
+            allocation_intents = static_intents + dispatch_intents
+            capacities = self._constraint_capacities(
+                allocation_intents,
+                service_supply=provider_plan,
+                extra_pool_capacities=self.logistics.transport_capacity_pool_capacities(
+                    day, surface
+                ),
+            )
+            execution = allocate_execution_requirements(allocation_intents, capacities)
+            provisional_services = self._service_plan_from_execution(
+                all_service_requests, execution, provider_plan
+            )
+            next_surface, surface_limits = self.logistics.transport_surface_availability(
+                day, provisional_services
+            )
+            actual_usage = self.logistics.dispatch_usage_from_execution(
+                logistics_plan, execution
+            )
+            return execution, actual_usage, next_surface, surface_limits
+
+        for _ in range(64):
+            execution, actual_usage, next_surface, surface_limits = resolve(
+                reference_usage, surface_factors
+            )
+            allocation_ids = (
+                set(reference_usage)
+                | set(actual_usage)
+                | set(surface_factors)
+                | set(next_surface)
+            )
+            usage_delta = max(
+                (
+                    self._directional_capacity_delta(
+                        reference_usage.get(allocation_id, DirectionalCapacity()),
+                        actual_usage.get(allocation_id, DirectionalCapacity()),
+                    )
+                    for allocation_id in allocation_ids
+                ),
+                default=0.0,
+            )
+            surface_delta = max(
+                (
+                    abs(
+                        surface_factors.get(allocation_id, 1.0)
+                        - next_surface.get(allocation_id, 1.0)
+                    )
+                    for allocation_id in allocation_ids
+                ),
+                default=0.0,
+            )
+            if max(usage_delta, surface_delta) <= tolerance:
+                verified_reference = dict(actual_usage)
+                verified_surface = dict(next_surface)
+                verified_execution, verified_usage, verified_next_surface, verified_limits = (
+                    resolve(verified_reference, verified_surface)
+                )
+                verify_ids = (
+                    set(verified_reference)
+                    | set(verified_usage)
+                    | set(verified_surface)
+                    | set(verified_next_surface)
+                )
+                verify_usage_delta = max(
+                    (
+                        self._directional_capacity_delta(
+                            verified_reference.get(allocation_id, DirectionalCapacity()),
+                            verified_usage.get(allocation_id, DirectionalCapacity()),
+                        )
+                        for allocation_id in verify_ids
+                    ),
+                    default=0.0,
+                )
+                verify_surface_delta = max(
+                    (
+                        abs(
+                            verified_surface.get(allocation_id, 1.0)
+                            - verified_next_surface.get(allocation_id, 1.0)
+                        )
+                        for allocation_id in verify_ids
+                    ),
+                    default=0.0,
+                )
+                if max(verify_usage_delta, verify_surface_delta) <= tolerance:
+                    return (
+                        verified_execution,
+                        verified_usage,
+                        verified_reference,
+                        verified_next_surface,
+                        verified_limits,
+                    )
+
+            reference_usage = {
+                allocation_id: DirectionalCapacity(
+                    damping
+                    * reference_usage.get(
+                        allocation_id, DirectionalCapacity()
+                    ).forward_t_per_day
+                    + (1.0 - damping)
+                    * actual_usage.get(
+                        allocation_id, DirectionalCapacity()
+                    ).forward_t_per_day,
+                    damping
+                    * reference_usage.get(
+                        allocation_id, DirectionalCapacity()
+                    ).reverse_t_per_day
+                    + (1.0 - damping)
+                    * actual_usage.get(
+                        allocation_id, DirectionalCapacity()
+                    ).reverse_t_per_day,
+                )
+                for allocation_id in sorted(allocation_ids, key=str)
+            }
+            surface_factors = dict(next_surface)
+
+        raise RuntimeError("transport operation requirement attribution did not converge")
 
     def tick_allocation_dependencies(
         self, service_types: tuple[str, ...] | set[str]
@@ -1005,7 +1180,7 @@ class Simulation:
             plan.procurement, funds
         )
 
-        legacy_resource_claims = intents.resource_claims + tuple(authorized_logistics.claims)
+        resource_claim_intents = tuple(intents.resource_claims)
         transport_requests = self.transport.transport_service_capacity_requests(
             self.day, authorized_logistics.planned_usage
         )
@@ -1014,7 +1189,7 @@ class Simulation:
         )
         base_intents: tuple[AllocationIntent | ExecutionRequirementBundle, ...] = (
             tuple(intents.execution_requirements)
-            + tuple(self._legacy_resource_bundle(claim) for claim in legacy_resource_claims)
+            + tuple(self._resource_claim_execution_bundle(claim) for claim in resource_claim_intents)
         )
 
         def resolve_for_maintenance(maintenance_factors):
@@ -1027,24 +1202,39 @@ class Simulation:
 
             # Provider dependencies are derived from the current upstream
             # fulfillment estimate. Consumer Service requirements join the same
-            # Execution Requirement allocation as Resource requirements below.
+            # root Execution Bundles as their Resource/Transport requirements.
             provider_plan = self._allocate_tick_services(power_by_location, requests=())
             provider_ids = {request.id for request in provider_plan.requests}
-            legacy_service_requests = tuple(
+            service_request_intents = tuple(
                 request for request in all_service_requests
                 if request.id not in provider_ids
-            )
-            allocation_intents = (
-                base_intents
-                + tuple(
-                    self._legacy_service_bundle(request)
-                    for request in legacy_service_requests
+                and not (
+                    request.owner_kind == "transport"
+                    and request.purpose == "turnaround_servicing"
                 )
             )
-            capacities = self._constraint_capacities(
-                allocation_intents, service_supply=provider_plan
+            static_intents = (
+                base_intents
+                + tuple(
+                    self._service_request_execution_bundle(request)
+                    for request in service_request_intents
+                )
             )
-            execution = allocate_execution_requirements(allocation_intents, capacities)
+
+            (
+                execution,
+                actual_usage,
+                reference_usage,
+                surface_factors,
+                surface_limits,
+            ) = self._resolve_transport_execution_fixed_point(
+                self.day,
+                authorized_logistics,
+                static_intents,
+                provider_plan,
+                all_service_requests,
+            )
+
             next_maintenance_factors = (
                 maintenance_factors
                 if self.maintenance is None
@@ -1053,9 +1243,13 @@ class Simulation:
             return (
                 power_by_location,
                 provider_plan,
-                legacy_service_requests,
+                service_request_intents,
                 execution,
                 next_maintenance_factors,
+                actual_usage,
+                reference_usage,
+                surface_factors,
+                surface_limits,
             )
 
         maintenance_factors = {
@@ -1069,9 +1263,13 @@ class Simulation:
             (
                 power_by_location,
                 provider_plan,
-                legacy_service_requests,
+                service_request_intents,
                 execution,
                 next_maintenance_factors,
+                transport_usage,
+                transport_reference_usage,
+                transport_surface_factors,
+                transport_surface_limits,
             ) = resolve_for_maintenance(maintenance_factors)
 
             facility_ids = set(maintenance_factors) | set(next_maintenance_factors)
@@ -1093,9 +1291,13 @@ class Simulation:
                 (
                     power_by_location,
                     provider_plan,
-                    legacy_service_requests,
+                    service_request_intents,
                     execution,
                     verified_factors,
+                    transport_usage,
+                    transport_reference_usage,
+                    transport_surface_factors,
+                    transport_surface_limits,
                 ) = resolve_for_maintenance(maintenance_factors)
                 verify_ids = set(maintenance_factors) | set(verified_factors)
                 verification_delta = max(
@@ -1126,12 +1328,37 @@ class Simulation:
                 "tick allocation provider dependencies did not converge"
             )
 
-        resources = self._resource_plan_from_execution(legacy_resource_claims, execution)
-        services = self._service_plan_from_execution(
-            legacy_service_requests, execution, provider_plan
+        logistics_projection_claims = self.logistics.resource_allocation_projection_claims(
+            self.day, authorized_logistics, transport_reference_usage
         )
-        transport = self.logistics.allocate_capacity_logistics_execution(
-            self.day, authorized_logistics, resources, services
+        all_resource_claims = intents.resource_claims + logistics_projection_claims
+        resource_overrides, service_overrides = (
+            self.logistics.transport_operation_allocation_overrides(
+                self.day, transport_usage
+            )
+        )
+        resources = self._resource_plan_from_execution(
+            all_resource_claims,
+            execution,
+            allocation_overrides=resource_overrides,
+        )
+        services = self._service_plan_from_execution(
+            all_service_requests,
+            execution,
+            provider_plan,
+            allocation_overrides=service_overrides,
+        )
+        operation_factors = self.logistics.transport_operation_execution_projection(
+            self.day,
+            authorized_logistics,
+            execution,
+            transport_usage,
+            transport_reference_usage,
+            transport_surface_factors,
+            transport_surface_limits,
+        )
+        transport = self.logistics.build_capacity_logistics_execution(
+            self.day, authorized_logistics, execution, operation_factors
         )
         return TickAllocations(
             funds,

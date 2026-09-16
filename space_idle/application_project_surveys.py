@@ -14,7 +14,7 @@ class SurveyProgressionProjectorMixin:
             if provider_operational_node_id is None
             else sim.graph.operational_node(provider_operational_node_id).body_id
         )
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         execution_plan = decision.allocations.execution
         powers = decision.allocations.power_by_location
         rows = []

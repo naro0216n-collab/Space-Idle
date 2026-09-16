@@ -64,7 +64,7 @@ class ProjectProjectorMixin:
         snapshot = (
             power
             if power is not None
-            else sim.tick_decision_projection().allocations.power_by_location[facility.operational_node_id]
+            else self._tick_decision_projection().allocations.power_by_location[facility.operational_node_id]
         )
         site_failures = sim.projects.upgrade_site_failures(
             facility.id, recipe.target_level, sim.day, snapshot
@@ -168,7 +168,7 @@ class ProjectProjectorMixin:
 
     def _project_rows(self, location_id: SpatialNodeId | None) -> tuple[ProjectRow, ...]:
         sim = self._simulation
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         requirement_rows = self._requirement_rows(
             execution_allocation=decision.allocations.transport,
             resolutions=decision.plan.requirement_resolutions,
@@ -334,7 +334,7 @@ class ProjectProjectorMixin:
 
     def _build_options_view(self, location_id: SpatialNodeId) -> BuildOptionsView:
         sim = self._simulation
-        powers = sim.tick_decision_projection().allocations.power_by_location
+        powers = self._tick_decision_projection().allocations.power_by_location
         rows = []
         for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id)):
             definition = sim.facilities.definitions[recipe.facility_def_id]

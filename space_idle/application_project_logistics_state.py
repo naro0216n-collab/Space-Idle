@@ -122,7 +122,7 @@ class LogisticsStateProjectorMixin:
 
     def _transport_allocation_rows(self) -> tuple[TransportAllocationRow, ...]:
         sim = self._simulation
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         rows: list[TransportAllocationRow] = []
         for allocation in sim.transport.transport_allocation_snapshots():
             plan = sim.transport.derive_transport_service_plan(allocation.id, sim.day)
@@ -250,7 +250,7 @@ class LogisticsStateProjectorMixin:
 
     def _vehicle_production_option_rows(self) -> tuple[VehicleProductionOptionRow, ...]:
         sim = self._simulation
-        powers = sim.tick_decision_projection().allocations.power_by_location
+        powers = self._tick_decision_projection().allocations.power_by_location
         rows: list[VehicleProductionOptionRow] = []
         for definition in sim.transport.vehicle_definitions():
             if definition.production.service_type is None or definition.production.days <= 1e-12:
@@ -285,7 +285,7 @@ class LogisticsStateProjectorMixin:
 
     def _vehicle_production_rows(self) -> tuple[VehicleProductionRow, ...]:
         sim = self._simulation
-        powers = sim.tick_decision_projection().allocations.power_by_location
+        powers = self._tick_decision_projection().allocations.power_by_location
         rows: list[VehicleProductionRow] = []
         for state in sim.transport.vehicle_production_snapshots():
             definition = self._vehicle_definition(state.vehicle_definition_id)

@@ -9,11 +9,19 @@ class SupplyPlanningProjectorMixin:
     ) -> tuple[SupplyRequirementRow, ...]:
         sim = self._simulation
         if resolutions is None:
-            decision = sim.tick_decision_projection()
+            decision = self._tick_decision_projection()
             resolutions = decision.plan.requirement_resolutions
             if execution_allocation is None:
                 execution_allocation = decision.allocations.transport
         resolutions = tuple(resolutions)
+        cache = getattr(self, "_query_projection_cache", None)
+        cached = None if cache is None else cache.get("requirement_rows")
+        if (
+            cached is not None
+            and cached[0] is execution_allocation
+            and cached[1] is resolutions
+        ):
+            return cached[2]
 
         recurring_rate_by_key: dict[tuple[object, object], float] = {}
         for resolution in resolutions:
@@ -126,7 +134,10 @@ class SupplyPlanningProjectorMixin:
                     blockers=tuple(dict.fromkeys(blockers)),
                 )
             )
-        return tuple(rows)
+        result = tuple(rows)
+        if cache is not None:
+            cache["requirement_rows"] = (execution_allocation, resolutions, result)
+        return result
 
     def _supply_policy_rows(self) -> tuple[SupplyPolicyRow, ...]:
         return tuple(

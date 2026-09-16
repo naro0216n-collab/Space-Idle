@@ -12,6 +12,17 @@ from .application_views import ProjectsView, QueryResult
 
 
 class ApplicationQueryRouterMixin:
+    def query_many(self, queries):
+        """Project several Queries against one transient derived-state snapshot."""
+        existing = getattr(self, "_query_projection_cache", None)
+        if existing is not None:
+            return {name: self.query(query) for name, query in queries.items()}
+        self._query_projection_cache = {}
+        try:
+            return {name: self.query(query) for name, query in queries.items()}
+        finally:
+            self._query_projection_cache = None
+
     def query(self, query: Query) -> QueryResult:
         try:
             return self._query(query)

@@ -13,7 +13,7 @@ from .shared import CelestialBodyId
 class SurfaceProjectorMixin:
     def _surface_map_view(self, body_id: CelestialBodyId) -> SurfaceMapView:
         sim = self._simulation
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         powers = decision.allocations.power_by_location
         body = sim.graph.bodies[body_id]
         locations = tuple(

@@ -42,7 +42,7 @@ class ApplicationReportProjectorMixin:
         sim = self._simulation
         nodes = self._dependency_scope_nodes(query)
         scope = set(nodes)
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         powers = decision.allocations.power_by_location
         resource_allocations = decision.allocations.resources
         service_allocations = decision.allocations.services
@@ -94,13 +94,17 @@ class ApplicationReportProjectorMixin:
 
         # Recurring SupplyRequirement is the structural daily requirement before
         # current stock/pipeline masks a dependency. Transport operation demand is
-        # created during Logistics planning, so its current-tick claims are the
-        # authoritative recurring requirement for that service usage.
+        # derived from the current authorized transport plan; ResourceClaim-shaped
+        # rows here are reporting projections, not an independent settlement path.
         for requirement in decision.intents.supplys:
             if requirement.destination_id not in scope or requirement.recurring_rate_t_per_day is None:
                 continue
             recurring_demand[requirement.resource_id] += requirement.recurring_rate_t_per_day
-        for claim in decision.allocations.logistics.claims:
+        transport_resource_rows = sim.logistics.resource_allocation_projection_claims(
+            sim.day,
+            decision.allocations.logistics,
+        )
+        for claim in transport_resource_rows:
             if claim.owner_kind != "transport_operation" or claim.operational_node_id not in scope:
                 continue
             recurring_demand[claim.resource_id] += claim.requested_amount
@@ -318,7 +322,7 @@ class ApplicationReportProjectorMixin:
         sim = self._simulation
         loc = str(location_id)
         issues: list[IssueRow] = []
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         power = decision.allocations.power_by_location[location_id]
 
         if power.demand_mw > power.allocated_mw + 1e-9:
@@ -405,7 +409,7 @@ class ApplicationReportProjectorMixin:
     def _global_logistics_issues(self, location_filter: str | None) -> tuple[IssueRow, ...]:
         sim = self._simulation
         issues: list[IssueRow] = []
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
 
         # Route issues are intrinsic endpoint/site constraints. Vehicle/Fleet
         # feasibility is projected through Transport Allocation rather than
@@ -570,7 +574,7 @@ class ApplicationReportProjectorMixin:
 
     def _flow_report_view(self, location_id: SpatialNodeId) -> FlowReportView:
         sim = self._simulation
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         power = decision.allocations.power_by_location[location_id]
         production: dict[object, float] = defaultdict(float)
         consumption: dict[object, float] = defaultdict(float)

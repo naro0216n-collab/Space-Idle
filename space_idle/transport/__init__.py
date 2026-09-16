@@ -13,7 +13,7 @@ from .models import (
     FleetPool, FleetReservation, FleetReservationSnapshot, FleetRelocation, FleetRelease,
     DirectionalCapacity, TransportAllocation, TransportServicePlan,
     TransportCapacitySnapshot, TransportServiceSupply,
-    TransportOperationDependencyProjection,
+    TransportOperationDependencyProjection, TransportOperationUsageRequirements,
 )
 from .movement import MovementResolver, SpaceflightMovementRule, SurfaceAccessMovementRule, SurfaceTransportMovementRule
 from .operations import (
@@ -36,7 +36,7 @@ __all__ = [
     'FleetPool', 'FleetReservation', 'FleetReservationSnapshot', 'FleetRelocation', 'FleetRelease',
     'DirectionalCapacity', 'TransportAllocation', 'TransportServicePlan',
     'TransportCapacitySnapshot', 'TransportServiceSupply',
-    'TransportOperationDependencyProjection',
+    'TransportOperationDependencyProjection', 'TransportOperationUsageRequirements',
     'MovementResolver', 'SpaceflightMovementRule', 'SurfaceAccessMovementRule', 'SurfaceTransportMovementRule',
     'OperationEvaluationContext', 'OperationEvaluatorRegistry',
     'build_default_operation_registry', 'TransportService',

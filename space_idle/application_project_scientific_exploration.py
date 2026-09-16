@@ -14,7 +14,7 @@ class ScientificExplorationProjectorMixin:
         service = sim.scientific_exploration
         if service is None:
             return ScientificExplorationsView(())
-        power_by_location = sim.tick_decision_projection().allocations.power_by_location
+        power_by_location = self._tick_decision_projection().allocations.power_by_location
         rows: list[ScientificExplorationRow] = []
         for definition in sorted(service.definitions.values(), key=lambda row: str(row.id)):
             state = service.campaigns.get(definition.id)

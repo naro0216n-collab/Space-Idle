@@ -13,6 +13,7 @@ from space_idle.external_economy import ExternalEconomyState, FundsRequest
 from space_idle.persistence import load_game, save_game
 from space_idle.shared import AccountState, DefinitionId, EntityId
 from space_idle.content import base_ids as ids
+from tests._logistics_support import resolve_authorized_logistics
 
 
 def _economy(funds: float = 100.0) -> tuple[ExternalEconomyState, DefinitionId, EntityId]:
@@ -47,15 +48,6 @@ def _request(
     )
 
 
-
-def _transport_service_allocations(sim, day, plan):
-    requests = sim.transport.transport_service_capacity_requests(day, plan.planned_usage)
-    locations = sim._active_locations() | set(sim.graph.operational_node_ids())
-    powers = {
-        location_id: sim.power.snapshot(location_id, sim.facilities, day)
-        for location_id in locations
-    }
-    return sim._allocate_tick_services(powers, requests)
 
 def test_funds_allocation_is_same_priority_registration_order_independent():
     def run(order: tuple[str, ...]):
@@ -196,7 +188,6 @@ def test_load_rederives_same_external_spending_authorization(tmp_path):
 
 def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
     from space_idle.content.base_game import EARTH, LUNAR_ORBIT, MACHINERY
-    from space_idle.resource_claim import allocate_resource_claims
     from space_idle.supply import SupplyRequirement
 
     app = build_game_application()
@@ -219,10 +210,8 @@ def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
     plan = sim.logistics.authorize_capacity_logistics(raw, funds, sim.day)
     row = next(item for item in plan.dispatches if item.requirement.id == requirement.id)
     assert row.amount_t == pytest.approx(0.1)
-    resources = allocate_resource_claims(plan.claims, sim.inventory)
-    services = _transport_service_allocations(sim, sim.day, plan)
-    execution = sim.logistics.allocate_capacity_logistics_execution(
-        sim.day, plan, resources, services
+    _shared, execution, _resources, _services = resolve_authorized_logistics(
+        sim, sim.day, plan
     )
     before = sim.external_economy.account.funds_musd
     sim.logistics.advance_capacity_logistics(

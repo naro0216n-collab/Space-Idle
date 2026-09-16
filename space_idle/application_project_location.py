@@ -128,7 +128,7 @@ class LocationProjectorMixin:
     def _operational_node_view(self, location_id: SpatialNodeId) -> OperationalNodeView:
         sim = self._simulation
         node = sim.graph.operational_node(location_id)
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         power = decision.allocations.power_by_location[location_id]
         research_power = decision.allocations.power_by_location
         service_allocations = decision.allocations.services

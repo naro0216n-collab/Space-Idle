@@ -9,7 +9,7 @@ class ContractProgressionProjectorMixin:
         sim = self._simulation
         if sim.contracts is None:
             return ContractsView(())
-        decision = sim.tick_decision_projection()
+        decision = self._tick_decision_projection()
         powers = decision.allocations.power_by_location
         rows: list[ContractRow] = []
         for state in sorted(

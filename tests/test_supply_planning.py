@@ -6,6 +6,7 @@ from space_idle import AdvanceTime, GetCargoFlows, GetLogistics, GetProjects, Pl
 from space_idle.content.base_game import (
     EARTH,
     LEO,
+    LEO_LUNAR_SERVICE,
     LUNAR_ORBIT,
     MACHINERY,
     ORBITAL_LOGISTICS_NODE,
@@ -17,9 +18,10 @@ from space_idle.content.base_game import (
     TECH_ORBITAL_OPERATIONS,
     WATER,
 )
-from space_idle.resource_claim import ResourceClaim, allocate_resource_claims
+from space_idle.resource_claim import ResourceClaim
 from space_idle.supply import SupplyRequirement
 from space_idle.shared import DefinitionId, EntityId
+from tests._logistics_support import resolve_authorized_logistics
 
 
 def _requirement(
@@ -62,24 +64,19 @@ def _allow_external_transport(sim) -> None:
     )
 
 
-def _transport_service_allocations(sim, day, plan):
-    requests = sim.transport.transport_service_capacity_requests(day, plan.planned_usage)
-    locations = sim._active_locations() | set(sim.graph.operational_node_ids())
-    powers = {
-        location_id: sim.power.snapshot(location_id, sim.facilities, day)
-        for location_id in locations
-    }
-    return sim._allocate_tick_services(powers, requests)
-
-
-def _advance_logistics(sim, day, requirements):
+def _resolve_logistics(sim, day, requirements):
     plan = sim.logistics.plan_capacity_logistics(day, tuple(requirements))
     funds = sim.external_economy.allocate(plan.spending_requests, day)
     plan = sim.logistics.authorize_capacity_logistics(plan, funds, day)
-    resources = allocate_resource_claims(plan.claims, sim.inventory)
-    services = _transport_service_allocations(sim, day, plan)
-    execution = sim.logistics.allocate_capacity_logistics_execution(
-        day, plan, resources, services
+    shared, transport, resources, _services = resolve_authorized_logistics(
+        sim, day, plan
+    )
+    return plan, funds, resources, shared, transport
+
+
+def _advance_logistics(sim, day, requirements):
+    plan, funds, resources, _shared, execution = _resolve_logistics(
+        sim, day, requirements
     )
     sim.logistics.advance_capacity_logistics(day, plan, funds, execution)
     return plan, resources, execution
@@ -148,10 +145,13 @@ def test_same_priority_transport_capacity_is_progressive_max_min_and_registratio
             if row.display_name == "商業地表打上げ"
         )
         sim.inventory.add(EARTH, MACHINERY, service_capacity * 4.0)
-        planned = sim.logistics.plan_capacity_logistics(sim.day, requirements)
+        planned, _funds, _resources, shared, _execution = _resolve_logistics(
+            sim, sim.day, requirements
+        )
         return service_capacity, {
             requirement.id: sum(
-                row.amount_t for row in planned.dispatches
+                shared.allocated(row.cargo_claim_id)
+                for row in planned.dispatches
                 if row.requirement.id == requirement.id
             )
             for requirement in requirements
@@ -165,6 +165,49 @@ def test_same_priority_transport_capacity_is_progressive_max_min_and_registratio
     assert forward == pytest.approx(reverse)
     assert forward[first.id] == pytest.approx(capacity / 2.0)
     assert forward[second.id] == pytest.approx(capacity / 2.0)
+
+
+def test_external_transport_service_capacity_is_shared_across_supported_directions():
+    sim = build_game_application()._simulation
+    sim.transport.transport_allocations.clear()
+    sim.external_economy.register_service(LEO_LUNAR_SERVICE)
+    sim.external_economy.create_policy(
+        enabled=True,
+        allowed_service_ids=(LEO_LUNAR_SERVICE,),
+        day=sim.day,
+    )
+    sim.inventory.add(LEO, MACHINERY, 1.0)
+    sim.inventory.add(LUNAR_ORBIT, MACHINERY, 1.0)
+    outbound = _requirement(
+        0.25,
+        requirement_id="supply.external-shared.forward",
+        destination=LUNAR_ORBIT,
+        source=LEO,
+        priority=3,
+    )
+    inbound = _requirement(
+        0.25,
+        requirement_id="supply.external-shared.reverse",
+        destination=LEO,
+        source=LUNAR_ORBIT,
+        priority=3,
+    )
+
+    plan, _funds, _resources, shared, _execution = _resolve_logistics(
+        sim, sim.day, (outbound, inbound)
+    )
+    allocated = {
+        requirement.id: sum(
+            shared.allocated(row.cargo_claim_id)
+            for row in plan.dispatches
+            if row.requirement.id == requirement.id
+        )
+        for requirement in (outbound, inbound)
+    }
+
+    assert sum(allocated.values()) == pytest.approx(0.25)
+    assert allocated[outbound.id] == pytest.approx(0.125)
+    assert allocated[inbound.id] == pytest.approx(0.125)
 
 
 def test_future_high_priority_requirement_does_not_preempt_current_requirement_before_lead_time():
@@ -336,7 +379,9 @@ def test_dispatch_source_claim_competes_with_higher_priority_local_use():
     sim.inventory.stock[(EARTH, MACHINERY)] = 1.0
     requirement = _requirement(1.0, requirement_id="supply.source-competition", priority=3)
     plan = sim.logistics.plan_capacity_logistics(sim.day, (requirement,))
-    cargo_claim = next(row for row in plan.claims if row.owner_kind == "logistics_dispatch")
+    cargo_dispatch = next(
+        row for row in plan.dispatches if row.requirement.id == requirement.id
+    )
     local_claim = ResourceClaim(
         EntityId("claim.local-use"), EARTH, MACHINERY, 1.0, 5,
         "test_local_use", EntityId("owner.local-use"), "local_use",
@@ -344,15 +389,16 @@ def test_dispatch_source_claim_competes_with_higher_priority_local_use():
 
     funds = sim.external_economy.allocate(plan.spending_requests, sim.day)
     plan = sim.logistics.authorize_capacity_logistics(plan, funds, sim.day)
-    resources = allocate_resource_claims(plan.claims + (local_claim,), sim.inventory)
-    services = _transport_service_allocations(sim, sim.day, plan)
-    execution = sim.logistics.allocate_capacity_logistics_execution(
-        sim.day, plan, resources, services
+    shared, execution, _resources, _services = resolve_authorized_logistics(
+        sim,
+        sim.day,
+        plan,
+        static_intents=(sim._resource_claim_execution_bundle(local_claim),),
     )
     sim.logistics.advance_capacity_logistics(sim.day, plan, funds, execution)
 
-    assert resources.allocated(local_claim.id) == pytest.approx(1.0)
-    assert resources.allocated(cargo_claim.id) == pytest.approx(0.0)
+    assert shared.allocated(local_claim.id) == pytest.approx(1.0)
+    assert shared.allocated(cargo_dispatch.cargo_claim_id) == pytest.approx(0.0)
     assert not sim.logistics.cargo_flows
 
 

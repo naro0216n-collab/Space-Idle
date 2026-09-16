@@ -318,6 +318,25 @@ class TransportOperationDependencyProjection:
     surface_service_locations: tuple[SpatialNodeId, ...] = ()
 
 
+@dataclass(frozen=True)
+class TransportOperationUsageRequirements:
+    """Per-tonne operation inputs derived from one Fleet service-cycle state.
+
+    Direction-specific payload increments are linear. Shared empty-cycle and
+    turnaround loads are attributed between directions from a reference usage
+    mix so their aggregate remains equal to the service plan's max-utilization
+    semantics.
+    """
+
+    allocation_id: EntityId
+    forward_resource_per_t: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+    reverse_resource_per_t: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+    turnaround_service_type: str | None
+    turnaround_node_id: SpatialNodeId
+    forward_turnaround_per_t: float = 0.0
+    reverse_turnaround_per_t: float = 0.0
+
+
 class OperationSupportLocation(str, Enum):
     ORIGIN = "origin"
     DESTINATION = "destination"

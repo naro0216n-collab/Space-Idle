@@ -33,6 +33,7 @@ class GameApplication(ApplicationCommandMixin, ApplicationQueryMixin):
         self._catalog = catalog
         self._time_paused = False
         self._time_speed_multiplier = 1.0
+        self._query_projection_cache = None
 
     @property
     def content_id(self) -> str:
