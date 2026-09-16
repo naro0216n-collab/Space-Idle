@@ -16,7 +16,7 @@ from space_idle.spatial import (
     SpatialNodeKind,
     StarSystemDef,
     SurfaceCellDef,
-    SurfaceField,
+    SurfaceTerrain,
     SurfacePoint,
 )
 from space_idle.validation import validate_runtime_state
@@ -49,7 +49,7 @@ def _cell(cell_id: str, body_id: CelestialBodyId, neighbors: tuple[str, ...]) ->
         100.0,
         SurfacePoint(0.0, 0.0),
         frozenset(SurfaceCellId(value) for value in neighbors),
-        SurfaceField(),
+        SurfaceTerrain(),
         display_name=cell_id,
     )
 

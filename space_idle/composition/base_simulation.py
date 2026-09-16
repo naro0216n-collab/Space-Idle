@@ -110,7 +110,7 @@ def build_base_simulation() -> Simulation:
 
     industry = IndustryService(build_process_specs())
 
-    surface_infrastructure = SurfaceInfrastructureService(graph)
+    surface_infrastructure = SurfaceInfrastructureService(graph, facilities)
     survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph)
     for cell_id, resource_id in initial_known_surface_resource_knowledge():
         survey.initialize_known(cell_id, resource_id)
@@ -155,7 +155,7 @@ def build_base_simulation() -> Simulation:
         build_scientific_exploration_definitions(),
         facilities, inventory, power, transport, research,
     )
-    extraction = ExtractionService(build_extraction_specs(), graph, surface_infrastructure)
+    extraction = ExtractionService(build_extraction_specs(), graph, environment, surface_infrastructure)
 
     # Keep the Contract Domain composed and available for future events,
     # collaboration, or scenario content. Base Game starts with no offers.

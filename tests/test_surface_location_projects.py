@@ -385,11 +385,28 @@ def test_founding_persistence_preserves_payload_ownership_and_materializes_locat
         ).total_units
         == package.required_units
     )
+    assert {
+        anchor.cell_id
+        for anchor in reloaded_sim.surface_infrastructure.active_access_anchors(
+            location_id, reloaded_sim.day
+        )
+    } == {cell}
     orbit_plans = (
         reloaded_sim.transport.movement_plan_candidates(location_id, ids.LUNAR_ORBIT)
         + reloaded_sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, location_id)
     )
     assert orbit_plans
+    assert all(
+        (
+            plan.origin.surface_interface_id is not None
+            and reloaded_sim.facilities.facilities[plan.origin.surface_interface_id].site_cell_id == cell
+        )
+        or (
+            plan.destination.surface_interface_id is not None
+            and reloaded_sim.facilities.facilities[plan.destination.surface_interface_id].site_cell_id == cell
+        )
+        for plan in orbit_plans
+    )
     plan_ids = {plan.id for plan in orbit_plans}
 
     reloaded.execute(AdvanceTime(1))

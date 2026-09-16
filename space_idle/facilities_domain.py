@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .domain import DomainExtension, StateCodec
-from .validation_support import ValidationContext, require as _require, validate_environment_condition as _validate_environment_condition
+from .validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
 from .facilities import FacilityPlacementScope, FacilityState
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 
@@ -68,13 +68,18 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         for supply in definition.capability_supplies:
             _require(supply.id not in seen_caps, f"duplicate capability {supply.id} on {definition.id}")
             seen_caps.add(supply.id)
-        for phase, conditions in (("installation", definition.installation_environment), ("operating", definition.operating_environment)):
-            seen_condition_codes: set[str] = set()
-            for condition in conditions:
-                _validate_environment_condition(condition, f"facility:{definition.id}:{phase}")
-                code = getattr(condition, "code", "")
-                _require(code not in seen_condition_codes, f"duplicate facility {phase} condition: {definition.id}/{code}")
-                seen_condition_codes.add(code)
+        _validate_site_requirements(
+            definition.installation_requirements,
+            ctx.known_capabilities,
+            f"facility:{definition.id}:installation",
+            ctx.known_service_types,
+        )
+        _validate_site_requirements(
+            definition.operating_requirements,
+            ctx.known_capabilities,
+            f"facility:{definition.id}:operating",
+            ctx.known_service_types,
+        )
     for facility in sim.facilities.facilities.values():
         _require(facility.definition_id in facility_defs, f"facility references unknown definition: {facility.id}")
         _require(facility.operational_node_id in nodes, f"facility references unknown operational node: {facility.id}")

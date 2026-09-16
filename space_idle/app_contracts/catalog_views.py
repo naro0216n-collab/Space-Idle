@@ -27,6 +27,7 @@ class SiteRequirementsDefinitionRow:
     environment: tuple[RequirementConditionRow, ...] = ()
     capabilities: tuple[CapabilityRequirementRow, ...] = ()
     service_capacities: tuple[ServiceCapacityRequirementRow, ...] = ()
+    spatial_classifications: tuple[RequirementConditionRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -50,8 +51,8 @@ class FacilityDefinitionRow:
     display_name: str
     capabilities: tuple[str, ...]
     service_capacity_supplies: tuple[tuple[str, float], ...] = ()
-    installation_environment: tuple[RequirementConditionRow, ...] = ()
-    operating_environment: tuple[RequirementConditionRow, ...] = ()
+    installation_requirements: SiteRequirementsDefinitionRow = SiteRequirementsDefinitionRow()
+    operating_requirements: SiteRequirementsDefinitionRow = SiteRequirementsDefinitionRow()
     maintenance_fraction_per_year: float = 0.0
     placement_scope: str = "OPERATIONAL_NODE"
 

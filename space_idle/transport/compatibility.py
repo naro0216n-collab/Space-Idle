@@ -3,14 +3,11 @@ from __future__ import annotations
 import math
 
 from ..power import PowerSnapshot
-from ..shared import DefinitionId, MovementPlanId, SpatialNodeId, SurfaceCellId
-from ..site import evaluate_environment_requirements, evaluate_site_requirements
-from ..spatial import AtmosphereField, GravityField, SpatialNodeKind, SurfaceField
-from .endpoints import great_circle_distance_km, movement_geometry, resolve_movement_endpoint
+from ..shared import DefinitionId, MovementPlanId, SpatialNodeId
+from ..site import evaluate_physical_site_requirements, evaluate_site_requirements
+from ..spatial import AtmosphereField, GravityField
+from .endpoints import movement_geometry, resolve_movement_endpoint
 from .models import (
-    LANDING,
-    POWERED_ASCENT,
-    SPACEFLIGHT,
     OperationAssetDisposition,
     OperationSupportLocation,
     MovementPlan,
@@ -21,124 +18,6 @@ from .models import (
 from .operations import OperationEvaluationContext
 
 class TransportCompatibilityMixin:
-    def deployment_propellant_t(
-        self,
-        vehicle_definition_id: DefinitionId,
-        operations,
-        cargo_t: float,
-    ) -> float:
-        performance = self.vehicle_defs[vehicle_definition_id].performance
-        delta_v = sum(operation.delta_v_km_s for operation in operations)
-        return performance.propellant_t_per_total_t_per_km_s * (performance.dry_mass_t + cargo_t) * delta_v
-
-    def deployment_asset_disposition(self, vehicle_definition_id: DefinitionId, operations):
-        performance = self.vehicle_defs[vehicle_definition_id].performance
-        disposition = OperationAssetDisposition.DESTINATION
-        for operation in operations:
-            current = performance.operation_asset_disposition(operation.operation_type)
-            if current is None:
-                continue
-            disposition = current
-            if current is OperationAssetDisposition.ORIGIN:
-                break
-        return disposition
-
-    def deployment_vehicle_failures(
-        self,
-        vehicle_definition_id: DefinitionId,
-        origin_id: SpatialNodeId,
-        target_cell_id: SurfaceCellId,
-        operations,
-        payload_t: float,
-        transit_days: int,
-        *,
-        day: int = 0,
-        provided_destination_capabilities: tuple[str, ...] = (),
-    ) -> tuple[str, ...]:
-        if vehicle_definition_id not in self.vehicle_defs:
-            return (f"vehicle_definition:{vehicle_definition_id}",)
-        performance = self.vehicle_defs[vehicle_definition_id].performance
-        environment = self.facilities.environment
-        graph = environment.graph
-        if not graph.has_operational_node(origin_id):
-            return (f"origin:{origin_id}",)
-        if target_cell_id not in graph.surface_cells:
-            return (f"target_cell:{target_cell_id}",)
-        failures: list[str] = []
-        origin_node = graph.operational_node(origin_id)
-        target_cell = graph.surface_cells[target_cell_id]
-        same_body = origin_node.body_id is not None and origin_node.body_id == target_cell.body_id
-        present_operations = {operation.operation_type for operation in operations}
-
-        if origin_node.kind is SpatialNodeKind.SURFACE and same_body:
-            surface_path = SURFACE_TRANSPORT in present_operations
-            flight_path = POWERED_ASCENT in present_operations and LANDING in present_operations
-            if not surface_path and not flight_path:
-                failures.append(
-                    "deployment_path:same_body_surface_requires_surface_transport_or_ascent_landing"
-                )
-        else:
-            if origin_node.kind is SpatialNodeKind.SURFACE and POWERED_ASCENT not in present_operations:
-                failures.append("deployment_path:powered_ascent_required")
-            if not same_body and SPACEFLIGHT not in present_operations:
-                failures.append("deployment_path:spaceflight_required")
-            if LANDING not in present_operations:
-                failures.append("deployment_path:landing_required")
-
-        origin_surface = self._surface_environment(origin_id, day)
-        destination_surface = self._surface_environment(target_cell_id, day)
-        surface_distance_km = None
-        if origin_node.kind is SpatialNodeKind.SURFACE and same_body:
-            origin_location = graph.locations[origin_id]
-            origin_cell = graph.surface_cells[origin_location.core_cell_id]
-            body = graph.bodies[target_cell.body_id]
-            surface_distance_km = great_circle_distance_km(
-                origin_cell.centroid, target_cell.centroid, body.mean_radius_km
-            )
-        context = OperationEvaluationContext(
-            transit_days=max(1, transit_days),
-            origin_surface=origin_surface,
-            destination_surface=destination_surface,
-            surface_distance_km=surface_distance_km,
-        )
-        for index, operation in enumerate(operations):
-            capability = performance.capability_for(operation.operation_type)
-            failures.extend(self.operation_registry.evaluate(operation, capability, context))
-            if (
-                capability is not None
-                and getattr(capability, "asset_disposition", OperationAssetDisposition.DESTINATION)
-                is OperationAssetDisposition.ORIGIN
-                and index < len(operations) - 1
-            ):
-                failures.append(f"operation:{operation.operation_type}:asset_returns_before_deployment_complete")
-        if payload_t > performance.payload_t + 1e-9:
-            failures.append(f"payload_capacity:{performance.payload_t:g}/{payload_t:g}")
-        failures.extend(performance.endurance_failures(float(transit_days)))
-        for support in performance.operation_support_requirements:
-            if support.operation_type not in present_operations:
-                continue
-            if support.location is OperationSupportLocation.ORIGIN:
-                if not self._has_active_capability(origin_id, support.capability_id, day):
-                    failures.append(
-                        f"operation_support:{support.operation_type}:origin:{support.capability_id}"
-                    )
-            elif support.capability_id not in provided_destination_capabilities:
-                failures.append(
-                    f"operation_support:{support.operation_type}:destination:{support.capability_id}"
-                )
-        if performance.propellant_resource_id is not None:
-            propellant = self.deployment_propellant_t(vehicle_definition_id, operations, payload_t)
-            if propellant > performance.propellant_capacity_t + 1e-9:
-                failures.append(
-                    f"propellant_capacity:{propellant:g}/{performance.propellant_capacity_t:g}"
-                )
-            failures.extend(
-                self.resource_support_failures(
-                    performance, origin_id, performance.propellant_resource_id, day
-                )
-            )
-        return tuple(dict.fromkeys(failures))
-
     def resource_support_failures(
         self,
         performance: TransportPerformanceProfile,
@@ -193,7 +72,7 @@ class TransportCompatibilityMixin:
                 for code, detail in self.facilities.activation_failures(interface, day):
                     failures.append(f"{prefix}:interface:{code}:{detail}")
             if endpoint.operational_node_id is None:
-                for failure in evaluate_environment_requirements(
+                for failure in evaluate_physical_site_requirements(
                     requirements, resolved.environment_context_id, day, self.facilities.environment
                 ):
                     failures.append(f"{prefix}:{failure.code}:{failure.detail}")
@@ -247,7 +126,7 @@ class TransportCompatibilityMixin:
 
     def _surface_environment(self, context_id, day: int) -> tuple[float, float] | None:
         environment = self.facilities.environment
-        if environment.get(context_id, SurfaceField, day) is None:
+        if not environment.graph.is_surface_context(context_id):
             return None
         gravity = environment.get(context_id, GravityField, day)
         atmosphere = environment.get(context_id, AtmosphereField, day)
@@ -371,7 +250,7 @@ class TransportCompatibilityMixin:
                 failures.append(f"{prefix}:endpoint:{exc}")
                 continue
             if endpoint.operational_node_id is None:
-                for failure in evaluate_environment_requirements(
+                for failure in evaluate_physical_site_requirements(
                     requirements, resolved.environment_context_id, day, self.facilities.environment
                 ):
                     failures.append(f"{prefix}:{failure.code}:{failure.detail}")

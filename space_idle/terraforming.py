@@ -16,10 +16,15 @@ class PlanetaryClimateState:
     density_kg_m3: float
     mean_temperature_k: float
     composition: dict[DefinitionId, float]
+    reference_temperature_k: float | None = None
 
     def __post_init__(self) -> None:
         if self.pressure_pa < 0 or self.density_kg_m3 < 0 or self.mean_temperature_k < 0:
             raise ValueError("planetary climate values must be non-negative")
+        if self.reference_temperature_k is None:
+            self.reference_temperature_k = self.mean_temperature_k
+        elif self.reference_temperature_k < 0:
+            raise ValueError("planetary climate reference temperature must be non-negative")
         if any(value < 0 for value in self.composition.values()):
             raise ValueError("planetary atmosphere composition must be non-negative")
         total = sum(self.composition.values())
@@ -70,6 +75,7 @@ class TerraformingEnvironmentOverlay(EnvironmentOverlay):
                 "pressure_pa": climate.pressure_pa,
                 "density_kg_m3": climate.density_kg_m3,
                 "mean_temperature_k": climate.mean_temperature_k,
+                "reference_temperature_k": climate.reference_temperature_k,
                 "composition": {str(k): v for k, v in sorted(climate.composition.items(), key=lambda x: str(x[0]))},
             }
             for body_id, climate in sorted(self.service.climates.items(), key=lambda x: str(x[0]))
@@ -92,6 +98,7 @@ class TerraformingEnvironmentOverlay(EnvironmentOverlay):
                 float(raw["density_kg_m3"]),
                 float(raw["mean_temperature_k"]),
                 {DefinitionId(str(k)): float(v) for k, v in composition_raw.items()},
+                float(raw["reference_temperature_k"]),
             )
         self.service.climates = restored
 
@@ -114,5 +121,20 @@ class TerraformingEnvironmentOverlay(EnvironmentOverlay):
         if facet_type is AtmosphereField:
             return cast(FacetT, AtmosphereField(climate.pressure_pa, climate.density_kg_m3, dict(climate.composition)))
         if facet_type is ThermalField:
-            return cast(FacetT, ThermalField(climate.mean_temperature_k))
+            reference = climate.reference_temperature_k
+            if reference is None:
+                raise ValueError("planetary climate lacks reference temperature")
+            delta = climate.mean_temperature_k - reference
+            if current is None:
+                return cast(FacetT, ThermalField(climate.mean_temperature_k))
+            if not isinstance(current, ThermalField):
+                raise TypeError("thermal environment overlay received incompatible field")
+            return cast(
+                FacetT,
+                ThermalField(
+                    current.nominal_temperature_k + delta,
+                    None if current.min_temperature_k is None else current.min_temperature_k + delta,
+                    None if current.max_temperature_k is None else current.max_temperature_k + delta,
+                ),
+            )
         return current

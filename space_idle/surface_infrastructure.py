@@ -8,16 +8,24 @@ from .facilities import FacilityBook
 from .power import PowerSnapshot
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
-from .shared import EntityId, SpatialNodeId, SurfaceCellId
-from .spatial import SpatialGraph
+from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from .spatial import SpatialGraph, great_circle_distance_km
 
 SURFACE_DISTRIBUTION_SERVICE = "surface_distribution"
+SURFACE_ACCESS_ANCHOR_CAPABILITY = "surface_access_anchor"
 
 
 @dataclass(frozen=True)
 class SurfaceInfrastructureLoad:
     code: str
     demand: float
+
+
+@dataclass(frozen=True)
+class SurfaceAccessAnchor:
+    facility_id: EntityId
+    facility_definition_id: DefinitionId
+    cell_id: SurfaceCellId
 
 
 @dataclass(frozen=True)
@@ -45,79 +53,131 @@ class SurfaceInfrastructureService:
     """
 
     graph: SpatialGraph
+    facilities: FacilityBook
     service_type: str = SURFACE_DISTRIBUTION_SERVICE
+    access_anchor_capability_id: str = SURFACE_ACCESS_ANCHOR_CAPABILITY
     network_dependent_service_types: frozenset[str] = frozenset({"cargo_transfer"})
 
-    def _characteristic_width(self, cell_id: SurfaceCellId) -> float:
-        return math.sqrt(self.graph.surface_cells[cell_id].area_km2)
+    def active_access_anchors(
+        self, location_id: SpatialNodeId, day: int = 0
+    ) -> tuple[SurfaceAccessAnchor, ...]:
+        location = self.graph.locations[location_id]
+        rows: list[SurfaceAccessAnchor] = []
+        for facility in sorted(
+            self.facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)
+        ):
+            if facility.site_cell_id is None or facility.site_cell_id not in location.developed_cell_ids:
+                continue
+            definition = self.facilities.definitions[facility.definition_id]
+            if any(
+                supply.id == self.access_anchor_capability_id
+                for supply in definition.capability_supplies
+            ):
+                rows.append(
+                    SurfaceAccessAnchor(
+                        facility.id,
+                        facility.definition_id,
+                        facility.site_cell_id,
+                    )
+                )
+        return tuple(rows)
 
-    def _distance_units(
+    def active_access_anchor_cells(
+        self, location_id: SpatialNodeId, day: int = 0
+    ) -> tuple[SurfaceCellId, ...]:
+        return tuple(
+            sorted(
+                {anchor.cell_id for anchor in self.active_access_anchors(location_id, day)},
+                key=str,
+            )
+        )
+
+    def _anchor_distances(
         self,
         location_id: SpatialNodeId,
         cell_ids: set[SurfaceCellId] | frozenset[SurfaceCellId],
-    ) -> dict[SurfaceCellId, float]:
-        location = self.graph.locations[location_id]
-        core = location.core_cell_id
-        if core not in cell_ids:
-            raise ValueError("surface infrastructure territory must contain the core cell")
-        core_width = self._characteristic_width(core)
-        if core_width <= 1e-12:
-            raise ValueError("surface cell characteristic width must be positive")
-
-        distances: dict[SurfaceCellId, float] = {core: 0.0}
-        pending: list[tuple[float, str, SurfaceCellId]] = [(0.0, str(core), core)]
+        anchor_cells: tuple[SurfaceCellId, ...],
+    ) -> dict[SurfaceCellId, tuple[float, SurfaceCellId]]:
+        if not anchor_cells:
+            return {}
+        body = self.graph.bodies[self.graph.locations[location_id].body_id]
+        distances: dict[SurfaceCellId, tuple[float, SurfaceCellId]] = {
+            anchor: (0.0, anchor) for anchor in anchor_cells if anchor in cell_ids
+        }
+        pending: list[tuple[float, str, str, SurfaceCellId, SurfaceCellId]] = [
+            (0.0, str(anchor), str(anchor), anchor, anchor)
+            for anchor in anchor_cells if anchor in cell_ids
+        ]
+        heapq.heapify(pending)
         while pending:
-            distance, _sort_key, current = heapq.heappop(pending)
-            if distance > distances[current] + 1e-12:
+            distance, _source_key, _cell_key, source, current = heapq.heappop(pending)
+            best = distances.get(current)
+            if best is None or distance > best[0] + 1e-12 or source != best[1]:
                 continue
-            current_width = self._characteristic_width(current)
-            for neighbor in sorted(self.graph.surface_cells[current].neighbor_ids, key=str):
+            current_cell = self.graph.surface_cells[current]
+            for neighbor in sorted(current_cell.neighbor_ids, key=str):
                 if neighbor not in cell_ids:
                     continue
-                neighbor_width = self._characteristic_width(neighbor)
-                edge = 0.5 * (current_width + neighbor_width) / core_width
+                neighbor_cell = self.graph.surface_cells[neighbor]
+                edge = great_circle_distance_km(
+                    current_cell.centroid, neighbor_cell.centroid, body.mean_radius_km
+                )
                 candidate = distance + edge
-                if candidate + 1e-12 < distances.get(neighbor, math.inf):
-                    distances[neighbor] = candidate
-                    heapq.heappush(pending, (candidate, str(neighbor), neighbor))
+                existing = distances.get(neighbor)
+                if (
+                    existing is None
+                    or candidate < existing[0] - 1e-12
+                    or (abs(candidate - existing[0]) <= 1e-12 and str(source) < str(existing[1]))
+                ):
+                    distances[neighbor] = (candidate, source)
+                    heapq.heappush(
+                        pending, (candidate, str(source), str(neighbor), source, neighbor)
+                    )
         if set(distances) != set(cell_ids):
-            raise ValueError("surface infrastructure territory must be connected")
+            raise ValueError("surface infrastructure territory must be connected to an active access anchor")
         return distances
 
     def load_sources_for_cells(
         self,
         location_id: SpatialNodeId,
         cell_ids: set[SurfaceCellId] | frozenset[SurfaceCellId],
+        day: int = 0,
     ) -> tuple[SurfaceInfrastructureLoad, ...]:
-        location = self.graph.locations[location_id]
-        core = location.core_cell_id
-        core_area = self.graph.surface_cells[core].area_km2
-        distances = self._distance_units(location_id, cell_ids)
-
-        territory_area = math.fsum(
-            self.graph.surface_cells[cell_id].area_km2 / core_area
-            for cell_id in sorted(cell_ids, key=str)
-            if cell_id != core
+        if not cell_ids:
+            return ()
+        anchors = tuple(
+            anchor for anchor in self.active_access_anchor_cells(location_id, day)
+            if anchor in cell_ids
         )
-        territory_spread = math.fsum(
-            (self.graph.surface_cells[cell_id].area_km2 / core_area)
-            * max(0.0, distances[cell_id] - 1.0)
-            for cell_id in sorted(cell_ids, key=str)
-            if cell_id != core
-        )
-        rows = []
+        if not anchors:
+            return (SurfaceInfrastructureLoad("access_anchor_missing", float(len(cell_ids))),)
+        distances = self._anchor_distances(location_id, cell_ids, anchors)
+        anchor_set = set(anchors)
+        territory_area = 0.0
+        territory_spread = 0.0
+        for cell_id in sorted(cell_ids, key=str):
+            if cell_id in anchor_set:
+                continue
+            distance_km, anchor_id = distances[cell_id]
+            cell = self.graph.surface_cells[cell_id]
+            anchor = self.graph.surface_cells[anchor_id]
+            area_ratio = cell.area_km2 / anchor.area_km2
+            distance_units = distance_km / math.sqrt(anchor.area_km2)
+            territory_area += area_ratio
+            territory_spread += area_ratio * max(0.0, distance_units - 1.0)
+        rows: list[SurfaceInfrastructureLoad] = []
         if territory_area > 1e-12:
             rows.append(SurfaceInfrastructureLoad("territory_area", territory_area))
         if territory_spread > 1e-12:
             rows.append(SurfaceInfrastructureLoad("territory_spread", territory_spread))
         return tuple(rows)
 
-    def load_sources(self, location_id: SpatialNodeId) -> tuple[SurfaceInfrastructureLoad, ...]:
+    def load_sources(self, location_id: SpatialNodeId, day: int = 0) -> tuple[SurfaceInfrastructureLoad, ...]:
         location = self.graph.locations[location_id]
-        return self.load_sources_for_cells(location_id, location.developed_cell_ids)
+        return self.load_sources_for_cells(location_id, location.developed_cell_ids, day)
 
-    def demand(self, location_id: SpatialNodeId) -> float:
-        return math.fsum(row.demand for row in self.load_sources(location_id))
+    def demand(self, location_id: SpatialNodeId, day: int = 0) -> float:
+        return math.fsum(row.demand for row in self.load_sources(location_id, day))
 
     @staticmethod
     def service_request_id(location_id: SpatialNodeId) -> EntityId:
@@ -129,8 +189,9 @@ class SurfaceInfrastructureService:
         *,
         requested_rate: float | None = None,
         priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
+        day: int = 0,
     ) -> ServiceCapacityRequest:
-        demand = self.demand(location_id) if requested_rate is None else requested_rate
+        demand = self.demand(location_id, day) if requested_rate is None else requested_rate
         return ServiceCapacityRequest(
             self.service_request_id(location_id),
             location_id,
@@ -153,7 +214,7 @@ class SurfaceInfrastructureService:
     ) -> SurfaceInfrastructureSnapshot:
         if location_id not in self.graph.locations:
             raise KeyError(location_id)
-        loads = self.load_sources(location_id)
+        loads = self.load_sources(location_id, day)
         demand = math.fsum(load.demand for load in loads)
         if allocation_plan is None:
             if demand > 1e-12:
@@ -222,9 +283,9 @@ class SurfaceInfrastructureService:
         return math.fsum(contributions)
 
     def fulfillment_from_plan(
-        self, location_id: SpatialNodeId, allocation_plan: ServiceCapacityAllocationPlan
+        self, location_id: SpatialNodeId, allocation_plan: ServiceCapacityAllocationPlan, day: int = 0
     ) -> float:
-        demand = self.demand(location_id)
+        demand = self.demand(location_id, day)
         if demand <= 1e-12:
             return 1.0
         try:
@@ -241,16 +302,17 @@ class SurfaceInfrastructureService:
         service_type: str,
         facilities: FacilityBook,
         allocation_plan: ServiceCapacityAllocationPlan,
+        day: int = 0,
     ) -> dict[EntityId, float]:
         if location_id not in self.graph.locations:
             return {}
         location = self.graph.locations[location_id]
-        fulfillment = self.fulfillment_from_plan(location_id, allocation_plan)
+        fulfillment = self.fulfillment_from_plan(location_id, allocation_plan, day)
         factors: dict[EntityId, float] = {}
         for facility in facilities.all_at(location_id):
             if service_type in self.network_dependent_service_types:
                 factors[facility.id] = fulfillment
-            elif facility.site_cell_id is None or facility.site_cell_id == location.core_cell_id:
+            elif facility.site_cell_id is None:
                 factors[facility.id] = 1.0
             elif facility.site_cell_id in location.developed_cell_ids:
                 factors[facility.id] = fulfillment
@@ -263,11 +325,12 @@ class SurfaceInfrastructureService:
         location_id: SpatialNodeId,
         cell_id: SurfaceCellId,
         allocation_plan: ServiceCapacityAllocationPlan,
+        day: int = 0,
     ) -> float:
         location = self.graph.locations[location_id]
         if cell_id not in location.developed_cell_ids:
             return 0.0
-        return self.fulfillment_from_plan(location_id, allocation_plan)
+        return self.fulfillment_from_plan(location_id, allocation_plan, day)
 
     def prospective_development_snapshot(
         self,
@@ -276,13 +339,14 @@ class SurfaceInfrastructureService:
         allocation_plan: ServiceCapacityAllocationPlan,
         *,
         development_request_id: EntityId | None = None,
+        day: int = 0,
     ) -> SurfaceInfrastructureSnapshot:
         failures = self.graph.surface_cell_development_failures(location_id, cell_id)
         if failures:
             raise ValueError("; ".join(detail for _code, detail in failures))
         cells = set(self.graph.locations[location_id].developed_cell_ids)
         cells.add(cell_id)
-        loads = self.load_sources_for_cells(location_id, cells)
+        loads = self.load_sources_for_cells(location_id, cells, day)
         demand = math.fsum(load.demand for load in loads)
         summary = allocation_plan.summary(location_id, self.service_type)
         try:

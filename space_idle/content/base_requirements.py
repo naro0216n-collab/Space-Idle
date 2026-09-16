@@ -3,28 +3,65 @@ from __future__ import annotations
 from ..facilities import CapabilitySupply, ServiceCapacitySupply
 from ..projects import BuildResourceRequirement, ConstructionRecipe
 from ..shared import DefinitionId
-from ..site import CapabilityRequirement, CapabilityRequirementState, FacetValueRange, RequiresFacet, SiteRequirements
-from ..spatial import AtmosphereField, OrbitalField, SurfaceField, ThermalField
+from ..site import (
+    CapabilityRequirement, CapabilityRequirementState, FacetValueRange, SiteRequirements,
+    SpatialClassification, SpatialClassificationRequirement,
+)
+from ..spatial import AtmosphereField, ThermalField
 from .base_ids import STRUCTURAL_COMPONENTS, MACHINERY, PRECISION_ELECTRONICS, BULK_STRUCTURE, FABRICATED_STRUCTURE, BASIC_MACHINE_PARTS
 
-SURFACE_ENV = (
-    RequiresFacet(SurfaceField, "environment:surface", "地表環境が必要"),
+SURFACE_CLASSIFICATION = (
+    SpatialClassificationRequirement(
+        SpatialClassification.SURFACE, "spatial:surface", "地表地点が必要"
+    ),
 )
-ORBIT_ENV = (
-    RequiresFacet(OrbitalField, "environment:orbit", "軌道環境が必要"),
+ORBIT_CLASSIFICATION = (
+    SpatialClassificationRequirement(
+        SpatialClassification.ORBITAL, "spatial:orbit", "軌道地点が必要"
+    ),
 )
-VACUUM_SURFACE_ENV = SURFACE_ENV + (
-    FacetValueRange(AtmosphereField, "pressure_pa", "environment:low_pressure", "低圧環境が必要", maximum=1000.0),
+VACUUM_ENV = (
+    FacetValueRange(
+        AtmosphereField, "pressure_pa", "environment:low_pressure", "低圧環境が必要", maximum=1000.0
+    ),
 )
-COLD_VOLATILE_SURFACE_ENV = VACUUM_SURFACE_ENV + (
-    FacetValueRange(ThermalField, "nominal_temperature_k", "environment:cold", "低温環境が必要", maximum=180.0),
+COLD_VOLATILE_ENV = VACUUM_ENV + (
+    FacetValueRange(
+        ThermalField, "nominal_temperature_k", "environment:cold", "低温環境が必要", maximum=180.0
+    ),
 )
-SURFACE_SITE = SiteRequirements(SURFACE_ENV)
-ORBIT_SITE = SiteRequirements(ORBIT_ENV)
-ATMOSPHERIC_SURFACE_SITE = SiteRequirements(SURFACE_ENV + (
-    FacetValueRange(AtmosphereField, "pressure_pa", "environment:atmospheric_surface", "十分な大気圧を持つ地表が必要", minimum=50000.0),
-))
-VACUUM_SURFACE_SITE = SiteRequirements(VACUUM_SURFACE_ENV)
+SURFACE_SITE = SiteRequirements(spatial_classification_requirements=SURFACE_CLASSIFICATION)
+ORBIT_SITE = SiteRequirements(spatial_classification_requirements=ORBIT_CLASSIFICATION)
+ATMOSPHERIC_SURFACE_SITE = SiteRequirements(
+    environment=(
+        FacetValueRange(
+            AtmosphereField,
+            "pressure_pa",
+            "environment:atmospheric_surface",
+            "十分な大気圧を持つ地表が必要",
+            minimum=50000.0,
+        ),
+    ),
+    spatial_classification_requirements=SURFACE_CLASSIFICATION,
+)
+VACUUM_SURFACE_SITE = SiteRequirements(
+    environment=VACUUM_ENV,
+    spatial_classification_requirements=SURFACE_CLASSIFICATION,
+)
+COLD_VOLATILE_SURFACE_SITE = SiteRequirements(
+    environment=COLD_VOLATILE_ENV,
+    spatial_classification_requirements=SURFACE_CLASSIFICATION,
+)
+
+
+def with_capabilities(site: SiteRequirements, *capability_ids: str) -> SiteRequirements:
+    return SiteRequirements(
+        environment=site.environment,
+        capability_requirements=site.capability_requirements + _available_requirements(*capability_ids),
+        service_capacity_requirements=site.service_capacity_requirements,
+        spatial_classification_requirements=site.spatial_classification_requirements,
+    )
+
 
 
 def _capabilities(*ids: str) -> tuple[CapabilitySupply, ...]:

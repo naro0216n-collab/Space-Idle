@@ -9,7 +9,8 @@ from ..facilities import FacilityBook
 from ..shared import CelestialBodyId, DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 from ..spatial import SpatialGraph
-from .endpoints import great_circle_distance_km, resolve_movement_endpoint
+from ..spatial import great_circle_distance_km
+from .endpoints import resolve_movement_endpoint
 from .models import (
     MovementEndpoint,
     MovementPlan,

@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from .domain import DomainExtension, StateCodec
-from .validation_support import ValidationContext, require as _require
+from .validation_support import (
+    ValidationContext, require as _require, validate_site_requirements,
+)
 from .exploration_models import SurveyCampaign
 from .shared import DefinitionId, SpatialNodeId, SurfaceCellId
 
@@ -108,6 +110,28 @@ def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(definition_id == spec.facility_def_id, f"extraction spec key mismatch: {definition_id}")
         _require(definition_id in ctx.facility_defs, f"extraction spec references unknown facility: {definition_id}")
         _require(spec.nominal_capacity_t_per_day >= 0, f"negative extraction capacity: {definition_id}")
+        validate_site_requirements(
+            spec.opportunity_requirements,
+            ctx.known_capabilities,
+            f"extraction:{definition_id}",
+            ctx.known_service_types,
+        )
+        if spec.geology_accessibility_key is not None:
+            _require(
+                any(
+                    spec.geology_accessibility_key in cell.static_geology
+                    for cell in sim.graph.surface_cells.values()
+                ),
+                f"extraction spec references unknown geology accessibility: {definition_id}/{spec.geology_accessibility_key}",
+            )
+        if spec.terrain_accessibility_attribute is not None:
+            _require(
+                all(
+                    hasattr(cell.terrain, spec.terrain_accessibility_attribute)
+                    for cell in sim.graph.surface_cells.values()
+                ),
+                f"extraction spec references unknown terrain accessibility: {definition_id}/{spec.terrain_accessibility_attribute}",
+            )
 
 
 def validate_survey_runtime(sim: Any) -> None:
@@ -163,6 +187,12 @@ def validate_extraction_runtime(sim: Any) -> None:
             _require(
                 sim.extraction.static_opportunity(location_id, resource_id) >= 0.0,
                 f"negative extraction opportunity: {(location_id, resource_id)}",
+            )
+            _require(
+                sim.extraction.effective_opportunity(
+                    location_id, resource_id, sim.facilities, day=sim.day
+                ) >= 0.0,
+                f"negative effective extraction opportunity: {(location_id, resource_id)}",
             )
 
 

@@ -401,29 +401,25 @@ class Simulation:
             return None
         if location_id not in self.graph.locations:
             return None
-        if self.extraction is not None and service_type.startswith(self.extraction.SERVICE_TYPE_PREFIX):
-            resource_ids = {
-                spec.resource_id
-                for spec in self.extraction.specs.values()
-                if self.extraction.service_type(spec.resource_id) == service_type
-            }
-            if len(resource_ids) == 1:
-                resource_id = next(iter(resource_ids))
-                try:
-                    fulfillment = surface.fulfillment_from_plan(location_id, resolved_plan)
-                except ValueError:
-                    fulfillment = 1.0 if surface.demand(location_id) <= 1e-12 else 0.0
-                factor = self.extraction.surface_distribution_factor(
-                    location_id, resource_id, fulfillment
+        if self.extraction is not None and service_type.startswith(
+            self.extraction.SERVICE_TYPE_PREFIX
+        ):
+            try:
+                fulfillment = surface.fulfillment_from_plan(
+                    location_id, resolved_plan, self.day
                 )
-                return {
-                    facility.id: factor
-                    for facility in self.facilities.all_at(location_id)
-                    if (spec := self.extraction.specs.get(facility.definition_id)) is not None
-                    and spec.resource_id == resource_id
-                }
+            except ValueError:
+                fulfillment = (
+                    1.0 if surface.demand(location_id, self.day) <= 1e-12 else 0.0
+                )
+            return {
+                facility.id: fulfillment
+                for facility in self.facilities.all_at(location_id)
+                if (spec := self.extraction.specs.get(facility.definition_id)) is not None
+                and self.extraction.service_type(spec.resource_id) == service_type
+            }
         return surface.facility_availability_factors(
-            location_id, service_type, self.facilities, resolved_plan
+            location_id, service_type, self.facilities, resolved_plan, self.day
         )
 
     def _service_supply_at(
@@ -582,7 +578,7 @@ class Simulation:
         if self.surface_infrastructure is not None:
             request_ids = {request.id for request in requests}
             upstream = tuple(
-                self.surface_infrastructure.service_request(location_id)
+                self.surface_infrastructure.service_request(location_id, day=self.day)
                 for location_id in sorted(self.graph.locations, key=str)
                 if self.surface_infrastructure.service_request_id(location_id)
                 not in request_ids
@@ -793,7 +789,7 @@ class Simulation:
         if self.surface_infrastructure is not None:
             request_ids = {request.id for request in rows}
             rows += tuple(
-                self.surface_infrastructure.service_request(location_id)
+                self.surface_infrastructure.service_request(location_id, day=self.day)
                 for location_id in sorted(self.graph.locations, key=str)
                 if self.surface_infrastructure.service_request_id(location_id)
                 not in request_ids

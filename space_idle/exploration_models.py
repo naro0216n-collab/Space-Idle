@@ -6,6 +6,7 @@ from typing import Literal
 
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .shared import DefinitionId, SpatialNodeId, SurfaceCellId
+from .site import SiteRequirements
 
 KnowledgeLevel = Literal[0, 1, 2, 3, 4]
 
@@ -64,10 +65,17 @@ class ExtractionSpec:
     resource_id: DefinitionId
     output_resource_id: DefinitionId
     nominal_capacity_t_per_day: float
+    opportunity_requirements: SiteRequirements = SiteRequirements()
+    geology_accessibility_key: str | None = None
+    terrain_accessibility_attribute: str | None = None
 
     def __post_init__(self) -> None:
         if self.nominal_capacity_t_per_day < 0:
             raise ValueError("nominal extraction capacity must be non-negative")
+        if self.geology_accessibility_key is not None and not self.geology_accessibility_key:
+            raise ValueError("geology accessibility key must not be empty")
+        if self.terrain_accessibility_attribute is not None and not self.terrain_accessibility_attribute:
+            raise ValueError("terrain accessibility attribute must not be empty")
 
 
 @dataclass(frozen=True)

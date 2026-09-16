@@ -6,6 +6,7 @@ from .application_views import (
     CapabilityRow,
     ServiceCapacityRow,
     EnvironmentFacetRow,
+    LocationEnvironmentSummaryRow,
     ExtractionRow,
     ExtractionResourceRow,
     FacilityRow,
@@ -15,13 +16,27 @@ from .application_views import (
     OperationalNodeView,
     SurfaceInfrastructureLoadRow,
     SurfaceInfrastructureRow,
+    SurfaceAccessAnchorRow,
+    SurfaceLocationDecisionRow,
     StorageRow,
 )
 from .shared import SpatialNodeId
-from .spatial import SpatialContextId
+from .spatial import EnvironmentFieldScope, SpatialContextId
 
 
 class LocationProjectorMixin:
+    def _environment_values(self, facet) -> tuple[tuple[str, object], ...]:
+        if is_dataclass(facet):
+            return tuple(
+                (field.name, self._transport_value(getattr(facet, field.name)))
+                for field in fields(facet)
+            )
+        return tuple(
+            (key, self._transport_value(value))
+            for key, value in sorted(vars(facet).items())
+            if not key.startswith("_")
+        )
+
     def _inventory_rows(self, location_id: SpatialNodeId) -> tuple[InventoryRow, ...]:
         sim = self._simulation
         resource_ids = set(self._catalog.resources)
@@ -99,7 +114,7 @@ class LocationProjectorMixin:
 
     def _environment_rows(self, location_id: SpatialContextId) -> tuple[EnvironmentFacetRow, ...]:
         sim = self._simulation
-        facet_types = {facet_type for (_node_id, facet_type) in sim.environment.static.facets}
+        facet_types = sim.environment.static.facet_types()
         rows: list[EnvironmentFacetRow] = []
         for facet_type in sorted(
             facet_types, key=lambda value: getattr(value, "facet_key", value.__name__)
@@ -107,23 +122,69 @@ class LocationProjectorMixin:
             facet = sim.environment.get(location_id, facet_type, sim.day)
             if facet is None:
                 continue
-            if is_dataclass(facet):
-                values = tuple(
-                    (field.name, self._transport_value(getattr(facet, field.name)))
-                    for field in fields(facet)
-                )
-            else:
-                values = tuple(
-                    (key, self._transport_value(value))
-                    for key, value in sorted(vars(facet).items())
-                    if not key.startswith("_")
-                )
             rows.append(
                 EnvironmentFacetRow(
-                    getattr(facet_type, "facet_key", facet_type.__name__), values
+                    getattr(facet_type, "facet_key", facet_type.__name__),
+                    self._environment_values(facet),
                 )
             )
         return tuple(rows)
+
+    def _surface_location_decision_row(
+        self, location_id: SpatialNodeId
+    ) -> SurfaceLocationDecisionRow | None:
+        sim = self._simulation
+        location = sim.graph.locations.get(location_id)
+        if location is None:
+            return None
+
+        facet_types = sim.environment.static.facet_types()
+        environment_summary: list[LocationEnvironmentSummaryRow] = []
+        for facet_type in sorted(
+            facet_types, key=lambda value: getattr(value, "facet_key", value.__name__)
+        ):
+            scope = getattr(facet_type, "environment_scope", None)
+            if not isinstance(scope, EnvironmentFieldScope):
+                continue
+            location_facet = sim.environment.get(location_id, facet_type, sim.day)
+            location_values = (
+                () if location_facet is None else self._environment_values(location_facet)
+            )
+            cell_values: list[tuple[str, tuple[tuple[str, object], ...]]] = []
+            if scope is not EnvironmentFieldScope.BODY_GLOBAL:
+                for cell_id in sorted(location.developed_cell_ids, key=str):
+                    facet = sim.environment.get(cell_id, facet_type, sim.day)
+                    if facet is not None:
+                        cell_values.append((str(cell_id), self._environment_values(facet)))
+            if not location_values and not cell_values:
+                continue
+            environment_summary.append(
+                LocationEnvironmentSummaryRow(
+                    getattr(facet_type, "facet_key", facet_type.__name__),
+                    scope.value,
+                    location_values,
+                    tuple(cell_values),
+                )
+            )
+
+        anchors: tuple[SurfaceAccessAnchorRow, ...] = ()
+        if sim.surface_infrastructure is not None:
+            anchors = tuple(
+                SurfaceAccessAnchorRow(
+                    str(anchor.facility_id),
+                    str(anchor.facility_definition_id),
+                    str(anchor.cell_id),
+                )
+                for anchor in sim.surface_infrastructure.active_access_anchors(
+                    location_id, sim.day
+                )
+            )
+        return SurfaceLocationDecisionRow(
+            str(location.core_cell_id),
+            tuple(str(cell_id) for cell_id in sorted(location.developed_cell_ids, key=str)),
+            anchors,
+            tuple(environment_summary),
+        )
 
     def _operational_node_view(self, location_id: SpatialNodeId) -> OperationalNodeView:
         sim = self._simulation
@@ -432,4 +493,5 @@ class LocationProjectorMixin:
             tuple(extraction),
             tuple(extraction_resources),
             self._project_rows(location_id),
+            self._surface_location_decision_row(location_id),
         )

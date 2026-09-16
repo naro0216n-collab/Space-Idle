@@ -8,7 +8,36 @@ if TYPE_CHECKING:
     from .facilities import FacilityBook
     from .power import PowerSnapshot
 from .shared import SpatialNodeId
-from .spatial import EnvironmentResolver, SpatialContextId, SpatialFacet
+from .spatial import EnvironmentResolver, SpatialContextId, SpatialFacet, SpatialNodeKind
+
+
+
+
+class SpatialClassification(str, Enum):
+    SURFACE = "SURFACE"
+    ORBITAL = "ORBITAL"
+    NON_SURFACE = "NON_SURFACE"
+
+
+@dataclass(frozen=True)
+class SpatialClassificationRequirement:
+    classification: SpatialClassification
+    code: str
+    description: str
+
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId) -> bool:
+        graph = environment.graph
+        if context_id in graph.locations or context_id in graph.surface_cells:
+            actual = SpatialClassification.SURFACE
+        elif context_id in graph.nodes:
+            actual = (
+                SpatialClassification.ORBITAL
+                if graph.nodes[context_id].kind is SpatialNodeKind.ORBITAL
+                else SpatialClassification.NON_SURFACE
+            )
+        else:
+            raise KeyError(context_id)
+        return actual is self.classification
 
 
 class EnvironmentCondition(Protocol):
@@ -87,6 +116,7 @@ class SiteRequirements:
     environment: tuple[EnvironmentCondition, ...] = ()
     capability_requirements: tuple[CapabilityRequirement, ...] = ()
     service_capacity_requirements: tuple[ServiceCapacityRequirement, ...] = ()
+    spatial_classification_requirements: tuple[SpatialClassificationRequirement, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -95,17 +125,23 @@ class SiteRequirementFailure:
     detail: str
 
 
-def evaluate_environment_requirements(
+def evaluate_physical_site_requirements(
     requirements: SiteRequirements,
     context_id: SpatialContextId,
     day: int,
     environment: EnvironmentResolver,
 ) -> tuple[SiteRequirementFailure, ...]:
-    return tuple(
+    failures = [
+        SiteRequirementFailure(requirement.code, requirement.description)
+        for requirement in requirements.spatial_classification_requirements
+        if not requirement.matches(environment, context_id)
+    ]
+    failures.extend(
         SiteRequirementFailure(condition.code, condition.description)
         for condition in requirements.environment
         if not condition.matches(environment, context_id, day)
     )
+    return tuple(failures)
 
 
 def evaluate_site_requirements(
@@ -120,7 +156,7 @@ def evaluate_site_requirements(
     service_capacity_available: Mapping[str, float] | None = None,
 ) -> tuple[SiteRequirementFailure, ...]:
     context_id = location_id if environment_context_id is None else environment_context_id
-    failures = list(evaluate_environment_requirements(requirements, context_id, day, environment))
+    failures = list(evaluate_physical_site_requirements(requirements, context_id, day, environment))
 
     for requirement in requirements.capability_requirements:
         if requirement.required_state is CapabilityRequirementState.INSTALLED:

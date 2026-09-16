@@ -99,7 +99,7 @@ def test_surface_distribution_facility_supplies_nominal_and_available_capacity()
     assert degraded.limiting_factors == ("surface_infrastructure",)
 
 
-def test_remote_resource_opportunity_is_static_while_surface_infrastructure_limits_execution_once():
+def test_cell_physical_opportunity_is_independent_of_surface_infrastructure_and_execution_is_limited_once():
     sim = build_game_application()._simulation
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
     decision = sim.tick_decision_projection()
@@ -111,7 +111,10 @@ def test_remote_resource_opportunity_is_static_while_surface_infrastructure_limi
         ids.EARTH, ids.METAL_ORE, sim.facilities, power, sim.day,
         decision.allocations.services,
     )
-    assert opportunity == pytest.approx(core + remote)
+    core_access = sim.graph.surface_cells[ids.EARTH_CELL_INDUSTRIAL].terrain.bearing_capacity_factor
+    remote_access = sim.graph.surface_cells[ids.EARTH_CELL_COASTAL].terrain.bearing_capacity_factor
+    physical_opportunity = core * core_access + remote * remote_access
+    assert opportunity == pytest.approx(physical_opportunity)
     constrained = next(
         row for row in sim.extraction.snapshots(
             ids.EARTH, sim.facilities, sim.inventory, power, sim.day,
@@ -119,8 +122,8 @@ def test_remote_resource_opportunity_is_static_while_surface_infrastructure_limi
         )
         if row.facility_def_id == ids.METAL_ORE_MINE
     )
-    assert 0.0 < constrained.scale < 1.0
-    assert constrained.effective_opportunity == pytest.approx(core + remote)
+    assert constrained.scale == 0.0
+    assert constrained.effective_opportunity == pytest.approx(physical_opportunity)
     assert "service_capacity" in constrained.limiting_factors
 
     sim.facilities.install(
@@ -136,7 +139,7 @@ def test_remote_resource_opportunity_is_static_while_surface_infrastructure_limi
         )
         if row.facility_def_id == ids.METAL_ORE_MINE
     )
-    assert supplied.effective_opportunity == pytest.approx(core + remote)
+    assert supplied.effective_opportunity == pytest.approx(physical_opportunity)
     assert supplied.scale == pytest.approx(1.0)
     assert supplied.limiting_factors == ()
 
@@ -153,6 +156,21 @@ def test_location_query_exposes_surface_infrastructure_decision_state_and_improv
     assert row.fulfillment == 0.0
     assert row.limiting_factors == ("surface_infrastructure",)
     assert str(ids.SURFACE_DISTRIBUTION_HUB) in row.improvement_facility_definition_ids
+
+    spatial = view.surface_location
+    assert spatial is not None
+    assert spatial.core_cell_id == str(ids.EARTH_CELL_INDUSTRIAL)
+    assert spatial.developed_cell_ids == (
+        str(ids.EARTH_CELL_COASTAL),
+        str(ids.EARTH_CELL_INDUSTRIAL),
+    )
+    assert any(anchor.cell_id == str(ids.EARTH_CELL_INDUSTRIAL) for anchor in spatial.active_access_anchors)
+    illumination = next(summary for summary in spatial.environment_summary if summary.key == "illumination")
+    assert illumination.location_values == ()
+    assert {cell_id for cell_id, _values in illumination.cell_values} == {
+        str(ids.EARTH_CELL_COASTAL),
+        str(ids.EARTH_CELL_INDUSTRIAL),
+    }
 
 
 def test_surface_infrastructure_limits_remote_service_execution_without_disabling_capability():

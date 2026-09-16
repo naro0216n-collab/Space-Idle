@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import asin, cos, radians, sin, sqrt
-
 from ..facilities import FacilityBook, FacilityPlacementScope
 from ..shared import EntityId, SpatialNodeId, SurfaceCellId
-from ..spatial import SpatialContextId, SurfacePoint
+from ..spatial import SpatialContextId, great_circle_distance_km
 from .models import MovementEndpoint, MovementPlan
 
 
@@ -95,14 +93,6 @@ def resolve_movement_endpoint(endpoint: MovementEndpoint, facilities: FacilityBo
         None,
     )
 
-
-def great_circle_distance_km(a: SurfacePoint, b: SurfacePoint, radius_km: float) -> float:
-    lat1, lon1 = radians(a.latitude_deg), radians(a.longitude_deg)
-    lat2, lon2 = radians(b.latitude_deg), radians(b.longitude_deg)
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    h = sin(dlat / 2.0) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2.0) ** 2
-    return 2.0 * radius_km * asin(min(1.0, sqrt(max(0.0, h))))
 
 
 def movement_geometry(plan: MovementPlan, facilities: FacilityBook) -> MovementGeometrySnapshot:

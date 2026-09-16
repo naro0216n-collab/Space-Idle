@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 from space_idle import build_game_application
+from space_idle.content import base_ids as ids
 from space_idle.content.base_game import EARTH, LEO, MACHINERY, REUSABLE_ORBITAL_CARGO_TUG
 from space_idle.transport import ResourceSupportRequirement
 from space_idle.validation import validate_simulation_configuration
@@ -91,7 +92,11 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
             ),
         ),
     )
-    servicing_id = sim.facilities.install(ROBOTIC_SURVEY_PACKAGE, EARTH)
+    servicing_id = sim.facilities.install(
+        ROBOTIC_SURVEY_PACKAGE,
+        EARTH,
+        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+    )
     sim.refresh_storage()
 
     result = app.execute(ProduceVehicle(str(vehicle_id), str(EARTH)))

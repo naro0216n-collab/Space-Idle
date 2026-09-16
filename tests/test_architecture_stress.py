@@ -8,6 +8,7 @@ from space_idle.spatial import (
     AtmosphereField,
     CelestialBodyDef,
     CharacteristicTransportGeometry,
+    EnvironmentFieldScope,
     EnvironmentResolver,
     IlluminationField,
     SpatialFacet,
@@ -17,7 +18,7 @@ from space_idle.spatial import (
     StarSystemDef,
     StaticFacetStore,
     SurfaceCellDef,
-    SurfaceField,
+    SurfaceTerrain,
     SurfacePoint,
     ThermalField,
 )
@@ -28,6 +29,7 @@ def test_environment_facets_accept_peer_extensions_without_core_registration():
     @dataclass(frozen=True)
     class TestEnvironmentField(SpatialFacet):
         facet_key = "test_environment_field"
+        environment_scope = EnvironmentFieldScope.CONTEXT_LOCAL
         value: float
 
     graph = SpatialGraph()
@@ -56,11 +58,11 @@ def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and
     graph.add_star_system(StarSystemDef(system, "Mars Test System", geometry))
     graph.add_body(CelestialBodyDef(mars_body, "火星", 1000.0, system, geometry))
     graph.add_surface_cell(SurfaceCellDef(
-        cell_a, mars_body, 100.0, SurfacePoint(5.0, 10.0), frozenset({cell_b}), SurfaceField(),
+        cell_a, mars_body, 100.0, SurfacePoint(5.0, 10.0), frozenset({cell_b}), SurfaceTerrain(),
         display_name="Stress Cell A",
     ))
     graph.add_surface_cell(SurfaceCellDef(
-        cell_b, mars_body, 120.0, SurfacePoint(8.0, 12.0), frozenset({cell_a}), SurfaceField(),
+        cell_b, mars_body, 120.0, SurfacePoint(8.0, 12.0), frozenset({cell_a}), SurfaceTerrain(),
         display_name="Stress Cell B",
     ))
     graph.found_location(site_a, "火星A", mars_body, cell_a)
@@ -70,10 +72,8 @@ def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and
         inherits_parent_environment=False,
     ))
     static = StaticFacetStore()
-    static.set(cell_a, AtmosphereField(610.0, 0.020, {DefinitionId("co2"): 0.95}))
-    static.set(cell_b, AtmosphereField(610.0, 0.020, {DefinitionId("co2"): 0.95}))
-    static.set(cell_a, ThermalField(210.0))
-    static.set(cell_b, ThermalField(210.0))
+    static.set_body(mars_body, AtmosphereField(610.0, 0.020, {DefinitionId("co2"): 0.95}))
+    static.set_body(mars_body, ThermalField(210.0))
     static.set(cell_a, IlluminationField(590.0, 0.65))
     static.set(cell_b, IlluminationField(590.0, 0.40))
     static.set(orbit, AtmosphereField(0.0, 0.0, {}))
@@ -93,8 +93,10 @@ def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and
     assert env.require(site_a, AtmosphereField).pressure_pa == 1000.0
     assert env.require(site_b, AtmosphereField).pressure_pa == 1000.0
     assert env.require(site_a, ThermalField).nominal_temperature_k == 215.0
-    assert env.require(site_a, IlluminationField).availability == 0.65
-    assert env.require(site_b, IlluminationField).availability == 0.40
+    assert env.require(cell_a, ThermalField).nominal_temperature_k == 215.0
+    assert env.require(cell_a, IlluminationField).availability == 0.65
+    assert env.require(cell_b, IlluminationField).availability == 0.40
+    assert env.get(site_a, IlluminationField) is None
     assert env.require(orbit, AtmosphereField).pressure_pa == 0.0
     assert env.require(orbit, ThermalField).nominal_temperature_k == 245.0
 

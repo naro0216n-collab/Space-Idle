@@ -102,9 +102,17 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             context_id in sim.graph.nodes or context_id in sim.graph.surface_cells,
             f"static environment facet references non-static context: {context_id}",
         )
+        sim.environment.static._field_scope(facet_type)
         _require(
             isinstance(facet, facet_type),
             f"environment facet type mismatch: {context_id}/{facet_type.__name__}",
+        )
+    for (body_id, facet_type), facet in sim.environment.static.body_facets.items():
+        _require(body_id in sim.graph.bodies, f"body environment facet references unknown body: {body_id}")
+        sim.environment.static._field_scope(facet_type)
+        _require(
+            isinstance(facet, facet_type),
+            f"body environment facet type mismatch: {body_id}/{facet_type.__name__}",
         )
     sim.environment.ordered_overlays()
     validate_runtime(sim)

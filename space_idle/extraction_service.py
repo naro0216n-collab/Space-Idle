@@ -14,7 +14,8 @@ from .inventory import InventoryBook
 from .knowledge import DomainActivity
 from .power import PowerSnapshot
 from .shared import DefinitionId, EntityId, SpatialNodeId
-from .spatial import SpatialGraph
+from .site import evaluate_physical_site_requirements
+from .spatial import EnvironmentResolver, SpatialGraph
 from .surface_infrastructure import SurfaceInfrastructureService
 from .exploration_models import ExtractionResourceSnapshot, ExtractionSpec, ExtractionSnapshot
 
@@ -25,6 +26,7 @@ class ExtractionService:
 
     specs: dict[DefinitionId, ExtractionSpec]
     graph: SpatialGraph
+    environment: EnvironmentResolver
     surface_infrastructure: SurfaceInfrastructureService
 
     @classmethod
@@ -60,43 +62,56 @@ class ExtractionService:
             for cell_id in sorted(location.developed_cell_ids, key=str)
         )
 
-    def surface_distribution_factor(
-        self, location_id: SpatialNodeId, resource_id: DefinitionId, fulfillment: float
-    ) -> float:
-        """Return the operational fraction enabled by intra-Location distribution.
-
-        Static Resource Opportunity remains geological state.  The core cell is
-        locally usable without remote distribution; only the developed-cell
-        opportunity beyond it depends on Surface Infrastructure.  This factor is
-        applied to extraction Service supply exactly once.
-        """
-        location = self.graph.locations.get(location_id)
-        if location is None:
-            return 1.0
-        total = self.static_opportunity(location_id, resource_id)
-        if total <= 1e-12:
-            return 1.0
-        core = self.graph.surface_cells[location.core_cell_id].resource_potential_by_resource.get(
-            resource_id, 0.0
-        )
-        remote = max(0.0, total - core)
-        enabled = core + remote * max(0.0, min(1.0, fulfillment))
-        return max(0.0, min(1.0, enabled / total))
+    def _cell_accessibility(self, spec: ExtractionSpec, cell_id, day: int) -> float:
+        if evaluate_physical_site_requirements(
+            spec.opportunity_requirements, cell_id, day, self.environment
+        ):
+            return 0.0
+        cell = self.graph.surface_cells[cell_id]
+        geology = 1.0
+        if spec.geology_accessibility_key is not None:
+            geology = cell.static_geology.get(spec.geology_accessibility_key, 0.0)
+        terrain = 1.0
+        if spec.terrain_accessibility_attribute is not None:
+            terrain = getattr(cell.terrain, spec.terrain_accessibility_attribute)
+        return max(0.0, geology) * max(0.0, terrain)
 
     def effective_opportunity(
         self,
         location_id: SpatialNodeId,
         resource_id: DefinitionId,
         facilities: FacilityBook,
-        power: PowerSnapshot,
+        power: PowerSnapshot | None = None,
         day: int = 0,
         service_allocations=None,
     ) -> float:
-        del facilities, power, day, service_allocations
-        # Surface-distribution fulfillment constrains extraction service supply.
-        # Opportunity itself is the physical/geological opportunity and must not
-        # apply the same infrastructure limitation a second time.
-        return self.static_opportunity(location_id, resource_id)
+        del power, service_allocations
+        location = self.graph.locations.get(location_id)
+        if location is None:
+            return 0.0
+        # Opportunity is physical/geological state. Surface Infrastructure is
+        # deliberately absent here and constrains extraction service execution
+        # once, through the shared service-capacity dependency graph.
+        active_specs = {
+            facility.definition_id: self.specs[facility.definition_id]
+            for facility in facilities.active_compatible_at(location_id, day)
+            if facility.definition_id in self.specs
+            and self.specs[facility.definition_id].resource_id == resource_id
+        }
+        if not active_specs:
+            return 0.0
+        total = 0.0
+        for cell_id in sorted(location.developed_cell_ids, key=str):
+            cell = self.graph.surface_cells[cell_id]
+            potential = cell.resource_potential_by_resource.get(resource_id, 0.0)
+            if potential <= 1e-12:
+                continue
+            accessibility = max(
+                (self._cell_accessibility(spec, cell_id, day) for spec in active_specs.values()),
+                default=0.0,
+            )
+            total += potential * accessibility
+        return total
 
     def _facility_inputs(
         self,
@@ -169,7 +184,8 @@ class ExtractionService:
                 self.specs[f.definition_id].nominal_capacity_t_per_day * f.level for f in rows
             )
             response = self.diminishing_response(
-                installed, self.static_opportunity(location_id, resource_id)
+                installed,
+                self.effective_opportunity(location_id, resource_id, facilities, day=day),
             )
             for facility in rows:
                 nominal = self.specs[facility.definition_id].nominal_capacity_t_per_day * facility.level
@@ -247,7 +263,9 @@ class ExtractionService:
                 weighted_scale += nominal * scale
                 output += full_output.get(facility.id, 0.0) * scale
             operational = 0.0 if installed <= 1e-12 else weighted_scale / installed
-            opportunity = self.static_opportunity(location_id, resource_id)
+            opportunity = self.effective_opportunity(
+                location_id, resource_id, facilities, power, day
+            )
             response = self.diminishing_response(installed, opportunity)
             rows.append(ExtractionResourceSnapshot(
                 resource_id,
@@ -295,7 +313,9 @@ class ExtractionService:
             except KeyError:
                 scale = 0.0
             summary = resource_summary.get(spec.resource_id)
-            opportunity = self.static_opportunity(location_id, spec.resource_id)
+            opportunity = self.effective_opportunity(
+                location_id, spec.resource_id, facilities, power, day
+            )
             if opportunity <= 1e-12 and nominal > 1e-12:
                 reasons.append(f"resource_opportunity:{spec.resource_id}")
             rows.append(ExtractionSnapshot(

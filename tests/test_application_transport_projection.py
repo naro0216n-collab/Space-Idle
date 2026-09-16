@@ -429,7 +429,11 @@ def test_construction_queries_expose_authoritative_project_controls():
     assert str(EARTH) not in build_options.import_source_options
     assert str(LEO) in build_options.import_source_options
 
-    project_id = app.execute(PlanBuild(str(EARTH), str(ids.SURFACE_POWER_GRID), priority=2, sourcing_policy="local_priority", import_source_id=str(LEO))).created_id
+    project_id = app.execute(PlanBuild(
+        str(EARTH), str(ids.SURFACE_POWER_GRID), priority=2,
+        sourcing_policy="local_priority", import_source_id=str(LEO),
+        site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
+    )).created_id
     assert project_id is not None
     row = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
     assert row.settings_editable and row.sourcing_editable

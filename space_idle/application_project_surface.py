@@ -70,6 +70,7 @@ class SurfaceProjectorMixin:
                     projected = sim.surface_infrastructure.prospective_development_snapshot(
                         location.operational_node_id, cell.id, decision.allocations.services,
                         development_request_id=development_request_id,
+                        day=sim.day,
                     )
                     projected_demand = projected.demand
                     projected_fulfillment = projected.fulfillment

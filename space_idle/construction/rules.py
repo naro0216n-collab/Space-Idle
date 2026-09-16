@@ -70,7 +70,7 @@ class ConstructionRulesMixin:
             facility = self.facilities.facilities[existing_facility_id]
             environment_context = self.facilities.facility_environment_context(facility)
         failures = list(evaluate_site_requirements(
-            SiteRequirements(environment=definition.installation_environment),
+            definition.installation_requirements,
             location_id, day, self.facilities.environment, self.facilities, power,
             environment_context_id=environment_context,
         ))
@@ -214,7 +214,7 @@ class ConstructionRulesMixin:
         day: int = 0,
     ) -> float:
         """Return current or projected Construction execution fulfillment."""
-        del power, day
+        del power
         if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
             return 1.0
         if project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}:
@@ -231,7 +231,7 @@ class ConstructionRulesMixin:
             return 1.0
         try:
             snapshot = service.prospective_development_snapshot(
-                project.operational_node_id, project.target.cell_id, service_allocations
+                project.operational_node_id, project.target.cell_id, service_allocations, day=day
             )
         except (KeyError, ValueError):
             return 0.0

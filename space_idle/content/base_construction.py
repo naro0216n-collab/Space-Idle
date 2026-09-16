@@ -8,10 +8,9 @@ from ..projects import (
     SpatialDevelopmentRecipe,
     BuildResourceRequirement,
 )
-from ..site import SiteRequirements, RequiresFacet
+from ..site import SiteRequirements
 from . import base_ids as ids
 from . import base_requirements as req
-from ..spatial import SurfaceField
 
 
 def build_construction_recipes() -> dict:
@@ -187,9 +186,7 @@ def sourcing_wait_days() -> dict[str, int]:
 
 
 def build_spatial_development_recipes() -> dict:
-    surface_site = SiteRequirements(environment=(
-        RequiresFacet(SurfaceField, "surface", "surface terrain data is required"),
-    ))
+    surface_site = req.SURFACE_SITE
     recipes = (
         SpatialDevelopmentRecipe(
             ids.SURFACE_CELL_DEVELOPMENT_PROJECT,

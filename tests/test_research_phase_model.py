@@ -113,10 +113,10 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
         prototype=ResearchPrototypeSpec(
             {},
             SiteRequirements(
-                req.SURFACE_ENV,
                 service_capacity_requirements=(
                     ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),
                 ),
+                spatial_classification_requirements=req.SURFACE_CLASSIFICATION,
             ),
         ),
         stages=(ResearchStage.PROTOTYPE,),

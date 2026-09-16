@@ -20,7 +20,12 @@ def test_partial_construction_procurement_is_project_owned_until_cancelled():
     app = build_game_application()
     sim = app._simulation
     result = app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.SURFACE_POWER_GRID), sourcing_policy="local_priority")
+        PlanBuild(
+            str(ids.EARTH),
+            str(ids.SURFACE_POWER_GRID),
+            sourcing_policy="local_priority",
+            site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
+        )
     )
     project = _project(sim)
     recipe = sim.projects.recipe_for_project(project)

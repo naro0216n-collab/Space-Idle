@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .application_catalog_support import condition_definition_row, site_requirements_definition
+from .application_catalog_support import site_requirements_definition
 from .application_views import (
     CelestialBodyDefinitionRow, FacilityDefinitionRow, OperationalNodeDefinitionRow,
     ProcessDefinitionRow, ResearchDefinitionRow, ResourceDefinitionRow,
@@ -28,12 +28,8 @@ def project_facilities(projector):
             service_capacity_supplies=tuple(
                 sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
             ),
-            installation_environment=tuple(
-                condition_definition_row(condition) for condition in definition.installation_environment
-            ),
-            operating_environment=tuple(
-                condition_definition_row(condition) for condition in definition.operating_environment
-            ),
+            installation_requirements=site_requirements_definition(definition.installation_requirements),
+            operating_requirements=site_requirements_definition(definition.operating_requirements),
             maintenance_fraction_per_year=definition.maintenance_fraction_per_year,
             placement_scope=definition.placement_scope.value,
         )

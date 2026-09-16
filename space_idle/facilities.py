@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Mapping
 
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
-from .site import EnvironmentCondition
+from .site import SiteRequirements, evaluate_physical_site_requirements
 from .spatial import EnvironmentResolver, SpatialContextId
 
 if TYPE_CHECKING:
@@ -47,8 +47,8 @@ class FacilityDef:
     id: DefinitionId
     display_name: str
     capability_supplies: tuple[CapabilitySupply, ...] = ()
-    installation_environment: tuple[EnvironmentCondition, ...] = ()
-    operating_environment: tuple[EnvironmentCondition, ...] = ()
+    installation_requirements: SiteRequirements = SiteRequirements()
+    operating_requirements: SiteRequirements = SiteRequirements()
     # Fraction of cumulative construction/upgrade resource investment required
     # per game year. The value is content balance; Core only supplies the rule.
     maintenance_fraction_per_year: float = 0.0
@@ -214,23 +214,24 @@ class FacilityBook:
     def active_at(self, operational_node_id: SpatialNodeId) -> list[FacilityState]:
         return [f for f in self.all_at(operational_node_id) if not f.paused]
 
-    def environment_failures(self, facility: FacilityState, day: int) -> tuple[tuple[str, str], ...]:
+    def operating_site_failures(self, facility: FacilityState, day: int) -> tuple[tuple[str, str], ...]:
         definition = self.definitions[facility.definition_id]
-        failures: list[tuple[str, str]] = []
         context_id = self.facility_environment_context(facility)
-        for condition in definition.operating_environment:
-            if not condition.matches(self.environment, context_id, day):
-                failures.append((condition.code, condition.description))
-        return tuple(failures)
+        return tuple(
+            (failure.code, failure.detail)
+            for failure in evaluate_physical_site_requirements(
+                definition.operating_requirements, context_id, day, self.environment
+            )
+        )
 
     def is_environmentally_compatible(self, facility: FacilityState, day: int) -> bool:
-        return not self.environment_failures(facility, day)
+        return not self.operating_site_failures(facility, day)
 
     def activation_failures(self, facility: FacilityState, day: int) -> tuple[tuple[str, str], ...]:
         failures: list[tuple[str, str]] = []
         if facility.paused:
             failures.append(("manual_pause", "設備が手動停止中"))
-        failures.extend(self.environment_failures(facility, day))
+        failures.extend(self.operating_site_failures(facility, day))
         return tuple(failures)
 
     def is_active_and_compatible(self, facility: FacilityState, day: int) -> bool:

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from .simulation import Simulation
 from .construction.models import CONSTRUCTION_SERVICE_TYPE
-from .site import FacetValueRange, RequiresFacet, SiteRequirements
+from .site import FacetValueRange, RequiresFacet, SiteRequirements, SpatialClassificationRequirement
 
 class ConfigurationError(ValueError):
     pass
@@ -30,6 +30,11 @@ def validate_site_requirements(
     known_service_types: set[str] | None = None,
 ) -> None:
     seen_codes: set[str] = set()
+    for requirement in requirements.spatial_classification_requirements:
+        require(isinstance(requirement, SpatialClassificationRequirement), f"invalid spatial classification requirement: {owner}")
+        require(bool(requirement.code), f"site requirement has empty code: {owner}")
+        require(requirement.code not in seen_codes, f"duplicate site requirement code: {owner}/{requirement.code}")
+        seen_codes.add(requirement.code)
     for condition in requirements.environment:
         validate_environment_condition(condition, owner)
         code = getattr(condition, "code", "")

@@ -139,6 +139,29 @@ class EnvironmentFacetRow:
 
 
 @dataclass(frozen=True)
+class LocationEnvironmentSummaryRow:
+    key: str
+    scope: str
+    location_values: tuple[tuple[str, object], ...]
+    cell_values: tuple[tuple[str, tuple[tuple[str, object], ...]], ...]
+
+
+@dataclass(frozen=True)
+class SurfaceAccessAnchorRow:
+    facility_id: str
+    facility_definition_id: str
+    cell_id: str
+
+
+@dataclass(frozen=True)
+class SurfaceLocationDecisionRow:
+    core_cell_id: str
+    developed_cell_ids: tuple[str, ...]
+    active_access_anchors: tuple[SurfaceAccessAnchorRow, ...]
+    environment_summary: tuple[LocationEnvironmentSummaryRow, ...]
+
+
+@dataclass(frozen=True)
 class ExtractionRow:
     facility_id: str
     facility_definition_id: str
@@ -188,3 +211,4 @@ class OperationalNodeView:
     extraction: tuple[ExtractionRow, ...]
     extraction_resources: tuple[ExtractionResourceRow, ...]
     projects: tuple[ProjectRow, ...]
+    surface_location: SurfaceLocationDecisionRow | None = None

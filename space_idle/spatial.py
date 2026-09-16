@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import dist, isfinite
+from math import asin, cos, dist, isfinite, radians, sin, sqrt
 from enum import Enum
 from typing import Any, ClassVar, Mapping, Protocol, TypeAlias, TypeVar, cast
 
@@ -11,15 +11,30 @@ FacetT = TypeVar("FacetT", bound="SpatialFacet")
 SpatialContextId: TypeAlias = SpatialNodeId | SurfaceCellId
 
 
+class EnvironmentFieldScope(str, Enum):
+    """Where a Physical Environment field is authoritative."""
+
+    BODY_GLOBAL = "BODY_GLOBAL"
+    SURFACE_CELL_LOCAL = "SURFACE_CELL_LOCAL"
+    BODY_WITH_CELL_OVERLAY = "BODY_WITH_CELL_OVERLAY"
+    CONTEXT_LOCAL = "CONTEXT_LOCAL"
+
+
 class SpatialFacet:
-    """Typed descriptive fact. Behavior belongs to consuming domains."""
+    """Typed Physical Environment field definition.
+
+    Each concrete field owns its scope/composition contract.  The resolver uses
+    that contract generically instead of maintaining a facet-name allowlist.
+    """
 
     facet_key: ClassVar[str]
+    environment_scope: ClassVar[EnvironmentFieldScope]
 
 
 @dataclass(frozen=True)
 class GravityField(SpatialFacet):
     facet_key: ClassVar[str] = "gravity"
+    environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.BODY_GLOBAL
     local_acceleration_m_s2: float
     escape_velocity_m_s: float | None = None
 
@@ -33,6 +48,7 @@ class GravityField(SpatialFacet):
 @dataclass(frozen=True)
 class AtmosphereField(SpatialFacet):
     facet_key: ClassVar[str] = "atmosphere"
+    environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.BODY_GLOBAL
     pressure_pa: float
     density_kg_m3: float
     composition: Mapping[DefinitionId, float]
@@ -47,6 +63,7 @@ class AtmosphereField(SpatialFacet):
 @dataclass(frozen=True)
 class IlluminationField(SpatialFacet):
     facet_key: ClassVar[str] = "illumination"
+    environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.SURFACE_CELL_LOCAL
     solar_flux_w_m2: float
     availability: float = 1.0
 
@@ -58,6 +75,7 @@ class IlluminationField(SpatialFacet):
 @dataclass(frozen=True)
 class ThermalField(SpatialFacet):
     facet_key: ClassVar[str] = "thermal"
+    environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY
     nominal_temperature_k: float
     min_temperature_k: float | None = None
     max_temperature_k: float | None = None
@@ -79,8 +97,8 @@ class ThermalField(SpatialFacet):
 
 
 @dataclass(frozen=True)
-class SurfaceField(SpatialFacet):
-    facet_key: ClassVar[str] = "surface"
+class SurfaceTerrain:
+    """Static terrain/geology descriptors owned by SurfaceCellDef."""
     terrain_factor: float = 1.0
     bearing_capacity_factor: float = 1.0
     dust_factor: float = 0.0
@@ -99,6 +117,7 @@ class SurfaceField(SpatialFacet):
 @dataclass(frozen=True)
 class OrbitalField(SpatialFacet):
     facet_key: ClassVar[str] = "orbit"
+    environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.CONTEXT_LOCAL
     orbital_period_s: float | None = None
 
     def __post_init__(self) -> None:
@@ -109,6 +128,7 @@ class OrbitalField(SpatialFacet):
 @dataclass(frozen=True)
 class CommunicationField(SpatialFacet):
     facet_key: ClassVar[str] = "communication"
+    environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY
     baseline_latency_s: float
     availability: float = 1.0
 
@@ -204,6 +224,17 @@ class SurfacePoint:
             raise ValueError("surface longitude must be within -180..180 degrees")
 
 
+
+
+def great_circle_distance_km(a: SurfacePoint, b: SurfacePoint, radius_km: float) -> float:
+    """Spatial-owned great-circle separation for two points on one body."""
+    lat1, lon1 = radians(a.latitude_deg), radians(a.longitude_deg)
+    lat2, lon2 = radians(b.latitude_deg), radians(b.longitude_deg)
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    h = sin(dlat / 2.0) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2.0) ** 2
+    return 2.0 * radius_km * asin(min(1.0, sqrt(max(0.0, h))))
+
 @dataclass(frozen=True)
 class SurfaceCellDef:
     """Static physical geography for one cell on a celestial body."""
@@ -213,7 +244,7 @@ class SurfaceCellDef:
     area_km2: float
     centroid: SurfacePoint
     neighbor_ids: frozenset[SurfaceCellId] = frozenset()
-    terrain: SurfaceField = SurfaceField()
+    terrain: SurfaceTerrain = SurfaceTerrain()
     static_geology: Mapping[str, float] = field(default_factory=dict)
     resource_potential_by_resource: Mapping[DefinitionId, float] = field(default_factory=dict)
     display_name: str = ""
@@ -548,10 +579,14 @@ class SpatialGraph:
         return ancestor_id in self.lineage(node_id)
 
     def environment_lineage(self, context_id: SpatialContextId) -> tuple[SpatialContextId, ...]:
-        if context_id in self.locations:
-            return (self.locations[cast(SpatialNodeId, context_id)].core_cell_id,)
-        if context_id in self.surface_cells:
-            return (cast(SurfaceCellId, context_id),)
+        """Return explicit context-local inheritance only.
+
+        Surface Locations deliberately do not inherit from ``core_cell_id``.
+        Body/global and Surface Cell composition is resolved by the field scope
+        contract in ``StaticFacetStore.resolve``.
+        """
+        if context_id in self.locations or context_id in self.surface_cells:
+            return (context_id,)
         if context_id not in self.nodes:
             raise KeyError(context_id)
         result: list[SpatialContextId] = []
@@ -621,16 +656,19 @@ class SpatialGraph:
         )
 
     def surface_cell_for_context(self, context_id: SpatialContextId) -> SurfaceCellId | None:
-        if context_id in self.locations:
-            return self.locations[cast(SpatialNodeId, context_id)].core_cell_id
+        """Return a Cell only when the context explicitly identifies that Cell."""
         if context_id in self.surface_cells:
             return cast(SurfaceCellId, context_id)
-        if context_id in self.nodes:
+        if context_id in self.locations or context_id in self.nodes:
             return None
         raise KeyError(context_id)
 
     def is_surface_context(self, context_id: SpatialContextId) -> bool:
-        return self.surface_cell_for_context(context_id) is not None
+        if context_id in self.locations or context_id in self.surface_cells:
+            return True
+        if context_id in self.nodes:
+            return False
+        raise KeyError(context_id)
 
     def _validate_location_shape(self, location: SurfaceLocationState, *, allow_unknown_neighbors: bool) -> None:
         if location.body_id not in self.bodies:
@@ -677,23 +715,114 @@ class SpatialGraph:
 
 @dataclass
 class StaticFacetStore:
+    """Static Physical Environment definitions separated by authoritative scope."""
+
     facets: dict[tuple[SpatialContextId, type[SpatialFacet]], SpatialFacet] = field(default_factory=dict)
+    body_facets: dict[tuple[CelestialBodyId, type[SpatialFacet]], SpatialFacet] = field(default_factory=dict)
+
+    @staticmethod
+    def _field_scope(facet_type: type[FacetT]) -> EnvironmentFieldScope:
+        scope = getattr(facet_type, "environment_scope", None)
+        if not isinstance(scope, EnvironmentFieldScope):
+            raise ValueError(
+                f"physical environment field lacks explicit scope: {facet_type.__name__}"
+            )
+        return scope
 
     def set(self, context_id: SpatialContextId, facet: FacetT) -> None:
+        self._field_scope(type(facet))
         self.facets[(context_id, type(facet))] = facet
 
-    def nearest(
+    def set_body(self, body_id: CelestialBodyId, facet: FacetT) -> None:
+        scope = self._field_scope(type(facet))
+        if scope not in {
+            EnvironmentFieldScope.BODY_GLOBAL,
+            EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY,
+        }:
+            raise ValueError(
+                f"{type(facet).__name__} cannot be defined at body scope ({scope.value})"
+            )
+        self.body_facets[(body_id, type(facet))] = facet
+
+    def facet_types(self) -> set[type[SpatialFacet]]:
+        return {facet_type for (_context_id, facet_type) in self.facets} | {
+            facet_type for (_body_id, facet_type) in self.body_facets
+        }
+
+    def field_applies_to_context(
+        self, graph: SpatialGraph, context_id: SpatialContextId, facet_type: type[FacetT]
+    ) -> bool:
+        scope = self._field_scope(facet_type)
+        if context_id in graph.locations:
+            return scope in {
+                EnvironmentFieldScope.BODY_GLOBAL,
+                EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY,
+            }
+        if context_id in graph.surface_cells or context_id in graph.nodes:
+            return True
+        raise KeyError(context_id)
+
+    def _nearest_context_value(
         self,
         graph: SpatialGraph,
         context_id: SpatialContextId,
         facet_type: type[FacetT],
     ) -> FacetT | None:
-        for scope in graph.environment_lineage(context_id):
-            if facet_type is SurfaceField and scope in graph.surface_cells:
-                return cast(FacetT, graph.surface_cells[cast(SurfaceCellId, scope)].terrain)
-            value = self.facets.get((scope, facet_type))
+        for context in graph.environment_lineage(context_id):
+            value = self.facets.get((context, facet_type))
             if value is not None:
                 return cast(FacetT, value)
+        return None
+
+    def resolve(
+        self,
+        graph: SpatialGraph,
+        context_id: SpatialContextId,
+        facet_type: type[FacetT],
+    ) -> FacetT | None:
+        scope = self._field_scope(facet_type)
+
+        if context_id in graph.locations:
+            # A Surface Location is an Operational Node spanning many Cells.  It
+            # may evaluate only body-global fields without an explicit Cell.
+            if scope not in {
+                EnvironmentFieldScope.BODY_GLOBAL,
+                EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY,
+            }:
+                return None
+            body_id = graph.locations[cast(SpatialNodeId, context_id)].body_id
+            value = self.body_facets.get((body_id, facet_type))
+            return None if value is None else cast(FacetT, value)
+
+        if context_id in graph.surface_cells:
+            cell_id = cast(SurfaceCellId, context_id)
+            cell = graph.surface_cells[cell_id]
+            body_value = self.body_facets.get((cell.body_id, facet_type))
+            cell_value = self.facets.get((cell_id, facet_type))
+            if scope is EnvironmentFieldScope.BODY_GLOBAL:
+                return None if body_value is None else cast(FacetT, body_value)
+            if scope in {EnvironmentFieldScope.SURFACE_CELL_LOCAL, EnvironmentFieldScope.CONTEXT_LOCAL}:
+                return None if cell_value is None else cast(FacetT, cell_value)
+            # BODY_WITH_CELL_OVERLAY: a Cell-local value replaces the body base
+            # for that field; absent an overlay the body value is inherited.
+            value = cell_value if cell_value is not None else body_value
+            return None if value is None else cast(FacetT, value)
+
+        if context_id not in graph.nodes:
+            raise KeyError(context_id)
+
+        # Non-surface contexts may provide explicit local values.  If a field
+        # also has a body-global component, that body value is only a fallback
+        # after the explicit non-surface lineage has been checked.
+        local_value = self._nearest_context_value(graph, context_id, facet_type)
+        if local_value is not None:
+            return local_value
+        if scope in {EnvironmentFieldScope.BODY_GLOBAL, EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY}:
+            body_id = graph.context_body_id(context_id)
+            if body_id is not None:
+                body_value = self.body_facets.get((body_id, facet_type))
+                if body_value is not None:
+                    return cast(FacetT, body_value)
         return None
 
 
@@ -754,7 +883,9 @@ class EnvironmentResolver:
         facet_type: type[FacetT],
         day: int = 0,
     ) -> FacetT | None:
-        value = self.static.nearest(self.graph, context_id, facet_type)
+        if not self.static.field_applies_to_context(self.graph, context_id, facet_type):
+            return None
+        value = self.static.resolve(self.graph, context_id, facet_type)
         for overlay in self.ordered_overlays():
             value = overlay.apply(self.graph, context_id, facet_type, value, day)
         return value

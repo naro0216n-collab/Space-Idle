@@ -20,11 +20,11 @@ def _research_lab_site() -> SiteRequirements:
 
 
 def _orbital_research_site() -> SiteRequirements:
-    return SiteRequirements(req.ORBIT_ENV, req._available_requirements("research_lab"))
+    return req.with_capabilities(req.ORBIT_SITE, "research_lab")
 
 
 def _surface_research_site() -> SiteRequirements:
-    return SiteRequirements(req.SURFACE_ENV, req._available_requirements("research_lab"))
+    return req.with_capabilities(req.SURFACE_SITE, "research_lab")
 
 
 def _with_research_execution(site: SiteRequirements) -> SiteRequirements:
@@ -33,7 +33,12 @@ def _with_research_execution(site: SiteRequirements) -> SiteRequirements:
         for requirement in site.service_capacity_requirements
         if requirement.service_type != "research_execution"
     ) + (ServiceCapacityRequirement("research_execution", 1.0),)
-    return SiteRequirements(site.environment, site.capability_requirements, requirements)
+    return SiteRequirements(
+        environment=site.environment,
+        capability_requirements=site.capability_requirements,
+        service_capacity_requirements=requirements,
+        spatial_classification_requirements=site.spatial_classification_requirements,
+    )
 
 
 def _prototype(site: SiteRequirements, resources: dict) -> ResearchPrototypeSpec:
@@ -74,8 +79,8 @@ def build_research_definitions() -> dict:
     lab = _research_lab_site()
     orbital_lab = _orbital_research_site()
     surface_lab = _surface_research_site()
-    surface_survey = SiteRequirements(req.SURFACE_ENV, req._available_requirements("surface_survey"))
-    regolith_demo = SiteRequirements(req.SURFACE_ENV, req._available_requirements("regolith_excavation"))
+    surface_survey = req.with_capabilities(req.SURFACE_SITE, "surface_survey")
+    regolith_demo = req.with_capabilities(req.SURFACE_SITE, "regolith_excavation")
     return {
         ids.TECH_ORBITAL_OPERATIONS: ResearchDefinition(
             ids.TECH_ORBITAL_OPERATIONS,
@@ -135,7 +140,7 @@ def build_research_definitions() -> dict:
             _prototype(lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.8}),
             _demonstration(
                 20,
-                SiteRequirements(req.COLD_VOLATILE_SURFACE_ENV, req._available_requirements("surface_survey")),
+                req.with_capabilities(req.COLD_VOLATILE_SURFACE_SITE, "surface_survey"),
             ),
             stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
@@ -183,7 +188,7 @@ def build_research_definitions() -> dict:
             _prototype(surface_lab, {ids.MACHINERY: 3.0, ids.PRECISION_ELECTRONICS: 2.0}),
             _demonstration(
                 12,
-                SiteRequirements(req.VACUUM_SURFACE_ENV, req._available_requirements("regolith_excavation")),
+                req.with_capabilities(req.VACUUM_SURFACE_SITE, "regolith_excavation"),
             ),
             stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
@@ -195,7 +200,7 @@ def build_research_definitions() -> dict:
             _prototype(surface_lab, {ids.MACHINERY: 2.5, ids.PRECISION_ELECTRONICS: 0.9}),
             _demonstration(
                 12,
-                SiteRequirements(req.SURFACE_ENV, req._available_requirements("ore_processing")),
+                req.with_capabilities(req.SURFACE_SITE, "ore_processing"),
             ),
             stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
@@ -207,7 +212,7 @@ def build_research_definitions() -> dict:
             _prototype(surface_lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.7}),
             _demonstration(
                 8,
-                SiteRequirements(req.SURFACE_ENV, req._available_requirements("metallurgy")),
+                req.with_capabilities(req.SURFACE_SITE, "metallurgy"),
             ),
             _experience(ids.EXPERIENCE_MANUFACTURING_OPERATIONS, 20.0),
             THEORY_PROTOTYPE_DEMONSTRATION_EXPERIENCE,
@@ -220,7 +225,7 @@ def build_research_definitions() -> dict:
             _prototype(surface_lab, {ids.MACHINERY: 2.5, ids.PRECISION_ELECTRONICS: 1.0}),
             _demonstration(
                 8,
-                SiteRequirements(req.SURFACE_ENV, req._available_requirements("metallurgy")),
+                req.with_capabilities(req.SURFACE_SITE, "metallurgy"),
             ),
             stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
@@ -232,9 +237,8 @@ def build_research_definitions() -> dict:
             _prototype(surface_lab, {ids.MACHINERY: 3.0, ids.PRECISION_ELECTRONICS: 1.2}),
             _demonstration(
                 12,
-                SiteRequirements(
-                    req.SURFACE_ENV,
-                    req._available_requirements("structural_fabrication", "basic_machine_shop"),
+                req.with_capabilities(
+                    req.SURFACE_SITE, "structural_fabrication", "basic_machine_shop"
                 ),
             ),
             stages=THEORY_PROTOTYPE_DEMONSTRATION,
@@ -247,7 +251,7 @@ def build_research_definitions() -> dict:
             _prototype(surface_lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.8}),
             _demonstration(
                 12,
-                SiteRequirements(req.SURFACE_ENV, req._available_requirements("water_extraction")),
+                req.with_capabilities(req.SURFACE_SITE, "water_extraction"),
             ),
             stages=THEORY_PROTOTYPE_DEMONSTRATION,
         ),
@@ -259,9 +263,8 @@ def build_research_definitions() -> dict:
             _prototype(surface_lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 1.0}),
             _demonstration(
                 15,
-                SiteRequirements(
-                    req.SURFACE_ENV,
-                    req._available_requirements("industrial_electrolysis", "cryogenic_storage"),
+                req.with_capabilities(
+                    req.SURFACE_SITE, "industrial_electrolysis", "cryogenic_storage"
                 ),
             ),
             _experience(ids.EXPERIENCE_TRANSPORT_OPERATIONS, 20.0),

@@ -15,7 +15,7 @@ from .resource_claim import ResourceAllocationPlan, ResourceClaim
 from .supply import SupplyRequirement
 from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
-from .site import SiteRequirements, evaluate_environment_requirements, evaluate_site_requirements
+from .site import SiteRequirements, evaluate_physical_site_requirements, evaluate_site_requirements
 from .storage import StorageService
 from .transport.models import (
     FleetReservationKind, MovementExecutionKind, MovementExecutionPayloadResource,
@@ -246,7 +246,7 @@ class LocationFoundingService:
             snapshot,
         ):
             failures.append(FoundingBlocker(f"staging:{failure.code}", failure.detail))
-        for failure in evaluate_environment_requirements(
+        for failure in evaluate_physical_site_requirements(
             package.target_requirements,
             cell_id,
             day,

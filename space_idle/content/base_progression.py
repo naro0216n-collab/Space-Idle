@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..survey import ExtractionSpec, SurveyCoverage, SurveyProviderSpec, SurveyTarget
+from . import base_requirements as req
 from . import base_ids as ids
 
 
@@ -50,19 +51,24 @@ def build_survey_providers() -> dict:
 def build_extraction_specs() -> dict:
     return {
         ids.SURFACE_AGGREGATE_QUARRY: ExtractionSpec(
-            ids.SURFACE_AGGREGATE_QUARRY, ids.AGGREGATE, ids.AGGREGATE, 2.4
+            ids.SURFACE_AGGREGATE_QUARRY, ids.AGGREGATE, ids.AGGREGATE, 2.4,
+            req.SURFACE_SITE, "crust_accessibility", "terrain_factor",
         ),
         ids.METAL_ORE_MINE: ExtractionSpec(
-            ids.METAL_ORE_MINE, ids.METAL_ORE, ids.METAL_ORE, 1.7
+            ids.METAL_ORE_MINE, ids.METAL_ORE, ids.METAL_ORE, 1.7,
+            req.SURFACE_SITE, "crust_accessibility", "bearing_capacity_factor",
         ),
         ids.INDUSTRIAL_WATER_INTAKE: ExtractionSpec(
-            ids.INDUSTRIAL_WATER_INTAKE, ids.WATER, ids.WATER, 1.0
+            ids.INDUSTRIAL_WATER_INTAKE, ids.WATER, ids.WATER, 1.0,
+            req.ATMOSPHERIC_SURFACE_SITE, "crust_accessibility", "terrain_factor",
         ),
         ids.VOLATILE_EXTRACTOR: ExtractionSpec(
-            ids.VOLATILE_EXTRACTOR, ids.WATER, ids.WATER, 6.0
+            ids.VOLATILE_EXTRACTOR, ids.WATER, ids.WATER, 6.0,
+            req.COLD_VOLATILE_SURFACE_SITE, "regolith_accessibility", "bearing_capacity_factor",
         ),
         ids.REGOLITH_HARVESTER: ExtractionSpec(
-            ids.REGOLITH_HARVESTER, ids.REGOLITH, ids.REGOLITH, 8.0
+            ids.REGOLITH_HARVESTER, ids.REGOLITH, ids.REGOLITH, 8.0,
+            req.VACUUM_SURFACE_SITE, "regolith_accessibility", "terrain_factor",
         ),
     }
 
