@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterable, Mapping
 
 from .allocation_graph import AllocationDependency, allocation_dependency_order
 from .priority import ActivityPriority
 from .shared import EntityId, SpatialNodeId
+
+
+class ServiceCapacityScope(str, Enum):
+    """Spatial ownership of a finite service flow.
+
+    Providers always remain physically located at an Operational Node.  An
+    ORGANIZATION-scoped service may additionally be consumed through the
+    organization aggregate after the provider's local dependencies have been
+    resolved.
+    """
+
+    OPERATIONAL_NODE = "OPERATIONAL_NODE"
+    ORGANIZATION = "ORGANIZATION"
 
 
 @dataclass(frozen=True)

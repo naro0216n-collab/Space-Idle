@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Mapping
 
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from .service_capacity import ServiceCapacityScope
 from .site import SiteRequirements, evaluate_physical_site_requirements
 from .spatial import EnvironmentResolver, SpatialContextId
 
@@ -31,15 +32,18 @@ class CapabilitySupply:
 
 @dataclass(frozen=True)
 class ServiceCapacitySupply:
-    """Finite per-tick flow supplied by a facility before allocation."""
+    """Finite per-tick flow supplied by a physically located facility."""
     service_type: str
     nominal_rate: float
+    scope: ServiceCapacityScope = ServiceCapacityScope.OPERATIONAL_NODE
 
     def __post_init__(self) -> None:
         if not self.service_type:
             raise ValueError("service type must not be empty")
         if self.nominal_rate <= 0:
             raise ValueError("service capacity nominal rate must be positive")
+        if not isinstance(self.scope, ServiceCapacityScope):
+            raise ValueError("service capacity scope must be a ServiceCapacityScope")
 
 
 @dataclass(frozen=True)
@@ -272,6 +276,19 @@ class FacilityBook:
             self._definition_has_capability(self.definitions[facility.definition_id], capability_id)
             for facility in self.active_compatible_at(operational_node_id, day)
         )
+
+    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope:
+        scopes = {
+            supply.scope
+            for definition in self.definitions.values()
+            for supply in definition.service_capacity_supplies
+            if supply.service_type == service_type
+        }
+        if not scopes:
+            return ServiceCapacityScope.OPERATIONAL_NODE
+        if len(scopes) != 1:
+            raise ValueError(f"mixed service capacity scopes for {service_type}: {sorted(scope.value for scope in scopes)}")
+        return next(iter(scopes))
 
     def nominal_service_capacity_at(
         self, operational_node_id: SpatialNodeId, service_type: str, day: int = 0

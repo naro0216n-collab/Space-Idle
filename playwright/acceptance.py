@@ -361,7 +361,7 @@ def run() -> dict[str, object]:
             _assert("Minimum Payload" in exploration_text, "exploration inspector must expose minimum payload requirement")
             _assert("Vehicle Capability" in exploration_text, "exploration inspector must expose generic vehicle capability requirements")
             _assert("RP/日" in exploration_text, "exploration inspector must expose application-projected RP rate")
-            _assert("軌道環境が必要" in exploration_text, "exploration inspector must expose site environment requirements")
+            _assert("空間条件: 軌道地点が必要" in exploration_text, "exploration inspector must expose spatial classification requirements")
             _assert("Operation:" in exploration_text, "exploration inspector must expose required operations")
             _assert("消耗資源:" in exploration_text, "exploration inspector must expose consumable resources")
             exploration_assign_buttons = page.locator('#inspectorContent [data-exploration-assign]')

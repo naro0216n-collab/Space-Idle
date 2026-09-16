@@ -4,15 +4,21 @@ from .power import PowerSnapshot
 from .execution_requirements import (
     ExecutionAllocationPlan,
     ExecutionRequirementBundle,
-    FundsOrPoolRequirement,
+    PoolRequirement,
     ReservationAcquisitionRequirement,
     ServiceCapacityRequirement as ExecutionServiceRequirement,
 )
+from .service_capacity import ServiceCapacityScope
 from .supply import SupplyRequirement
-from .shared import DefinitionId, EntityId, SpatialNodeId
-from .site import SiteRequirementFailure, evaluate_site_requirements
+from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from .site import (
+    SiteRequirementFailure,
+    SiteRequirements,
+    evaluate_site_requirements,
+    requires_surface_cell_context,
+)
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
-from .research_models import ResearchStage, ResearchState
+from .research_models import ResearchExecutionSite, ResearchStage, ResearchState
 
 
 class ResearchWorkflowMixin:
@@ -27,20 +33,64 @@ class ResearchWorkflowMixin:
     def _project_owner_id(research_id: DefinitionId) -> EntityId:
         return EntityId(f"research:{research_id}")
 
-    def _research_execution_supply_weights(
-        self, day: int
-    ) -> tuple[tuple[SpatialNodeId, float], ...]:
-        locations = sorted(
-            self.facilities.environment.graph.operational_node_ids(), key=str
+    def _execution_site_failures(
+        self,
+        requirements: SiteRequirements,
+        site: ResearchExecutionSite,
+        day: int,
+        power: PowerSnapshot | None = None,
+    ) -> tuple[SiteRequirementFailure, ...]:
+        graph = self.facilities.environment.graph
+        location_id = site.operational_node_id
+        if not graph.has_operational_node(location_id):
+            raise KeyError(location_id)
+
+        failures: list[SiteRequirementFailure] = []
+        local_site_required = (
+            location_id in graph.locations and requires_surface_cell_context(requirements)
         )
-        nominal: list[tuple[SpatialNodeId, float]] = []
-        for location_id in locations:
-            nominal_rate = self.facilities.nominal_service_capacity_at(
-                location_id, self.RESEARCH_EXECUTION_SERVICE, day
+        if site.surface_cell_id is None:
+            if local_site_required:
+                failures.append(
+                    SiteRequirementFailure(
+                        "surface_cell:required", "局所環境を評価するSurface Cellが必要"
+                    )
+                )
+        else:
+            location = graph.locations.get(location_id)
+            if location is None:
+                failures.append(
+                    SiteRequirementFailure(
+                        "surface_cell:non_surface_node", "Surface CellはSurface Locationでのみ指定可能"
+                    )
+                )
+            elif site.surface_cell_id not in location.developed_cell_ids:
+                failures.append(
+                    SiteRequirementFailure(
+                        "surface_cell:developed", "実行地点は所属Locationのdeveloped cellである必要がある"
+                    )
+                )
+            elif not local_site_required:
+                failures.append(
+                    SiteRequirementFailure(
+                        "surface_cell:not_required", "この研究段階はCell-local execution siteを要求しない"
+                    )
+                )
+
+        context_id = site.surface_cell_id or location_id
+        if not failures:
+            failures.extend(
+                evaluate_site_requirements(
+                    requirements,
+                    location_id,
+                    day,
+                    self.facilities.environment,
+                    self.facilities,
+                    power,
+                    environment_context_id=context_id,
+                )
             )
-            if nominal_rate > 1e-12:
-                nominal.append((location_id, nominal_rate))
-        return tuple(nominal)
+        return tuple(failures)
 
     def start_blockers(
         self,
@@ -127,18 +177,15 @@ class ResearchWorkflowMixin:
         location_id: SpatialNodeId,
         day: int = 0,
         power: PowerSnapshot | None = None,
+        surface_cell_id: SurfaceCellId | None = None,
     ) -> tuple[SiteRequirementFailure, ...]:
-        if not self.facilities.environment.graph.has_operational_node(location_id):
-            raise KeyError(location_id)
         prototype = self.definitions[research_id].prototype
         if prototype is None:
             raise ValueError("research has no prototype stage")
-        return evaluate_site_requirements(
+        return self._execution_site_failures(
             prototype.site_requirements,
-            location_id,
+            ResearchExecutionSite(location_id, surface_cell_id),
             day,
-            self.facilities.environment,
-            self.facilities,
             power,
         )
 
@@ -173,7 +220,8 @@ class ResearchWorkflowMixin:
 
     def _consume_prototype_reservations(self, research_id: DefinitionId) -> None:
         state = self.active[research_id]
-        location_id = state.prototype_operational_node_id
+        site = state.prototype_execution_site
+        location_id = None if site is None else site.operational_node_id
         prototype = self.definitions[research_id].prototype
         if location_id is None or prototype is None:
             return
@@ -187,29 +235,34 @@ class ResearchWorkflowMixin:
         research_id: DefinitionId,
         location_id: SpatialNodeId,
         day: int = 0,
+        surface_cell_id: SurfaceCellId | None = None,
     ) -> None:
         state = self.active.get(research_id)
         if state is None or state.stage is not ResearchStage.PROTOTYPE:
             raise ValueError("研究は試作段階ではありません")
         structural = self._structural_site_blockers(
-            self.prototype_site_blockers(research_id, location_id, day)
+            self.prototype_site_blockers(
+                research_id, location_id, day, surface_cell_id=surface_cell_id
+            )
         )
         if structural:
             raise ValueError(
                 "prototype site requirements not met: "
                 + "; ".join(detail for _code, detail in structural)
             )
-        previous = state.prototype_operational_node_id
-        if previous is not None and previous != location_id:
+        previous = state.prototype_execution_site
+        site = ResearchExecutionSite(location_id, surface_cell_id)
+        if previous is not None and previous != site:
             self._release_prototype_reservations(research_id)
-        state.prototype_operational_node_id = location_id
+        state.prototype_execution_site = site
 
     def supplys(self, day: int = 0) -> tuple[SupplyRequirement, ...]:
         requirements: list[SupplyRequirement] = []
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
             if state.paused or state.stage is not ResearchStage.PROTOTYPE:
                 continue
-            location_id = state.prototype_operational_node_id
+            site = state.prototype_execution_site
+            location_id = None if site is None else site.operational_node_id
             if location_id is None:
                 continue
             prototype = self.definitions[research_id].prototype
@@ -245,7 +298,8 @@ class ResearchWorkflowMixin:
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
             if state.paused or state.stage is not ResearchStage.PROTOTYPE:
                 continue
-            location_id = state.prototype_operational_node_id
+            site = state.prototype_execution_site
+            location_id = None if site is None else site.operational_node_id
             if location_id is None:
                 continue
             prototype = self.definitions[research_id].prototype
@@ -268,51 +322,64 @@ class ResearchWorkflowMixin:
         return tuple(requirements)
 
     @staticmethod
-    def _theory_bundle_id(research_id: DefinitionId, location_id: SpatialNodeId) -> EntityId:
-        return EntityId(f"execution.research:theory:{research_id}:{location_id}")
+    def _theory_bundle_id(research_id: DefinitionId) -> EntityId:
+        return EntityId(f"execution.research:theory:{research_id}")
 
     @staticmethod
-    def _stage_bundle_id(research_id: DefinitionId, stage: ResearchStage, location_id: SpatialNodeId) -> EntityId:
-        return EntityId(f"execution.research:{stage.value}:{research_id}:{location_id}")
+    def _stage_bundle_id(
+        research_id: DefinitionId, stage: ResearchStage, site: ResearchExecutionSite
+    ) -> EntityId:
+        suffix = (
+            str(site.operational_node_id)
+            if site.surface_cell_id is None
+            else f"{site.operational_node_id}:{site.surface_cell_id}"
+        )
+        return EntityId(f"execution.research:{stage.value}:{research_id}:{suffix}")
 
     def execution_requirement_bundles(
         self, day: int = 0
     ) -> tuple[ExecutionRequirementBundle, ...]:
         bundles: list[ExecutionRequirementBundle] = []
-        theory_supply = self._research_execution_supply_weights(day)
-        theory_supply_total = sum(rate for _location_id, rate in theory_supply)
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
             if state.paused:
                 continue
             definition = self.definitions[research_id]
             if state.stage is ResearchStage.THEORY:
                 remaining = max(0.0, definition.research_point_cost - state.stage_progress)
-                if remaining <= 1e-12 or theory_supply_total <= 1e-12:
+                if remaining <= 1e-12:
                     continue
-                for location_id, weight in theory_supply:
-                    requested = remaining * weight / theory_supply_total
-                    bundles.append(ExecutionRequirementBundle(
-                        self._theory_bundle_id(research_id, location_id),
-                        "research_project",
-                        self._project_owner_id(research_id),
-                        ResearchStage.THEORY.value,
-                        location_id,
-                        requested,
-                        state.priority,
-                        (
-                            ExecutionServiceRequirement(self.RESEARCH_EXECUTION_SERVICE, 1.0),
-                            FundsOrPoolRequirement("research_points", 1.0, "organization"),
+                bundles.append(ExecutionRequirementBundle(
+                    self._theory_bundle_id(research_id),
+                    "research_project",
+                    self._project_owner_id(research_id),
+                    ResearchStage.THEORY.value,
+                    None,
+                    remaining,
+                    state.priority,
+                    (
+                        ExecutionServiceRequirement(
+                            self.RESEARCH_EXECUTION_SERVICE,
+                            1.0,
+                            scope=ServiceCapacityScope.ORGANIZATION,
                         ),
-                    ))
+                        PoolRequirement("research_points", 1.0, "organization"),
+                    ),
+                ))
                 continue
 
             if state.stage is ResearchStage.PROTOTYPE:
-                location_id = state.prototype_operational_node_id
+                site = state.prototype_execution_site
                 spec = definition.prototype
-                if location_id is None or spec is None:
+                if site is None or spec is None:
                     continue
+                location_id = site.operational_node_id
                 if self._structural_site_blockers(
-                    self.prototype_site_blockers(research_id, location_id, day)
+                    self.prototype_site_blockers(
+                        research_id,
+                        location_id,
+                        day,
+                        surface_cell_id=site.surface_cell_id,
+                    )
                 ):
                     continue
                 resources_ready = all(
@@ -322,12 +389,18 @@ class ResearchWorkflowMixin:
                 if not resources_ready:
                     continue
             elif state.stage is ResearchStage.DEMONSTRATION:
-                location_id = state.demonstration_operational_node_id
+                site = state.demonstration_execution_site
                 spec = definition.demonstration
-                if location_id is None or spec is None:
+                if site is None or spec is None:
                     continue
+                location_id = site.operational_node_id
                 if self._structural_site_blockers(
-                    self.demonstration_site_blockers(research_id, location_id, day)
+                    self.demonstration_site_blockers(
+                        research_id,
+                        location_id,
+                        day,
+                        surface_cell_id=site.surface_cell_id,
+                    )
                 ):
                     continue
             else:
@@ -339,7 +412,7 @@ class ResearchWorkflowMixin:
                 if req.minimum_rate > 1e-12
             )
             bundles.append(ExecutionRequirementBundle(
-                self._stage_bundle_id(research_id, state.stage, location_id),
+                self._stage_bundle_id(research_id, state.stage, site),
                 "research_project",
                 self._project_owner_id(research_id),
                 state.stage.value,
@@ -357,19 +430,24 @@ class ResearchWorkflowMixin:
         research_id: DefinitionId,
         location_id: SpatialNodeId,
         day: int = 0,
+        surface_cell_id: SurfaceCellId | None = None,
     ) -> None:
         state = self.active.get(research_id)
         if state is None or state.stage is not ResearchStage.DEMONSTRATION:
             raise ValueError("研究は実証段階ではありません")
         structural = self._structural_site_blockers(
-            self.demonstration_site_blockers(research_id, location_id, day)
+            self.demonstration_site_blockers(
+                research_id, location_id, day, surface_cell_id=surface_cell_id
+            )
         )
         if structural:
             raise ValueError(
                 "demonstration site requirements not met: "
                 + "; ".join(detail for _code, detail in structural)
             )
-        state.demonstration_operational_node_id = location_id
+        state.demonstration_execution_site = ResearchExecutionSite(
+            location_id, surface_cell_id
+        )
         state.stage_progress = 0.0
 
     def demonstration_failures(
@@ -378,16 +456,15 @@ class ResearchWorkflowMixin:
         location_id: SpatialNodeId,
         day: int = 0,
         power: PowerSnapshot | None = None,
+        surface_cell_id: SurfaceCellId | None = None,
     ) -> tuple[SiteRequirementFailure, ...]:
         demonstration = self.definitions[research_id].demonstration
         if demonstration is None:
             raise ValueError("research has no demonstration stage")
-        return evaluate_site_requirements(
+        return self._execution_site_failures(
             demonstration.site_requirements,
-            location_id,
+            ResearchExecutionSite(location_id, surface_cell_id),
             day,
-            self.facilities.environment,
-            self.facilities,
             power,
         )
 
@@ -397,6 +474,7 @@ class ResearchWorkflowMixin:
         location_id: SpatialNodeId,
         day: int = 0,
         power: PowerSnapshot | None = None,
+        surface_cell_id: SurfaceCellId | None = None,
     ) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
         if state is None or state.stage is not ResearchStage.PROTOTYPE:
@@ -407,20 +485,23 @@ class ResearchWorkflowMixin:
         blockers.extend(
             (failure.code, failure.detail)
             for failure in self.prototype_failures(
-                research_id, location_id, day, power
+                research_id, location_id, day, power, surface_cell_id
             )
         )
         return tuple(blockers)
 
     def can_select_prototype_site(
-        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0
+        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0,
+        surface_cell_id: SurfaceCellId | None = None,
     ) -> bool:
         state = self.active.get(research_id)
         return (
             state is not None
             and state.stage is ResearchStage.PROTOTYPE
             and not self._structural_site_blockers(
-                self.prototype_site_blockers(research_id, location_id, day)
+                self.prototype_site_blockers(
+                    research_id, location_id, day, surface_cell_id=surface_cell_id
+                )
             )
         )
 
@@ -430,6 +511,7 @@ class ResearchWorkflowMixin:
         location_id: SpatialNodeId,
         day: int = 0,
         power: PowerSnapshot | None = None,
+        surface_cell_id: SurfaceCellId | None = None,
     ) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
         if state is None or state.stage is not ResearchStage.DEMONSTRATION:
@@ -440,20 +522,23 @@ class ResearchWorkflowMixin:
         blockers.extend(
             (failure.code, failure.detail)
             for failure in self.demonstration_failures(
-                research_id, location_id, day, power
+                research_id, location_id, day, power, surface_cell_id
             )
         )
         return tuple(blockers)
 
     def can_select_demonstration_site(
-        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0
+        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0,
+        surface_cell_id: SurfaceCellId | None = None,
     ) -> bool:
         state = self.active.get(research_id)
         return (
             state is not None
             and state.stage is ResearchStage.DEMONSTRATION
             and not self._structural_site_blockers(
-                self.demonstration_site_blockers(research_id, location_id, day)
+                self.demonstration_site_blockers(
+                    research_id, location_id, day, surface_cell_id=surface_cell_id
+                )
             )
         )
 
@@ -477,10 +562,11 @@ class ResearchWorkflowMixin:
         blockers: list[tuple[str, str]] = []
         if state.paused:
             blockers.append(("manual_pause", "研究が手動停止中"))
-        location_id = state.prototype_operational_node_id
-        if location_id is None:
+        site = state.prototype_execution_site
+        if site is None:
             blockers.append(("prototype_site", "試作地点を選択してください"))
             return tuple(blockers)
+        location_id = site.operational_node_id
         blockers.extend(
             (failure.code, failure.detail)
             for failure in self.prototype_failures(
@@ -488,6 +574,7 @@ class ResearchWorkflowMixin:
                 location_id,
                 day,
                 None if power_by_location is None else power_by_location.get(location_id),
+                site.surface_cell_id,
             )
         )
         prototype = self.definitions[research_id].prototype
@@ -516,10 +603,11 @@ class ResearchWorkflowMixin:
         blockers: list[tuple[str, str]] = []
         if state.paused:
             blockers.append(("manual_pause", "研究が手動停止中"))
-        location_id = state.demonstration_operational_node_id
-        if location_id is None:
+        site = state.demonstration_execution_site
+        if site is None:
             blockers.append(("demonstration_site", "実証地点を選択してください"))
             return tuple(blockers)
+        location_id = site.operational_node_id
         blockers.extend(
             (failure.code, failure.detail)
             for failure in self.demonstration_failures(
@@ -527,6 +615,7 @@ class ResearchWorkflowMixin:
                 location_id,
                 day,
                 None if power_by_location is None else power_by_location.get(location_id),
+                site.surface_cell_id,
             )
         )
         return tuple(blockers)
@@ -591,8 +680,6 @@ class ResearchWorkflowMixin:
             blockers: list[tuple[str, str]] = []
             if self.stored_points <= 1e-12:
                 blockers.append(("research_points", "Research Point不足"))
-            if not self._research_execution_supply_weights(day):
-                blockers.append(("research_execution", "Research execution能力なし"))
             return tuple(blockers)
         if state.stage is ResearchStage.PROTOTYPE:
             return self.prototype_blockers(
@@ -654,4 +741,4 @@ class ResearchWorkflowMixin:
         state.stage_progress = 0.0
         state.stage_started_day = day
         if state.stage is ResearchStage.DEMONSTRATION:
-            state.demonstration_operational_node_id = None
+            state.demonstration_execution_site = None

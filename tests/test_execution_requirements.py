@@ -4,7 +4,7 @@ import pytest
 
 from space_idle.execution_requirements import (
     ExecutionRequirementBundle,
-    FundsOrPoolRequirement,
+    PoolRequirement,
     ReservationAcquisitionRequirement,
     ResourceRequirement,
     ServiceCapacityRequirement,
@@ -130,7 +130,7 @@ def test_common_allocator_handles_reservation_acquisition_and_shared_owner_pools
     shared_pool = bundle(
         "research",
         10,
-        FundsOrPoolRequirement("research_points", 1, scope_id="organization"),
+        PoolRequirement("research_points", 1, scope_id="organization"),
     )
     pool_plan = allocate_execution_requirements(
         [shared_pool], {pool_constraint("research_points", "organization"): 4}

@@ -22,6 +22,7 @@ from space_idle import (
     ResumeTransportAllocation,
     PlanBuild,
     ProduceVehicle,
+    SetResearchPrototypeSite,
     StartResearch,
     StartSurvey,
     SetSupplyPolicy,
@@ -36,6 +37,7 @@ from space_idle.content.base_game import (
 )
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
+from space_idle.research import ResearchStage, ResearchState
 from space_idle.shared import EntityId, CelestialBodyId, DefinitionId
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
@@ -115,6 +117,28 @@ def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
     loaded, offline = load_game(path, build_game_application)
     assert offline is None
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
+
+
+def test_save_load_preserves_research_execution_site(tmp_path):
+    app = build_game_application()
+    sim = app._simulation
+    research_id = ids.TECH_ORBITAL_OPERATIONS
+    sim.research.active[research_id] = ResearchState(
+        research_id,
+        ResearchStage.PROTOTYPE,
+        stage_started_day=sim.day,
+    )
+    app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+
+    before = sim.research.active[research_id].prototype_execution_site
+    assert before is not None
+    path = tmp_path / "research-execution-site.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application)
+
+    after = loaded._simulation.research.active[research_id].prototype_execution_site
+    assert after == before
+    assert capture_state(loaded._simulation)["research"] == capture_state(sim)["research"]
     assert loaded.query(GetResearch()) == app.query(GetResearch())
 
     # Future-behavior equality only needs one canonical tick here. Multi-day

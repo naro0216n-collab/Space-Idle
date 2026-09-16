@@ -5,6 +5,7 @@ from math import isclose
 from space_idle import AdvanceTime, GetResearch, PauseFacility, ResumeFacility, StartResearch, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.facilities import FacilityDef, ServiceCapacitySupply
+from space_idle.service_capacity import ServiceCapacityScope
 from space_idle.research import (
     ResearchDefinition,
     ResearchProviderLevelSpec,
@@ -74,7 +75,11 @@ def test_global_research_points_are_progressively_allocated_without_upfront_or_s
     sim.facilities.definitions[provider_definition_id] = FacilityDef(
         provider_definition_id,
         "Research execution provider fixture",
-        service_capacity_supplies=(ServiceCapacitySupply("research_execution", 1.0),),
+        service_capacity_supplies=(
+            ServiceCapacitySupply(
+                "research_execution", 1.0, ServiceCapacityScope.ORGANIZATION
+            ),
+        ),
     )
     sim.research.providers = {
         provider_definition_id: ResearchProviderSpec(

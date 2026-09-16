@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from .facilities import FacilityBook
     from .power import PowerSnapshot
 from .shared import SpatialNodeId
-from .spatial import EnvironmentResolver, SpatialContextId, SpatialFacet, SpatialNodeKind
+from .spatial import EnvironmentFieldScope, EnvironmentResolver, SpatialContextId, SpatialFacet, SpatialNodeKind
 
 
 
@@ -117,6 +117,25 @@ class SiteRequirements:
     capability_requirements: tuple[CapabilityRequirement, ...] = ()
     service_capacity_requirements: tuple[ServiceCapacityRequirement, ...] = ()
     spatial_classification_requirements: tuple[SpatialClassificationRequirement, ...] = ()
+
+
+def requires_surface_cell_context(requirements: SiteRequirements) -> bool:
+    """Whether a surface execution site must name a concrete developed Cell.
+
+    Body-global fields do not choose a Cell. Cell-local fields and fields with
+    Cell overlays do, because evaluating them at the Location would discard the
+    local component that gives the placement its meaning.
+    """
+
+    for condition in requirements.environment:
+        facet_type = getattr(condition, "facet_type", None)
+        scope = getattr(facet_type, "environment_scope", None)
+        if scope in {
+            EnvironmentFieldScope.SURFACE_CELL_LOCAL,
+            EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY,
+        }:
+            return True
+    return False
 
 
 @dataclass(frozen=True)

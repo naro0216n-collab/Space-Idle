@@ -8,8 +8,9 @@ from .application_views import (
     ResearchRow,
     ResearchView,
 )
-from .app_contracts.progression_views import ResearchSiteOptionRow
+from .app_contracts.progression_views import ResearchExecutionSiteRow, ResearchSiteOptionRow
 from .research_models import ResearchStage
+from .site import requires_surface_cell_context
 
 
 class ResearchProgressionProjectorMixin:
@@ -23,32 +24,50 @@ class ResearchProgressionProjectorMixin:
         sim = self._simulation
         if sim.research is None:
             return ()
+        spec = definition.demonstration if demonstration else definition.prototype
+        if spec is None:
+            return ()
+        requires_cell = requires_surface_cell_context(spec.site_requirements)
         rows: list[ResearchSiteOptionRow] = []
         for node in sim.graph.operational_nodes():
-            blockers = (
-                sim.research.demonstration_site_blockers(
-                    definition.id,
-                    node.id,
-                    sim.day,
-                    power_by_location.get(node.id),
-                )
-                if demonstration
-                else sim.research.prototype_site_blockers(
-                    definition.id,
-                    node.id,
-                    sim.day,
-                    power_by_location.get(node.id),
-                )
+            location = sim.graph.locations.get(node.id)
+            cell_ids = (
+                tuple(sorted(location.developed_cell_ids, key=str))
+                if location is not None and requires_cell
+                else (None,)
             )
-            rows.append(ResearchSiteOptionRow(
-                str(node.id),
-                blockers,
-                (
-                    sim.research.can_select_demonstration_site(definition.id, node.id, sim.day)
+            for surface_cell_id in cell_ids:
+                blockers = (
+                    sim.research.demonstration_site_blockers(
+                        definition.id,
+                        node.id,
+                        sim.day,
+                        power_by_location.get(node.id),
+                        surface_cell_id,
+                    )
                     if demonstration
-                    else sim.research.can_select_prototype_site(definition.id, node.id, sim.day)
-                ),
-            ))
+                    else sim.research.prototype_site_blockers(
+                        definition.id,
+                        node.id,
+                        sim.day,
+                        power_by_location.get(node.id),
+                        surface_cell_id,
+                    )
+                )
+                rows.append(ResearchSiteOptionRow(
+                    str(node.id),
+                    None if surface_cell_id is None else str(surface_cell_id),
+                    blockers,
+                    (
+                        sim.research.can_select_demonstration_site(
+                            definition.id, node.id, sim.day, surface_cell_id
+                        )
+                        if demonstration
+                        else sim.research.can_select_prototype_site(
+                            definition.id, node.id, sim.day, surface_cell_id
+                        )
+                    ),
+                ))
         return tuple(rows)
 
     def _research_provider_rows(self, power_by_location) -> tuple[ResearchProviderRow, ...]:
@@ -158,15 +177,25 @@ class ResearchProgressionProjectorMixin:
                             for category, required in spec.requirements.items()
                         )
 
-            prototype_operational_node_id = (
+            prototype_execution_site = (
                 None
-                if state is None or state.prototype_operational_node_id is None
-                else str(state.prototype_operational_node_id)
+                if state is None or state.prototype_execution_site is None
+                else ResearchExecutionSiteRow(
+                    str(state.prototype_execution_site.operational_node_id),
+                    None
+                    if state.prototype_execution_site.surface_cell_id is None
+                    else str(state.prototype_execution_site.surface_cell_id),
+                )
             )
-            demonstration_operational_node_id = (
+            demonstration_execution_site = (
                 None
-                if state is None or state.demonstration_operational_node_id is None
-                else str(state.demonstration_operational_node_id)
+                if state is None or state.demonstration_execution_site is None
+                else ResearchExecutionSiteRow(
+                    str(state.demonstration_execution_site.operational_node_id),
+                    None
+                    if state.demonstration_execution_site.surface_cell_id is None
+                    else str(state.demonstration_execution_site.surface_cell_id),
+                )
             )
             prototype_sites = (
                 self._research_site_options(
@@ -203,7 +232,11 @@ class ResearchProgressionProjectorMixin:
 
             prototype_resources: list[ResearchPrototypeResourceRow] = []
             if definition.prototype is not None:
-                location_id = None if state is None else state.prototype_operational_node_id
+                location_id = (
+                    None
+                    if state is None or state.prototype_execution_site is None
+                    else state.prototype_execution_site.operational_node_id
+                )
                 for resource_id, required in sorted(
                     definition.prototype.resources.items(), key=lambda row: str(row[0])
                 ):
@@ -270,9 +303,9 @@ class ResearchProgressionProjectorMixin:
                 current_blockers,
                 start_blockers,
                 tuple(prototype_resources),
-                prototype_operational_node_id,
+                prototype_execution_site,
                 prototype_sites,
-                demonstration_operational_node_id,
+                demonstration_execution_site,
                 demonstration_sites,
                 demonstration_blockers,
                 prototype_blockers,

@@ -52,10 +52,11 @@ class ResearchExecutionMixin:
         self, execution_allocations: ExecutionAllocationPlan
     ) -> None:
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
+            site = state.prototype_execution_site
             if (
                 state.paused
                 or state.stage is not ResearchStage.PROTOTYPE
-                or state.prototype_operational_node_id is None
+                or site is None
             ):
                 continue
             prototype = self.definitions[research_id].prototype
@@ -64,7 +65,7 @@ class ResearchExecutionMixin:
                     f"prototype state has no prototype definition: {research_id}"
                 )
             owner_id = self._prototype_reservation_owner_id(research_id)
-            location_id = state.prototype_operational_node_id
+            location_id = site.operational_node_id
             for resource_id, required in sorted(
                 prototype.resources.items(), key=lambda row: str(row[0])
             ):
@@ -137,12 +138,19 @@ class ResearchExecutionMixin:
             if state.paused:
                 continue
             if state.stage is ResearchStage.PROTOTYPE:
-                location_id = state.prototype_operational_node_id
+                site = state.prototype_execution_site
                 prototype = self.definitions[research_id].prototype
-                if location_id is None or prototype is None:
+                if site is None or prototype is None:
                     continue
+                location_id = site.operational_node_id
                 snapshot = power_by_location[location_id]
-                if self.prototype_failures(research_id, location_id, day, snapshot):
+                if self.prototype_failures(
+                    research_id,
+                    location_id,
+                    day,
+                    snapshot,
+                    site.surface_cell_id,
+                ):
                     continue
                 resources_ready = all(
                     self.prototype_reserved_t(research_id, location_id, resource_id)
@@ -153,7 +161,7 @@ class ResearchExecutionMixin:
                 if not resources_ready:
                     continue
                 bundle_id = self._stage_bundle_id(
-                    research_id, ResearchStage.PROTOTYPE, location_id
+                    research_id, ResearchStage.PROTOTYPE, site
                 )
                 try:
                     allocated = execution_allocations.allocated(bundle_id)
@@ -162,15 +170,22 @@ class ResearchExecutionMixin:
                 if allocated + 1e-9 >= 1.0:
                     state.stage_progress = 1.0
             elif state.stage is ResearchStage.DEMONSTRATION:
-                location_id = state.demonstration_operational_node_id
+                site = state.demonstration_execution_site
                 demonstration = self.definitions[research_id].demonstration
-                if location_id is None or demonstration is None:
+                if site is None or demonstration is None:
                     continue
+                location_id = site.operational_node_id
                 snapshot = power_by_location[location_id]
-                if self.demonstration_failures(research_id, location_id, day, snapshot):
+                if self.demonstration_failures(
+                    research_id,
+                    location_id,
+                    day,
+                    snapshot,
+                    site.surface_cell_id,
+                ):
                     continue
                 bundle_id = self._stage_bundle_id(
-                    research_id, ResearchStage.DEMONSTRATION, location_id
+                    research_id, ResearchStage.DEMONSTRATION, site
                 )
                 try:
                     allocated = execution_allocations.allocated(bundle_id)

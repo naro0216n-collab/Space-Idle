@@ -24,16 +24,17 @@ from .research import ResearchService
 from .resource_claim import ResourceAllocation, ResourceAllocationPlan, ResourceClaim
 from .execution_requirements import (
     AllocationConstraintKey, AllocationIntent, ExecutionAllocation, ExecutionAllocationPlan,
-    ExecutionRequirementBundle, FundsOrPoolRequirement, ReservationAcquisitionRequirement,
+    ExecutionRequirementBundle, PoolRequirement, ReservationAcquisitionRequirement,
     ResourceRequirement, ServiceCapacityRequirement, StockOrPoolAdmissionRequirement,
     admission_constraint, allocate_execution_requirements, pool_constraint, resource_constraint,
-    service_constraint,
+    service_constraint, service_pool_constraint,
 )
 from .service_capacity import (
     ServiceCapacityAllocation,
     ServiceCapacityAllocationPlan,
     ServiceCapacityDependency,
     ServiceCapacityRequest,
+    ServiceCapacityScope,
     allocate_service_capacity,
     merge_service_capacity_plans,
     service_capacity_dependency_order,
@@ -270,6 +271,65 @@ class Simulation:
         """Return off-site Supply Requirements from the shared tick plan."""
         return self.tick_decision_projection().plan.external_requirements
 
+    def _with_organization_service_envelopes(
+        self, bundle: ExecutionRequirementBundle
+    ) -> ExecutionRequirementBundle:
+        """Conserve organization-reachable service supply across local and shared use.
+
+        A provider whose service is organization-scoped is still physically located
+        at one Operational Node.  A node-local consumer therefore needs both the
+        local capacity constraint and the organization aggregate envelope so that a
+        Theory consumer cannot simultaneously reuse the same finite provider flow.
+
+        The extra envelope is planning-only.  Domain bundles keep expressing the
+        consumer's actual execution scope; provider reachability determines whether
+        the shared conservation constraint is added.
+        """
+
+        requirements = list(bundle.requirements)
+        existing_organization_services = {
+            requirement.service_type
+            for requirement in requirements
+            if isinstance(requirement, ServiceCapacityRequirement)
+            and requirement.scope is ServiceCapacityScope.ORGANIZATION
+        }
+        for requirement in tuple(requirements):
+            if not isinstance(requirement, ServiceCapacityRequirement):
+                continue
+            if requirement.scope is not ServiceCapacityScope.OPERATIONAL_NODE:
+                continue
+            if requirement.service_type in existing_organization_services:
+                continue
+            if (
+                self.facilities.service_capacity_scope(requirement.service_type)
+                is not ServiceCapacityScope.ORGANIZATION
+            ):
+                continue
+            requirements.append(
+                ServiceCapacityRequirement(
+                    requirement.service_type,
+                    requirement.amount_per_execution,
+                    scope=ServiceCapacityScope.ORGANIZATION,
+                )
+            )
+            existing_organization_services.add(requirement.service_type)
+
+        if tuple(requirements) == bundle.requirements:
+            return bundle
+        return ExecutionRequirementBundle(
+            bundle.id,
+            bundle.owner_kind,
+            bundle.owner_id,
+            bundle.purpose,
+            bundle.operational_node_id,
+            bundle.requested_execution,
+            bundle.priority,
+            tuple(requirements),
+            minimum_execution=bundle.minimum_execution,
+            atomic=bundle.atomic,
+            wait_started_day=bundle.wait_started_day,
+        )
+
     def _execution_requirements(self) -> tuple[AllocationIntent, ...]:
         rows: list[AllocationIntent] = []
         rows.extend(self.projects.reservation_acquisition_requirements(self.day))
@@ -298,6 +358,12 @@ class Simulation:
                 self.scientific_exploration.reservation_acquisition_requirements(self.day)
             )
             rows.extend(self.scientific_exploration.execution_requirement_bundles(self.day))
+        rows = [
+            self._with_organization_service_envelopes(row)
+            if isinstance(row, ExecutionRequirementBundle)
+            else row
+            for row in rows
+        ]
         ids = [row.id for row in rows]
         if len(set(ids)) != len(ids):
             raise RuntimeError("duplicate execution requirement id")
@@ -839,7 +905,7 @@ class Simulation:
         )
 
     def _service_request_execution_bundle(self, request: ServiceCapacityRequest) -> ExecutionRequirementBundle:
-        return ExecutionRequirementBundle(
+        return self._with_organization_service_envelopes(ExecutionRequirementBundle(
             id=request.id,
             owner_kind=request.owner_kind,
             owner_id=request.owner_id,
@@ -851,7 +917,7 @@ class Simulation:
             minimum_execution=request.minimum_rate,
             atomic=request.atomic,
             wait_started_day=self.day if request.effective_minimum_rate > 1e-12 else None,
-        )
+        ))
 
     def _constraint_capacities(
         self,
@@ -867,6 +933,34 @@ class Simulation:
         capacities: dict[AllocationConstraintKey, float] = {}
         for bundle in bundles:
             for requirement in bundle.requirements:
+                if isinstance(requirement, ServiceCapacityRequirement):
+                    keys = requirement.constraint_keys(bundle.operational_node_id)
+                    for key in keys:
+                        if key in capacities:
+                            continue
+                        if service_supply is None:
+                            capacities[key] = 0.0
+                            continue
+                        if key.kind == "service":
+                            node_id = requirement.constraint_node(bundle.operational_node_id)
+                            capacities[key] = max(
+                                0.0, service_supply.summary(node_id, requirement.service_type).spare_rate
+                            )
+                            continue
+                        if (
+                            requirement.scope is ServiceCapacityScope.ORGANIZATION
+                            and self.facilities.service_capacity_scope(requirement.service_type)
+                            is not ServiceCapacityScope.ORGANIZATION
+                        ):
+                            capacities[key] = 0.0
+                            continue
+                        capacities[key] = math.fsum(
+                            max(0.0, service_supply.summary(node_id, requirement.service_type).spare_rate)
+                            for node_id, service_type in service_supply.supply_enabled
+                            if service_type == requirement.service_type
+                        )
+                    continue
+
                 key = requirement.constraint_key(bundle.operational_node_id)
                 if key in capacities:
                     continue
@@ -877,19 +971,14 @@ class Simulation:
                         self.inventory.available(node_id, requirement.resource_id)
                         - resource_used.get(key, 0.0),
                     )
-                elif isinstance(requirement, ServiceCapacityRequirement):
-                    if service_supply is None:
-                        capacities[key] = 0.0
-                    else:
-                        node_id = requirement.constraint_node(bundle.operational_node_id)
-                        summary = service_supply.summary(node_id, requirement.service_type)
-                        capacities[key] = max(0.0, summary.spare_rate)
                 elif isinstance(requirement, StockOrPoolAdmissionRequirement):
+                    if bundle.operational_node_id is None:
+                        raise ValueError("stock/admission requirement requires an Operational Node")
                     state = self.inventory.admission_state_for_class(
                         bundle.operational_node_id, requirement.pool_id
                     )
                     capacities[key] = state.admission_capacity_t or 0.0
-                elif isinstance(requirement, FundsOrPoolRequirement):
+                elif isinstance(requirement, PoolRequirement):
                     if key not in pool_capacities:
                         raise KeyError(f"no allocation pool owner for {key}")
                     capacities[key] = pool_capacities[key]

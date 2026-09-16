@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..facilities import CapabilitySupply, ServiceCapacitySupply
+from ..service_capacity import ServiceCapacityScope
 from ..projects import BuildResourceRequirement, ConstructionRecipe
 from ..shared import DefinitionId
 from ..site import (
@@ -71,6 +72,13 @@ def _capabilities(*ids: str) -> tuple[CapabilitySupply, ...]:
 def _services(**rates: float) -> tuple[ServiceCapacitySupply, ...]:
     return tuple(
         ServiceCapacitySupply(service_type, rate)
+        for service_type, rate in sorted(rates.items())
+    )
+
+
+def _organization_services(**rates: float) -> tuple[ServiceCapacitySupply, ...]:
+    return tuple(
+        ServiceCapacitySupply(service_type, rate, ServiceCapacityScope.ORGANIZATION)
         for service_type, rate in sorted(rates.items())
     )
 

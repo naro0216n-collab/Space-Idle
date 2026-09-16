@@ -15,7 +15,7 @@ from space_idle import (
     StartResearch,
     build_game_application,
 )
-from space_idle.content import base_requirements as req
+from space_idle.content import base_ids as ids, base_requirements as req
 from space_idle.content.base_game import EARTH, LEO
 from space_idle.research import (
     ResearchDefinition,
@@ -28,9 +28,11 @@ from space_idle.shared import DefinitionId
 from space_idle.site import (
     CapabilityRequirement,
     CapabilityRequirementState,
+    FacetValueRange,
     ServiceCapacityRequirement,
     SiteRequirements,
 )
+from space_idle.spatial import ThermalField
 
 
 def _research_row(app, research_id):
@@ -137,7 +139,9 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
 
     app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
     selected = _research_row(app, research_id)
-    assert selected.prototype_operational_node_id == str(EARTH)
+    assert selected.prototype_execution_site is not None
+    assert selected.prototype_execution_site.operational_node_id == str(EARTH)
+    assert selected.prototype_execution_site.surface_cell_id is None
     assert any(
         code == "service_capacity:available"
         for code, _detail in selected.current_blockers
@@ -148,6 +152,54 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
     sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
     app.execute(AdvanceTime(1))
     assert _research_row(app, research_id).status == "complete"
+
+
+def test_cell_local_research_site_requires_and_persists_explicit_developed_cell():
+    app = build_game_application()
+    sim = app._simulation
+    research_id = DefinitionId("test.research.cell_local_site")
+    sim.research.definitions[research_id] = ResearchDefinition(
+        research_id,
+        "Cell-local Site",
+        research_point_cost=0.0,
+        prototype=ResearchPrototypeSpec(
+            {},
+            SiteRequirements(
+                environment=(
+                    FacetValueRange(
+                        ThermalField,
+                        "nominal_temperature_k",
+                        "environment:any_thermal",
+                        "cell-local thermal context required",
+                        minimum=0.0,
+                    ),
+                ),
+                spatial_classification_requirements=req.SURFACE_CLASSIFICATION,
+            ),
+        ),
+        stages=(ResearchStage.PROTOTYPE,),
+    )
+    app.execute(StartResearch(str(research_id)))
+
+    row = _research_row(app, research_id)
+    earth_options = [
+        candidate
+        for candidate in row.prototype_sites
+        if candidate.operational_node_id == str(EARTH)
+    ]
+    assert [candidate.surface_cell_id for candidate in earth_options] == [
+        str(ids.EARTH_CELL_INDUSTRIAL)
+    ]
+    with pytest.raises(ApplicationError, match="prototype site requirements not met"):
+        app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+
+    app.execute(SetResearchPrototypeSite(
+        str(research_id), str(EARTH), str(ids.EARTH_CELL_INDUSTRIAL)
+    ))
+    selected = _research_row(app, research_id).prototype_execution_site
+    assert selected is not None
+    assert selected.operational_node_id == str(EARTH)
+    assert selected.surface_cell_id == str(ids.EARTH_CELL_INDUSTRIAL)
 
 def test_prototype_resources_stage_durably_and_complete_without_manual_funding():
     app = build_game_application()
@@ -223,7 +275,9 @@ def test_demonstration_site_selection_tolerates_transient_blockers_but_progress_
     assert earth.can_select
     app.execute(SetResearchDemonstrationSite(str(research_id), str(EARTH)))
     selected = _research_row(app, research_id)
-    assert selected.demonstration_operational_node_id == str(EARTH)
+    assert selected.demonstration_execution_site is not None
+    assert selected.demonstration_execution_site.operational_node_id == str(EARTH)
+    assert selected.demonstration_execution_site.surface_cell_id is None
     assert any(code == "capability:active" for code, _detail in selected.current_blockers)
 
     app.execute(ResumeFacility(str(site.id)))

@@ -15,6 +15,7 @@ from .research_models import (
     ResearchOperationalExperienceSpec,
     ResearchProviderLevelSpec,
     ResearchProviderSpec,
+    ResearchExecutionSite,
     ResearchStage,
     ResearchState,
 )
@@ -52,5 +53,5 @@ class ResearchService(ResearchWorkflowMixin, ResearchCapacityMixin, ResearchExec
 __all__ = [
     "ResearchDefinition", "ResearchPrototypeSpec", "ResearchDemonstrationSpec",
     "ResearchOperationalExperienceSpec", "ResearchProviderLevelSpec", "ResearchProviderSpec",
-    "ResearchStage", "ResearchState", "ResearchService",
+    "ResearchExecutionSite", "ResearchStage", "ResearchState", "ResearchService",
 ]

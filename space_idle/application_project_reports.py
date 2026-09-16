@@ -490,9 +490,17 @@ class ApplicationReportProjectorMixin:
             if row.status in {"available", "locked"}:
                 groups.append(("research_start", row.start_blockers, None))
             elif row.status == "prototype":
-                groups.append(("research_prototype", row.prototype_blockers, row.prototype_operational_node_id))
+                groups.append((
+                    "research_prototype",
+                    row.prototype_blockers,
+                    None if row.prototype_execution_site is None else row.prototype_execution_site.operational_node_id,
+                ))
             elif row.status == "demonstration":
-                groups.append(("research_demonstration", row.demonstration_blockers, row.demonstration_operational_node_id))
+                groups.append((
+                    "research_demonstration",
+                    row.demonstration_blockers,
+                    None if row.demonstration_execution_site is None else row.demonstration_execution_site.operational_node_id,
+                ))
 
             for source, blockers, selected_location in groups:
                 if location_filter is not None and selected_location != location_filter:

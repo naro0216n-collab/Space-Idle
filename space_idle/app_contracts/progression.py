@@ -13,14 +13,18 @@ class PauseResearch: research_id: str
 class ResumeResearch: research_id: str
 @dataclass(frozen=True)
 class SetResearchPrototypeSite:
-    research_id: str; operational_node_id: str
+    research_id: str
+    operational_node_id: str
+    surface_cell_id: str | None = None
 @dataclass(frozen=True)
 class SetResearchPriority:
     research_id: str
     priority: ActivityPriority
 @dataclass(frozen=True)
 class SetResearchDemonstrationSite:
-    research_id: str; operational_node_id: str
+    research_id: str
+    operational_node_id: str
+    surface_cell_id: str | None = None
 
 @dataclass(frozen=True)
 class StartSurvey:

@@ -25,11 +25,21 @@ class ProgressionCommandHandlerMixin:
             elif isinstance(command, ResumeResearch):
                 sim.research.resume(rid)
             elif isinstance(command, SetResearchPrototypeSite):
-                sim.research.set_prototype_site(rid, self._require_operational_node(command.operational_node_id), sim.day)
+                sim.research.set_prototype_site(
+                    rid,
+                    self._require_operational_node(command.operational_node_id),
+                    sim.day,
+                    None if command.surface_cell_id is None else SurfaceCellId(command.surface_cell_id),
+                )
             elif isinstance(command, SetResearchPriority):
                 sim.research.set_priority(rid, command.priority)
             else:
-                sim.research.set_demonstration_site(rid, self._require_operational_node(command.operational_node_id), sim.day)
+                sim.research.set_demonstration_site(
+                    rid,
+                    self._require_operational_node(command.operational_node_id),
+                    sim.day,
+                    None if command.surface_cell_id is None else SurfaceCellId(command.surface_cell_id),
+                )
             return CommandResult()
         if isinstance(command, (
             StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration,

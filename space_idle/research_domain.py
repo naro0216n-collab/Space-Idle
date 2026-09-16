@@ -8,8 +8,27 @@ from .validation_support import (
     require as _require,
     validate_site_requirements as _validate_site_requirements,
 )
-from .research_models import ResearchStage, ResearchState
-from .shared import DefinitionId, EntityId, SpatialNodeId
+from .research_models import ResearchExecutionSite, ResearchStage, ResearchState
+from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from .site import requires_surface_cell_context
+
+
+def _capture_execution_site(site: ResearchExecutionSite | None) -> dict[str, str | None] | None:
+    if site is None:
+        return None
+    return {
+        "operational_node_id": str(site.operational_node_id),
+        "surface_cell_id": None if site.surface_cell_id is None else str(site.surface_cell_id),
+    }
+
+
+def _restore_execution_site(data: dict[str, Any] | None) -> ResearchExecutionSite | None:
+    if data is None:
+        return None
+    return ResearchExecutionSite(
+        SpatialNodeId(data["operational_node_id"]),
+        None if data.get("surface_cell_id") is None else SurfaceCellId(data["surface_cell_id"]),
+    )
 
 
 def capture_research(sim: Any) -> dict[str, Any]:
@@ -25,12 +44,8 @@ def capture_research(sim: Any) -> dict[str, Any]:
                 "stage_progress": r.stage_progress,
                 "priority": r.priority,
                 "paused": r.paused,
-                "prototype_operational_node_id": (
-                    None if r.prototype_operational_node_id is None else str(r.prototype_operational_node_id)
-                ),
-                "demonstration_operational_node_id": (
-                    None if r.demonstration_operational_node_id is None else str(r.demonstration_operational_node_id)
-                ),
+                "prototype_execution_site": _capture_execution_site(r.prototype_execution_site),
+                "demonstration_execution_site": _capture_execution_site(r.demonstration_execution_site),
                 "stage_started_day": r.stage_started_day,
             }
             for r in sorted(sim.research.active.values(), key=lambda row: str(row.definition_id))
@@ -59,16 +74,8 @@ def restore_research(sim: Any, data: dict[str, Any]) -> None:
             stage_progress=float(r.get("stage_progress", 0.0)),
             priority=r["priority"],
             paused=bool(r["paused"]),
-            prototype_operational_node_id=(
-                None
-                if r["prototype_operational_node_id"] is None
-                else SpatialNodeId(r["prototype_operational_node_id"])
-            ),
-            demonstration_operational_node_id=(
-                None
-                if r.get("demonstration_operational_node_id") is None
-                else SpatialNodeId(r["demonstration_operational_node_id"])
-            ),
+            prototype_execution_site=_restore_execution_site(r.get("prototype_execution_site")),
+            demonstration_execution_site=_restore_execution_site(r.get("demonstration_execution_site")),
             stage_started_day=int(r.get("stage_started_day", 0)),
         )
 
@@ -209,6 +216,46 @@ def validate_runtime(sim: Any) -> None:
         _require(category != "", "empty knowledge category")
         _require(value >= -1e-9, f"negative knowledge value: {category}")
 
+    def validate_execution_site(
+        research_id: DefinitionId,
+        label: str,
+        site: ResearchExecutionSite | None,
+        requirements,
+    ) -> None:
+        if site is None:
+            return
+        _require(
+            sim.graph.has_operational_node(site.operational_node_id),
+            f"research {label} references unknown operational node: {research_id}",
+        )
+        if not sim.graph.has_operational_node(site.operational_node_id):
+            return
+        needs_cell = requires_surface_cell_context(requirements)
+        if site.surface_cell_id is None:
+            _require(
+                not (
+                    site.operational_node_id in sim.graph.locations
+                    and needs_cell
+                ),
+                f"research {label} requires explicit surface cell: {research_id}",
+            )
+            return
+        location = sim.graph.locations.get(site.operational_node_id)
+        _require(
+            location is not None,
+            f"research {label} surface cell requires surface location: {research_id}",
+        )
+        if location is None:
+            return
+        _require(
+            site.surface_cell_id in location.developed_cell_ids,
+            f"research {label} references undeveloped surface cell: {research_id}/{site.surface_cell_id}",
+        )
+        _require(
+            needs_cell,
+            f"research {label} stores unnecessary surface cell: {research_id}/{site.surface_cell_id}",
+        )
+
     for research_id, state in sim.research.active.items():
         _require(
             research_id == state.definition_id,
@@ -243,26 +290,47 @@ def validate_runtime(sim: Any) -> None:
                     state.stage_progress <= definition.demonstration.days + 1e-7,
                     f"invalid demonstration progress: {research_id}",
                 )
-        _require(
-            state.prototype_operational_node_id is None
-            or sim.graph.has_operational_node(state.prototype_operational_node_id),
-            f"research prototype references unknown location: {research_id}",
-        )
-        _require(
-            state.demonstration_operational_node_id is None
-            or sim.graph.has_operational_node(state.demonstration_operational_node_id),
-            f"research demonstration references unknown location: {research_id}",
-        )
+        if definition.prototype is not None:
+            validate_execution_site(
+                research_id,
+                "prototype",
+                state.prototype_execution_site,
+                definition.prototype.site_requirements,
+            )
+        else:
+            _require(
+                state.prototype_execution_site is None,
+                f"research without prototype stores prototype execution site: {research_id}",
+            )
+        if definition.demonstration is not None:
+            validate_execution_site(
+                research_id,
+                "demonstration",
+                state.demonstration_execution_site,
+                definition.demonstration.site_requirements,
+            )
+        else:
+            _require(
+                state.demonstration_execution_site is None,
+                f"research without demonstration stores demonstration execution site: {research_id}",
+            )
+        if state.stage is ResearchStage.THEORY:
+            _require(
+                state.prototype_execution_site is None
+                and state.demonstration_execution_site is None,
+                f"theory research must not own an execution site: {research_id}",
+            )
 
     allowed_reservations: dict[EntityId, tuple[DefinitionId, SpatialNodeId]] = {}
     for research_id, state in sim.research.active.items():
+        site = state.prototype_execution_site
         if (
             state.stage is ResearchStage.PROTOTYPE
-            and state.prototype_operational_node_id is not None
+            and site is not None
         ):
             allowed_reservations[
                 sim.research._prototype_reservation_owner_id(research_id)
-            ] = (research_id, state.prototype_operational_node_id)
+            ] = (research_id, site.operational_node_id)
     for (owner_id, location_id, resource_id), amount in sim.inventory.reserved.items():
         if not str(owner_id).startswith("research.prototype:"):
             continue

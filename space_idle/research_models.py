@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
-from .shared import DefinitionId, SpatialNodeId
+from .shared import DefinitionId, SpatialNodeId, SurfaceCellId
 from .site import SiteRequirements
 
 
@@ -119,6 +119,12 @@ class ResearchProviderSpec:
         raise ValueError(f"research provider does not define level {level}")
 
 
+@dataclass(frozen=True)
+class ResearchExecutionSite:
+    operational_node_id: SpatialNodeId
+    surface_cell_id: SurfaceCellId | None = None
+
+
 @dataclass
 class ResearchState:
     definition_id: DefinitionId
@@ -126,8 +132,8 @@ class ResearchState:
     stage_progress: float = 0.0
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     paused: bool = False
-    prototype_operational_node_id: SpatialNodeId | None = None
-    demonstration_operational_node_id: SpatialNodeId | None = None
+    prototype_execution_site: ResearchExecutionSite | None = None
+    demonstration_execution_site: ResearchExecutionSite | None = None
     stage_started_day: int = 0
 
     def __post_init__(self) -> None:

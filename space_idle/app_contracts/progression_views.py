@@ -9,8 +9,15 @@ from .catalog_views import SiteRequirementsDefinitionRow
 @dataclass(frozen=True)
 class ResearchSiteOptionRow:
     operational_node_id: str
+    surface_cell_id: str | None
     blockers: tuple[tuple[str, str], ...]
     can_select: bool
+
+
+@dataclass(frozen=True)
+class ResearchExecutionSiteRow:
+    operational_node_id: str
+    surface_cell_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,9 +80,9 @@ class ResearchRow:
     current_blockers: tuple[tuple[str, str], ...]
     start_blockers: tuple[tuple[str, str], ...]
     prototype_resources: tuple[ResearchPrototypeResourceRow, ...]
-    prototype_operational_node_id: str | None
+    prototype_execution_site: ResearchExecutionSiteRow | None
     prototype_sites: tuple[ResearchSiteOptionRow, ...]
-    demonstration_operational_node_id: str | None
+    demonstration_execution_site: ResearchExecutionSiteRow | None
     demonstration_sites: tuple[ResearchSiteOptionRow, ...]
     demonstration_blockers: tuple[tuple[str, str], ...]
     prototype_blockers: tuple[tuple[str, str], ...]

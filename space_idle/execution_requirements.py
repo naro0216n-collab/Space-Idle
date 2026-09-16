@@ -5,6 +5,7 @@ from typing import Iterable, Mapping, TypeAlias
 
 from .priority import ActivityPriority
 from .shared import DefinitionId, EntityId, SpatialNodeId
+from .service_capacity import ServiceCapacityScope
 
 _EPS = 1e-12
 
@@ -37,10 +38,13 @@ class ResourceRequirement:
         if self.amount_per_execution < -_EPS:
             raise ValueError("resource requirement must be non-negative")
 
-    def constraint_node(self, operational_node_id: SpatialNodeId) -> SpatialNodeId:
-        return operational_node_id if self.constraint_node_id is None else self.constraint_node_id
+    def constraint_node(self, operational_node_id: SpatialNodeId | None) -> SpatialNodeId:
+        node_id = operational_node_id if self.constraint_node_id is None else self.constraint_node_id
+        if node_id is None:
+            raise ValueError("resource requirement requires an Operational Node scope")
+        return node_id
 
-    def constraint_key(self, operational_node_id: SpatialNodeId) -> AllocationConstraintKey:
+    def constraint_key(self, operational_node_id: SpatialNodeId | None) -> AllocationConstraintKey:
         return resource_constraint(self.constraint_node(operational_node_id), self.resource_id)
 
 
@@ -49,22 +53,40 @@ class ServiceCapacityRequirement:
     service_type: str
     amount_per_execution: float
     constraint_node_id: SpatialNodeId | None = None
+    scope: ServiceCapacityScope = ServiceCapacityScope.OPERATIONAL_NODE
+    scope_id: str = "organization"
 
     def __post_init__(self) -> None:
-        if not self.service_type:
-            raise ValueError("service type must not be empty")
+        if not self.service_type or not self.scope_id:
+            raise ValueError("service type and scope id must not be empty")
         if self.amount_per_execution < -_EPS:
             raise ValueError("service requirement must be non-negative")
+        if not isinstance(self.scope, ServiceCapacityScope):
+            raise ValueError("service requirement scope must be a ServiceCapacityScope")
+        if self.scope is ServiceCapacityScope.ORGANIZATION and self.constraint_node_id is not None:
+            raise ValueError("organization service requirement cannot pin a provider node")
 
-    def constraint_node(self, operational_node_id: SpatialNodeId) -> SpatialNodeId:
-        return operational_node_id if self.constraint_node_id is None else self.constraint_node_id
+    def constraint_node(self, operational_node_id: SpatialNodeId | None) -> SpatialNodeId:
+        if self.scope is ServiceCapacityScope.ORGANIZATION:
+            raise ValueError("organization service requirement has no Operational Node constraint")
+        node_id = operational_node_id if self.constraint_node_id is None else self.constraint_node_id
+        if node_id is None:
+            raise ValueError("node-scoped service requirement requires an Operational Node")
+        return node_id
 
-    def constraint_key(self, operational_node_id: SpatialNodeId) -> AllocationConstraintKey:
+    def constraint_key(self, operational_node_id: SpatialNodeId | None) -> AllocationConstraintKey:
+        if self.scope is ServiceCapacityScope.ORGANIZATION:
+            return service_pool_constraint(self.service_type, self.scope_id)
         return service_constraint(self.constraint_node(operational_node_id), self.service_type)
+
+    def constraint_keys(self, operational_node_id: SpatialNodeId | None) -> tuple[AllocationConstraintKey, ...]:
+        if self.scope is ServiceCapacityScope.ORGANIZATION:
+            return (service_pool_constraint(self.service_type, self.scope_id),)
+        return (service_constraint(self.constraint_node(operational_node_id), self.service_type),)
 
 
 @dataclass(frozen=True)
-class FundsOrPoolRequirement:
+class PoolRequirement:
     pool_id: str
     amount_per_execution: float
     scope_id: str = "organization"
@@ -75,7 +97,7 @@ class FundsOrPoolRequirement:
         if self.amount_per_execution < -_EPS:
             raise ValueError("pool requirement must be non-negative")
 
-    def constraint_key(self, operational_node_id: SpatialNodeId) -> AllocationConstraintKey:
+    def constraint_key(self, operational_node_id: SpatialNodeId | None) -> AllocationConstraintKey:
         del operational_node_id
         return pool_constraint(self.pool_id, scope_id=self.scope_id)
 
@@ -91,14 +113,16 @@ class StockOrPoolAdmissionRequirement:
         if self.amount_per_execution < -_EPS:
             raise ValueError("admission requirement must be non-negative")
 
-    def constraint_key(self, operational_node_id: SpatialNodeId) -> AllocationConstraintKey:
+    def constraint_key(self, operational_node_id: SpatialNodeId | None) -> AllocationConstraintKey:
+        if operational_node_id is None:
+            raise ValueError("stock/admission requirement requires an Operational Node scope")
         return admission_constraint(operational_node_id, self.pool_id)
 
 
 ExecutionRequirement: TypeAlias = (
     ResourceRequirement
     | ServiceCapacityRequirement
-    | FundsOrPoolRequirement
+    | PoolRequirement
     | StockOrPoolAdmissionRequirement
 )
 
@@ -109,7 +133,7 @@ class ExecutionRequirementBundle:
     owner_kind: str
     owner_id: EntityId
     purpose: str
-    operational_node_id: SpatialNodeId
+    operational_node_id: SpatialNodeId | None
     requested_execution: float
     priority: ActivityPriority
     requirements: tuple[ExecutionRequirement, ...] = ()
@@ -136,21 +160,32 @@ class ExecutionRequirementBundle:
             raise ValueError("wait_started_day must be non-negative")
         seen: set[AllocationConstraintKey] = set()
         for requirement in self.requirements:
-            key = requirement.constraint_key(self.operational_node_id)
-            if key in seen:
-                raise ValueError(f"duplicate requirement constraint in bundle: {key}")
-            seen.add(key)
+            keys = (
+                requirement.constraint_keys(self.operational_node_id)
+                if isinstance(requirement, ServiceCapacityRequirement)
+                else (requirement.constraint_key(self.operational_node_id),)
+            )
+            for key in keys:
+                if key in seen:
+                    raise ValueError(f"duplicate requirement constraint in bundle: {key}")
+                seen.add(key)
 
     @property
     def effective_minimum_execution(self) -> float:
         return self.requested_execution if self.atomic else self.minimum_execution
 
     def coefficients(self) -> tuple[tuple[AllocationConstraintKey, float], ...]:
-        return tuple(
-            (requirement.constraint_key(self.operational_node_id), requirement.amount_per_execution)
-            for requirement in self.requirements
-            if requirement.amount_per_execution > _EPS
-        )
+        rows: list[tuple[AllocationConstraintKey, float]] = []
+        for requirement in self.requirements:
+            if requirement.amount_per_execution <= _EPS:
+                continue
+            keys = (
+                requirement.constraint_keys(self.operational_node_id)
+                if isinstance(requirement, ServiceCapacityRequirement)
+                else (requirement.constraint_key(self.operational_node_id),)
+            )
+            rows.extend((key, requirement.amount_per_execution) for key in keys)
+        return tuple(rows)
 
 
 @dataclass(frozen=True)
@@ -268,6 +303,10 @@ def resource_constraint(node_id: SpatialNodeId, resource_id: DefinitionId) -> Al
 
 def service_constraint(node_id: SpatialNodeId, service_type: str) -> AllocationConstraintKey:
     return AllocationConstraintKey("service", f"node:{node_id}", service_type)
+
+
+def service_pool_constraint(service_type: str, scope_id: str = "organization") -> AllocationConstraintKey:
+    return AllocationConstraintKey("service_pool", scope_id, service_type)
 
 
 def admission_constraint(node_id: SpatialNodeId, pool_id: str) -> AllocationConstraintKey:

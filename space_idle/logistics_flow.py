@@ -9,7 +9,7 @@ from .execution_requirements import (
     AllocationConstraintKey,
     ExecutionAllocationPlan,
     ExecutionRequirementBundle,
-    FundsOrPoolRequirement,
+    PoolRequirement,
     ResourceRequirement,
     ServiceCapacityRequirement,
     pool_constraint,
@@ -267,7 +267,7 @@ class LogisticsFlowMixin:
                     if amount > 1e-12
                 ),
                 *(
-                    FundsOrPoolRequirement(
+                    PoolRequirement(
                         pool_id,
                         float(count),
                         scope_id="transport_capacity",
