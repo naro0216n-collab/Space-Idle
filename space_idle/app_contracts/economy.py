@@ -4,30 +4,27 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class CreateExternalServicePolicy:
-    enabled: bool
-    allowed_service_ids: tuple[str, ...]
-    scope_kind: str = "global"
-    scope_id: str | None = None
-    spending_cap_musd: float | None = None
-    period_budget_musd: float | None = None
-    period_days: int = 30
-    minimum_reserve_musd: float = 0.0
+class CreateTradeOrder:
+    direction: str
+    resource_id: str
+    market_interface_id: str
+    priority: int = 3
+    control_mode: str = "quantity"
+    quantity_target_t: float | None = None
+    rate_target_t_per_day: float | None = None
+    price_limit_musd_per_t: float | None = None
 
 
 @dataclass(frozen=True)
-class SetExternalServicePolicy:
-    policy_id: str
-    enabled: bool
-    allowed_service_ids: tuple[str, ...]
-    scope_kind: str = "global"
-    scope_id: str | None = None
-    spending_cap_musd: float | None = None
-    period_budget_musd: float | None = None
-    period_days: int = 30
-    minimum_reserve_musd: float = 0.0
+class UpdateTradeOrder:
+    order_id: str
+    priority: int
+    control_mode: str
+    quantity_target_t: float | None = None
+    rate_target_t_per_day: float | None = None
+    price_limit_musd_per_t: float | None = None
 
 
 @dataclass(frozen=True)
-class DeleteExternalServicePolicy:
-    policy_id: str
+class CancelTradeOrder:
+    order_id: str

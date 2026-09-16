@@ -63,7 +63,7 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         data = payload["data"]
         required = {
             "world", "operational_node", "surface_map", "logistics",
-            "scientific_explorations", "external_economy", "dependency_analytics",
+            "scientific_explorations", "market", "dependency_analytics",
         }
         assert required <= data.keys()
         assert data["operational_node"]["id"] == str(ids.EARTH)

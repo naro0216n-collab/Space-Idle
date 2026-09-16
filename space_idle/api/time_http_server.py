@@ -22,7 +22,7 @@ from ..application_commands import (
     GetSurfaceMap,
     GetTransportAllocations,
     GetWorld,
-    GetExternalEconomy,
+    GetMarket,
 )
 from .codec import ApiPayloadError
 from .http_server import ApiServerConfig, SpaceIdleHTTPServer, SpaceIdleRequestHandler
@@ -61,7 +61,7 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             "fleet": GetFleet(),
             "transport_allocations": GetTransportAllocations(),
             "cargo_flows": GetCargoFlows(),
-            "external_economy": GetExternalEconomy(),
+            "market": GetMarket(),
         }
         if operational_node_id:
             queries.update({

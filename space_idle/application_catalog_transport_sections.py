@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_catalog_support import operation_capability_definition, site_requirements_definition
 from .application_transport_support import vehicle_concept
-from .application_views import ProcurementServiceDefinitionRow, MovementPlanDefinitionRow, TransportServiceDefinitionRow, VehicleDefinitionRow
+from .application_views import MovementPlanDefinitionRow, VehicleDefinitionRow
 
 
 def project_vehicles(projector):
@@ -14,9 +14,9 @@ def project_vehicles(projector):
             None if definition.propellant_resource_id is None else str(definition.propellant_resource_id),
             tuple(sorted(definition.generic_capabilities)),
             tuple((req.operation_type, req.location.value, req.capability_id) for req in definition.operation_support_requirements),
-            definition.production_service_type, definition.production_days, definition.production_cost_musd,
+            definition.production_service_type, definition.production_days,
             tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.production_resources),
-            definition.turnaround_service_type, definition.turnaround_days, definition.turnaround_cost_musd,
+            definition.turnaround_service_type, definition.turnaround_days,
             tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.turnaround_resources),
             tuple(operation_capability_definition(capability) for capability in definition.performance.operation_capabilities),
         )
@@ -34,33 +34,4 @@ def project_movement_plans(projector):
             site_requirements_definition(movement_plan.destination_requirements),
         )
         for movement_plan in projector._simulation.transport.movement_plan_options()
-    )
-
-
-def project_transport_services(projector):
-    return tuple(
-        TransportServiceDefinitionRow(
-            str(service.id), service.display_name, service.capacity_t_per_day, service.cost_musd_per_t,
-            service.performance.dry_mass_t, service.performance.payload_t, service.transit_time_multiplier,
-            tuple(operation_capability_definition(capability) for capability in service.performance.operation_capabilities),
-            site_requirements_definition(service.origin_requirements),
-            site_requirements_definition(service.destination_requirements),
-        )
-        for service in projector._simulation.transport.external_transport_service_definitions()
-    )
-
-
-def project_procurement_services(projector):
-    return tuple(
-        ProcurementServiceDefinitionRow(
-            str(service.id),
-            service.display_name,
-            str(service.supply_node_id),
-            service.supply_latency_days,
-            tuple((str(resource_id), price) for resource_id, price in service.resource_prices_musd_per_t),
-        )
-        for service in sorted(
-            projector._simulation.logistics.procurement_services.values(),
-            key=lambda row: str(row.id),
-        )
     )

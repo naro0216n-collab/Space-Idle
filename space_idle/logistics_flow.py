@@ -4,7 +4,6 @@ from dataclasses import dataclass, replace
 import heapq
 from typing import Mapping
 
-from .external_economy import FundsAllocationPlan, FundsRequest
 from .execution_requirements import (
     AllocationConstraintKey,
     ExecutionAllocationPlan,
@@ -17,7 +16,7 @@ from .execution_requirements import (
 from .knowledge import DomainActivity
 from .resource_claim import ResourceClaim
 from .supply import SupplyRequirement
-from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
+from .service_capacity import ServiceCapacityAllocationPlan
 from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
 from .supply_planning import SupplyPlanningOptions
 from .logistics_models import (
@@ -42,19 +41,12 @@ class _PlannedDispatch:
     path: tuple[TransportServiceSupply, ...]
     amount_t: float
     cargo_claim_id: EntityId
-    spending_request_ids: tuple[EntityId, ...] = ()
-    raw_amount_t: float | None = None
-
-    @property
-    def planned_amount_t(self) -> float:
-        return self.amount_t if self.raw_amount_t is None else self.raw_amount_t
 
 
 @dataclass(frozen=True)
 class LogisticsResourcePlan:
     dispatches: tuple[_PlannedDispatch, ...]
     planned_usage: tuple[tuple[EntityId, DirectionalCapacity], ...]
-    spending_requests: tuple[FundsRequest, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -99,8 +91,8 @@ class LogisticsExecutionAllocation:
 class LogisticsFlowMixin:
     """Shared sustained-capacity allocation and Cargo Flow execution.
 
-    The daily capacity budget is derived from Transport Allocations and external
-    services. Logistics consumes it; it does not select or resize Fleet assets.
+    The daily capacity budget is derived from player-owned Transport Allocations.
+    Logistics consumes it; it does not select or resize Fleet assets.
     """
 
     def _service_edges(self, day: int) -> tuple[TransportServiceSupply, ...]:
@@ -124,8 +116,6 @@ class LogisticsFlowMixin:
 
     @staticmethod
     def _transport_capacity_pool_id(edge: TransportServiceSupply) -> str:
-        if edge.external_service_id is not None:
-            return f"external:{edge.external_service_id}"
         return edge.key
 
     def transport_capacity_pool_capacities(
@@ -571,23 +561,18 @@ class LogisticsFlowMixin:
             cycle_days=edge.cycle_days,
             allocation_id=edge.allocation_id,
             direction=edge.direction,
-            external_service_id=edge.external_service_id,
         )
 
     @staticmethod
     def _capacity_owner_key_from_leg(leg: CargoServiceLeg) -> tuple:
         if leg.allocation_id is not None:
             return ("allocation", leg.allocation_id, leg.direction)
-        if leg.external_service_id is not None:
-            return ("external", leg.external_service_id)
         return ("service", leg.service_identity)
 
     @staticmethod
     def _capacity_owner_key_from_supply(edge: TransportServiceSupply) -> tuple:
         if edge.allocation_id is not None:
             return ("allocation", edge.allocation_id, edge.direction)
-        if edge.external_service_id is not None:
-            return ("external", edge.external_service_id)
         return ("service", edge.key)
 
     def _arrival_backpressure_by_service(self) -> dict[tuple, float]:
@@ -601,8 +586,6 @@ class LogisticsFlowMixin:
     def _edge_score(edge: TransportServiceSupply, policy: PathPolicy) -> float:
         if policy is PathPolicy.FASTEST:
             return float(edge.latency_days)
-        if policy is PathPolicy.LOWEST_COST:
-            return edge.cost_musd_per_t
         return edge.propellant_t_per_t
 
     def _automatic_service_path(
@@ -670,22 +653,10 @@ class LogisticsFlowMixin:
         return result
 
     def _transport_edges_for_requirement(
-        self,
-        requirement: SupplyRequirement,
-        edges: tuple[TransportServiceSupply, ...],
-        *,
-        enforce_external_policy: bool = True,
+        self, requirement: SupplyRequirement, edges: tuple[TransportServiceSupply, ...]
     ) -> tuple[TransportServiceSupply, ...]:
-        if not enforce_external_policy:
-            return edges
-        return tuple(
-            edge
-            for edge in edges
-            if edge.external_service_id is None
-            or self.external_economy.service_allowed(
-                edge.external_service_id, requirement.owner_kind, requirement.owner_id
-            )
-        )
+        del requirement
+        return edges
 
     def _supply_path_preferences(
         self, requirement: SupplyRequirement
@@ -710,13 +681,9 @@ class LogisticsFlowMixin:
         source_id: SpatialNodeId,
         day: int,
         edges: tuple[TransportServiceSupply, ...] | None = None,
-        *,
-        enforce_external_policy: bool = True,
     ) -> tuple[TransportServiceSupply, ...]:
         available = self._service_edges(day) if edges is None else edges
-        available = self._transport_edges_for_requirement(
-            requirement, available, enforce_external_policy=enforce_external_policy
-        )
+        available = self._transport_edges_for_requirement(requirement, available)
         _source, path_policy, explicit_path = self._supply_path_preferences(requirement)
         if explicit_path is None:
             return self._automatic_service_path(
@@ -851,18 +818,6 @@ class LogisticsFlowMixin:
         return EntityId(f"claim.logistics.cargo:{source_id}:{requirement_id}")
 
     @staticmethod
-    def _spending_request_id(
-        source_id: SpatialNodeId,
-        requirement_id: EntityId,
-        service_id: DefinitionId,
-        edge_key: str,
-        dispatch_index: int,
-    ) -> EntityId:
-        return EntityId(
-            f"funds.logistics:{source_id}:{requirement_id}:{service_id}:{edge_key}:{dispatch_index}"
-        )
-
-    @staticmethod
     def _operation_claim_id(
         allocation_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId
     ) -> EntityId:
@@ -903,7 +858,6 @@ class LogisticsFlowMixin:
         pipeline = self._flow_pipeline_by_requirement({row.id for row in requirement_rows})
         used: dict[EntityId, DirectionalCapacity] = {}
         dispatches: list[_PlannedDispatch] = []
-        spending_requests: list[FundsRequest] = []
 
         for requirement in requirement_rows:
             amount = max(0.0, requirement.amount_t - pipeline[requirement.id])
@@ -922,38 +876,6 @@ class LogisticsFlowMixin:
                 continue
             source_id, path = selected
 
-            spending_ids: list[EntityId] = []
-            for edge in path:
-                if edge.external_service_id is None or edge.cost_musd_per_t <= 1e-12:
-                    continue
-                policy = self.external_economy.resolve_policy(
-                    edge.external_service_id, requirement.owner_kind, requirement.owner_id
-                )
-                if policy is None:
-                    raise RuntimeError(
-                        "external service entered plan without policy authorization"
-                    )
-                request_id = self._spending_request_id(
-                    source_id,
-                    requirement.id,
-                    edge.external_service_id,
-                    edge.key,
-                    len(dispatches),
-                )
-                spending_ids.append(request_id)
-                spending_requests.append(
-                    FundsRequest(
-                        request_id,
-                        policy.id,
-                        edge.external_service_id,
-                        amount * edge.cost_musd_per_t,
-                        requirement.priority,
-                        requirement.owner_kind,
-                        requirement.owner_id,
-                        f"transport:{requirement.id}",
-                    )
-                )
-
             dispatches.append(
                 _PlannedDispatch(
                     source_id,
@@ -961,8 +883,6 @@ class LogisticsFlowMixin:
                     path,
                     amount,
                     self._cargo_claim_id(source_id, requirement.id),
-                    tuple(spending_ids),
-                    amount,
                 )
             )
             used = self._allocation_used_after(used, path, amount)
@@ -970,54 +890,6 @@ class LogisticsFlowMixin:
         return LogisticsResourcePlan(
             tuple(dispatches),
             tuple(sorted(used.items(), key=lambda row: str(row[0]))),
-            tuple(sorted(spending_requests, key=lambda row: str(row.id))),
-        )
-
-    def authorize_capacity_logistics(
-        self,
-        plan: LogisticsResourcePlan,
-        funds: FundsAllocationPlan,
-        day: int,
-    ) -> LogisticsResourcePlan:
-        """Apply Funds authorization before common execution allocation.
-
-        External spending is an upstream dependency of dispatch. Reducing a paid
-        dispatch here prevents denied external work from entering the Resource /
-        Service / Transport Capacity competition later in the same allocation phase.
-        """
-        dispatches: list[_PlannedDispatch] = []
-        used: dict[EntityId, DirectionalCapacity] = {}
-        requests_by_id = {request.id: request for request in plan.spending_requests}
-        for row in plan.dispatches:
-            amount = row.amount_t
-            for request_id in row.spending_request_ids:
-                request = requests_by_id[request_id]
-                if request.requested_musd <= 1e-12:
-                    continue
-                authorized = funds.authorized(request_id)
-                amount = min(
-                    amount,
-                    row.amount_t * max(0.0, authorized) / request.requested_musd,
-                )
-            if amount <= 1e-12:
-                continue
-            dispatches.append(
-                _PlannedDispatch(
-                    row.source_id,
-                    row.requirement,
-                    row.path,
-                    amount,
-                    row.cargo_claim_id,
-                    row.spending_request_ids,
-                    row.planned_amount_t,
-                )
-            )
-            used = self._allocation_used_after(used, row.path, amount)
-
-        return LogisticsResourcePlan(
-            tuple(dispatches),
-            tuple(sorted(used.items(), key=lambda row: str(row[0]))),
-            plan.spending_requests,
         )
 
     def _latest_completed_transport_day(self, day: int) -> int:
@@ -1257,180 +1129,61 @@ class LogisticsFlowMixin:
     def _handoff_request_id(owner_id: EntityId, kind: str) -> EntityId:
         return EntityId(f"service.cargo_handoff:{kind}:{owner_id}")
 
-    def external_arrival_handling_supply(
-        self,
-    ) -> dict[tuple[SpatialNodeId, str], float]:
-        """Return exogenous Cargo Handling supplied by active external carriers.
+    def boundary_execution_bundles(self, day: int) -> tuple[ExecutionRequirementBundle, ...]:
+        """Expose already-arrived Cargo as finite Boundary obligations.
 
-        A commercial Transport service that has already delivered Cargo remains
-        responsible for the carrier-side unload/transfer work represented by its
-        contracted service capacity.  Local Facility Cargo Handling can augment
-        this supply, but bootstrap deliveries are not made impossible merely
-        because the destination's own handling infrastructure is the Cargo being
-        delivered.  The supply is exposed only for actual external arrivals at
-        the boundary and is therefore not a reusable local Service Capacity.
-        """
-        by_provider: dict[tuple[str, SpatialNodeId], float] = {}
-        for waiting in self.arrival_waiting.values():
-            service_id = waiting.arrival_leg.external_service_id
-            if service_id is None:
-                continue
-            definition = self.transport.external_transport_service_definition(service_id)
-            if definition is None:
-                continue
-            provider_key = (waiting.arrival_leg.service_identity, waiting.node_id)
-            by_provider[provider_key] = max(
-                by_provider.get(provider_key, 0.0), definition.capacity_t_per_day
-            )
-        supply: dict[tuple[SpatialNodeId, str], float] = {}
-        for (_provider, node_id), amount in by_provider.items():
-            key = (node_id, "cargo_transfer")
-            supply[key] = supply.get(key, 0.0) + amount
-        return supply
-
-    def cargo_handoff_service_requests(self, day: int) -> tuple[ServiceCapacityRequest, ...]:
-        """Expose arrival handling and reload work to shared Service allocation.
-
-        Every arriving Cargo quantity must consume finite Cargo Handling before
-        it can either remain Logistics-owned through a direct handoff or cross
-        the ownership boundary into Inventory.  Inventory Admission is therefore
-        never used as an implicit substitute for Cargo Handling.
+        Final arrivals require both Cargo Handling and Inventory Admission in one
+        root bundle. Intermediate handoffs and previously staged reloads require
+        Cargo Handling only. The common boundary allocator therefore applies the
+        same Activity Priority/fairness semantics across all obligations.
         """
         del day
-        rows: list[ServiceCapacityRequest] = []
-        for waiting in sorted(self.arrival_waiting.values(), key=lambda row: str(row.id)):
-            rows.append(
-                ServiceCapacityRequest(
-                    self._handoff_request_id(waiting.id, "arrival"),
-                    waiting.node_id,
-                    "cargo_transfer",
-                    waiting.amount_t,
-                    waiting.priority,
-                    "cargo_handoff",
-                    waiting.id,
-                    "arrival_handling",
-                )
-            )
+        from .execution_requirements import StockOrPoolAdmissionRequirement
+        rows: list[ExecutionRequirementBundle] = []
         for staging in sorted(self.handoff_staging.values(), key=lambda row: str(row.id)):
-            rows.append(
-                ServiceCapacityRequest(
-                    self._handoff_request_id(staging.id, "reload"),
-                    staging.node_id,
-                    "cargo_transfer",
-                    staging.amount_t,
-                    staging.priority,
-                    "cargo_handoff",
-                    staging.id,
-                    "reload_handoff",
-                )
-            )
+            rows.append(ExecutionRequirementBundle(
+                id=self._handoff_request_id(staging.id, "reload"),
+                owner_kind="cargo_handoff", owner_id=staging.id, purpose="reload_handoff",
+                operational_node_id=staging.node_id, requested_execution=staging.amount_t,
+                priority=staging.priority,
+                requirements=(ServiceCapacityRequirement("cargo_transfer", 1.0),),
+            ))
+        for waiting in sorted(self.arrival_waiting.values(), key=lambda row: str(row.id)):
+            requirements: list = [ServiceCapacityRequirement("cargo_transfer", 1.0)]
+            if not waiting.remaining_legs:
+                storage_class = self.inventory.resource_storage_class.get(waiting.resource_id)
+                if storage_class is not None:
+                    requirements.append(StockOrPoolAdmissionRequirement(storage_class, 1.0))
+            rows.append(ExecutionRequirementBundle(
+                id=self._handoff_request_id(waiting.id, "arrival"),
+                owner_kind="cargo_handoff", owner_id=waiting.id, purpose="arrival_handling",
+                operational_node_id=waiting.node_id, requested_execution=waiting.amount_t,
+                priority=waiting.priority, requirements=tuple(requirements),
+            ))
         return tuple(rows)
 
-    @staticmethod
-    def _allocated_handoff_rate(
-        allocations: ServiceCapacityAllocationPlan | None, request_id: EntityId
-    ) -> float:
-        if allocations is None:
-            return 0.0
-        try:
-            return max(0.0, allocations.allocated(request_id))
-        except KeyError:
-            return 0.0
-
-    @staticmethod
-    def _staging_semantics_key(staging: CargoHandoffStaging) -> tuple:
-        return (
-            staging.resource_id, staging.node_id, staging.final_destination_id,
-            staging.requirement_id, staging.owner_kind, staging.owner_id, int(staging.priority),
-            staging.remaining_legs,
-        )
-
-    def _stage_unloaded_handoff(
-        self, waiting: CargoArrivalWaiting, amount_t: float, day: int
-    ) -> float:
-        if amount_t <= 1e-12 or not waiting.remaining_legs:
-            return 0.0
-        probe_key = (
-            waiting.resource_id, waiting.node_id, waiting.final_destination_id,
-            waiting.requirement_id, waiting.owner_kind, waiting.owner_id, int(waiting.priority),
-            waiting.remaining_legs,
-        )
-        existing = next(
-            (
-                row for row in sorted(self.handoff_staging.values(), key=lambda row: str(row.id))
-                if self._staging_semantics_key(row) == probe_key
-            ),
-            None,
-        )
-        if existing is None:
-            self._handoff_staging_counter += 1
-            staging_id = EntityId(f"cargo.handoff.{self._handoff_staging_counter}")
-            reservation_owner = EntityId(f"reservation.cargo_handoff:{staging_id}")
-        else:
-            staging_id = existing.id
-            reservation_owner = existing.reservation_owner_id
-
-        admission = self.inventory.admit(waiting.node_id, waiting.resource_id, amount_t)
-        admitted = admission.admitted_t
-        if admitted <= 1e-12:
-            return 0.0
-        reserved = self.inventory.reserve(
-            reservation_owner, waiting.node_id, waiting.resource_id, admitted
-        )
-        if abs(reserved - admitted) > 1e-8:
-            raise RuntimeError("cargo handoff admission could not be reserved atomically")
-        if existing is None:
-            self.handoff_staging[staging_id] = CargoHandoffStaging(
-                staging_id, waiting.resource_id, admitted, waiting.node_id,
-                waiting.final_destination_id, waiting.requirement_id, waiting.owner_kind,
-                waiting.owner_id, waiting.priority, reservation_owner,
-                waiting.remaining_legs, day,
-            )
-        else:
-            existing.amount_t += admitted
-            existing.staged_day = min(existing.staged_day, day)
-        return admitted
-
-    def settle_cargo_arrivals(
-        self,
-        day: int,
-        service_allocations: ServiceCapacityAllocationPlan | None = None,
-        direct_handoff_allocations: ServiceCapacityAllocationPlan | None = None,
+    def settle_cargo_boundary_execution(
+        self, day: int, execution: ExecutionAllocationPlan
     ) -> None:
-        """Complete Boundary handoff/admission after arrival slices are prepared.
-
-        Arrival handling consumes finite ``cargo_transfer`` Service Capacity
-        before either direct handoff or Inventory Admission. Direct handoff
-        preserves Logistics ownership. If a handled intermediate quantity is
-        unloaded, the admitted Resource is immediately reserved under a
-        Logistics continuation commitment and is reloaded through the same
-        transfer Service on a later boundary.
-        """
-        # Existing unloaded handoffs get the first chance to reload according to
-        # the shared Service allocation that was resolved for this boundary.
+        """Settle only quantities authorized by the common Boundary allocation."""
         for staging_id in sorted(tuple(self.handoff_staging), key=str):
             staging = self.handoff_staging[staging_id]
             request_id = self._handoff_request_id(staging.id, "reload")
-            direct_plan = direct_handoff_allocations or service_allocations
-            amount = min(
-                staging.amount_t,
-                self._allocated_handoff_rate(direct_plan, request_id),
-            )
+            try:
+                amount = min(staging.amount_t, max(0.0, execution.allocated(request_id)))
+            except KeyError:
+                amount = 0.0
             if amount <= 1e-12:
                 continue
             self.inventory.consume_reserved(
                 staging.reservation_owner_id, staging.node_id, staging.resource_id, amount
             )
             self._append_cargo_segment(
-                resource_id=staging.resource_id,
-                amount_t=amount,
+                resource_id=staging.resource_id, amount_t=amount,
                 final_destination_id=staging.final_destination_id,
-                requirement_id=staging.requirement_id,
-                owner_kind=staging.owner_kind,
-                owner_id=staging.owner_id,
-                priority=staging.priority,
-                legs=staging.remaining_legs,
-                dispatch_day=day,
+                requirement_id=staging.requirement_id, owner_kind=staging.owner_kind,
+                owner_id=staging.owner_id, priority=staging.priority,
+                legs=staging.remaining_legs, dispatch_day=day,
             )
             staging.amount_t = max(0.0, staging.amount_t - amount)
             if staging.amount_t <= 1e-9:
@@ -1438,48 +1191,26 @@ class LogisticsFlowMixin:
 
         for waiting_id in sorted(tuple(self.arrival_waiting), key=str):
             waiting = self.arrival_waiting[waiting_id]
-            arrival_request = self._handoff_request_id(waiting.id, "arrival")
-            handled = min(
-                waiting.amount_t,
-                self._allocated_handoff_rate(service_allocations, arrival_request),
-            )
-            if handled <= 1e-12:
+            request_id = self._handoff_request_id(waiting.id, "arrival")
+            try:
+                amount = min(waiting.amount_t, max(0.0, execution.allocated(request_id)))
+            except KeyError:
+                amount = 0.0
+            if amount <= 1e-12:
                 continue
-
-            if not waiting.remaining_legs:
-                admission = self.inventory.admit(
-                    waiting.node_id, waiting.resource_id, handled
-                )
-                waiting.amount_t = max(0.0, waiting.amount_t - admission.admitted_t)
-                if waiting.amount_t <= 1e-9:
-                    del self.arrival_waiting[waiting_id]
-                continue
-
-            direct_plan = direct_handoff_allocations or service_allocations
-            direct = min(
-                handled,
-                self._allocated_handoff_rate(direct_plan, arrival_request),
-            )
-            if direct > 1e-12:
+            if waiting.remaining_legs:
                 self._append_cargo_segment(
-                    resource_id=waiting.resource_id,
-                    amount_t=direct,
+                    resource_id=waiting.resource_id, amount_t=amount,
                     final_destination_id=waiting.final_destination_id,
-                    requirement_id=waiting.requirement_id,
-                    owner_kind=waiting.owner_kind,
-                    owner_id=waiting.owner_id,
-                    priority=waiting.priority,
-                    legs=waiting.remaining_legs,
-                    dispatch_day=day,
+                    requirement_id=waiting.requirement_id, owner_kind=waiting.owner_kind,
+                    owner_id=waiting.owner_id, priority=waiting.priority,
+                    legs=waiting.remaining_legs, dispatch_day=day,
                 )
-                waiting.amount_t = max(0.0, waiting.amount_t - direct)
-
-            unload_budget = max(0.0, handled - direct)
-            if unload_budget > 1e-12 and waiting.amount_t > 1e-12:
-                staged = self._stage_unloaded_handoff(
-                    waiting, min(waiting.amount_t, unload_budget), day
-                )
-                waiting.amount_t = max(0.0, waiting.amount_t - staged)
+            else:
+                admission = self.inventory.admit(waiting.node_id, waiting.resource_id, amount)
+                if abs(admission.admitted_t - amount) > 1e-7:
+                    raise RuntimeError("boundary Cargo allocation exceeded Inventory Admission")
+            waiting.amount_t = max(0.0, waiting.amount_t - amount)
             if waiting.amount_t <= 1e-9:
                 del self.arrival_waiting[waiting_id]
 
@@ -1550,29 +1281,13 @@ class LogisticsFlowMixin:
         self,
         day: int,
         plan: LogisticsResourcePlan,
-        funds: FundsAllocationPlan,
         execution: LogisticsExecutionAllocation,
     ) -> tuple[DomainActivity, ...]:
         """Execute exactly the already-resolved Transport allocation."""
         activities: list[DomainActivity] = []
-        requests_by_id = {request.id: request for request in plan.spending_requests}
         for row, amount in execution.executable_dispatches:
             requirement = row.requirement
             self.inventory.consume_allocated(row.source_id, requirement.resource_id, amount)
-            if row.spending_request_ids:
-                raw_amount = row.planned_amount_t
-                execution_factor = 0.0 if raw_amount <= 1e-12 else amount / raw_amount
-                for request_id in row.spending_request_ids:
-                    authorization = funds.authorization(request_id)
-                    request = requests_by_id[request_id]
-                    actual_cost = request.requested_musd * execution_factor
-                    if actual_cost > authorization.authorized_musd + 1e-8:
-                        raise RuntimeError(
-                            "external transport spend exceeded funds authorization"
-                        )
-                    self.external_economy.spend_authorized(
-                        authorization, actual_cost, day
-                    )
 
             activities.append(
                 DomainActivity(
@@ -1603,32 +1318,6 @@ class LogisticsFlowMixin:
             ):
                 self.transport.record_transport_operation(allocation_id, day)
         return tuple(activities)
-
-    def _external_policy_blockers_for_source(
-        self,
-        requirement: SupplyRequirement,
-        source_id: SpatialNodeId,
-        day: int,
-        edges: tuple[TransportServiceSupply, ...],
-    ) -> tuple[str, ...]:
-        try:
-            physical_path = self.supply_service_path(
-                requirement, source_id, day, edges, enforce_external_policy=False
-            )
-        except ValueError:
-            return ()
-        denied = {
-            edge.external_service_id
-            for edge in physical_path
-            if edge.external_service_id is not None
-            and not self.external_economy.service_allowed(
-                edge.external_service_id, requirement.owner_kind, requirement.owner_id
-            )
-        }
-        return tuple(
-            f"external_policy_denied:{service_id}"
-            for service_id in sorted(denied, key=str)
-        )
 
     def _service_edges_for_execution_allocation(
         self,
@@ -1680,7 +1369,7 @@ class LogisticsFlowMixin:
         for source_id in sorted(source_ids, key=str):
             try:
                 physical_path = self.supply_service_path(
-                    requirement, source_id, day, edges, enforce_external_policy=False
+                    requirement, source_id, day, edges
                 )
             except ValueError:
                 continue

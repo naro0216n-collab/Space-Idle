@@ -314,11 +314,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:
     result: set[DefinitionId] = set()
-    profiles = [
-        vehicle.performance for vehicle in sim.transport.vehicle_defs.values()
-    ] + [
-        service.performance for service in sim.transport.external_services.values()
-    ]
+    profiles = [vehicle.performance for vehicle in sim.transport.vehicle_defs.values()]
     for profile in profiles:
         if profile.propellant_resource_id is not None:
             result.add(profile.propellant_resource_id)
@@ -445,27 +441,15 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         )
         _validate_site_requirements(rule.origin_requirements, known_capabilities, f"movement_rule:{rule.id}:origin", known_service_types)
         _validate_site_requirements(rule.destination_requirements, known_capabilities, f"movement_rule:{rule.id}:destination", known_service_types)
-    for service_id, service in sim.transport.external_services.items():
-        _require(service_id == service.id, f"transport service key mismatch: {service_id}")
-        _require(service.capacity_t_per_day >= 0, f"negative transport service capacity: {service_id}")
-        _require(service.cost_musd_per_t >= 0, f"negative transport service cost: {service_id}")
-        _require(service.transit_time_multiplier > 0, f"non-positive transport service time multiplier: {service_id}")
-        _validate_transport_profile(sim, service.performance, known_capabilities, f"transport_service:{service_id}")
-        _validate_site_requirements(service.origin_requirements, known_capabilities, f"transport_service:{service_id}:origin", known_service_types)
-        _validate_site_requirements(service.destination_requirements, known_capabilities, f"transport_service:{service_id}:destination", known_service_types)
     for vehicle_id, vehicle in sim.transport.vehicle_defs.items():
         _require(vehicle_id == vehicle.id, f"vehicle definition key mismatch: {vehicle_id}")
         _validate_transport_profile(sim, vehicle.performance, known_capabilities, f"vehicle:{vehicle_id}")
         _require(vehicle.maintenance.turnaround_days >= 0, f"negative vehicle turnaround: {vehicle_id}")
-        _require(vehicle.maintenance.cost_musd >= 0, f"negative vehicle turnaround cost: {vehicle_id}")
         _require(all(amount >= 0 for _resource, amount in vehicle.maintenance.resources), f"negative vehicle turnaround resource: {vehicle_id}")
         _validate_unique_resources(vehicle.maintenance.resources, f"maintenance:{vehicle_id}")
         _require(vehicle.production.days >= 0, f"negative vehicle production time: {vehicle_id}")
-        _require(vehicle.production.cost_musd >= 0, f"negative vehicle production cost: {vehicle_id}")
         _require(all(amount >= 0 for _resource, amount in vehicle.production.resources), f"negative vehicle production resource: {vehicle_id}")
         _validate_unique_resources(vehicle.production.resources, f"production:{vehicle_id}")
-        _require(vehicle.economics.operating_cost_musd_per_cycle >= 0, f"negative vehicle cycle cost: {vehicle_id}")
-        _require(vehicle.economics.operating_cost_musd_per_cargo_t >= 0, f"negative vehicle cargo cost: {vehicle_id}")
         if vehicle.maintenance.service_type is not None:
             _require(
                 vehicle.maintenance.service_type in known_service_types,

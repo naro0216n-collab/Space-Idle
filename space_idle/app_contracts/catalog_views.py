@@ -92,11 +92,9 @@ class VehicleDefinitionRow:
     operation_support_requirements: tuple[tuple[str, str, str], ...]
     production_service_type: str | None
     production_days: float
-    production_cost_musd: float
     production_resources: tuple[tuple[str, float], ...]
     turnaround_service_type: str | None
     turnaround_days: float
-    turnaround_cost_musd: float
     turnaround_resources: tuple[tuple[str, float], ...]
     operation_capability_details: tuple[OperationCapabilityDefinitionRow, ...] = ()
 
@@ -112,29 +110,6 @@ class MovementPlanDefinitionRow:
     operations: tuple[tuple[str, float], ...]
     origin_requirements: SiteRequirementsDefinitionRow
     destination_requirements: SiteRequirementsDefinitionRow
-
-
-@dataclass(frozen=True)
-class TransportServiceDefinitionRow:
-    id: str
-    display_name: str
-    capacity_t_per_day: float
-    cost_musd_per_t: float
-    dry_mass_t: float
-    payload_t: float
-    transit_time_multiplier: float
-    capabilities: tuple[OperationCapabilityDefinitionRow, ...]
-    origin_requirements: SiteRequirementsDefinitionRow
-    destination_requirements: SiteRequirementsDefinitionRow
-
-
-@dataclass(frozen=True)
-class ProcurementServiceDefinitionRow:
-    id: str
-    display_name: str
-    supply_node_id: str
-    supply_latency_days: int
-    resource_prices_musd_per_t: tuple[tuple[str, float], ...]
 
 
 @dataclass(frozen=True)
@@ -162,8 +137,6 @@ class CatalogView:
     processes: tuple[ProcessDefinitionRow, ...] = ()
     research: tuple[ResearchDefinitionRow, ...] = ()
     movement_plans: tuple[MovementPlanDefinitionRow, ...] = ()
-    transport_services: tuple[TransportServiceDefinitionRow, ...] = ()
-    procurement_services: tuple[ProcurementServiceDefinitionRow, ...] = ()
 
 
 @dataclass(frozen=True)

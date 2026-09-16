@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ..shared import DefinitionId
 from ..transport import (
-    ExternalTransportServiceDef,
     LandingCapability,
     OperationSupportLocation,
     OperationSupportRequirement,
@@ -84,41 +83,8 @@ def build_spaceflight_movement_rules() -> tuple[SpaceflightMovementRule, ...]:
     )
 
 
-def build_external_transport_services() -> dict:
-    launch = TransportPerformanceProfile(
-        dry_mass_t=100.0, payload_t=30.0,
-        operation_capabilities=(PoweredAscentCapability(10.2, 11.0, 120000.0),),
-    )
-    orbital = TransportPerformanceProfile(
-        dry_mass_t=12.0, payload_t=20.0,
-        operation_capabilities=(SpaceflightCapability(6.0),),
-        endurance_days=120.0,
-    )
-    lander = TransportPerformanceProfile(
-        dry_mass_t=7.0, payload_t=8.0,
-        operation_capabilities=(PoweredAscentCapability(2.5, 2.5, 2000.0), LandingCapability(2.5, 2.5, 2000.0)),
-    )
-    direct = TransportPerformanceProfile(
-        dry_mass_t=120.0, payload_t=18.0,
-        operation_capabilities=(PoweredAscentCapability(10.2, 11.0, 120000.0), SpaceflightCapability(5.0), LandingCapability(2.5, 2.5, 2000.0)),
-        endurance_days=30.0,
-    )
-    return {
-        ids.EARTH_LEO_LAUNCH_SERVICE: ExternalTransportServiceDef(ids.EARTH_LEO_LAUNCH_SERVICE, "商業地表打上げ", 1.6, 4.0, launch, origin_requirements=req.ATMOSPHERIC_SURFACE_SITE, destination_requirements=req.ORBIT_SITE),
-        ids.LEO_LUNAR_SERVICE: ExternalTransportServiceDef(ids.LEO_LUNAR_SERVICE, "商業軌道間輸送", 0.25, 5.0, orbital, origin_requirements=req.ORBIT_SITE, destination_requirements=req.ORBIT_SITE),
-        ids.LUNAR_LANDING_SERVICE: ExternalTransportServiceDef(ids.LUNAR_LANDING_SERVICE, "商業真空地表着陸輸送", 0.20, 3.5, lander, origin_requirements=req.ORBIT_SITE, destination_requirements=req.VACUUM_SURFACE_SITE),
-        ids.DIRECT_LUNAR_SERVICE: ExternalTransportServiceDef(ids.DIRECT_LUNAR_SERVICE, "商業地球―真空地表直行輸送", 0.12, 11.0, direct, origin_requirements=req.ATMOSPHERIC_SURFACE_SITE, destination_requirements=req.VACUUM_SURFACE_SITE),
-    }
-
-
 def build_vehicle_definitions() -> dict:
-    """Owned base-game fleets are physical assets, not recurring money sinks.
-
-    Their operation is constrained by vehicle performance, propellant, support
-    infrastructure, turnaround time, production capacity, and material inputs.
-    Monetary settlement remains on ExternalTransportServiceDef for commercial
-    services and may still be used by other optional content.
-    """
+    """Owned base-game fleets are constrained only by physical requirements."""
     return {
         ids.REUSABLE_LAUNCH_VEHICLE: VehicleDef(
             id=ids.REUSABLE_LAUNCH_VEHICLE,

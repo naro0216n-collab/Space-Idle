@@ -470,8 +470,7 @@ class FleetAllocationMixin:
                 elif policy is PathPolicy.LOWEST_PROPELLANT:
                     edge = definition.propellant_t(plan, max(definition.max_cargo_for_movement(plan), 0.0))
                 else:
-                    payload = max(definition.max_cargo_for_movement(plan), 1e-9)
-                    edge = definition.operating_cost_musd_per_cargo_t + definition.operating_cost_musd_per_cycle / payload
+                    raise ValueError(f"unsupported path policy: {policy}")
                 new_path = path + (plan.id,)
                 heapq.heappush(
                     queue,

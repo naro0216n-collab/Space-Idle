@@ -198,7 +198,6 @@ class ContractRow:
     display_name: str
     status: str
     deadline_day: int
-    reward_musd: float
     target_operational_node_id: str | None
     blockers: tuple[str, ...]
 

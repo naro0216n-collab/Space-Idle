@@ -5,7 +5,7 @@ from .app_contracts.catalog_views import (
     SiteRequirementsDefinitionRow,
     OperationCapabilityDefinitionRow, ResourceDefinitionRow, FacilityDefinitionRow,
     ProcessDefinitionRow, ResearchDefinitionRow, VehicleDefinitionRow, MovementPlanDefinitionRow,
-    TransportServiceDefinitionRow, ProcurementServiceDefinitionRow, CelestialBodyDefinitionRow, OperationalNodeDefinitionRow,
+    CelestialBodyDefinitionRow, OperationalNodeDefinitionRow,
     CatalogView, OperationalNodeSummary, WorldView,
 )
 from .app_contracts.project_views import (
@@ -20,7 +20,7 @@ from .app_contracts.location_views import (
 )
 from .app_contracts.logistics_views import (
     InfrastructureRequirementRow, MovementEndpointRow, MovementServiceModeRow, MovementPlanRow, DirectionalCapacityRow, FleetPoolRow, TransportAllocationRow,
-    FleetRelocationResourceRequirementRow, FleetRelocationRow, FleetReleaseRow, CargoFlowRow, ExternalSupplyRow, VehicleProductionOptionRow, VehicleProductionRow,
+    FleetRelocationResourceRequirementRow, FleetRelocationRow, FleetReleaseRow, CargoFlowRow, VehicleProductionOptionRow, VehicleProductionRow,
     SupplyRequirementRow, SupplyPolicyRow, TargetStockRow, LogisticsView, TransportAllocationOptionRow,
     TransportAllocationOptionsView,
 )
@@ -41,7 +41,7 @@ from .app_contracts.surface_views import (
     SurfaceLocationTerritoryRow, SurfaceMapView, SurfaceResourceKnowledgeRow,
 )
 from .app_contracts.economy_views import (
-    ExternalEconomyView, ExternalServicePolicyRow, FundsAuthorizationRow,
+    BuyCommitmentRow, MarketInterfaceRow, MarketOfferRow, MarketView, TradeOrderRow,
 )
 
 QueryResult: TypeAlias = (
@@ -50,7 +50,7 @@ QueryResult: TypeAlias = (
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     MovementPlansView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |
     TransportAllocationOptionsView | ResearchView |
-    ScientificExplorationsView | SurveysView | ContractsView | ExternalEconomyView
+    ScientificExplorationsView | SurveysView | ContractsView | MarketView
 )
 
 __all__ = [name for name in globals() if not name.startswith('_') and name not in {'TypeAlias'}]

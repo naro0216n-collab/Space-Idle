@@ -1,59 +1,83 @@
 from __future__ import annotations
 
-import math
-
 from .application_views import (
-    ExternalEconomyView,
-    ExternalServicePolicyRow,
-    FundsAuthorizationRow,
+    BuyCommitmentRow, MarketInterfaceRow, MarketOfferRow, MarketView, TradeOrderRow,
 )
+from .market import TradeDirection
 
 
-class ExternalEconomyProjectorMixin:
-    def _external_economy_view(self) -> ExternalEconomyView:
+class MarketProjectorMixin:
+    def _market_view(self) -> MarketView:
         sim = self._simulation
-        state = sim.external_economy
-        _requests, allocation = sim.external_funds_projection()
-        policies = tuple(
-            ExternalServicePolicyRow(
-                id=str(policy.id),
-                enabled=policy.enabled,
-                allowed_service_ids=tuple(map(str, policy.allowed_service_ids)),
-                scope_kind=policy.scope_kind,
-                scope_id=None if policy.scope_id is None else str(policy.scope_id),
-                spending_cap_musd=policy.spending_cap_musd,
-                period_budget_musd=policy.period_budget_musd,
-                period_days=policy.period_days,
-                minimum_reserve_musd=policy.minimum_reserve_musd,
-                period_start_day=policy.period_start_day,
-                spent_in_period_musd=policy.effective_period_spend(sim.day),
-                remaining_period_budget_musd=(
-                    None
-                    if math.isinf(policy.period_remaining_musd(sim.day))
-                    else policy.period_remaining_musd(sim.day)
-                ),
+        market = sim.market
+        interfaces = []
+        for interface in sorted(market.interfaces.values(), key=lambda row: str(row.id)):
+            provider = market.provider_defs[interface.provider_id]
+            resources = sorted(
+                {rid for rid, _ in provider.buy_offers_musd_per_t}
+                | {rid for rid, _ in provider.sell_offers_musd_per_t},
+                key=str,
             )
-            for policy in sorted(state.policies.values(), key=lambda row: str(row.id))
-        )
-        rows = tuple(
-            FundsAuthorizationRow(
-                request_id=str(row.request_id),
-                policy_id=str(row.policy_id),
-                service_id=str(row.service_id),
-                requested_musd=row.requested_musd,
-                authorized_musd=row.authorized_musd,
-                unmet_musd=row.unmet_musd,
-                priority=row.priority,
-                owner_kind=row.owner_kind,
-                owner_id=str(row.owner_id),
-                purpose=row.purpose,
-                limiting_factors=row.limiting_factors,
+            interfaces.append(MarketInterfaceRow(
+                str(interface.id), str(provider.id), provider.display_name,
+                str(interface.operational_node_id), interface.enabled,
+                tuple(MarketOfferRow(
+                    str(resource_id), provider.buy_price(resource_id), provider.sell_price(resource_id),
+                    market.available_provider_supply_t(provider.id, resource_id),
+                    market.available_provider_demand_t(provider.id, resource_id),
+                ) for resource_id in resources),
+            ))
+
+        buy_plan = market.plan_buy_allocations()
+        buy_limiting = {row.order_id: row.limiting_factors for row in buy_plan.rows}
+        orders = []
+        for order in sorted(market.orders.values(), key=lambda row: str(row.id)):
+            interface = market.interfaces[order.market_interface_id]
+            provider = market.provider_defs[interface.provider_id]
+            price = provider.buy_price(order.resource_id) if order.direction is TradeDirection.BUY else provider.sell_price(order.resource_id)
+            committed = sum(
+                row.remaining_quantity_t for row in market.buy_commitments.values()
+                if row.order_id == order.id
             )
-            for row in allocation.rows
+            in_flight = 0.0
+            presented = 0.0
+            blockers: list[str] = []
+            limiting = list(buy_limiting.get(order.id, ()))
+            if not interface.enabled:
+                blockers.append("market_interface_disabled")
+            if price is None:
+                blockers.append("offer_unavailable")
+            elif not market._price_condition_satisfied(order, price):
+                blockers.append("price_condition")
+            if order.direction is TradeDirection.SELL:
+                requirement_id = market.sell_requirement_id(order.id)
+                in_flight = sim.logistics.cargo_flow_pipeline_t(requirement_id)
+                presented = sim.inventory.available(interface.operational_node_id, order.resource_id)
+                if market.available_provider_demand_t(interface.provider_id, order.resource_id) <= 1e-9:
+                    limiting.append("provider_demand")
+                if presented <= 1e-9 and in_flight <= 1e-9:
+                    blockers.append("resource_not_at_market_interface")
+            else:
+                if market.available_funds_musd <= 1e-9:
+                    limiting.append("funds")
+                if market.available_provider_supply_t(interface.provider_id, order.resource_id) <= 1e-9:
+                    limiting.append("provider_supply")
+            orders.append(TradeOrderRow(
+                str(order.id), order.direction.value, str(order.resource_id), str(order.market_interface_id),
+                order.priority, order.control_mode.value, order.quantity_target_t, order.rate_target_t_per_day,
+                order.price_limit_musd_per_t, price, committed, in_flight, presented,
+                order.settled_quantity_t, tuple(dict.fromkeys(blockers)), tuple(dict.fromkeys(limiting)),
+            ))
+        commitments = tuple(
+            BuyCommitmentRow(
+                str(row.id), str(row.order_id), str(row.resource_id), row.remaining_quantity_t,
+                row.committed_price_musd_per_t, row.reserved_funds_musd, row.maturity_day,
+                sim.inventory.admission_state(
+                    market.interfaces[row.market_interface_id].operational_node_id, row.resource_id
+                ).blockers if row.maturity_day <= sim.day else (),
+            )
+            for row in sorted(market.buy_commitments.values(), key=lambda value: str(value.id))
         )
-        return ExternalEconomyView(
-            state.account.funds_musd,
-            policies,
-            rows,
-            sim.external_economy.spent_on_day(sim.day - 1),
+        return MarketView(
+            market.funds.balance, market.available_funds_musd, tuple(interfaces), tuple(orders), commitments
         )

@@ -8,7 +8,7 @@ from .application_handle_progression import ProgressionCommandHandlerMixin
 from .application_handle_transport import TransportCommandHandlerMixin
 from .application_handle_logistics import LogisticsCommandHandlerMixin
 from .application_handle_contracts import ContractCommandHandlerMixin
-from .application_handle_economy import ExternalEconomyCommandHandlerMixin
+from .application_handle_economy import MarketCommandHandlerMixin
 
 
 class ApplicationCommandMixin(
@@ -19,7 +19,7 @@ class ApplicationCommandMixin(
     TransportCommandHandlerMixin,
     LogisticsCommandHandlerMixin,
     ContractCommandHandlerMixin,
-    ExternalEconomyCommandHandlerMixin,
+    MarketCommandHandlerMixin,
 ):
     def _execute(self, command: Command) -> CommandResult:
         for handler in (
@@ -29,7 +29,7 @@ class ApplicationCommandMixin(
             self._handle_transport_command,
             self._handle_logistics_command,
             self._handle_contract_command,
-            self._handle_external_economy_command,
+            self._handle_market_command,
         ):
             result = handler(command)
             if result is not NotImplemented:

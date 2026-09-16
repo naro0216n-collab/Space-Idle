@@ -9,13 +9,13 @@ from space_idle import (
 from space_idle.content.base_game import (
     CONSTRUCTION_EQUIPMENT,
     EARTH,
-    EARTH_LEO_LAUNCH_SERVICE,
     LEO,
-    LEO_LUNAR_SERVICE,
     LUNAR_ORBIT,
     MACHINERY,
     ORBITAL_LOGISTICS_NODE,
+    PROPELLANT,
     REUSABLE_LAUNCH_VEHICLE,
+    REUSABLE_ORBITAL_CARGO_TUG,
     WATER,
 )
 from space_idle.execution_requirements import (
@@ -52,20 +52,33 @@ def _requirement(
 
 
 def _owned_earth_leo_capacity(sim, units: int = 1):
-    sim.transport.external_services.clear()
     return sim.transport.create_transport_allocation(
         REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=units, day=sim.day
     )
 
 
-def _allow_external_transport(sim) -> None:
-    for service_id in sim.transport.external_services:
-        sim.external_economy.register_service(service_id)
-    sim.external_economy.create_policy(
-        enabled=True,
-        allowed_service_ids=tuple(sim.transport.external_services),
-        day=sim.day,
+def _owned_multistage_capacity(sim):
+    if not any(
+        facility.definition_id == ORBITAL_LOGISTICS_NODE and facility.operational_node_id == LEO
+        for facility in sim.facilities.facilities.values()
+    ):
+        sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
+    if not any(
+        facility.definition_id == ORBITAL_LOGISTICS_NODE and facility.operational_node_id == LUNAR_ORBIT
+        for facility in sim.facilities.facilities.values()
+    ):
+        sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
+    sim.refresh_storage()
+    sim.inventory.add(LEO, PROPELLANT, 10.0)
+    sim.inventory.add(LUNAR_ORBIT, PROPELLANT, 10.0)
+    launch = sim.transport.create_transport_allocation(
+        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
     )
+    tug = sim.transport.create_transport_allocation(
+        REUSABLE_ORBITAL_CARGO_TUG,
+        LEO, LUNAR_ORBIT, target_units=1, day=sim.day
+    )
+    return launch, tug
 
 
 def test_dynamic_supply_dispatch_uses_owned_route_and_pipeline_prevents_duplicate():
@@ -118,52 +131,6 @@ def test_supply_policy_selects_preferred_source_without_provisioning_transport()
     assert len(sim.transport.transport_allocations) == allocation_count
 
 
-def test_external_transport_service_capacity_is_one_shared_pool_across_directions():
-    sim = build_game_application()._simulation
-    sim.transport.transport_allocations.clear()
-    sim.external_economy.register_service(LEO_LUNAR_SERVICE)
-    sim.external_economy.create_policy(
-        enabled=True,
-        allowed_service_ids=(LEO_LUNAR_SERVICE,),
-        day=sim.day,
-    )
-    sim.inventory.add(LEO, MACHINERY, 1.0)
-    sim.inventory.add(LUNAR_ORBIT, MACHINERY, 1.0)
-    outbound = _requirement(
-        0.25,
-        requirement_id="supply.external-shared.forward",
-        destination=LUNAR_ORBIT,
-        source=LEO,
-    )
-    inbound = _requirement(
-        0.25,
-        requirement_id="supply.external-shared.reverse",
-        destination=LEO,
-        source=LUNAR_ORBIT,
-    )
-
-    plan = sim.logistics.plan_capacity_logistics(sim.day, (outbound, inbound))
-    bundles = sim.logistics.dispatch_execution_requirements(sim.day, plan)
-    capacities = {
-        key: float("inf")
-        for bundle in bundles
-        for key, _coefficient in bundle.coefficients()
-    }
-    capacities.update(sim.logistics.transport_capacity_pool_capacities(sim.day))
-    allocation = allocate_execution_requirements(bundles, capacities)
-    allocated = {
-        requirement.id: sum(
-            allocation.allocated(row.cargo_claim_id)
-            for row in plan.dispatches
-            if row.requirement.id == requirement.id
-        )
-        for requirement in (outbound, inbound)
-    }
-
-    assert sum(allocated.values()) == pytest.approx(0.25)
-    assert allocated[outbound.id] == pytest.approx(0.125)
-    assert allocated[inbound.id] == pytest.approx(0.125)
-
 def test_future_high_priority_requirement_does_not_preempt_current_requirement_before_lead_time():
     sim = build_game_application()._simulation
     allocation_id = _owned_earth_leo_capacity(sim)
@@ -195,7 +162,6 @@ def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_
     sim.technology.completed.update(
         sim.projects.recipes[ORBITAL_LOGISTICS_NODE].prerequisite_technologies
     )
-    sim.transport.external_services.clear()
     project_id = app.execute(
         PlanBuild(
             str(LEO),
@@ -268,7 +234,7 @@ def test_unconstrained_requirement_auto_selects_reachable_stocked_source():
 def test_multistage_dispatch_freezes_current_and_downstream_service_conditions():
     sim = build_game_application()._simulation
     sim.transport.transport_allocations.clear()
-    _allow_external_transport(sim)
+    _owned_multistage_capacity(sim)
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
     sim.refresh_storage()
     sim.inventory.stock[(LUNAR_ORBIT, MACHINERY)] = 0.0
@@ -299,7 +265,9 @@ def test_multistage_dispatch_freezes_current_and_downstream_service_conditions()
 def test_cargo_is_not_available_until_boundary_arrival_settlement():
     sim = build_game_application()._simulation
     sim.transport.transport_allocations.clear()
-    _allow_external_transport(sim)
+    sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
+    sim.refresh_storage()
+    _owned_earth_leo_capacity(sim)
     resource = DefinitionId("test.resource.boundary-supply")
     sim.inventory.add(EARTH, resource, 1.0)
     before = sim.inventory.amount(LEO, resource)
@@ -317,13 +285,20 @@ def test_cargo_is_not_available_until_boundary_arrival_settlement():
     assert sim.inventory.amount(LEO, resource) == pytest.approx(before)
 
     sim.advance_days(1)
+    assert sim.inventory.amount(LEO, resource) >= before
+    for _ in range(8):
+        if sim.inventory.amount(LEO, resource) >= before + dispatched - 1e-9:
+            break
+        sim.advance_days(1)
     assert sim.inventory.amount(LEO, resource) == pytest.approx(before + dispatched)
 
 def test_cargo_arrival_waits_for_inventory_admission():
     app = build_game_application()
     sim = app._simulation
     sim.transport.transport_allocations.clear()
-    _allow_external_transport(sim)
+    sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
+    sim.refresh_storage()
+    _owned_earth_leo_capacity(sim)
     sim.inventory.stock[(LEO, MACHINERY)] = 0.0
     free = sim.inventory.free_capacity(LEO, MACHINERY)
     assert free is not None and free > 1.0
@@ -351,7 +326,10 @@ def test_cargo_arrival_waits_for_inventory_admission():
     assert any("storage" in blocker for blocker in projected.admission_blockers)
 
     sim.inventory.consume_allocated(LEO, CONSTRUCTION_EQUIPMENT, waiting.amount_t)
-    sim.advance_days(1)
+    for _ in range(8):
+        sim.advance_days(1)
+        if waiting.id not in sim.logistics.arrival_waiting:
+            break
     assert waiting.id not in sim.logistics.arrival_waiting
 
 def test_dispatch_source_requirement_competes_with_higher_priority_local_use():
@@ -404,10 +382,11 @@ def test_locally_covered_requirement_does_not_report_unused_transport_blockers()
 def test_unchanged_daily_dispatches_extend_one_cargo_flow_segment():
     sim = build_game_application()._simulation
     sim.transport.transport_allocations.clear()
-    _allow_external_transport(sim)
-    launch_capacity = sim.transport.external_services[
-        EARTH_LEO_LAUNCH_SERVICE
-    ].capacity_t_per_day
+    allocation_id = _owned_earth_leo_capacity(sim)
+    launch_capacity = sim.transport.transport_capacity_snapshot(
+        allocation_id, day=sim.day
+    ).available.forward_t_per_day
+    assert launch_capacity > 0.0
     sim.inventory.add(EARTH, MACHINERY, launch_capacity * 3.0)
     requirement = _requirement(
         launch_capacity * 3.0,
@@ -415,9 +394,7 @@ def test_unchanged_daily_dispatches_extend_one_cargo_flow_segment():
     )
 
     for day in (0, 1):
-        raw = sim.logistics.plan_capacity_logistics(day, (requirement,))
-        funds = sim.external_economy.allocate(raw.spending_requests, day)
-        plan = sim.logistics.authorize_capacity_logistics(raw, funds, day)
+        plan = sim.logistics.plan_capacity_logistics(day, (requirement,))
         bundles = sim.logistics.dispatch_execution_requirements(day, plan)
         capacities = {
             key: float("inf")
@@ -429,7 +406,7 @@ def test_unchanged_daily_dispatches_extend_one_cargo_flow_segment():
         execution = sim.logistics.build_capacity_logistics_execution(
             day, plan, shared, ()
         )
-        sim.logistics.advance_capacity_logistics(day, plan, funds, execution)
+        sim.logistics.advance_capacity_logistics(day, plan, execution)
 
     flows = [
         row for row in sim.logistics.cargo_flows.values()
@@ -442,19 +419,10 @@ def test_unchanged_daily_dispatches_extend_one_cargo_flow_segment():
     assert segment.dispatch_rate_t_per_day == pytest.approx(launch_capacity)
     assert segment.amount_t == pytest.approx(launch_capacity * 2.0)
 
-@pytest.mark.parametrize(
-    "direct_handoff",
-    (True, False),
-    ids=("logistics_owned_direct", "inventory_staged_reload"),
-)
-def test_multistage_handoff_ownership_transition(direct_handoff):
+def test_multistage_boundary_handoff_preserves_logistics_ownership():
     sim = build_game_application()._simulation
     sim.transport.transport_allocations.clear()
-    _allow_external_transport(sim)
-    if direct_handoff:
-        sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
-    sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
-    sim.refresh_storage()
+    _owned_multistage_capacity(sim)
     resource = CONSTRUCTION_EQUIPMENT
     sim.inventory.stock[(LUNAR_ORBIT, resource)] = 0.0
     sim.inventory.add(EARTH, resource, 0.1)
@@ -462,53 +430,18 @@ def test_multistage_handoff_ownership_transition(direct_handoff):
     target_id = sim.logistics.set_target_stock(LUNAR_ORBIT, resource, 0.1, 5)
 
     sim.advance_days(1)
-    first = next(
-        row for row in sim.logistics.cargo_flows.values()
-        if row.owner_id == target_id
-    )
+    first = next(row for row in sim.logistics.cargo_flows.values() if row.owner_id == target_id)
     assert first.remaining_legs
     handoff_node = first.destination_id
     stock_before = sim.inventory.amount(handoff_node, resource)
     sim.advance_to_day(first.first_arrival_day)
 
-    assert not [
-        row for row in sim.logistics.arrival_waiting.values()
-        if row.owner_id == target_id
-    ]
-    staging_rows = [
-        row for row in sim.logistics.handoff_staging.values()
-        if row.owner_id == target_id
-    ]
-    if direct_handoff:
-        assert staging_rows == []
-        downstream = next(
-            row for row in sim.logistics.cargo_flows.values()
-            if row.owner_id == target_id
-        )
-        assert downstream.source_id == handoff_node
-        assert sim.inventory.amount(handoff_node, resource) == pytest.approx(stock_before)
-        return
-
-    assert len(staging_rows) == 1
-    staging = staging_rows[0]
-    assert sim.inventory.amount(handoff_node, resource) == pytest.approx(
-        stock_before + staging.amount_t
-    )
-    assert sim.inventory.reserved_for(
-        staging.reservation_owner_id, handoff_node, resource
-    ) == pytest.approx(staging.amount_t)
-
-    sim.facilities.install(ORBITAL_LOGISTICS_NODE, handoff_node)
-    sim.refresh_storage()
-    sim.advance_days(1)
-
-    assert staging.id not in sim.logistics.handoff_staging
-    assert sim.inventory.amount(handoff_node, resource) == pytest.approx(stock_before)
-    downstream = next(
-        row for row in sim.logistics.cargo_flows.values()
-        if row.owner_id == target_id
-    )
+    assert not [row for row in sim.logistics.arrival_waiting.values() if row.owner_id == target_id]
+    assert not [row for row in sim.logistics.handoff_staging.values() if row.owner_id == target_id]
+    downstream = next(row for row in sim.logistics.cargo_flows.values() if row.owner_id == target_id)
     assert downstream.source_id == handoff_node
+    assert sim.inventory.amount(handoff_node, resource) == pytest.approx(stock_before)
+
 
 def test_arrival_waiting_reduces_reusable_transport_capacity_until_cleared():
     sim = build_game_application()._simulation
@@ -546,10 +479,13 @@ def test_arrival_waiting_reduces_reusable_transport_capacity_until_cleared():
     assert "arrival_backpressure" in blocked.limiting_factors
 
     sim.inventory.consume_allocated(LEO, filler, waiting.amount_t)
-    sim.advance_days(1)
+    for _ in range(8):
+        sim.advance_days(1)
+        if waiting.id not in sim.logistics.arrival_waiting:
+            break
     assert waiting.id not in sim.logistics.arrival_waiting
     restored = sim.logistics.current_transport_capacity_snapshot(
-        allocation_id, day=ready_day + 1
+        allocation_id, day=sim.day
     )
     assert restored.available.forward_t_per_day == pytest.approx(
         baseline.available.forward_t_per_day

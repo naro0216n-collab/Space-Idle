@@ -4,11 +4,11 @@ from .version import VERSION as __version__
 from .bootstrap import build_game_application
 from .application import (
     AcceptContract, AdvanceTime, ApplicationError, AssignExplorationFleet, CancelBuild,
-    CreateExternalServicePolicy, SetExternalServicePolicy, DeleteExternalServicePolicy,
+    CreateTradeOrder, UpdateTradeOrder, CancelTradeOrder,
     ChangeTransportAllocationMode, CreateTransportAllocation,
     DeclineContract, DeleteTransportAllocation,
     SetResearchPriority, GameApplication, GetBottlenecks, GetBuildOptions, GetCatalog,
-    GetCargoFlows, GetContracts, GetDependencyAnalytics, GetExternalEconomy, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode, GetLogistics,
+    GetCargoFlows, GetContracts, GetDependencyAnalytics, GetMarket, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetTransportAllocations, GetTransportAllocationOptions,
     GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseResearch,

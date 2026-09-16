@@ -54,7 +54,6 @@ class LogisticsMovementPlanProjectorMixin:
                     cycle_days=plan.cycle_days,
                     forward_latency_days=plan.forward_latency_days,
                     reverse_latency_days=plan.reverse_latency_days,
-                    cost_musd_per_t=definition.operating_cost_musd_per_cargo_t,
                     propellant_resource_id=(
                         None
                         if definition.propellant_resource_id is None
@@ -67,43 +66,6 @@ class LogisticsMovementPlanProjectorMixin:
                 )
             )
 
-        for service in sim.transport.external_transport_service_definitions():
-            blockers = tuple(
-                dict.fromkeys(
-                    sim.transport.movement_plan_failures(movement_plan.id, sim.day)
-                    + sim.transport.service_movement_failures(
-                        movement_plan.id, service.id, sim.day
-                    )
-                )
-            )
-            rows.append(
-                MovementServiceModeRow(
-                    id=str(service.id),
-                    display_name=service.display_name,
-                    kind="external_service",
-                    vehicle_definition_id=None,
-                    fleet_total_units=0,
-                    fleet_free_units=0,
-                    nominal_capacity=DirectionalCapacityRow(
-                        service.capacity_t_per_day, 0.0
-                    ),
-                    cycle_days=None,
-                    forward_latency_days=sim.transport.performance_movement_transit_days(
-                        movement_plan,
-                        service.performance,
-                        transit_multiplier=service.transit_time_multiplier,
-                    ),
-                    reverse_latency_days=None,
-                    cost_musd_per_t=service.cost_musd_per_t,
-                    propellant_resource_id=None,
-                    full_load_propellant_t=None,
-                    service_feasible=(
-                        service.capacity_t_per_day > 1e-12 and not blockers
-                    ),
-                    infrastructure_requirements=(),
-                    blockers=blockers,
-                )
-            )
         return tuple(rows)
 
     def _movement_plan_rows(

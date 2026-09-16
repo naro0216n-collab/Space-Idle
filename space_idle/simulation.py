@@ -7,8 +7,7 @@ from .allocation_graph import AllocationDependency, allocation_dependency_order
 from .contracts import ContractService
 from .construction.models import CONSTRUCTION_SERVICE_TYPE
 from .domain import DomainExtension
-from .external_economy import ExternalEconomyState, FundsAllocationPlan, FundsRequest
-from .external_procurement import ExternalProcurementPlan
+from .market import MarketBuyAllocationPlan, MarketService
 from .facilities import FacilityBook, FacilityPlacementScope
 from .founding import LocationFoundingService
 from .industry import IndustryService
@@ -97,23 +96,12 @@ class TickPlan:
     requirement_resolutions: tuple[SupplyRequirementResolution, ...]
     external_requirements: tuple[SupplyRequirement, ...]
     logistics: LogisticsResourcePlan
-    procurement: ExternalProcurementPlan
-
-    @property
-    def spending_requests(self) -> tuple[FundsRequest, ...]:
-        return tuple(
-            sorted(
-                self.logistics.spending_requests + self.procurement.spending_requests,
-                key=lambda row: str(row.id),
-            )
-        )
 
 
 @dataclass(frozen=True)
 class TickAllocations:
-    funds: FundsAllocationPlan
+    market_buys: MarketBuyAllocationPlan
     logistics: LogisticsResourcePlan
-    procurement: ExternalProcurementPlan
     execution: ExecutionAllocationPlan
     resources: ResourceAllocationPlan
     power_by_location: dict[SpatialNodeId, PowerSnapshot]
@@ -121,7 +109,6 @@ class TickAllocations:
     transport: LogisticsExecutionAllocation
 
 
-ALLOCATION_FUNDS = "funds"
 ALLOCATION_LOGISTICS = "logistics_authorization"
 ALLOCATION_RESOURCES = "resources"
 ALLOCATION_MAINTENANCE = "maintenance"
@@ -145,7 +132,7 @@ class TickDecisionProjection:
 @dataclass
 class Simulation:
     day: int
-    external_economy: ExternalEconomyState
+    market: MarketService
     graph: SpatialGraph
     environment: EnvironmentResolver
     inventory: InventoryBook
@@ -168,6 +155,7 @@ class Simulation:
     content_id: str = "unconfigured"
     pending_offline_game_days: float = 0.0
     domain_extensions: tuple[DomainExtension, ...] = ()
+    _boundary_used_by_constraint: dict[AllocationConstraintKey, float] = field(default_factory=dict, init=False, repr=False)
     _boundary_settled_day: int = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -184,6 +172,30 @@ class Simulation:
         if day != self.day:
             raise ValueError("saved canonical boundary does not match simulation day")
         self._boundary_settled_day = day
+
+    def boundary_capacity_usage_snapshot(self) -> tuple[tuple[AllocationConstraintKey, float], ...]:
+        """Authoritative same-day capacity already consumed at Boundary settlement."""
+        return tuple(
+            sorted(
+                ((key, amount) for key, amount in self._boundary_used_by_constraint.items() if amount > 1e-12),
+                key=lambda row: (row[0].kind, row[0].scope_id, row[0].name),
+            )
+        )
+
+    def restore_boundary_capacity_usage(
+        self, rows: tuple[tuple[AllocationConstraintKey, float], ...]
+    ) -> None:
+        restored: dict[AllocationConstraintKey, float] = {}
+        for key, amount in rows:
+            if key.kind not in {"service", "service_pool"}:
+                raise ValueError("boundary capacity usage must reference Service constraints")
+            if amount < -1e-9:
+                raise ValueError("boundary capacity usage must be non-negative")
+            if key in restored:
+                raise ValueError("duplicate boundary capacity usage constraint")
+            if amount > 1e-12:
+                restored[key] = amount
+        self._boundary_used_by_constraint = restored
 
     def _ensure_current_boundary_settled(self) -> None:
         if self._boundary_settled_day == self.day:
@@ -256,6 +268,7 @@ class Simulation:
         requirements.extend(self.transport.fleet_relocation_supplys(self.day))
         if self.scientific_exploration is not None:
             requirements.extend(self.scientific_exploration.supplys(self.day))
+        requirements.extend(self.market.sell_supply_requirements(self.logistics))
         seen: set[object] = set()
         for requirement in requirements:
             if requirement.id in seen:
@@ -358,6 +371,7 @@ class Simulation:
                 self.scientific_exploration.reservation_acquisition_requirements(self.day)
             )
             rows.extend(self.scientific_exploration.execution_requirement_bundles(self.day))
+        rows.extend(self.market.sell_execution_bundles())
         rows = [
             self._with_organization_service_envelopes(row)
             if isinstance(row, ExecutionRequirementBundle)
@@ -678,11 +692,6 @@ class Simulation:
         allocations = self._allocate_tick(snapshot, intents, plan)
         return TickDecisionProjection(snapshot, intents, plan, allocations)
 
-    def external_funds_projection(self) -> tuple[tuple[FundsRequest, ...], FundsAllocationPlan]:
-        """Expose Funds requests and authorization from the shared tick DAG."""
-        decision = self.tick_decision_projection()
-        return decision.plan.spending_requests, decision.allocations.funds
-
     def resource_allocation_projection(self) -> ResourceAllocationPlan:
         """Derive the current shared Resource allocation without mutating state."""
         return self.tick_decision_projection().allocations.resources
@@ -718,96 +727,45 @@ class Simulation:
             capped=capped,
         )
 
-    def _allocate_boundary_handoff_services(
-        self, requests: tuple[ServiceCapacityRequest, ...]
-    ) -> tuple[ServiceCapacityAllocationPlan | None, ServiceCapacityAllocationPlan | None]:
-        """Allocate boundary Cargo Handling without hiding its provider source.
-
-        Local ``cargo_transfer`` capacity is shared by direct handoff, unload and
-        reload work.  External carriers can additionally supply the carrier-side
-        handling needed to unload Cargo they have already delivered, but that
-        exogenous capacity cannot be reused to reload Inventory-owned Cargo or
-        masquerade as local transfer infrastructure.
-        """
-        if not requests:
-            return None, None
-
-        locations = self._active_locations() | set(self.graph.operational_node_ids())
-        power_by_location = {
-            location_id: self.power.resolve_snapshot(
-                self.power.physical_snapshot(location_id, self.facilities, self.day)
-            )
-            for location_id in locations
-        }
-        local = self._allocate_tick_services(power_by_location, requests)
-
-        external_supply = self.logistics.external_arrival_handling_supply()
-        residual_requests: list[ServiceCapacityRequest] = []
-        for request in requests:
-            if request.purpose != "arrival_handling":
-                continue
-            residual = max(0.0, request.requested_rate - local.allocated(request.id))
-            if residual <= 1e-12:
-                continue
-            residual_requests.append(ServiceCapacityRequest(
-                request.id,
-                request.operational_node_id,
-                request.service_type,
-                residual,
-                request.priority,
-                request.owner_kind,
-                request.owner_id,
-                request.purpose,
-            ))
-        external = allocate_service_capacity(
-            tuple(residual_requests),
-            nominal_supply=external_supply,
-        )
-        external_ids = {request.id for request in external.requests}
-
-        allocations: list[ServiceCapacityAllocation] = []
-        for request in requests:
-            amount = local.allocated(request.id)
-            if request.id in external_ids:
-                amount += external.allocated(request.id)
-            amount = min(request.requested_rate, max(0.0, amount))
-            allocations.append(ServiceCapacityAllocation(
-                request.id, request.requested_rate, amount,
-                max(0.0, request.requested_rate - amount),
-            ))
-
-        nominal = dict(local.supply_nominal)
-        enabled = dict(local.supply_enabled)
-        limiting = dict(local.supply_limiting_factors)
-        for key, amount in external.supply_nominal.items():
-            nominal[key] = nominal.get(key, 0.0) + amount
-        for key, amount in external.supply_enabled.items():
-            enabled[key] = enabled.get(key, 0.0) + amount
-        combined = ServiceCapacityAllocationPlan(
-            requests, tuple(allocations), nominal, enabled, limiting
-        )
-        return combined, local
-
     def _settle_tick_boundary(self) -> None:
-        """Settle state whose completion time was reached before this tick."""
-        self.external_economy.settle_periods(self.day)
+        """Settle prior physical obligations through the common finite constraints."""
+        self._boundary_used_by_constraint = {}
+        self.market.replenish_to_day(self.day)
         self.transport.advance_fleet_state(self.day)
         if self.scientific_exploration is not None:
             self.scientific_exploration.settle_movement_arrivals(self.day)
         if self.founding is not None and self.founding.settle_arrivals(self.day):
             self.transport.invalidate_movement_plans()
-        self.logistics.prepare_cargo_arrivals(self.day)
-        handoff_requests = self.logistics.cargo_handoff_service_requests(self.day)
-        handoff_allocations, direct_handoff_allocations = (
-            self._allocate_boundary_handoff_services(handoff_requests)
-        )
-        self.logistics.settle_cargo_arrivals(
-            self.day, handoff_allocations, direct_handoff_allocations
-        )
-        self.logistics.settle_external_supply(self.day)
 
-        # Procurement wait/policy maturation is a clock-boundary transition.
-        # It may expose intents for this tick but never consumes inventory.
+        self.logistics.prepare_cargo_arrivals(self.day)
+        cargo_bundles = self.logistics.boundary_execution_bundles(self.day)
+        buy_bundles = self.market.buy_boundary_bundles(self.day, self.inventory)
+        bundles = cargo_bundles + buy_bundles
+        if bundles:
+            locations = self._active_locations() | set(self.graph.operational_node_ids())
+            power_by_location = {
+                location_id: self.power.resolve_snapshot(
+                    self.power.physical_snapshot(location_id, self.facilities, self.day)
+                )
+                for location_id in locations
+            }
+            # Boundary obligations are consumers in the same common Execution
+            # allocation below.  Derive provider supply/dependencies only here;
+            # pre-allocating the same Cargo/Buy consumer as a Service request would
+            # turn its own allocation into zero ``spare_rate`` and double-settle
+            # the finite capacity.
+            service_supply = self._allocate_tick_services(power_by_location, requests=())
+            capacities = self._constraint_capacities(bundles, service_supply=service_supply)
+            boundary_execution = allocate_execution_requirements(bundles, capacities)
+            self._boundary_used_by_constraint = {
+                key: amount for key, amount in boundary_execution.used_by_constraint.items()
+                if key.kind in {"service", "service_pool"} and amount > 1e-12
+            }
+            self.logistics.settle_cargo_boundary_execution(self.day, boundary_execution)
+            self.market.settle_matured_buys(self.day, boundary_execution, self.inventory)
+
+        # Project procurement is an internal durable reservation lifecycle unrelated
+        # to the External Resource Market. Its clock maturation remains boundary-owned.
         self.projects.advance_procurement(self.day)
 
     def _physical_tick_snapshot(self) -> TickPhysicalSnapshot:
@@ -841,12 +799,7 @@ class Simulation:
         logistics_plan = self.logistics.plan_capacity_logistics(
             self.day, external_requirements
         )
-        procurement_plan = self.logistics.plan_external_procurement(
-            self.day, external_requirements, logistics_plan
-        )
-        return TickPlan(
-            requirement_resolutions, external_requirements, logistics_plan, procurement_plan
-        )
+        return TickPlan(requirement_resolutions, external_requirements, logistics_plan)
 
     def _complete_service_requests(
         self, requests: tuple[ServiceCapacityRequest, ...]
@@ -872,7 +825,7 @@ class Simulation:
         extra: dict[AllocationConstraintKey, float] | None = None,
     ) -> dict[AllocationConstraintKey, float]:
         capacities: dict[AllocationConstraintKey, float] = {}
-        for owner in (self.research,):
+        for owner in (self.research, self.market):
             if owner is None or not hasattr(owner, "allocation_pool_capacities"):
                 continue
             for key, amount in owner.allocation_pool_capacities().items():
@@ -944,7 +897,9 @@ class Simulation:
                         if key.kind == "service":
                             node_id = requirement.constraint_node(bundle.operational_node_id)
                             capacities[key] = max(
-                                0.0, service_supply.summary(node_id, requirement.service_type).spare_rate
+                                0.0,
+                                service_supply.summary(node_id, requirement.service_type).spare_rate
+                                - self._boundary_used_by_constraint.get(key, 0.0),
                             )
                             continue
                         if (
@@ -954,10 +909,13 @@ class Simulation:
                         ):
                             capacities[key] = 0.0
                             continue
-                        capacities[key] = math.fsum(
-                            max(0.0, service_supply.summary(node_id, requirement.service_type).spare_rate)
-                            for node_id, service_type in service_supply.supply_enabled
-                            if service_type == requirement.service_type
+                        capacities[key] = max(
+                            0.0,
+                            math.fsum(
+                                max(0.0, service_supply.summary(node_id, requirement.service_type).spare_rate)
+                                for node_id, service_type in service_supply.supply_enabled
+                                if service_type == requirement.service_type
+                            ) - self._boundary_used_by_constraint.get(key, 0.0),
                         )
                     continue
 
@@ -1202,11 +1160,9 @@ class Simulation:
         """Return the explicit same-tick cross-Domain allocation DAG."""
         service_types = tuple(sorted(set(service_types)))
         dependencies: list[AllocationDependency] = [
-            AllocationDependency(ALLOCATION_LOGISTICS, ALLOCATION_FUNDS),
             AllocationDependency(ALLOCATION_RESOURCES, ALLOCATION_LOGISTICS),
             AllocationDependency(ALLOCATION_MAINTENANCE, ALLOCATION_RESOURCES),
             AllocationDependency(ALLOCATION_POWER, ALLOCATION_MAINTENANCE),
-            AllocationDependency(ALLOCATION_TRANSPORT, ALLOCATION_FUNDS),
             AllocationDependency(ALLOCATION_TRANSPORT, ALLOCATION_LOGISTICS),
             AllocationDependency(ALLOCATION_TRANSPORT, ALLOCATION_RESOURCES),
         ]
@@ -1228,7 +1184,6 @@ class Simulation:
         self, service_types: tuple[str, ...] | set[str]
     ) -> tuple[str, ...]:
         nodes = {
-            ALLOCATION_FUNDS,
             ALLOCATION_LOGISTICS,
             ALLOCATION_RESOURCES,
             ALLOCATION_MAINTENANCE,
@@ -1256,13 +1211,8 @@ class Simulation:
         the common execution allocation to a deterministic fixed point instead of
         letting Domain call order decide who receives shared stock.
         """
-        funds = self.external_economy.allocate(plan.spending_requests, self.day)
-        authorized_logistics = self.logistics.authorize_capacity_logistics(
-            plan.logistics, funds, self.day
-        )
-        authorized_procurement = self.logistics.authorize_external_procurement(
-            plan.procurement, funds
-        )
+        market_buys = self.market.plan_buy_allocations()
+        authorized_logistics = plan.logistics
 
         resource_claim_intents = tuple(intents.resource_claims)
         transport_requests = self.transport.transport_service_capacity_requests(
@@ -1445,9 +1395,8 @@ class Simulation:
             self.day, authorized_logistics, execution, operation_factors
         )
         return TickAllocations(
-            funds,
+            market_buys,
             authorized_logistics,
-            authorized_procurement,
             execution,
             resources,
             power_by_location,
@@ -1463,6 +1412,10 @@ class Simulation:
         activities: list[DomainActivity] = []
         powers = allocations.power_by_location
         self.storage.refresh(self.day, powers)
+        # Buy commitments acquire only Funds/provider reservations; Sell settles
+        # physical Interface inventory and credits Funds after this tick's allocation.
+        self.market.create_buy_commitments(allocations.market_buys, self.day)
+        self.market.settle_sells(allocations.execution, self.inventory)
         if self.maintenance is not None:
             self.maintenance.advance_day(allocations.execution, self.day)
 
@@ -1519,14 +1472,8 @@ class Simulation:
         # only amounts authorized from the start-of-tick allocation and cannot
         # admit arriving Cargo to Inventory until the next boundary.
         self.transport.advance_fleet_relocations(allocations.resources, self.day)
-        self.logistics.advance_external_procurement(
-            self.day, allocations.procurement, allocations.funds
-        )
         return self.logistics.advance_capacity_logistics(
-            self.day,
-            allocations.logistics,
-            allocations.funds,
-            allocations.transport,
+            self.day, allocations.logistics, allocations.transport
         )
 
     def _settle_tick_state_transitions(self, allocations: TickAllocations) -> None:

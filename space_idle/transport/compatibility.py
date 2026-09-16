@@ -225,59 +225,6 @@ class TransportCompatibilityMixin:
             plan, self.vehicle_defs[vehicle_definition_id].performance, day
         )
 
-    def service_movement_failures(
-        self, movement_plan_id: MovementPlanId, service_id: DefinitionId, day: int = 0
-    ) -> tuple[str, ...]:
-        plan = self.movement_plan(movement_plan_id)
-        if plan is None:
-            return (f"movement_plan:{movement_plan_id}:unknown",)
-        service = self.external_services[service_id]
-        failures = list(
-            self.performance_movement_failures(
-                plan,
-                service.performance,
-                day,
-                transit_multiplier=service.transit_time_multiplier,
-            )
-        )
-        for prefix, endpoint, requirements in (
-            ("origin", plan.origin, service.origin_requirements),
-            ("destination", plan.destination, service.destination_requirements),
-        ):
-            try:
-                resolved = resolve_movement_endpoint(endpoint, self.facilities)
-            except ValueError as exc:
-                failures.append(f"{prefix}:endpoint:{exc}")
-                continue
-            if endpoint.operational_node_id is None:
-                for failure in evaluate_physical_site_requirements(
-                    requirements, resolved.environment_context_id, day, self.facilities.environment
-                ):
-                    failures.append(f"{prefix}:{failure.code}:{failure.detail}")
-                for requirement in requirements.capability_requirements:
-                    failures.append(
-                        f"{prefix}:capability:{requirement.required_state.value.lower()}:"
-                        f"{requirement.capability_id}"
-                    )
-                for requirement in requirements.service_capacity_requirements:
-                    if requirement.minimum_rate > 1e-9:
-                        failures.append(
-                            f"{prefix}:service_capacity:available:"
-                            f"{requirement.service_type}:0/{requirement.minimum_rate:g}"
-                        )
-            else:
-                for failure in evaluate_site_requirements(
-                    requirements,
-                    endpoint.node_id,
-                    day,
-                    self.facilities.environment,
-                    self.facilities,
-                    None,
-                    environment_context_id=resolved.environment_context_id,
-                ):
-                    failures.append(f"{prefix}:{failure.code}:{failure.detail}")
-        return tuple(failures)
-
     def _has_active_capability(
         self,
         location_id: SpatialNodeId,

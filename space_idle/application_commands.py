@@ -27,13 +27,13 @@ from .app_contracts.logistics import (
 )
 from .app_contracts.contracts import AcceptContract, DeclineContract
 from .app_contracts.economy import (
-    CreateExternalServicePolicy, DeleteExternalServicePolicy, SetExternalServicePolicy,
+    CancelTradeOrder, CreateTradeOrder, UpdateTradeOrder,
 )
 from .app_contracts.queries import (
     GetCatalog, GetWorld, GetSurfaceMap, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetBottlenecks, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetMovementPlans, GetFleet,
     GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions,
-    GetResearch, GetScientificExplorations, GetSurveys, GetContracts, GetExternalEconomy,
+    GetResearch, GetScientificExplorations, GetSurveys, GetContracts, GetMarket,
 )
 
 Command: TypeAlias = (
@@ -48,14 +48,13 @@ Command: TypeAlias = (
     CreateTransportAllocation | UpdateTransportAllocation | ChangeTransportAllocationMode |
     PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |
     SetTargetStock | DeleteTargetStock | SetSupplyPolicy | DeleteSupplyPolicy | AcceptContract |
-    DeclineContract | CreateExternalServicePolicy | SetExternalServicePolicy |
-    DeleteExternalServicePolicy | AdvanceTime
+    DeclineContract | CreateTradeOrder | UpdateTradeOrder | CancelTradeOrder | AdvanceTime
 )
 Query: TypeAlias = (
     GetCatalog | GetWorld | GetSurfaceMap | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetBottlenecks | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetMovementPlans | GetFleet |
     GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions |
-    GetResearch | GetScientificExplorations | GetSurveys | GetContracts | GetExternalEconomy
+    GetResearch | GetScientificExplorations | GetSurveys | GetContracts | GetMarket
 )
 
 __all__ = [name for name in globals() if not name.startswith('_') and name not in {'TypeAlias'}]

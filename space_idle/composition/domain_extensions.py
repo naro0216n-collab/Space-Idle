@@ -5,7 +5,7 @@ from ..construction.domain import DOMAIN_EXTENSION as CONSTRUCTION_EXTENSION
 from ..core_domain import DOMAIN_EXTENSION as CORE_EXTENSION
 from ..domain import DomainExtension
 from ..facilities_domain import DOMAIN_EXTENSION as FACILITIES_EXTENSION
-from ..external_economy_domain import DOMAIN_EXTENSION as EXTERNAL_ECONOMY_EXTENSION
+from ..market_domain import DOMAIN_EXTENSION as MARKET_EXTENSION
 from ..founding_domain import DOMAIN_EXTENSION as FOUNDING_EXTENSION
 from ..inventory_domain import DOMAIN_EXTENSION as INVENTORY_EXTENSION
 from ..production.domain import DOMAIN_EXTENSION as PRODUCTION_EXTENSION
@@ -22,7 +22,7 @@ BASE_DOMAIN_EXTENSIONS: tuple[DomainExtension, ...] = (
     CORE_EXTENSION,
     SPATIAL_EXTENSION,
     TECHNOLOGY_EXTENSION,
-    EXTERNAL_ECONOMY_EXTENSION,
+    MARKET_EXTENSION,
     FACILITIES_EXTENSION,
     INVENTORY_EXTENSION,
     STORAGE_EXTENSION,

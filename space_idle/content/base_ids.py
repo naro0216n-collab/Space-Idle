@@ -137,11 +137,6 @@ REUSABLE_ORBITAL_CARGO_TUG = DefinitionId("base.vehicle.reusable_orbital_cargo_t
 REUSABLE_SURFACE_CARGO_LANDER = DefinitionId("base.vehicle.reusable_surface_cargo_lander")
 SURFACE_CARGO_HAULER = DefinitionId("base.vehicle.surface_cargo_hauler")
 
-EARTH_LEO_LAUNCH_SERVICE = DefinitionId("base.transport_service.commercial_earth_launch")
-LEO_LUNAR_SERVICE = DefinitionId("base.transport_service.commercial_orbital_transfer")
-LUNAR_LANDING_SERVICE = DefinitionId("base.transport_service.commercial_vacuum_lander")
-DIRECT_LUNAR_SERVICE = DefinitionId("base.transport_service.commercial_earth_lunar_direct")
-EARTH_INDUSTRIAL_MARKET = DefinitionId("base.procurement_service.earth_industrial_market")
 
 # Scientific Exploration campaigns are finite science activities, separate from resource survey.
 CISLUNAR_SCIENCE_EXPLORATION = DefinitionId("base.scientific_exploration.cislunar_environment_observation")

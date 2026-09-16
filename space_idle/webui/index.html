@@ -83,7 +83,7 @@
           <section class="card"><div class="card-heading"><h3>Transport Allocation</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Vehicle Production</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Cargo Flow</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>External Service Policy / Funds</h3><span id="externalFundsBadge" class="badge"></span></div><div id="externalEconomyPanel"></div></section>
+          <section class="card"><div class="card-heading"><h3>External Resource Market / Funds</h3><span id="marketFundsBadge" class="badge"></span></div><div id="marketPanel"></div></section>
         </div>
       </section>
 
@@ -99,7 +99,7 @@
         <label>需要地<select id="supplyPolicyDestination" required></select></label>
         <label>資源<select id="supplyPolicyResource" required></select></label>
         <label>優先供給元<select id="supplyPolicySource"><option value="">自動選択</option></select></label>
-        <label>経路方針<select id="supplyPolicyPathPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
+        <label>経路方針<select id="supplyPolicyPathPolicy"><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label>
         <div class="cell-sub">供給方針はsource/pathのPlayer Policyです。Transport CapacityやFleet配備量は変更しません。</div>
         <div class="dialog-actions"><button type="button" class="secondary" id="supplyPolicyCancelButton">取消</button><button type="submit" class="primary">方針を保存</button></div>
       </form>
@@ -121,7 +121,7 @@
         <div class="field-pair"><label>Vehicle type<div id="relocationVehicle" class="cell-main">—</div></label><label>出発地<div id="relocationSource" class="cell-main">—</div></label></div>
         <div class="cell-sub">現在free: <span id="relocationFree">0</span> unit。移動中はsource Fleetとして拘束され、到着時にdestination Poolへ移ります。</div>
         <label>到着地<select id="relocationDestination" required></select></label>
-        <div class="field-pair"><label>移動unit数<input id="relocationUnits" type="number" min="1" step="1" value="1" required></label><label>経路方針<select id="relocationPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label></div>
+        <div class="field-pair"><label>移動unit数<input id="relocationUnits" type="number" min="1" step="1" value="1" required></label><label>経路方針<select id="relocationPolicy"><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label></div>
         <div id="relocationPreview" class="inspector-section"><div class="cell-sub">到着地・unit数・経路方針から移動計画を確認します。</div></div>
         <div class="dialog-actions"><button type="button" class="secondary" id="relocationCancelButton">取消</button><button type="submit" class="primary" id="relocationSubmitButton">移動開始</button></div>
       </form>
@@ -136,7 +136,7 @@
         <div class="field-pair"><label>Control mode<select id="allocationMode"><option value="units">UNITS</option><option value="capacity">CAPACITY</option></select></label><label>配備優先度<select id="allocationPriority" required><option value="1">1 最低</option><option value="2">2 低</option><option value="3" selected>3 標準</option><option value="4">4 高</option><option value="5">5 最高</option></select></label></div>
         <div id="allocationUnitsGroup"><label>Authoritative target units<input id="allocationUnits" type="number" min="0" step="1" value="1" required></label></div>
         <div id="allocationCapacityGroup" hidden><div class="field-pair"><label>Forward target (t/日)<input id="allocationForward" type="number" min="0" step="0.01" value="1"></label><label>Reverse target (t/日)<input id="allocationReverse" type="number" min="0" step="0.01" value="0"></label></div></div>
-        <label>経路方針<select id="allocationPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
+        <label>経路方針<select id="allocationPolicy"><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label>
         <div id="allocationServiceOptions" class="inspector-section"><div class="cell-sub">出発地と到着地からTransport Service候補を取得します。</div></div>
         <div class="cell-sub">UNITSではunit数だけ、CAPACITYでは方向別capacityだけが正本です。Fleet不足でもtargetは保持され、active / unfilledとして表示されます。</div>
         <div class="dialog-actions"><button type="button" class="secondary" id="allocationCancelButton">取消</button><button type="submit" class="primary">Allocation作成</button></div>

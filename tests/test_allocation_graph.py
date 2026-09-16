@@ -7,7 +7,6 @@ import pytest
 from space_idle import build_game_application
 from space_idle.allocation_graph import AllocationDependency, allocation_dependency_order
 from space_idle.simulation import (
-    ALLOCATION_FUNDS,
     ALLOCATION_LOGISTICS,
     ALLOCATION_MAINTENANCE,
     ALLOCATION_POWER,
@@ -47,7 +46,6 @@ def test_tick_allocation_graph_orders_cross_domain_and_service_dependencies():
     position = {node: index for index, node in enumerate(order)}
     dependencies = sim.tick_allocation_dependencies(service_types)
 
-    assert position[ALLOCATION_FUNDS] < position[ALLOCATION_LOGISTICS]
     assert position[ALLOCATION_LOGISTICS] < position[ALLOCATION_RESOURCES]
     assert position[ALLOCATION_RESOURCES] < position[ALLOCATION_MAINTENANCE]
     assert position[ALLOCATION_MAINTENANCE] < position[ALLOCATION_POWER]
@@ -63,7 +61,7 @@ def test_configuration_validation_rejects_cross_domain_allocation_cycle():
 
     def cyclic_dependencies(self, service_types):
         return original(service_types) + (
-            AllocationDependency(ALLOCATION_FUNDS, ALLOCATION_TRANSPORT),
+            AllocationDependency(ALLOCATION_LOGISTICS, ALLOCATION_TRANSPORT),
         )
 
     sim.tick_allocation_dependencies = MethodType(cyclic_dependencies, sim)

@@ -11,7 +11,6 @@ from .compatibility import TransportCompatibilityMixin
 from .fleet_allocations import FleetAllocationMixin
 from .executions import MovementExecutionMixin
 from .models import (
-    ExternalTransportServiceDef,
     FleetPool,
     FleetRelocation,
     FleetRelease,
@@ -46,7 +45,6 @@ class TransportService(
     facilities: FacilityBook
     power: PowerService
     vehicle_defs: dict[DefinitionId, VehicleDef] = field(default_factory=dict)
-    external_services: dict[DefinitionId, ExternalTransportServiceDef] = field(default_factory=dict)
     operation_registry: OperationEvaluatorRegistry = field(default_factory=build_default_operation_registry)
     surface_movement_rules: tuple[SurfaceTransportMovementRule, ...] = ()
     surface_access_movement_rules: tuple[SurfaceAccessMovementRule, ...] = ()
@@ -205,18 +203,6 @@ class TransportService(
         """Drop derived Movement Plan indexes after physical/spatial state changes."""
         self._movement_plan_cache.clear()
         self._movement_plan_options_cache = None
-
-    def external_transport_service_definition(
-        self, service_id: DefinitionId
-    ) -> ExternalTransportServiceDef | None:
-        """Return one immutable external Transport service definition."""
-        return self.external_services.get(service_id)
-
-    def external_transport_service_definitions(
-        self,
-    ) -> tuple[ExternalTransportServiceDef, ...]:
-        """Return immutable external Transport service definitions."""
-        return tuple(sorted(self.external_services.values(), key=lambda row: str(row.id)))
 
     def fleet_pool_keys(self) -> tuple[tuple[DefinitionId, SpatialNodeId], ...]:
         """Return Fleet pool identities without exposing the mutable pool container."""

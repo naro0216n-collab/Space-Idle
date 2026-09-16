@@ -23,7 +23,6 @@ class CargoServiceLeg:
     cycle_days: float
     allocation_id: EntityId | None = None
     direction: str | None = None
-    external_service_id: DefinitionId | None = None
 
     def __post_init__(self) -> None:
         if not self.service_identity:
@@ -38,8 +37,6 @@ class CargoServiceLeg:
             raise ValueError("cargo service leg allocation and direction must be paired")
         if self.direction not in (None, "forward", "reverse"):
             raise ValueError("cargo service leg direction must be forward or reverse")
-        if self.allocation_id is not None and self.external_service_id is not None:
-            raise ValueError("cargo service leg cannot be both owned and external")
 
 
 @dataclass

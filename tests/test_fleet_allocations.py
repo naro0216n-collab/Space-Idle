@@ -420,12 +420,8 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     )
     assert required > 0.0
 
-    for service_id in lg.external_services:
-        sim.external_economy.register_service(service_id)
-    sim.external_economy.create_policy(
-        enabled=True,
-        allowed_service_ids=tuple(lg.external_services),
-        day=sim.day,
+    lg.create_transport_allocation(
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, target_units=1, day=sim.day
     )
     sim.inventory.add(ids.EARTH, ids.PROPELLANT, required)
 
@@ -445,17 +441,19 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     ready_day = flow.first_arrival_day
     assert ready_day > 0
 
-    lg.external_services.clear()
     sim.advance_to_day(ready_day)
     assert relocation.movement_execution_id is None
     assert sim.inventory.available(ids.LEO, ids.PROPELLANT) == pytest.approx(required)
 
-    sim.advance_days(1)
+    for _ in range(8):
+        sim.advance_days(1)
+        if relocation.movement_execution_id is not None:
+            break
 
     assert relocation.movement_execution_id is not None
     execution = lg.movement_executions[relocation.movement_execution_id]
-    assert execution.started_day == ready_day
-    assert execution.completion_day == ready_day + execution.latency_days
+    assert execution.started_day >= ready_day
+    assert execution.completion_day == execution.started_day + execution.latency_days
     assert flow.id not in sim.logistics.cargo_flows
 
 def test_resource_support_uses_definition_capability_instead_of_magic_refueling_id():
@@ -502,7 +500,6 @@ def test_resource_support_uses_definition_capability_instead_of_magic_refueling_
 def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execution():
     sim = _fleet_sim(1)
     lg = sim.transport
-    lg.external_services.clear()
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)

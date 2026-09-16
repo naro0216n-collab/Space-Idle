@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .domain_extensions import BASE_DOMAIN_EXTENSIONS
 from ..contracts import ContractService
-from ..external_economy import ExternalEconomyState
+from ..market import FundsState, MarketService
 from ..facilities import FacilityBook
 from ..founding import LocationFoundingService
 from ..industry import IndustryService
@@ -13,7 +13,7 @@ from ..maintenance import FacilityMaintenanceService
 from ..power import PowerService
 from ..projects import ProjectService
 from ..research import ResearchService
-from ..shared import AccountState, EntityId
+from ..shared import EntityId
 from ..simulation import Simulation
 from ..storage import StorageService
 from ..surface_infrastructure import SurfaceInfrastructureService
@@ -36,7 +36,7 @@ from ..content.base_founding import build_founding_packages
 from ..content.base_industry import build_process_specs
 from ..content.base_initial_state import configure_initial_inventory
 from ..content.base_power import build_power_specs
-from ..content.base_procurement import build_external_procurement_services
+from ..content.base_market import build_market_interfaces, build_market_provider_definitions
 from ..content.base_progression import (
     build_extraction_specs,
     build_survey_providers,
@@ -50,7 +50,6 @@ from ..content.base_scientific_exploration import build_scientific_exploration_d
 from ..content.base_spatial import build_spatial_model
 from ..content.base_storage import build_storage_provider_specs
 from ..content.base_transport import (
-    build_external_transport_services,
     build_spaceflight_movement_rules,
     build_surface_access_movement_rules,
     build_surface_movement_rules,
@@ -74,11 +73,13 @@ def build_base_simulation() -> Simulation:
     inventory = InventoryBook()
     configure_initial_inventory(inventory)
 
-    # Funds are organization-level settlement state. External spending is
-    # authorized by explicit policy/allocation; base-game growth is not funded
-    # by passive income or automatically offered contracts.
-    account = AccountState(1800.0)
-    external_economy = ExternalEconomyState(account)
+    # Funds are organization-level External Resource Market settlement state.
+    # Phase 5 moves this initial balance and Market runtime state into Scenario Definition.
+    market = MarketService(FundsState(1800.0))
+    for provider in build_market_provider_definitions().values():
+        market.initialize_provider(provider, day=0)
+    for interface in build_market_interfaces():
+        market.set_interface(interface)
     technology = TechnologyState()
     power = PowerService(build_power_specs(), environment)
 
@@ -91,9 +92,6 @@ def build_base_simulation() -> Simulation:
         spaceflight_movement_rules=build_spaceflight_movement_rules(),
         technology_state=technology,
     )
-    transport.external_services.update(build_external_transport_services())
-    for service_id in transport.external_services:
-        external_economy.register_service(service_id)
     transport.vehicle_defs.update(build_vehicle_definitions())
     for vehicle_definition_id, count, location_id in initial_vehicle_deployments():
         transport.add_fleet_units(vehicle_definition_id, count, location_id)
@@ -101,12 +99,8 @@ def build_base_simulation() -> Simulation:
     logistics = LogisticsService(
         transport=transport,
         inventory=inventory,
-        external_economy=external_economy,
         facilities=facilities,
     )
-    logistics.procurement_services.update(build_external_procurement_services())
-    for service_id in logistics.procurement_services:
-        external_economy.register_service(service_id)
 
     industry = IndustryService(build_process_specs())
 
@@ -159,10 +153,10 @@ def build_base_simulation() -> Simulation:
 
     # Keep the Contract Domain composed and available for future events,
     # collaboration, or scenario content. Base Game starts with no offers.
-    contracts = ContractService(build_contract_templates(), facilities, power, account)
+    contracts = ContractService(build_contract_templates(), facilities, power)
 
     sim = Simulation(
-        day=0, external_economy=external_economy, graph=graph, environment=environment, inventory=inventory,
+        day=0, market=market, graph=graph, environment=environment, inventory=inventory,
         facilities=facilities, power=power, storage=storage, industry=industry, transport=transport, logistics=logistics,
         projects=projects, technology=technology, founding=founding, contracts=contracts,
         research=research, survey=survey, extraction=extraction,

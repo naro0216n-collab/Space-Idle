@@ -98,29 +98,6 @@ class TransportSupplyMixin:
                     )
                 )
 
-        for service in sorted(self.external_services.values(), key=lambda row: str(row.id)):
-            if service.capacity_t_per_day <= 1e-12:
-                continue
-            for plan in self.movement_plan_options():
-                if self.service_movement_failures(plan.id, service.id, day):
-                    continue
-                supplies.append(
-                    TransportServiceSupply(
-                        key=f"external:{service.id}:{plan.id}",
-                        source_id=plan.origin_id,
-                        destination_id=plan.destination_id,
-                        capacity_t_per_day=service.capacity_t_per_day,
-                        latency_days=(latency := self.performance_movement_transit_days(
-                            plan,
-                            service.performance,
-                            transit_multiplier=service.transit_time_multiplier,
-                        )),
-                        cycle_days=max(1.0, float(latency)),
-                        movement_plan_path=(plan.id,),
-                        external_service_id=service.id,
-                        cost_musd_per_t=service.cost_musd_per_t,
-                    )
-                )
         return tuple(supplies)
 
     def transport_operation_dependencies(

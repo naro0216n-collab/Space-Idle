@@ -124,22 +124,26 @@ class ApplicationReportProjectorMixin:
             else:
                 external_outflow[dispatch.resource_id] += dispatch.amount_t
 
-        # External Procurement crosses the player-system boundary at a fixed
-        # Supply Endpoint. Authorized orders are this tick's external inflow;
-        # provider-side supply remains pipeline state until Inventory Admission.
-        projected_procurement_by_destination: dict[
-            tuple[object, SpatialNodeId], float
-        ] = defaultdict(float)
-        for order in decision.allocations.procurement.orders:
-            projected_procurement_by_destination[
-                (order.requirement.id, order.supply_node_id)
-            ] += order.amount_t
-            if order.supply_node_id in scope:
-                external_inflow[order.requirement.resource_id] += order.amount_t
+        # External Resource Market ownership remains visible through the same
+        # Resource-flow analytics. Unsettled Buy commitments are provider-owned
+        # inbound pipeline; executable Sell settlement is the external outflow.
+        for commitment in sim.market.buy_commitments.values():
+            interface = sim.market.interfaces.get(commitment.market_interface_id)
+            if interface is not None and interface.operational_node_id in scope:
+                imports_pipeline[commitment.resource_id] += commitment.remaining_quantity_t
 
-        for delivery in sim.logistics.external_supply_snapshots():
-            if delivery.supply_node_id in scope:
-                imports_pipeline[delivery.resource_id] += delivery.amount_t
+        for order in sim.market.orders.values():
+            if order.direction.value != "sell":
+                continue
+            interface = sim.market.interfaces.get(order.market_interface_id)
+            if interface is None or interface.operational_node_id not in scope:
+                continue
+            try:
+                amount = decision.allocations.execution.allocated(sim.market.sell_execution_id(order.id))
+            except KeyError:
+                amount = 0.0
+            if amount > 1e-12:
+                external_outflow[order.resource_id] += amount
 
         for flow in sim.logistics.cargo_flow_snapshots():
             source_inside = flow.source_id in scope
@@ -172,13 +176,7 @@ class ApplicationReportProjectorMixin:
             remaining = max(
                 0.0,
                 sim.logistics.requirement_remaining_t(requirement)
-                - sim.logistics.external_supply_pipeline_t(
-                    requirement.id, supply_node_id=requirement.destination_id
-                )
-                - projected_dispatch_by_requirement[requirement.id]
-                - projected_procurement_by_destination[
-                    (requirement.id, requirement.destination_id)
-                ],
+                - projected_dispatch_by_requirement[requirement.id],
             )
             if remaining <= 1e-12:
                 continue

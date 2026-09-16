@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from space_idle import (
-    AdvanceTime, CreateExternalServicePolicy, GetWorld,
+    AdvanceTime, GetWorld,
     build_game_application,
 )
 from space_idle.content.base_game import (
@@ -10,7 +10,6 @@ from space_idle.content.base_game import (
     REUSABLE_LAUNCH_VEHICLE,
     WATER,
     CONSTRUCTION_EQUIPMENT,
-    EARTH_LEO_LAUNCH_SERVICE,
 )
 
 
@@ -25,65 +24,37 @@ def test_time_progression_has_no_automatic_income():
     assert after.funds_musd == before.funds_musd
 
 
-def test_owned_transport_is_physical_while_external_transport_requires_policy_and_funds():
-    def configure_target(app, *, owned: bool):
-        sim = app._simulation
-        sim.inventory.stock[(LEO, CONSTRUCTION_EQUIPMENT)] = 0.0
-        sim.inventory.add(EARTH, CONSTRUCTION_EQUIPMENT, 2.0)
-        sim.logistics.set_supply_policy(
-            LEO, CONSTRUCTION_EQUIPMENT, preferred_source_id=EARTH
-        )
-        target_id = sim.logistics.set_target_stock(
-            LEO, CONSTRUCTION_EQUIPMENT, 1.0, 5
-        )
-        if owned:
-            sim.transport.external_services.clear()
-            sim.transport.create_transport_allocation(
-                REUSABLE_LAUNCH_VEHICLE,
-                EARTH,
-                LEO,
-                target_units=1,
-                day=sim.day,
-            )
-        else:
-            sim.transport.transport_allocations.clear()
-        return sim, target_id
-
-    owned = build_game_application()
-    owned_sim, owned_target = configure_target(owned, owned=True)
-    owned_before = owned.query(GetWorld()).funds_musd
-    owned_sim.advance_days(1)
-    assert owned.query(GetWorld()).funds_musd == owned_before
-    assert any(
-        row.owner_id == owned_target
-        for row in owned_sim.logistics.cargo_flows.values()
+def test_transport_requires_player_owned_capacity_and_never_spends_market_funds():
+    app = build_game_application()
+    sim = app._simulation
+    sim.inventory.stock[(LEO, CONSTRUCTION_EQUIPMENT)] = 0.0
+    sim.inventory.add(EARTH, CONSTRUCTION_EQUIPMENT, 2.0)
+    sim.logistics.set_supply_policy(
+        LEO, CONSTRUCTION_EQUIPMENT, preferred_source_id=EARTH
     )
+    target_id = sim.logistics.set_target_stock(
+        LEO, CONSTRUCTION_EQUIPMENT, 1.0, 5
+    )
+    sim.transport.transport_allocations.clear()
+    before = app.query(GetWorld()).funds_musd
 
-    commercial = build_game_application()
-    commercial_sim, commercial_target = configure_target(commercial, owned=False)
-    commercial_before = commercial.query(GetWorld()).funds_musd
-
-    commercial_sim.advance_days(1)
-    assert commercial.query(GetWorld()).funds_musd == commercial_before
+    sim.advance_days(1)
+    assert app.query(GetWorld()).funds_musd == before
     assert not [
-        row for row in commercial_sim.logistics.cargo_flows.values()
-        if row.owner_id == commercial_target
+        row for row in sim.logistics.cargo_flows.values()
+        if row.owner_id == target_id
     ]
 
-    commercial.execute(CreateExternalServicePolicy(
-        enabled=True,
-        allowed_service_ids=(str(EARTH_LEO_LAUNCH_SERVICE),),
-    ))
-    assert any(
-        row.requirement.owner_id == commercial_target and amount > 0.0
-        for row, amount in commercial_sim.tick_decision_projection().allocations.transport.executable_dispatches
+    sim.transport.create_transport_allocation(
+        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
     )
-    commercial_sim.advance_days(1)
-    assert commercial.query(GetWorld()).funds_musd < commercial_before
+    sim.advance_days(1)
+    assert app.query(GetWorld()).funds_musd == before
     assert any(
-        row.owner_id == commercial_target
-        for row in commercial_sim.logistics.cargo_flows.values()
+        row.owner_id == target_id
+        for row in sim.logistics.cargo_flows.values()
     )
+
 
 def test_extraction_stops_when_output_storage_service_is_full():
     app = build_game_application()

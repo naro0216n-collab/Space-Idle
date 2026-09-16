@@ -5,7 +5,7 @@
     revision:null, session:null, world:null, catalog:null, operationalNodeId:null, operationalNode:null,
     flow:null, dependencyAnalytics:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
-    fleet:null, transportAllocations:null, cargoFlows:null, externalEconomy:null,
+    fleet:null, transportAllocations:null, cargoFlows:null, market:null,
     selectedMovementPlanId:null, activeView:'operations', activeTab:'overview', inspector:null,
     busy:false, syncInFlight:null,
   };
@@ -21,7 +21,7 @@
   const definitionMaps = () => [
     state.catalog?.resources, state.catalog?.facilities, state.catalog?.vehicles,
     state.catalog?.operational_nodes, state.catalog?.processes, state.catalog?.research,
-    state.catalog?.movement_plans, state.catalog?.transport_services, state.catalog?.procurement_services,
+    state.catalog?.movement_plans,
   ].filter(Boolean).map(byId);
   const definitionName = (id) => {
     if(!id)return '—';
@@ -67,11 +67,12 @@
     text=text.replace(/endurance:([0-9.+-]+)\/([0-9.+-]+)/g,(_,required,available)=>`航続期間不足: ${required} / ${available} 日`);
     text=text.replace(/resource:([^:;]+):([^:;]+):([0-9.+-]+)\/([0-9.+-]+)/g,(_,locationId,resourceId,current,required)=>`${locationName(locationId)}の${resourceName(resourceId)}不足: ${current} / ${required} t`);
     text=text.replace(/relocation_path:(.+)/g,(_,detail)=>`移動経路不成立: ${detail}`);
-    text=text.replace(/external_policy_denied:([^;]+)/g,(_,id)=>`External Service Policy未許可: ${definitionName(id)}`);
-    text=text.replace(/external_spending_cap/g,'External Serviceの1 request支出上限');
-    text=text.replace(/external_period_budget/g,'External Serviceの期間予算不足');
-    text=text.replace(/external_minimum_reserve/g,'最低留保Fundsにより支出不可');
-    text=text.replace(/external_funds/g,'External Service用Funds不足');
+    text=text.replace(/market_interface_disabled/g,'Market Interface停止');
+    text=text.replace(/offer_unavailable/g,'Market offerなし');
+    text=text.replace(/price_condition/g,'価格条件外');
+    text=text.replace(/provider_supply/g,'Market Provider供給不足');
+    text=text.replace(/provider_demand/g,'Market Provider需要不足');
+    text=text.replace(/resource_not_at_market_interface/g,'Market Interfaceに売却対象Resourceなし');
     text=text.replace(/unmet_demand/g,'未充足需要');
     text=text.replace(/external_dependency/g,'外部依存');
     text=text.replace(/storage_over_capacity/g,'Usable Storage Capacity超過');
@@ -180,7 +181,7 @@
     state.session=data.session; state.world=data.world; state.globalIssues=data.global_issues;
     state.research=data.research; state.scientificExplorations=data.scientific_explorations; state.contracts=data.contracts; state.logisticsSummary=data.logistics_summary; state.logistics=data.logistics;
     state.movementPlans=data.movement_plans; state.fleet=data.fleet; state.transportAllocations=data.transport_allocations; state.cargoFlows=data.cargo_flows;
-    state.externalEconomy=data.external_economy??state.externalEconomy;
+    state.market=data.market??state.market;
     if(data.operational_node!==undefined)state.operationalNode=data.operational_node;
     if(data.flow!==undefined)state.flow=data.flow;
     if(data.dependency_analytics!==undefined)state.dependencyAnalytics=data.dependency_analytics;

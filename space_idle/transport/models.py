@@ -34,7 +34,6 @@ class OperationAssetDisposition(str, Enum):
 
 class PathPolicy(str, Enum):
     FASTEST = "fastest"
-    LOWEST_COST = "lowest_cost"
     LOWEST_PROPELLANT = "lowest_propellant"
 
 
@@ -285,8 +284,6 @@ class TransportServiceSupply:
     movement_plan_path: tuple[MovementPlanId, ...]
     allocation_id: EntityId | None = None
     direction: str | None = None
-    external_service_id: DefinitionId | None = None
-    cost_musd_per_t: float = 0.0
     propellant_t_per_t: float = 0.0
 
     def __post_init__(self) -> None:
@@ -302,8 +299,8 @@ class TransportServiceSupply:
             raise ValueError("owned transport supply requires allocation and direction together")
         if self.direction not in (None, "forward", "reverse"):
             raise ValueError("transport service supply direction must be forward or reverse")
-        if self.cost_musd_per_t < 0 or self.propellant_t_per_t < 0:
-            raise ValueError("transport service supply costs must be non-negative")
+        if self.propellant_t_per_t < 0:
+            raise ValueError("transport service supply propellant must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -721,16 +718,9 @@ class TransportPerformanceProfile:
 
 
 @dataclass(frozen=True)
-class VehicleEconomicsSpec:
-    operating_cost_musd_per_cycle: float = 0.0
-    operating_cost_musd_per_cargo_t: float = 0.0
-
-
-@dataclass(frozen=True)
 class VehicleProductionSpec:
     service_type: str | None = None
     days: float = 0.0
-    cost_musd: float = 0.0
     resources: tuple[tuple[DefinitionId, float], ...] = ()
     site_requirements: SiteRequirements = SiteRequirements()
 
@@ -739,7 +729,6 @@ class VehicleProductionSpec:
 class VehicleMaintenanceSpec:
     service_type: str | None = None
     turnaround_days: float = 0.0
-    cost_musd: float = 0.0
     resources: tuple[tuple[DefinitionId, float], ...] = ()
 
 
@@ -748,7 +737,6 @@ class VehicleDef:
     id: DefinitionId
     display_name: str
     performance: TransportPerformanceProfile
-    economics: VehicleEconomicsSpec = VehicleEconomicsSpec()
     production: VehicleProductionSpec = VehicleProductionSpec()
     maintenance: VehicleMaintenanceSpec = VehicleMaintenanceSpec()
 
@@ -773,23 +761,15 @@ class VehicleDef:
     @property
     def generic_capabilities(self) -> tuple[str, ...]: return self.performance.generic_capabilities
     @property
-    def operating_cost_musd_per_cycle(self) -> float: return self.economics.operating_cost_musd_per_cycle
-    @property
-    def operating_cost_musd_per_cargo_t(self) -> float: return self.economics.operating_cost_musd_per_cargo_t
-    @property
     def production_service_type(self) -> str | None: return self.production.service_type
     @property
     def production_days(self) -> float: return self.production.days
-    @property
-    def production_cost_musd(self) -> float: return self.production.cost_musd
     @property
     def production_resources(self) -> tuple[tuple[DefinitionId, float], ...]: return self.production.resources
     @property
     def turnaround_service_type(self) -> str | None: return self.maintenance.service_type
     @property
     def turnaround_days(self) -> float: return self.maintenance.turnaround_days
-    @property
-    def turnaround_cost_musd(self) -> float: return self.maintenance.cost_musd
     @property
     def turnaround_resources(self) -> tuple[tuple[DefinitionId, float], ...]: return self.maintenance.resources
 
@@ -816,15 +796,3 @@ class VehicleDef:
     def landing(self): return self.capability_for(LANDING)
     @property
     def atmospheric_entry(self): return self.capability_for(ATMOSPHERIC_ENTRY)
-
-
-@dataclass(frozen=True)
-class ExternalTransportServiceDef:
-    id: DefinitionId
-    display_name: str
-    capacity_t_per_day: float
-    cost_musd_per_t: float
-    performance: TransportPerformanceProfile
-    transit_time_multiplier: float = 1.0
-    origin_requirements: SiteRequirements = SiteRequirements()
-    destination_requirements: SiteRequirements = SiteRequirements()

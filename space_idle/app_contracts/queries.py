@@ -60,4 +60,4 @@ class GetSurveys: provider_operational_node_id: str | None = None
 @dataclass(frozen=True)
 class GetContracts: pass
 @dataclass(frozen=True)
-class GetExternalEconomy: pass
+class GetMarket: pass

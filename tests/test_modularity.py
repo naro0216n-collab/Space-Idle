@@ -38,7 +38,6 @@ def test_domain_authoritative_state_is_not_read_directly_across_domain_boundarie
     authoritative_state = {
         "transport": {
             "vehicle_defs",
-            "external_services",
             "fleet_pools",
             "fleet_reservations",
             "transport_allocations",
@@ -48,7 +47,7 @@ def test_domain_authoritative_state_is_not_read_directly_across_domain_boundarie
         },
         "logistics": {
             "target_stocks", "supply_policies", "cargo_flows", "arrival_waiting",
-            "handoff_staging", "external_supply_batches",
+            "handoff_staging",
         },
     }
     service_fields = {
@@ -94,7 +93,6 @@ def test_domain_authoritative_state_is_not_read_directly_across_domain_boundarie
                 (
                     "space_idle.logistics",
                     "space_idle.transport",
-                    "space_idle.external_economy",
                 )
             )
         )

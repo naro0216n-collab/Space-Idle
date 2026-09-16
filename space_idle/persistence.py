@@ -9,10 +9,11 @@ from typing import Any, Callable
 from .application import GameApplication
 from .application_commands import ApplicationError, SetTimeControl
 from .domain import validate_extension_registry
+from .execution_requirements import AllocationConstraintKey
 from .simulation import OfflineProgressPolicy, OfflineProgressResult
 
 
-SAVE_SCHEMA_VERSION = 46
+SAVE_SCHEMA_VERSION = 47
 
 
 class SaveFormatError(ValueError):
@@ -36,6 +37,10 @@ def capture_state(sim) -> dict[str, Any]:
     data: dict[str, Any] = {
         "day": sim.day,
         "pending_offline_game_days": sim.pending_offline_game_days,
+        "boundary_used_by_constraint": [
+            {"kind": key.kind, "scope_id": key.scope_id, "name": key.name, "amount": amount}
+            for key, amount in sim.boundary_capacity_usage_snapshot()
+        ],
     }
     for extension in _extensions(sim):
         codec = extension.state_codec
@@ -48,6 +53,17 @@ def restore_state(sim, data: dict[str, Any]) -> None:
     sim.day = int(data["day"])
     sim.restore_boundary_settled_day(sim.day)
     sim.pending_offline_game_days = float(data.get("pending_offline_game_days", 0.0))
+    try:
+        boundary_usage = tuple(
+            (
+                AllocationConstraintKey(str(row["kind"]), str(row["scope_id"]), str(row["name"])),
+                float(row["amount"]),
+            )
+            for row in data.get("boundary_used_by_constraint", [])
+        )
+        sim.restore_boundary_capacity_usage(boundary_usage)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SaveFormatError(f"invalid boundary capacity usage: {exc}") from exc
     for extension in _extensions(sim):
         codec = extension.state_codec
         if codec is None:

@@ -20,7 +20,7 @@
   const kv=(rows)=>`<dl class="kv-grid">${rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
   const capText=(c)=>c?`${fmt(c.forward_t_per_day,2)} / ${fmt(c.reverse_t_per_day,2)} t/日`:'—';
   const infrastructureText=(rows)=>{const items=rows||[];return items.length?items.map((r)=>`${locationName(r.operational_node_id)}: ${capabilityName(r.capability_id)} (${r.required_state==='ACTIVE'?'Active':'Installed'})`).join(' / '):'追加Capability要件なし';};
-  const policyLabels={fastest:'最速',lowest_cost:'最低コスト',lowest_propellant:'推進剤最少'};
+  const policyLabels={fastest:'最速',lowest_propellant:'推進剤最少'};
   const policyLabel=(value)=>policyLabels[value]||value;
   const pathText=(path)=>{const rows=path||[];return rows.length?rows.map((id)=>definitionName(id)).join(' → '):'—';};
   const relocationKey=(destination,units,policy)=>`${destination}\u001f${units}\u001f${policy}`;
@@ -174,40 +174,59 @@
     $('#vehicleProductionTable').innerHTML=`<table><thead><tr><th>建造中</th><th>進捗</th><th>状態</th><th>優先度</th><th>blocker</th><th>操作</th></tr></thead><tbody>${projectRows||'<tr><td colspan="6">建造中Vehicleなし</td></tr>'}</tbody></table><table><thead><tr><th>建造候補</th><th>期間</th><th>必要資源</th><th>優先度</th><th>blocker</th><th>操作</th></tr></thead><tbody>${optionRows||'<tr><td colspan="6">建造候補なし</td></tr>'}</tbody></table>`;
   }
 
-  function externalServiceDefinitions(){
-    return [...(state.catalog?.transport_services||[]), ...(state.catalog?.procurement_services||[])];
-  }
-  function externalServiceOptions(selected=[]){
-    const chosen=new Set(selected||[]);
-    return externalServiceDefinitions().map((service)=>`<label class="cell-sub"><input type="checkbox" data-policy-service="${esc(service.id)}" ${chosen.has(service.id)?'checked':''}> ${esc(service.display_name)} · ${esc(service.id)}</label>`).join('');
-  }
   function numberOrNull(input){const raw=input?.value?.trim();return raw===''?null:Number(raw);}
-  function renderExternalEconomy(){
-    const economy=state.externalEconomy;if(!economy)return;
-    $('#externalFundsBadge').textContent=`$${fmt(economy.funds_musd,2)}M`;
-    const auth=(economy.authorizations||[]);
-    const authRows=auth.map((row)=>`<tr><td>${esc(definitionName(row.service_id))}</td><td>${esc(ownerLabel(row.owner_kind))} · ${esc(row.owner_id)}</td><td>${fmt(row.requested_musd,2)}</td><td>${fmt(row.authorized_musd,2)}</td><td>${fmt(row.unmet_musd,2)}</td><td>${esc((row.limiting_factors||[]).join(' / ')||'—')}</td></tr>`).join('');
-    const policies=(economy.policies||[]).map((policy)=>`<div class="detail-card" data-external-policy-row="${esc(policy.id)}" data-policy-scope-kind="${esc(policy.scope_kind)}" data-policy-scope-id="${esc(policy.scope_id||'')}"><div class="mode-title"><span>${esc(policy.id)} · ${esc(policy.scope_kind)}${policy.scope_id?`:${esc(policy.scope_id)}`:''}</span><span class="badge ${policy.enabled?'ok':'warn'}">${policy.enabled?'許可':'停止'}</span></div><label class="cell-sub"><input type="checkbox" data-policy-enabled ${policy.enabled?'checked':''}> External Serviceを許可</label><div class="action-stack" data-policy-services>${externalServiceOptions(policy.allowed_service_ids)}</div>${kv([
-      ['1 request上限',`<input data-policy-cap type="number" min="0" step="0.01" value="${policy.spending_cap_musd==null?'':esc(policy.spending_cap_musd)}" placeholder="制限なし"> M`],
-      ['期間予算',`<input data-policy-budget type="number" min="0" step="0.01" value="${policy.period_budget_musd==null?'':esc(policy.period_budget_musd)}" placeholder="制限なし"> M / <input data-policy-period type="number" min="1" step="1" value="${esc(policy.period_days)}" style="width:5em">日`],
-      ['最低留保Funds',`<input data-policy-reserve type="number" min="0" step="0.01" value="${esc(policy.minimum_reserve_musd)}"> M`],
-      ['期間消費 / 残額',`${fmt(policy.spent_in_period_musd,2)} / ${policy.remaining_period_budget_musd==null?'∞':fmt(policy.remaining_period_budget_musd,2)} M`],
-    ])}<div class="action-row"><button type="button" data-policy-save="${esc(policy.id)}">設定適用</button><button type="button" class="danger-button" data-policy-delete="${esc(policy.id)}">削除</button></div></div>`).join('');
-    const noPolicy=(economy.policies||[]).length?'':'<div class="issue"><div class="issue-title">Policy未設定: External Serviceはdefault-denyです。Owned Fleetはこの設定に依存しません。</div></div>';
-    $('#externalEconomyPanel').innerHTML=`<div style="padding:8px">${kv([['現在Funds',`$${fmt(economy.funds_musd,2)}M`],['前tick External支出',`$${fmt(economy.last_tick_spent_musd,2)}M`]])}${noPolicy}${policies}<div class="detail-card" data-new-external-policy><div class="mode-title"><span>Global Policyを追加</span></div><label class="cell-sub"><input type="checkbox" data-policy-enabled checked> External Serviceを許可</label><div class="action-stack" data-policy-services>${externalServiceOptions()}</div>${kv([['1 request上限','<input data-policy-cap type="number" min="0" step="0.01" placeholder="制限なし"> M'],['期間予算','<input data-policy-budget type="number" min="0" step="0.01" placeholder="制限なし"> M / <input data-policy-period type="number" min="1" step="1" value="30" style="width:5em">日'],['最低留保Funds','<input data-policy-reserve type="number" min="0" step="0.01" value="0"> M']])}<button type="button" class="primary" data-policy-create>Policy作成</button></div><h4>当tick Spending Authorization</h4><div class="table-wrap"><table><thead><tr><th>Service</th><th>対象</th><th>requested M</th><th>authorized M</th><th>unmet M</th><th>limiting factor</th></tr></thead><tbody>${authRows||'<tr><td colspan="6">現在のExternal spending requestなし</td></tr>'}</tbody></table></div></div>`;
+  function marketOfferRows(){
+    return (state.market?.interfaces||[]).flatMap((iface)=>(iface.offers||[]).map((offer)=>({iface,offer})));
   }
-  function policyPayload(root){
-    const services=[...root.querySelectorAll('[data-policy-service]:checked')].map((node)=>node.dataset.policyService);
-    return {enabled:Boolean(root.querySelector('[data-policy-enabled]')?.checked),allowed_service_ids:services,scope_kind:root.dataset.policyScopeKind||'global',scope_id:root.dataset.policyScopeId||null,spending_cap_musd:numberOrNull(root.querySelector('[data-policy-cap]')),period_budget_musd:numberOrNull(root.querySelector('[data-policy-budget]')),period_days:Number(root.querySelector('[data-policy-period]')?.value||30),minimum_reserve_musd:Number(root.querySelector('[data-policy-reserve]')?.value||0)};
+  function marketResourceOptions(){
+    const seen=new Set();const rows=[];
+    for(const {offer} of marketOfferRows()){
+      if(seen.has(offer.resource_id))continue;seen.add(offer.resource_id);
+      rows.push(`<option value="${esc(offer.resource_id)}">${esc(resourceName(offer.resource_id))}</option>`);
+    }
+    return rows.join('');
+  }
+  function marketInterfaceOptions(){
+    return (state.market?.interfaces||[]).map((row)=>`<option value="${esc(row.id)}">${esc(row.provider_name)} · ${esc(locationName(row.operational_node_id))}</option>`).join('');
+  }
+  function marketTargetFields(prefix,mode,quantity,rate){
+    const q=quantity==null?'':quantity,r=rate==null?'':rate;
+    return `<select data-market-mode data-draft-key="${prefix}:mode"><option value="quantity" ${mode==='quantity'?'selected':''}>QUANTITY</option><option value="rate" ${mode==='rate'?'selected':''}>RATE / 日</option></select><input data-market-target type="number" min="0" step="0.01" value="${esc(mode==='rate'?r:q)}" data-draft-key="${prefix}:target">`;
+  }
+  function renderMarket(){
+    const market=state.market;if(!market)return;
+    $('#marketFundsBadge').textContent=`$${fmt(market.funds_available_musd,2)}M available`;
+    const offerRows=(market.interfaces||[]).flatMap((iface)=>(iface.offers||[]).map((offer)=>`<tr><td><div class="cell-main">${esc(iface.provider_name)}</div><div class="cell-sub">${esc(locationName(iface.operational_node_id))}${iface.enabled?'':' · 停止'}</div></td><td>${esc(resourceName(offer.resource_id))}</td><td>${offer.buy_price_musd_per_t==null?'—':`$${fmt(offer.buy_price_musd_per_t,2)}M/t`}<div class="cell-sub">供給 ${fmt(offer.provider_supply_available_t,2)} t</div></td><td>${offer.sell_price_musd_per_t==null?'—':`$${fmt(offer.sell_price_musd_per_t,2)}M/t`}<div class="cell-sub">需要 ${fmt(offer.provider_demand_available_t,2)} t</div></td></tr>`)).join('');
+    const orderRows=(market.orders||[]).map((row)=>{
+      const blockers=(row.blockers||[]).map(A.userFacingText);const limiting=(row.limiting_factors||[]).map(A.userFacingText);
+      const progress=row.direction==='sell'?`settled ${fmt(row.settled_quantity_t,2)} / presented ${fmt(row.presented_quantity_t,2)} / in-flight ${fmt(row.in_flight_quantity_t,2)}`:`settled ${fmt(row.settled_quantity_t,2)} / committed ${fmt(row.committed_quantity_t,2)}`;
+      return `<tr data-market-order-row="${esc(row.id)}"><td><div class="cell-main">${row.direction==='buy'?'Buy':'Sell'} ${esc(resourceName(row.resource_id))}</div><div class="cell-sub">${esc(row.id)} · ${esc(definitionName(row.market_interface_id))}</div></td><td>${row.current_offer_price_musd_per_t==null?'—':`$${fmt(row.current_offer_price_musd_per_t,2)}M/t`}<div class="cell-sub">条件 ${row.price_limit_musd_per_t==null?'なし':`$${fmt(row.price_limit_musd_per_t,2)}M/t`}</div></td><td>${marketTargetFields(`market:${esc(row.id)}`,row.control_mode,row.quantity_target_t,row.rate_target_t_per_day)}</td><td><select data-market-priority data-draft-key="market:${esc(row.id)}:priority">${priorityOptions(row.priority)}</select><input data-market-price type="number" min="0" step="0.01" value="${row.price_limit_musd_per_t==null?'':esc(row.price_limit_musd_per_t)}" placeholder="価格条件なし" data-draft-key="market:${esc(row.id)}:price"></td><td>${esc(progress)}${blockers.length?`<div class="cell-sub">blocker: ${esc(blockers.join(' / '))}</div>`:''}${limiting.length?`<div class="cell-sub">limiting: ${esc(limiting.join(' / '))}</div>`:''}</td><td><div class="action-row"><button type="button" data-market-save="${esc(row.id)}">設定適用</button><button type="button" class="danger-button" data-market-cancel="${esc(row.id)}">取消</button></div></td></tr>`;
+    }).join('');
+    const commitmentRows=(market.buy_commitments||[]).map((row)=>`<tr><td>${esc(resourceName(row.resource_id))}<div class="cell-sub">${esc(row.id)} / ${esc(row.order_id)}</div></td><td>${fmt(row.remaining_quantity_t,2)} t</td><td>$${fmt(row.committed_price_musd_per_t,2)}M/t</td><td>$${fmt(row.reserved_funds_musd,2)}M</td><td>Day ${fmt(row.maturity_day,0)}</td><td>${esc((row.blockers||[]).map(A.userFacingText).join(' / ')||'なし')}</td></tr>`).join('');
+    const canCreate=(market.interfaces||[]).length&&marketOfferRows().length;
+    const createCard=`<div class="detail-card" data-new-market-order><div class="mode-title"><span>Trade Order作成</span></div>${kv([
+      ['Market Interface',`<select data-market-interface data-draft-key="market:new:interface">${marketInterfaceOptions()}</select>`],
+      ['Direction','<select data-market-direction data-draft-key="market:new:direction"><option value="buy">Buy</option><option value="sell">Sell</option></select>'],
+      ['Resource',`<select data-market-resource data-draft-key="market:new:resource">${marketResourceOptions()}</select>`],
+      ['Control',marketTargetFields('market:new','quantity',0,null)],
+      ['Priority',`<select data-market-priority data-draft-key="market:new:priority">${priorityOptions(3)}</select>`],
+      ['Price condition','<input data-market-price type="number" min="0" step="0.01" placeholder="Buy上限 / Sell下限" data-draft-key="market:new:price">'],
+    ])}<button type="button" class="primary" data-market-create ${canCreate?'':'disabled'}>Trade Order作成</button></div>`;
+    $('#marketPanel').innerHTML=`<div style="padding:8px">${kv([['Funds total',`$${fmt(market.funds_total_musd,2)}M`],['Funds available',`$${fmt(market.funds_available_musd,2)}M`]])}<h4>Market Offer / finite availability</h4><div class="table-wrap"><table><thead><tr><th>Provider / Interface</th><th>Resource</th><th>Buy</th><th>Sell</th></tr></thead><tbody>${offerRows||'<tr><td colspan="4">利用可能Market offerなし</td></tr>'}</tbody></table></div><h4>Trade Order</h4><div class="table-wrap"><table><thead><tr><th>Order</th><th>Offer / 条件</th><th>Target</th><th>Priority / 価格</th><th>進捗 / blocker</th><th>操作</th></tr></thead><tbody>${orderRows||'<tr><td colspan="6">Trade Orderなし</td></tr>'}</tbody></table></div>${createCard}<h4>Buy Commitment</h4><div class="table-wrap"><table><thead><tr><th>Resource</th><th>未settle</th><th>commit価格</th><th>予約Funds</th><th>maturity</th><th>Admission blocker</th></tr></thead><tbody>${commitmentRows||'<tr><td colspan="6">Buy Commitmentなし</td></tr>'}</tbody></table></div></div>`;
+  }
+  function marketOrderPayload(root,{create=false}={}){
+    const mode=root.querySelector('[data-market-mode]')?.value||'quantity';
+    const target=Number(root.querySelector('[data-market-target]')?.value||0);
+    const payload={priority:Number(root.querySelector('[data-market-priority]')?.value||3),control_mode:mode,quantity_target_t:mode==='quantity'?target:null,rate_target_t_per_day:mode==='rate'?target:null,price_limit_musd_per_t:numberOrNull(root.querySelector('[data-market-price]'))};
+    if(create){payload.direction=root.querySelector('[data-market-direction]').value;payload.resource_id=root.querySelector('[data-market-resource]').value;payload.market_interface_id=root.querySelector('[data-market-interface]').value;}
+    return payload;
   }
 
   function renderCargoFlows(){
     const cargo=state.cargoFlows?.items||logistics().cargo_flows||[];
-    const procurement=logistics().external_supply_batches||[];
     $('#cargoCountBadge').textContent=`${cargo.length}件`;
     const cargoRows=cargo.map((f)=>`<tr><td><div class="cell-main">${esc(resourceName(f.resource_id))}</div><div class="cell-sub">${esc(ownerLabel(f.owner_kind))} · ${esc(f.owner_id)}</div></td><td>${esc(locationName(f.source_id))} → ${esc(locationName(f.destination_id))}</td><td>${fmt(f.amount_t)} t</td><td>${esc(f.status)}</td><td>Day ${fmt(f.departure_day,0)} → ${fmt(f.ready_day,0)}</td><td>${esc((f.service_ids||[]).map(definitionName).join(' → '))}</td><td>${esc((f.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')}</td></tr>`).join('');
-    const procurementRows=procurement.map((f)=>`<tr><td><div class="cell-main">${esc(resourceName(f.resource_id))}</div><div class="cell-sub">${esc(ownerLabel(f.owner_kind))} · ${esc(f.owner_id)}</div></td><td>${esc(locationName(f.supply_node_id))}</td><td>${fmt(f.amount_t)} t</td><td>${esc(f.status)}</td><td>Day ${fmt(f.order_day,0)} → ${fmt(f.available_day,0)}</td><td>${esc(definitionName(f.service_id))}</td><td>${esc((f.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')}</td></tr>`).join('');
-    $('#cargoTable').innerHTML=`<h4>Cargo Flow</h4><table><thead><tr><th>資源 / 発生元</th><th>区間</th><th>量</th><th>状態</th><th>dispatch / arrival</th><th>Service path</th><th>入庫blocker</th></tr></thead><tbody>${cargoRows||'<tr><td colspan="7">輸送中・到着待機Cargo Flowなし</td></tr>'}</tbody></table><h4>External Supply</h4><table><thead><tr><th>資源 / 用途</th><th>Supply Endpoint</th><th>量</th><th>状態</th><th>order / available</th><th>Provider</th><th>Admission blocker</th></tr></thead><tbody>${procurementRows||'<tr><td colspan="7">External Supply待機なし</td></tr>'}</tbody></table>`;
+    $('#cargoTable').innerHTML=`<table><thead><tr><th>資源 / 発生元</th><th>区間</th><th>量</th><th>状態</th><th>dispatch / arrival</th><th>Service path</th><th>入庫blocker</th></tr></thead><tbody>${cargoRows||'<tr><td colspan="7">輸送中・到着待機Cargo Flowなし</td></tr>'}</tbody></table>`;
   }
 
   function renderMovementPlanInspector(){
@@ -215,7 +234,7 @@
     if(!state.selectedMovementPlanId){title.textContent='Movement Planを選択';content.innerHTML='<div class="empty-state">左のMovement Planまたはネットワーク上の接続を選択してください。</div>';return;}
     const movementPlan=(state.movementPlans?.items||[]).find((row)=>row.id===state.selectedMovementPlanId);if(!movementPlan)return;
     title.textContent=movementPlan.display_name;
-    const modes=(movementPlan.modes||[]).map((m)=>`<div class="detail-card ${m.service_feasible?'is-usable':''}"><div class="mode-title"><span>${esc(m.display_name)}</span><span class="badge ${m.service_feasible?'ok':'warn'}">${m.service_feasible?'Service可':'阻害'}</span></div><div class="cell-sub">${m.kind==='external_service'?'外部Service':`Fleet total ${fmt(m.fleet_total_units,0)} / free ${fmt(m.fleet_free_units,0)}`} · nominal ${capText(m.nominal_capacity)} · cycle ${m.cycle_days==null?'—':fmt(m.cycle_days,1)+'日'}</div>${m.kind==='external_service'?'':`<div class="cell-sub">Infrastructure: ${esc(infrastructureText(m.infrastructure_requirements))}</div>`}${(m.blockers||[]).length?`<div class="issue-stack">${m.blockers.map((b)=>issueHtml(['transport',b])).join('')}</div>`:''}</div>`).join('');
+    const modes=(movementPlan.modes||[]).map((m)=>`<div class="detail-card ${m.service_feasible?'is-usable':''}"><div class="mode-title"><span>${esc(m.display_name)}</span><span class="badge ${m.service_feasible?'ok':'warn'}">${m.service_feasible?'Service可':'阻害'}</span></div><div class="cell-sub">Fleet total ${fmt(m.fleet_total_units,0)} / free ${fmt(m.fleet_free_units,0)} · nominal ${capText(m.nominal_capacity)} · cycle ${m.cycle_days==null?'—':fmt(m.cycle_days,1)+'日'}</div><div class="cell-sub">Infrastructure: ${esc(infrastructureText(m.infrastructure_requirements))}</div>${(m.blockers||[]).length?`<div class="issue-stack">${m.blockers.map((b)=>issueHtml(['transport',b])).join('')}</div>`:''}</div>`).join('');
     const endpointText=(endpoint)=>endpoint?`${locationName(endpoint.node_id)} · ${endpoint.locator_kind}:${endpoint.locator_id}${endpoint.surface_cell_id?` · cell ${endpoint.surface_cell_id}`:''}`:'—';
     const segmentRows=[['出発',esc(endpointText(movementPlan.origin_endpoint))],['到着',esc(endpointText(movementPlan.destination_endpoint))],['Movement条件',movementPlan.available?'成立':'不成立'],['Service成立',movementPlan.service_feasible_now?'はい':'いいえ']];
     if(movementPlan.same_body_surface&&movementPlan.distance_km!=null)segmentRows.push(['地表距離',`${fmt(movementPlan.distance_km,1)} km`]);else segmentRows.push(['基準日数',fmt(movementPlan.transit_days)]);
@@ -262,7 +281,7 @@
   function render(){
     if(!state.logisticsSummary||!state.movementPlans)return;const s=state.logisticsSummary;
     $('#logisticsSummary').innerHTML=[['Fleet',`${s.free_fleet_units}/${s.fleet_units} free`],['Allocation',`${s.allocation_count} · 未充足 ${s.unfilled_allocation_units}`],['Supply Policy',`${s.supply_policy_count}`],['Target Stock',`${s.target_stock_count}`],['Requirement',`${s.requirement_count}`],['待ち供給',`${fmt(s.queued_supply_t)} t`],['輸送中',`${fmt(s.in_transit_t)} t`],['到着待機',`${fmt(s.arrival_waiting_t)} t`]].map(metricHtml).join('');
-    populateLocationSelects();renderMovementPlanFilters();renderMovementPlanList();renderNetwork();renderSupplyPolicies();renderRequirements();renderFleet();renderAllocations();renderVehicleProduction();renderCargoFlows();renderExternalEconomy();renderMovementPlanInspector();
+    populateLocationSelects();renderMovementPlanFilters();renderMovementPlanList();renderNetwork();renderSupplyPolicies();renderRequirements();renderFleet();renderAllocations();renderVehicleProduction();renderCargoFlows();renderMarket();renderMovementPlanInspector();
   }
 
   document.addEventListener('click',async(event)=>{
@@ -281,9 +300,9 @@
     const produce=event.target.closest('[data-produce-vehicle]');if(produce){const row=produce.closest('[data-production-option-row]');try{await command('ProduceVehicle',{vehicle_definition_id:produce.dataset.produceVehicle,operational_node_id:produce.dataset.productionLocation,priority:Number(row.querySelector('[data-production-priority-value]').value)});}catch{}return;}
     const productionToggle=event.target.closest('[data-production-toggle]');if(productionToggle){try{await command(productionToggle.dataset.paused==='1'?'ResumeVehicleProduction':'PauseVehicleProduction',{production_id:productionToggle.dataset.productionToggle});}catch{}return;}
     const productionSettings=event.target.closest('[data-production-settings]');if(productionSettings){const row=productionSettings.closest('[data-production-project-row]');try{await command('SetVehicleProductionSettings',{production_id:productionSettings.dataset.productionSettings,priority:Number(row.querySelector('[data-production-priority-value]').value)});}catch{}return;}
-    const policyCreate=event.target.closest('[data-policy-create]');if(policyCreate){const root=policyCreate.closest('[data-new-external-policy]');try{await command('CreateExternalServicePolicy',policyPayload(root));}catch{}return;}
-    const policySave=event.target.closest('[data-policy-save]');if(policySave){const root=policySave.closest('[data-external-policy-row]');try{await command('SetExternalServicePolicy',{policy_id:policySave.dataset.policySave,...policyPayload(root)});}catch{}return;}
-    const policyDelete=event.target.closest('[data-policy-delete]');if(policyDelete){try{await command('DeleteExternalServicePolicy',{policy_id:policyDelete.dataset.policyDelete});}catch{}return;}
+    const marketCreate=event.target.closest('[data-market-create]');if(marketCreate){const root=marketCreate.closest('[data-new-market-order]');try{await command('CreateTradeOrder',marketOrderPayload(root,{create:true}));}catch{}return;}
+    const marketSave=event.target.closest('[data-market-save]');if(marketSave){const root=marketSave.closest('[data-market-order-row]');try{await command('UpdateTradeOrder',{order_id:marketSave.dataset.marketSave,...marketOrderPayload(root)});}catch{}return;}
+    const marketCancel=event.target.closest('[data-market-cancel]');if(marketCancel){try{await command('CancelTradeOrder',{order_id:marketCancel.dataset.marketCancel});}catch{}return;}
     const supplyDelete=event.target.closest('[data-supply-policy-delete]');if(supplyDelete){try{await command('DeleteSupplyPolicy',{destination_id:supplyDelete.dataset.supplyPolicyDelete,resource_id:supplyDelete.dataset.resourceId});}catch{}return;}
     const targetDelete=event.target.closest('[data-target-stock-delete]');if(targetDelete){try{await command('DeleteTargetStock',{destination_id:targetDelete.dataset.targetStockDelete,resource_id:targetDelete.dataset.resourceId});}catch{}return;}
   });

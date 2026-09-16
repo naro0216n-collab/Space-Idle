@@ -5,7 +5,7 @@ from enum import Enum
 
 from .facilities import FacilityBook
 from .power import PowerService, PowerSnapshot
-from .shared import AccountState, ContractId, DefinitionId, SpatialNodeId
+from .shared import ContractId, DefinitionId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
 
 
@@ -15,7 +15,6 @@ class CapabilityContractTemplate:
     display_name: str
     site_requirements: SiteRequirements
     duration_days: int
-    reward_musd: float
     target_operational_node_id: SpatialNodeId | None = None
 
 
@@ -44,7 +43,6 @@ class ContractService:
     templates: dict[DefinitionId, ContractTemplate]
     facilities: FacilityBook
     power: PowerService
-    account: AccountState
     contracts: dict[ContractId, ContractState] = field(default_factory=dict)
     _counter: int = 0
 
@@ -109,7 +107,6 @@ class ContractService:
                 template, day, power_by_location
             ):
                 state.status = ContractStatus.COMPLETED
-                self.account.earn(template.reward_musd)
                 continue
             if day > state.deadline_day:
                 state.status = ContractStatus.FAILED

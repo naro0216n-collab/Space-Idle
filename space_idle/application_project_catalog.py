@@ -9,9 +9,7 @@ from .application_catalog_core_sections import (
     project_resources,
 )
 from .application_catalog_transport_sections import (
-    project_procurement_services,
     project_movement_plans,
-    project_transport_services,
     project_vehicles,
 )
 from .application_views import CatalogView, OperationalNodeSummary, WorldView
@@ -29,8 +27,6 @@ class CatalogWorldProjectorMixin:
             project_processes(self),
             project_research(self),
             project_movement_plans(self),
-            project_transport_services(self),
-            project_procurement_services(self),
         )
 
     def _world_view(self) -> WorldView:
@@ -51,7 +47,7 @@ class CatalogWorldProjectorMixin:
         return WorldView(
             sim.content_id,
             sim.day,
-            sim.external_economy.account.funds_musd,
+            sim.market.funds.balance,
             tuple(operational_nodes),
         )
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from .domain import DomainExtension, StateCodec
-from .external_procurement import ExternalSupplyBatch, ExternalSupplyStatus
 from .logistics_models import (
     CargoArrivalWaiting,
     CargoFlowSegment,
@@ -25,9 +24,6 @@ def _capture_leg(leg: CargoServiceLeg) -> dict[str, Any]:
         "cycle_days": leg.cycle_days,
         "allocation_id": None if leg.allocation_id is None else str(leg.allocation_id),
         "direction": leg.direction,
-        "external_service_id": (
-            None if leg.external_service_id is None else str(leg.external_service_id)
-        ),
     }
 
 
@@ -42,11 +38,6 @@ def _restore_leg(row: dict[str, Any]) -> CargoServiceLeg:
             None if row.get("allocation_id") is None else EntityId(row["allocation_id"])
         ),
         direction=row.get("direction"),
-        external_service_id=(
-            None
-            if row.get("external_service_id") is None
-            else DefinitionId(row["external_service_id"])
-        ),
     )
 
 
@@ -56,7 +47,6 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
         "cargo_flow_counter": lg._cargo_flow_counter,
         "arrival_waiting_counter": lg._arrival_waiting_counter,
         "handoff_staging_counter": lg._handoff_staging_counter,
-        "external_supply_counter": lg._external_supply_counter,
         "cargo_flows": [
             {
                 "id": str(row.id),
@@ -110,22 +100,6 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
             }
             for row in sorted(lg.handoff_staging.values(), key=lambda row: str(row.id))
         ],
-        "external_supply_batches": [
-            {
-                "id": str(row.id),
-                "service_id": str(row.service_id),
-                "requirement_id": str(row.requirement_id),
-                "owner_kind": row.owner_kind,
-                "owner_id": str(row.owner_id),
-                "supply_node_id": str(row.supply_node_id),
-                "resource_id": str(row.resource_id),
-                "amount_t": row.amount_t,
-                "order_day": row.order_day,
-                "available_day": row.available_day,
-                "status": row.status.value,
-            }
-            for row in sorted(lg.external_supply_batches.values(), key=lambda row: str(row.id))
-        ],
         "target_stocks": [
             {
                 "id": str(row.id),
@@ -161,7 +135,6 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
     lg._cargo_flow_counter = int(data.get("cargo_flow_counter", 0))
     lg._arrival_waiting_counter = int(data.get("arrival_waiting_counter", 0))
     lg._handoff_staging_counter = int(data.get("handoff_staging_counter", 0))
-    lg._external_supply_counter = int(data.get("external_supply_counter", 0))
     lg.cargo_flows = {
         EntityId(row["id"]): CargoFlowSegment(
             id=EntityId(row["id"]),
@@ -214,22 +187,6 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             staged_day=int(row["staged_day"]),
         )
         for row in data.get("handoff_staging", [])
-    }
-    lg.external_supply_batches = {
-        EntityId(row["id"]): ExternalSupplyBatch(
-            EntityId(row["id"]),
-            DefinitionId(row["service_id"]),
-            EntityId(row["requirement_id"]),
-            row["owner_kind"],
-            EntityId(row["owner_id"]),
-            SpatialNodeId(row["supply_node_id"]),
-            DefinitionId(row["resource_id"]),
-            float(row["amount_t"]),
-            int(row["order_day"]),
-            int(row["available_day"]),
-            ExternalSupplyStatus(row.get("status", "ordered")),
-        )
-        for row in data.get("external_supply_batches", [])
     }
     lg.target_stocks = {
         EntityId(row["id"]): TargetStockPolicy(
@@ -322,17 +279,6 @@ def validate_logistics_runtime(sim: Any) -> None:
             abs(reserved - staging.amount_t) <= max(1e-9, staging.amount_t * 1e-8),
             f"handoff staging reservation mismatch: {staging_id}",
         )
-
-    for supply_id, supply in lg.external_supply_batches.items():
-        _require(supply_id == supply.id, f"external supply key mismatch: {supply_id}")
-        service = lg.procurement_services.get(supply.service_id)
-        _require(service is not None, f"external supply references unknown service: {supply_id}/{supply.service_id}")
-        _require(sim.graph.has_operational_node(supply.supply_node_id), f"external supply references unknown endpoint: {supply_id}/{supply.supply_node_id}")
-        if service is not None:
-            _require(supply.supply_node_id == service.supply_node_id, f"external supply endpoint does not match service: {supply_id}")
-            _require(service.unit_price_musd_per_t(supply.resource_id) is not None, f"external supply resource is not offered by service: {supply_id}/{supply.resource_id}")
-        _require(supply.amount_t > 0, f"external supply has non-positive amount: {supply_id}")
-        _require(supply.available_day > supply.order_day, f"external supply has non-positive lead time: {supply_id}")
 
     for policy_id, policy in lg.target_stocks.items():
         _require(policy_id == policy.id, f"target stock key mismatch: {policy_id}")

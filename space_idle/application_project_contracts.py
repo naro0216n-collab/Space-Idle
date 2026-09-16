@@ -56,7 +56,6 @@ class ContractProgressionProjectorMixin:
                     template.display_name,
                     state.status.value,
                     state.deadline_day,
-                    template.reward_musd,
                     target_operational_node_id,
                     blockers,
                 )

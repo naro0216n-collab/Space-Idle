@@ -6,7 +6,7 @@ from ..priority import (
     ActivityPriority, DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PROVISIONING_PRIORITY, ProvisioningPriority,
 )
 
-PathPolicyLiteral = Literal["fastest", "lowest_cost", "lowest_propellant"]
+PathPolicyLiteral = Literal["fastest", "lowest_propellant"]
 TransportControlModeLiteral = Literal["units", "capacity"]
 
 

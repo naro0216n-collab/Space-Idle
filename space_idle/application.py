@@ -16,8 +16,8 @@ from .application_commands import (
     SetFacilityActivityPriority, SetProjectImportSource, SetProjectPriority, SetProjectSourcingPolicy,
     SetResearchDemonstrationSite, SetResearchPrototypeSite, SetSurveyPriority,
     SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration, SetScientificExplorationPriority,
-    StartSurvey, UnassignExplorationFleet, UpdateTransportAllocation, AssignExplorationFleet, CreateExternalServicePolicy,
-    SetExternalServicePolicy, DeleteExternalServicePolicy, GetExternalEconomy,
+    StartSurvey, UnassignExplorationFleet, UpdateTransportAllocation, AssignExplorationFleet, CreateTradeOrder,
+    UpdateTradeOrder, CancelTradeOrder, GetMarket,
     SetTargetStock, DeleteTargetStock, SetSupplyPolicy, DeleteSupplyPolicy,
 )
 

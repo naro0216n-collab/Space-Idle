@@ -3,7 +3,6 @@ from __future__ import annotations
 from .application_transport_support import infrastructure_requirement_rows
 from .application_views import (
     CargoFlowRow, CargoFlowsView, DirectionalCapacityRow, FleetPoolRow,
-    ExternalSupplyRow,
     FleetRelocationPreviewView, FleetRelocationResourceRequirementRow,
     FleetRelocationRow, FleetReleaseRow, FleetView, TransportAllocationRow,
     TransportAllocationsView, VehicleProductionOptionRow, VehicleProductionRow,
@@ -222,31 +221,6 @@ class LogisticsStateProjectorMixin:
                 latency_days=next_leg.latency_days,
             ))
         return tuple(sorted(rows, key=lambda row: row.id))
-
-    def _external_supply_rows(self) -> tuple[ExternalSupplyRow, ...]:
-        sim = self._simulation
-        return tuple(
-            ExternalSupplyRow(
-                id=str(row.id),
-                service_id=str(row.service_id),
-                requirement_id=str(row.requirement_id),
-                owner_kind=row.owner_kind,
-                owner_id=str(row.owner_id),
-                supply_node_id=str(row.supply_node_id),
-                resource_id=str(row.resource_id),
-                amount_t=row.amount_t,
-                order_day=row.order_day,
-                available_day=row.available_day,
-                status=row.status.value,
-                admission_blockers=(
-                    sim.inventory.admission_state(row.supply_node_id, row.resource_id).blockers
-                    if row.status.value == "admission_waiting" else ()
-                ),
-            )
-            for row in sorted(
-                sim.logistics.external_supply_snapshots(), key=lambda row: str(row.id)
-            )
-        )
 
     def _vehicle_production_option_rows(self) -> tuple[VehicleProductionOptionRow, ...]:
         sim = self._simulation

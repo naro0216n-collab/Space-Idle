@@ -23,7 +23,6 @@ class LogisticsProjectorMixin(
             vehicle_production_options=self._vehicle_production_option_rows(),
             vehicle_production=self._vehicle_production_rows(),
             cargo_flows=self._cargo_flow_rows(),
-            external_supply_batches=self._external_supply_rows(),
             supply_policies=self._supply_policy_rows(),
             target_stocks=self._target_stock_rows(),
             requirements=self._requirement_rows(

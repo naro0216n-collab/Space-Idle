@@ -41,11 +41,7 @@ class SupplyPlanningProjectorMixin:
         rows: list[SupplyRequirementRow] = []
         for resolution in resolutions:
             requirement = resolution.requirement
-            cargo_pipeline = sim.logistics.cargo_flow_pipeline_t(requirement.id)
-            procurement_pipeline = sim.logistics.external_supply_pipeline_t(
-                requirement.id, supply_node_id=requirement.destination_id
-            )
-            pipeline_t = cargo_pipeline + procurement_pipeline
+            pipeline_t = sim.logistics.cargo_flow_pipeline_t(requirement.id)
             remaining_t = max(0.0, resolution.external_required_t - pipeline_t)
             options = sim.logistics.supply_planning_options(
                 requirement,
@@ -56,21 +52,7 @@ class SupplyPlanningProjectorMixin:
             runway = None if rate is None else runway_by_key.get(
                 (requirement.destination_id, requirement.resource_id), 0.0
             )
-            external_supply_days = [
-                row.available_day
-                for row in sim.logistics.external_supply_snapshots()
-                if row.requirement_id == requirement.id
-                and row.supply_node_id == requirement.destination_id
-            ]
-            arrivals = [
-                value
-                for value in (
-                    options.earliest_confirmed_arrival_day,
-                    min(external_supply_days) if external_supply_days else None,
-                )
-                if value is not None
-            ]
-            earliest = min(arrivals) if arrivals else None
+            earliest = options.earliest_confirmed_arrival_day
             gap = None
             if runway is not None and earliest is not None:
                 gap = max(0.0, float(earliest - sim.day) - runway)
