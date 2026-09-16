@@ -230,6 +230,11 @@ class MarketService:
     _order_counter: int = 0
     _commitment_counter: int = 0
 
+    def initialize_funds(self, balance_musd: float) -> None:
+        if self.funds.balance != 0.0 or self.buy_commitments:
+            raise ValueError("Funds state is already initialized")
+        self.funds = FundsState(balance_musd)
+
     @property
     def reserved_funds_musd(self) -> float:
         return sum(row.reserved_funds_musd for row in self.buy_commitments.values())
@@ -238,9 +243,18 @@ class MarketService:
     def available_funds_musd(self) -> float:
         return max(0.0, self.funds.balance - self.reserved_funds_musd)
 
-    def initialize_provider(self, definition: MarketProviderDef, *, day: int = 0) -> None:
+    def register_provider_definition(self, definition: MarketProviderDef) -> None:
+        if definition.id in self.provider_defs:
+            raise ValueError(f"duplicate market provider definition: {definition.id}")
         self.provider_defs[definition.id] = definition
-        self.provider_states[definition.id] = MarketProviderState(
+
+    def initialize_provider_state(self, provider_id: DefinitionId, *, day: int = 0) -> None:
+        if provider_id not in self.provider_defs:
+            raise KeyError(provider_id)
+        if provider_id in self.provider_states:
+            raise ValueError(f"market provider state already exists: {provider_id}")
+        definition = self.provider_defs[provider_id]
+        self.provider_states[provider_id] = MarketProviderState(
             definition.id,
             {row.resource_id: row.initial_t for row in definition.supply},
             {row.resource_id: row.initial_t for row in definition.demand},

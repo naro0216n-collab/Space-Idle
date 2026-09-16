@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..market import MarketAvailabilityDef, MarketInterfaceState, MarketProviderDef
+from ..market import MarketAvailabilityDef, MarketProviderDef
 from ..shared import DefinitionId, EntityId
 from . import base_ids as ids
 
@@ -43,7 +43,3 @@ def build_market_provider_definitions() -> dict[DefinitionId, MarketProviderDef]
         lead_time_days=2,
     )
     return {provider.id: provider}
-
-
-def build_market_interfaces() -> tuple[MarketInterfaceState, ...]:
-    return (MarketInterfaceState(EARTH_MARKET_INTERFACE, EARTH_MARKET_PROVIDER, ids.EARTH, True),)

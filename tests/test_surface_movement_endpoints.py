@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 from space_idle import GetMovementPlans, build_game_application
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.transport import (
     MovementEndpoint,
@@ -178,7 +179,7 @@ def test_movement_plan_is_rederived_after_save_load(tmp_path):
 
     path = tmp_path / "movement-plan.json"
     save_game(app, path)
-    loaded, _ = load_game(path, build_game_application)
+    loaded, _ = load_game(path, build_game_application_for_load)
     loaded_plan = _plan_between(loaded._simulation, a, b)
     assert loaded_plan.id == plan.id
     geometry = loaded._simulation.transport.movement_geometry(loaded_plan.id)

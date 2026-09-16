@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from space_idle import AdvanceTime, GetMovementPlans, GetWorld, build_game_application
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import GameRuntime
 from space_idle.content import base_ids as ids
 from space_idle.content.base_game import (
@@ -15,7 +16,8 @@ from space_idle.persistence import capture_state
 def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ticks(tmp_path):
     now = [100.0]
     runtime = GameRuntime(
-        factory=build_game_application,
+        new_game_factory=build_game_application,
+        load_factory=build_game_application_for_load,
         save_dir=tmp_path,
         offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=10.0),
         clock=lambda: now[0],
@@ -60,7 +62,8 @@ def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ti
 def test_runtime_clock_preserves_elapsed_wall_time_during_projection_work(tmp_path):
     now = [100.0]
     runtime = GameRuntime(
-        factory=build_game_application,
+        new_game_factory=build_game_application,
+        load_factory=build_game_application_for_load,
         save_dir=tmp_path,
         offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=10.0),
         clock=lambda: now[0],

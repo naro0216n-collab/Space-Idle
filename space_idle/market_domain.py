@@ -112,19 +112,20 @@ def restore_market(sim: Any, data: dict[str, Any]) -> None:
 
 def validate_configuration(sim: Any, _ctx) -> None:
     market = sim.market
-    _require(market.funds.balance >= 0.0, "negative initial market Funds")
     for provider_id, definition in market.provider_defs.items():
         _require(provider_id == definition.id, f"market provider definition key mismatch: {provider_id}")
-        _require(provider_id in market.provider_states, f"market provider lacks state: {provider_id}")
-    for interface_id, interface in market.interfaces.items():
-        _require(interface_id == interface.id, f"market interface key mismatch: {interface_id}")
-        _require(interface.provider_id in market.provider_defs, f"market interface references unknown provider: {interface_id}")
-        _require(sim.graph.has_operational_node(interface.operational_node_id), f"market interface references unknown Operational Node: {interface_id}")
 
 
 def validate_runtime(sim: Any) -> None:
     market = sim.market
     _require(isfinite(market.funds.balance) and market.funds.balance >= -1e-9, "invalid market Funds")
+    for interface_id, interface in market.interfaces.items():
+        _require(interface_id == interface.id, f"market interface key mismatch: {interface_id}")
+        _require(interface.provider_id in market.provider_defs, f"market interface references unknown provider: {interface_id}")
+        _require(
+            sim.graph.has_operational_node(interface.operational_node_id),
+            f"market interface references unknown Operational Node: {interface_id}",
+        )
     _require(
         market.reserved_funds_musd <= market.funds.balance + 1e-9,
         "market Buy commitments over-reserve Funds",

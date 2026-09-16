@@ -13,6 +13,7 @@ from space_idle import (
     RetireFleet,
     build_game_application,
 )
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.facilities import CapabilitySupply, FacilityDef, ServiceCapacitySupply
 from space_idle.site import (
@@ -104,7 +105,7 @@ def test_fleet_retirement_application_projection_and_save_load_preserve_commitme
 
     path = tmp_path / "retirement.json"
     save_game(app, path, saved_at=datetime(2026, 9, 17, tzinfo=timezone.utc))
-    loaded, offline = load_game(path, build_game_application)
+    loaded, offline = load_game(path, build_game_application_for_load)
     assert offline is None
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
     loaded_retirement = loaded._simulation.transport.fleet_retirements[EntityId(retirement_id)]

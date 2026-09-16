@@ -60,7 +60,7 @@ STATE_CODEC = StateCodec("facilities", capture_facilities, restore_facilities)
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
-    nodes = ctx.nodes
+    nodes = ctx.operational_nodes
     facility_defs = ctx.facility_defs
     for key, definition in facility_defs.items():
         _require(key == definition.id, f"facility definition key mismatch: {key}")

@@ -13,6 +13,7 @@ def validate_core_configuration(sim: Any, ctx: ValidationContext) -> None:
 
 
 def validate_core_runtime(sim: Any) -> None:
+    _require(sim.runtime_state_initialized, "runtime state has not been initialized")
     _require(sim.day >= 0, "negative simulation day")
     _require(
         sim.boundary_settled_day == sim.day,

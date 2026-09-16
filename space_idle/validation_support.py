@@ -57,7 +57,8 @@ def validate_site_requirements(
 
 @dataclass(frozen=True)
 class ValidationContext:
-    nodes: dict
+    spatial_nodes: dict
+    operational_nodes: dict
     facility_defs: dict
     known_capabilities: set[str]
     known_service_types: set[str]
@@ -83,6 +84,7 @@ class ValidationContext:
         if sim.survey is not None:
             service_types.add(sim.survey.SERVICE_TYPE)
         return cls(
+            sim.graph.nodes,
             sim.graph.operational_node_map(),
             sim.facilities.definitions,
             sim.facilities.capability_ids(),

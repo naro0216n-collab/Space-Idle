@@ -40,6 +40,14 @@ class GameApplication(ApplicationCommandMixin, ApplicationQueryMixin):
         return self._simulation.content_id
 
     @property
+    def world_definition_id(self) -> str:
+        return self._simulation.world_definition_id
+
+    @property
+    def scenario_id(self) -> str:
+        return self._simulation.scenario_id
+
+    @property
     def time_paused(self) -> bool:
         return self._time_paused
 

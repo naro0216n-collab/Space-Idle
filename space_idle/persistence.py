@@ -15,7 +15,7 @@ from .validation import validate_runtime_state
 from .validation_support import ConfigurationError
 
 
-SAVE_SCHEMA_VERSION = 50
+SAVE_SCHEMA_VERSION = 51
 
 
 class SaveFormatError(ValueError):
@@ -26,6 +26,8 @@ class SaveFormatError(ValueError):
 class SaveEnvelope:
     schema_version: int
     content_id: str
+    world_definition_id: str
+    scenario_id: str
     saved_at: str
     state: dict[str, Any]
 
@@ -73,6 +75,7 @@ def restore_state(sim, data: dict[str, Any]) -> None:
         if codec.key not in data:
             raise SaveFormatError(f"save state is missing domain section: {codec.key}")
         codec.restore(sim, data[codec.key])
+    sim.mark_runtime_state_initialized()
     sim.transport.invalidate_movement_plans()
     sim.refresh_storage()
 
@@ -113,14 +116,18 @@ def save_game(
     state = capture_state(app._simulation)
     state["application"] = _application_state(app)
     envelope = SaveEnvelope(
-        SAVE_SCHEMA_VERSION,
-        app.content_id,
-        timestamp.astimezone(timezone.utc).isoformat(),
-        state,
+        schema_version=SAVE_SCHEMA_VERSION,
+        content_id=app.content_id,
+        world_definition_id=app.world_definition_id,
+        scenario_id=app.scenario_id,
+        saved_at=timestamp.astimezone(timezone.utc).isoformat(),
+        state=state,
     )
     payload = {
         "schema_version": envelope.schema_version,
         "content_id": envelope.content_id,
+        "world_definition_id": envelope.world_definition_id,
+        "scenario_id": envelope.scenario_id,
         "saved_at": envelope.saved_at,
         "state": envelope.state,
     }
@@ -137,7 +144,10 @@ def _read_envelope(path: str | Path) -> SaveEnvelope:
         raise SaveFormatError(f"invalid save file: {exc}") from exc
     if not isinstance(raw, dict):
         raise SaveFormatError("save root must be an object")
-    required = {"schema_version", "content_id", "saved_at", "state"}
+    required = {
+        "schema_version", "content_id", "world_definition_id", "scenario_id",
+        "saved_at", "state",
+    }
     if not required.issubset(raw):
         raise SaveFormatError("save file is missing required fields")
     if raw["schema_version"] != SAVE_SCHEMA_VERSION:
@@ -147,25 +157,36 @@ def _read_envelope(path: str | Path) -> SaveEnvelope:
     if not isinstance(raw["state"], dict):
         raise SaveFormatError("save state must be an object")
     return SaveEnvelope(
-        int(raw["schema_version"]),
-        str(raw["content_id"]),
-        str(raw["saved_at"]),
-        raw["state"],
+        schema_version=int(raw["schema_version"]),
+        content_id=str(raw["content_id"]),
+        world_definition_id=str(raw["world_definition_id"]),
+        scenario_id=str(raw["scenario_id"]),
+        saved_at=str(raw["saved_at"]),
+        state=raw["state"],
     )
 
 
 def load_game(
     path: str | Path,
-    factory: Callable[[], GameApplication],
+    load_factory: Callable[[], GameApplication],
     *,
     now: datetime | None = None,
     offline_policy: OfflineProgressPolicy | None = None,
 ) -> tuple[GameApplication, OfflineProgressResult | None]:
     envelope = _read_envelope(path)
-    app = factory()
+    app = load_factory()
     if envelope.content_id != app.content_id:
         raise SaveFormatError(
             f"save content mismatch: {envelope.content_id} != {app.content_id}"
+        )
+    if envelope.world_definition_id != app.world_definition_id:
+        raise SaveFormatError(
+            "save world definition mismatch: "
+            f"{envelope.world_definition_id} != {app.world_definition_id}"
+        )
+    if envelope.scenario_id != app.scenario_id:
+        raise SaveFormatError(
+            f"save scenario mismatch: {envelope.scenario_id} != {app.scenario_id}"
         )
     try:
         restore_state(app._simulation, envelope.state)

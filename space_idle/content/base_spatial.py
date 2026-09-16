@@ -9,7 +9,6 @@ from ..spatial import (
     EnvironmentResolver,
     GravityField,
     IlluminationField,
-    OperationalNodeState,
     OrbitalField,
     SpatialGraph,
     SpatialNodeDef,
@@ -58,7 +57,10 @@ def _moon_cell(
     )
 
 
-def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
+BASE_WORLD_DEFINITION_ID = "base.world.sol"
+
+
+def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
     graph = SpatialGraph()
     graph.add_star_system(StarSystemDef(
         ids.SOL_SYSTEM,
@@ -202,14 +204,6 @@ def build_spatial_model() -> tuple[SpatialGraph, EnvironmentResolver]:
     for cell in earth_cells + moon_cells:
         graph.add_surface_cell(cell)
 
-    # Operational existence is explicit and separate from spatial context.
-    graph.add_operational_node(OperationalNodeState(ids.LEO))
-    graph.add_operational_node(OperationalNodeState(ids.LUNAR_ORBIT))
-
-    # Initial scenario Surface Location is mutable geography with a corresponding Operational Node.
-    graph.found_location(
-        ids.EARTH, "地球産業拠点", ids.EARTH_BODY, ids.EARTH_CELL_INDUSTRIAL
-    )
 
     facets = StaticFacetStore()
 

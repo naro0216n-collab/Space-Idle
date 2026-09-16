@@ -64,7 +64,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         )
         if template.target_operational_node_id is not None:
             _require(
-                template.target_operational_node_id in ctx.nodes,
+                template.target_operational_node_id in ctx.operational_nodes,
                 f"contract references unknown operational node: {template_id}",
             )
 

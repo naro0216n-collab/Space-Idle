@@ -5,6 +5,7 @@ import json
 from threading import Thread
 
 from space_idle import build_game_application
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
 
@@ -37,7 +38,7 @@ def _raw_request(port: int, path: str):
 
 
 def test_http_api_command_query_and_save_load_boundary(tmp_path):
-    runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
+    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     port = server.server_address[1]
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -86,7 +87,7 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         thread.join(timeout=5)
 
 def test_http_api_rejects_stale_command_revision(tmp_path):
-    runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
+    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0, cors_origins=("*",)))
     port = server.server_address[1]
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -115,7 +116,7 @@ def test_http_api_rejects_stale_command_revision(tmp_path):
 
 
 def test_static_webui_is_served_and_path_traversal_is_rejected(tmp_path):
-    runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
+    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     port = server.server_address[1]
     thread = Thread(target=server.serve_forever, daemon=True)

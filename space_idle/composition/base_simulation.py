@@ -32,56 +32,46 @@ from ..content.base_construction import (
     sourcing_wait_days,
 )
 from ..content.base_contracts import build_contract_templates
-from ..content.base_facilities import build_facility_definitions, initial_facility_placements, initial_facility_investments
+from ..content.base_facilities import build_facility_definitions
 from ..content.base_founding import build_founding_packages
 from ..content.base_industry import build_process_specs
-from ..content.base_initial_state import configure_initial_inventory
+from ..content.base_inventory import configure_inventory_definitions
 from ..content.base_power import build_power_specs
-from ..content.base_market import build_market_interfaces, build_market_provider_definitions
+from ..content.base_market import build_market_provider_definitions
 from ..content.base_progression import (
     build_extraction_specs,
     build_survey_providers,
     build_survey_targets,
-    initial_known_surface_resource_knowledge,
 )
 from ..content.base_research import (
     build_experience_contribution_rules, build_research_definitions, build_research_providers,
 )
 from ..content.base_scientific_exploration import build_scientific_exploration_definitions
-from ..content.base_spatial import build_spatial_model
+from ..content.base_spatial import BASE_WORLD_DEFINITION_ID, build_world_definition
 from ..content.base_storage import build_storage_provider_specs
 from ..content.base_transport import (
     build_spaceflight_movement_rules,
     build_surface_access_movement_rules,
     build_surface_movement_rules,
     build_vehicle_definitions,
-    initial_vehicle_deployments,
 )
 
 
 def build_base_simulation() -> Simulation:
-    """Compose the base-game domain services from content-owned definitions."""
-    graph, environment = build_spatial_model()
+    """Compose static base-game definitions with empty authoritative runtime State."""
+    graph, environment = build_world_definition()
 
     facility_definitions = build_facility_definitions()
     facilities = FacilityBook(facility_definitions, environment)
-    initial_investments = initial_facility_investments()
-    for facility_id, location_id, site_cell_id in initial_facility_placements():
-        facilities.install(
-            facility_id, location_id, site_cell_id=site_cell_id,
-            invested_resources=initial_investments.get(facility_id, {}),
-        )
 
     inventory = InventoryBook()
-    configure_initial_inventory(inventory)
+    configure_inventory_definitions(inventory)
 
-    # Funds are organization-level External Resource Market settlement state.
-    # Phase 5 moves this initial balance and Market runtime state into Scenario Definition.
-    market = MarketService(FundsState(1800.0))
+    # Provider offers are static Content. Funds, provider availability and
+    # Market Interfaces are Scenario-owned runtime State.
+    market = MarketService(FundsState(0.0))
     for provider in build_market_provider_definitions().values():
-        market.initialize_provider(provider, day=0)
-    for interface in build_market_interfaces():
-        market.set_interface(interface)
+        market.register_provider_definition(provider)
     technology = TechnologyState()
     power = PowerService(build_power_specs(), environment)
 
@@ -95,8 +85,6 @@ def build_base_simulation() -> Simulation:
         technology_state=technology,
     )
     transport.vehicle_defs.update(build_vehicle_definitions())
-    for vehicle_definition_id, count, location_id in initial_vehicle_deployments():
-        transport.add_fleet_units(vehicle_definition_id, count, location_id)
 
     logistics = LogisticsService(
         transport=transport,
@@ -108,8 +96,6 @@ def build_base_simulation() -> Simulation:
 
     surface_infrastructure = SurfaceInfrastructureService(graph, facilities)
     survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph)
-    for cell_id, resource_id in initial_known_surface_resource_knowledge():
-        survey.initialize_known(cell_id, resource_id)
 
     storage = StorageService(build_storage_provider_specs(), inventory, facilities)
 
@@ -169,10 +155,7 @@ def build_base_simulation() -> Simulation:
         scientific_exploration=scientific_exploration, maintenance=maintenance,
         surface_infrastructure=surface_infrastructure,
     )
-    # Establish the day-0 canonical Boundary before exposing the Simulation to
-    # Application/Query callers.
-    sim.prepare_player_command()
-    sim.refresh_storage()
     sim.content_id = "base_game.gameplay.v0.4.5"
+    sim.world_definition_id = BASE_WORLD_DEFINITION_ID
     sim.domain_extensions = BASE_DOMAIN_EXTENSIONS
     return sim

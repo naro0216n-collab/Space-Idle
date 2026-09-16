@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from space_idle import GetWorld, SetTimeControl, build_game_application
 from space_idle.api import GameRuntime
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.persistence import load_game, save_game
 from space_idle.simulation import OfflineProgressPolicy
 
@@ -19,7 +20,7 @@ def test_application_time_control_is_saved_and_controls_offline_progress(tmp_pat
 
     loaded, result = load_game(
         path,
-        build_game_application,
+        build_game_application_for_load,
         now=saved_at + timedelta(seconds=20),
         offline_policy=policy,
     )
@@ -33,7 +34,7 @@ def test_application_time_control_is_saved_and_controls_offline_progress(tmp_pat
     save_game(app, paused_path, saved_at=saved_at)
     paused, paused_result = load_game(
         paused_path,
-        build_game_application,
+        build_game_application_for_load,
         now=saved_at + timedelta(hours=1),
         offline_policy=policy,
     )
@@ -48,7 +49,8 @@ def test_runtime_load_uses_saved_timestamp_and_saved_application_time_control(tm
     monotonic_clock = [100.0]
     policy = OfflineProgressPolicy(real_seconds_per_game_day=10.0)
     runtime = GameRuntime(
-        factory=build_game_application,
+        new_game_factory=build_game_application,
+        load_factory=build_game_application_for_load,
         save_dir=tmp_path,
         offline_policy=policy,
         clock=lambda: monotonic_clock[0],

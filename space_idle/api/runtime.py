@@ -50,19 +50,21 @@ class GameRuntime:
     def __init__(
         self,
         *,
-        factory: Callable[[], GameApplication],
+        new_game_factory: Callable[[], GameApplication],
+        load_factory: Callable[[], GameApplication],
         save_dir: str | Path = "saves",
         offline_policy: OfflineProgressPolicy | None = None,
         clock: Callable[[], float] = monotonic,
         utcnow: Callable[[], datetime] = _utc_now,
     ) -> None:
-        self._factory = factory
+        self._new_game_factory = new_game_factory
+        self._load_factory = load_factory
         self._save_dir = Path(save_dir)
         self._offline_policy = offline_policy
         self._clock = clock
         self._utcnow = utcnow
         self._lock = RLock()
-        self._app = factory()
+        self._app = new_game_factory()
         self._revision = 0
         self._last_explicit_mutation_revision = 0
         self._last_clock = clock()
@@ -101,6 +103,8 @@ class GameRuntime:
             "revision": self._revision,
             "app_version": VERSION,
             "content_id": self._app.content_id,
+            "world_definition_id": self._app.world_definition_id,
+            "scenario_id": self._app.scenario_id,
             "day": world.day,
             "automatic_progress_enabled": self._offline_policy is not None,
             "offline_progress_enabled": self._offline_policy is not None,
@@ -185,7 +189,7 @@ class GameRuntime:
 
     def new_game(self) -> RuntimeResult:
         with self._lock:
-            self._app = self._factory()
+            self._app = self._new_game_factory()
             self._last_clock = self._clock()
             self._revision += 1
             self._last_explicit_mutation_revision = self._revision
@@ -223,7 +227,7 @@ class GameRuntime:
             policy = self._offline_policy if apply_offline else None
             app, offline_result = load_game(
                 path,
-                self._factory,
+                self._load_factory,
                 now=self._utcnow(),
                 offline_policy=policy,
             )

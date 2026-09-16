@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from space_idle import GetSurfaceMap, build_game_application
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
 from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId, StarSystemId, SurfaceCellId
@@ -136,7 +137,7 @@ def test_spatial_persistence_saves_authoritative_territory_not_derived_or_static
     assert "developed_cell_ids" in raw
     assert "owner_location_id" not in raw
 
-    loaded, _ = load_game(path, build_game_application)
+    loaded, _ = load_game(path, build_game_application_for_load)
     loaded_graph = loaded._simulation.graph
     assert loaded_graph.locations[ids.EARTH].developed_cell_ids == {
         ids.EARTH_CELL_INDUSTRIAL,

@@ -71,12 +71,3 @@ def build_extraction_specs() -> dict:
             req.VACUUM_SURFACE_SITE, "regolith_accessibility", "terrain_factor",
         ),
     }
-
-
-def initial_known_surface_resource_knowledge() -> tuple[tuple, ...]:
-    """Content-defined Surface Cell knowledge that is complete at game start."""
-    return tuple(
-        (cell_id, resource_id)
-        for cell_id in (ids.EARTH_CELL_INDUSTRIAL, ids.EARTH_CELL_COASTAL, ids.EARTH_CELL_INLAND)
-        for resource_id in (ids.AGGREGATE, ids.METAL_ORE, ids.WATER)
-    )

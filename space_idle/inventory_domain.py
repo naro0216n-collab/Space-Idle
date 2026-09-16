@@ -9,6 +9,13 @@ from .shared import DefinitionId, EntityId, SpatialNodeId
 
 def capture_inventory(sim: Any) -> dict[str, Any]:
     return {
+        "base_storage_capacity": [
+            {"operational_node_id": str(loc), "storage_class": storage_class, "amount": amount}
+            for (loc, storage_class), amount in sorted(
+                sim.inventory.base_storage_capacity_t.items(),
+                key=lambda x: (str(x[0][0]), x[0][1]),
+            )
+        ],
         "stock": [
             {"operational_node_id": str(loc), "resource_id": str(res), "amount": amount}
             for (loc, res), amount in sorted(sim.inventory.stock.items(), key=lambda x: (str(x[0][0]), str(x[0][1])))
@@ -25,6 +32,10 @@ def capture_inventory(sim: Any) -> dict[str, Any]:
 
 
 def restore_inventory(sim: Any, data: dict[str, Any]) -> None:
+    sim.inventory.base_storage_capacity_t = {
+        (SpatialNodeId(r["operational_node_id"]), str(r["storage_class"])): float(r["amount"])
+        for r in data["base_storage_capacity"]
+    }
     sim.inventory.stock = {
         (SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): float(r["amount"])
         for r in data["stock"]
@@ -47,7 +58,7 @@ def referenced_resources(sim: Any) -> set[DefinitionId]:
 
 STATE_CODEC = StateCodec("inventory", capture_inventory, restore_inventory)
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
-    nodes = ctx.nodes
+    nodes = ctx.operational_nodes
     for (operational_node_id, storage_class), amount in sim.inventory.base_storage_capacity_t.items():
         _require(operational_node_id in nodes, f"base storage capacity references unknown location: {operational_node_id}")
         _require(bool(storage_class), f"empty storage class at {operational_node_id}")

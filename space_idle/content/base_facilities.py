@@ -72,39 +72,3 @@ def build_facility_definitions() -> dict:
         for definition_id, definition in definitions.items()
     }
     return definitions
-
-
-def initial_facility_placements() -> tuple[tuple, ...]:
-    return (
-        (ids.EARTH_RESEARCH_LAB, ids.EARTH, None),
-        (ids.EARTH_OBSERVATION_SATELLITE, ids.LEO, None),
-        (ids.LUNAR_RESOURCE_SURVEY_ORBITER, ids.LUNAR_ORBIT, None),
-        (ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT, None),
-        (ids.GRID_POWER_SUPPLY, ids.EARTH, None),
-        (ids.EARTH_LAUNCH_SUPPORT, ids.EARTH, ids.EARTH_CELL_INDUSTRIAL),
-        (ids.VEHICLE_ASSEMBLY_FACILITY, ids.EARTH, None),
-        (ids.SURFACE_AGGREGATE_QUARRY, ids.EARTH, None),
-        (ids.METAL_ORE_MINE, ids.EARTH, None),
-        (ids.INDUSTRIAL_WATER_INTAKE, ids.EARTH, None),
-        (ids.BASIC_STRUCTURAL_MATERIAL_PLANT, ids.EARTH, None),
-        (ids.BASIC_MACHINERY_WORKS, ids.EARTH, None),
-    )
-
-
-def initial_facility_investments() -> dict:
-    """Content-owned physical investment history for starting facilities."""
-    S, M, E = ids.STRUCTURAL_COMPONENTS, ids.MACHINERY, ids.PRECISION_ELECTRONICS
-    return {
-        ids.EARTH_RESEARCH_LAB: {S: 12.0, M: 10.0, E: 8.0},
-        ids.EARTH_OBSERVATION_SATELLITE: {S: 1.5, M: 1.0, E: 1.0},
-        ids.LUNAR_RESOURCE_SURVEY_ORBITER: {S: 1.5, M: 1.0, E: 1.5},
-        ids.ORBITAL_LOGISTICS_NODE: {S: 3.0, M: 2.0, E: 1.0},
-        ids.GRID_POWER_SUPPLY: {S: 8.0, M: 6.0},
-        ids.EARTH_LAUNCH_SUPPORT: {S: 10.0, M: 8.0, E: 2.0},
-        ids.VEHICLE_ASSEMBLY_FACILITY: {S: 10.0, M: 10.0, E: 3.0},
-        ids.SURFACE_AGGREGATE_QUARRY: {S: 5.0, M: 7.0},
-        ids.METAL_ORE_MINE: {S: 6.0, M: 8.0},
-        ids.INDUSTRIAL_WATER_INTAKE: {S: 5.0, M: 5.0},
-        ids.BASIC_STRUCTURAL_MATERIAL_PLANT: {S: 8.0, M: 8.0},
-        ids.BASIC_MACHINERY_WORKS: {S: 8.0, M: 10.0, E: 1.0},
-    }

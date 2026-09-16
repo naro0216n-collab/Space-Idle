@@ -69,7 +69,7 @@ def referenced_resources(sim: Any) -> set[DefinitionId]:
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     capabilities = ctx.known_capabilities
-    nodes = ctx.nodes
+    nodes = ctx.spatial_nodes
     for definition_id, definition in sim.scientific_exploration.definitions.items():
         _require(definition_id == definition.id, f"scientific exploration key mismatch: {definition_id}")
         _require(definition.origin_id in nodes and definition.destination_id in nodes, f"scientific exploration references unknown endpoint: {definition_id}")

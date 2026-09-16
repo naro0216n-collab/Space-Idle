@@ -17,6 +17,7 @@ from space_idle import (
     UnassignExplorationFleet,
     build_game_application,
 )
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
@@ -247,7 +248,7 @@ def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future
 
     path = tmp_path / "scientific-exploration.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application)
+    loaded, _ = load_game(path, build_game_application_for_load)
     original_state = capture_state(app._simulation)
     loaded_state = capture_state(loaded._simulation)
     assert loaded_state["scientific_exploration"] == original_state["scientific_exploration"]

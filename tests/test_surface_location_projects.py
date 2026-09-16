@@ -16,6 +16,7 @@ from space_idle import (
     StartSurvey,
     build_game_application,
 )
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
 from space_idle.founding import FoundingResourceRequirement
@@ -270,8 +271,8 @@ def test_surface_map_exposes_founding_package_vehicle_and_blockers():
 def test_founding_persistence_preserves_payload_ownership_and_materializes_location_once(tmp_path):
     package_id = DefinitionId("test.founding.persisted_payload")
 
-    def factory():
-        current = build_game_application()
+    def factory(*, for_load: bool = False):
+        current = build_game_application_for_load() if for_load else build_game_application()
         current_sim = current._simulation
         base = current_sim.founding.packages[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
         current_sim.founding.packages[package_id] = replace(
@@ -319,7 +320,7 @@ def test_founding_persistence_preserves_payload_ownership_and_materializes_locat
     project = next(p for p in sim.founding.projects.values() if str(p.id) == project_id)
     preparing_path = tmp_path / "preparing-founding.json"
     save_game(app, preparing_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(preparing_path, factory)
+    loaded, _ = load_game(preparing_path, lambda: factory(for_load=True))
     loaded_sim = loaded._simulation
     loaded_project = loaded_sim.founding.projects[project.id]
     assert loaded_project == project
@@ -343,7 +344,7 @@ def test_founding_persistence_preserves_payload_ownership_and_materializes_locat
 
     deploying_path = tmp_path / "deploying-founding.json"
     save_game(loaded, deploying_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    reloaded, _ = load_game(deploying_path, factory)
+    reloaded, _ = load_game(deploying_path, lambda: factory(for_load=True))
     reloaded_sim = reloaded._simulation
     reloaded_project = reloaded_sim.founding.projects[project.id]
     assert reloaded_project.status.value == "deploying"

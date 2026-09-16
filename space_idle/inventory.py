@@ -51,8 +51,8 @@ class InventoryBook:
     stock: dict[tuple[SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
     reserved: dict[tuple[EntityId, SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
     resource_storage_class: dict[DefinitionId, StorageClass] = field(default_factory=dict)
-    # Static site capacity comes from content. Current physical/usable Stock
-    # Capacities are derived from it plus installed storage facilities.
+    # Authoritative node-local base capacity is runtime State. Current
+    # physical/usable capacities are derived from it plus installed facilities.
     base_storage_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float] = field(default_factory=dict)
     physical_storage_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float] = field(default_factory=dict)
     usable_storage_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float] = field(default_factory=dict)

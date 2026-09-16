@@ -11,6 +11,7 @@ from space_idle import (
     PlanFacilityUpgrade,
     build_game_application,
 )
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.application_commands import ApplicationError
 from space_idle.construction import (
     BuildResourceRequirement,
@@ -36,8 +37,8 @@ UPGRADE_RESOURCE_A = DefinitionId("test.resource.upgrade_a")
 UPGRADE_RESOURCE_B = DefinitionId("test.resource.upgrade_b")
 
 
-def _build_upgrade_fixture_application():
-    app = build_game_application()
+def _build_upgrade_fixture_application(*, for_load: bool = False):
+    app = build_game_application_for_load() if for_load else build_game_application()
     sim = app._simulation
 
     sim.facilities.definitions[UPGRADE_FACILITY] = FacilityDef(
@@ -76,8 +77,9 @@ def _build_upgrade_fixture_application():
         UPGRADE_CONTRACTOR,
         work_per_day=10.0,
     )
-    sim.facilities.install(UPGRADE_CONTRACTOR, ids.EARTH)
-    sim.facilities.install(UPGRADE_FACILITY, ids.EARTH)
+    if not for_load:
+        sim.facilities.install(UPGRADE_CONTRACTOR, ids.EARTH)
+        sim.facilities.install(UPGRADE_FACILITY, ids.EARTH)
     return app
 
 
@@ -161,7 +163,7 @@ def test_upgrade_target_roundtrips_then_applies_resources_and_level_once(tmp_pat
 
     path = tmp_path / "active-upgrade.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, offline = load_game(path, _build_upgrade_fixture_application)
+    loaded, offline = load_game(path, lambda: _build_upgrade_fixture_application(for_load=True))
     assert offline is None
 
     loaded_row, loaded_facility = _upgrade_target(loaded)

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from space_idle import AdvanceTime, GetOperationalNode, GetProjects, build_game_application
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.app_contracts.construction import CancelBuild, PlanFacilityDecommission
 from space_idle.application_commands import ApplicationError
 from space_idle.content import base_ids as ids
@@ -17,8 +18,8 @@ DECOMMISSION_TARGET = DefinitionId("test.facility.decommission_target")
 SALVAGE_RESOURCE = DefinitionId("test.resource.decommission_salvage")
 
 
-def _build_decommission_fixture_application():
-    app = build_game_application()
+def _build_decommission_fixture_application(*, for_load: bool = False):
+    app = build_game_application_for_load() if for_load else build_game_application()
     sim = app._simulation
     sim.inventory.register_storage_class(SALVAGE_RESOURCE, "general_cargo")
     sim.facilities.definitions[DECOMMISSION_TARGET] = FacilityDef(
@@ -70,7 +71,7 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
     path = tmp_path / "decommissioning.json"
     before_stock = sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE)
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, offline = load_game(path, _build_decommission_fixture_application)
+    loaded, offline = load_game(path, lambda: _build_decommission_fixture_application(for_load=True))
     assert offline is None
     assert loaded._simulation.facilities.facilities[facility_id].lifecycle is FacilityLifecycle.DECOMMISSIONING
     assert _project_row(loaded, project_id).irreversible_started

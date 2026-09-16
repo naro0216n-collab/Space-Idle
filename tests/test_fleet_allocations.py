@@ -4,7 +4,6 @@ import pytest
 from dataclasses import replace
 
 from space_idle import GetFleet, build_game_application
-from space_idle.composition.base_simulation import build_base_simulation
 from space_idle.content import base_ids as ids
 from space_idle.shared import EntityId, SpatialNodeId
 from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
@@ -21,7 +20,7 @@ from space_idle.transport.models import (
 
 
 def _fleet_sim(count: int = 5):
-    sim = build_base_simulation()
+    sim = build_game_application()._simulation
     # Core invariants must not depend on the provisional initial Fleet content.
     sim.transport.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).total_units = count
     return sim
@@ -173,7 +172,7 @@ def test_provisioning_allocator_honors_priority_and_is_registration_order_indepe
     assert snapshot.unfilled_units == 2
     assert "fleet_unfilled:2" in snapshot.blockers
     def active_by_destination(destinations):
-        registration_sim = build_base_simulation()
+        registration_sim = build_game_application()._simulation
         registration_logistics = registration_sim.transport
         target_id = SpatialNodeId("test.location.registration_order")
         registration_sim.graph.found_location(
@@ -236,7 +235,7 @@ def test_provisioning_allocator_honors_priority_and_is_registration_order_indepe
 
 
 def test_capacity_mode_rejects_unsupported_directional_target_without_mutation():
-    sim = build_base_simulation()
+    sim = build_game_application()._simulation
     lg = sim.transport
     before_allocations = dict(lg.transport_allocations)
 

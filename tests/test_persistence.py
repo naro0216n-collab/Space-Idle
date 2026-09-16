@@ -30,6 +30,7 @@ from space_idle import (
     SetTargetStock,
     build_game_application,
 )
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content.base_game import (
     EARTH,
     LEO,
@@ -115,7 +116,7 @@ def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
     path = tmp_path / "game.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
 
-    loaded, offline = load_game(path, build_game_application)
+    loaded, offline = load_game(path, build_game_application_for_load)
     assert offline is None
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
@@ -135,7 +136,7 @@ def test_save_load_preserves_research_execution_site(tmp_path):
     assert before is not None
     path = tmp_path / "research-execution-site.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application)
+    loaded, _ = load_game(path, build_game_application_for_load)
 
     after = loaded._simulation.research.active[research_id].prototype_execution_site
     assert after == before
@@ -183,11 +184,11 @@ def test_offline_progress_uses_the_same_active_simulation_path_as_normal_time(tm
     save_game(original, path, saved_at=saved_at)
 
     offline, result = load_game(
-        path, build_game_application,
+        path, build_game_application_for_load,
         now=saved_at + timedelta(seconds=elapsed_days),
         offline_policy=policy,
     )
-    direct, _ = load_game(path, build_game_application)
+    direct, _ = load_game(path, build_game_application_for_load)
     direct.execute(AdvanceTime(elapsed_days))
 
     assert result is not None and result.advanced_days == elapsed_days
@@ -234,7 +235,7 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
 
     path = tmp_path / "cargo-flow.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application)
+    loaded, _ = load_game(path, build_game_application_for_load)
 
     assert loaded._simulation.logistics.cargo_flows == before_flows
     assert loaded._simulation.logistics.current_transport_capacity_snapshot(
@@ -267,7 +268,7 @@ def test_save_load_preserves_vehicle_production_staging_and_future_completion(tm
     before = capture_state(sim)
     path = tmp_path / "vehicle-production.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application)
+    loaded, _ = load_game(path, build_game_application_for_load)
     loaded_state = capture_state(loaded._simulation)
     assert loaded_state["transport"] == before["transport"]
     assert loaded_state["inventory"] == before["inventory"]
@@ -324,7 +325,7 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
 
     path = tmp_path / "derived-projections.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application)
+    loaded, _ = load_game(path, build_game_application_for_load)
     assert capture_state(loaded._simulation) == before
     assert loaded.query(
         GetOperationalNode(str(ids.EARTH))
@@ -338,8 +339,8 @@ def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):
     body_id = CelestialBodyId(str(ids.EARTH_BODY))
     species = DefinitionId("test.atmosphere.n2")
 
-    def factory():
-        app = build_game_application()
+    def factory(*, for_load: bool = False):
+        app = build_game_application_for_load() if for_load else build_game_application()
         service = TerraformingService({
             body_id: PlanetaryClimateState(body_id, 101325.0, 1.225, 288.0, {species: 1.0})
         })
@@ -353,7 +354,7 @@ def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):
 
     path = tmp_path / "dynamic-environment.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, factory)
+    loaded, _ = load_game(path, lambda: factory(for_load=True))
 
     assert loaded._simulation.environment.capture_overlay_state() == before
     assert capture_state(loaded._simulation)["environment"] == capture_state(app._simulation)["environment"]
@@ -371,4 +372,4 @@ def test_load_rejects_cross_domain_runtime_invariant_violation(tmp_path):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(SaveFormatError, match="invalid saved runtime state"):
-        load_game(path, build_game_application)
+        load_game(path, build_game_application_for_load)

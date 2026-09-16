@@ -39,6 +39,7 @@ from space_idle import (
 )
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.persistence import capture_state
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import GameRuntime
 from space_idle.api.codec import to_jsonable
 from space_idle.content.base_game import EARTH, LEO
@@ -395,7 +396,8 @@ def test_vehicle_production_application_contract_exposes_planning_blockers_and_p
 def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(tmp_path):
     now = [0.0]
     runtime = GameRuntime(
-        factory=build_game_application,
+        new_game_factory=build_game_application,
+        load_factory=build_game_application_for_load,
         save_dir=tmp_path,
         offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0),
         clock=lambda: now[0],

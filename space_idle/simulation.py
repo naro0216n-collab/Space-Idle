@@ -153,9 +153,12 @@ class Simulation:
     maintenance: FacilityMaintenanceService | None = None
     surface_infrastructure: SurfaceInfrastructureService | None = None
     content_id: str = "unconfigured"
+    world_definition_id: str = "unconfigured"
+    scenario_id: str = "unconfigured"
     pending_offline_game_days: float = 0.0
     domain_extensions: tuple[DomainExtension, ...] = ()
     _boundary_used_by_constraint: dict[AllocationConstraintKey, float] = field(default_factory=dict, init=False, repr=False)
+    _initial_state_initialized: bool = field(default=False, init=False, repr=False)
     _boundary_settled_day: int = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -167,6 +170,19 @@ class Simulation:
     @property
     def boundary_settled_day(self) -> int:
         return self._boundary_settled_day
+
+    @property
+    def runtime_state_initialized(self) -> bool:
+        return self._initial_state_initialized
+
+    def require_uninitialized_runtime_state(self) -> None:
+        if self._initial_state_initialized:
+            raise ValueError("initial runtime state has already been established")
+
+    def mark_runtime_state_initialized(self) -> None:
+        if self._initial_state_initialized:
+            raise ValueError("initial runtime state has already been established")
+        self._initial_state_initialized = True
 
     def restore_boundary_settled_day(self, day: int) -> None:
         if day != self.day:

@@ -173,11 +173,3 @@ def build_vehicle_definitions() -> dict:
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
         ),
     }
-
-
-def initial_vehicle_deployments() -> tuple[tuple, ...]:
-    return (
-        (ids.REUSABLE_LAUNCH_VEHICLE, 1, ids.EARTH),
-        (ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO),
-        (ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LUNAR_ORBIT),
-    )

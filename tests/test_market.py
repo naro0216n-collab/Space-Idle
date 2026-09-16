@@ -9,6 +9,7 @@ from space_idle import (
     GetMarket,
     build_game_application,
 )
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.content.base_market import EARTH_MARKET_INTERFACE
 from space_idle.execution_requirements import allocate_execution_requirements
@@ -41,7 +42,8 @@ def _market(*, funds: float = 10.0, supply: float = 10.0, demand: float = 10.0, 
         lead_time_days=lead,
     )
     market = MarketService(FundsState(funds))
-    market.initialize_provider(provider)
+    market.register_provider_definition(provider)
+    market.initialize_provider_state(provider_id)
     market.set_interface(MarketInterfaceState(interface_id, provider_id, node_id))
     return market, provider_id, interface_id, node_id, resource
 
@@ -232,7 +234,7 @@ def test_market_state_roundtrips_and_replenishes_deterministically(tmp_path):
 
     path = tmp_path / "market.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application)
+    loaded, _ = load_game(path, build_game_application_for_load)
     assert capture_state(loaded._simulation)["market"] == capture_state(sim)["market"]
 
     sim.advance_days(3)
