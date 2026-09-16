@@ -88,13 +88,14 @@ def test_soft_saturation_response_is_monotonic_diminishing_and_opportunity_sensi
         ExtractionService.marginal_response(capacity, 5.0)
     )
 
-def test_operational_fulfillment_scales_soft_saturation_output():
+def test_extraction_throughput_derives_from_installed_capacity_and_operational_fulfillment():
     base = build_game_application()._simulation
-    facilities = FacilityBook(build_facility_definitions(), base.facilities.environment)
+    definitions = build_facility_definitions()
+
+    facilities = FacilityBook(definitions, base.facilities.environment)
     facility_id = facilities.install(ids.METAL_ORE_MINE, ids.EARTH)
     full_power = PowerSnapshot(0.0, 0.0, 0.0, {facility_id: 1.0}, {facility_id: 1.0})
     half_power = PowerSnapshot(0.0, 0.0, 0.0, {facility_id: 0.5}, {facility_id: 1.0})
-
     full_execution = _execution_plan(base, facilities, full_power)
     half_execution = _execution_plan(base, facilities, half_power)
     full = next(
@@ -109,12 +110,39 @@ def test_operational_fulfillment_scales_soft_saturation_output():
         )
         if row.resource_id == ids.METAL_ORE
     )
-
     assert full.operational_fulfillment == 1.0
     assert half.operational_fulfillment == 0.5
     assert half.output_t_per_day == pytest.approx(full.output_t_per_day * 0.5)
     assert half.marginal_efficiency == pytest.approx(full.marginal_efficiency * 0.5)
 
+    neutral_power = PowerSnapshot(0.0, 0.0, 0.0, {}, {})
+
+    def resource_row(levels):
+        capacity_facilities = FacilityBook(definitions, base.facilities.environment)
+        for level in levels:
+            capacity_facilities.install(ids.METAL_ORE_MINE, ids.EARTH, level=level)
+        execution = _execution_plan(base, capacity_facilities, neutral_power)
+        return next(
+            row
+            for row in base.extraction.resource_snapshots(
+                ids.EARTH,
+                capacity_facilities,
+                neutral_power,
+                base.day,
+                execution,
+            )
+            if row.resource_id == ids.METAL_ORE
+        )
+
+    one = resource_row((1,))
+    expanded_a = resource_row((1, 2, 3))
+    expanded_b = resource_row((3, 1, 2))
+    assert (
+        expanded_a.installed_nominal_capacity_t_per_day
+        > one.installed_nominal_capacity_t_per_day
+    )
+    assert expanded_a.output_t_per_day > one.output_t_per_day
+    assert expanded_a == expanded_b
 
 def test_survey_knowledge_and_research_unlocks_do_not_change_physical_throughput():
     app = build_game_application()
@@ -130,33 +158,6 @@ def test_survey_knowledge_and_research_unlocks_do_not_change_physical_throughput
     sim.technology.unlock(ids.TECH_REGOLITH_EXCAVATION)
     after_research = _resource_snapshot(sim, ids.METAL_ORE)
     assert after_research == known
-
-
-def test_new_extraction_capacity_changes_throughput_and_registration_order_does_not():
-    base = build_game_application()._simulation
-    definitions = build_facility_definitions()
-    power = PowerSnapshot(0.0, 0.0, 0.0, {}, {})
-
-    def resource_row(levels):
-        facilities = FacilityBook(definitions, base.facilities.environment)
-        for level in levels:
-            facilities.install(ids.METAL_ORE_MINE, ids.EARTH, level=level)
-        execution = _execution_plan(base, facilities, power)
-        return next(
-            row
-            for row in base.extraction.resource_snapshots(
-                ids.EARTH, facilities, power, base.day, execution
-            )
-            if row.resource_id == ids.METAL_ORE
-        )
-
-    one = resource_row((1,))
-    expanded_a = resource_row((1, 2, 3))
-    expanded_b = resource_row((3, 1, 2))
-
-    assert expanded_a.installed_nominal_capacity_t_per_day > one.installed_nominal_capacity_t_per_day
-    assert expanded_a.output_t_per_day > one.output_t_per_day
-    assert expanded_a == expanded_b
 
 
 def test_application_queries_expose_surface_knowledge_and_extraction_decision_state():

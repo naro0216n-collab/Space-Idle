@@ -183,43 +183,7 @@ def test_application_decision_queries_are_observational():
     assert capture_state(sim) == before
 
 
-def test_transport_allocation_projection_exposes_authoritative_target_policy_and_derived_capacity():
-    app = build_game_application()
-    allocation_id = app.execute(CreateTransportAllocation(
-        str(ids.REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
-        provisioning_priority=4, control_mode="units", target_units=2,
-        path_policy="fastest",
-    )).created_id
-    assert allocation_id is not None
-
-    row = next(item for item in app.query(GetTransportAllocations()).items if item.id == allocation_id)
-    assert row.control_mode == "units"
-    assert row.target_units == 2
-    assert row.target_capacity is None
-    assert row.required_units == row.target_units
-    assert row.active_units + row.unfilled_units == row.required_units
-    assert row.nominal.forward_t_per_day > 0
-    assert row.available.forward_t_per_day <= row.nominal.forward_t_per_day
-    assert row.spare.forward_t_per_day == pytest.approx(
-        row.available.forward_t_per_day - row.used.forward_t_per_day
-    )
-
-    app.execute(UpdateTransportAllocation(
-        allocation_id, provisioning_priority=5, target_units=1,
-        path_policy="lowest_propellant",
-    ))
-    updated = next(
-        item for item in app.query(GetTransportAllocations()).items
-        if item.id == allocation_id
-    )
-    assert updated.provisioning_priority == 5
-    assert updated.path_policy == "lowest_propellant"
-    assert updated.target_units == 1
-    assert updated.required_units == updated.target_units
-    assert updated.active_units + updated.unfilled_units == updated.required_units
-
-
-def test_transport_service_requirements_are_projected_from_the_same_plan_for_options_and_allocations():
+def test_transport_allocation_projection_exposes_target_capacity_policy_and_plan_requirements():
     app = build_game_application()
     option = next(
         row
@@ -243,14 +207,37 @@ def test_transport_service_requirements_are_projected_from_the_same_plan_for_opt
 
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
-        control_mode="units", target_units=1,
+        provisioning_priority=4, control_mode="units", target_units=2,
+        path_policy="fastest",
     )).created_id
-    allocation = next(
-        row for row in app.query(GetTransportAllocations()).items
-        if row.id == allocation_id
-    )
-    assert allocation.infrastructure_requirements == option.infrastructure_requirements
+    assert allocation_id is not None
 
+    row = next(item for item in app.query(GetTransportAllocations()).items if item.id == allocation_id)
+    assert row.control_mode == "units"
+    assert row.target_units == 2
+    assert row.target_capacity is None
+    assert row.required_units == row.target_units
+    assert row.active_units + row.unfilled_units == row.required_units
+    assert row.nominal.forward_t_per_day > 0
+    assert row.available.forward_t_per_day <= row.nominal.forward_t_per_day
+    assert row.spare.forward_t_per_day == pytest.approx(
+        row.available.forward_t_per_day - row.used.forward_t_per_day
+    )
+    assert row.infrastructure_requirements == option.infrastructure_requirements
+
+    app.execute(UpdateTransportAllocation(
+        allocation_id, provisioning_priority=5, target_units=1,
+        path_policy="lowest_propellant",
+    ))
+    updated = next(
+        item for item in app.query(GetTransportAllocations()).items
+        if item.id == allocation_id
+    )
+    assert updated.provisioning_priority == 5
+    assert updated.path_policy == "lowest_propellant"
+    assert updated.target_units == 1
+    assert updated.required_units == updated.target_units
+    assert updated.active_units + updated.unfilled_units == updated.required_units
 
 def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
     app = build_game_application()

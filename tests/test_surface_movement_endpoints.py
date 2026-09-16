@@ -98,24 +98,38 @@ def test_surface_gateway_identity_anchors_plan_while_current_cell_drives_geometr
     assert after_plan.id == before_plan.id
 
 
-def test_surface_transport_latency_uses_endpoint_distance_and_vehicle_speed():
+def test_surface_transport_physics_derive_latency_and_range_blockers_from_endpoint_geometry():
     sim = build_game_application()._simulation
     a, _ = _location_with_gateway(sim, "a", ids.MOON_CELL_SOUTH_POLAR_RIDGE)
     b, _ = _location_with_gateway(sim, "b", ids.MOON_CELL_POLAR_COLD_TRAP)
-    vehicle = _surface_vehicle("test.vehicle.surface", speed_km_per_day=25.0)
-    sim.transport.vehicle_defs[vehicle.id] = vehicle
     forward = _plan_between(sim, a, b)
     reverse = _plan_between(sim, b, a)
-
     distance = sim.transport.movement_geometry(forward.id).distance_km
-    assert distance is not None
+    assert distance is not None and distance > 1
+
+    vehicle = _surface_vehicle("test.vehicle.surface", speed_km_per_day=25.0)
+    sim.transport.vehicle_defs[vehicle.id] = vehicle
     expected_days = max(1, math.ceil(distance / 25.0))
-    assert sim.transport.performance_movement_transit_days(forward, vehicle.performance) == expected_days
-    service = sim.transport.transport_service_plan_for(vehicle.id, a, b, path=(forward.id,))
+    assert sim.transport.performance_movement_transit_days(
+        forward, vehicle.performance
+    ) == expected_days
+    service = sim.transport.transport_service_plan_for(
+        vehicle.id, a, b, path=(forward.id,)
+    )
     assert service.feasible
     assert service.forward_latency_days == expected_days
     assert service.reverse_path == (reverse.id,)
 
+    short_range = _surface_vehicle(
+        "test.vehicle.short", speed_km_per_day=100, max_distance_km=distance / 2
+    )
+    sim.transport.vehicle_defs[short_range.id] = short_range
+    assert any(
+        "surface_transport:distance:" in failure
+        for failure in sim.transport.vehicle_movement_physical_failures(
+            forward.id, short_range.id
+        )
+    )
 
 def test_player_founded_location_gets_orbit_movement_only_after_real_gateway_exists():
     sim = build_game_application()._simulation
@@ -153,21 +167,6 @@ def test_surface_interface_projection_and_availability_follow_gateway_facility()
     blocked = app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=False)).items[0]
     assert not blocked.available
     assert any(item.startswith("origin:interface:manual_pause:") for item in blocked.blockers)
-
-
-def test_surface_transport_distance_limit_is_physical_blocker():
-    sim = build_game_application()._simulation
-    a, _ = _location_with_gateway(sim, "a", ids.MOON_CELL_SOUTH_POLAR_RIDGE)
-    b, _ = _location_with_gateway(sim, "b", ids.MOON_CELL_NEARSIDE_MARE)
-    plan = _plan_between(sim, a, b)
-    distance = sim.transport.movement_geometry(plan.id).distance_km
-    assert distance is not None and distance > 1
-    vehicle = _surface_vehicle("test.vehicle.short", speed_km_per_day=100, max_distance_km=distance / 2)
-    sim.transport.vehicle_defs[vehicle.id] = vehicle
-    assert any(
-        "surface_transport:distance:" in failure
-        for failure in sim.transport.vehicle_movement_physical_failures(plan.id, vehicle.id)
-    )
 
 
 def test_movement_plan_is_rederived_after_save_load(tmp_path):
@@ -210,53 +209,55 @@ def test_physical_target_endpoint_uses_surface_cell_without_operational_node():
 
 
 
-def test_distinct_non_surface_nodes_with_same_anchor_still_get_movement_candidate():
-    sim = build_game_application()._simulation
-    extra_orbit = SpatialNodeId("test.node.colocated_lunar_orbit")
-    lunar_geometry = sim.graph.bodies[ids.MOON].system_local_transport_geometry
-    sim.graph.add(SpatialNodeDef(
-        extra_orbit,
+def test_generic_spaceflight_plan_derivation_uses_spatial_geometry_without_pairwise_routes():
+    colocated_sim = build_game_application()._simulation
+    colocated_orbit = SpatialNodeId("test.node.colocated_lunar_orbit")
+    lunar_geometry = colocated_sim.graph.bodies[
+        ids.MOON
+    ].system_local_transport_geometry
+    colocated_sim.graph.add(SpatialNodeDef(
+        colocated_orbit,
         "Co-located Lunar Orbit",
         ids.SOL_SYSTEM,
         lunar_geometry,
         body_id=ids.MOON,
         kind=SpatialNodeKind.ORBITAL,
     ))
-    sim.graph.add_operational_node(OperationalNodeState(extra_orbit))
+    colocated_sim.graph.add_operational_node(OperationalNodeState(colocated_orbit))
+    colocated_plan = _select_plan(
+        colocated_sim.transport.movement_plan_candidates(
+            ids.LUNAR_ORBIT, colocated_orbit
+        ),
+        operation_types=("spaceflight",),
+    )
+    assert colocated_plan.relation.characteristic_distance_km == 0.0
 
-    plans = sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, extra_orbit)
-
-    plan = _select_plan(plans, operation_types=("spaceflight",))
-    assert plan.relation.characteristic_distance_km == 0.0
-
-
-def test_new_celestial_body_uses_spatial_geometry_without_pairwise_movement_definition():
-    sim = build_game_application()._simulation
+    new_body_sim = build_game_application()._simulation
     body_id = CelestialBodyId("test.body.new")
-    extra_orbit = SpatialNodeId("test.node.new_body_orbit")
+    new_body_orbit = SpatialNodeId("test.node.new_body_orbit")
     geometry = CharacteristicTransportGeometry(
         (1_000_000.0, 0.0, 0.0),
         (6.0, 0.0, 0.0),
     )
-    sim.graph.add_body(CelestialBodyDef(
+    new_body_sim.graph.add_body(CelestialBodyDef(
         body_id, "New Body", 1000.0, ids.SOL_SYSTEM, geometry
     ))
-    sim.graph.add(SpatialNodeDef(
-        extra_orbit,
+    new_body_sim.graph.add(SpatialNodeDef(
+        new_body_orbit,
         "New Body Orbit",
         ids.SOL_SYSTEM,
         geometry,
         body_id=body_id,
         kind=SpatialNodeKind.ORBITAL,
     ))
-    sim.graph.add_operational_node(OperationalNodeState(extra_orbit))
-
-    plans = sim.transport.movement_plan_candidates(ids.LEO, extra_orbit)
-
-    plan = _select_plan(plans, operation_types=("spaceflight",))
-    assert plan.origin.operational_node_id == ids.LEO
-    assert plan.destination.operational_node_id == extra_orbit
-    assert plan.relation.characteristic_distance_km == 1_000_000.0
-    assert plan.relation.characteristic_delta_v_km_s == 6.0
-    assert tuple(op.operation_type for op in plan.operations) == ("spaceflight",)
-    assert plan.operations[0].delta_v_km_s == 6.0
+    new_body_sim.graph.add_operational_node(OperationalNodeState(new_body_orbit))
+    new_body_plan = _select_plan(
+        new_body_sim.transport.movement_plan_candidates(ids.LEO, new_body_orbit),
+        operation_types=("spaceflight",),
+    )
+    assert new_body_plan.origin.operational_node_id == ids.LEO
+    assert new_body_plan.destination.operational_node_id == new_body_orbit
+    assert new_body_plan.relation.characteristic_distance_km == 1_000_000.0
+    assert new_body_plan.relation.characteristic_delta_v_km_s == 6.0
+    assert tuple(op.operation_type for op in new_body_plan.operations) == ("spaceflight",)
+    assert new_body_plan.operations[0].delta_v_km_s == 6.0

@@ -59,13 +59,13 @@ def _parallel_projection(
     return app
 
 
-def test_parallel_theory_same_priority_is_fair_and_registration_order_independent_across_constraints():
+def test_research_shared_allocation_respects_priority_fairness_and_registration_order():
     for suffix, execution_rate, stored_points, blocker_code in (
         ("rp", 20.0, 1.0, "research_points:allocation"),
         ("execution", 1.0, 100.0, "service:allocation"),
     ):
-        a = DefinitionId(f"test.research.parallel.{suffix}.a")
-        b = DefinitionId(f"test.research.parallel.{suffix}.b")
+        a = DefinitionId(f"test.research.shared.{suffix}.a")
+        b = DefinitionId(f"test.research.shared.{suffix}.b")
         first = _parallel_projection(
             (a, b), execution_rate=execution_rate, stored_points=stored_points
         )
@@ -85,22 +85,10 @@ def test_parallel_theory_same_priority_is_fair_and_registration_order_independen
             assert second_rows[rid].rp_allocated == row.rp_allocated
             assert any(code == blocker_code for code, _ in row.current_blockers)
 
-
-def test_research_priority_controls_shared_execution_and_rp_constraints():
-    for suffix, execution_rate, stored_points, blocker_code in (
-        ("execution", 1.0, 100.0, "service:allocation"),
-        ("rp", 20.0, 1.0, "research_points:allocation"),
-    ):
-        a = DefinitionId(f"test.research.priority.{suffix}.a")
-        b = DefinitionId(f"test.research.priority.{suffix}.b")
-        app = _parallel_projection(
-            (a, b), execution_rate=execution_rate, stored_points=stored_points
-        )
-        app.execute(SetResearchPriority(str(a), 5))
-        app.execute(SetResearchPriority(str(b), 1))
-
-        high = _research_row(app, a)
-        low = _research_row(app, b)
+        first.execute(SetResearchPriority(str(a), 5))
+        first.execute(SetResearchPriority(str(b), 1))
+        high = _research_row(first, a)
+        low = _research_row(first, b)
         assert high.priority == 5
         assert low.priority == 1
         assert high.execution_allocated == 1.0

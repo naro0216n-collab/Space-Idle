@@ -50,8 +50,8 @@ def _request(
 
 
 
-def test_funds_allocation_is_same_priority_registration_order_independent():
-    def run(order: tuple[str, ...]):
+def test_funds_allocation_enforces_priority_fairness_budget_and_account_limits():
+    def run_same_priority(order: tuple[str, ...]):
         state, service, policy = _economy(10.0)
         rows = {
             "a": _request("funds.a", policy, service, 8.0, 3),
@@ -60,36 +60,34 @@ def test_funds_allocation_is_same_priority_registration_order_independent():
         plan = state.allocate(tuple(rows[key] for key in order), 0)
         return {str(row.request_id): row.authorized_musd for row in plan.rows}
 
-    assert run(("a", "b")) == pytest.approx(run(("b", "a")))
-    result = run(("a", "b"))
-    assert result["funds.a"] == pytest.approx(4.0)
-    assert result["funds.b"] == pytest.approx(6.0)
+    forward = run_same_priority(("a", "b"))
+    assert forward == pytest.approx(run_same_priority(("b", "a")))
+    assert forward["funds.a"] == pytest.approx(4.0)
+    assert forward["funds.b"] == pytest.approx(6.0)
 
-
-def test_higher_priority_authorization_reserves_period_budget_within_tick():
-    state, service, policy = _economy(100.0)
-    state.policies[policy].period_budget_musd = 10.0
-    plan = state.allocate(
+    budgeted, service, policy = _economy(100.0)
+    budgeted.policies[policy].period_budget_musd = 10.0
+    priority_plan = budgeted.allocate(
         (
             _request("funds.high", policy, service, 8.0, 5),
             _request("funds.low", policy, service, 8.0, 1),
         ),
         0,
     )
-    assert plan.authorized(EntityId("funds.high")) == pytest.approx(8.0)
-    assert plan.authorized(EntityId("funds.low")) == pytest.approx(2.0)
-    assert "period_budget" in plan.authorization(EntityId("funds.low")).limiting_factors
+    assert priority_plan.authorized(EntityId("funds.high")) == pytest.approx(8.0)
+    assert priority_plan.authorized(EntityId("funds.low")) == pytest.approx(2.0)
+    assert "period_budget" in priority_plan.authorization(
+        EntityId("funds.low")
+    ).limiting_factors
 
-
-def test_minimum_reserve_and_spending_cap_limit_authorization():
-    state, service, policy = _economy(20.0)
-    state.policies[policy].minimum_reserve_musd = 7.0
-    state.policies[policy].spending_cap_musd = 15.0
-    plan = state.allocate((_request("funds.one", policy, service, 30.0, 3),), 0)
-    row = plan.authorization(EntityId("funds.one"))
+    limited, service, policy = _economy(20.0)
+    limited.policies[policy].minimum_reserve_musd = 7.0
+    limited.policies[policy].spending_cap_musd = 15.0
+    row = limited.allocate(
+        (_request("funds.one", policy, service, 30.0, 3),), 0
+    ).authorization(EntityId("funds.one"))
     assert row.authorized_musd == pytest.approx(13.0)
     assert set(row.limiting_factors) == {"funds", "minimum_reserve", "spending_cap"}
-
 
 def test_application_policy_defaults_to_deny_and_roundtrips_with_funds(tmp_path):
     app = build_game_application()
