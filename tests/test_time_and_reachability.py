@@ -6,8 +6,6 @@ from space_idle import AdvanceTime, GetMovementPlans, GetWorld, build_game_appli
 from space_idle.api import GameRuntime
 from space_idle.content import base_ids as ids
 from space_idle.content.base_game import (
-    TECH_CISLUNAR_LOGISTICS,
-    TECH_LUNAR_PROSPECTING,
     REUSABLE_ORBITAL_CARGO_TUG,
 )
 from space_idle.simulation import OfflineProgressPolicy
@@ -87,7 +85,10 @@ def test_runtime_clock_preserves_elapsed_wall_time_during_projection_work(tmp_pa
 
 def test_positive_transport_duration_rounds_up_to_canonical_day_boundary():
     sim = build_game_application()._simulation
-    plan = sim.transport.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT)[0]
+    plan = replace(
+        min(sim.transport.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT), key=lambda row: str(row.id)),
+        transit_days=5,
+    )
     base = sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].performance
     performance = replace(base, transit_time_multiplier=0.7)
 
@@ -95,20 +96,22 @@ def test_positive_transport_duration_rounds_up_to_canonical_day_boundary():
     assert sim.transport.performance_movement_transit_days(plan, performance) == 4
 
 
-def test_movement_reachability_is_not_directly_gated_by_research_completion():
+def test_movement_reachability_depends_on_physical_state_not_technology_completion_state():
     app = build_game_application()
     sim = app._simulation
-    plan = sim.transport.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT)[0]
+    plan = min(sim.transport.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT), key=lambda row: str(row.id))
 
-    before = sim.transport.movement_plan_failures(plan.id, sim.day)
-    assert not any(failure.startswith("technology:") for failure in before)
+    prior_technology_state = set(sim.technology.completed)
+    sim.technology.replace(set())
+    without_completed_research = sim.transport.movement_plan_failures(plan.id, sim.day)
 
-    sim.technology.completed.update({TECH_CISLUNAR_LOGISTICS, TECH_LUNAR_PROSPECTING})
-    after = sim.transport.movement_plan_failures(plan.id, sim.day)
-    assert after == before
+    sim.technology.replace(set(sim.research.definitions))
+    with_all_research_completed = sim.transport.movement_plan_failures(plan.id, sim.day)
+    assert with_all_research_completed == without_completed_research
 
     movement_plan = app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=True)).items[0]
     assert movement_plan.available
     assert movement_plan.service_feasible_now
     assert movement_plan.modes
     assert any(mode.service_feasible for mode in movement_plan.modes)
+    sim.technology.replace(prior_technology_state)

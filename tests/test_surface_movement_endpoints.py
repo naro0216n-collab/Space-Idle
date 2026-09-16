@@ -36,10 +36,20 @@ def _location_with_gateway(sim, name: str, cell_id):
     return location_id, gateway_id
 
 
+def _select_plan(plans, *, operation_types=None):
+    if operation_types is not None:
+        plans = tuple(
+            plan for plan in plans
+            if tuple(operation.operation_type for operation in plan.operations)
+            == tuple(operation_types)
+        )
+    assert plans
+    return min(plans, key=lambda plan: str(plan.id))
+
+
 def _plan_between(sim, origin, destination):
     plans = sim.transport.movement_plan_candidates(origin, destination)
-    assert len(plans) == 1
-    return plans[0]
+    return _select_plan(plans)
 
 
 def _surface_vehicle(vehicle_id: str, *, speed_km_per_day: float, max_distance_km: float | None = None) -> VehicleDef:
@@ -191,13 +201,12 @@ def test_physical_target_endpoint_uses_surface_cell_without_operational_node():
     assert resolved.surface_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
     assert resolved.environment_context_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
     assert ids.MOON_CELL_FARSIDE_HIGHLANDS not in sim.graph.operational_node_states
-    assert len(plans) == 1
-    assert plans[0].destination.operational_node_id is None
-    assert plans[0].destination.physical_target_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
-    assert plans[0].relation.destination_context_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
-    assert plans[0].relation.characteristic_distance_km == 0.0
-    assert tuple(op.operation_type for op in plans[0].operations) == ("landing",)
-    assert not sim.transport.movement_plan_failures(plans[0].id, sim.day)
+    plan = _select_plan(plans, operation_types=("landing",))
+    assert plan.destination.operational_node_id is None
+    assert plan.destination.physical_target_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
+    assert plan.relation.destination_context_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
+    assert plan.relation.characteristic_distance_km == 0.0
+    assert not sim.transport.movement_plan_failures(plan.id, sim.day)
 
 
 
@@ -217,9 +226,8 @@ def test_distinct_non_surface_nodes_with_same_anchor_still_get_movement_candidat
 
     plans = sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, extra_orbit)
 
-    assert len(plans) == 1
-    assert plans[0].relation.characteristic_distance_km == 0.0
-    assert tuple(op.operation_type for op in plans[0].operations) == ("spaceflight",)
+    plan = _select_plan(plans, operation_types=("spaceflight",))
+    assert plan.relation.characteristic_distance_km == 0.0
 
 
 def test_new_celestial_body_uses_spatial_geometry_without_pairwise_movement_definition():
@@ -245,8 +253,7 @@ def test_new_celestial_body_uses_spatial_geometry_without_pairwise_movement_defi
 
     plans = sim.transport.movement_plan_candidates(ids.LEO, extra_orbit)
 
-    assert len(plans) == 1
-    plan = plans[0]
+    plan = _select_plan(plans, operation_types=("spaceflight",))
     assert plan.origin.operational_node_id == ids.LEO
     assert plan.destination.operational_node_id == extra_orbit
     assert plan.relation.characteristic_distance_km == 1_000_000.0

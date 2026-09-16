@@ -421,4 +421,5 @@ def test_gateway_contract_validates_fixed_slot_then_publishes_exact_commit() -> 
     assert "TRANSPORT_DIR=.publish/transport/${branches[0]}" in workflow
     assert "python scripts/publish_gateway_validate.py" in workflow
     assert 'git push origin "${PUBLISH_COMMIT}:refs/heads/${TARGET_BRANCH}"' in workflow
-    assert "Dispatch Fast CI for published branch" in workflow
+    assert "actions/workflows/ci.yml/dispatches" in workflow
+    assert '-f ref="${TARGET_BRANCH}"' in workflow

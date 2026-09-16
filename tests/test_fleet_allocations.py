@@ -438,7 +438,6 @@ def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execut
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
     sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
 
-    rule = lg.spaceflight_movement_rules[0]
     lg.spaceflight_movement_rules = tuple(
         replace(
             row,
@@ -446,7 +445,9 @@ def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execut
                 row.origin_requirements.environment,
                 (CapabilityRequirement("research_lab", CapabilityRequirementState.ACTIVE),),
             ),
-        ) if row.id == rule.id else row
+        )
+        if row.operation_type == "spaceflight"
+        else row
         for row in lg.spaceflight_movement_rules
     )
     lg.invalidate_movement_plans()
@@ -480,7 +481,13 @@ def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
     sim.graph.found_location(target_id, "Target", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS)
     sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, target_id)
     sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, target_id, site_cell_id=ids.MOON_CELL_FARSIDE_HIGHLANDS)
-    landing_plan = lg.movement_plan_candidates(ids.LUNAR_ORBIT, target_id)[0]
+    landing_plan = min(
+        (
+            plan for plan in lg.movement_plan_candidates(ids.LUNAR_ORBIT, target_id)
+            if tuple(operation.operation_type for operation in plan.operations) == ("landing",)
+        ),
+        key=lambda row: str(row.id),
+    )
     definition = lg.vehicle_defs[vehicle_id]
     lg.vehicle_defs[vehicle_id] = replace(
         definition,
@@ -502,7 +509,13 @@ def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
     allocation_id = lg.create_transport_allocation(
         vehicle_id, ids.LEO, target_id, target_units=1,
         path=(
-            lg.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT)[0].id,
+            min(
+                (
+                    plan for plan in lg.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT)
+                    if tuple(operation.operation_type for operation in plan.operations) == ("spaceflight",)
+                ),
+                key=lambda row: str(row.id),
+            ).id,
             landing_plan.id,
         ),
         day=sim.day,

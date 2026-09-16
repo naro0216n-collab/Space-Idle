@@ -9,12 +9,12 @@ from space_idle import (
     ApplicationError,
     GetResearch,
     PauseFacility,
+    ResumeFacility,
     SetResearchDemonstrationSite,
     SetResearchPrototypeSite,
     StartResearch,
     build_game_application,
 )
-from space_idle.content import base_ids as ids
 from space_idle.content import base_requirements as req
 from space_idle.content.base_game import EARTH, LEO
 from space_idle.research import (
@@ -23,6 +23,7 @@ from space_idle.research import (
     ResearchPrototypeSpec,
     ResearchStage,
 )
+from space_idle.facilities import CapabilitySupply, FacilityDef, ServiceCapacitySupply
 from space_idle.shared import DefinitionId
 from space_idle.site import (
     CapabilityRequirement,
@@ -36,22 +37,34 @@ def _research_row(app, research_id):
     return next(row for row in app.query(GetResearch()).items if row.id == str(research_id))
 
 
-def _earth_lab(sim):
-    return next(
-        facility for facility in sim.facilities.facilities.values()
-        if facility.definition_id == ids.EARTH_RESEARCH_LAB
+TEST_RESEARCH_SITE_CAPABILITY = "test.research_site_capability"
+TEST_RESEARCH_SITE_SERVICE = "test.research_site_service"
+TEST_RESEARCH_SITE_FACILITY = DefinitionId("test.facility.research_site")
+
+
+def _research_site_fixture(sim):
+    existing = next(
+        (facility for facility in sim.facilities.facilities.values()
+         if facility.definition_id == TEST_RESEARCH_SITE_FACILITY),
+        None,
     )
+    if existing is not None:
+        return existing
+    sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = FacilityDef(
+        TEST_RESEARCH_SITE_FACILITY,
+        "Research site fixture",
+        capability_supplies=(CapabilitySupply(TEST_RESEARCH_SITE_CAPABILITY),),
+        service_capacity_supplies=(ServiceCapacitySupply(TEST_RESEARCH_SITE_SERVICE, 1.0),),
+    )
+    facility_id = sim.facilities.install(TEST_RESEARCH_SITE_FACILITY, EARTH)
+    return sim.facilities.facilities[facility_id]
 
 
-def _remove_earth_research_execution(sim):
-    lab = _earth_lab(sim)
-    definition = sim.facilities.definitions[lab.definition_id]
-    sim.facilities.definitions[lab.definition_id] = replace(
-        definition,
-        service_capacity_supplies=tuple(
-            supply for supply in definition.service_capacity_supplies
-            if supply.service_type != "research_execution"
-        ),
+def _remove_research_site_service(sim):
+    facility = _research_site_fixture(sim)
+    definition = sim.facilities.definitions[facility.definition_id]
+    sim.facilities.definitions[facility.definition_id] = replace(
+        definition, service_capacity_supplies=()
     )
     return definition
 
@@ -89,29 +102,38 @@ def test_research_definition_requires_explicit_stage_composition():
         )
 
 
-def test_prototype_site_can_be_selected_before_transient_service_capacity_is_available():
+def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structural_mismatch():
     app = build_game_application()
     sim = app._simulation
-    research_id = DefinitionId("test.research.prototype_waits_for_execution")
+    research_id = DefinitionId("test.research.prototype_site_contract")
     sim.research.definitions[research_id] = ResearchDefinition(
         research_id,
-        "Prototype Waits For Execution",
+        "Prototype Site Contract",
         research_point_cost=0.0,
         prototype=ResearchPrototypeSpec(
             {},
-            SiteRequirements(service_capacity_requirements=(
-                ServiceCapacityRequirement("research_execution", 1.0),
-            )),
+            SiteRequirements(
+                req.SURFACE_ENV,
+                service_capacity_requirements=(
+                    ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),
+                ),
+            ),
         ),
         stages=(ResearchStage.PROTOTYPE,),
     )
-    original = _remove_earth_research_execution(sim)
+    original = _remove_research_site_service(sim)
     app.execute(StartResearch(str(research_id)))
 
     row = _research_row(app, research_id)
     earth = next(site for site in row.prototype_sites if site.operational_node_id == str(EARTH))
     assert any(code == "service_capacity:available" for code, _detail in earth.blockers)
     assert earth.can_select
+
+    leo = next(site for site in row.prototype_sites if site.operational_node_id == str(LEO))
+    assert leo.blockers
+    assert not leo.can_select
+    with pytest.raises(ApplicationError, match="prototype site requirements not met"):
+        app.execute(SetResearchPrototypeSite(str(research_id), str(LEO)))
 
     app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
     selected = _research_row(app, research_id)
@@ -123,31 +145,9 @@ def test_prototype_site_can_be_selected_before_transient_service_capacity_is_ava
     app.execute(AdvanceTime(1))
     assert _research_row(app, research_id).status == "prototype"
 
-    sim.facilities.definitions[_earth_lab(sim).definition_id] = original
+    sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
     app.execute(AdvanceTime(1))
     assert _research_row(app, research_id).status == "complete"
-
-
-def test_prototype_site_selection_still_rejects_structural_environment_mismatch():
-    app = build_game_application()
-    sim = app._simulation
-    research_id = DefinitionId("test.research.prototype_surface_only")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Surface-only Prototype",
-        research_point_cost=0.0,
-        prototype=ResearchPrototypeSpec({}, SiteRequirements(req.SURFACE_ENV)),
-        stages=(ResearchStage.PROTOTYPE,),
-    )
-    app.execute(StartResearch(str(research_id)))
-
-    row = _research_row(app, research_id)
-    leo = next(site for site in row.prototype_sites if site.operational_node_id == str(LEO))
-    assert leo.blockers
-    assert not leo.can_select
-    with pytest.raises(ApplicationError, match="prototype site requirements not met"):
-        app.execute(SetResearchPrototypeSite(str(research_id), str(LEO)))
-
 
 def test_prototype_resources_stage_durably_and_complete_without_manual_funding():
     app = build_game_application()
@@ -161,7 +161,7 @@ def test_prototype_resources_stage_durably_and_complete_without_manual_funding()
         prototype=ResearchPrototypeSpec(
             {resource_id: 1.0},
             SiteRequirements(service_capacity_requirements=(
-                ServiceCapacityRequirement("research_execution", 1.0),
+                ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),
             )),
         ),
         stages=(ResearchStage.PROTOTYPE,),
@@ -170,7 +170,7 @@ def test_prototype_resources_stage_durably_and_complete_without_manual_funding()
 
     app.execute(StartResearch(str(research_id)))
     app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
-    original = _remove_earth_research_execution(sim)
+    original = _remove_research_site_service(sim)
     app.execute(AdvanceTime(1))
 
     row = _research_row(app, research_id)
@@ -180,43 +180,62 @@ def test_prototype_resources_stage_durably_and_complete_without_manual_funding()
     assert resource.requested_t == 0.0
     assert not any(code == "prototype_resource" for code, _detail in row.current_blockers)
 
-    sim.facilities.definitions[_earth_lab(sim).definition_id] = original
+    sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
     app.execute(AdvanceTime(1))
     assert _research_row(app, research_id).status == "complete"
 
 
-def test_demonstration_site_can_be_selected_despite_transient_active_capability_blocker():
+def test_demonstration_site_selection_tolerates_transient_blockers_but_progress_requires_runtime_service():
     app = build_game_application()
     sim = app._simulation
-    research_id = DefinitionId("test.research.active_capability_demo")
+    research_id = DefinitionId("test.research.demonstration_runtime_contract")
     sim.research.definitions[research_id] = ResearchDefinition(
         research_id,
-        "Active Capability Demonstration",
+        "Demonstration Runtime Contract",
         research_point_cost=0.0,
         demonstration=ResearchDemonstrationSpec(
             2,
-            SiteRequirements(capability_requirements=(
-                CapabilityRequirement("research_lab", CapabilityRequirementState.ACTIVE),
-            )),
+            SiteRequirements(
+                capability_requirements=(
+                    CapabilityRequirement(
+                        TEST_RESEARCH_SITE_CAPABILITY,
+                        CapabilityRequirementState.ACTIVE,
+                    ),
+                ),
+                service_capacity_requirements=(
+                    ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),
+                ),
+            ),
         ),
         stages=(ResearchStage.DEMONSTRATION,),
     )
-    lab = _earth_lab(sim)
-    app.execute(PauseFacility(str(lab.id)))
+    site = _research_site_fixture(sim)
+    app.execute(PauseFacility(str(site.id)))
     app.execute(StartResearch(str(research_id)))
 
     row = _research_row(app, research_id)
-    earth = next(site for site in row.demonstration_sites if site.operational_node_id == str(EARTH))
+    earth = next(
+        candidate
+        for candidate in row.demonstration_sites
+        if candidate.operational_node_id == str(EARTH)
+    )
     assert any(code == "capability:active" for code, _detail in earth.blockers)
     assert earth.can_select
-
     app.execute(SetResearchDemonstrationSite(str(research_id), str(EARTH)))
     selected = _research_row(app, research_id)
     assert selected.demonstration_operational_node_id == str(EARTH)
     assert any(code == "capability:active" for code, _detail in selected.current_blockers)
-    assert selected.can_pause
-    assert not selected.can_resume
 
+    app.execute(ResumeFacility(str(site.id)))
+    original = _remove_research_site_service(sim)
+    app.execute(AdvanceTime(1))
+    blocked = _research_row(app, research_id)
+    assert any(code == "service_capacity:available" for code, _detail in blocked.current_blockers)
+    assert sim.research.active[research_id].stage_progress == 0.0
+
+    sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
+    app.execute(AdvanceTime(1))
+    assert sim.research.active[research_id].stage_progress > 0.0
 
 def test_partial_prototype_staging_returns_to_previous_site_when_site_changes():
     app = build_game_application()
@@ -247,37 +266,3 @@ def test_partial_prototype_staging_returns_to_previous_site_when_site_changes():
     assert sim.inventory.amount(EARTH, resource_id) == pytest.approx(0.25)
     assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.25)
     assert sim.research.prototype_reserved_t(research_id, LEO, resource_id) == 0.0
-
-
-def test_demonstration_progress_requires_allocated_research_execution_service():
-    app = build_game_application()
-    sim = app._simulation
-    research_id = DefinitionId("test.research.execution_capacity")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Research Execution Capacity",
-        research_point_cost=0.0,
-        demonstration=ResearchDemonstrationSpec(
-            2,
-            SiteRequirements(
-                capability_requirements=(
-                    CapabilityRequirement("research_lab", CapabilityRequirementState.ACTIVE),
-                ),
-                service_capacity_requirements=(
-                    ServiceCapacityRequirement("research_execution", 1.0),
-                ),
-            ),
-        ),
-        stages=(ResearchStage.DEMONSTRATION,),
-    )
-    app.execute(StartResearch(str(research_id)))
-    _remove_earth_research_execution(sim)
-    row = _research_row(app, research_id)
-    earth = next(site for site in row.demonstration_sites if site.operational_node_id == str(EARTH))
-    assert any(code == "service_capacity:available" for code, _detail in earth.blockers)
-    assert earth.can_select
-    app.execute(SetResearchDemonstrationSite(str(research_id), str(EARTH)))
-
-    app.execute(AdvanceTime(1))
-
-    assert sim.research.active[research_id].stage_progress == 0.0

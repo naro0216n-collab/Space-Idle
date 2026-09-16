@@ -55,6 +55,20 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert payload["data"]["day"] == 2
         assert payload["data"]["operational_nodes"]
 
+        status, _, payload = _request(
+            port, "GET",
+            f"/api/v1/ui-state?operational_node_id={ids.EARTH}&surface_body_id={ids.EARTH_BODY}",
+        )
+        assert status == 200
+        data = payload["data"]
+        required = {
+            "world", "operational_node", "surface_map", "logistics",
+            "scientific_explorations", "external_economy", "dependency_analytics",
+        }
+        assert required <= data.keys()
+        assert data["operational_node"]["id"] == str(ids.EARTH)
+        assert data["surface_map"]["body_id"] == str(ids.EARTH_BODY)
+
         status, _, payload = _request(port, "POST", "/api/v1/session/save", {"slot": "boundary"})
         assert status == 200 and payload["data"]["saved"] is True
 
@@ -70,33 +84,6 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
-
-
-def test_ui_state_composes_current_application_decision_surfaces(tmp_path):
-    runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        status, _, payload = _request(
-            port, "GET",
-            f"/api/v1/ui-state?operational_node_id={ids.EARTH}&surface_body_id={ids.EARTH_BODY}",
-        )
-        assert status == 200
-        data = payload["data"]
-        required = {
-            "world", "operational_node", "surface_map", "logistics",
-            "scientific_explorations", "external_economy", "dependency_analytics",
-        }
-        assert required <= data.keys()
-        assert data["operational_node"]["id"] == str(ids.EARTH)
-        assert data["surface_map"]["body_id"] == str(ids.EARTH_BODY)
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
 
 def test_http_api_rejects_stale_command_revision(tmp_path):
     runtime = GameRuntime(factory=build_game_application, save_dir=tmp_path)

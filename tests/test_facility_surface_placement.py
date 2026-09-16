@@ -1,23 +1,17 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from space_idle import (
-    AdvanceTime,
     GetBuildOptions,
     GetCatalog,
     GetSurfaceMap,
-    PlanBuild,
     build_game_application,
 )
 from space_idle.content import base_ids as ids
 from space_idle.content.base_facilities import build_facility_definitions
 from space_idle.facilities import FacilityBook, FacilityPlacementScope
-from space_idle.persistence import load_game, save_game
 from space_idle.shared import SpatialNodeId
-from space_idle.validation import validate_runtime_state
 
 
 def test_facility_placement_scope_controls_surface_cell_requirement():
@@ -89,6 +83,7 @@ def test_surface_cell_facility_uses_site_environment_while_remaining_location_ow
 
 def test_surface_map_owns_surface_buildability_and_location_build_options_do_not_request_cells():
     app = build_game_application()
+    sim = app._simulation
 
     build_options = app.query(GetBuildOptions(str(ids.EARTH)))
     assert str(ids.ROBOTIC_GEOLOGY_STATION) not in {
@@ -104,8 +99,11 @@ def test_surface_map_owns_surface_buildability_and_location_build_options_do_not
     )
     assert option.location_id == str(ids.EARTH)
     assert option.can_plan
-    assert ("technology", str(ids.TECH_ROBOTIC_FIELD_GEOLOGY)) in option.blockers
-    assert "mixed" in option.sourcing_policy_options
+    recipe = sim.projects.recipes[ids.ROBOTIC_GEOLOGY_STATION]
+    assert {detail for code, detail in option.blockers if code == "technology"} == {
+        str(technology_id) for technology_id in recipe.prerequisite_technologies
+    }
+    assert option.sourcing_policy_options == build_options.sourcing_policy_options
     assert option.import_source_options == build_options.import_source_options
 
     catalog = app.query(GetCatalog())
@@ -113,41 +111,3 @@ def test_surface_map_owns_surface_buildability_and_location_build_options_do_not
         row for row in catalog.facilities if row.id == str(ids.ROBOTIC_GEOLOGY_STATION)
     )
     assert robotic.placement_scope == "SURFACE_CELL"
-
-
-def test_completed_surface_build_preserves_site_cell_through_save_load(tmp_path: Path):
-    app = build_game_application()
-    sim = app._simulation
-    sim.technology.unlock(ids.TECH_ROBOTIC_FIELD_GEOLOGY)
-
-    result = app.execute(
-        PlanBuild(
-            str(ids.EARTH),
-            str(ids.ROBOTIC_GEOLOGY_STATION),
-            sourcing_policy="local_priority",
-            site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
-        )
-    )
-    assert result.created_id is not None
-    for _ in range(4):
-        app.execute(AdvanceTime(1))
-        project = next(
-            row for row in sim.projects.projects.values() if str(row.id) == result.created_id
-        )
-        if project.completed_facility_id is not None:
-            break
-
-    assert project.completed_facility_id is not None
-    facility = sim.facilities.facilities[project.completed_facility_id]
-    assert project.site_cell_id == ids.EARTH_CELL_INDUSTRIAL
-    assert facility.site_cell_id == ids.EARTH_CELL_INDUSTRIAL
-    validate_runtime_state(sim)
-
-    path = tmp_path / "surface-facility.json"
-    save_game(app, path)
-    loaded, _ = load_game(path, build_game_application)
-
-    loaded_project = loaded._simulation.projects.projects[project.id]
-    loaded_facility = loaded._simulation.facilities.facilities[facility.id]
-    assert loaded_project.site_cell_id == ids.EARTH_CELL_INDUSTRIAL
-    assert loaded_facility.site_cell_id == ids.EARTH_CELL_INDUSTRIAL

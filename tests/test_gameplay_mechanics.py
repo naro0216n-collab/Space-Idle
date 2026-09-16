@@ -2,14 +2,7 @@ from __future__ import annotations
 
 
 from space_idle import (
-    AdvanceTime,
-    CreateTransportAllocation,
-    GetCargoFlows,
-    GetLogistics,
     GetMovementPlans,
-    PauseTransportAllocation,
-    PlanBuild,
-    ResumeTransportAllocation,
     build_game_application,
 )
 from space_idle.content import base_ids as ids
@@ -18,38 +11,10 @@ from space_idle.shared import DefinitionId
 from space_idle.spatial import AtmosphereField, GravityField
 
 
-def test_paused_transport_capacity_keeps_supply_requirement_visible_without_dispatching_cargo_flow():
-    app = build_game_application()
-    sim = app._simulation
-    sim.technology.completed.update({ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS})
-    allocation_id = app.execute(CreateTransportAllocation(
-        str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
-        control_mode="units", target_units=1, provisioning_priority=5,
-    )).created_id
-    assert allocation_id is not None
-    project_id = app.execute(PlanBuild(
-        str(ids.LEO), str(ids.ORBITAL_LOGISTICS_NODE), priority=5,
-        sourcing_policy="import_now", import_source_id=str(ids.EARTH),
-    )).created_id
-    assert project_id is not None
-
-    app.execute(PauseTransportAllocation(allocation_id))
-    app.execute(AdvanceTime(1))
-    requirements = [row for row in app.query(GetLogistics()).requirements if row.owner_id == project_id]
-    assert requirements and all(row.operational_source_count == 0 for row in requirements)
-    assert app.query(GetCargoFlows()).items == ()
-
-    app.execute(ResumeTransportAllocation(allocation_id))
-    app.execute(AdvanceTime(1))
-    assert app.query(GetCargoFlows()).items
-    allocation = next(row for row in app.query(GetLogistics()).allocations if row.id == allocation_id)
-    assert not allocation.paused and allocation.used.forward_t_per_day > 0
-
-
 def test_vehicle_movement_eligibility_is_derived_from_operation_capability_not_vehicle_name():
     app = build_game_application()
     sim = app._simulation
-    plan = sim.transport.movement_plan_candidates(ids.EARTH, ids.LEO)[0]
+    plan = min(sim.transport.movement_plan_candidates(ids.EARTH, ids.LEO), key=lambda row: str(row.id))
 
     movement_plan_view = app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=True)).items[0]
     lander_mode = next(mode for mode in movement_plan_view.modes if mode.id == str(ids.REUSABLE_SURFACE_CARGO_LANDER))

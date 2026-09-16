@@ -40,13 +40,23 @@ def test_service_capacity_allocator_honors_priority_and_is_order_independent_wit
 def test_service_capacity_requirement_is_distinct_from_capability_requirement():
     from space_idle import build_game_application
     from space_idle.content import base_ids as ids
+    from space_idle.facilities import FacilityDef, ServiceCapacitySupply
+    from space_idle.shared import DefinitionId
     from space_idle.site import ServiceCapacityRequirement, SiteRequirements, evaluate_site_requirements
 
     sim = build_game_application()._simulation
+    service_type = "test.site_service_capacity"
+    facility_definition_id = DefinitionId("test.facility.site_service_capacity")
+    sim.facilities.definitions[facility_definition_id] = FacilityDef(
+        facility_definition_id,
+        "Site service-capacity fixture",
+        service_capacity_supplies=(ServiceCapacitySupply(service_type, 1.0),),
+    )
+    sim.facilities.install(facility_definition_id, ids.EARTH)
     power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
     failures = evaluate_site_requirements(
         SiteRequirements(service_capacity_requirements=(
-            ServiceCapacityRequirement("research_execution", 2.0),
+            ServiceCapacityRequirement(service_type, 2.0),
         )),
         ids.EARTH,
         sim.day,
@@ -55,11 +65,11 @@ def test_service_capacity_requirement_is_distinct_from_capability_requirement():
         power,
     )
     assert [(row.code, row.detail) for row in failures] == [
-        ("service_capacity:available", "research_execution:1/2")
+        ("service_capacity:available", f"{service_type}:1/2")
     ]
 
 
-def test_service_capacity_dependency_order_is_upstream_first_and_deterministic():
+def test_service_capacity_dependency_order_is_upstream_first_deterministic_and_fail_closed():
     dependencies = (
         ServiceCapacityDependency("research", "surface"),
         ServiceCapacityDependency("surface", "power"),
@@ -69,15 +79,12 @@ def test_service_capacity_dependency_order_is_upstream_first_and_deterministic()
         {"cargo", "research", "surface", "power"}, dependencies
     ) == ("power", "surface", "cargo", "research")
 
-
-def test_service_capacity_dependency_cycle_fails_closed():
-    dependencies = (
+    cyclic = (
         ServiceCapacityDependency("surface", "cargo"),
         ServiceCapacityDependency("cargo", "surface"),
     )
     with pytest.raises(ValueError, match="service capacity dependency cycle"):
-        service_capacity_dependency_order({"surface", "cargo"}, dependencies)
-
+        service_capacity_dependency_order({"surface", "cargo"}, cyclic)
 
 def test_configuration_validation_rejects_same_tick_service_dependency_cycle():
     from space_idle import build_game_application

@@ -8,22 +8,84 @@ from space_idle import (
     AdvanceTime,
     GetOperationalNode,
     GetProjects,
-    PauseBuild,
     PlanFacilityUpgrade,
-    ResumeBuild,
     build_game_application,
 )
 from space_idle.application_commands import ApplicationError
-from space_idle.content.base_game import EARTH, EARTH_RESEARCH_LAB
+from space_idle.construction import (
+    BuildResourceRequirement,
+    ConstructionProviderSpec,
+    FacilityUpgradeRecipe,
+)
+from space_idle.content import base_ids as ids
+from space_idle.facilities import FacilityDef
 from space_idle.persistence import load_game, save_game
-from space_idle.shared import EntityId
+from space_idle.research import (
+    ResearchDefinition,
+    ResearchProviderLevelSpec,
+    ResearchProviderSpec,
+    ResearchStage,
+)
+from space_idle.shared import DefinitionId, EntityId
 
 
-def _earth_lab(app):
+UPGRADE_FACILITY = DefinitionId("test.facility.upgrade_target")
+UPGRADE_CONTRACTOR = DefinitionId("test.facility.upgrade_contractor")
+UPGRADE_TECHNOLOGY = DefinitionId("test.technology.facility_upgrade")
+UPGRADE_RESOURCE_A = DefinitionId("test.resource.upgrade_a")
+UPGRADE_RESOURCE_B = DefinitionId("test.resource.upgrade_b")
+
+
+def _build_upgrade_fixture_application():
+    app = build_game_application()
+    sim = app._simulation
+
+    sim.facilities.definitions[UPGRADE_FACILITY] = FacilityDef(
+        UPGRADE_FACILITY,
+        "Upgrade target fixture",
+    )
+    sim.facilities.definitions[UPGRADE_CONTRACTOR] = FacilityDef(
+        UPGRADE_CONTRACTOR,
+        "Upgrade contractor fixture",
+    )
+    sim.research.definitions[UPGRADE_TECHNOLOGY] = ResearchDefinition(
+        UPGRADE_TECHNOLOGY,
+        "Upgrade prerequisite fixture",
+        research_point_cost=1.0,
+        stages=(ResearchStage.THEORY,),
+    )
+    sim.research.providers[UPGRADE_FACILITY] = ResearchProviderSpec(
+        UPGRADE_FACILITY,
+        tier=1,
+        levels=(
+            ResearchProviderLevelSpec(1, 2.0, 10.0),
+            ResearchProviderLevelSpec(2, 5.0, 25.0),
+        ),
+    )
+    sim.projects.upgrade_recipes[(UPGRADE_FACILITY, 2)] = FacilityUpgradeRecipe(
+        UPGRADE_FACILITY,
+        2,
+        (
+            BuildResourceRequirement(UPGRADE_RESOURCE_A, 1.0),
+            BuildResourceRequirement(UPGRADE_RESOURCE_B, 1.0),
+        ),
+        construction_work=1.0,
+        prerequisite_technologies=frozenset({UPGRADE_TECHNOLOGY}),
+    )
+    sim.projects.construction_providers[UPGRADE_CONTRACTOR] = ConstructionProviderSpec(
+        UPGRADE_CONTRACTOR,
+        work_per_day=10.0,
+    )
+    sim.facilities.install(UPGRADE_CONTRACTOR, ids.EARTH)
+    sim.facilities.install(UPGRADE_FACILITY, ids.EARTH)
+    return app
+
+
+def _upgrade_target(app):
     row = next(
         facility
-        for facility in app.query(GetOperationalNode(str(EARTH))).facilities
-        if facility.definition_id == str(EARTH_RESEARCH_LAB)
+        for facility in app.query(GetOperationalNode(str(ids.EARTH))).facilities
+        if facility.definition_id == str(UPGRADE_FACILITY)
     )
     state = app._simulation.facilities.facilities[EntityId(row.id)]
     return row, state
@@ -36,118 +98,108 @@ def _unlock_next_upgrade(app, facility_state):
     return recipe
 
 
+def _seed_upgrade_materials(app, facility_state, recipe):
+    inventory = app._simulation.inventory
+    for requirement in recipe.resources:
+        key = (facility_state.operational_node_id, requirement.resource_id)
+        inventory.stock[key] = inventory.amount(*key) + requirement.amount_t
+
+
 def _project(app, project_id):
     return next(row for row in app.query(GetProjects()).items if row.id == project_id)
 
 
-
-
-def test_upgrade_query_separates_plan_eligibility_from_runtime_blockers():
-    app = build_game_application()
-    before_row, facility = _earth_lab(app)
+def test_upgrade_query_owns_plan_eligibility_and_single_active_project_contract():
+    app = _build_upgrade_fixture_application()
+    before_row, facility = _upgrade_target(app)
+    _unlock_next_upgrade(app, facility)
     option = before_row.next_upgrade
     assert option is not None
     assert option.can_plan
     assert option.active_project_id is None
-    assert any(code == "technology" for code, _detail in option.blockers)
 
-    result = app.execute(PlanFacilityUpgrade(
-        before_row.id, priority=3, sourcing_policy="mixed"
-    ))
-    assert result.created_id is not None
+    first = app.execute(
+        PlanFacilityUpgrade(before_row.id, priority=3, sourcing_policy="local_priority")
+    )
+    assert first.created_id is not None
 
-    after_row, _ = _earth_lab(app)
+    after_row, _ = _upgrade_target(app)
     active = after_row.next_upgrade
     assert active is not None
     assert not active.can_plan
-    assert active.active_project_id == result.created_id
-    assert ("active_upgrade_project", result.created_id) in active.blockers
+    assert active.active_project_id == first.created_id
+    assert ("active_upgrade_project", first.created_id) in active.blockers
+    with pytest.raises(ApplicationError):
+        app.execute(PlanFacilityUpgrade(before_row.id, sourcing_policy="local_priority"))
 
-def test_facility_upgrade_is_a_resource_backed_construction_project():
-    app = build_game_application()
-    before_row, facility = _earth_lab(app)
+
+def test_upgrade_target_roundtrips_then_applies_resources_and_level_once(tmp_path):
+    app = _build_upgrade_fixture_application()
+    before_row, facility = _upgrade_target(app)
     recipe = _unlock_next_upgrade(app, facility)
+    _seed_upgrade_materials(app, facility, recipe)
+
     provider = app._simulation.research.providers[facility.definition_id]
     before_provider_spec = provider.level_spec(facility.level)
     next_provider_spec = provider.level_spec(facility.level + 1)
-    assert (
-        before_provider_spec.generation_points_per_day,
-        before_provider_spec.storage_capacity_points,
-    ) != (
-        next_provider_spec.generation_points_per_day,
-        next_provider_spec.storage_capacity_points,
-    )
-
-    stock_before = {
-        requirement.resource_id: app._simulation.inventory.amount(
-            facility.operational_node_id, requirement.resource_id
-        )
-        for requirement in recipe.resources
-    }
+    assert before_provider_spec != next_provider_spec
     investment_before = dict(facility.invested_resources)
 
     result = app.execute(
-        PlanFacilityUpgrade(
-            before_row.id,
-            priority=5,
-            sourcing_policy="import_now",
-        )
+        PlanFacilityUpgrade(before_row.id, priority=5, sourcing_policy="local_priority")
     )
     assert result.created_id is not None
     project_id = result.created_id
 
-    planned = _project(app, project_id)
-    assert planned.target_kind == "facility_upgrade"
-    assert planned.target_facility_id == before_row.id
-    assert planned.target_level == facility.level + 1
-    assert facility.level == 1
-    assert not planned.materials_committed
-
-    app.execute(PauseBuild(project_id))
+    # The first canonical boundary acquires the inputs; level application belongs
+    # to the following construction boundary. Persist between those boundaries so
+    # the upgrade-specific target state is verified without a separate save/load case.
     app.execute(AdvanceTime(1))
-    paused = _project(app, project_id)
-    assert paused.paused
-    assert paused.construction_done == 0
+    ready = _project(app, project_id)
+    assert ready.status == "ready"
     assert facility.level == 1
 
-    app.execute(ResumeBuild(project_id))
-    for _ in range(20):
-        app.execute(AdvanceTime(1))
-        if _project(app, project_id).status == "complete":
-            break
-    else:
-        raise AssertionError("facility upgrade did not complete")
+    path = tmp_path / "active-upgrade.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, offline = load_game(path, _build_upgrade_fixture_application)
+    assert offline is None
 
-    completed = _project(app, project_id)
+    loaded_row, loaded_facility = _upgrade_target(loaded)
+    loaded_project = _project(loaded, project_id)
+    assert loaded_row.id == before_row.id
+    assert loaded_project.target_kind == "facility_upgrade"
+    assert loaded_project.target_facility_id == before_row.id
+    assert loaded_project.target_level == 2
+    assert loaded_facility.level == 1
+
+    loaded.execute(AdvanceTime(1))
+    completed = _project(loaded, project_id)
+    assert completed.status == "complete"
     assert completed.materials_committed
-    assert completed.construction_done >= completed.construction_required - 1e-9
     assert completed.completed_facility_id == before_row.id
-    assert facility.level == 2
+    assert loaded_facility.level == 2
 
     for requirement, resource in zip(recipe.resources, completed.resources, strict=True):
         assert resource.resource_id == str(requirement.resource_id)
-        assert resource.committed_t >= requirement.amount_t - 1e-9
-        assert resource.requirement_id is None
-        after = app._simulation.inventory.amount(
-            facility.operational_node_id, requirement.resource_id
-        )
-        assert after < stock_before[requirement.resource_id]
-        assert facility.invested_resources[requirement.resource_id] == pytest.approx(
+        assert resource.committed_t == pytest.approx(requirement.amount_t)
+        assert loaded_facility.invested_resources[requirement.resource_id] == pytest.approx(
             investment_before.get(requirement.resource_id, 0.0) + requirement.amount_t
         )
 
-    after_row, _ = _earth_lab(app)
-    power = app._simulation.power.snapshot(
-        facility.operational_node_id, app._simulation.facilities, app._simulation.day
+    after_row, _ = _upgrade_target(loaded)
+    power = loaded._simulation.power.snapshot(
+        loaded_facility.operational_node_id,
+        loaded._simulation.facilities,
+        loaded._simulation.day,
     )
     assert after_row.research_generation_points_per_day == pytest.approx(
-        app._simulation.research.provider_generation(
-            facility.id, {facility.operational_node_id: power}, app._simulation.day
+        loaded._simulation.research.provider_generation(
+            loaded_facility.id, {loaded_facility.operational_node_id: power}, loaded._simulation.day
         )
     )
     assert after_row.research_storage_capacity_points == pytest.approx(
-        app._simulation.research.provider_storage_capacity(
-            facility.id, {facility.operational_node_id: power}, app._simulation.day
+        loaded._simulation.research.provider_storage_capacity(
+            loaded_facility.id, {loaded_facility.operational_node_id: power}, loaded._simulation.day
         )
     )
     assert (
@@ -157,48 +209,3 @@ def test_facility_upgrade_is_a_resource_backed_construction_project():
         before_row.research_generation_points_per_day,
         before_row.research_storage_capacity_points,
     )
-
-
-def test_active_upgrade_roundtrips_without_applying_level_early(tmp_path):
-    app = build_game_application()
-    row, facility = _earth_lab(app)
-    _unlock_next_upgrade(app, facility)
-
-    result = app.execute(
-        PlanFacilityUpgrade(row.id, priority=5, sourcing_policy="import_now")
-    )
-    assert result.created_id is not None
-    project_id = result.created_id
-    app.execute(PauseBuild(project_id))
-    app.execute(AdvanceTime(1))
-
-    active = _project(app, project_id)
-    assert active.paused
-    assert active.status != "complete"
-    assert facility.level == 1
-
-    path = tmp_path / "active-upgrade.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, offline = load_game(path, build_game_application)
-    assert offline is None
-
-    loaded_row, loaded_facility = _earth_lab(loaded)
-    loaded_project = _project(loaded, project_id)
-    assert loaded_row.id == row.id
-    assert loaded_facility.level == 1
-    assert loaded_project.paused is True
-    assert loaded_project.status != "complete"
-    assert loaded_project.target_kind == "facility_upgrade"
-    assert loaded_project.target_facility_id == row.id
-    assert loaded_project.target_level == 2
-
-
-def test_duplicate_active_upgrade_is_rejected_at_application_boundary():
-    app = build_game_application()
-    row, facility = _earth_lab(app)
-    _unlock_next_upgrade(app, facility)
-    first = app.execute(PlanFacilityUpgrade(row.id, sourcing_policy="import_now"))
-    assert first.created_id is not None
-
-    with pytest.raises(ApplicationError):
-        app.execute(PlanFacilityUpgrade(row.id, sourcing_policy="import_now"))

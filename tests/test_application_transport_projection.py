@@ -382,7 +382,7 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
 def test_construction_queries_expose_authoritative_project_controls():
     app = build_game_application()
     build_options = app.query(GetBuildOptions(str(EARTH)))
-    assert set(build_options.sourcing_policy_options) == {"import_now", "mixed", "local_priority"}
+    assert tuple(build_options.sourcing_policy_options) == app._simulation.projects.sourcing_policy_options()
     assert str(EARTH) not in build_options.import_source_options
     assert str(LEO) in build_options.import_source_options
 

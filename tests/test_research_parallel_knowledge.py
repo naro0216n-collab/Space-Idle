@@ -4,7 +4,7 @@ from dataclasses import replace
 
 from space_idle import GetResearch, SetResearchPriority, StartResearch, build_game_application
 from space_idle.content import base_ids as ids
-from space_idle.facilities import ServiceCapacitySupply
+from space_idle.facilities import FacilityDef, ServiceCapacitySupply
 from space_idle.knowledge import ExperienceContributionRule
 from space_idle.research import (
     ResearchDefinition,
@@ -19,20 +19,22 @@ def _research_row(app, research_id):
 
 
 def _set_earth_research_execution_capacity(sim, rate: float) -> None:
-    lab = next(
-        facility for facility in sim.facilities.facilities.values()
-        if facility.definition_id == ids.EARTH_RESEARCH_LAB
+    for definition_id, definition in tuple(sim.facilities.definitions.items()):
+        supplies = tuple(
+            supply for supply in definition.service_capacity_supplies
+            if supply.service_type != "research_execution"
+        )
+        if supplies != definition.service_capacity_supplies:
+            sim.facilities.definitions[definition_id] = replace(
+                definition, service_capacity_supplies=supplies
+            )
+    fixture_id = DefinitionId("test.facility.research_execution_capacity")
+    sim.facilities.definitions[fixture_id] = FacilityDef(
+        fixture_id,
+        "Research execution capacity fixture",
+        service_capacity_supplies=(ServiceCapacitySupply("research_execution", rate),),
     )
-    definition = sim.facilities.definitions[lab.definition_id]
-    supplies = tuple(
-        ServiceCapacitySupply(supply.service_type, rate)
-        if supply.service_type == "research_execution"
-        else supply
-        for supply in definition.service_capacity_supplies
-    )
-    sim.facilities.definitions[lab.definition_id] = replace(
-        definition, service_capacity_supplies=supplies
-    )
+    sim.facilities.install(fixture_id, ids.EARTH)
 
 
 def _parallel_projection(

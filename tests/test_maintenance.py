@@ -5,21 +5,44 @@ import pytest
 from space_idle import GetFlowReport, GetOperationalNode, GetLogistics, SetMaintenancePriority, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.execution_requirements import allocate_execution_requirements, resource_constraint
-from space_idle.shared import EntityId
+from space_idle.facilities import FacilityDef, ServiceCapacitySupply
+from space_idle.shared import DefinitionId, EntityId
 
 
-def _earth_facilities_with_maintenance(sim):
-    return [
-        facility
-        for facility in sorted(sim.facilities.facilities.values(), key=lambda row: str(row.id))
-        if facility.operational_node_id == ids.EARTH
-        and sim.facilities.maintenance_requirements_per_day(facility.id)
-    ]
+def _install_maintenance_facility(
+    sim,
+    node_id,
+    *,
+    definition_suffix: str,
+    resource_id: DefinitionId,
+    service_type: str | None = None,
+):
+    definition_id = DefinitionId(f"test.facility.maintenance.{definition_suffix}")
+    service_supplies = (
+        (ServiceCapacitySupply(service_type, 10.0),)
+        if service_type is not None
+        else ()
+    )
+    sim.facilities.definitions[definition_id] = FacilityDef(
+        definition_id,
+        f"Maintenance fixture {definition_suffix}",
+        maintenance_fraction_per_year=365.0,
+        service_capacity_supplies=service_supplies,
+    )
+    facility_id = sim.facilities.install(
+        definition_id, node_id, invested_resources={resource_id: 1.0}
+    )
+    return sim.facilities.facilities[facility_id]
 
 
 def test_facility_maintenance_priority_is_player_visible_and_command_driven():
     app = build_game_application()
-    facility = _earth_facilities_with_maintenance(app._simulation)[0]
+    sim = app._simulation
+    facility = _install_maintenance_facility(
+        sim, ids.EARTH,
+        definition_suffix="priority",
+        resource_id=DefinitionId("test.resource.maintenance_priority"),
+    )
 
     app.execute(SetMaintenancePriority(str(facility.id), 5))
     row = next(
@@ -34,29 +57,22 @@ def test_facility_maintenance_priority_is_player_visible_and_command_driven():
 def test_maintenance_shortage_can_starve_lower_priority_facility_without_auto_rescue():
     app = build_game_application()
     sim = app._simulation
-    high, low = _earth_facilities_with_maintenance(sim)[:2]
-
-    # Keep only two facilities in the maintenance competition so the expected
-    # allocation is independent of unrelated initial content.
+    common = DefinitionId("test.resource.maintenance_shared")
+    high = _install_maintenance_facility(
+        sim, ids.EARTH, definition_suffix="shared", resource_id=common
+    )
+    low_id = sim.facilities.install(
+        high.definition_id, ids.EARTH, invested_resources={common: 1.0}
+    )
+    low = sim.facilities.facilities[low_id]
     sim.facilities.facilities = {high.id: high, low.id: low}
     high.maintenance_priority = 4
     low.maintenance_priority = 1
-
-    high_req = sim.facilities.maintenance_requirements_per_day(high.id)
-    low_req = sim.facilities.maintenance_requirements_per_day(low.id)
-    common = next(resource for resource in high_req if resource in low_req)
-
-    # All co-inputs are abundant; the common material is deliberately limited
-    # to the high-priority facility's one-day need.
-    all_resources = set(high_req) | set(low_req)
-    for resource_id in all_resources:
-        sim.inventory.stock[(ids.EARTH, resource_id)] = 100.0
-    sim.inventory.stock[(ids.EARTH, common)] = high_req[common]
+    sim.inventory.stock[(ids.EARTH, common)] = 1.0
 
     bundles = sim.maintenance.execution_requirement_bundles(sim.day)
     capacities = {
-        resource_constraint(ids.EARTH, resource_id): sim.inventory.available(ids.EARTH, resource_id)
-        for resource_id in all_resources
+        resource_constraint(ids.EARTH, common): sim.inventory.available(ids.EARTH, common)
     }
     allocations = allocate_execution_requirements(bundles, capacities)
     satisfaction = sim.maintenance.satisfaction_projection(allocations)
@@ -64,48 +80,44 @@ def test_maintenance_shortage_can_starve_lower_priority_facility_without_auto_re
 
     assert satisfaction[high.id] == pytest.approx(1.0)
     assert satisfaction[low.id] == pytest.approx(0.0)
-    # The Core exposes the shortage outcome; it does not create material or
-    # silently reroute supply to keep every facility operational.
     assert sim.inventory.amount(ids.EARTH, common) == pytest.approx(0.0)
 
 
 def test_maintenance_runway_reports_actual_site_stock_not_one_day_planning_amount():
     app = build_game_application()
     sim = app._simulation
-    facility = next(
-        row for row in sim.facilities.facilities.values()
-        if row.operational_node_id == ids.LEO
-        and sim.facilities.maintenance_requirements_per_day(row.id)
+    resource_id = DefinitionId("test.resource.maintenance_runway")
+    facility = _install_maintenance_facility(
+        sim, ids.LEO, definition_suffix="runway", resource_id=resource_id
     )
     sim.facilities.facilities = {facility.id: facility}
-    requirements = sim.facilities.maintenance_requirements_per_day(facility.id)
-    resource_id, daily = next(iter(requirements.items()))
-    for rid, rate in requirements.items():
-        sim.inventory.stock[(ids.LEO, rid)] = rate * 20.0
+    daily = sim.facilities.maintenance_requirements_per_day(facility.id)[resource_id]
+    stock_days = sim.maintenance.reorder_point_days + 5.0
+    sim.inventory.stock[(ids.LEO, resource_id)] = daily * stock_days
 
     row = next(
         demand for demand in app.query(GetLogistics()).requirements
         if demand.owner_id == str(facility.id) and demand.resource_id == str(resource_id)
     )
 
-    assert row.requested_t == pytest.approx(daily)  # above the 15-day reorder point
-    assert row.local_runway_days == pytest.approx(20.0)
+    assert row.requested_t == pytest.approx(daily)
+    assert row.local_runway_days == pytest.approx(stock_days)
     assert row.supply_state == "local_covered"
 
 
 def test_current_tick_maintenance_allocation_controls_power_and_service_capacity():
     app = build_game_application()
     sim = app._simulation
-    facility = next(
-        row for row in sim.facilities.facilities.values()
-        if row.operational_node_id == ids.EARTH
-        and sim.facilities.maintenance_requirements_per_day(row.id)
-        and sim.facilities.definitions[row.definition_id].service_capacity_supplies
+    resource_id = DefinitionId("test.resource.maintenance_service")
+    service_type = "test.maintenance_service"
+    facility = _install_maintenance_facility(
+        sim, ids.EARTH,
+        definition_suffix="service",
+        resource_id=resource_id,
+        service_type=service_type,
     )
-    service_type = sim.facilities.definitions[facility.definition_id].service_capacity_supplies[0].service_type
-    requirements = sim.facilities.maintenance_requirements_per_day(facility.id)
-    for resource_id in requirements:
-        sim.inventory.stock[(ids.EARTH, resource_id)] = 0.0
+    sim.facilities.facilities = {facility.id: facility}
+    sim.inventory.stock[(ids.EARTH, resource_id)] = 0.0
 
     decision = sim.tick_decision_projection()
     power = decision.allocations.power_by_location[ids.EARTH]
@@ -118,29 +130,31 @@ def test_current_tick_maintenance_allocation_controls_power_and_service_capacity
 
     assert factor == pytest.approx(0.0)
     assert row.maintenance_satisfaction == pytest.approx(0.0)
-    assert service.enabled_rate < service.nominal_rate
+    assert service.nominal_rate > 0.0
+    assert service.enabled_rate == pytest.approx(0.0)
 
 
 def test_maintenance_replenishment_plan_is_independent_of_transient_reservations():
     app = build_game_application()
     sim = app._simulation
-    facility = _earth_facilities_with_maintenance(sim)[0]
+    resource_id = DefinitionId("test.resource.maintenance_replenishment")
+    facility = _install_maintenance_facility(
+        sim, ids.EARTH, definition_suffix="replenishment", resource_id=resource_id
+    )
     sim.facilities.facilities = {facility.id: facility}
-    requirements = sim.facilities.maintenance_requirements_per_day(facility.id)
-    resource_id, daily = next(iter(requirements.items()))
-
-    for rid, rate in requirements.items():
-        sim.inventory.stock[(facility.operational_node_id, rid)] = rate * 20.0
+    daily = sim.facilities.maintenance_requirements_per_day(facility.id)[resource_id]
+    stock_days = sim.maintenance.reorder_point_days + 5.0
+    sim.inventory.stock[(ids.EARTH, resource_id)] = daily * stock_days
 
     baseline = {
         demand.resource_id: demand.amount_t
         for demand in sim.maintenance.supplys(sim.day)
     }
     sim.inventory.reserve(
-        EntityId('test.transient'),
+        EntityId("test.transient"),
         facility.operational_node_id,
         resource_id,
-        daily * 10.0,
+        daily * (stock_days / 2.0),
     )
     after_reservation = {
         demand.resource_id: demand.amount_t

@@ -2,21 +2,20 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle import GetCargoFlows, GetLogistics, GetProjects, PlanBuild, build_game_application
+from space_idle import (
+    GetCargoFlows, GetLogistics, GetProjects, PauseTransportAllocation,
+    PlanBuild, ResumeTransportAllocation, build_game_application,
+)
 from space_idle.content.base_game import (
     CONSTRUCTION_EQUIPMENT,
     EARTH,
+    EARTH_LEO_LAUNCH_SERVICE,
     LEO,
     LEO_LUNAR_SERVICE,
     LUNAR_ORBIT,
     MACHINERY,
     ORBITAL_LOGISTICS_NODE,
-    PRECISION_ELECTRONICS,
-    PROPELLANT,
     REUSABLE_LAUNCH_VEHICLE,
-    REUSABLE_ORBITAL_CARGO_TUG,
-    TECH_CISLUNAR_LOGISTICS,
-    TECH_ORBITAL_OPERATIONS,
     WATER,
 )
 from space_idle.execution_requirements import (
@@ -193,7 +192,9 @@ def test_future_high_priority_requirement_does_not_preempt_current_requirement_b
 def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_exists():
     app = build_game_application()
     sim = app._simulation
-    sim.technology.completed.update({TECH_ORBITAL_OPERATIONS, TECH_CISLUNAR_LOGISTICS})
+    sim.technology.completed.update(
+        sim.projects.recipes[ORBITAL_LOGISTICS_NODE].prerequisite_technologies
+    )
     sim.transport.external_services.clear()
     project_id = app.execute(
         PlanBuild(
@@ -214,9 +215,21 @@ def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_
     project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
     assert any(code in {"import_source", "import_transport_blocked"} for code, _ in project.blockers)
 
-    _owned_earth_leo_capacity(sim)
+    allocation_id = _owned_earth_leo_capacity(sim)
     for row in requirements:
         sim.inventory.add(EARTH, row.resource_id, row.amount_t)
+
+    app.execute(PauseTransportAllocation(str(allocation_id)))
+    sim.advance_days(1)
+    paused_requirements = [
+        row for row in app.query(GetLogistics()).requirements
+        if row.owner_id == project_id
+    ]
+    assert paused_requirements
+    assert all(row.operational_source_count == 0 for row in paused_requirements)
+    assert app.query(GetCargoFlows()).items == ()
+
+    app.execute(ResumeTransportAllocation(str(allocation_id)))
     decision = sim.tick_decision_projection()
     assert [
         row for row, amount in decision.allocations.transport.executable_dispatches
@@ -229,6 +242,11 @@ def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_
         if row.owner_id == EntityId(project_id)
     ]
     assert generated
+    allocation = next(
+        row for row in app.query(GetLogistics()).allocations
+        if row.id == str(allocation_id)
+    )
+    assert not allocation.paused and allocation.used.forward_t_per_day > 0.0
 
 def test_unconstrained_requirement_auto_selects_reachable_stocked_source():
     sim = build_game_application()._simulation
@@ -387,11 +405,9 @@ def test_unchanged_daily_dispatches_extend_one_cargo_flow_segment():
     sim = build_game_application()._simulation
     sim.transport.transport_allocations.clear()
     _allow_external_transport(sim)
-    launch_capacity = next(
-        row.capacity_t_per_day
-        for row in sim.transport.external_services.values()
-        if row.display_name == "商業地表打上げ"
-    )
+    launch_capacity = sim.transport.external_services[
+        EARTH_LEO_LAUNCH_SERVICE
+    ].capacity_t_per_day
     sim.inventory.add(EARTH, MACHINERY, launch_capacity * 3.0)
     requirement = _requirement(
         launch_capacity * 3.0,

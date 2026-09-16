@@ -110,6 +110,19 @@ def test_application_policy_defaults_to_deny_and_roundtrips_with_funds(tmp_path)
     ).created_id
     assert policy_id is not None
     sim.external_economy.account.funds_musd = 777.0
+    recipe = sim.projects.recipes[ids.ORBITAL_LOGISTICS_NODE]
+    sim.technology.completed.update(recipe.prerequisite_technologies)
+    sim.projects.plan_build(
+        ids.ORBITAL_LOGISTICS_NODE,
+        ids.LEO,
+        3,
+        "import_now",
+        day=sim.day,
+        import_source_id=ids.EARTH,
+    )
+    sim.projects.advance_procurement(sim.day)
+    authorizations_before = app.query(GetExternalEconomy()).authorizations
+    assert authorizations_before
 
     path = tmp_path / "external-economy.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -122,6 +135,7 @@ def test_application_policy_defaults_to_deny_and_roundtrips_with_funds(tmp_path)
     assert row.spending_cap_musd == pytest.approx(12.0)
     assert row.period_budget_musd == pytest.approx(40.0)
     assert row.minimum_reserve_musd == pytest.approx(250.0)
+    assert view.authorizations == authorizations_before
 
 
 def test_duplicate_same_scope_policy_for_same_service_fails_closed():
@@ -151,40 +165,6 @@ def test_supply_planning_exposes_policy_denial_until_authorized():
     options = sim.logistics.supply_planning_options(demand, sim.day)
     assert ids.EARTH in options.operational_source_ids
     assert not any(value.startswith("external_policy_denied:") for value in options.blockers)
-
-
-def test_load_rederives_same_external_spending_authorization(tmp_path):
-    from space_idle.content.base_game import (
-        EARTH, LEO, ORBITAL_LOGISTICS_NODE,
-        TECH_CISLUNAR_LOGISTICS, TECH_ORBITAL_OPERATIONS,
-    )
-
-    app = build_game_application()
-    sim = app._simulation
-    sim.technology.completed.update({TECH_ORBITAL_OPERATIONS, TECH_CISLUNAR_LOGISTICS})
-    sim.projects.plan_build(
-        ORBITAL_LOGISTICS_NODE,
-        LEO,
-        3,
-        "import_now",
-        day=sim.day,
-        import_source_id=EARTH,
-    )
-    sim.projects.advance_procurement(sim.day)
-    app.execute(CreateExternalServicePolicy(
-        enabled=True,
-        allowed_service_ids=(str(ids.EARTH_LEO_LAUNCH_SERVICE),),
-        period_budget_musd=20.0,
-        minimum_reserve_musd=100.0,
-    ))
-    before = app.query(GetExternalEconomy()).authorizations
-    assert before
-
-    path = tmp_path / "external-auth.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application)
-    after = loaded.query(GetExternalEconomy()).authorizations
-    assert after == before
 
 
 def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():

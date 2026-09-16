@@ -39,15 +39,6 @@ def _fleet_row(app, definition_id, location_id):
     )
 
 
-def _advance_until_complete(app, exploration_id, *, max_days: int = 200) -> int:
-    state = app._simulation.scientific_exploration.campaigns[exploration_id]
-    for elapsed in range(max_days + 1):
-        if state.phase.value == "complete":
-            return elapsed
-        app.execute(AdvanceTime(1))
-    raise AssertionError(f"scientific exploration did not complete within {max_days} days: {exploration_id}")
-
-
 def _seed_exploration_movement_resources(app, *, returning: bool = False) -> None:
     sim = app._simulation
     exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
@@ -67,6 +58,37 @@ def _seed_exploration_movement_resources(app, *, returning: bool = False) -> Non
             requirement.resource_id,
             requirement.required_t,
         )
+
+
+def _advance_outbound_campaign_to_completion(app, exploration_id) -> None:
+    sim = app._simulation
+    state = sim.scientific_exploration.campaigns[exploration_id]
+    definition = sim.scientific_exploration.definitions[exploration_id]
+
+    assert state.phase.value == "outbound"
+    execution = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(execution.completion_day - sim.day))
+    assert state.phase.value == "active"
+
+    while state.phase.value == "active":
+        progress_before = state.progress_days
+        app.execute(AdvanceTime(1))
+        assert (
+            state.phase.value != "active"
+            or state.progress_days > progress_before + 1e-12
+        ), "active scientific exploration made no canonical-tick progress"
+
+    if definition.return_to_origin:
+        assert state.phase.value == "return_preparing"
+        _seed_exploration_movement_resources(app, returning=True)
+        # Reservation acquisition and departure are separate canonical tick
+        # results, already covered by the preparation ordering contract.
+        app.execute(AdvanceTime(2))
+        assert state.phase.value == "returning"
+        execution = sim.transport.movement_executions[state.movement_execution_id]
+        app.execute(AdvanceTime(execution.completion_day - sim.day))
+
+    assert state.phase.value == "complete"
 
 
 def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performance():
@@ -215,6 +237,14 @@ def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future
         str(ids.REUSABLE_ORBITAL_CARGO_TUG),
     ))
 
+    app.execute(AdvanceTime(2))
+    assert (
+        app._simulation.scientific_exploration.campaigns[
+            ids.CISLUNAR_SCIENCE_EXPLORATION
+        ].phase.value
+        == "outbound"
+    )
+
     path = tmp_path / "scientific-exploration.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
@@ -222,15 +252,18 @@ def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future
     loaded_state = capture_state(loaded._simulation)
     assert loaded_state["scientific_exploration"] == original_state["scientific_exploration"]
     assert loaded_state["transport"] == original_state["transport"]
-    assert _fleet_row(loaded, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == _row(loaded).required_units
+    loaded_campaign = loaded._simulation.scientific_exploration.campaigns[
+        ids.CISLUNAR_SCIENCE_EXPLORATION
+    ]
+    assert loaded_campaign.reserved_units == _row(loaded).required_units
+    assert loaded_campaign.movement_execution_id in loaded._simulation.transport.movement_executions
 
-    remaining_days = _advance_until_complete(app, ids.CISLUNAR_SCIENCE_EXPLORATION)
-    assert remaining_days > 0
-    loaded.execute(AdvanceTime(remaining_days))
+    _advance_outbound_campaign_to_completion(app, ids.CISLUNAR_SCIENCE_EXPLORATION)
+    _advance_outbound_campaign_to_completion(loaded, ids.CISLUNAR_SCIENCE_EXPLORATION)
     loaded_campaign = loaded._simulation.scientific_exploration.campaigns[ids.CISLUNAR_SCIENCE_EXPLORATION]
     original_campaign = app._simulation.scientific_exploration.campaigns[ids.CISLUNAR_SCIENCE_EXPLORATION]
     assert loaded_campaign == original_campaign
-    assert _fleet_row(loaded, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
+    assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
     state = loaded_campaign
     assert state.phase.value == "complete"
     assert state.research_points_awarded == pytest.approx(
@@ -317,7 +350,13 @@ def test_full_rp_storage_constrains_reward_retention_but_does_not_freeze_campaig
         exploration_id, day=sim.day
     )
     before_points = sim.research.stored_points
-    app.execute(AdvanceTime(7))
+    # Progress through the canonical reservation/start boundary, then derive the
+    # remaining transit from the frozen execution rather than a Content duration.
+    app.execute(AdvanceTime(2))
+    execution = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(execution.completion_day - sim.day))
+    assert state.phase.value == "active"
+    app.execute(AdvanceTime(1))
 
     assert state.inputs_consumed is True
     assert state.progress_days > 0.0

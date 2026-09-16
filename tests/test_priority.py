@@ -3,6 +3,9 @@ from __future__ import annotations
 import pytest
 
 from space_idle import PauseFacility, ResumeFacility, SetFacilityActivityPriority, build_game_application
+from space_idle.content import base_ids as ids
+from space_idle.facilities import FacilityDef
+from space_idle.shared import DefinitionId
 from space_idle.priority import (
     ActivityPriority, DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PRIORITY_LEVEL,
     DEFAULT_PROVISIONING_PRIORITY, PriorityLevel, ProvisioningPriority,
@@ -32,7 +35,13 @@ def test_priority_contract_has_five_ordinal_bands_defaults_and_distinct_roles():
 
 def test_pause_is_state_not_a_priority_level():
     app = build_game_application()
-    facility = next(iter(app._simulation.facilities.facilities.values()))
+    sim = app._simulation
+    definition_id = DefinitionId("test.facility.priority_pause")
+    sim.facilities.definitions[definition_id] = FacilityDef(
+        definition_id, "Priority/pause fixture"
+    )
+    facility_id = sim.facilities.install(definition_id, ids.EARTH)
+    facility = sim.facilities.facilities[facility_id]
     app.execute(SetFacilityActivityPriority(str(facility.id), 5))
     app.execute(PauseFacility(str(facility.id)))
     assert facility.paused is True

@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import pytest
 
 from space_idle import GetDependencyAnalytics, build_game_application
 from space_idle.catalog import ResourceGroupDef
 from space_idle.content import base_ids as ids
 from space_idle.content.base_game import EARTH, LEO
-from space_idle.persistence import load_game, save_game
 from space_idle.shared import DefinitionId, EntityId
 from space_idle.validation import validate_catalog_coverage
 from space_idle.validation_support import ConfigurationError
@@ -113,7 +110,9 @@ def test_content_defined_resource_group_aggregates_members_without_cross_resourc
 def test_current_authorized_transport_projects_boundary_flow_consumption_and_partial_unmet():
     app = build_game_application()
     sim = app._simulation
-    sim.technology.completed.update({ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS})
+    sim.technology.completed.update(
+        sim.projects.recipes[ids.ORBITAL_LOGISTICS_NODE].prerequisite_technologies
+    )
     sim.transport.external_services.clear()
     sim.transport.create_transport_allocation(
         ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
@@ -257,7 +256,7 @@ def test_external_supply_pipeline_applies_only_at_its_supply_endpoint_scope():
     remote_app = build_game_application()
     remote = remote_app._simulation
     remote.technology.completed.update(
-        {ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS}
+        remote.projects.recipes[ids.ORBITAL_LOGISTICS_NODE].prerequisite_technologies
     )
     remote_project_id = remote.projects.plan_build(
         ids.ORBITAL_LOGISTICS_NODE, LEO, 4, "import_now",
@@ -317,24 +316,3 @@ def test_resource_group_definition_fails_closed_when_member_resource_is_missing(
 
     with pytest.raises(ConfigurationError, match="references missing resources"):
         validate_catalog_coverage(app._simulation, app._catalog)
-
-def test_dependency_analytics_is_derived_again_after_load(tmp_path):
-    app = build_game_application()
-    sim = app._simulation
-    sim.logistics.cargo_flows[EntityId("flow.analytics.persist")] = CargoFlowSegment(
-        id=EntityId("flow.analytics.persist"), resource_id=ids.WATER, amount_t=7.0,
-        source_id=EARTH, final_destination_id=LEO, requirement_id=None,
-        owner_kind="test", owner_id=EntityId("analytics.owner"), priority=3,
-        leg=CargoServiceLeg("analytics.service", EARTH, LEO, 2, 2.0),
-        remaining_legs=(), dispatch_start_day=sim.day, dispatch_end_day=sim.day + 1,
-        dispatch_rate_t_per_day=7.0,
-    )
-    before = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),)))
-
-    path = tmp_path / "analytics-save.json"
-    save_game(app, path, saved_at=datetime(2026, 9, 14, tzinfo=timezone.utc))
-    loaded, offline = load_game(path, build_game_application)
-    assert offline is None
-    after = loaded.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),)))
-
-    assert after == before

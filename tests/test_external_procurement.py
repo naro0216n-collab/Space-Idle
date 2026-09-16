@@ -69,8 +69,9 @@ def test_external_procurement_defaults_to_deny():
     assert procurement.spending_requests == ()
 
 
-def test_external_procurement_uses_funds_then_supply_lead_time_and_inventory_admission():
-    sim = build_base_simulation()
+def test_external_procurement_uses_funds_then_persisted_supply_lead_time_and_inventory_admission(tmp_path):
+    app = build_game_application()
+    sim = app._simulation
     demand = _demand(amount=5.0)
     sim.inventory.stock[(ids.EARTH, ids.MACHINERY)] = 0.0
     _enable_for_demand(sim, demand)
@@ -98,15 +99,22 @@ def test_external_procurement_uses_funds_then_supply_lead_time_and_inventory_adm
         order.amount_t * order.unit_price_musd_per_t
     )
 
-    sim.logistics.settle_external_supply(supply.available_day - 1)
-    assert sim.inventory.amount(ids.EARTH, ids.MACHINERY) == pytest.approx(before_stock)
-    assert supply.id in sim.logistics.external_supply_batches
+    path = tmp_path / "external-procurement.json"
+    save_game(app, path, saved_at=datetime(2026, 9, 15, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application)
+    loaded_sim = loaded._simulation
+    loaded_supply = loaded_sim.logistics.external_supply_batches[supply.id]
+    assert loaded_supply == supply
 
-    sim.logistics.settle_external_supply(supply.available_day)
-    assert sim.inventory.amount(ids.EARTH, ids.MACHINERY) == pytest.approx(
+    loaded_sim.logistics.settle_external_supply(loaded_supply.available_day - 1)
+    assert loaded_sim.inventory.amount(ids.EARTH, ids.MACHINERY) == pytest.approx(before_stock)
+    assert loaded_supply.id in loaded_sim.logistics.external_supply_batches
+
+    loaded_sim.logistics.settle_external_supply(loaded_supply.available_day)
+    assert loaded_sim.inventory.amount(ids.EARTH, ids.MACHINERY) == pytest.approx(
         before_stock + 5.0
     )
-    assert supply.id not in sim.logistics.external_supply_batches
+    assert loaded_supply.id not in loaded_sim.logistics.external_supply_batches
 
 
 def test_external_procurement_budget_scales_physical_order_before_execution():
@@ -154,25 +162,6 @@ def test_external_supply_waits_for_inventory_admission_capacity():
     sim.logistics.settle_external_supply(supply.available_day + 1)
     assert supply.id not in sim.logistics.external_supply_batches
     assert sim.inventory.amount(ids.EARTH, ids.MACHINERY) == pytest.approx(3.0)
-
-
-def test_external_supply_roundtrips_through_save_load(tmp_path):
-    app = build_game_application()
-    sim = app._simulation
-    demand = _demand(amount=2.0)
-    sim.inventory.stock[(ids.EARTH, ids.MACHINERY)] = 0.0
-    _enable_for_demand(sim, demand)
-
-    _, _, _, procurement, funds = _plan_and_authorize_procurement(sim, demand)
-    sim.logistics.advance_external_procurement(sim.day, procurement, funds)
-    before = next(iter(sim.logistics.external_supply_batches.values()))
-
-    path = tmp_path / "external-procurement.json"
-    save_game(app, path, saved_at=datetime(2026, 9, 15, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application)
-    after = loaded._simulation.logistics.external_supply_batches[before.id]
-
-    assert after == before
 
 
 def test_remote_procurement_replenishes_logistics_source_without_bypassing_transport():

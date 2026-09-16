@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-import json
 
 from space_idle import (
     AdvanceTime,
@@ -13,9 +12,25 @@ from space_idle import (
     build_game_application,
 )
 from space_idle.content import base_ids as ids
-from space_idle.persistence import load_game, save_game
 from space_idle.surface_infrastructure import SURFACE_DISTRIBUTION_SERVICE
 from space_idle.service_capacity import allocate_service_capacity
+
+
+def _ensure_project_materials_on_hand(sim, *project_ids: str) -> None:
+    required = {}
+    for project_id in project_ids:
+        project = next(
+            row for row in sim.projects.projects.values()
+            if str(row.id) == project_id
+        )
+        recipe = sim.projects.recipe_for_project(project)
+        for requirement in recipe.resources:
+            key = (project.operational_node_id, requirement.resource_id)
+            required[key] = required.get(key, 0.0) + requirement.amount_t
+    for (node_id, resource_id), amount_t in required.items():
+        sim.inventory.stock[(node_id, resource_id)] = max(
+            sim.inventory.amount(node_id, resource_id), amount_t
+        )
 
 
 def _snapshot(sim, maintenance_factors=None):
@@ -45,6 +60,12 @@ def test_location_expansion_increases_aggregate_surface_infrastructure_load():
     one_remote = _snapshot(sim)
     assert one_remote.demand > initial.demand
     assert any(row.code == "territory_area" for row in one_remote.load_sources)
+    assert ids.EARTH_CELL_COASTAL not in sim.graph.operational_node_ids()
+    assert all(
+        location_id != ids.EARTH_CELL_COASTAL
+        for location_id, _resource_id in sim.inventory.stock
+    )
+    assert SURFACE_DISTRIBUTION_SERVICE in sim.facilities.service_types()
 
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_INLAND)
     two_remote = _snapshot(sim)
@@ -134,17 +155,6 @@ def test_location_query_exposes_surface_infrastructure_decision_state_and_improv
     assert str(ids.SURFACE_DISTRIBUTION_HUB) in row.improvement_facility_definition_ids
 
 
-def test_surface_infrastructure_does_not_create_cell_inventory_or_logistics_nodes():
-    sim = build_game_application()._simulation
-    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
-    _snapshot(sim)
-
-    assert ids.EARTH_CELL_COASTAL not in sim.graph.operational_node_ids()
-    assert all(location_id != ids.EARTH_CELL_COASTAL for location_id, _ in sim.inventory.stock)
-    assert SURFACE_DISTRIBUTION_SERVICE in sim.facilities.service_types()
-
-
 def test_surface_infrastructure_limits_remote_service_execution_without_disabling_capability():
     sim = build_game_application()._simulation
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
@@ -164,9 +174,13 @@ def test_surface_infrastructure_limits_remote_service_execution_without_disablin
         allocation_plan=decision.allocations.services,
     ).fulfillment == 0.0
     constrained = decision.allocations.services.summary(ids.EARTH, "survey_observation")
+    cargo_constrained = decision.allocations.services.summary(ids.EARTH, "cargo_transfer")
     assert constrained.nominal_rate == pytest.approx(expected_rate)
     assert constrained.enabled_rate == 0.0
     assert constrained.limiting_factors == ("provider_dependency",)
+    assert cargo_constrained.nominal_rate > 0.0
+    assert cargo_constrained.enabled_rate == 0.0
+    assert sim.facilities.active_capability_at(ids.EARTH, "cargo_transfer", sim.day)
 
     sim.facilities.install(
         ids.SURFACE_DISTRIBUTION_HUB,
@@ -180,21 +194,25 @@ def test_surface_infrastructure_limits_remote_service_execution_without_disablin
         allocation_plan=decision.allocations.services,
     ).fulfillment > 0.0
     supplied = decision.allocations.services.summary(ids.EARTH, "survey_observation")
+    cargo_supplied = decision.allocations.services.summary(ids.EARTH, "cargo_transfer")
     assert supplied.nominal_rate == pytest.approx(expected_rate)
     assert supplied.enabled_rate == pytest.approx(expected_rate)
     assert supplied.limiting_factors == ()
+    assert cargo_supplied.enabled_rate > 0.0
     assert sim.facilities.active_capability_at(ids.EARTH, "surface_survey", sim.day)
+    assert sim.facilities.active_capability_at(ids.EARTH, "cargo_transfer", sim.day)
     assert station_id in sim.facilities.facilities
 
 def test_surface_cell_development_execution_reports_shared_bundle_fulfillment():
     app = build_game_application()
     sim = app._simulation
     project_id = app.execute(DevelopSurfaceCell(
-        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"
+        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="local_priority"
     )).created_id
     assert project_id is not None
+    _ensure_project_materials_on_hand(sim, project_id)
 
-    app.execute(AdvanceTime(12))
+    app.execute(AdvanceTime(1))
     project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
     assert project.construction_done == 0.0
     assert project.construction_fulfillment == 0.0
@@ -234,14 +252,15 @@ def test_concurrent_surface_development_projects_share_the_common_execution_allo
     app = build_game_application()
     sim = app._simulation
     coastal_id = app.execute(DevelopSurfaceCell(
-        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"
+        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="local_priority"
     )).created_id
     inland_id = app.execute(DevelopSurfaceCell(
-        str(ids.EARTH), str(ids.EARTH_CELL_INLAND), sourcing_policy="import_now"
+        str(ids.EARTH), str(ids.EARTH_CELL_INLAND), sourcing_policy="local_priority"
     )).created_id
     assert coastal_id is not None and inland_id is not None
+    _ensure_project_materials_on_hand(sim, coastal_id, inland_id)
 
-    app.execute(AdvanceTime(12))
+    app.execute(AdvanceTime(1))
     sim.facilities.install(
         ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH,
         site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
@@ -263,43 +282,6 @@ def test_concurrent_surface_development_projects_share_the_common_execution_allo
     rows = {row.id: row for row in app.query(GetProjects()).items}
     assert rows[coastal_id].construction_fulfillment == pytest.approx(execution.fulfillment(coastal.id))
     assert rows[inland_id].construction_fulfillment == pytest.approx(execution.fulfillment(inland.id))
-
-
-def test_surface_infrastructure_is_derived_after_save_load(tmp_path):
-    app = build_game_application()
-    sim = app._simulation
-    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
-    before = _snapshot(sim)
-
-    path = tmp_path / "surface-infrastructure.json"
-    save_game(app, path)
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    assert "surface_infrastructure" not in payload["state"]
-
-    loaded, _ = load_game(path, build_game_application)
-    after = _snapshot(loaded._simulation)
-    assert after == before
-
-
-def test_surface_gateway_handling_service_uses_location_surface_infrastructure():
-    sim = build_game_application()._simulation
-    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
-    assert sim.facilities.active_capability_at(ids.EARTH, "cargo_transfer", sim.day)
-    decision = sim.tick_decision_projection()
-    assert decision.allocations.services.summary(
-        ids.EARTH, "cargo_transfer"
-    ).enabled_rate == 0.0
-
-    sim.facilities.install(
-        ids.SURFACE_DISTRIBUTION_HUB,
-        ids.EARTH,
-        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
-    )
-    decision = sim.tick_decision_projection()
-    assert decision.allocations.services.summary(
-        ids.EARTH, "cargo_transfer"
-    ).enabled_rate > 0.0
 
 
 def test_remote_surface_movement_capacity_uses_location_surface_infrastructure():

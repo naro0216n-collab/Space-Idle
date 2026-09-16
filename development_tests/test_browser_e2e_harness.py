@@ -38,6 +38,33 @@ jobs:
     )
 
 
+
+
+def _browser_scenario_jobs(path: Path) -> tuple[str, ...]:
+    jobs: list[str] = []
+    current_job: str | None = None
+    has_scenario = False
+    in_jobs = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line == "jobs:":
+            in_jobs = True
+            continue
+        if not in_jobs:
+            continue
+        if line and not line.startswith(" "):
+            break
+        if line.startswith("  ") and not line.startswith("    ") and line.endswith(":"):
+            if current_job is not None and has_scenario:
+                jobs.append(current_job)
+            current_job = line.strip()[:-1]
+            has_scenario = False
+            continue
+        if current_job is not None and "python playwright/" in line:
+            has_scenario = True
+    if current_job is not None and has_scenario:
+        jobs.append(current_job)
+    return tuple(jobs)
+
 def _configure_ci(monkeypatch, tmp_path: Path, workflow: Path, *, name: str, job: str) -> None:
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GITHUB_WORKFLOW", name)
@@ -221,8 +248,10 @@ def test_full_browser_jobs_derive_each_declared_suite_and_harness_contract(monke
     monkeypatch.setenv("GITHUB_WORKFLOW", "Full Validation")
     monkeypatch.setenv("SPACE_IDLE_CI_WORKFLOW_FILE", str(workflow))
 
+    jobs = _browser_scenario_jobs(workflow)
+    assert jobs
     suites = []
-    for job in ("chromium-e2e", "webkit-e2e"):
+    for job in jobs:
         monkeypatch.setenv("GITHUB_JOB", job)
         suite = support.ci_suite()
         assert suite is not None

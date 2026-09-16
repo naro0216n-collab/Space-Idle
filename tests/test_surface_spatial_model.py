@@ -21,6 +21,7 @@ from space_idle.spatial import (
 )
 from space_idle.validation import validate_runtime_state
 from space_idle.facilities import FacilityDef
+from space_idle.transport import TransportPerformanceProfile, VehicleDef
 
 
 def _add_system(graph: SpatialGraph, system_id: str = "test.system") -> StarSystemId:
@@ -108,10 +109,25 @@ def test_base_surface_map_exposes_affiliation_without_creating_cell_inventory_no
     assert {location_id for location_id, _resource_id in sim.inventory.stock} == before_inventory_locations
 
 
-def test_developed_territory_persists_without_saving_derived_cell_owner(tmp_path: Path):
+def test_spatial_persistence_saves_authoritative_territory_not_derived_or_static_context(tmp_path: Path):
     app = build_game_application()
     sim = app._simulation
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
+    dormant = SpatialNodeId("test.node.context_only")
+    sim.graph.add(
+        SpatialNodeDef(
+            dormant,
+            "Context only",
+            ids.SOL_SYSTEM,
+            sim.graph.bodies[ids.MOON].system_local_transport_geometry,
+            body_id=ids.MOON,
+            kind=SpatialNodeKind.ORBITAL,
+            inherits_parent_environment=False,
+        )
+    )
+    before_operational = set(sim.graph.operational_node_ids())
+    before_locations = set(sim.graph.locations)
+    assert dormant not in before_operational
     validate_runtime_state(sim)
 
     path = tmp_path / "save.json"
@@ -121,11 +137,15 @@ def test_developed_territory_persists_without_saving_derived_cell_owner(tmp_path
     assert "owner_location_id" not in raw
 
     loaded, _ = load_game(path, build_game_application)
-    assert loaded._simulation.graph.locations[ids.EARTH].developed_cell_ids == {
+    loaded_graph = loaded._simulation.graph
+    assert loaded_graph.locations[ids.EARTH].developed_cell_ids == {
         ids.EARTH_CELL_INDUSTRIAL,
         ids.EARTH_CELL_COASTAL,
     }
-    assert loaded._simulation.graph.owner_of_cell(ids.EARTH_CELL_COASTAL) == ids.EARTH
+    assert loaded_graph.owner_of_cell(ids.EARTH_CELL_COASTAL) == ids.EARTH
+    assert set(loaded_graph.operational_node_ids()) == before_operational
+    assert set(loaded_graph.locations) == before_locations
+    assert dormant not in loaded_graph.nodes  # runtime-added static Content is rebuilt, not Save state
 
 
 def test_non_surface_spatial_context_is_not_operational_until_explicitly_promoted():
@@ -169,7 +189,10 @@ def test_non_operational_spatial_context_cannot_own_facility_supply_policy_or_in
     )
     assert not sim.graph.has_operational_node(dormant)
 
-    facility_definition_id = next(iter(sim.facilities.definitions))
+    facility_definition_id = DefinitionId("test.facility.dormant_owner")
+    sim.facilities.definitions[facility_definition_id] = FacilityDef(
+        facility_definition_id, "Dormant owner fixture"
+    )
     with pytest.raises(KeyError):
         sim.facilities.install(facility_definition_id, dormant)
     with pytest.raises(KeyError):
@@ -178,33 +201,6 @@ def test_non_operational_spatial_context_cannot_own_facility_supply_policy_or_in
     sim.inventory.stock[(dormant, ids.WATER)] = 1.0
     with pytest.raises(ValueError, match="inventory references unknown location"):
         validate_runtime_state(sim)
-
-
-def test_save_load_preserves_operational_node_existence_separately_from_surface_territory(tmp_path: Path):
-    app = build_game_application()
-    sim = app._simulation
-    dormant = SpatialNodeId("test.node.context_only")
-    sim.graph.add(
-        SpatialNodeDef(
-            dormant,
-            "Context only",
-            ids.SOL_SYSTEM,
-            sim.graph.bodies[ids.MOON].system_local_transport_geometry,
-            body_id=ids.MOON,
-            kind=SpatialNodeKind.ORBITAL,
-            inherits_parent_environment=False,
-        )
-    )
-    before_operational = set(sim.graph.operational_node_ids())
-    assert dormant not in before_operational
-
-    path = tmp_path / "operational-node-state.json"
-    save_game(app, path)
-    loaded, _ = load_game(path, build_game_application)
-
-    assert set(loaded._simulation.graph.operational_node_ids()) == before_operational
-    assert dormant not in loaded._simulation.graph.nodes  # static Content is rebuilt, not Save state
-    assert set(loaded._simulation.graph.locations) == set(sim.graph.locations)
 
 
 def test_surface_and_non_surface_operational_nodes_share_owner_contracts():
@@ -224,7 +220,12 @@ def test_surface_and_non_surface_operational_nodes_share_owner_contracts():
     assert sim.inventory.amount(ids.EARTH, generic_resource) == pytest.approx(1.0)
     assert sim.inventory.amount(ids.LEO, generic_resource) == pytest.approx(1.0)
 
-    vehicle_definition = next(iter(sim.transport.vehicle_defs))
+    vehicle_definition = DefinitionId("test.vehicle.operational_node_owner")
+    sim.transport.vehicle_defs[vehicle_definition] = VehicleDef(
+        vehicle_definition,
+        "Operational-node owner fixture",
+        TransportPerformanceProfile(dry_mass_t=1.0, payload_t=1.0, endurance_days=1.0),
+    )
     before_earth = sim.transport.fleet_pool(vehicle_definition, ids.EARTH).total_units
     before_orbit = sim.transport.fleet_pool(vehicle_definition, ids.LEO).total_units
     sim.transport.add_fleet_units(vehicle_definition, 1, ids.EARTH, day=sim.day)

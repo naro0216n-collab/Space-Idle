@@ -9,38 +9,26 @@ from space_idle.validation import validate_simulation_configuration
 from space_idle.validation_support import ConfigurationError
 
 
-def test_vehicle_resource_specs_reject_duplicate_resource_ids():
+def test_vehicle_definition_validation_rejects_invalid_resource_and_interface_contracts():
     app = build_game_application()
     sim = app._simulation
     vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
     definition = sim.transport.vehicle_defs[vehicle_id]
 
-    sim.transport.vehicle_defs[vehicle_id] = replace(
-        definition,
-        production=replace(
-            definition.production,
+    for field in ("production", "maintenance"):
+        invalid = replace(
+            getattr(definition, field),
             resources=((MACHINERY, 1.0), (MACHINERY, 2.0)),
-        ),
-    )
-    with pytest.raises(ConfigurationError, match="duplicate vehicle resource input: production"):
-        validate_simulation_configuration(sim)
-
-    sim.transport.vehicle_defs[vehicle_id] = replace(
-        definition,
-        maintenance=replace(
-            definition.maintenance,
-            resources=((MACHINERY, 1.0), (MACHINERY, 2.0)),
-        ),
-    )
-    with pytest.raises(ConfigurationError, match="duplicate vehicle resource input: maintenance"):
-        validate_simulation_configuration(sim)
-
-
-def test_vehicle_resource_support_requires_declared_vehicle_interface():
-    app = build_game_application()
-    sim = app._simulation
-    vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.transport.vehicle_defs[vehicle_id]
+        )
+        sim.transport.vehicle_defs[vehicle_id] = replace(
+            definition,
+            **{field: invalid},
+        )
+        with pytest.raises(
+            ConfigurationError,
+            match=rf"duplicate vehicle resource input: {field}",
+        ):
+            validate_simulation_configuration(sim)
 
     sim.transport.vehicle_defs[vehicle_id] = replace(
         definition,
@@ -60,13 +48,28 @@ def test_vehicle_resource_support_requires_declared_vehicle_interface():
             ),
         ),
     )
-
     with pytest.raises(
         ConfigurationError,
         match="transport resource support requires undeclared vehicle capability",
     ):
         validate_simulation_configuration(sim)
 
+    sim.transport.vehicle_defs[vehicle_id] = replace(
+        definition,
+        performance=replace(definition.performance, endurance_days=0.0),
+    )
+    with pytest.raises(ConfigurationError, match="non-positive transport endurance"):
+        validate_simulation_configuration(sim)
+
+    sim.transport.vehicle_defs[vehicle_id] = replace(
+        definition,
+        performance=replace(
+            definition.performance,
+            generic_capabilities=("docking", "docking"),
+        ),
+    )
+    with pytest.raises(ConfigurationError, match="duplicate generic vehicle capability"):
+        validate_simulation_configuration(sim)
 
 def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
     from space_idle import AdvanceTime, PauseFacility, ProduceVehicle
@@ -142,37 +145,6 @@ def test_operation_asset_disposition_prevents_movement_continuation_after_recove
     )
     failures = sim.transport.performance_movement_failures(plan, profile, sim.day)
     assert "operation:powered_ascent:asset_returns_before_movement_complete" in failures
-
-
-def test_transport_endurance_is_profile_level_and_validated():
-    app = build_game_application()
-    sim = app._simulation
-    vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.transport.vehicle_defs[vehicle_id]
-
-    sim.transport.vehicle_defs[vehicle_id] = replace(
-        definition,
-        performance=replace(definition.performance, endurance_days=0.0),
-    )
-    with pytest.raises(ConfigurationError, match="non-positive transport endurance"):
-        validate_simulation_configuration(sim)
-
-
-def test_generic_vehicle_capabilities_are_intrinsic_and_unique():
-    app = build_game_application()
-    sim = app._simulation
-    vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.transport.vehicle_defs[vehicle_id]
-
-    sim.transport.vehicle_defs[vehicle_id] = replace(
-        definition,
-        performance=replace(
-            definition.performance,
-            generic_capabilities=("docking", "docking"),
-        ),
-    )
-    with pytest.raises(ConfigurationError, match="duplicate generic vehicle capability"):
-        validate_simulation_configuration(sim)
 
 
 def test_transport_endurance_applies_independently_of_operation_kind():
