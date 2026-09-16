@@ -16,6 +16,7 @@ import tempfile
 import time
 
 from space_idle import build_game_application
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.version import VERSION
@@ -45,7 +46,8 @@ def run() -> None:
 
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-interaction-")
     runtime = GameRuntime(
-        factory=build_game_application,
+        new_game_factory=build_game_application,
+        load_factory=build_game_application_for_load,
         save_dir=Path(temp_dir.name) / "saves",
         offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=0.35),
     )

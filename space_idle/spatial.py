@@ -655,14 +655,6 @@ class SpatialGraph:
             "interstellar", distance_km, delta_v_km_s
         )
 
-    def surface_cell_for_context(self, context_id: SpatialContextId) -> SurfaceCellId | None:
-        """Return a Cell only when the context explicitly identifies that Cell."""
-        if context_id in self.surface_cells:
-            return cast(SurfaceCellId, context_id)
-        if context_id in self.locations or context_id in self.nodes:
-            return None
-        raise KeyError(context_id)
-
     def is_surface_context(self, context_id: SpatialContextId) -> bool:
         if context_id in self.locations or context_id in self.surface_cells:
             return True

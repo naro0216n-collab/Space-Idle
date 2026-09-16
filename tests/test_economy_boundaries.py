@@ -70,7 +70,7 @@ def test_extraction_stops_when_output_storage_service_is_full():
         if row.output_t_per_day > 0
     )
     spec = sim.extraction.specs[initial.facility_def_id]
-    free = sim.inventory.free_capacity(EARTH, spec.output_resource_id)
+    free = sim.inventory.admission_state(EARTH, spec.output_resource_id).admission_capacity_t
     assert free is not None and free > 0
 
     sim.inventory.add(EARTH, spec.output_resource_id, free)

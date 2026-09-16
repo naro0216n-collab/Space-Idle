@@ -177,6 +177,59 @@ def test_fleet_retirement_priority_competes_for_shared_work_capacity():
     assert not low.irreversible_started
 
 
+def test_fleet_retirement_salvage_blocker_uses_shared_storage_class_headroom():
+    app = build_game_application()
+    sim = app._simulation
+    sim.transport.fleet_pool(ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH).total_units = 1
+
+    retirement_id = EntityId(app.execute(
+        RetireFleet(str(ids.REUSABLE_LAUNCH_VEHICLE), 1, str(ids.EARTH), priority=5)
+    ).created_id)
+    state = sim.transport.fleet_retirements[retirement_id]
+    definition = sim.transport.vehicle_defs[state.vehicle_definition_id]
+    required_work = definition.retirement.work_days_per_unit * state.units
+
+    for _ in range(10):
+        app.execute(AdvanceTime(1))
+        if state.progress_work + 1e-9 >= required_work:
+            break
+    assert state.progress_work == pytest.approx(required_work)
+    assert state.phase is FleetRetirementPhase.DISMANTLING
+
+    storage_class = sim.inventory.resource_storage_class[ids.STRUCTURAL_COMPONENTS]
+    salvage = tuple(
+        (resource_id, amount_per_unit * state.units)
+        for resource_id, amount_per_unit in definition.retirement.recovery_resources_per_unit
+        if amount_per_unit * state.units > 0.0
+    )
+    salvage_total = sum(
+        amount
+        for resource_id, amount in salvage
+        if sim.inventory.resource_storage_class.get(resource_id) == storage_class
+    )
+    largest_component = max(
+        amount
+        for resource_id, amount in salvage
+        if sim.inventory.resource_storage_class.get(resource_id) == storage_class
+    )
+    assert salvage_total > largest_component
+
+    admission = sim.inventory.admission_state_for_class(ids.EARTH, storage_class)
+    assert admission.admission_capacity_t is not None
+    target_headroom = (salvage_total + largest_component) / 2.0
+    filler = ids.CONSTRUCTION_EQUIPMENT
+    sim.inventory.stock[(ids.EARTH, filler)] = sim.inventory.amount(ids.EARTH, filler) + (
+        admission.admission_capacity_t - target_headroom
+    )
+
+    admission = sim.inventory.admission_state_for_class(ids.EARTH, storage_class)
+    assert admission.admission_capacity_t is not None
+    assert largest_component < admission.admission_capacity_t < salvage_total
+    assert f"salvage_admission:{storage_class}" in sim.transport.fleet_retirement_blockers(
+        retirement_id, day=sim.day
+    )
+
+
 def test_fleet_retirement_at_non_earth_node_waits_for_salvage_admission():
     app = build_game_application()
     sim = app._simulation

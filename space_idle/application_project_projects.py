@@ -270,7 +270,7 @@ class ProjectProjectorMixin:
                 tuple(
                     (str(resource_id), amount)
                     for resource_id, amount in sorted(
-                        sim.projects._decommission_salvage(project).items(), key=lambda row: str(row[0])
+                        sim.projects.decommission_salvage_for_project(project).items(), key=lambda row: str(row[0])
                     )
                 ),
             ))

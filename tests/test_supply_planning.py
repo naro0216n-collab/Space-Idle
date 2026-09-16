@@ -367,7 +367,7 @@ def test_cargo_arrival_waits_for_inventory_admission():
     sim.refresh_storage()
     _owned_earth_leo_capacity(sim)
     sim.inventory.stock[(LEO, MACHINERY)] = 0.0
-    free = sim.inventory.free_capacity(LEO, MACHINERY)
+    free = sim.inventory.admission_state(LEO, MACHINERY).admission_capacity_t
     assert free is not None and free > 1.0
     sim.inventory.add(LEO, CONSTRUCTION_EQUIPMENT, free)
     sim.inventory.add(EARTH, MACHINERY, 1.0)
@@ -519,7 +519,7 @@ def test_arrival_waiting_reduces_reusable_transport_capacity_until_cleared():
     filler = DefinitionId("test.resource.backpressure-filler")
     sim.inventory.register_storage_class(cargo, "general_cargo")
     sim.inventory.register_storage_class(filler, "general_cargo")
-    free = sim.inventory.free_capacity(LEO, cargo)
+    free = sim.inventory.admission_state(LEO, cargo).admission_capacity_t
     assert free is not None and free > 1.0
     sim.inventory.add(LEO, filler, free)
     sim.inventory.add(EARTH, cargo, 1.0)

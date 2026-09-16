@@ -17,6 +17,7 @@ import time
 import urllib.request
 
 from space_idle import AdvanceTime, PlanBuild, build_game_application
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
 from space_idle.simulation import OfflineProgressPolicy
@@ -58,7 +59,8 @@ def run() -> None:
 
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-logistics-ui-")
     runtime = GameRuntime(
-        factory=_build_logistics_test_application,
+        new_game_factory=_build_logistics_test_application,
+        load_factory=build_game_application_for_load,
         save_dir=Path(temp_dir.name) / "saves",
         offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0),
     )

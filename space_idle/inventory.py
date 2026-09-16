@@ -175,10 +175,6 @@ class InventoryBook:
             )
         return self.admission_state_for_class(operational_node_id, storage_class)
 
-    def free_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
-        """Compatibility projection of the canonical Inventory Admission state."""
-        return self.admission_state(operational_node_id, resource_id).admission_capacity_t
-
     def amount(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return self.stock.get((operational_node_id, resource_id), 0.0)
 
@@ -209,10 +205,6 @@ class InventoryBook:
         return InventoryAdmissionResult(
             requested, accepted, max(0.0, requested - accepted), before, after
         )
-
-    def add_up_to(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
-        """Compatibility projection. New physical inflow should use :meth:`admit`."""
-        return self.admit(operational_node_id, resource_id, amount).admitted_t
 
     def add(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
         result = self.admit(operational_node_id, resource_id, amount)
