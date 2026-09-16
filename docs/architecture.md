@@ -598,6 +598,8 @@ Surface LocationではCore Cellや代表座標をMovement距離の固定正本�
 
 Surface Cell自体を通常Transport Capacity Network Nodeにはしない。Location設立前だけは `physical_target(surface_cell_id)` をFounding / Deployment等のone-shot Movementで利用できる。
 
+Movement Planはauthoritative StateではなくSpatial / Facility / Definitionからの派生結果である。同一physical state内では、全候補、OD別候補、Plan ID参照等が同じ導出結果を再利用できる索引をTransport Domainが保持してよい。Plan ID参照のたびに全Operational Node pairを再列挙する方式をQuery契約にはしない。Spatial topology、Movement Endpointを構成するFacility、その他Plan内容へ影響するphysical stateが変化したときだけ派生索引を無効化し、必要時に再導出する。派生索引はSave対象にしない。
+
 ### 10.2 Vehicle Definition / Fleet State
 
 Vehicle DefinitionはMovement適合と運用能力を導出する物理・運用性能を持ち、固定の`t/day`を持たない。必要に応じてDry Mass / Payload Capacity、Propellant type / capacity / consumption model、Operation capabilities / environment envelope、Travel performance / Endurance、Docking / refueling interface、turnaround / servicing、Production Capability / duration / resources等を持つ。
@@ -844,6 +846,8 @@ SurveyProviderDefinition
 
 Query DTOはJSON化可能なimmutableデータとする。UI側が可否・維持率・Movement適合・allocation・Projected Material Readiness・産業依存度等を再計算しない。
 
+Queryは要求されたscopeを不必要に拡大しない。origin / destination、Operational Node、Entity ID等で対象が限定されている場合は、そのscopeから必要な派生状態を導出する。同一Application snapshot内で複数Queryが同じ派生状態を必要とする場合は同じprojection / indexを再利用し、各Query・各rowから全世界候補を再生成しない。read Queryはauthoritative Stateを変更せず、性能上の都合だけでDomain-owned derived indexを無条件にinvalidateしない。
+
 ## 14. Save / Load / Offline Progress
 
 SaveはApplication単位のversion付きSnapshotとする。静的Definitionは現在Contentから再構築し、可変Stateだけを復元する。
@@ -854,7 +858,7 @@ Static Star System / Celestial Body / Surface Cell topology / geology / Resource
 
 ゲーム性評価段階ではschema/content migrationを目的化しない。
 
-Offline Progressは通常Simulationと別ルールにせず、実時間経過をゲーム時間へ換算して同じ1 game dayのcanonical advance経路を使う。通常進行、高速進行、Offlineで同じgame timeを進めた結果が同じStateになることを不変条件とする。fast-forwardは日次tick列と同値な区間をまとめる実装最適化としてのみ利用する。
+Offline Progressは通常Simulationと別ルールにせず、実時間経過をゲーム時間へ換算して同じ1 game dayのcanonical advance経路を使う。通常進行、高速進行、Offlineで同じgame timeを進めた結果が同じStateになることを不変条件とする。fast-forwardは日次tick列と同値な区間をまとめる実装最適化としてのみ利用する。RuntimeやQueryの処理が重い場合も、経過実時間を意図的に破棄する等の時間意味論変更を性能対策に使わず、重複導出や探索範囲を先に是正する。
 
 ## 15. Validation / Test
 
@@ -921,6 +925,8 @@ Runtime Validation：
 - Provisioning PriorityとActivity Priorityが別State ownershipを持つ
 - Nominal / Available / Used capacityが同じTransport Service Planから一貫して導出される
 - 任意の成立済みOperational Node pairについてSpatial Relation / Movement Plan候補を評価できる
+- 同一physical stateのMovement Plan全候補導出をPlan ID参照や複数Queryの各rowから反復せず、派生索引として再利用できる
+- origin / destination等でscopeを限定したMovement Queryが無関係な全Operational Node pair導出へ拡大しない
 - 新規Location / Celestial Body追加時に既存全地点との静的OD Route定義を要求しない
 - Surface / Spaceflight / Landing等のOperation適合がVehicle名称に依存しない
 - dispatch済みCargo /開始済みMovement Executionのlatencyが後続Definition / Infrastructure変更で遡及変更されない

@@ -190,6 +190,16 @@ class MovementResolver:
             plans.extend(self.direct_plans(origin_id, destination.id))
         return tuple(sorted(plans, key=lambda row: (str(row.destination_id), str(row.id))))
 
+    def inbound_plans(self, destination_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
+        if not self.graph.has_operational_node(destination_id):
+            return ()
+        plans: list[MovementPlan] = []
+        for origin in self.graph.operational_nodes():
+            if origin.id == destination_id:
+                continue
+            plans.extend(self.direct_plans(origin.id, destination_id))
+        return tuple(sorted(plans, key=lambda row: (str(row.origin_id), str(row.id))))
+
     def all_direct_plans(self) -> tuple[MovementPlan, ...]:
         plans: list[MovementPlan] = []
         nodes = tuple(node.id for node in self.graph.operational_nodes())
@@ -198,12 +208,6 @@ class MovementResolver:
                 if origin_id != destination_id:
                     plans.extend(self.direct_plans(origin_id, destination_id))
         return tuple(sorted(plans, key=lambda row: str(row.id)))
-
-    def plan_by_id(self, plan_id: MovementPlanId) -> MovementPlan | None:
-        for plan in self.all_direct_plans():
-            if plan.id == plan_id:
-                return plan
-        return None
 
     def _access_rules_for_body(self, body_id: CelestialBodyId) -> tuple[SurfaceAccessMovementRule, ...]:
         return tuple(

@@ -329,7 +329,6 @@ class LogisticsStateProjectorMixin:
 
     def _fleet_relocation_preview_view(self, query) -> FleetRelocationPreviewView:
         sim = self._simulation
-        sim.transport.invalidate_movement_plans()
         policy = PathPolicy(query.path_policy)
         plan = sim.transport.fleet_relocation_plan(
             DefinitionId(query.vehicle_definition_id),

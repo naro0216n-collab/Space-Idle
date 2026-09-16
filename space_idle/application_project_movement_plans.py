@@ -115,15 +115,20 @@ class LogisticsMovementPlanProjectorMixin:
         include_modes: bool = True,
     ) -> tuple[MovementPlanRow, ...]:
         sim = self._simulation
-        sim.transport.invalidate_movement_plans()
+        if movement_plan_id is not None:
+            movement_plan = sim.transport.movement_plan(movement_plan_id)
+            candidates = () if movement_plan is None else (movement_plan,)
+        elif origin_id is not None and destination_id is not None:
+            candidates = sim.transport.movement_plan_candidates(origin_id, destination_id)
+        elif origin_id is not None:
+            candidates = sim.transport.outbound_movement_plans(origin_id)
+        elif destination_id is not None:
+            candidates = sim.transport.inbound_movement_plans(destination_id)
+        else:
+            candidates = sim.transport.movement_plan_options()
+
         rows: list[MovementPlanRow] = []
-        for movement_plan in sim.transport.movement_plan_options():
-            if origin_id is not None and str(movement_plan.origin_id) != origin_id:
-                continue
-            if destination_id is not None and str(movement_plan.destination_id) != destination_id:
-                continue
-            if movement_plan_id is not None and str(movement_plan.id) != movement_plan_id:
-                continue
+        for movement_plan in candidates:
             movement_plan_blockers = sim.transport.movement_plan_failures(movement_plan.id, sim.day)
             mode_rows = self._movement_service_mode_rows(movement_plan)
             try:
@@ -190,7 +195,6 @@ class LogisticsMovementPlanProjectorMixin:
         self, source_id, destination_id
     ) -> TransportAllocationOptionsView:
         sim = self._simulation
-        sim.transport.invalidate_movement_plans()
         options: list[TransportAllocationOptionRow] = []
         for definition in sim.transport.vehicle_definitions():
             fleet = sim.transport.fleet_pool_snapshot(definition.id, source_id)

@@ -52,6 +52,7 @@ class TransportService(
     surface_access_movement_rules: tuple[SurfaceAccessMovementRule, ...] = ()
     spaceflight_movement_rules: tuple[SpaceflightMovementRule, ...] = ()
     _movement_plan_cache: dict[MovementPlanId, MovementPlan] = field(default_factory=dict, repr=False)
+    _movement_plan_options_cache: tuple[MovementPlan, ...] | None = field(default=None, repr=False)
     fleet_pools: dict[tuple[DefinitionId, SpatialNodeId], FleetPool] = field(default_factory=dict)
     fleet_reservations: dict[EntityId, FleetReservation] = field(default_factory=dict)
     transport_allocations: dict[EntityId, TransportAllocation] = field(default_factory=dict)
@@ -88,7 +89,9 @@ class TransportService(
     def movement_plan_candidates(
         self, origin_id: SpatialNodeId, destination_id: SpatialNodeId
     ) -> tuple[MovementPlan, ...]:
-        return self.movement_resolver().direct_plans(origin_id, destination_id)
+        plans = self.movement_resolver().direct_plans(origin_id, destination_id)
+        self._movement_plan_cache.update((plan.id, plan) for plan in plans)
+        return plans
 
     def movement_plans_to_physical_target(
         self, origin_id: SpatialNodeId, target_cell_id: SurfaceCellId
@@ -166,16 +169,31 @@ class TransportService(
         )
 
     def outbound_movement_plans(self, origin_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
-        return self.movement_resolver().outbound_plans(origin_id)
+        plans = self.movement_resolver().outbound_plans(origin_id)
+        self._movement_plan_cache.update((plan.id, plan) for plan in plans)
+        return plans
+
+    def inbound_movement_plans(self, destination_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
+        plans = self.movement_resolver().inbound_plans(destination_id)
+        self._movement_plan_cache.update((plan.id, plan) for plan in plans)
+        return plans
 
     def movement_plan(self, plan_id: MovementPlanId) -> MovementPlan | None:
-        current = self.movement_resolver().plan_by_id(plan_id)
-        if current is not None:
-            return current
+        cached = self._movement_plan_cache.get(plan_id)
+        if cached is not None:
+            return cached
+        # A plan id is a stable opaque hash and cannot be inverted back to its
+        # endpoints.  Materialize the current direct-plan index at most once for
+        # this physical state, then use O(1) lookup for every dependent query.
+        self.movement_plan_options()
         return self._movement_plan_cache.get(plan_id)
 
     def movement_plan_options(self) -> tuple[MovementPlan, ...]:
-        return self.movement_resolver().all_direct_plans()
+        if self._movement_plan_options_cache is None:
+            plans = self.movement_resolver().all_direct_plans()
+            self._movement_plan_options_cache = plans
+            self._movement_plan_cache.update((plan.id, plan) for plan in plans)
+        return self._movement_plan_options_cache
 
     def require_movement_plan(self, plan_id: MovementPlanId) -> MovementPlan:
         plan = self.movement_plan(plan_id)
@@ -184,8 +202,9 @@ class TransportService(
         return plan
 
     def invalidate_movement_plans(self) -> None:
-        """Drop derived Movement Plan cache after physical/spatial state changes."""
+        """Drop derived Movement Plan indexes after physical/spatial state changes."""
         self._movement_plan_cache.clear()
+        self._movement_plan_options_cache = None
 
     def external_transport_service_definition(
         self, service_id: DefinitionId

@@ -42,6 +42,7 @@ from space_idle.api import GameRuntime
 from space_idle.api.codec import to_jsonable
 from space_idle.content.base_game import EARTH, LEO
 from space_idle.content import base_ids as ids
+from space_idle.transport.movement import MovementResolver
 
 
 def test_vehicle_definition_identity_is_consistent_across_catalog_fleet_and_movement_modes():
@@ -57,6 +58,57 @@ def test_vehicle_definition_identity_is_consistent_across_catalog_fleet_and_move
         for mode in movement_plan.modes:
             if mode.vehicle_definition_id is not None:
                 assert mode.vehicle_definition_id in definitions
+
+
+def test_movement_plan_derived_index_is_reused_until_physical_invalidation(monkeypatch):
+    app = build_game_application()
+    sim = app._simulation
+    original = MovementResolver.all_direct_plans
+    calls = 0
+
+    def counted_all_direct_plans(resolver):
+        nonlocal calls
+        calls += 1
+        return original(resolver)
+
+    monkeypatch.setattr(MovementResolver, "all_direct_plans", counted_all_direct_plans)
+    sim.transport.invalidate_movement_plans()
+
+    plans = sim.transport.movement_plan_options()
+    assert plans
+    assert calls == 1
+    for plan in plans:
+        assert sim.transport.movement_plan(plan.id) is not None
+    app.query(GetMovementPlans(include_modes=True))
+    assert calls == 1
+
+    app.execute(AdvanceTime(1))
+    app.query(GetMovementPlans(include_modes=True))
+    assert calls == 1
+
+    sim.transport.invalidate_movement_plans()
+    sim.transport.movement_plan_options()
+    assert calls == 2
+
+
+def test_scoped_movement_query_does_not_expand_to_all_operational_node_pairs(monkeypatch):
+    app = build_game_application()
+    sim = app._simulation
+    sim.transport.invalidate_movement_plans()
+
+    def reject_global_enumeration(_resolver):
+        raise AssertionError("scoped Movement query must not enumerate every OD pair")
+
+    monkeypatch.setattr(MovementResolver, "all_direct_plans", reject_global_enumeration)
+    view = app.query(GetMovementPlans(
+        origin_id=str(EARTH),
+        destination_id=str(LEO),
+        include_modes=False,
+    ))
+
+    assert view.items
+    assert {row.origin_id for row in view.items} == {str(EARTH)}
+    assert {row.destination_id for row in view.items} == {str(LEO)}
 
 
 def test_application_decision_queries_are_observational():

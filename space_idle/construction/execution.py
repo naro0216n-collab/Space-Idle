@@ -151,7 +151,8 @@ class ConstructionExecutionMixin:
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
         day: int = 0,
-    ) -> None:
+    ) -> bool:
+        physical_state_changed = False
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
             if (
                 project.paused
@@ -165,6 +166,9 @@ class ConstructionExecutionMixin:
                 continue
             if recipe.self_deploying or recipe.construction_work <= 1e-12:
                 self._finish_project(project)
+                physical_state_changed = True
                 continue
             if project.construction_done + 1e-9 >= recipe.construction_work:
                 self._finish_project(project)
+                physical_state_changed = True
+        return physical_state_changed

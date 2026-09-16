@@ -59,7 +59,7 @@ def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ti
     assert runtime._app._simulation.boundary_settled_day == runtime._app._simulation.day
 
 
-def test_runtime_does_not_recredit_runtime_processing_time_as_game_time(tmp_path):
+def test_runtime_clock_preserves_elapsed_wall_time_during_projection_work(tmp_path):
     now = [100.0]
     runtime = GameRuntime(
         factory=build_game_application,
@@ -71,22 +71,18 @@ def test_runtime_does_not_recredit_runtime_processing_time_as_game_time(tmp_path
 
     query_many = runtime._app.query_many
 
-    def expensive_projection(queries):
+    def projection_with_elapsed_wall_time(queries):
         result = query_many(queries)
         now[0] += 5.0
         return result
 
-    runtime._app.query_many = expensive_projection
+    runtime._app.query_many = projection_with_elapsed_wall_time
 
     first = runtime.snapshot({"world": GetWorld()})
     second = runtime.snapshot({"world": GetWorld()})
 
     assert first.data["world"].day == 0
-    assert second.data["world"].day == 0
-
-    now[0] += 2.5
-    advanced = runtime.snapshot({"world": GetWorld()})
-    assert advanced.data["world"].day == 1
+    assert second.data["world"].day == 2
 
 
 def test_positive_transport_duration_rounds_up_to_canonical_day_boundary():

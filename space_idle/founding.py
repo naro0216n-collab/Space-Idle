@@ -680,8 +680,9 @@ class LocationFoundingService:
                     project.status = FoundingStatus.DEPLOYING
                     project.movement_execution_id = execution.id
 
-    def settle_arrivals(self, day: int) -> None:
+    def settle_arrivals(self, day: int) -> bool:
         """Complete deployments whose arrival time was reached before this tick."""
+        physical_state_changed = False
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
             if project.status is not FoundingStatus.DEPLOYING:
                 continue
@@ -692,6 +693,8 @@ class LocationFoundingService:
                 raise RuntimeError(f"founding MovementExecution missing: {project.id}")
             if execution.completion_day <= day:
                 self._complete(project, day)
+                physical_state_changed = True
+        return physical_state_changed
 
     def _complete(self, project: LocationFoundingProject, day: int) -> None:
         graph = self.facilities.environment.graph

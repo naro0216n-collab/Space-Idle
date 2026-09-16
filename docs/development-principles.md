@@ -79,7 +79,17 @@ Domain model
 
 各層で同じルールを再実装せず、判断は所有Domainへ集約し、外側は契約を利用する。
 
-### 3.5 実装後に広域監査する
+### 3.5 計算量と導出範囲をArchitecture契約として扱う
+
+Generic Coreが将来増加するEntityや関係を扱う場合、正しさだけでなく、どの集合に対して何回導出するかを実装前に確認する。Operational Node、Movement Plan、Facility、Resource、Project等の件数が増えたとき、局所Queryや1回のtickが無関係な全世界集合の再列挙へ暗黙に拡大しない構造を選ぶ。
+
+特に、同じauthoritative Stateから同一の派生結果を複数箇所が参照する場合は、一度導出して索引・snapshotとして再利用する。個別ID参照やorigin / destination等で範囲が指定されたQueryは、その要求範囲に応じた導出を使い、各行の評価から全候補生成を繰り返さない。派生索引のinvalidationは、その入力となるauthoritative Stateを変更する責務側で行い、read Queryが安全確認のために毎回破棄する構造へしない。
+
+この再利用は派生状態の保存正本化を意味しない。索引・cache・projectionはSave対象にせず、入力State変更後に再導出可能であることを保つ。性能問題への対処として、wall-clockとgame timeの対応、canonical tick、Domain invariant、Queryの意味論を変更して処理コストを見えなくすることは行わない。まず重複導出、探索範囲、責務境界、データアクセス経路を修正する。
+
+検証は不安定な実時間閾値だけに依存せず、「同一physical stateで全候補導出が一度だけである」「絞り込みQueryが全世界候補を要求しない」等、計算量増大の原因となる契約を直接確認する。
+
+### 3.6 実装後に広域監査する
 
 機能が動作した時点で終えず、変更範囲の周辺を含めて監査する。
 

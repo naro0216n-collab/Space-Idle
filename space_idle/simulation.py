@@ -732,9 +732,8 @@ class Simulation:
         self.transport.advance_fleet_state(self.day)
         if self.scientific_exploration is not None:
             self.scientific_exploration.settle_movement_arrivals(self.day)
-        if self.founding is not None:
-            self.founding.settle_arrivals(self.day)
-        self.transport.invalidate_movement_plans()
+        if self.founding is not None and self.founding.settle_arrivals(self.day):
+            self.transport.invalidate_movement_plans()
         self.logistics.prepare_cargo_arrivals(self.day)
         handoff_requests = self.logistics.cargo_handoff_service_requests(self.day)
         handoff_allocations, direct_handoff_allocations = (
@@ -1448,8 +1447,8 @@ class Simulation:
     def _settle_tick_state_transitions(self, allocations: TickAllocations) -> None:
         if self.research is not None:
             self.research.settle_completions(self.day + 1)
-        self.projects.settle_completions(allocations.power_by_location, self.day)
-        self.transport.invalidate_movement_plans()
+        if self.projects.settle_completions(allocations.power_by_location, self.day):
+            self.transport.invalidate_movement_plans()
         next_day = self.day + 1
         if self.contracts is not None:
             self.contracts.advance_day(
