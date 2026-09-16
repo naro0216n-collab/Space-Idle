@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,6 +86,23 @@ class GameRuntime:
             self._revision += 1
         return result
 
+    @contextmanager
+    def _clock_boundary_locked(self):
+        """Synchronize wall time without feeding Runtime work back into itself.
+
+        Elapsed wall time is measured between completed Runtime boundaries. Time
+        spent executing canonical simulation ticks or deriving read projections is
+        scheduler overhead, not new idle time to enqueue on the next request.
+        Otherwise an expensive snapshot at high speed can create a catch-up spiral:
+        projection work becomes elapsed time, which creates more ticks, which makes
+        the next projection still later.
+        """
+        self._sync_clock_locked()
+        try:
+            yield
+        finally:
+            self._last_clock = self._clock()
+
     @property
     def revision(self) -> int:
         with self._lock:
@@ -115,8 +133,8 @@ class GameRuntime:
 
     def metadata(self) -> dict[str, object]:
         with self._lock:
-            self._sync_clock_locked()
-            return self._metadata_locked()
+            with self._clock_boundary_locked():
+                return self._metadata_locked()
 
     def snapshot(self, queries: Mapping[str, Query]) -> RuntimeResult:
         """Read several projections at one authoritative simulation instant.
@@ -127,10 +145,10 @@ class GameRuntime:
         is read while the runtime lock is held.
         """
         with self._lock:
-            self._sync_clock_locked()
-            data: dict[str, object] = {"session": self._metadata_locked()}
-            data.update(self._app.query_many(queries))
-            return RuntimeResult(self._revision, data)
+            with self._clock_boundary_locked():
+                data: dict[str, object] = {"session": self._metadata_locked()}
+                data.update(self._app.query_many(queries))
+                return RuntimeResult(self._revision, data)
 
     def set_time_control(
         self,
@@ -143,25 +161,25 @@ class GameRuntime:
             speed_multiplier=speed_multiplier,
         )
         with self._lock:
-            self._sync_clock_locked()
-            before = (
-                self._app.time_paused,
-                self._app.time_speed_multiplier,
-            )
-            self._app.execute(command)
-            after = (
-                self._app.time_paused,
-                self._app.time_speed_multiplier,
-            )
-            if after != before:
-                self._revision += 1
-                self._last_explicit_mutation_revision = self._revision
-            return RuntimeResult(self._revision, self._metadata_locked())
+            with self._clock_boundary_locked():
+                before = (
+                    self._app.time_paused,
+                    self._app.time_speed_multiplier,
+                )
+                self._app.execute(command)
+                after = (
+                    self._app.time_paused,
+                    self._app.time_speed_multiplier,
+                )
+                if after != before:
+                    self._revision += 1
+                    self._last_explicit_mutation_revision = self._revision
+                return RuntimeResult(self._revision, self._metadata_locked())
 
     def query(self, query: Query) -> RuntimeResult:
         with self._lock:
-            self._sync_clock_locked()
-            return RuntimeResult(self._revision, self._app.query(query))
+            with self._clock_boundary_locked():
+                return RuntimeResult(self._revision, self._app.query(query))
 
     def execute(
         self,
@@ -170,26 +188,27 @@ class GameRuntime:
         expected_revision: int | None = None,
     ) -> RuntimeResult:
         with self._lock:
-            self._sync_clock_locked()
-            if expected_revision is not None:
-                conflict = (
-                    expected_revision > self._revision
-                    or self._last_explicit_mutation_revision > expected_revision
-                )
-                if conflict:
-                    raise RevisionConflict(expected_revision, self._revision)
-            result = self._app.execute(command)
-            self._revision += 1
-            self._last_explicit_mutation_revision = self._revision
-            return RuntimeResult(self._revision, result)
+            with self._clock_boundary_locked():
+                if expected_revision is not None:
+                    conflict = (
+                        expected_revision > self._revision
+                        or self._last_explicit_mutation_revision > expected_revision
+                    )
+                    if conflict:
+                        raise RevisionConflict(expected_revision, self._revision)
+                result = self._app.execute(command)
+                self._revision += 1
+                self._last_explicit_mutation_revision = self._revision
+                return RuntimeResult(self._revision, result)
 
     def new_game(self) -> RuntimeResult:
         with self._lock:
             self._app = self._factory()
-            self._last_clock = self._clock()
             self._revision += 1
             self._last_explicit_mutation_revision = self._revision
-            return RuntimeResult(self._revision, self._metadata_locked())
+            result = RuntimeResult(self._revision, self._metadata_locked())
+            self._last_clock = self._clock()
+            return result
 
     def _slot_path(self, slot: str) -> Path:
         if (
@@ -202,13 +221,13 @@ class GameRuntime:
 
     def save(self, slot: str) -> RuntimeResult:
         with self._lock:
-            self._sync_clock_locked()
-            path = self._slot_path(slot)
-            save_game(self._app, path, saved_at=self._utcnow())
-            return RuntimeResult(
-                self._revision,
-                {"slot": slot, "saved": True},
-            )
+            with self._clock_boundary_locked():
+                path = self._slot_path(slot)
+                save_game(self._app, path, saved_at=self._utcnow())
+                return RuntimeResult(
+                    self._revision,
+                    {"slot": slot, "saved": True},
+                )
 
     def load(
         self,
@@ -228,10 +247,9 @@ class GameRuntime:
                 offline_policy=policy,
             )
             self._app = app
-            self._last_clock = self._clock()
             self._revision += 1
             self._last_explicit_mutation_revision = self._revision
-            return RuntimeResult(
+            result = RuntimeResult(
                 self._revision,
                 {
                     "slot": slot,
@@ -244,3 +262,5 @@ class GameRuntime:
                     "session": self._metadata_locked(),
                 },
             )
+            self._last_clock = self._clock()
+            return result

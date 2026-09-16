@@ -59,6 +59,36 @@ def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ti
     assert runtime._app._simulation.boundary_settled_day == runtime._app._simulation.day
 
 
+def test_runtime_does_not_recredit_runtime_processing_time_as_game_time(tmp_path):
+    now = [100.0]
+    runtime = GameRuntime(
+        factory=build_game_application,
+        save_dir=tmp_path,
+        offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=10.0),
+        clock=lambda: now[0],
+    )
+    runtime.set_time_control(speed_multiplier=4.0)
+
+    query_many = runtime._app.query_many
+
+    def expensive_projection(queries):
+        result = query_many(queries)
+        now[0] += 5.0
+        return result
+
+    runtime._app.query_many = expensive_projection
+
+    first = runtime.snapshot({"world": GetWorld()})
+    second = runtime.snapshot({"world": GetWorld()})
+
+    assert first.data["world"].day == 0
+    assert second.data["world"].day == 0
+
+    now[0] += 2.5
+    advanced = runtime.snapshot({"world": GetWorld()})
+    assert advanced.data["world"].day == 1
+
+
 def test_positive_transport_duration_rounds_up_to_canonical_day_boundary():
     sim = build_game_application()._simulation
     plan = sim.transport.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT)[0]
