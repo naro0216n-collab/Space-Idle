@@ -21,8 +21,8 @@ class CargoServiceLeg:
     destination_id: SpatialNodeId
     latency_days: int
     cycle_days: float
-    allocation_id: EntityId | None = None
-    direction: str | None = None
+    allocation_id: EntityId
+    direction: str
 
     def __post_init__(self) -> None:
         if not self.service_identity:
@@ -33,9 +33,7 @@ class CargoServiceLeg:
             raise ValueError("cargo service leg latency must be positive")
         if self.cycle_days <= 0:
             raise ValueError("cargo service leg cycle must be positive")
-        if (self.allocation_id is None) != (self.direction is None):
-            raise ValueError("cargo service leg allocation and direction must be paired")
-        if self.direction not in (None, "forward", "reverse"):
+        if self.direction not in ("forward", "reverse"):
             raise ValueError("cargo service leg direction must be forward or reverse")
 
 
@@ -151,41 +149,3 @@ class CargoArrivalWaiting:
     @property
     def next_leg(self) -> CargoServiceLeg | None:
         return None if not self.remaining_legs else self.remaining_legs[0]
-
-
-@dataclass
-class CargoHandoffStaging:
-    """Inventory-owned, reserved Cargo waiting to load onto the next leg.
-
-    The physical Resource is held by Inventory under ``reservation_owner_id``;
-    this state only owns the continuation commitment and frozen downstream
-    service conditions. It must never be counted as Logistics-owned cargo mass.
-    """
-
-    id: EntityId
-    resource_id: DefinitionId
-    amount_t: float
-    node_id: SpatialNodeId
-    final_destination_id: SpatialNodeId
-    requirement_id: EntityId | None
-    owner_kind: str
-    owner_id: EntityId
-    priority: ActivityPriority
-    reservation_owner_id: EntityId
-    remaining_legs: tuple[CargoServiceLeg, ...]
-    staged_day: int
-
-    def __post_init__(self) -> None:
-        self.priority = ActivityPriority(self.priority)
-        if self.amount_t <= 0:
-            raise ValueError("handoff staging amount must be positive")
-        if not self.remaining_legs:
-            raise ValueError("handoff staging requires a next transport leg")
-        if self.remaining_legs[0].source_id != self.node_id:
-            raise ValueError("handoff staging next leg must start at staging node")
-        if self.remaining_legs[-1].destination_id != self.final_destination_id:
-            raise ValueError("handoff staging path must end at final destination")
-
-    @property
-    def next_leg(self) -> CargoServiceLeg:
-        return self.remaining_legs[0]

@@ -204,22 +204,7 @@ class LogisticsStateProjectorMixin:
                 final_destination_id=str(waiting.final_destination_id),
                 latency_days=waiting.arrival_leg.latency_days,
             ))
-        for staging in sorted(
-            sim.logistics.handoff_staging_snapshots(), key=lambda row: str(row.id)
-        ):
-            next_leg = staging.next_leg
-            rows.append(CargoFlowRow(
-                id=str(staging.id), resource_id=str(staging.resource_id), amount_t=staging.amount_t,
-                source_id=str(staging.node_id), destination_id=str(next_leg.destination_id),
-                requirement_id=None if staging.requirement_id is None else str(staging.requirement_id),
-                owner_kind=staging.owner_kind, owner_id=str(staging.owner_id), priority=staging.priority,
-                service_ids=tuple(leg.service_identity for leg in staging.remaining_legs),
-                service_destinations=tuple(str(leg.destination_id) for leg in staging.remaining_legs),
-                departure_day=staging.staged_day, ready_day=staging.staged_day + next_leg.latency_days,
-                status="handoff_staged",
-                final_destination_id=str(staging.final_destination_id),
-                latency_days=next_leg.latency_days,
-            ))
+
         return tuple(sorted(rows, key=lambda row: row.id))
 
     def _vehicle_production_option_rows(self) -> tuple[VehicleProductionOptionRow, ...]:

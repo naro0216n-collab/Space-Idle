@@ -47,7 +47,7 @@ class MarketProjectorMixin:
                 blockers.append("market_interface_disabled")
             if price is None:
                 blockers.append("offer_unavailable")
-            elif not market._price_condition_satisfied(order, price):
+            elif not order.accepts_offer_price(price):
                 blockers.append("price_condition")
             if order.direction is TradeDirection.SELL:
                 requirement_id = market.sell_requirement_id(order.id)
@@ -57,11 +57,6 @@ class MarketProjectorMixin:
                     limiting.append("provider_demand")
                 if presented <= 1e-9 and in_flight <= 1e-9:
                     blockers.append("resource_not_at_market_interface")
-            else:
-                if market.available_funds_musd <= 1e-9:
-                    limiting.append("funds")
-                if market.available_provider_supply_t(interface.provider_id, order.resource_id) <= 1e-9:
-                    limiting.append("provider_supply")
             orders.append(TradeOrderRow(
                 str(order.id), order.direction.value, str(order.resource_id), str(order.market_interface_id),
                 order.priority, order.control_mode.value, order.quantity_target_t, order.rate_target_t_per_day,
@@ -73,7 +68,8 @@ class MarketProjectorMixin:
                 str(row.id), str(row.order_id), str(row.resource_id), row.remaining_quantity_t,
                 row.committed_price_musd_per_t, row.reserved_funds_musd, row.maturity_day,
                 sim.inventory.admission_state(
-                    market.interfaces[row.market_interface_id].operational_node_id, row.resource_id
+                    market.interfaces[market.orders[row.order_id].market_interface_id].operational_node_id,
+                    row.resource_id,
                 ).blockers if row.maturity_day <= sim.day else (),
             )
             for row in sorted(market.buy_commitments.values(), key=lambda value: str(value.id))

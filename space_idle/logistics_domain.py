@@ -6,7 +6,6 @@ from .domain import DomainExtension, StateCodec
 from .logistics_models import (
     CargoArrivalWaiting,
     CargoFlowSegment,
-    CargoHandoffStaging,
     CargoServiceLeg,
 )
 from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
@@ -22,7 +21,7 @@ def _capture_leg(leg: CargoServiceLeg) -> dict[str, Any]:
         "destination_id": str(leg.destination_id),
         "latency_days": leg.latency_days,
         "cycle_days": leg.cycle_days,
-        "allocation_id": None if leg.allocation_id is None else str(leg.allocation_id),
+        "allocation_id": str(leg.allocation_id),
         "direction": leg.direction,
     }
 
@@ -34,10 +33,8 @@ def _restore_leg(row: dict[str, Any]) -> CargoServiceLeg:
         destination_id=SpatialNodeId(row["destination_id"]),
         latency_days=int(row["latency_days"]),
         cycle_days=float(row["cycle_days"]),
-        allocation_id=(
-            None if row.get("allocation_id") is None else EntityId(row["allocation_id"])
-        ),
-        direction=row.get("direction"),
+        allocation_id=EntityId(row["allocation_id"]),
+        direction=row["direction"],
     )
 
 
@@ -46,7 +43,6 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
     return {
         "cargo_flow_counter": lg._cargo_flow_counter,
         "arrival_waiting_counter": lg._arrival_waiting_counter,
-        "handoff_staging_counter": lg._handoff_staging_counter,
         "cargo_flows": [
             {
                 "id": str(row.id),
@@ -83,23 +79,6 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
             }
             for row in sorted(lg.arrival_waiting.values(), key=lambda row: str(row.id))
         ],
-        "handoff_staging": [
-            {
-                "id": str(row.id),
-                "resource_id": str(row.resource_id),
-                "amount_t": row.amount_t,
-                "node_id": str(row.node_id),
-                "final_destination_id": str(row.final_destination_id),
-                "requirement_id": None if row.requirement_id is None else str(row.requirement_id),
-                "owner_kind": row.owner_kind,
-                "owner_id": str(row.owner_id),
-                "priority": int(row.priority),
-                "reservation_owner_id": str(row.reservation_owner_id),
-                "remaining_legs": [_capture_leg(leg) for leg in row.remaining_legs],
-                "staged_day": row.staged_day,
-            }
-            for row in sorted(lg.handoff_staging.values(), key=lambda row: str(row.id))
-        ],
         "target_stocks": [
             {
                 "id": str(row.id),
@@ -134,7 +113,6 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
     lg = sim.logistics
     lg._cargo_flow_counter = int(data.get("cargo_flow_counter", 0))
     lg._arrival_waiting_counter = int(data.get("arrival_waiting_counter", 0))
-    lg._handoff_staging_counter = int(data.get("handoff_staging_counter", 0))
     lg.cargo_flows = {
         EntityId(row["id"]): CargoFlowSegment(
             id=EntityId(row["id"]),
@@ -170,23 +148,6 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             arrived_day=int(row["arrived_day"]),
         )
         for row in data.get("arrival_waiting", [])
-    }
-    lg.handoff_staging = {
-        EntityId(row["id"]): CargoHandoffStaging(
-            id=EntityId(row["id"]),
-            resource_id=DefinitionId(row["resource_id"]),
-            amount_t=float(row["amount_t"]),
-            node_id=SpatialNodeId(row["node_id"]),
-            final_destination_id=SpatialNodeId(row["final_destination_id"]),
-            requirement_id=None if row.get("requirement_id") is None else EntityId(row["requirement_id"]),
-            owner_kind=row["owner_kind"],
-            owner_id=EntityId(row["owner_id"]),
-            priority=int(row["priority"]),
-            reservation_owner_id=EntityId(row["reservation_owner_id"]),
-            remaining_legs=tuple(_restore_leg(leg) for leg in row["remaining_legs"]),
-            staged_day=int(row["staged_day"]),
-        )
-        for row in data.get("handoff_staging", [])
     }
     lg.target_stocks = {
         EntityId(row["id"]): TargetStockPolicy(
@@ -261,24 +222,6 @@ def validate_logistics_runtime(sim: Any) -> None:
         for leg in waiting.remaining_legs:
             _validate_leg(sim, f"arrival waiting {waiting_id}", leg)
 
-    for staging_id, staging in lg.handoff_staging.items():
-        _require(staging_id == staging.id, f"handoff staging key mismatch: {staging_id}")
-        _require(staging.amount_t > 0, f"handoff staging has non-positive amount: {staging_id}")
-        _require(1 <= int(staging.priority) <= 5, f"handoff staging priority must be 1..5: {staging_id}")
-        _require(
-            sim.graph.has_operational_node(staging.node_id)
-            and sim.graph.has_operational_node(staging.final_destination_id),
-            f"handoff staging references unknown node: {staging_id}",
-        )
-        for leg in staging.remaining_legs:
-            _validate_leg(sim, f"handoff staging {staging_id}", leg)
-        reserved = sim.inventory.reserved_for(
-            staging.reservation_owner_id, staging.node_id, staging.resource_id
-        )
-        _require(
-            abs(reserved - staging.amount_t) <= max(1e-9, staging.amount_t * 1e-8),
-            f"handoff staging reservation mismatch: {staging_id}",
-        )
 
     for policy_id, policy in lg.target_stocks.items():
         _require(policy_id == policy.id, f"target stock key mismatch: {policy_id}")

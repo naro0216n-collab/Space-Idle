@@ -189,8 +189,8 @@ class Simulation:
         for key, amount in rows:
             if key.kind not in {"service", "service_pool"}:
                 raise ValueError("boundary capacity usage must reference Service constraints")
-            if amount < -1e-9:
-                raise ValueError("boundary capacity usage must be non-negative")
+            if not math.isfinite(amount) or amount < -1e-9:
+                raise ValueError("boundary capacity usage must be finite and non-negative")
             if key in restored:
                 raise ValueError("duplicate boundary capacity usage constraint")
             if amount > 1e-12:
@@ -268,7 +268,7 @@ class Simulation:
         requirements.extend(self.transport.fleet_relocation_supplys(self.day))
         if self.scientific_exploration is not None:
             requirements.extend(self.scientific_exploration.supplys(self.day))
-        requirements.extend(self.market.sell_supply_requirements(self.logistics))
+        requirements.extend(self.market.sell_supply_requirements())
         seen: set[object] = set()
         for requirement in requirements:
             if requirement.id in seen:
@@ -791,10 +791,8 @@ class Simulation:
         requirement_resolutions = resolve_local_supply(
             intents.supplys, self.inventory
         )
-        external_requirements = tuple(
-            requirement
-            for resolution in requirement_resolutions
-            if (requirement := resolution.external_requirement()) is not None
+        external_requirements = self.logistics.active_shipping_requirements(
+            self.day, intents.supplys
         )
         logistics_plan = self.logistics.plan_capacity_logistics(
             self.day, external_requirements

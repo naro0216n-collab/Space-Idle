@@ -23,7 +23,10 @@ def test_scope_boundary_changes_import_export_without_double_counting_internal_f
         id=EntityId("flow.analytics.scope"), resource_id=ids.WATER, amount_t=12.0,
         source_id=EARTH, final_destination_id=LEO, requirement_id=None,
         owner_kind="test", owner_id=EntityId("analytics.owner"), priority=3,
-        leg=CargoServiceLeg("analytics.service", EARTH, LEO, 2, 2.0),
+        leg=CargoServiceLeg(
+            "analytics.service", EARTH, LEO, 2, 2.0,
+            EntityId("analytics.transport-allocation"), "forward",
+        ),
         remaining_legs=(), dispatch_start_day=sim.day, dispatch_end_day=sim.day + 1,
         dispatch_rate_t_per_day=12.0,
     )

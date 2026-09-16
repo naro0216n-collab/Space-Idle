@@ -128,7 +128,12 @@ class ApplicationReportProjectorMixin:
         # Resource-flow analytics. Unsettled Buy commitments are provider-owned
         # inbound pipeline; executable Sell settlement is the external outflow.
         for commitment in sim.market.buy_commitments.values():
-            interface = sim.market.interfaces.get(commitment.market_interface_id)
+            order = sim.market.orders.get(commitment.order_id)
+            interface = (
+                None
+                if order is None
+                else sim.market.interfaces.get(order.market_interface_id)
+            )
             if interface is not None and interface.operational_node_id in scope:
                 imports_pipeline[commitment.resource_id] += commitment.remaining_quantity_t
 

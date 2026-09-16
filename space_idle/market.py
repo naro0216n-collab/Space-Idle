@@ -30,8 +30,8 @@ class FundsState:
     balance: float
 
     def __post_init__(self) -> None:
-        if self.balance < -_EPS:
-            raise ValueError("funds balance must be non-negative")
+        if not isfinite(self.balance) or self.balance < -_EPS:
+            raise ValueError("funds balance must be finite and non-negative")
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,8 @@ class MarketAvailabilityDef:
     replenishment_t_per_day: float = 0.0
 
     def __post_init__(self) -> None:
+        if not all(isfinite(value) for value in (self.initial_t, self.capacity_t, self.replenishment_t_per_day)):
+            raise ValueError("market availability values must be finite")
         if self.initial_t < -_EPS or self.capacity_t < -_EPS or self.replenishment_t_per_day < -_EPS:
             raise ValueError("market availability values must be non-negative")
         if self.initial_t > self.capacity_t + _EPS:
@@ -141,18 +143,23 @@ class TradeOrderState:
         if self.control_mode is TradeControlMode.QUANTITY:
             if self.quantity_target_t is None or self.rate_target_t_per_day is not None:
                 raise ValueError("QUANTITY order requires only quantity_target_t")
-            if self.quantity_target_t < -_EPS:
-                raise ValueError("trade quantity target must be non-negative")
+            if not isfinite(self.quantity_target_t) or self.quantity_target_t < -_EPS:
+                raise ValueError("trade quantity target must be finite and non-negative")
         else:
             if self.rate_target_t_per_day is None or self.quantity_target_t is not None:
                 raise ValueError("RATE order requires only rate_target_t_per_day")
-            if self.rate_target_t_per_day < -_EPS:
-                raise ValueError("trade rate target must be non-negative")
+            if not isfinite(self.rate_target_t_per_day) or self.rate_target_t_per_day < -_EPS:
+                raise ValueError("trade rate target must be finite and non-negative")
         if self.price_limit_musd_per_t is not None:
             if not isfinite(self.price_limit_musd_per_t) or self.price_limit_musd_per_t < -_EPS:
                 raise ValueError("trade price limit must be finite and non-negative")
-        if self.settled_quantity_t < -_EPS:
-            raise ValueError("settled trade quantity must be non-negative")
+        if not isfinite(self.settled_quantity_t) or self.settled_quantity_t < -_EPS:
+            raise ValueError("settled trade quantity must be finite and non-negative")
+        if (
+            self.control_mode is TradeControlMode.QUANTITY
+            and self.settled_quantity_t > (self.quantity_target_t or 0.0) + _EPS
+        ):
+            raise ValueError("settled QUANTITY trade amount exceeds target")
 
     @property
     def current_target_t(self) -> float:
@@ -160,26 +167,30 @@ class TradeOrderState:
             return max(0.0, self.rate_target_t_per_day or 0.0)
         return max(0.0, (self.quantity_target_t or 0.0) - self.settled_quantity_t)
 
+    def accepts_offer_price(self, offer_price_musd_per_t: float) -> bool:
+        """Return whether the current price condition allows a new settlement/commit."""
+        if self.price_limit_musd_per_t is None:
+            return True
+        if self.direction is TradeDirection.BUY:
+            return offer_price_musd_per_t <= self.price_limit_musd_per_t + _EPS
+        return offer_price_musd_per_t + _EPS >= self.price_limit_musd_per_t
+
 
 @dataclass
 class BuyCommitment:
     id: EntityId
     order_id: EntityId
-    provider_id: DefinitionId
-    market_interface_id: EntityId
     resource_id: DefinitionId
     remaining_quantity_t: float
     committed_price_musd_per_t: float
-    priority: ActivityPriority
     created_day: int
     maturity_day: int
 
     def __post_init__(self) -> None:
-        self.priority = ActivityPriority(self.priority)
-        if self.remaining_quantity_t <= _EPS:
-            raise ValueError("buy commitment quantity must be positive")
-        if self.committed_price_musd_per_t < -_EPS:
-            raise ValueError("buy commitment price must be non-negative")
+        if not isfinite(self.remaining_quantity_t) or self.remaining_quantity_t <= _EPS:
+            raise ValueError("buy commitment quantity must be finite and positive")
+        if not isfinite(self.committed_price_musd_per_t) or self.committed_price_musd_per_t < -_EPS:
+            raise ValueError("buy commitment price must be finite and non-negative")
         if self.created_day < 0 or self.maturity_day < self.created_day:
             raise ValueError("invalid buy commitment timing")
 
@@ -273,7 +284,8 @@ class MarketService:
         return sum(
             row.remaining_quantity_t
             for row in self.buy_commitments.values()
-            if row.provider_id == provider_id and row.resource_id == resource_id
+            if row.resource_id == resource_id
+            and self.interfaces[self.orders[row.order_id].market_interface_id].provider_id == provider_id
         )
 
     def available_provider_supply_t(self, provider_id: DefinitionId, resource_id: DefinitionId) -> float:
@@ -362,6 +374,19 @@ class MarketService:
             price,
             current.settled_quantity_t,
         )
+        if (
+            replacement.direction is TradeDirection.BUY
+            and replacement.control_mode is TradeControlMode.QUANTITY
+        ):
+            committed = sum(
+                row.remaining_quantity_t
+                for row in self.buy_commitments.values()
+                if row.order_id == order_id
+            )
+            if replacement.current_target_t + _EPS < committed:
+                raise ValueError(
+                    "QUANTITY buy target cannot be reduced below active commitments"
+                )
         self.orders[order_id] = replacement
 
     def cancel_order(self, order_id: EntityId) -> None:
@@ -374,14 +399,6 @@ class MarketService:
         ]:
             del self.buy_commitments[commitment_id]
         del self.orders[order_id]
-
-    @staticmethod
-    def _price_condition_satisfied(order: TradeOrderState, offer_price: float) -> bool:
-        if order.price_limit_musd_per_t is None:
-            return True
-        if order.direction is TradeDirection.BUY:
-            return offer_price <= order.price_limit_musd_per_t + _EPS
-        return offer_price + _EPS >= order.price_limit_musd_per_t
 
     def plan_buy_allocations(self) -> MarketBuyAllocationPlan:
         bundles: list[ExecutionRequirementBundle] = []
@@ -397,7 +414,7 @@ class MarketService:
                 continue
             provider = self.provider_defs[interface.provider_id]
             price = provider.buy_price(order.resource_id)
-            if price is None or not self._price_condition_satisfied(order, price):
+            if price is None or not order.accepts_offer_price(price):
                 continue
             active = sum(
                 row.remaining_quantity_t
@@ -452,19 +469,16 @@ class MarketService:
             interface = self.interfaces[order.market_interface_id]
             provider = self.provider_defs[interface.provider_id]
             price = provider.buy_price(order.resource_id)
-            if price is None or not self._price_condition_satisfied(order, price):
+            if price is None or not order.accepts_offer_price(price):
                 continue
             self._commitment_counter += 1
             commitment_id = EntityId(f"buy.commitment.{self._commitment_counter}")
             self.buy_commitments[commitment_id] = BuyCommitment(
                 commitment_id,
                 order.id,
-                interface.provider_id,
-                interface.id,
                 order.resource_id,
                 row.allocated_t,
                 price,
-                order.priority,
                 day,
                 day + provider.lead_time_days,
             )
@@ -479,7 +493,10 @@ class MarketService:
     def buy_boundary_bundles(self, day: int, inventory: InventoryBook) -> tuple[ExecutionRequirementBundle, ...]:
         rows: list[ExecutionRequirementBundle] = []
         for commitment in self.matured_buy_commitments(day):
-            interface = self.interfaces.get(commitment.market_interface_id)
+            order = self.orders.get(commitment.order_id)
+            if order is None or order.direction is not TradeDirection.BUY:
+                continue
+            interface = self.interfaces.get(order.market_interface_id)
             if interface is None or not interface.enabled:
                 continue
             requirements: list = [ServiceCapacityRequirement("cargo_transfer", 1.0)]
@@ -493,7 +510,7 @@ class MarketService:
                 purpose="market_buy_admission",
                 operational_node_id=interface.operational_node_id,
                 requested_execution=commitment.remaining_quantity_t,
-                priority=commitment.priority,
+                priority=order.priority,
                 requirements=tuple(requirements),
             ))
         return tuple(rows)
@@ -507,11 +524,12 @@ class MarketService:
                 amount = 0.0
             if amount <= _EPS:
                 continue
-            interface = self.interfaces[commitment.market_interface_id]
+            order = self.orders[commitment.order_id]
+            interface = self.interfaces[order.market_interface_id]
             cost = amount * commitment.committed_price_musd_per_t
             if self.funds.balance + _EPS < cost:
                 raise RuntimeError("reserved market Funds disappeared before settlement")
-            provider_state = self.provider_states[commitment.provider_id]
+            provider_state = self.provider_states[interface.provider_id]
             provider_supply = provider_state.supply_available_t.get(commitment.resource_id, 0.0)
             if provider_supply + _EPS < amount:
                 raise RuntimeError("reserved provider supply disappeared before settlement")
@@ -527,7 +545,7 @@ class MarketService:
             if commitment.remaining_quantity_t <= _EPS:
                 del self.buy_commitments[commitment.id]
 
-    def sell_supply_requirements(self, logistics) -> tuple[SupplyRequirement, ...]:
+    def sell_supply_requirements(self) -> tuple[SupplyRequirement, ...]:
         rows: list[SupplyRequirement] = []
         for order in sorted(self.orders.values(), key=lambda value: (-int(value.priority), str(value.id))):
             if order.direction is not TradeDirection.SELL:
@@ -537,26 +555,19 @@ class MarketService:
                 continue
             provider = self.provider_defs[interface.provider_id]
             price = provider.sell_price(order.resource_id)
-            if price is None or not self._price_condition_satisfied(order, price):
+            if price is None or not order.accepts_offer_price(price):
                 continue
             target = order.current_target_t
             if target <= _EPS:
                 continue
             requirement_id = self.sell_requirement_id(order.id)
-            in_flight = logistics.cargo_flow_pipeline_t(requirement_id)
-            # Interface stock is credited later by normal local-supply resolution;
-            # only Player-owned Cargo already committed to this stable requirement
-            # is removed here to prevent duplicate dispatch.
-            amount = max(0.0, target - in_flight)
-            if amount <= _EPS:
-                continue
             rows.append(SupplyRequirement(
                 requirement_id,
                 "market_sell",
                 order.id,
                 interface.operational_node_id,
                 order.resource_id,
-                amount,
+                target,
                 order.priority,
                 None,
                 order.rate_target_t_per_day if order.control_mode is TradeControlMode.RATE else None,
@@ -575,7 +586,7 @@ class MarketService:
                 continue
             provider = self.provider_defs[interface.provider_id]
             price = provider.sell_price(order.resource_id)
-            if price is None or not self._price_condition_satisfied(order, price):
+            if price is None or not order.accepts_offer_price(price):
                 continue
             requested = order.current_target_t
             if requested <= _EPS:
@@ -626,7 +637,7 @@ class MarketService:
             interface = self.interfaces[order.market_interface_id]
             provider = self.provider_defs[interface.provider_id]
             price = provider.sell_price(order.resource_id)
-            if price is None or not self._price_condition_satisfied(order, price):
+            if price is None or not order.accepts_offer_price(price):
                 continue
             demand = self.provider_states[interface.provider_id].demand_available_t.get(order.resource_id, 0.0)
             if demand + _EPS < amount:

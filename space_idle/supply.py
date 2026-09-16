@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import TYPE_CHECKING, Iterable
 
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
@@ -35,12 +36,14 @@ class SupplyRequirement:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "priority", ActivityPriority(self.priority))
-        if self.amount_t < 0:
-            raise ValueError("supply requirement amount must be non-negative")
+        if not isfinite(self.amount_t) or self.amount_t < 0:
+            raise ValueError("supply requirement amount must be finite and non-negative")
         if self.source_id is not None and self.source_id == self.destination_id:
             raise ValueError("supply requirement source and destination must differ")
-        if self.recurring_rate_t_per_day is not None and self.recurring_rate_t_per_day <= 0:
-            raise ValueError("supply requirement recurring rate must be positive")
+        if self.recurring_rate_t_per_day is not None and (
+            not isfinite(self.recurring_rate_t_per_day) or self.recurring_rate_t_per_day <= 0
+        ):
+            raise ValueError("supply requirement recurring rate must be finite and positive")
         if self.forecast_requirement_day is not None and self.forecast_requirement_day < 0:
             raise ValueError("supply requirement forecast day must be non-negative")
         if not self.purpose:
@@ -59,8 +62,8 @@ class TargetStockPolicy:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "priority", ActivityPriority(self.priority))
-        if self.target_quantity_t < 0:
-            raise ValueError("target stock quantity must be non-negative")
+        if not isfinite(self.target_quantity_t) or self.target_quantity_t < 0:
+            raise ValueError("target stock quantity must be finite and non-negative")
 
     def requirement(self, day: int) -> SupplyRequirement:
         return SupplyRequirement(

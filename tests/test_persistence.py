@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 
@@ -36,7 +37,7 @@ from space_idle.content.base_game import (
     REUSABLE_ORBITAL_CARGO_TUG,
 )
 from space_idle.content import base_ids as ids
-from space_idle.persistence import capture_state, load_game, save_game
+from space_idle.persistence import SaveFormatError, capture_state, load_game, save_game
 from space_idle.research import ResearchStage, ResearchState
 from space_idle.shared import EntityId, CelestialBodyId, DefinitionId
 from space_idle.simulation import OfflineProgressPolicy
@@ -356,3 +357,18 @@ def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):
 
     assert loaded._simulation.environment.capture_overlay_state() == before
     assert capture_state(loaded._simulation)["environment"] == capture_state(app._simulation)["environment"]
+
+
+def test_load_rejects_cross_domain_runtime_invariant_violation(tmp_path):
+    app = build_game_application()
+    path = tmp_path / "invalid-runtime.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    provider = payload["state"]["market"]["provider_states"][0]
+    resource_id = next(iter(provider["supply_available_t"]))
+    provider["supply_available_t"][resource_id] = 1.0e12
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SaveFormatError, match="invalid saved runtime state"):
+        load_game(path, build_game_application)

@@ -24,6 +24,7 @@ from space_idle.execution_requirements import (
     allocate_execution_requirements,
     resource_constraint,
 )
+from space_idle.logistics_models import CargoFlowSegment, CargoServiceLeg
 from space_idle.supply import SupplyRequirement
 from space_idle.shared import DefinitionId, EntityId
 
@@ -115,6 +116,72 @@ def test_dynamic_supply_dispatch_uses_owned_route_and_pipeline_prevents_duplicat
         row for row in next_day.plan.logistics.dispatches
         if row.requirement.owner_id == target_id
     ]
+
+
+def test_recurring_supply_uses_latency_coverage_without_turning_pipeline_into_a_rate_cap():
+    sim = build_game_application()._simulation
+    allocation_id = _owned_earth_leo_capacity(sim)
+    sim.inventory.stock[(LEO, MACHINERY)] = 0.0
+    sim.inventory.stock[(EARTH, MACHINERY)] = 100.0
+    requirement = SupplyRequirement(
+        EntityId("supply.recurring-latency"), "test", EntityId("owner.recurring-latency"),
+        LEO, MACHINERY, 2.0, 3, EARTH, 2.0,
+    )
+    service = next(
+        row for row in sim.transport.transport_service_supplies(sim.day)
+        if row.allocation_id == allocation_id and row.direction == "forward"
+    )
+
+    active = sim.logistics.active_shipping_requirements(sim.day, (requirement,))
+    assert active[0].amount_t == pytest.approx(2.0 * (service.latency_days + 1))
+
+    sim.logistics.cargo_flows[EntityId("cargo.segment.recurring-test")] = CargoFlowSegment(
+        id=EntityId("cargo.segment.recurring-test"), resource_id=MACHINERY, amount_t=2.0,
+        source_id=EARTH, final_destination_id=LEO, requirement_id=requirement.id,
+        owner_kind=requirement.owner_kind, owner_id=requirement.owner_id, priority=requirement.priority,
+        leg=CargoServiceLeg(
+            service.key, service.source_id, service.destination_id,
+            service.latency_days, service.cycle_days, service.allocation_id, service.direction,
+        ),
+        remaining_legs=(), dispatch_start_day=sim.day, dispatch_end_day=sim.day + 1,
+        dispatch_rate_t_per_day=2.0,
+    )
+    active_with_pipeline = sim.logistics.active_shipping_requirements(sim.day, (requirement,))
+    plan = sim.logistics.plan_capacity_logistics(sim.day, active_with_pipeline)
+
+    dispatch = next(row for row in plan.dispatches if row.requirement.id == requirement.id)
+    assert dispatch.amount_t == pytest.approx(2.0 * service.latency_days)
+
+def test_explicit_supply_source_remains_visible_when_transport_is_not_provisioned():
+    app = build_game_application()
+    sim = app._simulation
+    sim.technology.completed.update(
+        sim.projects.recipes[ORBITAL_LOGISTICS_NODE].prerequisite_technologies
+    )
+    project_id = app.execute(
+        PlanBuild(
+            str(LEO),
+            str(ORBITAL_LOGISTICS_NODE),
+            priority=5,
+            sourcing_policy="import_now",
+            import_source_id=str(EARTH),
+        )
+    ).created_id
+    assert project_id is not None
+
+    sim.advance_days(1)
+    rows = [
+        row for row in app.query(GetLogistics()).requirements
+        if row.owner_id == project_id
+    ]
+
+    assert rows
+    assert all(row.candidate_source_count == 1 for row in rows)
+    assert all(row.stocked_source_count == 1 for row in rows)
+    assert all(row.operational_source_count == 0 for row in rows)
+    assert all(row.supply_state == "transport_blocked" for row in rows)
+    assert all("no_transport_capacity" in row.blockers for row in rows)
+
 
 def test_supply_policy_selects_preferred_source_without_provisioning_transport():
     app = build_game_application()
@@ -437,7 +504,6 @@ def test_multistage_boundary_handoff_preserves_logistics_ownership():
     sim.advance_to_day(first.first_arrival_day)
 
     assert not [row for row in sim.logistics.arrival_waiting.values() if row.owner_id == target_id]
-    assert not [row for row in sim.logistics.handoff_staging.values() if row.owner_id == target_id]
     downstream = next(row for row in sim.logistics.cargo_flows.values() if row.owner_id == target_id)
     assert downstream.source_id == handoff_node
     assert sim.inventory.amount(handoff_node, resource) == pytest.approx(stock_before)

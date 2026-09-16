@@ -11,9 +11,11 @@ from .application_commands import ApplicationError, SetTimeControl
 from .domain import validate_extension_registry
 from .execution_requirements import AllocationConstraintKey
 from .simulation import OfflineProgressPolicy, OfflineProgressResult
+from .validation import validate_runtime_state
+from .validation_support import ConfigurationError
 
 
-SAVE_SCHEMA_VERSION = 47
+SAVE_SCHEMA_VERSION = 48
 
 
 class SaveFormatError(ValueError):
@@ -165,8 +167,14 @@ def load_game(
         raise SaveFormatError(
             f"save content mismatch: {envelope.content_id} != {app.content_id}"
         )
-    restore_state(app._simulation, envelope.state)
-    _restore_application_state(app, envelope.state)
+    try:
+        restore_state(app._simulation, envelope.state)
+        _restore_application_state(app, envelope.state)
+        validate_runtime_state(app._simulation)
+    except SaveFormatError:
+        raise
+    except (ConfigurationError, KeyError, TypeError, ValueError) as exc:
+        raise SaveFormatError(f"invalid saved runtime state: {exc}") from exc
     offline_result = None
     if now is not None and offline_policy is not None and not app.time_paused:
         current = now

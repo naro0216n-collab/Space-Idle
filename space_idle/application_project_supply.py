@@ -8,12 +8,16 @@ class SupplyPlanningProjectorMixin:
         self, *, execution_allocation=None, resolutions=None
     ) -> tuple[SupplyRequirementRow, ...]:
         sim = self._simulation
+        decision = self._tick_decision_projection()
         if resolutions is None:
-            decision = self._tick_decision_projection()
             resolutions = decision.plan.requirement_resolutions
             if execution_allocation is None:
                 execution_allocation = decision.allocations.transport
         resolutions = tuple(resolutions)
+        shipping_by_id = {
+            requirement.id: requirement
+            for requirement in decision.plan.external_requirements
+        }
         cache = getattr(self, "_query_projection_cache", None)
         cached = None if cache is None else cache.get("requirement_rows")
         if (
@@ -42,7 +46,11 @@ class SupplyPlanningProjectorMixin:
         for resolution in resolutions:
             requirement = resolution.requirement
             pipeline_t = sim.logistics.cargo_flow_pipeline_t(requirement.id)
-            remaining_t = max(0.0, resolution.external_required_t - pipeline_t)
+            shipping = shipping_by_id.get(requirement.id)
+            remaining_t = max(
+                0.0,
+                (0.0 if shipping is None else shipping.amount_t) - pipeline_t,
+            )
             options = sim.logistics.supply_planning_options(
                 requirement,
                 sim.day,
@@ -57,22 +65,22 @@ class SupplyPlanningProjectorMixin:
             if runway is not None and earliest is not None:
                 gap = max(0.0, float(earliest - sim.day) - runway)
 
-            if resolution.external_required_t <= 1e-9:
-                supply_state = "local_covered"
-            elif gap is not None and gap > 1e-9:
+            if gap is not None and gap > 1e-9:
                 supply_state = "coverage_gap"
-            elif remaining_t <= 1e-9:
-                supply_state = "pipeline_covered"
-            elif not options.candidate_source_ids:
+            elif remaining_t > 1e-9 and not options.candidate_source_ids:
                 supply_state = "no_source"
-            elif not options.operational_source_ids:
+            elif remaining_t > 1e-9 and not options.operational_source_ids:
                 supply_state = "transport_blocked"
-            elif not options.stocked_source_ids:
+            elif remaining_t > 1e-9 and not options.stocked_source_ids:
                 supply_state = "source_shortage"
-            elif runway is not None and runway <= 1.0 + 1e-9:
+            elif remaining_t > 1e-9 and runway is not None and runway <= 1.0 + 1e-9:
                 supply_state = "low_runway"
-            else:
+            elif remaining_t > 1e-9:
                 supply_state = "uncovered"
+            elif pipeline_t > 1e-9:
+                supply_state = "pipeline_covered"
+            else:
+                supply_state = "local_covered"
 
             blockers = list(options.blockers) if remaining_t > 1e-9 else []
             if remaining_t > 1e-9 and not options.candidate_source_ids:

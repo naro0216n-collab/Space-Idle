@@ -282,8 +282,8 @@ class TransportServiceSupply:
     latency_days: int
     cycle_days: float
     movement_plan_path: tuple[MovementPlanId, ...]
-    allocation_id: EntityId | None = None
-    direction: str | None = None
+    allocation_id: EntityId
+    direction: str
     propellant_t_per_t: float = 0.0
 
     def __post_init__(self) -> None:
@@ -295,9 +295,7 @@ class TransportServiceSupply:
             raise ValueError("transport service supply cycle must be positive")
         if self.source_id == self.destination_id:
             raise ValueError("transport service supply endpoints must differ")
-        if (self.allocation_id is None) != (self.direction is None):
-            raise ValueError("owned transport supply requires allocation and direction together")
-        if self.direction not in (None, "forward", "reverse"):
+        if self.direction not in ("forward", "reverse"):
             raise ValueError("transport service supply direction must be forward or reverse")
         if self.propellant_t_per_t < 0:
             raise ValueError("transport service supply propellant must be non-negative")

@@ -47,7 +47,6 @@ def test_domain_authoritative_state_is_not_read_directly_across_domain_boundarie
         },
         "logistics": {
             "target_stocks", "supply_policies", "cargo_flows", "arrival_waiting",
-            "handoff_staging",
         },
     }
     service_fields = {
