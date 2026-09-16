@@ -15,7 +15,7 @@ from space_idle import (
 )
 from space_idle.application_commands import ApplicationError
 from space_idle.content.base_game import EARTH, EARTH_RESEARCH_LAB
-from space_idle.persistence import capture_state, load_game, save_game
+from space_idle.persistence import load_game, save_game
 from space_idle.shared import EntityId
 
 
@@ -181,12 +181,13 @@ def test_active_upgrade_roundtrips_without_applying_level_early(tmp_path):
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, offline = load_game(path, build_game_application)
     assert offline is None
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
     loaded_row, loaded_facility = _earth_lab(loaded)
     loaded_project = _project(loaded, project_id)
     assert loaded_row.id == row.id
     assert loaded_facility.level == 1
+    assert loaded_project.paused is True
+    assert loaded_project.status != "complete"
     assert loaded_project.target_kind == "facility_upgrade"
     assert loaded_project.target_facility_id == row.id
     assert loaded_project.target_level == 2

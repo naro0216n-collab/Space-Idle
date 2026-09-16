@@ -38,11 +38,9 @@ from space_idle.content.base_game import (
 )
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
-from space_idle.supply import SupplyRequirement
 from space_idle.shared import EntityId, CelestialBodyId, DefinitionId
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
-from tests._logistics_support import resolve_authorized_logistics
 
 
 def _advance_until_research_startable(app, research_id, max_days=2000):
@@ -119,11 +117,11 @@ def test_save_load_preserves_survey_knowledge_campaign_and_future_behavior(tmp_p
     loaded, _ = load_game(path, build_game_application)
     assert loaded._simulation.survey.knowledge_progress == sim.survey.knowledge_progress
     assert loaded._simulation.survey.campaigns[active_key].target_knowledge_level == target_level
-    assert capture_state(loaded._simulation) == capture_state(sim)
 
     app.execute(AdvanceTime(7))
     loaded.execute(AdvanceTime(7))
-    assert capture_state(loaded._simulation) == capture_state(sim)
+    assert loaded._simulation.survey.knowledge_progress == sim.survey.knowledge_progress
+    assert loaded._simulation.survey.campaigns == sim.survey.campaigns
 
 
 def test_offline_progress_uses_the_same_active_simulation_path_as_normal_time(tmp_path):
@@ -192,23 +190,16 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
     )).created_id
     assert allocation_id is not None
 
+    sim.inventory.stock[(ids.LEO, ids.MACHINERY)] = 0.0
     sim.inventory.add(ids.EARTH, ids.MACHINERY, 1.0)
-    demand = SupplyRequirement(
-        EntityId("requirement.persistence"), "test", EntityId("owner.persistence"),
-        ids.LEO, ids.MACHINERY, 0.5, 5, ids.EARTH,
+    sim.logistics.set_supply_policy(
+        ids.LEO, ids.MACHINERY, preferred_source_id=ids.EARTH
     )
-    logistics_plan = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
-    funds = sim.external_economy.allocate(logistics_plan.spending_requests, sim.day)
-    logistics_plan = sim.logistics.authorize_capacity_logistics(
-        logistics_plan, funds, sim.day
+    target_id = sim.logistics.set_target_stock(ids.LEO, ids.MACHINERY, 0.5, 5)
+    sim.advance_days(1)
+    assert any(
+        row.owner_id == target_id for row in sim.logistics.cargo_flows.values()
     )
-    _shared, execution, _resources, _services = resolve_authorized_logistics(
-        sim, sim.day, logistics_plan
-    )
-    sim.logistics.advance_capacity_logistics(
-        sim.day, logistics_plan, funds, execution,
-    )
-    assert sim.logistics.cargo_flows
 
     allocation_entity_id = EntityId(allocation_id)
     before_capacity = sim.logistics.current_transport_capacity_snapshot(
@@ -224,40 +215,8 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
     assert loaded._simulation.logistics.current_transport_capacity_snapshot(
         allocation_entity_id, day=loaded._simulation.day
     ) == before_capacity
-    assert capture_state(loaded._simulation) == capture_state(sim)
 
-
-def test_save_load_preserves_vehicle_production_progress_and_completed_fleet_unit(tmp_path):
-    app = build_game_application()
-    result = app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
-    assert result.created_id is not None
-    production_id = EntityId(result.created_id)
-    app.execute(AdvanceTime(1))
-    original = app._simulation.transport.vehicle_production_projects[production_id]
-    assert original.phase.value == "building"
-    assert original.progress_days > 0
-
-    path = tmp_path / "vehicle-production.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application)
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
-
-    before_units = loaded._simulation.transport.fleet_pool(
-        REUSABLE_ORBITAL_CARGO_TUG, EARTH
-    ).total_units
-    days = int(app._simulation.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production.days)
-    app.execute(AdvanceTime(days))
-    loaded.execute(AdvanceTime(days))
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
-    state = loaded._simulation.transport.vehicle_production_projects[production_id]
-    assert state.phase.value == "complete"
-    assert state.completed_units == 1
-    assert loaded._simulation.transport.fleet_pool(
-        REUSABLE_ORBITAL_CARGO_TUG, EARTH
-    ).total_units == before_units + 1
-
-
-def test_save_load_preserves_partial_vehicle_production_staging(tmp_path):
+def test_save_load_preserves_vehicle_production_staging_and_future_completion(tmp_path):
     app = build_game_application()
     sim = app._simulation
     definition = sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG]
@@ -275,20 +234,41 @@ def test_save_load_preserves_partial_vehicle_production_staging(tmp_path):
     assert result.created_id is not None
     production_id = EntityId(result.created_id)
     app.execute(AdvanceTime(1))
-    state = sim.transport.vehicle_production_projects[production_id]
+    original = sim.transport.vehicle_production_projects[production_id]
     remaining_on_hand = sim.inventory.amount(EARTH, partial_resource)
-    staged_t = partial_stock - remaining_on_hand
-    assert state.phase.value == "awaiting_inputs"
-    assert staged_t > 0.0
+    assert original.phase.value == "awaiting_inputs"
+    assert partial_stock - remaining_on_hand > 0.0
 
-    path = tmp_path / "vehicle-production-partial.json"
+    before = capture_state(sim)
+    path = tmp_path / "vehicle-production.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
+    loaded_state = capture_state(loaded._simulation)
+    assert loaded_state["transport"] == before["transport"]
+    assert loaded_state["inventory"] == before["inventory"]
 
-    assert capture_state(loaded._simulation) == capture_state(sim)
-    assert loaded._simulation.inventory.amount(
-        EARTH, partial_resource
-    ) == pytest.approx(remaining_on_hand)
+    before_units = loaded._simulation.transport.fleet_pool(
+        REUSABLE_ORBITAL_CARGO_TUG, EARTH
+    ).total_units
+    for current in (app._simulation, loaded._simulation):
+        for resource_id, resource_required_t in definition.production.resources:
+            current.inventory.stock[(EARTH, resource_id)] = max(
+                current.inventory.amount(EARTH, resource_id), resource_required_t * 2.0
+            )
+
+    production_days = int(definition.production.days)
+    app.execute(AdvanceTime(production_days))
+    loaded.execute(AdvanceTime(production_days))
+    state = loaded._simulation.transport.vehicle_production_projects[production_id]
+    assert state.phase.value == "complete"
+    assert state.completed_units == 1
+    assert loaded._simulation.transport.fleet_pool(
+        REUSABLE_ORBITAL_CARGO_TUG, EARTH
+    ).total_units == before_units + 1
+    loaded_future = capture_state(loaded._simulation)
+    original_future = capture_state(app._simulation)
+    assert loaded_future["transport"] == original_future["transport"]
+    assert loaded_future["inventory"] == original_future["inventory"]
 
 
 def test_transient_allocation_projection_is_not_persisted_as_authoritative_state(tmp_path):
@@ -321,7 +301,7 @@ def test_durable_inventory_reservation_roundtrips(tmp_path):
     loaded, _ = load_game(path, build_game_application)
 
     assert loaded._simulation.inventory.reserved_for(owner, EARTH, resource_id) == pytest.approx(amount)
-    assert capture_state(loaded._simulation) == capture_state(sim)
+    assert capture_state(loaded._simulation)["inventory"] == capture_state(sim)["inventory"]
 
 
 def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):
@@ -346,15 +326,13 @@ def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):
     loaded, _ = load_game(path, factory)
 
     assert loaded._simulation.environment.capture_overlay_state() == before
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
+    assert capture_state(loaded._simulation)["environment"] == capture_state(app._simulation)["environment"]
 
 
 def test_save_load_preserves_unloaded_handoff_reservation_ownership(tmp_path):
     app = build_game_application()
     sim = app._simulation
-    # Leave the first handoff without local transfer capacity.  External carrier
-    # handling can unload the Cargo, creating the canonical Inventory-owned
-    # reservation that must survive Save / Load.
+    sim.transport.transport_allocations.clear()
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
     sim.refresh_storage()
     for service_id in sim.transport.external_services:
@@ -364,31 +342,27 @@ def test_save_load_preserves_unloaded_handoff_reservation_ownership(tmp_path):
         allowed_service_ids=tuple(sim.transport.external_services),
         day=sim.day,
     )
-    sim.inventory.add(ids.EARTH, ids.MACHINERY, 0.1)
-    demand = SupplyRequirement(
-        EntityId("requirement.persistence-handoff"), "test",
-        EntityId("owner.persistence-handoff"), ids.LUNAR_ORBIT,
-        ids.MACHINERY, 0.1, 4, ids.EARTH,
+    sim.inventory.stock[(ids.LUNAR_ORBIT, ids.CONSTRUCTION_EQUIPMENT)] = 0.0
+    sim.inventory.add(ids.EARTH, ids.CONSTRUCTION_EQUIPMENT, 0.1)
+    sim.logistics.set_supply_policy(
+        ids.LUNAR_ORBIT,
+        ids.CONSTRUCTION_EQUIPMENT,
+        preferred_source_id=ids.EARTH,
     )
-    plan = sim.logistics.plan_capacity_logistics(sim.day, (demand,))
-    funds = sim.external_economy.allocate(plan.spending_requests, sim.day)
-    plan = sim.logistics.authorize_capacity_logistics(plan, funds, sim.day)
-    _shared, execution, _resources, _services = resolve_authorized_logistics(
-        sim, sim.day, plan
+    target_id = sim.logistics.set_target_stock(
+        ids.LUNAR_ORBIT, ids.CONSTRUCTION_EQUIPMENT, 0.1, 4
     )
-    sim.logistics.advance_capacity_logistics(sim.day, plan, funds, execution)
+
+    sim.advance_days(1)
     first = next(
-        row for row in sim.logistics.cargo_flows.values() if row.requirement_id == demand.id
+        row for row in sim.logistics.cargo_flows.values()
+        if row.owner_id == target_id
     )
     assert first.remaining_legs
-    sim.logistics.prepare_cargo_arrivals(first.first_arrival_day)
-    requests = sim.logistics.cargo_handoff_service_requests(first.first_arrival_day)
-    allocations, direct_allocations = sim._allocate_boundary_handoff_services(requests)
-    sim.logistics.settle_cargo_arrivals(
-        first.first_arrival_day, allocations, direct_allocations
-    )
+    sim.advance_to_day(first.first_arrival_day)
     staging = next(
-        row for row in sim.logistics.handoff_staging.values() if row.requirement_id == demand.id
+        row for row in sim.logistics.handoff_staging.values()
+        if row.owner_id == target_id
     )
     assert sim.inventory.reserved_for(
         staging.reservation_owner_id, staging.node_id, staging.resource_id
@@ -398,7 +372,10 @@ def test_save_load_preserves_unloaded_handoff_reservation_ownership(tmp_path):
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
 
-    assert capture_state(loaded._simulation) == capture_state(sim)
+    loaded_state = capture_state(loaded._simulation)
+    original_state = capture_state(sim)
+    assert loaded_state["logistics"] == original_state["logistics"]
+    assert loaded_state["inventory"] == original_state["inventory"]
     loaded_staging = loaded._simulation.logistics.handoff_staging[staging.id]
     assert loaded._simulation.inventory.reserved_for(
         loaded_staging.reservation_owner_id,

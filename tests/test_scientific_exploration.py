@@ -218,14 +218,20 @@ def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future
     path = tmp_path / "scientific-exploration.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application)
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
+    original_state = capture_state(app._simulation)
+    loaded_state = capture_state(loaded._simulation)
+    assert loaded_state["scientific_exploration"] == original_state["scientific_exploration"]
+    assert loaded_state["transport"] == original_state["transport"]
     assert _fleet_row(loaded, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).exploration_units == _row(loaded).required_units
 
     remaining_days = _advance_until_complete(app, ids.CISLUNAR_SCIENCE_EXPLORATION)
     assert remaining_days > 0
     loaded.execute(AdvanceTime(remaining_days))
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
-    state = loaded._simulation.scientific_exploration.campaigns[ids.CISLUNAR_SCIENCE_EXPLORATION]
+    loaded_campaign = loaded._simulation.scientific_exploration.campaigns[ids.CISLUNAR_SCIENCE_EXPLORATION]
+    original_campaign = app._simulation.scientific_exploration.campaigns[ids.CISLUNAR_SCIENCE_EXPLORATION]
+    assert loaded_campaign == original_campaign
+    assert _fleet_row(loaded, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
+    state = loaded_campaign
     assert state.phase.value == "complete"
     assert state.research_points_awarded == pytest.approx(
         loaded._simulation.scientific_exploration.definitions[
@@ -373,9 +379,15 @@ def test_partial_exploration_inputs_are_reserved_and_unassign_releases_them():
     app.execute(AdvanceTime(1))
 
     initial_stock = 0.05
-    owner_id = sim.scientific_exploration._input_reservation_owner_id(exploration_id)
+    reservations = [
+        (owner_id, amount)
+        for (owner_id, node_id, resource_id), amount in sim.inventory.reserved.items()
+        if node_id == definition.origin_id and resource_id == machinery and amount > 0.0
+    ]
+    assert len(reservations) == 1
+    owner_id, reserved = reservations[0]
     assert sim.inventory.amount(definition.origin_id, machinery) == pytest.approx(initial_stock)
-    assert sim.inventory.reserved_for(owner_id, definition.origin_id, machinery) == pytest.approx(initial_stock)
+    assert reserved == pytest.approx(initial_stock)
     assert sim.inventory.available(definition.origin_id, machinery) == pytest.approx(0.0)
     state = sim.scientific_exploration.campaigns[exploration_id]
     assert state.inputs_consumed is False

@@ -149,101 +149,61 @@ def test_missing_constraint_capacity_is_rejected_instead_of_assumed_infinite():
         allocate_execution_requirements([row], {})
 
 
-def test_real_maintenance_and_industry_bundles_share_one_resource_constraint():
+def test_canonical_tick_shares_resource_constraint_across_maintenance_and_industry_priority():
     from space_idle import build_game_application
     from space_idle.content import base_ids as ids
 
     sim = build_game_application()._simulation
+    structural_key = resource_constraint(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
     maintenance = tuple(
-        bundle for bundle in sim.maintenance.execution_requirement_bundles(sim.day)
-        if bundle.operational_node_id == ids.EARTH
-        and any(key.kind == "resource" and key.name == str(ids.STRUCTURAL_COMPONENTS)
-                for key, _ in bundle.coefficients())
-    )
-    assert maintenance
-    for bundle_row in maintenance:
-        sim.facilities.facilities[bundle_row.owner_id].maintenance_priority = ActivityPriority(4)
-    maintenance = tuple(
-        bundle for bundle in sim.maintenance.execution_requirement_bundles(sim.day)
-        if bundle.operational_node_id == ids.EARTH
-        and any(key.kind == "resource" and key.name == str(ids.STRUCTURAL_COMPONENTS)
-                for key, _ in bundle.coefficients())
+        row for row in sim.maintenance.execution_requirement_bundles(sim.day)
+        if row.operational_node_id == ids.EARTH
+        and any(key == structural_key for key, _coefficient in row.coefficients())
     )
     industry = tuple(
-        bundle for bundle in sim.industry.execution_requirement_bundles(
+        row for row in sim.industry.execution_requirement_bundles(
             ids.EARTH, sim.facilities, sim.inventory, sim.day
         )
-        if any(key.kind == "resource" and key.name == str(ids.STRUCTURAL_COMPONENTS)
-               for key, _ in bundle.coefficients())
+        if any(key == structural_key for key, _coefficient in row.coefficients())
     )
-    assert industry
+    assert maintenance and industry
 
-    rows = maintenance + industry
-    capacities = {
-        key: float("inf")
-        for row in rows
-        for key, _coefficient in row.coefficients()
-    }
-    structural_key = resource_constraint(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
+    for row in maintenance:
+        sim.facilities.facilities[row.owner_id].maintenance_priority = ActivityPriority(4)
+    for row in industry:
+        sim.facilities.facilities[row.owner_id].activity_priority = ActivityPriority(1)
+
+    maintenance = tuple(
+        row for row in sim.maintenance.execution_requirement_bundles(sim.day)
+        if row.operational_node_id == ids.EARTH
+        and any(key == structural_key for key, _coefficient in row.coefficients())
+    )
     maintenance_need = sum(
         coefficient * row.requested_execution
         for row in maintenance
         for key, coefficient in row.coefficients()
         if key == structural_key
     )
-    capacities[structural_key] = maintenance_need
-    plan = allocate_execution_requirements(rows, capacities)
+    sim.inventory.stock[(ids.EARTH, ids.STRUCTURAL_COMPONENTS)] = maintenance_need
 
-    assert all(plan.fulfillment(row.id) == pytest.approx(1.0) for row in maintenance)
-    assert all(plan.fulfillment(row.id) == pytest.approx(0.0) for row in industry)
-    assert plan.used_by_constraint[structural_key] == pytest.approx(maintenance_need)
-
-
-def test_simulation_priority_allocation_is_not_decided_by_maintenance_call_order():
-    from dataclasses import replace
-
-    from space_idle import build_game_application
-    from space_idle.content import base_ids as ids
-
-    sim = build_game_application()._simulation
-    for facility in sim.facilities.facilities.values():
-        facility.maintenance_priority = ActivityPriority(1)
-
-    snapshot = sim._physical_tick_snapshot()
-    intents = sim._generate_tick_intents(snapshot)
-    available = sim.inventory.available(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
-    high_priority = ExecutionRequirementBundle(
-        id=EntityId("execution.priority_probe"),
-        owner_kind="test_activity",
-        owner_id=EntityId("priority_probe"),
-        purpose="priority_probe",
-        operational_node_id=ids.EARTH,
-        requested_execution=available,
-        priority=ActivityPriority(5),
-        requirements=(ResourceRequirement(ids.STRUCTURAL_COMPONENTS, 1.0),),
-    )
-    intents = replace(
-        intents,
-        execution_requirements=intents.execution_requirements + (high_priority,),
-    )
-
-    allocations = sim._allocate_tick(snapshot, intents, sim._plan_tick(intents))
-
-    assert allocations.execution.allocated(high_priority.id) == pytest.approx(available)
-    structural_key = resource_constraint(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
-    maintenance = tuple(
-        row
-        for row in allocations.execution.bundles
+    plan = sim.tick_decision_projection().allocations.execution
+    maintenance_rows = tuple(
+        row for row in plan.bundles
         if row.owner_kind == "facility_maintenance"
         and row.operational_node_id == ids.EARTH
         and any(key == structural_key for key, _coefficient in row.coefficients())
     )
-    assert maintenance
-    assert all(
-        allocations.execution.allocated(row.id) == pytest.approx(0.0)
-        for row in maintenance
+    industry_rows = tuple(
+        row for row in plan.bundles
+        if row.owner_kind == "industry_process"
+        and row.operational_node_id == ids.EARTH
+        and any(key == structural_key for key, _coefficient in row.coefficients())
     )
 
+    assert maintenance_rows and industry_rows
+    assert all(plan.fulfillment(row.id) == pytest.approx(1.0) for row in maintenance_rows)
+    assert all(plan.fulfillment(row.id) == pytest.approx(0.0) for row in industry_rows)
+    assert plan.used_by_constraint[structural_key] == pytest.approx(maintenance_need)
 
 def test_real_industry_and_extraction_requirements_are_settled_by_execution_plan():
     from space_idle import build_game_application

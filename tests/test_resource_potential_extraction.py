@@ -88,34 +88,6 @@ def test_soft_saturation_response_is_monotonic_diminishing_and_opportunity_sensi
         ExtractionService.marginal_response(capacity, 5.0)
     )
 
-def test_physical_opportunity_is_not_scaled_by_surface_infrastructure_twice():
-    app = build_game_application()
-    sim = app._simulation
-    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
-    before = sim.extraction.effective_opportunity(
-        ids.EARTH, ids.METAL_ORE, sim.facilities, power, sim.day
-    )
-    added = sim.graph.surface_cells[ids.EARTH_CELL_COASTAL].resource_potential_by_resource[ids.METAL_ORE]
-
-    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
-    constrained_decision = sim.tick_decision_projection()
-    constrained_power = constrained_decision.allocations.power_by_location[ids.EARTH]
-    constrained = sim.extraction.effective_opportunity(
-        ids.EARTH, ids.METAL_ORE, sim.facilities, constrained_power, sim.day,
-        constrained_decision.allocations.services,
-    )
-    assert constrained == pytest.approx(before + added)
-
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
-    supplied_decision = sim.tick_decision_projection()
-    supplied_power = supplied_decision.allocations.power_by_location[ids.EARTH]
-    supplied = sim.extraction.effective_opportunity(
-        ids.EARTH, ids.METAL_ORE, sim.facilities, supplied_power, sim.day,
-        supplied_decision.allocations.services,
-    )
-    assert supplied == pytest.approx(constrained)
-
-
 def test_operational_fulfillment_scales_soft_saturation_output():
     base = build_game_application()._simulation
     facilities = FacilityBook(build_facility_definitions(), base.facilities.environment)

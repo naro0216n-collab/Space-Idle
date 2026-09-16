@@ -10,10 +10,11 @@ from space_idle import (
     build_game_application,
 )
 from space_idle.external_economy import ExternalEconomyState, FundsRequest
+from space_idle.execution_requirements import allocate_execution_requirements
 from space_idle.persistence import load_game, save_game
 from space_idle.shared import AccountState, DefinitionId, EntityId
+from space_idle.supply import SupplyRequirement
 from space_idle.content import base_ids as ids
-from tests._logistics_support import resolve_authorized_logistics
 
 
 def _economy(funds: float = 100.0) -> tuple[ExternalEconomyState, DefinitionId, EntityId]:
@@ -133,7 +134,7 @@ def test_supply_planning_exposes_policy_denial_until_authorized():
     app = build_game_application()
     sim = app._simulation
     sim.transport.transport_allocations.clear()
-    demand = __import__('space_idle.supply', fromlist=['SupplyRequirement']).SupplyRequirement(
+    demand = SupplyRequirement(
         EntityId("requirement.policy-blocker"), "test", EntityId("owner.policy-blocker"),
         ids.LEO, ids.MACHINERY, 1.0, 3, ids.EARTH,
     )
@@ -188,7 +189,6 @@ def test_load_rederives_same_external_spending_authorization(tmp_path):
 
 def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
     from space_idle.content.base_game import EARTH, LUNAR_ORBIT, MACHINERY
-    from space_idle.supply import SupplyRequirement
 
     app = build_game_application()
     sim = app._simulation
@@ -201,8 +201,14 @@ def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
     )
     sim.inventory.add(EARTH, MACHINERY, 1.0)
     requirement = SupplyRequirement(
-        EntityId("requirement.multiedge-spend"), "test", EntityId("owner.multiedge-spend"),
-        LUNAR_ORBIT, MACHINERY, 1.0, 3, EARTH,
+        EntityId("requirement.multiedge-spend"),
+        "test",
+        EntityId("owner.multiedge-spend"),
+        LUNAR_ORBIT,
+        MACHINERY,
+        1.0,
+        3,
+        EARTH,
     )
     raw = sim.logistics.plan_capacity_logistics(sim.day, (requirement,))
     assert len(raw.spending_requests) == 2
@@ -210,11 +216,19 @@ def test_multiedge_external_transport_spends_only_cost_of_executed_tonnage():
     plan = sim.logistics.authorize_capacity_logistics(raw, funds, sim.day)
     row = next(item for item in plan.dispatches if item.requirement.id == requirement.id)
     assert row.amount_t == pytest.approx(0.1)
-    _shared, execution, _resources, _services = resolve_authorized_logistics(
-        sim, sim.day, plan
+
+    bundles = sim.logistics.dispatch_execution_requirements(sim.day, plan)
+    capacities = {
+        key: float("inf")
+        for bundle in bundles
+        for key, _coefficient in bundle.coefficients()
+    }
+    capacities.update(sim.logistics.transport_capacity_pool_capacities(sim.day))
+    shared = allocate_execution_requirements(bundles, capacities)
+    execution = sim.logistics.build_capacity_logistics_execution(
+        sim.day, plan, shared, ()
     )
+
     before = sim.external_economy.account.funds_musd
-    sim.logistics.advance_capacity_logistics(
-            sim.day, plan, funds, execution,
-        )
+    sim.logistics.advance_capacity_logistics(sim.day, plan, funds, execution)
     assert before - sim.external_economy.account.funds_musd == pytest.approx(0.9)

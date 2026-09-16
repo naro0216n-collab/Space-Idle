@@ -108,40 +108,25 @@ def test_research_priority_controls_shared_execution_and_rp_constraints():
         assert low.rp_allocated == 0.0
         assert any(code == blocker_code for code, _ in low.current_blockers)
 
-def test_operational_experience_does_not_accumulate_from_research_time_itself():
+def test_operational_experience_is_driven_by_real_activity_not_research_time():
     app = build_game_application()
     sim = app._simulation
-    category = "test.experience.never_emitted"
+
+    never_emitted = "test.experience.never_emitted"
     sim.research.experience_rules = sim.research.experience_rules + (
-        ExperienceContributionRule("never_emitted", category, 1.0),
+        ExperienceContributionRule("never_emitted", never_emitted, 1.0),
     )
-    research_id = DefinitionId("test.research.operational_experience_wait")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
+    waiting_id = DefinitionId("test.research.operational_experience_wait")
+    sim.research.definitions[waiting_id] = ResearchDefinition(
+        waiting_id,
         "Experience Wait",
         0.0,
-        operational_experience=ResearchOperationalExperienceSpec({category: 1.0}),
+        operational_experience=ResearchOperationalExperienceSpec({never_emitted: 1.0}),
         stages=(ResearchStage.OPERATIONAL_EXPERIENCE,),
     )
-
-    sim.research.start(research_id, day=sim.day)
-    assert sim.research.active[research_id].stage is ResearchStage.OPERATIONAL_EXPERIENCE
-    sim.advance_days(1)
-
-    assert sim.research.knowledge_state.value(category) == 0.0
-    assert research_id in sim.research.active
-    assert any(
-        code == "operational_experience"
-        for code, _ in sim.research.operational_experience_blockers(research_id)
-    )
-
-
-def test_actual_extraction_activity_contributes_to_knowledge_and_unblocks_research():
-    app = build_game_application()
-    sim = app._simulation
-    research_id = DefinitionId("test.research.extraction_experience")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
+    extraction_id = DefinitionId("test.research.extraction_experience")
+    sim.research.definitions[extraction_id] = ResearchDefinition(
+        extraction_id,
         "Extraction Experience",
         0.0,
         operational_experience=ResearchOperationalExperienceSpec({
@@ -150,10 +135,20 @@ def test_actual_extraction_activity_contributes_to_knowledge_and_unblocks_resear
         stages=(ResearchStage.OPERATIONAL_EXPERIENCE,),
     )
 
-    sim.research.start(research_id, day=sim.day)
-    before = sim.research.knowledge_state.value(ids.EXPERIENCE_EXTRACTION_OPERATIONS)
+    sim.research.start(waiting_id, day=sim.day)
+    sim.research.start(extraction_id, day=sim.day)
+    extraction_before = sim.research.knowledge_state.value(
+        ids.EXPERIENCE_EXTRACTION_OPERATIONS
+    )
     sim.advance_days(1)
 
-    after = sim.research.knowledge_state.value(ids.EXPERIENCE_EXTRACTION_OPERATIONS)
-    assert after > before
-    assert research_id in sim.research.completed
+    assert sim.research.knowledge_state.value(never_emitted) == 0.0
+    assert waiting_id in sim.research.active
+    assert any(
+        code == "operational_experience"
+        for code, _ in sim.research.operational_experience_blockers(waiting_id)
+    )
+    assert sim.research.knowledge_state.value(
+        ids.EXPERIENCE_EXTRACTION_OPERATIONS
+    ) > extraction_before
+    assert extraction_id in sim.research.completed

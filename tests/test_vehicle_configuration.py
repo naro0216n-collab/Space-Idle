@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 
 from space_idle import build_game_application
-from space_idle.content.base_game import MACHINERY, REUSABLE_ORBITAL_CARGO_TUG
+from space_idle.content.base_game import EARTH, LEO, MACHINERY, REUSABLE_ORBITAL_CARGO_TUG
 from space_idle.transport import ResourceSupportRequirement
 from space_idle.validation import validate_simulation_configuration
 from space_idle.validation_support import ConfigurationError
@@ -182,8 +182,8 @@ def test_transport_endurance_applies_independently_of_operation_kind():
     app = build_game_application()
     sim = app._simulation
     plan = sim.transport.movement_plan_candidates(
-        __import__("space_idle.content.base_ids", fromlist=["EARTH"]).EARTH,
-        __import__("space_idle.content.base_ids", fromlist=["LEO"]).LEO,
+        EARTH,
+        LEO,
     )[0]
     profile = TransportPerformanceProfile(
         dry_mass_t=10.0,

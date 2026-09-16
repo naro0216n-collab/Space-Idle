@@ -76,29 +76,7 @@ def test_body_and_player_scopes_resolve_operational_nodes_in_application():
     assert set(player.node_ids) == {str(value) for value in graph.operational_node_ids()}
 
 
-def test_content_defined_resource_group_aggregates_resource_metrics_without_core_special_case():
-    app = build_game_application()
-    group_id = DefinitionId("test.group.volatiles")
-    app._catalog.resource_groups[group_id] = ResourceGroupDef(
-        group_id, "Volatiles", (ids.WATER, ids.OXYGEN, ids.HYDROGEN)
-    )
-
-    view = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),)))
-    group = next(row for row in view.resource_groups if row.id == str(group_id))
-    members = [row for row in view.resources if row.id in group.member_resource_ids]
-
-    assert group.local_production_per_day == pytest.approx(
-        sum(row.local_production_per_day for row in members)
-    )
-    assert group.local_consumption_per_day == pytest.approx(
-        sum(row.local_consumption_per_day for row in members)
-    )
-    assert group.imports_pipeline == pytest.approx(sum(row.imports_pipeline for row in members))
-    assert group.exports_pipeline == pytest.approx(sum(row.exports_pipeline for row in members))
-
-
-
-def test_resource_group_does_not_use_one_resource_surplus_to_cover_another_resource_deficit():
+def test_content_defined_resource_group_aggregates_members_without_cross_resource_substitution():
     app = build_game_application()
     group_id = DefinitionId("test.group.non_substitutable")
     app._catalog.resource_groups[group_id] = ResourceGroupDef(
@@ -109,19 +87,28 @@ def test_resource_group_does_not_use_one_resource_surplus_to_cover_another_resou
     water = _resource(view, ids.WATER)
     machinery = _resource(view, ids.MACHINERY)
     group = next(row for row in view.resource_groups if row.id == str(group_id))
+    members = (water, machinery)
+
+    assert group.local_production_per_day == pytest.approx(
+        sum(row.local_production_per_day for row in members)
+    )
+    assert group.local_consumption_per_day == pytest.approx(
+        sum(row.local_consumption_per_day for row in members)
+    )
+    assert group.imports_pipeline == pytest.approx(sum(row.imports_pipeline for row in members))
+    assert group.exports_pipeline == pytest.approx(sum(row.exports_pipeline for row in members))
 
     assert water.local_production_per_day > machinery.local_demand_per_day
     assert machinery.external_dependency_per_day > 0
     assert group.external_dependency_per_day == pytest.approx(
-        water.external_dependency_per_day + machinery.external_dependency_per_day
+        sum(row.external_dependency_per_day for row in members)
     )
     assert group.local_coverage_ratio == pytest.approx(
-        (
-            max(0.0, water.local_demand_per_day - water.external_dependency_per_day)
-            + max(0.0, machinery.local_demand_per_day - machinery.external_dependency_per_day)
-        ) / (water.local_demand_per_day + machinery.local_demand_per_day)
+        sum(
+            max(0.0, row.local_demand_per_day - row.external_dependency_per_day)
+            for row in members
+        ) / sum(row.local_demand_per_day for row in members)
     )
-
 
 def test_current_authorized_transport_projects_boundary_flow_consumption_and_partial_unmet():
     app = build_game_application()

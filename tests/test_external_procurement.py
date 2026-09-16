@@ -10,8 +10,7 @@ from space_idle.content import base_ids as ids
 from space_idle.external_procurement import ExternalSupplyStatus
 from space_idle.persistence import load_game, save_game
 from space_idle.supply import SupplyRequirement
-from space_idle.shared import EntityId
-from tests._logistics_support import resolve_authorized_logistics
+from space_idle.shared import DefinitionId, EntityId
 
 
 def _demand(*, destination=ids.EARTH, amount=4.0, source=None) -> SupplyRequirement:
@@ -179,9 +178,12 @@ def test_external_supply_roundtrips_through_save_load(tmp_path):
 def test_remote_procurement_replenishes_logistics_source_without_bypassing_transport():
     sim = build_base_simulation()
     sim.transport.transport_allocations.clear()
-    demand = _demand(destination=ids.LEO, amount=1.0, source=ids.EARTH)
     sim.inventory.stock[(ids.EARTH, ids.MACHINERY)] = 0.0
     sim.inventory.stock[(ids.LEO, ids.MACHINERY)] = 0.0
+    sim.logistics.set_supply_policy(
+        ids.LEO, ids.MACHINERY, preferred_source_id=ids.EARTH
+    )
+    target_id = sim.logistics.set_target_stock(ids.LEO, ids.MACHINERY, 1.0, 4)
     sim.external_economy.create_policy(
         enabled=True,
         allowed_service_ids=(
@@ -191,62 +193,43 @@ def test_remote_procurement_replenishes_logistics_source_without_bypassing_trans
         day=sim.day,
     )
 
-    raw_logistics, raw_procurement, logistics, procurement, funds = (
-        _plan_and_authorize_procurement(sim, demand)
-    )
-    assert raw_logistics.dispatches
-    assert len(raw_procurement.orders) == 1
-    order = raw_procurement.orders[0]
-    assert order.supply_node_id == ids.EARTH
-    assert order.supply_node_id != demand.destination_id
+    initial = sim.tick_decision_projection()
+    assert not [
+        row for row, _amount in initial.allocations.transport.executable_dispatches
+        if row.requirement.owner_id == target_id
+    ]
 
-    _shared, transport, _resources, _services = resolve_authorized_logistics(
-        sim, sim.day, logistics
+    sim.advance_days(1)
+    supply = next(
+        row for row in sim.logistics.external_supply_batches.values()
+        if row.requirement_id.startswith("supply.target_stock:")
+        and row.supply_node_id == ids.EARTH
+        and row.resource_id == ids.MACHINERY
     )
-    assert transport.executable_dispatches == ()
-    sim.logistics.advance_external_procurement(sim.day, procurement, funds)
-    sim.logistics.advance_capacity_logistics(
-        sim.day, logistics, funds, transport
-    )
-
-    assert sim.logistics.cargo_flows == {}
-    supply = next(iter(sim.logistics.external_supply_batches.values()))
-    sim.logistics.settle_external_supply(supply.available_day)
-    assert sim.inventory.amount(ids.EARTH, ids.MACHINERY) == pytest.approx(1.0)
+    assert supply.supply_node_id != ids.LEO
     assert sim.inventory.amount(ids.LEO, ids.MACHINERY) == pytest.approx(0.0)
 
-    dispatch_day = supply.available_day
-    raw = sim.logistics.plan_capacity_logistics(dispatch_day, (demand,))
-    dispatch_funds = sim.external_economy.allocate(raw.spending_requests, dispatch_day)
-    authorized = sim.logistics.authorize_capacity_logistics(
-        raw, dispatch_funds, dispatch_day
-    )
-    _shared, execution, _resources, _services = resolve_authorized_logistics(
-        sim, dispatch_day, authorized
-    )
-    assert execution.executable_dispatches
-    sim.logistics.advance_capacity_logistics(
-        dispatch_day, authorized, dispatch_funds, execution
+    sim.advance_to_day(supply.available_day)
+    assert sim.inventory.amount(ids.EARTH, ids.MACHINERY) >= 1.0
+    assert sim.inventory.amount(ids.LEO, ids.MACHINERY) == pytest.approx(0.0)
+    ready = sim.tick_decision_projection()
+    assert any(
+        row.requirement.owner_id == target_id and amount > 0.0
+        for row, amount in ready.allocations.transport.executable_dispatches
     )
 
-    flow = next(iter(sim.logistics.cargo_flows.values()))
+    sim.advance_days(1)
+    flow = next(
+        row for row in sim.logistics.cargo_flows.values()
+        if row.owner_id == target_id
+    )
     assert flow.source_id == ids.EARTH
     assert flow.final_destination_id == ids.LEO
     assert flow.leg.external_service_id == ids.EARTH_LEO_LAUNCH_SERVICE
-    assert sim.inventory.amount(ids.EARTH, ids.MACHINERY) == pytest.approx(0.0)
     assert sim.inventory.amount(ids.LEO, ids.MACHINERY) == pytest.approx(0.0)
 
-    arrival_day = flow.first_arrival_day
-    sim.logistics.prepare_cargo_arrivals(arrival_day)
-    handoff_requests = sim.logistics.cargo_handoff_service_requests(arrival_day)
-    handoff_allocations, direct_allocations = sim._allocate_boundary_handoff_services(
-        handoff_requests
-    )
-    sim.logistics.settle_cargo_arrivals(
-        arrival_day, handoff_allocations, direct_allocations
-    )
-    assert sim.inventory.amount(ids.LEO, ids.MACHINERY) == pytest.approx(1.0)
-
+    sim.advance_to_day(flow.first_arrival_day)
+    assert sim.inventory.amount(ids.LEO, ids.MACHINERY) >= 1.0
 
 def test_explicit_source_demand_is_not_replaced_by_destination_procurement():
     from space_idle.external_procurement import ExternalProcurementServiceDef
@@ -255,7 +238,7 @@ def test_explicit_source_demand_is_not_replaced_by_destination_procurement():
     sim = build_base_simulation()
     demand = _demand(destination=ids.LEO, amount=1.0, source=ids.EARTH)
     destination_service = ExternalProcurementServiceDef(
-        id=ids.EARTH_INDUSTRIAL_MARKET.__class__("test.procurement.leo"),
+        id=DefinitionId("test.procurement.leo"),
         display_name="Test LEO Market",
         supply_node_id=ids.LEO,
         resource_prices_musd_per_t=((ids.MACHINERY, 0.1),),

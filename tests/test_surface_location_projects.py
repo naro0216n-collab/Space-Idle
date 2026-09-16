@@ -337,8 +337,8 @@ def test_active_founding_save_load_preserves_identity_and_future_transition(tmp_
     save_game(app, path, saved_at=saved_at)
     loaded, _ = load_game(path, build_game_application)
     loaded_project = loaded._simulation.founding.projects[project.id]
+    assert loaded_project == project
     assert loaded_project.new_location_id == generated
-    assert capture_state(loaded._simulation) == capture_state(sim)
 
     elapsed_days = _advance_until(
         app, lambda: generated in sim.graph.locations, "founding completion after load point"

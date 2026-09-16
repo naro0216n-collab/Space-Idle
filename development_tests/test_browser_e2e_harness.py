@@ -214,17 +214,19 @@ def test_fast_ci_remains_independent_even_as_its_scenario_list_changes(monkeypat
     assert support.guard_ci_secondary_entrypoint("future_fast_smoke.py") is False
 
 
-def test_full_browser_jobs_derive_each_declared_suite_and_harness_contract() -> None:
+def test_full_browser_jobs_derive_each_declared_suite_and_harness_contract(monkeypatch) -> None:
     support = _load_module("space_idle_e2e_support_workflow_test", PLAYWRIGHT_DIR / "e2e_support.py")
     workflow = ROOT / ".github" / "workflows" / "full-validation.yml"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_WORKFLOW", "Full Validation")
+    monkeypatch.setenv("SPACE_IDLE_CI_WORKFLOW_FILE", str(workflow))
 
-    suites = [
-        support._declared_job_scenarios(workflow, "chromium-e2e"),
-        support._declared_job_scenarios(workflow, "webkit-e2e"),
-    ]
-    assert all(suites)
-    assert "full-validation.yml" in support.COALESCED_CI_WORKFLOW_FILES
-    assert "ci.yml" not in support.COALESCED_CI_WORKFLOW_FILES
+    suites = []
+    for job in ("chromium-e2e", "webkit-e2e"):
+        monkeypatch.setenv("GITHUB_JOB", job)
+        suite = support.ci_suite()
+        assert suite is not None
+        suites.append(suite)
 
     # Every scenario declared in any coalesced browser job must adopt the generic
     # entrypoint contract. Browser-specific additions are allowed; an unintegrated

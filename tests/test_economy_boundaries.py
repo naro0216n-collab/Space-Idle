@@ -9,13 +9,11 @@ from space_idle.content.base_game import (
     LEO,
     REUSABLE_LAUNCH_VEHICLE,
     WATER,
+    CONSTRUCTION_EQUIPMENT,
     EARTH_LEO_LAUNCH_SERVICE,
 )
 
 
-from space_idle.supply import SupplyRequirement
-from space_idle.shared import EntityId
-from tests._logistics_support import resolve_authorized_logistics
 
 def test_time_progression_has_no_automatic_income():
     app = build_game_application()
@@ -28,53 +26,64 @@ def test_time_progression_has_no_automatic_income():
 
 
 def test_owned_transport_is_physical_while_external_transport_requires_policy_and_funds():
-    def demand():
-        return SupplyRequirement(
-            EntityId("requirement.economy"), "test", EntityId("owner.economy"),
-            LEO, WATER, 1.0, 5, EARTH,
+    def configure_target(app, *, owned: bool):
+        sim = app._simulation
+        sim.inventory.stock[(LEO, CONSTRUCTION_EQUIPMENT)] = 0.0
+        sim.inventory.add(EARTH, CONSTRUCTION_EQUIPMENT, 2.0)
+        sim.logistics.set_supply_policy(
+            LEO, CONSTRUCTION_EQUIPMENT, preferred_source_id=EARTH
         )
-
-    def execute(sim):
-        raw = sim.logistics.plan_capacity_logistics(sim.day, (demand(),))
-        funds = sim.external_economy.allocate(raw.spending_requests, sim.day)
-        plan = sim.logistics.authorize_capacity_logistics(raw, funds, sim.day)
-        _shared, execution, _resources, _services = resolve_authorized_logistics(
-            sim, sim.day, plan
+        target_id = sim.logistics.set_target_stock(
+            LEO, CONSTRUCTION_EQUIPMENT, 1.0, 5
         )
-        sim.logistics.advance_capacity_logistics(
-            sim.day, plan, funds, execution,
-        )
+        if owned:
+            sim.transport.external_services.clear()
+            sim.transport.create_transport_allocation(
+                REUSABLE_LAUNCH_VEHICLE,
+                EARTH,
+                LEO,
+                target_units=1,
+                day=sim.day,
+            )
+        else:
+            sim.transport.transport_allocations.clear()
+        return sim, target_id
 
     owned = build_game_application()
-    owned_sim = owned._simulation
-    owned_sim.transport.external_services.clear()
-    owned_sim.transport.create_transport_allocation(
-        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=owned_sim.day
-    )
-    owned_sim.inventory.add(EARTH, WATER, 1.0)
+    owned_sim, owned_target = configure_target(owned, owned=True)
     owned_before = owned.query(GetWorld()).funds_musd
-    execute(owned_sim)
+    owned_sim.advance_days(1)
     assert owned.query(GetWorld()).funds_musd == owned_before
-    assert owned_sim.logistics.cargo_flows
+    assert any(
+        row.owner_id == owned_target
+        for row in owned_sim.logistics.cargo_flows.values()
+    )
 
     commercial = build_game_application()
-    commercial_sim = commercial._simulation
-    commercial_sim.transport.transport_allocations.clear()
-    commercial_sim.inventory.add(EARTH, WATER, 2.0)
+    commercial_sim, commercial_target = configure_target(commercial, owned=False)
     commercial_before = commercial.query(GetWorld()).funds_musd
 
-    execute(commercial_sim)
+    commercial_sim.advance_days(1)
     assert commercial.query(GetWorld()).funds_musd == commercial_before
-    assert not commercial_sim.logistics.cargo_flows
+    assert not [
+        row for row in commercial_sim.logistics.cargo_flows.values()
+        if row.owner_id == commercial_target
+    ]
 
     commercial.execute(CreateExternalServicePolicy(
         enabled=True,
         allowed_service_ids=(str(EARTH_LEO_LAUNCH_SERVICE),),
     ))
-    execute(commercial_sim)
+    assert any(
+        row.requirement.owner_id == commercial_target and amount > 0.0
+        for row, amount in commercial_sim.tick_decision_projection().allocations.transport.executable_dispatches
+    )
+    commercial_sim.advance_days(1)
     assert commercial.query(GetWorld()).funds_musd < commercial_before
-    assert commercial_sim.logistics.cargo_flows
-
+    assert any(
+        row.owner_id == commercial_target
+        for row in commercial_sim.logistics.cargo_flows.values()
+    )
 
 def test_extraction_stops_when_output_storage_service_is_full():
     app = build_game_application()

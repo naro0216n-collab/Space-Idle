@@ -60,32 +60,23 @@ def _surface_vehicle(vehicle_id: str, *, speed_km_per_day: float, max_distance_k
     )
 
 
-def test_surface_movement_plan_uses_real_gateway_facility_cells():
+def test_surface_gateway_identity_anchors_plan_while_current_cell_drives_geometry():
     sim = build_game_application()._simulation
     a, a_gateway = _location_with_gateway(sim, "a", ids.MOON_CELL_SOUTH_POLAR_RIDGE)
     b, b_gateway = _location_with_gateway(sim, "b", ids.MOON_CELL_NEARSIDE_MARE)
 
-    plan = _plan_between(sim, a, b)
-    geometry = sim.transport.movement_geometry(plan.id)
-
-    assert plan.origin.surface_interface_id == a_gateway
-    assert plan.destination.surface_interface_id == b_gateway
-    assert geometry.origin.surface_cell_id == ids.MOON_CELL_SOUTH_POLAR_RIDGE
-    assert geometry.destination.surface_cell_id == ids.MOON_CELL_NEARSIDE_MARE
-    assert geometry.same_body_surface
-    assert geometry.distance_km is not None and geometry.distance_km > 0
-
-
-def test_gateway_position_changes_movement_geometry_without_changing_location_identity():
-    sim = build_game_application()._simulation
-    a, gateway = _location_with_gateway(sim, "a", ids.MOON_CELL_SOUTH_POLAR_RIDGE)
-    b, _ = _location_with_gateway(sim, "b", ids.MOON_CELL_NEARSIDE_MARE)
     before_plan = _plan_between(sim, a, b)
     before = sim.transport.movement_geometry(before_plan.id)
+    assert before_plan.origin.surface_interface_id == a_gateway
+    assert before_plan.destination.surface_interface_id == b_gateway
+    assert before.origin.surface_cell_id == ids.MOON_CELL_SOUTH_POLAR_RIDGE
+    assert before.destination.surface_cell_id == ids.MOON_CELL_NEARSIDE_MARE
+    assert before.same_body_surface
+    assert before.distance_km is not None and before.distance_km > 0
 
     sim.graph.develop_surface_cell(a, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
     sim.graph.develop_surface_cell(a, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
-    sim.facilities.facilities[gateway].site_cell_id = ids.MOON_CELL_EQUATORIAL_HIGHLANDS
+    sim.facilities.facilities[a_gateway].site_cell_id = ids.MOON_CELL_EQUATORIAL_HIGHLANDS
     sim.transport.invalidate_movement_plans()
 
     after_plan = _plan_between(sim, a, b)
@@ -94,8 +85,6 @@ def test_gateway_position_changes_movement_geometry_without_changing_location_id
     assert after.origin.surface_cell_id == ids.MOON_CELL_EQUATORIAL_HIGHLANDS
     assert after.distance_km is not None and before.distance_km is not None
     assert after.distance_km < before.distance_km
-    # Plan identity follows the stable endpoint interface identity; its geometry
-    # is re-derived from the gateway's current Surface Cell.
     assert after_plan.id == before_plan.id
 
 

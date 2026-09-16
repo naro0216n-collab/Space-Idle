@@ -417,8 +417,8 @@ def test_gateway_trusted_workflow_guard_requires_publish_control_blob_identity(t
 
 def test_gateway_contract_validates_fixed_slot_then_publishes_exact_commit() -> None:
     workflow = (ROOT / ".github" / "workflows" / "publish-gateway.yml").read_text(encoding="utf-8")
-    validator = (ROOT / "scripts" / "publish_gateway_validate.py").read_text(encoding="utf-8")
     assert "'.publish/transport/**'" in workflow
+    assert "TRANSPORT_DIR=.publish/transport/${branches[0]}" in workflow
+    assert "python scripts/publish_gateway_validate.py" in workflow
     assert 'git push origin "${PUBLISH_COMMIT}:refs/heads/${TARGET_BRANCH}"' in workflow
     assert "Dispatch Fast CI for published branch" in workflow
-    assert "_transport_parts" in validator

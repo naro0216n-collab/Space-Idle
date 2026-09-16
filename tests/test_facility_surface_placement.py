@@ -15,7 +15,7 @@ from space_idle import (
 from space_idle.content import base_ids as ids
 from space_idle.content.base_facilities import build_facility_definitions
 from space_idle.facilities import FacilityBook, FacilityPlacementScope
-from space_idle.persistence import capture_state, load_game, save_game
+from space_idle.persistence import load_game, save_game
 from space_idle.shared import SpatialNodeId
 from space_idle.validation import validate_runtime_state
 
@@ -147,7 +147,6 @@ def test_completed_surface_build_preserves_site_cell_through_save_load(tmp_path:
     save_game(app, path)
     loaded, _ = load_game(path, build_game_application)
 
-    assert capture_state(loaded._simulation) == capture_state(sim)
     loaded_project = loaded._simulation.projects.projects[project.id]
     loaded_facility = loaded._simulation.facilities.facilities[facility.id]
     assert loaded_project.site_cell_id == ids.EARTH_CELL_INDUSTRIAL

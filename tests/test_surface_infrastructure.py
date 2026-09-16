@@ -7,6 +7,7 @@ from space_idle import (
     AdvanceTime,
     DevelopSurfaceCell,
     GetLogistics,
+    GetSurfaceMap,
     GetOperationalNode,
     GetProjects,
     build_game_application,
@@ -144,7 +145,7 @@ def test_surface_infrastructure_does_not_create_cell_inventory_or_logistics_node
     assert SURFACE_DISTRIBUTION_SERVICE in sim.facilities.service_types()
 
 
-def test_remote_surface_facility_capability_remains_categorical_under_surface_service_shortage():
+def test_surface_infrastructure_limits_remote_service_execution_without_disabling_capability():
     sim = build_game_application()._simulation
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
     station_id = sim.facilities.install(
@@ -152,6 +153,8 @@ def test_remote_surface_facility_capability_remains_categorical_under_surface_se
         ids.EARTH,
         site_cell_id=ids.EARTH_CELL_COASTAL,
     )
+
+    expected_rate = sim.survey.providers[ids.ROBOTIC_GEOLOGY_STATION].points_per_day
     assert sim.facilities.installed_capability_at(ids.EARTH, "surface_survey")
     assert sim.facilities.active_capability_at(ids.EARTH, "surface_survey", sim.day)
     decision = sim.tick_decision_projection()
@@ -160,6 +163,10 @@ def test_remote_surface_facility_capability_remains_categorical_under_surface_se
         ids.EARTH, sim.facilities, power, sim.day,
         allocation_plan=decision.allocations.services,
     ).fulfillment == 0.0
+    constrained = decision.allocations.services.summary(ids.EARTH, "survey_observation")
+    assert constrained.nominal_rate == pytest.approx(expected_rate)
+    assert constrained.enabled_rate == 0.0
+    assert constrained.limiting_factors == ("provider_dependency",)
 
     sim.facilities.install(
         ids.SURFACE_DISTRIBUTION_HUB,
@@ -172,39 +179,12 @@ def test_remote_surface_facility_capability_remains_categorical_under_surface_se
         ids.EARTH, sim.facilities, power, sim.day,
         allocation_plan=decision.allocations.services,
     ).fulfillment > 0.0
-    assert sim.facilities.active_capability_at(ids.EARTH, "surface_survey", sim.day)
-    assert station_id in sim.facilities.facilities
-
-
-def test_remote_surface_survey_supply_is_enabled_by_shared_surface_dependency_allocation():
-    sim = build_game_application()._simulation
-    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
-    sim.facilities.install(
-        ids.ROBOTIC_GEOLOGY_STATION,
-        ids.EARTH,
-        site_cell_id=ids.EARTH_CELL_COASTAL,
-    )
-
-    expected_rate = sim.survey.providers[ids.ROBOTIC_GEOLOGY_STATION].points_per_day
-    constrained = sim.tick_decision_projection().allocations.services.summary(
-        ids.EARTH, "survey_observation"
-    )
-    assert constrained.nominal_rate == pytest.approx(expected_rate)
-    assert constrained.enabled_rate == 0.0
-    assert constrained.limiting_factors == ("provider_dependency",)
-
-    sim.facilities.install(
-        ids.SURFACE_DISTRIBUTION_HUB,
-        ids.EARTH,
-        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
-    )
-    supplied = sim.tick_decision_projection().allocations.services.summary(
-        ids.EARTH, "survey_observation"
-    )
+    supplied = decision.allocations.services.summary(ids.EARTH, "survey_observation")
     assert supplied.nominal_rate == pytest.approx(expected_rate)
     assert supplied.enabled_rate == pytest.approx(expected_rate)
     assert supplied.limiting_factors == ()
-
+    assert sim.facilities.active_capability_at(ids.EARTH, "surface_survey", sim.day)
+    assert station_id in sim.facilities.facilities
 
 def test_surface_cell_development_execution_reports_shared_bundle_fulfillment():
     app = build_game_application()
@@ -238,7 +218,7 @@ def test_surface_cell_development_execution_reports_shared_bundle_fulfillment():
 
 def test_surface_map_exposes_projected_infrastructure_limit_for_cell_development():
     app = build_game_application()
-    surface = app.query(__import__('space_idle').GetSurfaceMap(str(ids.EARTH_BODY)))
+    surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
     coastal = next(cell for cell in surface.cells if cell.id == str(ids.EARTH_CELL_COASTAL))
     option = next(row for row in coastal.development_options if row.location_id == str(ids.EARTH))
     assert option.blockers == ()
