@@ -210,15 +210,12 @@ class ScientificExplorationService:
             ("origin", definition.origin_id, definition.origin_requirements),
             ("destination", definition.destination_id, definition.destination_requirements),
         ):
-            snapshot = None if power_by_location is None else power_by_location.get(location_id)
             for failure in evaluate_site_requirements(
                 requirements,
                 location_id,
                 day,
                 self.facilities.environment,
                 self.facilities,
-                self.service_capacity_registry,
-                snapshot,
             ):
                 failures.append(f"{prefix}:{failure.code}:{failure.detail}")
         return tuple(dict.fromkeys(failures))
@@ -724,8 +721,6 @@ class ScientificExplorationService:
                 day,
                 self.facilities.environment,
                 self.facilities,
-                self.service_capacity_registry,
-                snapshot,
             ):
                 blockers.append(f"destination:{failure.code}:{failure.detail}")
         return tuple(dict.fromkeys(blockers))

@@ -59,7 +59,6 @@ def with_capabilities(site: SiteRequirements, *capability_ids: str) -> SiteRequi
     return SiteRequirements(
         environment=site.environment,
         capability_requirements=site.capability_requirements + _available_requirements(*capability_ids),
-        service_capacity_requirements=site.service_capacity_requirements,
         spatial_classification_requirements=site.spatial_classification_requirements,
     )
 

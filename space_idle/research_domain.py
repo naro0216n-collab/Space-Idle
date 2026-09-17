@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .domain import DomainExtension, StateCodec
+from .execution_requirements import ServiceCapacityRequirement
 from .validation_support import (
     ValidationContext,
     require as _require,
@@ -141,8 +142,13 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
                 research.prototype.site_requirements,
                 known_capabilities,
                 f"research:{research_id}:prototype",
-                ctx.known_service_types,
             )
+            for requirement in research.prototype.execution_requirements:
+                if isinstance(requirement, ServiceCapacityRequirement):
+                    _require(
+                        requirement.service_type in ctx.known_service_types,
+                        f"research prototype references unknown service type: {research_id}/{requirement.service_type}",
+                    )
         if research.demonstration is not None:
             _require(
                 research.demonstration.days > 0,
@@ -152,8 +158,13 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
                 research.demonstration.site_requirements,
                 known_capabilities,
                 f"research:{research_id}:demonstration",
-                ctx.known_service_types,
             )
+            for requirement in research.demonstration.execution_requirements:
+                if isinstance(requirement, ServiceCapacityRequirement):
+                    _require(
+                        requirement.service_type in ctx.known_service_types,
+                        f"research demonstration references unknown service type: {research_id}/{requirement.service_type}",
+                    )
         if research.operational_experience is not None:
             for category, required in research.operational_experience.requirements.items():
                 _require(required >= 0, f"negative experience requirement: {research_id}/{category}")

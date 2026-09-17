@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from .execution_requirements import ExecutionRequirement
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .shared import DefinitionId, SpatialNodeId, SurfaceCellId
 from .site import SiteRequirements
@@ -19,6 +20,7 @@ class ResearchStage(str, Enum):
 class ResearchPrototypeSpec:
     resources: dict[DefinitionId, float]
     site_requirements: SiteRequirements = SiteRequirements()
+    execution_requirements: tuple[ExecutionRequirement, ...] = ()
 
     def __post_init__(self) -> None:
         if any(amount < 0 for amount in self.resources.values()):
@@ -29,6 +31,7 @@ class ResearchPrototypeSpec:
 class ResearchDemonstrationSpec:
     days: int
     site_requirements: SiteRequirements = SiteRequirements()
+    execution_requirements: tuple[ExecutionRequirement, ...] = ()
 
     def __post_init__(self) -> None:
         if self.days <= 0:

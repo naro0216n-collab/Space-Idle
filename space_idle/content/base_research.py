@@ -9,8 +9,9 @@ from ..research import (
     ResearchProviderLevelSpec,
     ResearchProviderSpec,
 )
+from ..execution_requirements import ServiceCapacityRequirement
 from ..knowledge import ExperienceContributionRule
-from ..site import ServiceCapacityRequirement, SiteRequirements
+from ..site import SiteRequirements
 from . import base_ids as ids
 from . import base_requirements as req
 
@@ -27,26 +28,20 @@ def _surface_research_site() -> SiteRequirements:
     return req.with_capabilities(req.SURFACE_SITE, "research_lab")
 
 
-def _with_research_execution(site: SiteRequirements) -> SiteRequirements:
-    requirements = tuple(
-        requirement
-        for requirement in site.service_capacity_requirements
-        if requirement.service_type != "research_execution"
-    ) + (ServiceCapacityRequirement("research_execution", 1.0),)
-    return SiteRequirements(
-        environment=site.environment,
-        capability_requirements=site.capability_requirements,
-        service_capacity_requirements=requirements,
-        spatial_classification_requirements=site.spatial_classification_requirements,
+def _prototype(site: SiteRequirements, resources: dict) -> ResearchPrototypeSpec:
+    return ResearchPrototypeSpec(
+        resources,
+        site,
+        (ServiceCapacityRequirement("research_execution", 1.0),),
     )
 
 
-def _prototype(site: SiteRequirements, resources: dict) -> ResearchPrototypeSpec:
-    return ResearchPrototypeSpec(resources, _with_research_execution(site))
-
-
 def _demonstration(days: int, site: SiteRequirements) -> ResearchDemonstrationSpec:
-    return ResearchDemonstrationSpec(days, _with_research_execution(site))
+    return ResearchDemonstrationSpec(
+        days,
+        site,
+        (ServiceCapacityRequirement("research_execution", 1.0),),
+    )
 
 
 def _experience(category: str, amount: float) -> ResearchOperationalExperienceSpec:

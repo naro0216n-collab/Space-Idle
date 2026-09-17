@@ -37,99 +37,60 @@ def test_service_capacity_allocator_honors_priority_and_is_order_independent_wit
     assert priority_plan.allocated(high.id) == pytest.approx(3.0)
     assert priority_plan.allocated(low.id) == pytest.approx(1.0)
 
-def test_service_capacity_requirement_is_distinct_from_capability_requirement():
+def test_site_eligibility_and_finite_service_allocation_are_separate_contracts():
     from space_idle import build_game_application
     from space_idle.content import base_ids as ids
-    from space_idle.facilities import FacilityDef, ServiceCapacitySupply
+    from space_idle.execution_requirements import (
+        ExecutionRequirementBundle,
+        ServiceCapacityRequirement,
+        allocate_execution_requirements,
+        service_constraint,
+    )
+    from space_idle.facilities import CapabilitySupply, FacilityDef, ServiceCapacitySupply
+    from space_idle.priority import ActivityPriority
     from space_idle.shared import DefinitionId
-    from space_idle.site import ServiceCapacityRequirement, SiteRequirements, evaluate_site_requirements
+    from space_idle.site import (
+        CapabilityRequirement, CapabilityRequirementState, SiteRequirements,
+        evaluate_site_requirements,
+    )
 
     sim = build_game_application()._simulation
     service_type = "test.site_service_capacity"
+    capability_id = "test.site_capability"
     facility_definition_id = DefinitionId("test.facility.site_service_capacity")
     sim.facilities.definitions[facility_definition_id] = FacilityDef(
         facility_definition_id,
-        "Site service-capacity fixture",
+        "Site eligibility / allocation fixture",
+        capability_supplies=(CapabilitySupply(capability_id),),
         service_capacity_supplies=(ServiceCapacitySupply(service_type, 1.0),),
     )
     sim.facilities.install(facility_definition_id, ids.EARTH)
-    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
-    failures = evaluate_site_requirements(
-        SiteRequirements(service_capacity_requirements=(
-            ServiceCapacityRequirement(service_type, 2.0),
-        )),
-        ids.EARTH,
-        sim.day,
-        sim.environment,
-        sim.facilities,
-        sim.service_capacity_registry,
-        power,
-    )
-    assert [(row.code, row.detail) for row in failures] == [
-        ("service_capacity:available", f"{service_type}:1/2")
-    ]
 
-
-def test_site_requirements_resolve_service_capacity_through_registered_domain_provider():
-    from space_idle import build_game_application
-    from space_idle.domain import DomainExtension
-    from space_idle.service_capacity import ServiceCapacityScope
-    from space_idle.site import ServiceCapacityRequirement, SiteRequirements, evaluate_site_requirements
-    from space_idle.content import base_ids as ids
-
-    sim = build_game_application()._simulation
-    service_type = "test.non_facility_site_service"
-
-    class Provider:
-        def service_capacity_types(self):
-            return (service_type,)
-
-        def service_capacity_scope(self, requested_type):
-            if requested_type != service_type:
-                raise KeyError(requested_type)
-            return ServiceCapacityScope.OPERATIONAL_NODE
-
-        def service_capacity_provider_definition_ids(self, requested_type):
-            if requested_type != service_type:
-                raise KeyError(requested_type)
-            return frozenset()
-
-        def service_capacity_upstream_services(self, requested_type):
-            if requested_type != service_type:
-                raise KeyError(requested_type)
-            return frozenset()
-
-        def service_capacity_supply_at(
-            self, operational_node_id, requested_type, facilities, power, day=0,
-            *, provider_factors=None,
-        ):
-            del facilities, day, provider_factors
-            if requested_type != service_type or operational_node_id != ids.EARTH:
-                return (0.0, 0.0)
-            return (2.0, 1.5 if power is not None else 2.0)
-
-    provider = Provider()
-    sim.domain_extensions += (
-        DomainExtension(
-            "test.non_facility_site_service",
-            service_capacity_provider=lambda _sim: provider,
-        ),
-    )
-
-    requirements = SiteRequirements(service_capacity_requirements=(
-        ServiceCapacityRequirement(service_type, 1.0),
+    eligibility = SiteRequirements(capability_requirements=(
+        CapabilityRequirement(capability_id, CapabilityRequirementState.ACTIVE),
     ))
-    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
     assert not evaluate_site_requirements(
-        requirements,
-        ids.EARTH,
-        sim.day,
-        sim.environment,
-        sim.facilities,
-        sim.service_capacity_registry,
-        power,
+        eligibility, ids.EARTH, sim.day, sim.environment, sim.facilities
     )
 
+    bundles = tuple(
+        ExecutionRequirementBundle(
+            EntityId(f"execution.{name}"),
+            "test_activity",
+            EntityId(name),
+            "work",
+            ids.EARTH,
+            1.0,
+            ActivityPriority(3),
+            (ServiceCapacityRequirement(service_type, 1.0),),
+        )
+        for name in ("a", "b")
+    )
+    plan = allocate_execution_requirements(
+        bundles, {service_constraint(ids.EARTH, service_type): 1.0}
+    )
+    assert plan.allocated(EntityId("execution.a")) == pytest.approx(0.5)
+    assert plan.allocated(EntityId("execution.b")) == pytest.approx(0.5)
 
 def test_service_capacity_dependency_order_is_upstream_first_deterministic_and_fail_closed():
     dependencies = (

@@ -112,7 +112,6 @@ def test_decommission_lifecycle_registry_accepts_new_participants_without_projec
     registry.register_reference_releaser("test_releaser", releaser)
 
     facility_id = sim.facilities.install(DECOMMISSION_TARGET, ids.EARTH)
-    sim.industry.selected_process_by_facility[facility_id] = DefinitionId("test.process.future_intent")
     failures = sim.projects.decommission_plan_failures(facility_id)
     assert any(row.code == "test_commitment" for row in failures)
 
@@ -131,4 +130,4 @@ def test_decommission_lifecycle_registry_accepts_new_participants_without_projec
         pytest.fail("decommission project did not complete")
 
     assert releaser.released == [facility_id]
-    assert facility_id not in sim.industry.selected_process_by_facility
+    assert facility_id not in sim.facilities.facilities

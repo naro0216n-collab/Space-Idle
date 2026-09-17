@@ -22,6 +22,7 @@ def capture_facilities(sim: Any) -> dict[str, Any]:
                 "maintenance_priority": f.maintenance_priority,
                 "level": f.level,
                 "lifecycle": f.lifecycle.value,
+                "selected_process_id": None if f.selected_process_id is None else str(f.selected_process_id),
                 "invested_resources": {str(resource_id): amount for resource_id, amount in sorted(f.invested_resources.items(), key=lambda row: str(row[0]))},
             }
             for f in sorted(sim.facilities.facilities.values(), key=lambda row: str(row.id))
@@ -43,6 +44,11 @@ def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
             maintenance_priority=row["maintenance_priority"],
             level=int(row["level"]),
             lifecycle=FacilityLifecycle(row.get("lifecycle", "NORMAL")),
+            selected_process_id=(
+                None
+                if row.get("selected_process_id") is None
+                else DefinitionId(row["selected_process_id"])
+            ),
             invested_resources={DefinitionId(key): float(value) for key, value in row["invested_resources"].items()},
         )
     sim.facilities._counter = int(data["counter"])
@@ -75,13 +81,11 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             definition.installation_requirements,
             ctx.known_capabilities,
             f"facility:{definition.id}:installation",
-            ctx.known_service_types,
         )
         _validate_site_requirements(
             definition.operating_requirements,
             ctx.known_capabilities,
             f"facility:{definition.id}:operating",
-            ctx.known_service_types,
         )
     for facility in sim.facilities.facilities.values():
         _require(facility.definition_id in facility_defs, f"facility references unknown definition: {facility.id}")

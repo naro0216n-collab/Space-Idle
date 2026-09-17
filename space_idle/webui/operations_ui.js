@@ -19,8 +19,7 @@
     const spatial=(requirements?.spatial_classifications||[]).map((row)=>`<div class="cell-sub">空間条件: ${esc(row.description||row.code)}</div>`).join('');
     const env=(requirements?.environment||[]).map((row)=>`<div class="cell-sub">物理環境: ${esc(row.description||row.code)}</div>`).join('');
     const caps=(requirements?.capabilities||[]).map((row)=>`<div class="cell-sub">${row.required_state==='ACTIVE'?'稼働':'設置'}Capability: ${esc(capabilityName(row.capability_id))}</div>`).join('');
-    const services=(requirements?.service_capacities||[]).map((row)=>`<div class="cell-sub">Service: ${esc(capabilityName(row.service_type))} ${fmt(row.minimum_rate)}</div>`).join('');
-    return spatial+env+caps+services||'<div class="cell-sub">追加条件なし</div>';
+    return spatial+env+caps||'<div class="cell-sub">追加条件なし</div>';
   };
   function constructionPlanControls(prefix,{draftScope=prefix,policyOptions=[],sourceOptions=[],selectedPolicy='mixed',selectedSource=null,disabled=false}={}){
     const policyRows=(policyOptions||[]).map((value)=>`<option value="${esc(value)}" ${value===selectedPolicy?'selected':''}>${esc(sourcingPolicyName(value))}</option>`).join('');
@@ -217,7 +216,7 @@
     if(industry){
       const processOptions=(industry.process_options||[]).map(([processId,name])=>`<option value="${esc(processId)}" ${processId===industry.process_id?'selected':''}>${esc(name||definitionName(processId))}</option>`).join('');
       const processControl=`<div class="form-row"><label>Process<select id="facilityProcessSelect" data-draft-key="facility:${esc(f.id)}:process" ${processOptions?'':'disabled'}>${processOptions||'<option>候補なし</option>'}</select></label><button type="button" data-set-facility-process="${esc(f.id)}" ${processOptions?'':'disabled'}>Processを適用</button></div>`;
-      productionSection+=section('生産工程',kv([['現在Process',esc(industry.process_display_name||industry.process_id||'未選択')],['実効稼働率',pct(industry.scale)]])+processControl+`<h4>投入/日</h4>${rateCards(industry.input_rates_per_day)}<h4>生産物/日</h4>${rateCards(industry.output_rates_per_day)}<h4>limiting factor</h4>${limitingHtml(industry.limiting_factors)}`);
+      productionSection+=section('生産工程',kv([['現在Process',esc(industry.process_display_name||industry.process_id||'未選択')],['Process選択',industry.selection_required?'選択が必要':'確定'],['実効稼働率',pct(industry.scale)]])+processControl+`<h4>投入/日</h4>${rateCards(industry.input_rates_per_day)}<h4>生産物/日</h4>${rateCards(industry.output_rates_per_day)}<h4>limiting factor</h4>${limitingHtml(industry.limiting_factors)}`);
     }
     if(extraction){
       productionSection+=section('採掘',kv([['対象資源',esc(resourceName(extraction.resource_id))],['Nominal Capacity',`${fmt(extraction.nominal_capacity_t_per_day,3)} t/日`],['Effective Opportunity',fmt(extraction.effective_opportunity,3)],['限界効率',pct(extraction.marginal_efficiency)],['産出資源',esc(resourceName(extraction.output_resource_id))],['生産物/日',`${fmt(extraction.output_t_per_day,3)} t/日`],['実効稼働率',pct(extraction.scale)]])+`<h4>limiting factor</h4>${limitingHtml(extraction.limiting_factors)}`);

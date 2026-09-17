@@ -26,7 +26,6 @@ class ResearchWorkflowMixin:
     _TRANSIENT_SITE_BLOCKERS = frozenset({
         "manual_pause",
         "capability:active",
-        "service_capacity:available",
     })
 
     @staticmethod
@@ -86,8 +85,6 @@ class ResearchWorkflowMixin:
                     day,
                     self.facilities.environment,
                     self.facilities,
-                    self.service_capacity_registry,
-                    power,
                     environment_context_id=context_id,
                 )
             )
@@ -407,11 +404,7 @@ class ResearchWorkflowMixin:
             else:
                 continue
 
-            requirements = tuple(
-                ExecutionServiceRequirement(req.service_type, req.minimum_rate)
-                for req in spec.site_requirements.service_capacity_requirements
-                if req.minimum_rate > 1e-12
-            )
+            requirements = spec.execution_requirements
             bundles.append(ExecutionRequirementBundle(
                 self._stage_bundle_id(research_id, state.stage, site),
                 "research_project",

@@ -23,13 +23,13 @@ from space_idle.research import (
     ResearchPrototypeSpec,
     ResearchStage,
 )
+from space_idle.execution_requirements import ServiceCapacityRequirement
 from space_idle.facilities import CapabilitySupply, FacilityDef, ServiceCapacitySupply
 from space_idle.shared import DefinitionId
 from space_idle.site import (
     CapabilityRequirement,
     CapabilityRequirementState,
     FacetValueRange,
-    ServiceCapacityRequirement,
     SiteRequirements,
 )
 from space_idle.spatial import ThermalField
@@ -115,11 +115,9 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
         prototype=ResearchPrototypeSpec(
             {},
             SiteRequirements(
-                service_capacity_requirements=(
-                    ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),
-                ),
                 spatial_classification_requirements=req.SURFACE_CLASSIFICATION,
             ),
+            (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
         ),
         stages=(ResearchStage.PROTOTYPE,),
     )
@@ -128,7 +126,7 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
 
     row = _research_row(app, research_id)
     earth = next(site for site in row.prototype_sites if site.operational_node_id == str(EARTH))
-    assert any(code == "service_capacity:available" for code, _detail in earth.blockers)
+    assert not any(code.startswith("service") for code, _detail in earth.blockers)
     assert earth.can_select
 
     leo = next(site for site in row.prototype_sites if site.operational_node_id == str(LEO))
@@ -143,7 +141,7 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
     assert selected.prototype_execution_site.operational_node_id == str(EARTH)
     assert selected.prototype_execution_site.surface_cell_id is None
     assert any(
-        code == "service_capacity:available"
+        code == "service:allocation"
         for code, _detail in selected.current_blockers
     )
     app.execute(AdvanceTime(1))
@@ -212,9 +210,8 @@ def test_prototype_resources_stage_durably_and_complete_without_manual_funding()
         research_point_cost=0.0,
         prototype=ResearchPrototypeSpec(
             {resource_id: 1.0},
-            SiteRequirements(service_capacity_requirements=(
-                ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),
-            )),
+            SiteRequirements(),
+            (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
         ),
         stages=(ResearchStage.PROTOTYPE,),
     )
@@ -254,10 +251,8 @@ def test_demonstration_site_selection_tolerates_transient_blockers_but_progress_
                         CapabilityRequirementState.ACTIVE,
                     ),
                 ),
-                service_capacity_requirements=(
-                    ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),
-                ),
             ),
+            (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
         ),
         stages=(ResearchStage.DEMONSTRATION,),
     )
@@ -284,7 +279,7 @@ def test_demonstration_site_selection_tolerates_transient_blockers_but_progress_
     original = _remove_research_site_service(sim)
     app.execute(AdvanceTime(1))
     blocked = _research_row(app, research_id)
-    assert any(code == "service_capacity:available" for code, _detail in blocked.current_blockers)
+    assert any(code == "service:allocation" for code, _detail in blocked.current_blockers)
     assert sim.research.active[research_id].stage_progress == 0.0
 
     sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original

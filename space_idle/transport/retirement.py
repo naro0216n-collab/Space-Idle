@@ -51,7 +51,7 @@ class FleetRetirementMixin:
             raise KeyError(operational_node_id)
         failures = evaluate_site_requirements(
             spec.site_requirements, operational_node_id, day,
-            self.facilities.environment, self.facilities, self.service_capacity_registry,
+            self.facilities.environment, self.facilities,
         )
         if failures:
             raise ValueError(
@@ -126,7 +126,7 @@ class FleetRetirementMixin:
         if remaining_work > _EPS:
             failures = evaluate_site_requirements(
                 spec.site_requirements, state.operational_node_id, day,
-                self.facilities.environment, self.facilities, self.service_capacity_registry,
+                self.facilities.environment, self.facilities,
             )
             blockers.extend(f"site:{failure.code}:{failure.detail}" for failure in failures)
             if spec.service_type is not None:
@@ -175,7 +175,7 @@ class FleetRetirementMixin:
             if remaining_work > _EPS:
                 site_failures = evaluate_site_requirements(
                     spec.site_requirements, state.operational_node_id, day,
-                    self.facilities.environment, self.facilities, self.service_capacity_registry,
+                    self.facilities.environment, self.facilities,
                 )
                 if site_failures:
                     continue

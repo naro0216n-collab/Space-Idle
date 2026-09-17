@@ -59,8 +59,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(template_id == template.id, f"contract template key mismatch: {template_id}")
         _require(template.duration_days >= 0, f"negative contract duration: {template_id}")
         _validate_site_requirements(
-            template.site_requirements, ctx.known_capabilities, f"contract:{template_id}",
-            ctx.known_service_types
+            template.site_requirements, ctx.known_capabilities, f"contract:{template_id}"
         )
         if template.target_operational_node_id is not None:
             _require(

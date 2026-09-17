@@ -86,6 +86,7 @@ class FacilityState:
     invested_resources: dict[DefinitionId, float] = field(default_factory=dict)
     site_cell_id: SurfaceCellId | None = None
     lifecycle: FacilityLifecycle = FacilityLifecycle.NORMAL
+    selected_process_id: DefinitionId | None = None
 
     def __post_init__(self) -> None:
         self.activity_priority = ActivityPriority(self.activity_priority)

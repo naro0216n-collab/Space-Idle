@@ -330,7 +330,8 @@ class LocationProjectorMixin:
             definition = sim.facilities.definitions[facility.definition_id]
             options = tuple((str(process.id), process.display_name) for process in compatible)
             snap = snapshots.get(facility.id)
-            process = None if snap is None else sim.industry.processes[snap.process_id]
+            process = sim.industry.process_for(facility)
+            selection_required = len(compatible) > 1 and facility.selected_process_id is None
             if snap is not None:
                 limiting = snap.limiting_factors
                 scale = snap.scale
@@ -364,6 +365,7 @@ class LocationProjectorMixin:
                     None if process is None else str(process.id),
                     None if process is None else process.display_name,
                     options,
+                    selection_required,
                     scale,
                     limiting,
                     inputs,

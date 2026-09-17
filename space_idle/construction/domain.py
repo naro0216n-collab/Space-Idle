@@ -126,13 +126,12 @@ STATE_CODEC = StateCodec("projects", capture_projects, restore_projects)
 def _validate_physical_recipe(recipe, owner: str, ctx: ValidationContext) -> None:
     _require(recipe.construction_work >= 0, f"negative construction work: {owner}")
     _require(recipe.prerequisite_technologies.issubset(ctx.known_technologies), f"construction references unknown technology: {owner}")
-    _validate_site_requirements(recipe.site_requirements, ctx.known_capabilities, owner, ctx.known_service_types)
+    _validate_site_requirements(recipe.site_requirements, ctx.known_capabilities, owner)
     resource_ids: set[DefinitionId] = set()
     for requirement in recipe.resources:
         _require(requirement.resource_id not in resource_ids, f"duplicate construction resource: {owner}/{requirement.resource_id}")
         resource_ids.add(requirement.resource_id)
         _require(requirement.amount_t > 0, f"non-positive construction resource amount: {owner}/{requirement.resource_id}")
-    _require(2 <= len(recipe.resources) <= 3, f"construction recipe must use 2-3 physical resources: {owner}")
 
 
 def _validate_facility_recipe(recipe, owner: str, ctx: ValidationContext) -> None:
@@ -145,7 +144,7 @@ def _validate_decommission_recipe(recipe, owner: str, ctx: ValidationContext) ->
     _require(recipe.construction_work > 0, f"decommission work must be positive: {owner}")
     _require(not recipe.self_deploying, f"facility decommission cannot self-deploy: {owner}")
     _require(recipe.prerequisite_technologies.issubset(ctx.known_technologies), f"decommission references unknown technology: {owner}")
-    _validate_site_requirements(recipe.site_requirements, ctx.known_capabilities, owner, ctx.known_service_types)
+    _validate_site_requirements(recipe.site_requirements, ctx.known_capabilities, owner)
     resource_ids: set[DefinitionId] = set()
     for requirement in recipe.resources:
         _require(requirement.resource_id not in resource_ids, f"duplicate decommission resource: {owner}/{requirement.resource_id}")

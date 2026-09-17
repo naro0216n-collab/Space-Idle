@@ -17,16 +17,9 @@ class CapabilityRequirementRow:
 
 
 @dataclass(frozen=True)
-class ServiceCapacityRequirementRow:
-    service_type: str
-    minimum_rate: float
-
-
-@dataclass(frozen=True)
 class SiteRequirementsDefinitionRow:
     environment: tuple[RequirementConditionRow, ...] = ()
     capabilities: tuple[CapabilityRequirementRow, ...] = ()
-    service_capacities: tuple[ServiceCapacityRequirementRow, ...] = ()
     spatial_classifications: tuple[RequirementConditionRow, ...] = ()
 
 

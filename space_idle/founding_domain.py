@@ -80,8 +80,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     for package_id, package in service.packages.items():
         _require(package_id == package.id, f"founding package key mismatch: {package_id}")
         _require(package.required_units > 0, f"founding package has invalid fleet units: {package_id}")
-        validate_site_requirements(package.staging_requirements, ctx.known_capabilities, f"founding:{package_id}:staging", ctx.known_service_types)
-        validate_site_requirements(package.target_requirements, ctx.known_capabilities, f"founding:{package_id}:target", ctx.known_service_types)
+        validate_site_requirements(package.staging_requirements, ctx.known_capabilities, f"founding:{package_id}:staging")
+        validate_site_requirements(package.target_requirements, ctx.known_capabilities, f"founding:{package_id}:target")
         _require(
             not package.target_requirements.capability_requirements,
             f"founding target requirements cannot depend on pre-location capabilities: {package_id}",

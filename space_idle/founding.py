@@ -258,8 +258,6 @@ class LocationFoundingService:
             day,
             self.facilities.environment,
             self.facilities,
-            self.service_capacity_registry,
-            snapshot,
         ):
             failures.append(FoundingBlocker(f"staging:{failure.code}", failure.detail))
         for failure in evaluate_physical_site_requirements(

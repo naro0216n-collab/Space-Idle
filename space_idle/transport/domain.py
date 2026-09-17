@@ -466,8 +466,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
                 sim.transport.operation_registry.supports(operation.operation_type),
                 f"surface-access movement rule references unregistered operation: {rule.id}/{operation.operation_type}",
             )
-        _validate_site_requirements(rule.space_requirements, known_capabilities, f"movement_rule:{rule.id}:space", known_service_types)
-        _validate_site_requirements(rule.surface_requirements, known_capabilities, f"movement_rule:{rule.id}:surface", known_service_types)
+        _validate_site_requirements(rule.space_requirements, known_capabilities, f"movement_rule:{rule.id}:space")
+        _validate_site_requirements(rule.surface_requirements, known_capabilities, f"movement_rule:{rule.id}:surface")
     for rule in sim.transport.spaceflight_movement_rules:
         _require(rule.characteristic_speed_km_per_day > 0, f"non-positive spaceflight characteristic speed: {rule.id}")
         _require(rule.minimum_transit_days > 0, f"non-positive spaceflight minimum transit time: {rule.id}")
@@ -475,8 +475,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             sim.transport.operation_registry.supports(rule.operation_type),
             f"spaceflight movement rule references unregistered operation: {rule.id}/{rule.operation_type}",
         )
-        _validate_site_requirements(rule.origin_requirements, known_capabilities, f"movement_rule:{rule.id}:origin", known_service_types)
-        _validate_site_requirements(rule.destination_requirements, known_capabilities, f"movement_rule:{rule.id}:destination", known_service_types)
+        _validate_site_requirements(rule.origin_requirements, known_capabilities, f"movement_rule:{rule.id}:origin")
+        _validate_site_requirements(rule.destination_requirements, known_capabilities, f"movement_rule:{rule.id}:destination")
     for vehicle_id, vehicle in sim.transport.vehicle_defs.items():
         _require(vehicle_id == vehicle.id, f"vehicle definition key mismatch: {vehicle_id}")
         _validate_transport_profile(sim, vehicle.performance, known_capabilities, f"vehicle:{vehicle_id}")
@@ -495,7 +495,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         if retirement.enabled:
             _require(retirement.service_type is not None, f"vehicle retirement requires a service type: {vehicle_id}")
             _require(retirement.service_type in known_service_types, f"vehicle retirement references unknown service type: {vehicle_id}/{retirement.service_type}")
-            _validate_site_requirements(retirement.site_requirements, known_capabilities, f"vehicle_retirement:{vehicle_id}", known_service_types)
+            _validate_site_requirements(retirement.site_requirements, known_capabilities, f"vehicle_retirement:{vehicle_id}")
         if vehicle.maintenance.service_type is not None:
             _require(
                 vehicle.maintenance.service_type in known_service_types,
@@ -509,7 +509,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             _require(vehicle.production.days > 0, f"vehicle production duration must be positive: {vehicle_id}")
             _require(2 <= len(vehicle.production.resources) <= 3, f"vehicle production should use 2-3 physical resources: {vehicle_id}")
             _require(all(amount > 0 for _resource, amount in vehicle.production.resources), f"vehicle production has non-positive resource input: {vehicle_id}")
-            _validate_site_requirements(vehicle.production.site_requirements, known_capabilities, f"vehicle_production:{vehicle_id}", known_service_types)
+            _validate_site_requirements(vehicle.production.site_requirements, known_capabilities, f"vehicle_production:{vehicle_id}")
 def validate_transport_runtime(sim: Any) -> None:
     tr = sim.transport
     for (vehicle_definition_id, location_id), pool in tr.fleet_pools.items():

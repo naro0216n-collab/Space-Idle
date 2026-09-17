@@ -146,8 +146,6 @@ class VehicleProductionMixin:
                 day,
                 self.facilities.environment,
                 self.facilities,
-                self.service_capacity_registry,
-                power,
             )
         )
         if production.service_type is not None:

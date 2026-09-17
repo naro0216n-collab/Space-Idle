@@ -77,7 +77,6 @@ class ContractService:
         self,
         template: CapabilityContractTemplate,
         day: int,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> bool:
         locations = (
             (template.target_operational_node_id,)
@@ -91,8 +90,6 @@ class ContractService:
                 day,
                 self.facilities.environment,
                 self.facilities,
-                self.service_capacity_registry,
-                None if power_by_location is None else power_by_location.get(location_id),
             )
             for location_id in locations
         )
@@ -107,7 +104,7 @@ class ContractService:
                 continue
             template = self.templates[state.template_id]
             if state.status == ContractStatus.ACCEPTED and self._capability_contract_complete(
-                template, day, power_by_location
+                template, day
             ):
                 state.status = ContractStatus.COMPLETED
                 continue

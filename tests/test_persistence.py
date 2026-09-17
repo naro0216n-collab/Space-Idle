@@ -24,6 +24,7 @@ from space_idle import (
     PlanBuild,
     ProduceVehicle,
     SetResearchPrototypeSite,
+    SetFacilityProcess,
     StartResearch,
     StartSurvey,
     SetSupplyPolicy,
@@ -39,6 +40,7 @@ from space_idle.content.base_game import (
 )
 from space_idle.content import base_ids as ids
 from space_idle.persistence import SaveFormatError, capture_state, load_game, save_game
+from space_idle.industry import ProcessSpec
 from space_idle.research import ResearchStage, ResearchState
 from space_idle.shared import EntityId, CelestialBodyId, DefinitionId
 from space_idle.simulation import OfflineProgressPolicy
@@ -118,6 +120,70 @@ def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
 
     loaded, offline = load_game(path, build_game_application_for_load)
     assert offline is None
+    assert capture_state(loaded._simulation) == capture_state(app._simulation)
+
+
+
+def test_facility_owned_process_selection_roundtrips_in_facility_state(tmp_path):
+    app = build_game_application()
+    sim = app._simulation
+    process = sim.industry.processes[ids.PROCESS_BASIC_STRUCTURAL_MATERIAL]
+    facility = next(
+        row for row in sim.facilities.facilities.values()
+        if row.definition_id == process.facility_def_id
+    )
+
+    alternate_process_id = DefinitionId("test.process.alternate_structural_material")
+    sim.industry.processes[alternate_process_id] = ProcessSpec(
+        alternate_process_id,
+        "Alternate structural material",
+        process.facility_def_id,
+        {},
+        {ids.STRUCTURAL_COMPONENTS: 0.01},
+    )
+    unresolved = next(
+        item for item in app.query(GetOperationalNode(str(facility.operational_node_id))).industry
+        if item.facility_id == str(facility.id)
+    )
+    assert unresolved.selection_required
+    assert unresolved.process_id is None
+    assert tuple(process_id for process_id, _name in unresolved.process_options) == tuple(sorted((
+        str(process.id), str(alternate_process_id),
+    )))
+
+    app.execute(SetFacilityProcess(str(facility.id), str(process.id)))
+    assert facility.selected_process_id == process.id
+    selected = next(
+        item for item in app.query(GetOperationalNode(str(facility.operational_node_id))).industry
+        if item.facility_id == str(facility.id)
+    )
+    assert not selected.selection_required
+    assert selected.process_id == str(process.id)
+    del sim.industry.processes[alternate_process_id]
+
+    state = capture_state(sim)
+    assert "industry" not in state
+    saved_facility = next(
+        row for row in state["facilities"]["items"]
+        if row["id"] == str(facility.id)
+    )
+    assert saved_facility["selected_process_id"] == str(process.id)
+
+    path = tmp_path / "facility-process.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, offline = load_game(path, build_game_application_for_load)
+    assert offline is None
+    loaded_facility = loaded._simulation.facilities.facilities[facility.id]
+    assert loaded_facility.selected_process_id == process.id
+    row = next(
+        item for item in loaded.query(GetOperationalNode(str(facility.operational_node_id))).industry
+        if item.facility_id == str(facility.id)
+    )
+    assert row.process_id == str(process.id)
+    assert not row.selection_required
+
+    app.execute(AdvanceTime(1))
+    loaded.execute(AdvanceTime(1))
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
 

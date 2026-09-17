@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .execution_requirements import (
     ExecutionRequirementBundle,
@@ -23,7 +23,6 @@ from .production import (
 @dataclass
 class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExecutionMixin):
     processes: dict[DefinitionId, ProcessSpec]
-    selected_process_by_facility: dict[EntityId, DefinitionId] = field(default_factory=dict)
 
     SERVICE_TYPE_PREFIX = "process:"
 
@@ -76,14 +75,6 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             ))
         return tuple(rows)
 
-
-    def release_facility_reference(self, facility_id: EntityId) -> None:
-        """Drop mutable future intent tied to a facility being removed.
-
-        Process selection is not a durable execution commitment: once the
-        facility is gone it must not remain as a live cross-domain reference.
-        """
-        self.selected_process_by_facility.pop(facility_id, None)
 
     def service_capacity_types(self) -> tuple[str, ...]:
         return tuple(sorted(

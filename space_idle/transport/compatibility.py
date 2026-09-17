@@ -81,12 +81,6 @@ class TransportCompatibilityMixin:
                         f"{prefix}:capability:{requirement.required_state.value.lower()}:"
                         f"{requirement.capability_id}"
                     )
-                for requirement in requirements.service_capacity_requirements:
-                    if requirement.minimum_rate > 1e-9:
-                        failures.append(
-                            f"{prefix}:service_capacity:available:"
-                            f"{requirement.service_type}:0/{requirement.minimum_rate:g}"
-                        )
             else:
                 for failure in evaluate_site_requirements(
                     requirements,
@@ -94,8 +88,6 @@ class TransportCompatibilityMixin:
                     day,
                     self.facilities.environment,
                     self.facilities,
-                    self.service_capacity_registry,
-                    None,
                     environment_context_id=resolved.environment_context_id,
                 ):
                     failures.append(f"{prefix}:{failure.code}:{failure.detail}")

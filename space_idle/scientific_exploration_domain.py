@@ -92,8 +92,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             len(consumable_ids) == len(set(consumable_ids)),
             f"scientific exploration has duplicate consumable resource: {definition_id}",
         )
-        validate_site_requirements(definition.origin_requirements, capabilities, f"scientific_exploration:{definition_id}:origin", ctx.known_service_types)
-        validate_site_requirements(definition.destination_requirements, capabilities, f"scientific_exploration:{definition_id}:destination", ctx.known_service_types)
+        validate_site_requirements(definition.origin_requirements, capabilities, f"scientific_exploration:{definition_id}:origin")
+        validate_site_requirements(definition.destination_requirements, capabilities, f"scientific_exploration:{definition_id}:destination")
 
 
 def validate_runtime(sim: Any) -> None:

@@ -108,7 +108,6 @@ def build_base_simulation() -> Simulation:
     facility_lifecycle_registry = FacilityLifecycleRegistry()
     facility_lifecycle_registry.register_blocker_provider("transport", transport)
     facility_lifecycle_registry.register_blocker_provider("storage", storage)
-    facility_lifecycle_registry.register_reference_releaser("industry", industry)
 
     surface_cell_claim_registry = SurfaceCellClaimRegistry()
 

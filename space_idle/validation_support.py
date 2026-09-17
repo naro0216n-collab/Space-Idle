@@ -26,7 +26,6 @@ def validate_site_requirements(
     requirements: SiteRequirements,
     known_capabilities: set[str],
     owner: str,
-    known_service_types: set[str] | None = None,
 ) -> None:
     seen_codes: set[str] = set()
     for requirement in requirements.spatial_classification_requirements:
@@ -45,14 +44,6 @@ def validate_site_requirements(
         key = (requirement.capability_id, requirement.required_state.value)
         require(key not in seen_capabilities, f"duplicate capability requirement: {owner}/{requirement.capability_id}/{requirement.required_state.value}")
         seen_capabilities.add(key)
-    seen_services: set[str] = set()
-    for requirement in requirements.service_capacity_requirements:
-        if known_service_types is None:
-            require(False, f"service capacity requirement cannot be validated without known service types: {owner}/{requirement.service_type}")
-        else:
-            require(requirement.service_type in known_service_types, f"site requirement references unknown service type: {owner}/{requirement.service_type}")
-        require(requirement.service_type not in seen_services, f"duplicate service capacity requirement: {owner}/{requirement.service_type}")
-        seen_services.add(requirement.service_type)
 
 @dataclass(frozen=True)
 class ValidationContext:

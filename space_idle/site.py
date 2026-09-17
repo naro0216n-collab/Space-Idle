@@ -6,9 +6,7 @@ from typing import Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .facilities import FacilityBook
-    from .power import PowerSnapshot
 from .shared import SpatialNodeId
-from .service_capacity import ServiceCapacityRegistry
 from .spatial import EnvironmentFieldScope, EnvironmentResolver, SpatialContextId, SpatialFacet, SpatialNodeKind
 
 
@@ -101,22 +99,9 @@ class CapabilityRequirement:
 
 
 @dataclass(frozen=True)
-class ServiceCapacityRequirement:
-    service_type: str
-    minimum_rate: float
-
-    def __post_init__(self) -> None:
-        if not self.service_type:
-            raise ValueError("service capacity requirement type must not be empty")
-        if self.minimum_rate < 0:
-            raise ValueError("service capacity requirement minimum must be non-negative")
-
-
-@dataclass(frozen=True)
 class SiteRequirements:
     environment: tuple[EnvironmentCondition, ...] = ()
     capability_requirements: tuple[CapabilityRequirement, ...] = ()
-    service_capacity_requirements: tuple[ServiceCapacityRequirement, ...] = ()
     spatial_classification_requirements: tuple[SpatialClassificationRequirement, ...] = ()
 
 
@@ -170,8 +155,6 @@ def evaluate_site_requirements(
     day: int,
     environment: EnvironmentResolver,
     facilities: "FacilityBook",
-    service_capacity_registry: ServiceCapacityRegistry,
-    power: "PowerSnapshot | None" = None,
     *,
     environment_context_id: SpatialContextId | None = None,
 ) -> tuple[SiteRequirementFailure, ...]:
@@ -187,18 +170,5 @@ def evaluate_site_requirements(
             failures.append(SiteRequirementFailure(
                 f"capability:{requirement.required_state.value.lower()}",
                 requirement.capability_id,
-            ))
-    for requirement in requirements.service_capacity_requirements:
-        available = service_capacity_registry.available_at(
-            location_id,
-            requirement.service_type,
-            facilities,
-            power,
-            day,
-        )
-        if available + 1e-9 < requirement.minimum_rate:
-            failures.append(SiteRequirementFailure(
-                "service_capacity:available",
-                f"{requirement.service_type}:{available:g}/{requirement.minimum_rate:g}",
             ))
     return tuple(failures)

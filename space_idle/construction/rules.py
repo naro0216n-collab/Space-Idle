@@ -79,12 +79,10 @@ class ConstructionRulesMixin:
         failures = list(evaluate_site_requirements(
             definition.installation_requirements,
             location_id, day, self.facilities.environment, self.facilities,
-            self.service_capacity_registry, power,
             environment_context_id=environment_context,
         ))
         failures.extend(evaluate_site_requirements(
             recipe.site_requirements, location_id, day, self.facilities.environment, self.facilities,
-            self.service_capacity_registry, power,
             environment_context_id=environment_context,
         ))
         return tuple(dict.fromkeys(failures))
@@ -131,7 +129,6 @@ class ConstructionRulesMixin:
         recipe = self.spatial_recipes[recipe_id]
         failures = list(evaluate_site_requirements(
             recipe.site_requirements, location_id, day, self.facilities.environment, self.facilities,
-            self.service_capacity_registry, power,
             environment_context_id=cell_id,
         ))
         required_level = recipe.minimum_survey_knowledge_level
@@ -228,8 +225,6 @@ class ConstructionRulesMixin:
                 day,
                 self.facilities.environment,
                 self.facilities,
-                self.service_capacity_registry,
-                power,
                 environment_context_id=self.facilities.facility_environment_context(facility),
             )
         if isinstance(project.target, NewFacilityTarget):

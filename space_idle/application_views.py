@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import TypeAlias
 from .app_contracts.catalog_views import (
-    RequirementConditionRow, CapabilityRequirementRow, ServiceCapacityRequirementRow,
+    RequirementConditionRow, CapabilityRequirementRow,
     SiteRequirementsDefinitionRow,
     OperationCapabilityDefinitionRow, ResourceDefinitionRow, FacilityDefinitionRow,
     ProcessDefinitionRow, ResearchDefinitionRow, VehicleDefinitionRow, MovementPlanDefinitionRow,

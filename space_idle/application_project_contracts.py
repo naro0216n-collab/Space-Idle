@@ -9,8 +9,6 @@ class ContractProgressionProjectorMixin:
         sim = self._simulation
         if sim.contracts is None:
             return ContractsView(())
-        decision = self._tick_decision_projection()
-        powers = decision.allocations.power_by_location
         rows: list[ContractRow] = []
         for state in sorted(
             sim.contracts.contracts.values(), key=lambda row: str(row.id)
@@ -28,8 +26,6 @@ class ContractProgressionProjectorMixin:
                     sim.day,
                     sim.environment,
                     sim.facilities,
-                    sim.service_capacity_registry,
-                    powers[template.target_operational_node_id],
                 )
                 blockers = tuple(
                     f"{failure.code}:{failure.detail}" for failure in failures
@@ -44,8 +40,6 @@ class ContractProgressionProjectorMixin:
                             sim.day,
                             sim.environment,
                             sim.facilities,
-                            sim.service_capacity_registry,
-                            powers[node.id],
                         )
                         for node in sim.graph.operational_nodes()
                     )

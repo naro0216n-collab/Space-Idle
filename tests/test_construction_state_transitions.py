@@ -8,7 +8,7 @@ from space_idle.construction import BuildResourceRequirement, ConstructionRecipe
 from space_idle.facilities import FacilityDef
 from space_idle.research import ResearchDefinition, ResearchStage
 from space_idle.shared import DefinitionId
-from space_idle.validation import validate_runtime_state
+from space_idle.validation import validate_runtime_state, validate_simulation_configuration
 
 
 def _project(sim):
@@ -135,3 +135,24 @@ def test_parallel_same_priority_projects_share_construction_service_capacity():
     assert first_done / app._simulation.projects.recipe_for_project(projects[first]).construction_work == pytest.approx(
         second_done / app._simulation.projects.recipe_for_project(projects[second]).construction_work
     )
+
+
+def test_construction_recipe_resource_count_is_content_not_core_validation():
+    app = build_game_application()
+    sim = app._simulation
+    facility_id = DefinitionId("test.facility.four_resource_recipe")
+    sim.facilities.definitions[facility_id] = FacilityDef(
+        facility_id, "Four-resource construction fixture"
+    )
+    sim.projects.recipes[facility_id] = ConstructionRecipe(
+        facility_id,
+        (
+            BuildResourceRequirement(ids.STRUCTURAL_COMPONENTS, 1.0),
+            BuildResourceRequirement(ids.MACHINERY, 1.0),
+            BuildResourceRequirement(ids.PRECISION_ELECTRONICS, 1.0),
+            BuildResourceRequirement(ids.BULK_STRUCTURE, 1.0),
+        ),
+        construction_work=1.0,
+    )
+
+    validate_simulation_configuration(sim)

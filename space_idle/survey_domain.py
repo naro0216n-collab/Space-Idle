@@ -114,7 +114,6 @@ def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
             spec.opportunity_requirements,
             ctx.known_capabilities,
             f"extraction:{definition_id}",
-            ctx.known_service_types,
         )
         if spec.geology_accessibility_key is not None:
             _require(

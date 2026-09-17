@@ -129,6 +129,7 @@ class IndustryRow:
     process_id: str | None
     process_display_name: str | None
     process_options: tuple[tuple[str, str], ...]
+    selection_required: bool
     scale: float
     limiting_factors: tuple[str, ...]
     input_rates_per_day: tuple[tuple[str, float], ...]
