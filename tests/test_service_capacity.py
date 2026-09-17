@@ -62,11 +62,73 @@ def test_service_capacity_requirement_is_distinct_from_capability_requirement():
         sim.day,
         sim.environment,
         sim.facilities,
+        sim.service_capacity_registry,
         power,
     )
     assert [(row.code, row.detail) for row in failures] == [
         ("service_capacity:available", f"{service_type}:1/2")
     ]
+
+
+def test_site_requirements_resolve_service_capacity_through_registered_domain_provider():
+    from space_idle import build_game_application
+    from space_idle.domain import DomainExtension
+    from space_idle.service_capacity import ServiceCapacityScope
+    from space_idle.site import ServiceCapacityRequirement, SiteRequirements, evaluate_site_requirements
+    from space_idle.content import base_ids as ids
+
+    sim = build_game_application()._simulation
+    service_type = "test.non_facility_site_service"
+
+    class Provider:
+        def service_capacity_types(self):
+            return (service_type,)
+
+        def service_capacity_scope(self, requested_type):
+            if requested_type != service_type:
+                raise KeyError(requested_type)
+            return ServiceCapacityScope.OPERATIONAL_NODE
+
+        def service_capacity_provider_definition_ids(self, requested_type):
+            if requested_type != service_type:
+                raise KeyError(requested_type)
+            return frozenset()
+
+        def service_capacity_upstream_services(self, requested_type):
+            if requested_type != service_type:
+                raise KeyError(requested_type)
+            return frozenset()
+
+        def service_capacity_supply_at(
+            self, operational_node_id, requested_type, facilities, power, day=0,
+            *, provider_factors=None,
+        ):
+            del facilities, day, provider_factors
+            if requested_type != service_type or operational_node_id != ids.EARTH:
+                return (0.0, 0.0)
+            return (2.0, 1.5 if power is not None else 2.0)
+
+    provider = Provider()
+    sim.domain_extensions += (
+        DomainExtension(
+            "test.non_facility_site_service",
+            service_capacity_provider=lambda _sim: provider,
+        ),
+    )
+
+    requirements = SiteRequirements(service_capacity_requirements=(
+        ServiceCapacityRequirement(service_type, 1.0),
+    ))
+    power = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day)
+    assert not evaluate_site_requirements(
+        requirements,
+        ids.EARTH,
+        sim.day,
+        sim.environment,
+        sim.facilities,
+        sim.service_capacity_registry,
+        power,
+    )
 
 
 def test_service_capacity_dependency_order_is_upstream_first_deterministic_and_fail_closed():

@@ -38,9 +38,8 @@ def _snapshot(sim, maintenance_factors=None):
     power = sim.power.resolve_snapshot(physical, maintenance_factors)
     request = sim.surface_infrastructure.service_request(ids.EARTH)
     key = (ids.EARTH, sim.surface_infrastructure.service_type)
-    nominal = sim.facilities.nominal_service_capacity_at(ids.EARTH, key[1], sim.day)
-    enabled = sim.surface_infrastructure.provider_available_capacity(
-        ids.EARTH, sim.facilities, power, sim.day
+    nominal, enabled = sim.service_capacity_registry.supply_at(
+        ids.EARTH, key[1], sim.facilities, power, sim.day
     )
     plan = allocate_service_capacity(
         (request,), nominal_supply={key: nominal}, enabled_supply={key: enabled}

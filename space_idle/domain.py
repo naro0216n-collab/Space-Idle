@@ -11,6 +11,7 @@ ConfigurationValidator = Callable[[Any, Any], None]
 RuntimeValidator = Callable[[Any], None]
 ResourceReferenceProvider = Callable[[Any], set[DefinitionId]]
 ServiceCapacityProviderFactory = Callable[[Any], Any]
+ServiceCapacityRequestProviderFactory = Callable[[Any], Any]
 AllocationPoolProviderFactory = Callable[[Any], Any]
 
 
@@ -37,6 +38,7 @@ class DomainExtension:
     runtime_validator: RuntimeValidator | None = None
     referenced_resources: ResourceReferenceProvider | None = None
     service_capacity_provider: ServiceCapacityProviderFactory | None = None
+    service_capacity_request_provider: ServiceCapacityRequestProviderFactory | None = None
     allocation_pool_provider: AllocationPoolProviderFactory | None = None
 
 

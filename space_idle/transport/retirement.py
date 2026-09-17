@@ -51,7 +51,7 @@ class FleetRetirementMixin:
             raise KeyError(operational_node_id)
         failures = evaluate_site_requirements(
             spec.site_requirements, operational_node_id, day,
-            self.facilities.environment, self.facilities,
+            self.facilities.environment, self.facilities, self.service_capacity_registry,
         )
         if failures:
             raise ValueError(
@@ -126,13 +126,17 @@ class FleetRetirementMixin:
         if remaining_work > _EPS:
             failures = evaluate_site_requirements(
                 spec.site_requirements, state.operational_node_id, day,
-                self.facilities.environment, self.facilities,
+                self.facilities.environment, self.facilities, self.service_capacity_registry,
             )
             blockers.extend(f"site:{failure.code}:{failure.detail}" for failure in failures)
             if spec.service_type is not None:
                 power = self.power.snapshot(state.operational_node_id, self.facilities, day)
-                available_service = self.facilities.enabled_service_capacity_at(
-                    state.operational_node_id, spec.service_type, power, day
+                available_service = self.service_capacity_registry.available_at(
+                    state.operational_node_id,
+                    spec.service_type,
+                    self.facilities,
+                    power,
+                    day,
                 )
                 if available_service <= _EPS:
                     blockers.append(f"service:{spec.service_type}")
@@ -171,7 +175,7 @@ class FleetRetirementMixin:
             if remaining_work > _EPS:
                 site_failures = evaluate_site_requirements(
                     spec.site_requirements, state.operational_node_id, day,
-                    self.facilities.environment, self.facilities,
+                    self.facilities.environment, self.facilities, self.service_capacity_registry,
                 )
                 if site_failures:
                     continue

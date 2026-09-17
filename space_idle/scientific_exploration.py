@@ -7,6 +7,7 @@ from enum import Enum
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .power import PowerService, PowerSnapshot
+from .service_capacity import ServiceCapacityRegistry
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .research import ResearchService
 from .execution_requirements import (
@@ -94,6 +95,7 @@ class ScientificExplorationService:
     power: PowerService
     transport: "TransportService"
     research: ResearchService
+    service_capacity_registry: ServiceCapacityRegistry
     campaigns: dict[DefinitionId, ScientificExplorationState] = field(default_factory=dict)
 
     def start(
@@ -215,6 +217,7 @@ class ScientificExplorationService:
                 day,
                 self.facilities.environment,
                 self.facilities,
+                self.service_capacity_registry,
                 snapshot,
             ):
                 failures.append(f"{prefix}:{failure.code}:{failure.detail}")
@@ -721,6 +724,7 @@ class ScientificExplorationService:
                 day,
                 self.facilities.environment,
                 self.facilities,
+                self.service_capacity_registry,
                 snapshot,
             ):
                 blockers.append(f"destination:{failure.code}:{failure.detail}")

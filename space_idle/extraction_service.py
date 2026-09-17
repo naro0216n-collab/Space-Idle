@@ -180,11 +180,19 @@ class ExtractionService:
         location_id: SpatialNodeId,
         service_type: str,
         facilities: FacilityBook,
-        power: PowerSnapshot,
+        power: PowerSnapshot | None,
         day: int = 0,
         *,
         provider_factors: dict[EntityId, float] | None = None,
     ) -> tuple[float, float]:
+        if power is None:
+            nominal = sum(
+                spec.nominal_capacity_t_per_day * facility.level
+                for facility in facilities.active_compatible_at(location_id, day)
+                for spec in (self.specs.get(facility.definition_id),)
+                if spec is not None and self.service_type(spec.resource_id) == service_type
+            )
+            return (nominal, nominal)
         nominal, enabled = self.service_supply(
             location_id, facilities, power, day, provider_factors=provider_factors
         )

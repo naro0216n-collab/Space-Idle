@@ -407,7 +407,7 @@ class SurveyService:
         provider_operational_node_id: SpatialNodeId,
         service_type: str,
         facilities: FacilityBook,
-        power: PowerSnapshot,
+        power: PowerSnapshot | None,
         day: int = 0,
         *,
         provider_factors: dict[EntityId, float] | None = None,
@@ -416,8 +416,11 @@ class SurveyService:
             raise ValueError("survey service provider requires its owning FacilityBook")
         if service_type != self.SERVICE_TYPE:
             return (0.0, 0.0)
+        nominal = self.nominal_service_capacity_at(provider_operational_node_id, day)
+        if power is None:
+            return (nominal, nominal)
         return (
-            self.nominal_service_capacity_at(provider_operational_node_id, day),
+            nominal,
             self.enabled_service_capacity_at(
                 provider_operational_node_id, power, day, provider_factors=provider_factors
             ),

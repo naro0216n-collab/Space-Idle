@@ -9,7 +9,7 @@ from .power import PowerSnapshot
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .service_capacity import (
     ServiceCapacityAllocationPlan, ServiceCapacityDependency, ServiceCapacityProvider,
-    ServiceCapacityRequest,
+    ServiceCapacityRegistry, ServiceCapacityRequest,
 )
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .spatial import SpatialGraph, great_circle_distance_km
@@ -50,13 +50,14 @@ class SurfaceInfrastructureService:
 
     Surface Cells remain physical geography only.  This service turns the
     extent and spread of one Location's developed territory into a Location-
-    scoped service load and compares that load with Facility-supplied surface
-    distribution service capacity.  No Cell Inventory or direct Cell-to-Cell cargo links
+    scoped service load and compares that load with registered Service Capacity
+    supply.  No Cell Inventory or direct Cell-to-Cell cargo links
     are created.
     """
 
     graph: SpatialGraph
     facilities: FacilityBook
+    service_capacity_registry: ServiceCapacityRegistry
     service_type: str = SURFACE_DISTRIBUTION_SERVICE
     access_anchor_capability_id: str = SURFACE_ACCESS_ANCHOR_CAPABILITY
 
@@ -185,6 +186,13 @@ class SurfaceInfrastructureService:
     def service_request_id(location_id: SpatialNodeId) -> EntityId:
         return EntityId(f"service.surface_distribution:{location_id}")
 
+    def service_capacity_requests(self, day: int) -> tuple[ServiceCapacityRequest, ...]:
+        """Declare the Location-wide distribution load as root Service demand."""
+        return tuple(
+            self.service_request(location_id, day=day)
+            for location_id in sorted(self.graph.locations, key=str)
+        )
+
     def service_request(
         self,
         location_id: SpatialNodeId,
@@ -223,11 +231,12 @@ class SurfaceInfrastructureService:
                 raise ValueError(
                     f"shared surface infrastructure allocation required for {location_id}"
                 )
-            nominal = facilities.nominal_service_capacity_at(
-                location_id, self.service_type, day
-            )
-            available = self.provider_available_capacity(
-                location_id, facilities, power, day
+            nominal, available = self.service_capacity_registry.supply_at(
+                location_id,
+                self.service_type,
+                facilities,
+                power,
+                day,
             )
             return SurfaceInfrastructureSnapshot(
                 location_id, nominal, available, 0.0, 1.0, loads, (), 0.0, available
@@ -253,36 +262,6 @@ class SurfaceInfrastructureService:
             allocated,
             summary.spare_rate,
         )
-
-    def provider_available_capacity(
-        self,
-        location_id: SpatialNodeId,
-        facilities: FacilityBook,
-        power: PowerSnapshot,
-        day: int,
-    ) -> float:
-        """Resolve only physical provider dependencies for this upstream service."""
-        contributions: list[float] = []
-        for facility in sorted(
-            facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)
-        ):
-            definition = facilities.definitions[facility.definition_id]
-            utilization = max(
-                0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0))
-            )
-            maintenance = max(
-                0.0,
-                min(
-                    1.0,
-                    power.maintenance_factor_by_facility.get(facility.id, 1.0),
-                ),
-            )
-            for supply in definition.service_capacity_supplies:
-                if supply.service_type == self.service_type:
-                    contributions.append(
-                        supply.nominal_rate * utilization * maintenance
-                    )
-        return math.fsum(contributions)
 
     def fulfillment_from_plan(
         self, location_id: SpatialNodeId, allocation_plan: ServiceCapacityAllocationPlan, day: int = 0

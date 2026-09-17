@@ -86,6 +86,7 @@ class ResearchWorkflowMixin:
                     day,
                     self.facilities.environment,
                     self.facilities,
+                    self.service_capacity_registry,
                     power,
                     environment_context_id=context_id,
                 )

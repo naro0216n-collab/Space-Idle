@@ -28,6 +28,7 @@ class ContractProgressionProjectorMixin:
                     sim.day,
                     sim.environment,
                     sim.facilities,
+                    sim.service_capacity_registry,
                     powers[template.target_operational_node_id],
                 )
                 blockers = tuple(
@@ -43,6 +44,7 @@ class ContractProgressionProjectorMixin:
                             sim.day,
                             sim.environment,
                             sim.facilities,
+                            sim.service_capacity_registry,
                             powers[node.id],
                         )
                         for node in sim.graph.operational_nodes()

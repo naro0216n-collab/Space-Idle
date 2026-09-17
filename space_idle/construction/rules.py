@@ -78,11 +78,13 @@ class ConstructionRulesMixin:
             environment_context = self.facilities.facility_environment_context(facility)
         failures = list(evaluate_site_requirements(
             definition.installation_requirements,
-            location_id, day, self.facilities.environment, self.facilities, power,
+            location_id, day, self.facilities.environment, self.facilities,
+            self.service_capacity_registry, power,
             environment_context_id=environment_context,
         ))
         failures.extend(evaluate_site_requirements(
-            recipe.site_requirements, location_id, day, self.facilities.environment, self.facilities, power,
+            recipe.site_requirements, location_id, day, self.facilities.environment, self.facilities,
+            self.service_capacity_registry, power,
             environment_context_id=environment_context,
         ))
         return tuple(dict.fromkeys(failures))
@@ -128,7 +130,8 @@ class ConstructionRulesMixin:
     ) -> tuple[SiteRequirementFailure, ...]:
         recipe = self.spatial_recipes[recipe_id]
         failures = list(evaluate_site_requirements(
-            recipe.site_requirements, location_id, day, self.facilities.environment, self.facilities, power,
+            recipe.site_requirements, location_id, day, self.facilities.environment, self.facilities,
+            self.service_capacity_registry, power,
             environment_context_id=cell_id,
         ))
         required_level = recipe.minimum_survey_knowledge_level
@@ -225,6 +228,7 @@ class ConstructionRulesMixin:
                 day,
                 self.facilities.environment,
                 self.facilities,
+                self.service_capacity_registry,
                 power,
                 environment_context_id=self.facilities.facility_environment_context(facility),
             )
@@ -328,7 +332,7 @@ class ConstructionRulesMixin:
         location_id: SpatialNodeId,
         service_type: str,
         facilities,
-        power: PowerSnapshot,
+        power: PowerSnapshot | None,
         day: int = 0,
         *,
         provider_factors: dict[EntityId, float] | None = None,
@@ -336,8 +340,11 @@ class ConstructionRulesMixin:
         del facilities
         if service_type != CONSTRUCTION_SERVICE_TYPE:
             return (0.0, 0.0)
+        nominal = self.construction_nominal_capacity_at(location_id, day)
+        if power is None:
+            return (nominal, nominal)
         return (
-            self.construction_nominal_capacity_at(location_id, day),
+            nominal,
             self.construction_capacity_at(
                 location_id, power, day, provider_factors=provider_factors
             ),

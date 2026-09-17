@@ -32,6 +32,7 @@ from .service_capacity import (
     ServiceCapacityAllocationPlan,
     ServiceCapacityDependency,
     ServiceCapacityProvider,
+    ServiceCapacityRegistry,
     ServiceCapacityRequest,
     ServiceCapacityScope,
     allocate_service_capacity,
@@ -142,6 +143,7 @@ class Simulation:
     logistics: LogisticsService
     projects: ProjectService
     technology: TechnologyState
+    service_capacity_registry: ServiceCapacityRegistry
     founding: LocationFoundingService | None = None
     contracts: ContractService | None = None
     research: ResearchService | None = None
@@ -408,14 +410,7 @@ class Simulation:
     def _service_capacity_provider(
         self, service_type: str
     ) -> ServiceCapacityProvider | None:
-        providers = tuple(
-            provider
-            for provider in self.service_capacity_providers()
-            if service_type in provider.service_capacity_types()
-        )
-        if len(providers) > 1:
-            raise RuntimeError(f"multiple service capacity providers own {service_type}")
-        return providers[0] if providers else None
+        return self.service_capacity_registry.provider_for(service_type)
 
     def _service_supply_at(
         self,
@@ -507,17 +502,7 @@ class Simulation:
         requests: tuple[ServiceCapacityRequest, ...] | None = None,
     ) -> ServiceCapacityAllocationPlan:
         """Standalone Service projection; normal ticks use the full DAG."""
-        requests = () if requests is None else requests
-        if self.surface_infrastructure is not None:
-            request_ids = {request.id for request in requests}
-            upstream = tuple(
-                self.surface_infrastructure.service_request(location_id, day=self.day)
-                for location_id in sorted(self.graph.locations, key=str)
-                if self.surface_infrastructure.service_request_id(location_id)
-                not in request_ids
-            )
-            requests = requests + upstream
-
+        requests = self._complete_service_requests(() if requests is None else requests)
         service_types = self._service_allocation_types(requests)
         dependencies = self.service_capacity_dependencies()
         order = service_capacity_dependency_order(service_types, dependencies)
@@ -650,24 +635,44 @@ class Simulation:
         )
         return TickPlan(requirement_resolutions, external_requirements, logistics_plan)
 
+    def service_capacity_request_providers(self) -> tuple[object, ...]:
+        """Return composed owners of root finite-Service demand."""
+        rows: list[object] = []
+        for extension in self.domain_extensions:
+            factory = extension.service_capacity_request_provider
+            if factory is None:
+                continue
+            provider = factory(self)
+            if provider is not None:
+                rows.append(provider)
+        return tuple(rows)
+
+    def service_capacity_root_requests(self) -> tuple[ServiceCapacityRequest, ...]:
+        rows: list[ServiceCapacityRequest] = []
+        seen: set[object] = set()
+        for provider in self.service_capacity_request_providers():
+            for request in provider.service_capacity_requests(self.day):
+                if request.id in seen:
+                    raise RuntimeError(f"duplicate root service capacity request id: {request.id}")
+                seen.add(request.id)
+                rows.append(request)
+        return tuple(rows)
+
     def _complete_service_requests(
         self, requests: tuple[ServiceCapacityRequest, ...]
     ) -> tuple[ServiceCapacityRequest, ...]:
-        rows = requests
-        if self.surface_infrastructure is not None:
-            request_ids = {request.id for request in rows}
-            rows += tuple(
-                self.surface_infrastructure.service_request(location_id, day=self.day)
-                for location_id in sorted(self.graph.locations, key=str)
-                if self.surface_infrastructure.service_request_id(location_id)
-                not in request_ids
-            )
-        seen: set[object] = set()
-        for request in rows:
-            if request.id in seen:
-                raise RuntimeError(f"duplicate service capacity request id: {request.id}")
-            seen.add(request.id)
-        return rows
+        rows = list(requests)
+        by_id = {request.id: request for request in rows}
+        if len(by_id) != len(rows):
+            raise RuntimeError("duplicate service capacity request id")
+        for request in self.service_capacity_root_requests():
+            prior = by_id.get(request.id)
+            if prior is None:
+                rows.append(request)
+                by_id[request.id] = request
+            elif prior != request:
+                raise RuntimeError(f"conflicting service capacity request id: {request.id}")
+        return tuple(rows)
 
     def allocation_pool_providers(self) -> tuple[object, ...]:
         """Return composed owners of finite non-Resource allocation pools."""

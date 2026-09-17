@@ -363,15 +363,18 @@ class FacilityBook:
         operational_node_id: SpatialNodeId,
         service_type: str,
         facilities: "FacilityBook",
-        power: "PowerSnapshot",
+        power: "PowerSnapshot | None",
         day: int = 0,
         *,
         provider_factors: Mapping[EntityId, float] | None = None,
     ) -> tuple[float, float]:
         if facilities is not self:
             raise ValueError("facility service provider requires its owning FacilityBook")
+        nominal = self.nominal_service_capacity_at(operational_node_id, service_type, day)
+        if power is None:
+            return (nominal, nominal)
         return (
-            self.nominal_service_capacity_at(operational_node_id, service_type, day),
+            nominal,
             self.enabled_service_capacity_at(
                 operational_node_id, service_type, power, day,
                 provider_factors=provider_factors,

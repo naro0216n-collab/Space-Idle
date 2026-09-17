@@ -5,6 +5,7 @@ from enum import Enum
 
 from .facilities import FacilityBook
 from .power import PowerService, PowerSnapshot
+from .service_capacity import ServiceCapacityRegistry
 from .shared import ContractId, DefinitionId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
 
@@ -43,6 +44,7 @@ class ContractService:
     templates: dict[DefinitionId, ContractTemplate]
     facilities: FacilityBook
     power: PowerService
+    service_capacity_registry: ServiceCapacityRegistry
     contracts: dict[ContractId, ContractState] = field(default_factory=dict)
     _counter: int = 0
 
@@ -89,6 +91,7 @@ class ContractService:
                 day,
                 self.facilities.environment,
                 self.facilities,
+                self.service_capacity_registry,
                 None if power_by_location is None else power_by_location.get(location_id),
             )
             for location_id in locations

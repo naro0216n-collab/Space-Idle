@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Mapping, Protocol
+from typing import Callable, Iterable, Mapping, Protocol, TYPE_CHECKING
 
 from .allocation_graph import AllocationDependency, allocation_dependency_order
 from .priority import ActivityPriority
 from .shared import DefinitionId, EntityId, SpatialNodeId
+
+if TYPE_CHECKING:
+    from .facilities import FacilityBook
+    from .power import PowerSnapshot
 
 
 class ServiceCapacityScope(str, Enum):
@@ -20,6 +24,12 @@ class ServiceCapacityScope(str, Enum):
 
     OPERATIONAL_NODE = "OPERATIONAL_NODE"
     ORGANIZATION = "ORGANIZATION"
+
+
+class ServiceCapacityRequestProvider(Protocol):
+    """Provider of root finite-service demand not owned by an execution bundle."""
+
+    def service_capacity_requests(self, day: int) -> tuple["ServiceCapacityRequest", ...]: ...
 
 
 class ServiceCapacityProvider(Protocol):
@@ -53,6 +63,72 @@ class ServiceCapacityProvider(Protocol):
         *,
         provider_factors: Mapping[EntityId, float] | None = None,
     ) -> tuple[float, float]: ...
+
+
+class ServiceCapacityRegistry:
+    """Resolve finite Service Capacity without knowing the owning Domain.
+
+    The composition root binds one provider source after all Domains are
+    composed.  Consumers such as SiteRequirements can then ask the shared
+    registry for a service by type instead of assuming that FacilityBook is
+    the only possible provider.  The registry is derived runtime wiring, not
+    persisted state.
+    """
+
+    def __init__(self) -> None:
+        self._provider_source: Callable[[], tuple[ServiceCapacityProvider, ...]] | None = None
+
+    def bind_provider_source(
+        self, provider_source: Callable[[], tuple[ServiceCapacityProvider, ...]]
+    ) -> None:
+        self._provider_source = provider_source
+
+    def providers(self) -> tuple[ServiceCapacityProvider, ...]:
+        if self._provider_source is None:
+            return ()
+        return self._provider_source()
+
+    def provider_for(self, service_type: str) -> ServiceCapacityProvider | None:
+        providers = tuple(
+            provider
+            for provider in self.providers()
+            if service_type in provider.service_capacity_types()
+        )
+        if len(providers) > 1:
+            raise RuntimeError(f"multiple service capacity providers own {service_type}")
+        return providers[0] if providers else None
+
+    def supply_at(
+        self,
+        operational_node_id: SpatialNodeId,
+        service_type: str,
+        facilities: "FacilityBook",
+        power: "PowerSnapshot | None",
+        day: int = 0,
+    ) -> tuple[float, float]:
+        provider = self.provider_for(service_type)
+        if provider is None:
+            return (0.0, 0.0)
+        return provider.service_capacity_supply_at(
+            operational_node_id,
+            service_type,
+            facilities,
+            power,
+            day,
+        )
+
+    def available_at(
+        self,
+        operational_node_id: SpatialNodeId,
+        service_type: str,
+        facilities: "FacilityBook",
+        power: "PowerSnapshot | None",
+        day: int = 0,
+    ) -> float:
+        nominal, available = self.supply_at(
+            operational_node_id, service_type, facilities, power, day
+        )
+        return nominal if power is None else available
 
 
 @dataclass(frozen=True)

@@ -118,11 +118,19 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         location_id: SpatialNodeId,
         service_type: str,
         facilities: FacilityBook,
-        power: PowerSnapshot,
+        power: PowerSnapshot | None,
         day: int = 0,
         *,
         provider_factors: dict[EntityId, float] | None = None,
     ) -> tuple[float, float]:
+        if power is None:
+            nominal = sum(
+                1.0
+                for facility in facilities.active_compatible_at(location_id, day)
+                for process in (self.process_for(facility),)
+                if process is not None and self.process_service_type(process.id) == service_type
+            )
+            return (nominal, nominal)
         nominal, enabled = self.service_supply(
             location_id, facilities, power, day, provider_factors=provider_factors
         )

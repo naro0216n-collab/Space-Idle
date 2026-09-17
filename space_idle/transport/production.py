@@ -146,18 +146,17 @@ class VehicleProductionMixin:
                 day,
                 self.facilities.environment,
                 self.facilities,
+                self.service_capacity_registry,
                 power,
             )
         )
         if production.service_type is not None:
-            enabled = (
-                self.facilities.nominal_service_capacity_at(
-                    location_id, production.service_type, day
-                )
-                if power is None
-                else self.facilities.enabled_service_capacity_at(
-                    location_id, production.service_type, power, day
-                )
+            enabled = self.service_capacity_registry.available_at(
+                location_id,
+                production.service_type,
+                self.facilities,
+                power,
+                day,
             )
             if enabled <= 1e-12:
                 failures.append(

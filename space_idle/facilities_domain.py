@@ -113,9 +113,6 @@ def validate_runtime(sim: Any) -> None:
         _require(1 <= int(facility.activity_priority) <= 5, f"facility activity priority must be 1..5: {facility_id}")
         _require(1 <= int(facility.maintenance_priority) <= 5, f"facility maintenance priority must be 1..5: {facility_id}")
         _require(all(amount >= -1e-9 for amount in facility.invested_resources.values()), f"facility has negative invested resource: {facility_id}")
-        if sim.research is not None and facility.definition_id in sim.research.providers:
-            provider = sim.research.providers[facility.definition_id]
-            _require(any(level.level == facility.level for level in provider.levels), f"research provider does not define facility level: {facility_id}/{facility.level}")
 
 
 DOMAIN_EXTENSION = DomainExtension(

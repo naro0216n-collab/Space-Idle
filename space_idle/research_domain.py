@@ -215,6 +215,13 @@ def validate_runtime(sim: Any) -> None:
     for category, value in sim.research.knowledge_state.experience_by_category.items():
         _require(category != "", "empty knowledge category")
         _require(value >= -1e-9, f"negative knowledge value: {category}")
+    for facility in sim.facilities.facilities.values():
+        provider = sim.research.providers.get(facility.definition_id)
+        if provider is not None:
+            _require(
+                any(level.level == facility.level for level in provider.levels),
+                f"research provider does not define facility level: {facility.id}/{facility.level}",
+            )
 
     def validate_execution_site(
         research_id: DefinitionId,

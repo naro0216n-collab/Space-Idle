@@ -94,6 +94,7 @@ class TransportCompatibilityMixin:
                     day,
                     self.facilities.environment,
                     self.facilities,
+                    self.service_capacity_registry,
                     None,
                     environment_context_id=resolved.environment_context_id,
                 ):

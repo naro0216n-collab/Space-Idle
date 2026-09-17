@@ -6,6 +6,7 @@ from ..facilities import FacilityBook
 from ..facility_lifecycle import FacilityLifecycleBlocker
 from ..inventory import InventoryBook
 from ..power import PowerService
+from ..service_capacity import ServiceCapacityRegistry
 from ..shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
 from ..technology import TechnologyState
 from .compatibility import TransportCompatibilityMixin
@@ -48,6 +49,7 @@ class TransportService(
     inventory: InventoryBook
     facilities: FacilityBook
     power: PowerService
+    service_capacity_registry: ServiceCapacityRegistry
     vehicle_defs: dict[DefinitionId, VehicleDef] = field(default_factory=dict)
     operation_registry: OperationEvaluatorRegistry = field(default_factory=build_default_operation_registry)
     surface_movement_rules: tuple[SurfaceTransportMovementRule, ...] = ()

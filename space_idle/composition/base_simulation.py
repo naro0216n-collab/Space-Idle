@@ -14,6 +14,7 @@ from ..maintenance import FacilityMaintenanceService
 from ..power import PowerService
 from ..projects import ProjectService
 from ..research import ResearchService
+from ..service_capacity import ServiceCapacityRegistry
 from ..simulation import Simulation
 from ..storage import StorageService
 from ..surface_infrastructure import SurfaceInfrastructureService
@@ -64,6 +65,7 @@ def build_base_simulation() -> Simulation:
 
     facility_definitions = build_facility_definitions()
     facilities = FacilityBook(facility_definitions, environment)
+    service_capacity_registry = ServiceCapacityRegistry()
 
     inventory = InventoryBook()
     configure_inventory_definitions(inventory)
@@ -80,6 +82,7 @@ def build_base_simulation() -> Simulation:
         inventory=inventory,
         facilities=facilities,
         power=power,
+        service_capacity_registry=service_capacity_registry,
         surface_movement_rules=build_surface_movement_rules(),
         surface_access_movement_rules=build_surface_access_movement_rules(),
         spaceflight_movement_rules=build_spaceflight_movement_rules(),
@@ -95,7 +98,9 @@ def build_base_simulation() -> Simulation:
 
     industry = IndustryService(build_process_specs())
 
-    surface_infrastructure = SurfaceInfrastructureService(graph, facilities)
+    surface_infrastructure = SurfaceInfrastructureService(
+        graph, facilities, service_capacity_registry
+    )
     survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph)
 
     storage = StorageService(build_storage_provider_specs(), inventory, facilities)
@@ -115,6 +120,7 @@ def build_base_simulation() -> Simulation:
         inventory=inventory,
         facilities=facilities,
         power=power,
+        service_capacity_registry=service_capacity_registry,
         sourcing_wait_days=sourcing_wait_days(),
         surface_infrastructure=surface_infrastructure,
         surface_knowledge_level_provider=survey.cell_knowledge_level,
@@ -128,6 +134,7 @@ def build_base_simulation() -> Simulation:
 
     founding = LocationFoundingService(
         build_founding_packages(), facilities, inventory, power, transport, storage,
+        service_capacity_registry,
         surface_knowledge_level_provider=survey.cell_knowledge_level,
         surface_cell_claim_registry=surface_cell_claim_registry,
     )
@@ -135,23 +142,26 @@ def build_base_simulation() -> Simulation:
 
     research = ResearchService(
         build_research_definitions(), build_research_providers(),
-        facilities, inventory, power, technology_state=technology,
+        facilities, inventory, power, service_capacity_registry, technology_state=technology,
         experience_rules=build_experience_contribution_rules(),
     )
     scientific_exploration = ScientificExplorationService(
         build_scientific_exploration_definitions(),
-        facilities, inventory, power, transport, research,
+        facilities, inventory, power, transport, research, service_capacity_registry,
     )
     extraction = ExtractionService(build_extraction_specs(), graph, environment, surface_infrastructure)
 
     # Keep the Contract Domain composed and available for future events,
     # collaboration, or scenario content. Base Game starts with no offers.
-    contracts = ContractService(build_contract_templates(), facilities, power)
+    contracts = ContractService(
+        build_contract_templates(), facilities, power, service_capacity_registry
+    )
 
     sim = Simulation(
         day=0, market=market, graph=graph, environment=environment, inventory=inventory,
         facilities=facilities, power=power, storage=storage, industry=industry, transport=transport, logistics=logistics,
         projects=projects, technology=technology, founding=founding, contracts=contracts,
+        service_capacity_registry=service_capacity_registry,
         research=research, survey=survey, extraction=extraction,
         scientific_exploration=scientific_exploration, maintenance=maintenance,
         surface_infrastructure=surface_infrastructure,
@@ -159,4 +169,5 @@ def build_base_simulation() -> Simulation:
     sim.content_id = "base_game.gameplay.v0.4.5"
     sim.world_definition_id = BASE_WORLD_DEFINITION_ID
     sim.domain_extensions = BASE_DOMAIN_EXTENSIONS
+    service_capacity_registry.bind_provider_source(sim.service_capacity_providers)
     return sim

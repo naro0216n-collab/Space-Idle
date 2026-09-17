@@ -6,6 +6,7 @@ from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .knowledge import ExperienceContributionRule, KnowledgeState
 from .power import PowerService
+from .service_capacity import ServiceCapacityRegistry
 from .shared import DefinitionId
 from .technology import TechnologyState
 from .research_models import (
@@ -31,6 +32,7 @@ class ResearchService(ResearchWorkflowMixin, ResearchCapacityMixin, ResearchExec
     facilities: FacilityBook
     inventory: InventoryBook
     power: PowerService
+    service_capacity_registry: ServiceCapacityRegistry
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     active: dict[DefinitionId, ResearchState] = field(default_factory=dict)
     stored_points: float = 0.0

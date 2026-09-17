@@ -10,6 +10,7 @@ from .facilities import FacilityBook, FacilityPlacementScope
 from .inventory import InventoryBook
 from .transport.service import TransportService
 from .power import PowerService, PowerSnapshot
+from .service_capacity import ServiceCapacityRegistry
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .execution_requirements import (
     ExecutionAllocationPlan,
@@ -158,6 +159,7 @@ class LocationFoundingService:
     power: PowerService
     transport: TransportService
     storage: StorageService
+    service_capacity_registry: ServiceCapacityRegistry
     surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
     surface_cell_claim_registry: SurfaceCellClaimRegistry = field(default_factory=SurfaceCellClaimRegistry)
     projects: dict[ProjectId, LocationFoundingProject] = field(default_factory=dict)
@@ -241,14 +243,12 @@ class LocationFoundingService:
             if actual < package.minimum_survey_knowledge_level:
                 failures.append(FoundingBlocker("survey_knowledge", f"{actual}/{package.minimum_survey_knowledge_level}"))
         snapshot = power
-        preparation_capacity = (
-            self.facilities.nominal_service_capacity_at(
-                staging_node_id, package.preparation_service_type, day
-            )
-            if snapshot is None
-            else self.facilities.enabled_service_capacity_at(
-                staging_node_id, package.preparation_service_type, snapshot, day
-            )
+        preparation_capacity = self.service_capacity_registry.available_at(
+            staging_node_id,
+            package.preparation_service_type,
+            self.facilities,
+            snapshot,
+            day,
         )
         if preparation_capacity <= 1e-12:
             failures.append(FoundingBlocker("staging_service", package.preparation_service_type))
@@ -258,6 +258,7 @@ class LocationFoundingService:
             day,
             self.facilities.environment,
             self.facilities,
+            self.service_capacity_registry,
             snapshot,
         ):
             failures.append(FoundingBlocker(f"staging:{failure.code}", failure.detail))
@@ -570,14 +571,12 @@ class LocationFoundingService:
         if project.status is FoundingStatus.PREPARING:
             package = self.packages[project.founding_package_id]
             snapshot = power
-            preparation_capacity = (
-                self.facilities.nominal_service_capacity_at(
-                    project.staging_node_id, package.preparation_service_type, day
-                )
-                if snapshot is None
-                else self.facilities.enabled_service_capacity_at(
-                    project.staging_node_id, package.preparation_service_type, snapshot, day
-                )
+            preparation_capacity = self.service_capacity_registry.available_at(
+                project.staging_node_id,
+                package.preparation_service_type,
+                self.facilities,
+                snapshot,
+                day,
             )
             if preparation_capacity <= 1e-12:
                 failures.append(FoundingBlocker("staging_service", package.preparation_service_type))

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping, Protocol, TYPE_CHECKING
+from typing import Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .facilities import FacilityBook
     from .power import PowerSnapshot
 from .shared import SpatialNodeId
+from .service_capacity import ServiceCapacityRegistry
 from .spatial import EnvironmentFieldScope, EnvironmentResolver, SpatialContextId, SpatialFacet, SpatialNodeKind
 
 
@@ -169,10 +170,10 @@ def evaluate_site_requirements(
     day: int,
     environment: EnvironmentResolver,
     facilities: "FacilityBook",
+    service_capacity_registry: ServiceCapacityRegistry,
     power: "PowerSnapshot | None" = None,
     *,
     environment_context_id: SpatialContextId | None = None,
-    service_capacity_available: Mapping[str, float] | None = None,
 ) -> tuple[SiteRequirementFailure, ...]:
     context_id = location_id if environment_context_id is None else environment_context_id
     failures = list(evaluate_physical_site_requirements(requirements, context_id, day, environment))
@@ -188,16 +189,13 @@ def evaluate_site_requirements(
                 requirement.capability_id,
             ))
     for requirement in requirements.service_capacity_requirements:
-        if service_capacity_available is not None:
-            available = service_capacity_available.get(requirement.service_type, 0.0)
-        elif power is not None:
-            available = facilities.enabled_service_capacity_at(
-                location_id, requirement.service_type, power, day
-            )
-        else:
-            available = facilities.nominal_service_capacity_at(
-                location_id, requirement.service_type, day
-            )
+        available = service_capacity_registry.available_at(
+            location_id,
+            requirement.service_type,
+            facilities,
+            power,
+            day,
+        )
         if available + 1e-9 < requirement.minimum_rate:
             failures.append(SiteRequirementFailure(
                 "service_capacity:available",

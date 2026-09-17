@@ -206,3 +206,45 @@ def test_allocation_pool_provider_extension_does_not_require_central_enum_change
 
     assert provider in sim.allocation_pool_providers()
     assert sim.allocation_pool_capacities()[custom_key] == 7.0
+
+
+def test_root_service_request_provider_extension_does_not_require_simulation_switch():
+    from space_idle import build_game_application
+    from space_idle.domain import DomainExtension
+    from space_idle.priority import DEFAULT_ACTIVITY_PRIORITY
+    from space_idle.service_capacity import ServiceCapacityRequest
+    from space_idle.shared import EntityId
+    from space_idle.content import base_ids as ids
+
+    sim = build_game_application()._simulation
+    request = ServiceCapacityRequest(
+        EntityId("request.test.root_service"),
+        ids.EARTH,
+        "surface_distribution",
+        0.25,
+        DEFAULT_ACTIVITY_PRIORITY,
+        "test_root_service",
+        EntityId("test.root_service"),
+        "test",
+    )
+
+    @dataclass
+    class TestRequestProvider:
+        row: ServiceCapacityRequest
+
+        def service_capacity_requests(self, day: int):
+            del day
+            return (self.row,)
+
+    provider = TestRequestProvider(request)
+    sim.domain_extensions += (
+        DomainExtension(
+            "test_root_service_request",
+            service_capacity_request_provider=lambda _sim: provider,
+        ),
+    )
+
+    assert provider in sim.service_capacity_request_providers()
+    assert request in sim.service_capacity_root_requests()
+    completed = sim._complete_service_requests((request,))
+    assert completed.count(request) == 1
