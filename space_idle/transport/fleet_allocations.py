@@ -534,9 +534,24 @@ class FleetAllocationMixin:
     def derive_transport_service_plan(
         self, allocation_id: EntityId, day: int = 0
     ) -> TransportServicePlan:
-        return self._derive_transport_service_plan(
-            self.transport_allocations[allocation_id], day
+        allocation = self.transport_allocations[allocation_id]
+        cache = self._projection_service_plan_cache
+        if cache is None:
+            return self._derive_transport_service_plan(allocation, day)
+        cache_key = (
+            allocation.id,
+            day,
+            allocation.vehicle_definition_id,
+            allocation.anchor_node_id,
+            allocation.destination_id,
+            allocation.path,
+            allocation.path_policy,
         )
+        cached = cache.get(cache_key)
+        if cached is None:
+            cached = self._derive_transport_service_plan(allocation, day)
+            cache[cache_key] = cached
+        return cached
 
     def transport_service_plan_for(
         self,

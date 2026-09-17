@@ -834,7 +834,7 @@ def test_bidirectional_service_resource_use_counts_empty_return_not_loaded_retur
     assert snapshot.utilization == pytest.approx(1.0)
 
 
-def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_utilization():
+def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_utilization(monkeypatch):
     sim = _fleet_sim(1)
     lg = sim.transport
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
@@ -876,7 +876,17 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
     )
     sim.logistics.assign_logistics_policy("target_stock", EntityId(str(target_id)), policy_id)
 
+    derive_calls = 0
+    original_derive = lg._derive_transport_service_plan
+
+    def counted_derive(allocation, day):
+        nonlocal derive_calls
+        derive_calls += 1
+        return original_derive(allocation, day)
+
+    monkeypatch.setattr(lg, "_derive_transport_service_plan", counted_derive)
     decision = sim.tick_decision_projection()
+    assert derive_calls == 1
     dispatch, executable = next(
         (row, amount)
         for row, amount in decision.allocations.transport.executable_dispatches

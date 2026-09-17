@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from collections.abc import Callable
 
@@ -23,6 +24,7 @@ from .models import (
     MovementPlan,
     PathPolicy,
     TransportAllocation,
+    TransportServicePlan,
     VehicleDef,
 )
 from .operations import OperationEvaluatorRegistry, build_default_operation_registry
@@ -60,6 +62,16 @@ class TransportService(
     spaceflight_movement_rules: tuple[SpaceflightMovementRule, ...] = ()
     _movement_plan_cache: dict[MovementPlanId, MovementPlan] = field(default_factory=dict, repr=False)
     _movement_plan_options_cache: tuple[MovementPlan, ...] | None = field(default=None, repr=False)
+    _movement_plan_outbound_index: dict[SpatialNodeId, tuple[MovementPlan, ...]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _movement_plan_inbound_index: dict[SpatialNodeId, tuple[MovementPlan, ...]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _projection_service_plan_cache: dict[tuple[object, ...], TransportServicePlan] | None = field(
+        default=None, init=False, repr=False
+    )
+    _projection_cache_depth: int = field(default=0, init=False, repr=False)
     fleet_pools: dict[tuple[DefinitionId, SpatialNodeId], FleetPool] = field(default_factory=dict)
     fleet_commitments: dict[EntityId, FleetCommitmentState] = field(default_factory=dict)
     transport_allocations: dict[EntityId, TransportAllocation] = field(default_factory=dict)
@@ -142,6 +154,26 @@ class TransportService(
             surface_access_rules=self.surface_access_movement_rules,
             spaceflight_rules=self.spaceflight_movement_rules,
         )
+
+    @contextmanager
+    def derived_projection_scope(self):
+        """Reuse pure Transport derivations within one immutable physical projection.
+
+        The cache is deliberately scoped to the caller's projection and is discarded
+        afterwards.  It therefore removes repeated route/service derivation inside
+        fixed-point allocation without turning derived state into a long-lived source
+        of truth.
+        """
+        root_scope = self._projection_cache_depth == 0
+        if root_scope:
+            self._projection_service_plan_cache = {}
+        self._projection_cache_depth += 1
+        try:
+            yield
+        finally:
+            self._projection_cache_depth -= 1
+            if root_scope:
+                self._projection_service_plan_cache = None
 
     def movement_plan_candidates(
         self, origin_id: SpatialNodeId, destination_id: SpatialNodeId
@@ -232,13 +264,21 @@ class TransportService(
         )
 
     def outbound_movement_plans(self, origin_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
+        cached = self._movement_plan_outbound_index.get(origin_id)
+        if cached is not None:
+            return cached
         plans = self.movement_resolver().outbound_plans(origin_id)
         self._movement_plan_cache.update((plan.id, plan) for plan in plans)
+        self._movement_plan_outbound_index[origin_id] = plans
         return plans
 
     def inbound_movement_plans(self, destination_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
+        cached = self._movement_plan_inbound_index.get(destination_id)
+        if cached is not None:
+            return cached
         plans = self.movement_resolver().inbound_plans(destination_id)
         self._movement_plan_cache.update((plan.id, plan) for plan in plans)
+        self._movement_plan_inbound_index[destination_id] = plans
         return plans
 
     def movement_plan(self, plan_id: MovementPlanId) -> MovementPlan | None:
@@ -268,6 +308,10 @@ class TransportService(
         """Drop derived Movement Plan indexes after physical/spatial state changes."""
         self._movement_plan_cache.clear()
         self._movement_plan_options_cache = None
+        self._movement_plan_outbound_index.clear()
+        self._movement_plan_inbound_index.clear()
+        if self._projection_service_plan_cache is not None:
+            self._projection_service_plan_cache.clear()
 
     def fleet_pool_keys(self) -> tuple[tuple[DefinitionId, SpatialNodeId], ...]:
         """Return Fleet pool identities without exposing the mutable pool container."""

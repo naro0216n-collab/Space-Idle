@@ -524,11 +524,12 @@ class Simulation:
 
     def tick_decision_projection(self) -> TickDecisionProjection:
         """Project current intent, planning and allocation without mutation."""
-        snapshot = self._physical_tick_snapshot()
-        intents = self._generate_tick_intents(snapshot)
-        plan = self._plan_tick(intents)
-        allocations = self._allocate_tick(snapshot, intents, plan)
-        return TickDecisionProjection(snapshot, intents, plan, allocations)
+        with self.transport.derived_projection_scope():
+            snapshot = self._physical_tick_snapshot()
+            intents = self._generate_tick_intents(snapshot)
+            plan = self._plan_tick(intents)
+            allocations = self._allocate_tick(snapshot, intents, plan)
+            return TickDecisionProjection(snapshot, intents, plan, allocations)
 
     def resource_allocation_projection(self) -> ResourceAllocationProjection:
         """Derive the current shared Resource allocation without mutating state."""
