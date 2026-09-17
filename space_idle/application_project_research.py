@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_views import (
     ResearchExperienceRow, ResearchKnowledgeRow, ResearchPrototypeResourceRow,
-    ResearchProviderRow, ResearchRow, ResearchView,
+    ResearchProviderAssignmentOptionRow, ResearchProviderRow, ResearchRow, ResearchView,
 )
 from .app_contracts.progression_views import ResearchExecutionSiteRow, ResearchSiteOptionRow
 from .research_models import (
@@ -35,31 +35,125 @@ class ResearchProgressionProjectorMixin:
                 ))
         return tuple(rows)
 
-    def _research_provider_rows(self, power_by_location) -> tuple[ResearchProviderRow, ...]:
+    def _research_provider_assignment_options(self) -> tuple[ResearchProviderAssignmentOptionRow, ...]:
+        sim = self._simulation
+        if sim.research is None:
+            return ()
+        rows: list[ResearchProviderAssignmentOptionRow] = []
+        fleet_providers = tuple(
+            provider for provider in sim.research.providers.values()
+            if provider.source_kind is ResearchProviderSourceKind.FLEET
+        )
+        for provider in sorted(fleet_providers, key=lambda row: str(row.id)):
+            for node in sorted(sim.graph.operational_nodes(), key=lambda row: str(row.id)):
+                failures = sim.research.provider_assignment_site_failures(
+                    provider.id, node.id, day=sim.day
+                )
+                free_units = sim.transport.fleet_free_units(
+                    provider.source_definition_id, node.id
+                )
+                blockers = [(failure.code, failure.detail) for failure in failures]
+                if free_units <= 0:
+                    blockers.append(("fleet:free_units", "No free compatible Fleet units at this node"))
+                rows.append(ResearchProviderAssignmentOptionRow(
+                    provider_definition_id=str(provider.id),
+                    source_definition_id=str(provider.source_definition_id),
+                    operational_node_id=str(node.id),
+                    tier=provider.tier,
+                    free_units=free_units,
+                    blockers=tuple(blockers),
+                    can_create=not blockers,
+                ))
+        return tuple(rows)
+
+    def _research_provider_rows(self, power_by_location, execution_allocations) -> tuple[ResearchProviderRow, ...]:
         sim = self._simulation
         if sim.research is None:
             return ()
         rows: list[ResearchProviderRow] = []
-        provider_by_facility_def = {
-            provider.source_definition_id: provider
-            for provider in sim.research.providers.values()
-            if provider.source_kind is ResearchProviderSourceKind.FACILITY
-        }
         for facility in sorted(sim.facilities.facilities.values(), key=lambda row: str(row.id)):
-            provider = provider_by_facility_def.get(facility.definition_id)
+            provider = sim.research.facility_provider_spec(facility.id)
             if provider is None:
                 continue
-            blockers = list(sim.facilities.activation_failures(facility, sim.day))
-            snapshot = power_by_location[facility.operational_node_id]
-            utilization = max(0.0, min(1.0, snapshot.utilization_by_facility.get(facility.id, 1.0)))
-            if not blockers and utilization <= 1e-12:
-                blockers.append(("power", "研究設備への電力供給なし"))
+            blockers = sim.research.facility_provider_blockers(
+                facility.id, power_by_location, sim.day
+            )
+            requested = sim.research.provider_generation(facility.id, power_by_location, sim.day)
+            try:
+                admitted = execution_allocations.allocated(
+                    sim.research._facility_generation_bundle_id(facility.id)
+                )
+            except KeyError:
+                admitted = 0.0
+            level_spec = provider.level_spec(facility.level)
+            execution_supply = (
+                level_spec.research_execution_per_day
+                * sim.research._provider_factor(facility.id, power_by_location, sim.day)
+            )
             rows.append(ResearchProviderRow(
-                str(facility.id), str(facility.definition_id), str(facility.operational_node_id),
-                provider.tier, facility.level,
-                sim.research.provider_generation(facility.id, power_by_location, sim.day),
-                sim.research.provider_storage_capacity(facility.id, power_by_location, sim.day),
-                tuple(blockers),
+                id=str(facility.id),
+                provider_definition_id=str(provider.id),
+                source_kind=provider.source_kind.value,
+                source_definition_id=str(provider.source_definition_id),
+                operational_node_id=str(facility.operational_node_id),
+                tier=provider.tier,
+                level=facility.level,
+                committed_units=None,
+                fleet_commitment_id=None,
+                paused=False,
+                priority=facility.activity_priority,
+                generation_points_per_day=requested,
+                admitted_generation_points_per_day=admitted,
+                storage_capacity_points=sim.research.provider_storage_capacity(
+                    facility.id, power_by_location, sim.day
+                ),
+                research_execution_per_day=execution_supply,
+                blockers=tuple(blockers),
+                can_pause=False,
+                can_resume=False,
+                can_resize=False,
+                can_release=False,
+                facility_id=str(facility.id),
+                facility_definition_id=str(facility.definition_id),
+            ))
+
+        for assignment_id, assignment in sorted(
+            sim.research.provider_assignments.items(), key=lambda row: str(row[0])
+        ):
+            provider = sim.research.providers[assignment.provider_definition_id]
+            quantity = sim.research.provider_assignment_quantity(assignment_id)
+            requested, capacity = sim.research._fleet_assignment_rates(assignment_id, day=sim.day)
+            try:
+                admitted = execution_allocations.allocated(
+                    sim.research._assignment_generation_bundle_id(assignment_id)
+                )
+            except KeyError:
+                admitted = 0.0
+            execution_supply = sim.research.provider_assignment_research_execution(
+                assignment_id, day=sim.day
+            )
+            blockers = sim.research.provider_assignment_blockers(assignment_id, day=sim.day)
+            rows.append(ResearchProviderRow(
+                id=str(assignment_id),
+                provider_definition_id=str(provider.id),
+                source_kind=provider.source_kind.value,
+                source_definition_id=str(assignment.vehicle_definition_id),
+                operational_node_id=str(assignment.operational_node_id),
+                tier=provider.tier,
+                level=None,
+                committed_units=quantity,
+                fleet_commitment_id=str(assignment.fleet_commitment_ref),
+                paused=assignment.paused,
+                priority=assignment.priority,
+                generation_points_per_day=requested,
+                admitted_generation_points_per_day=admitted,
+                storage_capacity_points=capacity,
+                research_execution_per_day=execution_supply,
+                blockers=blockers,
+                can_pause=not assignment.paused,
+                can_resume=assignment.paused,
+                can_resize=True,
+                can_release=True,
             ))
         return tuple(rows)
 
@@ -75,13 +169,15 @@ class ResearchProgressionProjectorMixin:
     def _research_view(self) -> ResearchView:
         sim = self._simulation
         if sim.research is None:
-            return ResearchView(0.0, 0.0, 0.0, False, (), (), ())
+            return ResearchView(0.0, 0.0, 0.0, 0.0, False, (), (), (), ())
         decision = self._tick_decision_projection()
         power_by_location = decision.allocations.power_by_location
         generation = sim.research.generation_rate(power_by_location, sim.day)
         capacity = sim.research.storage_capacity(power_by_location, sim.day)
-        providers = self._research_provider_rows(power_by_location)
         execution_allocations = decision.allocations.execution
+        providers = self._research_provider_rows(power_by_location, execution_allocations)
+        provider_assignment_options = self._research_provider_assignment_options()
+        admitted_generation = sum(row.admitted_generation_points_per_day for row in providers)
         point_requests, point_allocations = sim.research.point_allocation_projection(execution_allocations)
         knowledge = tuple(
             ResearchKnowledgeRow(category, value)
@@ -182,6 +278,7 @@ class ResearchProgressionProjectorMixin:
                 prerequisites=tuple(sorted(str(item) for item in definition.prerequisites)),
             ))
         return ResearchView(
-            sim.research.stored_points, capacity, generation,
-            sim.research.stored_points > capacity + 1e-9, providers, knowledge, tuple(rows),
+            sim.research.stored_points, capacity, generation, admitted_generation,
+            sim.research.stored_points > capacity + 1e-9, providers,
+            provider_assignment_options, knowledge, tuple(rows),
         )

@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from math import isclose
 
 from space_idle import GetResearch, SetResearchPriority, StartResearch, build_game_application
 from space_idle.content import base_ids as ids
-from space_idle.facilities import FacilityDef, ServiceCapacitySupply
-from space_idle.service_capacity import ServiceCapacityScope
+from space_idle.facilities import FacilityDef
 from space_idle.knowledge import ExperienceContributionRule
 from space_idle.power import PowerSpec
 from space_idle.research import (
     ResearchDefinition,
     ResearchTheoryStageSpec,
     ResearchOperationalExperienceStageSpec,
+    ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
     ResearchStage,
 )
 from space_idle.shared import DefinitionId
@@ -23,25 +22,14 @@ def _research_row(app, research_id):
 
 
 def _set_earth_research_execution_capacity(sim, rate: float) -> None:
-    for definition_id, definition in tuple(sim.facilities.definitions.items()):
-        supplies = tuple(
-            supply for supply in definition.service_capacity_supplies
-            if supply.service_type != "research_execution"
-        )
-        if supplies != definition.service_capacity_supplies:
-            sim.facilities.definitions[definition_id] = replace(
-                definition, service_capacity_supplies=supplies
-            )
     fixture_id = DefinitionId("test.facility.research_execution_capacity")
     sim.facilities.definitions[fixture_id] = FacilityDef(
-        fixture_id,
-        "Research execution capacity fixture",
-        service_capacity_supplies=(
-            ServiceCapacitySupply(
-                "research_execution", rate, ServiceCapacityScope.ORGANIZATION
-            ),
-        ),
+        fixture_id, "Research execution capacity fixture"
     )
+    sim.research.providers = {fixture_id: ResearchProviderSpec(
+        fixture_id, ResearchProviderSourceKind.FACILITY, fixture_id, tier=1,
+        levels=(ResearchProviderLevelSpec(1, 0.0, 0.0, rate),),
+    )}
     sim.facilities.install(fixture_id, ids.EARTH)
 
 
@@ -105,28 +93,14 @@ def test_research_shared_allocation_respects_priority_fairness_and_registration_
 def test_organization_research_execution_aggregates_provider_sites_after_local_power():
     app = build_game_application()
     sim = app._simulation
-    for definition_id, definition in tuple(sim.facilities.definitions.items()):
-        supplies = tuple(
-            supply
-            for supply in definition.service_capacity_supplies
-            if supply.service_type != "research_execution"
-        )
-        if supplies != definition.service_capacity_supplies:
-            sim.facilities.definitions[definition_id] = replace(
-                definition, service_capacity_supplies=supplies
-            )
-
     earth_provider = DefinitionId("test.facility.research_execution.earth")
     leo_provider = DefinitionId("test.facility.research_execution.leo")
+    sim.research.providers = {}
     for definition_id in (earth_provider, leo_provider):
-        sim.facilities.definitions[definition_id] = FacilityDef(
-            definition_id,
-            str(definition_id),
-            service_capacity_supplies=(
-                ServiceCapacitySupply(
-                    "research_execution", 1.0, ServiceCapacityScope.ORGANIZATION
-                ),
-            ),
+        sim.facilities.definitions[definition_id] = FacilityDef(definition_id, str(definition_id))
+        sim.research.providers[definition_id] = ResearchProviderSpec(
+            definition_id, ResearchProviderSourceKind.FACILITY, definition_id, tier=1,
+            levels=(ResearchProviderLevelSpec(1, 0.0, 0.0, 1.0),),
         )
     sim.power.specs[earth_provider] = PowerSpec(None, 0.1)
     sim.power.specs[leo_provider] = PowerSpec(None, 1.0)
@@ -141,12 +115,10 @@ def test_organization_research_execution_aggregates_provider_sites_after_local_p
     constrained = _research_row(app, research_id).execution_allocated
     decision = sim.tick_decision_projection()
     expected = sum(
-        sim.facilities.enabled_service_capacity_at(
-            node_id,
-            "research_execution",
-            decision.allocations.power_by_location[node_id],
-            sim.day,
-        )
+        sim.research.service_capacity_supply_at(
+            node_id, "research_execution", sim.facilities,
+            decision.allocations.power_by_location[node_id], sim.day
+        )[1]
         for node_id in (ids.EARTH, ids.LEO)
     )
     assert isclose(constrained, expected, abs_tol=1e-9)

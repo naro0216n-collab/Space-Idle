@@ -102,6 +102,25 @@ class PoolRequirement:
         return pool_constraint(self.pool_id, scope_id=self.scope_id)
 
 
+
+
+@dataclass(frozen=True)
+class PoolAdmissionRequirement:
+    pool_id: str
+    amount_per_execution: float
+    scope_id: str = "organization"
+
+    def __post_init__(self) -> None:
+        if not self.pool_id or not self.scope_id:
+            raise ValueError("pool admission identity must not be empty")
+        if self.amount_per_execution < -_EPS:
+            raise ValueError("pool admission requirement must be non-negative")
+
+    def constraint_key(self, operational_node_id: SpatialNodeId | None) -> AllocationConstraintKey:
+        del operational_node_id
+        return pool_admission_constraint(self.pool_id, scope_id=self.scope_id)
+
+
 @dataclass(frozen=True)
 class StockOrPoolAdmissionRequirement:
     pool_id: str
@@ -123,6 +142,7 @@ ExecutionRequirement: TypeAlias = (
     ResourceRequirement
     | ServiceCapacityRequirement
     | PoolRequirement
+    | PoolAdmissionRequirement
     | StockOrPoolAdmissionRequirement
 )
 
@@ -360,6 +380,10 @@ def service_constraint(node_id: SpatialNodeId, service_type: str) -> AllocationC
 
 def service_pool_constraint(service_type: str, scope_id: str = "organization") -> AllocationConstraintKey:
     return AllocationConstraintKey("service_pool", scope_id, service_type)
+
+
+def pool_admission_constraint(pool_id: str, *, scope_id: str = "organization") -> AllocationConstraintKey:
+    return AllocationConstraintKey("pool_admission", scope_id, pool_id)
 
 
 def admission_constraint(node_id: SpatialNodeId, pool_id: str) -> AllocationConstraintKey:

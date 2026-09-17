@@ -128,8 +128,10 @@ class ResearchExecutionMixin:
                 allocated = 0.0
             state.stage_progress = (state.stage_progress or 0.0) + max(0.0, allocated)
 
-        # Research Point production is settled separately through its common
-        # admission allocation. This method only consumes Project allocations.
+        # Research Point production shares the organization admission headroom
+        # in the same common allocation, then settles after Theory consumption so
+        # generated RP cannot feed a Theory stage in the same tick.
+        self.settle_generated_points(execution_allocations)
 
     def settle_completions(self, day: int) -> None:
         for research_id in sorted(tuple(self.active), key=str):

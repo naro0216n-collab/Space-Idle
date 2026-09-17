@@ -29,7 +29,7 @@ from .app_contracts.logistics_reports import (
     CargoFlowsView,
 )
 from .app_contracts.progression_views import (
-    ResearchProviderRow, ResearchPrototypeResourceRow, ResearchExperienceRow, ResearchKnowledgeRow,
+    ResearchProviderRow, ResearchProviderAssignmentOptionRow, ResearchPrototypeResourceRow, ResearchExperienceRow, ResearchKnowledgeRow,
     ResearchRow, ResearchView, ScientificExplorationFleetOptionRow,
     ScientificExplorationRow, ScientificExplorationsView, SurveyRow, SurveysView,
     ContractRow, ContractsView,

@@ -9,7 +9,9 @@ from space_idle import (
     ApplicationError,
     GetResearch,
     PauseFacility,
+    PauseResearch,
     ResumeFacility,
+    ResumeResearch,
     SetResearchDemonstrationSite,
     SetResearchPrototypeSite,
     StartResearch,
@@ -81,7 +83,7 @@ def test_explicit_empty_prototype_stage_progresses_automatically_after_site_sele
     sim.research.start(research_id, day=sim.day)
     assert sim.research.active[research_id].current_stage_id == "prototype"
     assert _research_row(app, research_id).stages == ("prototype",)
-    sim.research.set_prototype_site(research_id, EARTH, sim.day)
+    sim.research.set_prototype_site(research_id, "prototype", EARTH, sim.day)
 
     sim.advance_days(1)
 
@@ -118,9 +120,9 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
     assert leo.blockers
     assert not leo.can_select
     with pytest.raises(ApplicationError, match="prototype site requirements not met"):
-        app.execute(SetResearchPrototypeSite(str(research_id), str(LEO)))
+        app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(LEO)))
 
-    app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
     selected = _research_row(app, research_id)
     assert selected.prototype_execution_site is not None
     assert selected.prototype_execution_site.operational_node_id == str(EARTH)
@@ -168,10 +170,10 @@ def test_cell_local_research_site_requires_and_persists_explicit_developed_cell(
         str(ids.EARTH_CELL_INDUSTRIAL)
     ]
     with pytest.raises(ApplicationError, match="prototype site requirements not met"):
-        app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+        app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
 
     app.execute(SetResearchPrototypeSite(
-        str(research_id), str(EARTH), str(ids.EARTH_CELL_INDUSTRIAL)
+        str(research_id), "prototype", str(EARTH), str(ids.EARTH_CELL_INDUSTRIAL)
     ))
     selected = _research_row(app, research_id).prototype_execution_site
     assert selected is not None
@@ -191,7 +193,7 @@ def test_prototype_resources_stage_durably_and_complete_without_manual_funding()
     sim.inventory.add(EARTH, resource_id, 1.0)
 
     app.execute(StartResearch(str(research_id)))
-    app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
     original = _remove_research_site_service(sim)
     app.execute(AdvanceTime(1))
 
@@ -201,6 +203,16 @@ def test_prototype_resources_stage_durably_and_complete_without_manual_funding()
     assert resource.reserved_t == 1.0
     assert resource.requested_t == 0.0
     assert not any(code == "prototype_resource" for code, _detail in row.current_blockers)
+
+    app.execute(PauseResearch(str(research_id)))
+    paused_reserved = sim.research.prototype_reserved_t(
+        research_id, "prototype", EARTH, resource_id
+    )
+    app.execute(AdvanceTime(1))
+    assert sim.research.prototype_reserved_t(
+        research_id, "prototype", EARTH, resource_id
+    ) == paused_reserved == 1.0
+    app.execute(ResumeResearch(str(research_id)))
 
     sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
     app.execute(AdvanceTime(1))
@@ -235,7 +247,7 @@ def test_demonstration_site_selection_tolerates_transient_blockers_but_progress_
     )
     assert any(code == "capability:active" for code, _detail in earth.blockers)
     assert earth.can_select
-    app.execute(SetResearchDemonstrationSite(str(research_id), str(EARTH)))
+    app.execute(SetResearchDemonstrationSite(str(research_id), "demonstration", str(EARTH)))
     selected = _research_row(app, research_id)
     assert selected.demonstration_execution_site is not None
     assert selected.demonstration_execution_site.operational_node_id == str(EARTH)
@@ -263,14 +275,14 @@ def test_partial_prototype_staging_returns_to_previous_site_when_site_changes():
     sim.inventory.add(EARTH, resource_id, 0.25)
 
     app.execute(StartResearch(str(research_id)))
-    app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
     app.execute(AdvanceTime(1))
 
     assert sim.research.prototype_reserved_t(research_id, "prototype", EARTH, resource_id) == 0.25
     assert sim.inventory.amount(EARTH, resource_id) == pytest.approx(0.25)
     assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.0)
 
-    app.execute(SetResearchPrototypeSite(str(research_id), str(LEO)))
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(LEO)))
 
     assert sim.research.prototype_reserved_t(research_id, "prototype", EARTH, resource_id) == 0.0
     assert sim.inventory.amount(EARTH, resource_id) == pytest.approx(0.25)
@@ -292,8 +304,11 @@ def test_repeated_stage_type_uses_stage_id_for_identity_and_transition():
     )
 
     app.execute(StartResearch(str(research_id)))
+    row = _research_row(app, research_id)
+    assert row.stage_ids == ("prototype-a", "prototype-b")
+    assert row.stages == ("prototype", "prototype")
     assert sim.research.active[research_id].current_stage_id == "prototype-a"
-    app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype-a", str(EARTH)))
     first_bundle = sim.research.execution_requirement_bundles(sim.day)[0]
     assert ":prototype-a:" in str(first_bundle.id)
 
@@ -301,10 +316,24 @@ def test_repeated_stage_type_uses_stage_id_for_identity_and_transition():
     state = sim.research.active[research_id]
     assert state.current_stage_id == "prototype-b"
     assert state.execution_context is None
-    app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+    with pytest.raises(ApplicationError, match="stage changed"):
+        app.execute(SetResearchPrototypeSite(str(research_id), "prototype-a", str(EARTH)))
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype-b", str(EARTH)))
     second_bundle = sim.research.execution_requirement_bundles(sim.day)[0]
     assert ":prototype-b:" in str(second_bundle.id)
     assert second_bundle.id != first_bundle.id
+
+    resource_id = DefinitionId("test.resource.repeated_stage_identity")
+    assert sim.research.prototype_requirement_id(
+        research_id, "prototype-a", resource_id
+    ) != sim.research.prototype_requirement_id(
+        research_id, "prototype-b", resource_id
+    )
+    assert sim.research.prototype_reservation_requirement_id(
+        research_id, "prototype-a", resource_id
+    ) != sim.research.prototype_reservation_requirement_id(
+        research_id, "prototype-b", resource_id
+    )
 
 
 def test_research_definition_rejects_duplicate_stage_id_not_repeated_type():

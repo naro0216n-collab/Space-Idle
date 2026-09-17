@@ -3,9 +3,12 @@ from __future__ import annotations
 from .application_commands import (
     Command, CommandResult, SetResearchPriority, PauseResearch, PauseSurvey,
     ResumeResearch, ResumeSurvey, SetResearchDemonstrationSite,
+    CreateResearchProviderAssignment, ResizeResearchProviderAssignment,
+    SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment,
+    ResumeResearchProviderAssignment, ReleaseResearchProviderAssignment,
     SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
 )
-from .shared import DefinitionId, SurfaceCellId
+from .shared import DefinitionId, EntityId, SurfaceCellId
 
 
 class ProgressionCommandHandlerMixin:
@@ -27,6 +30,7 @@ class ProgressionCommandHandlerMixin:
             elif isinstance(command, SetResearchPrototypeSite):
                 sim.research.set_prototype_site(
                     rid,
+                    command.stage_id,
                     self._require_operational_node(command.operational_node_id),
                     sim.day,
                     None if command.surface_cell_id is None else SurfaceCellId(command.surface_cell_id),
@@ -36,10 +40,39 @@ class ProgressionCommandHandlerMixin:
             else:
                 sim.research.set_demonstration_site(
                     rid,
+                    command.stage_id,
                     self._require_operational_node(command.operational_node_id),
                     sim.day,
                     None if command.surface_cell_id is None else SurfaceCellId(command.surface_cell_id),
                 )
+            return CommandResult()
+        if isinstance(command, (
+            CreateResearchProviderAssignment, ResizeResearchProviderAssignment,
+            SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment,
+            ResumeResearchProviderAssignment, ReleaseResearchProviderAssignment,
+        )):
+            if sim.research is None:
+                raise RuntimeError("research is not configured")
+            if isinstance(command, CreateResearchProviderAssignment):
+                assignment_id = sim.research.create_provider_assignment(
+                    DefinitionId(command.provider_definition_id),
+                    self._require_operational_node(command.operational_node_id),
+                    int(command.quantity),
+                    priority=command.priority,
+                    day=sim.day,
+                )
+                return CommandResult(str(assignment_id))
+            assignment_id = EntityId(command.assignment_id)
+            if isinstance(command, ResizeResearchProviderAssignment):
+                sim.research.resize_provider_assignment(assignment_id, int(command.quantity))
+            elif isinstance(command, SetResearchProviderAssignmentPriority):
+                sim.research.set_provider_assignment_priority(assignment_id, command.priority)
+            elif isinstance(command, PauseResearchProviderAssignment):
+                sim.research.pause_provider_assignment(assignment_id)
+            elif isinstance(command, ResumeResearchProviderAssignment):
+                sim.research.resume_provider_assignment(assignment_id)
+            else:
+                sim.research.release_provider_assignment(assignment_id, day=sim.day)
             return CommandResult()
         if isinstance(command, (
             StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration,

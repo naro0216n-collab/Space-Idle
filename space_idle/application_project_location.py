@@ -207,7 +207,7 @@ class LocationProjectorMixin:
             research_provider = (
                 None
                 if sim.research is None
-                else sim.research.providers.get(facility.definition_id)
+                else sim.research.facility_provider_spec(facility.id)
             )
             if research_provider is None:
                 research_tier = None

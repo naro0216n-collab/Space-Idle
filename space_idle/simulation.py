@@ -23,7 +23,7 @@ from .allocation_projection import ResourceAllocationProjection, ResourceAllocat
 from .execution_requirements import (
     AllocationConstraintKey, AllocationIntent, ExecutionAllocation, ExecutionAllocationPlan,
     ExecutionRequirementBundle, PoolRequirement, ReservationAcquisitionRequirement,
-    ResourceRequirement, ServiceCapacityRequirement, StockOrPoolAdmissionRequirement,
+    ResourceRequirement, ServiceCapacityRequirement, PoolAdmissionRequirement, StockOrPoolAdmissionRequirement,
     admission_constraint, allocate_execution_requirements, pool_constraint, resource_constraint,
     service_constraint, service_pool_constraint, with_service_capacity_conservation,
 )
@@ -779,7 +779,7 @@ class Simulation:
                         bundle.operational_node_id, requirement.pool_id
                     )
                     capacities[key] = state.admission_capacity_t or 0.0
-                elif isinstance(requirement, PoolRequirement):
+                elif isinstance(requirement, (PoolRequirement, PoolAdmissionRequirement)):
                     if key not in pool_capacities:
                         raise KeyError(f"no allocation pool owner for {key}")
                     capacities[key] = pool_capacities[key]
@@ -917,6 +917,7 @@ class Simulation:
         static_intents: tuple[AllocationIntent | ExecutionRequirementBundle, ...],
         provider_plan: ServiceCapacityAllocationPlan,
         all_service_requests: tuple[ServiceCapacityRequest, ...],
+        research_pool_overrides: dict[AllocationConstraintKey, float] | None = None,
     ) -> tuple[
         ExecutionAllocationPlan,
         dict[EntityId, DirectionalCapacity],
@@ -936,12 +937,17 @@ class Simulation:
                 day, logistics_plan, reference
             )
             allocation_intents = static_intents + dispatch_intents
+            pool_overrides = dict(
+                self.logistics.allocation_pool_capacities(day, surface)
+            )
+            for key, value in (research_pool_overrides or {}).items():
+                if key in pool_overrides:
+                    raise RuntimeError(f"duplicate allocation pool override: {key}")
+                pool_overrides[key] = value
             capacities = self._constraint_capacities(
                 allocation_intents,
                 service_supply=provider_plan,
-                pool_capacity_overrides=self.logistics.allocation_pool_capacities(
-                    day, surface
-                ),
+                pool_capacity_overrides=pool_overrides,
             )
             execution = allocate_execution_requirements(allocation_intents, capacities)
             provisional_services = self._service_plan_from_execution(
@@ -1131,7 +1137,12 @@ class Simulation:
             # fulfillment estimate. Consumer Service requirements join the same
             # root Execution Bundles as their Resource/Transport requirements.
             provider_plan = self._allocate_tick_services(power_by_location, requests=())
-            static_intents = base_intents
+            research_generation = (
+                ()
+                if self.research is None
+                else self.research.generation_execution_bundles(power_by_location, self.day)
+            )
+            static_intents = base_intents + research_generation
 
             (
                 execution,
@@ -1145,6 +1156,13 @@ class Simulation:
                 static_intents,
                 provider_plan,
                 all_service_requests,
+                (
+                    None
+                    if self.research is None
+                    else self.research.allocation_pool_capacity_overrides(
+                        power_by_location, self.day
+                    )
+                ),
             )
 
             next_maintenance_factors = (

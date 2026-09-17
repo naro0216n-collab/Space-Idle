@@ -15,6 +15,9 @@ from .app_contracts.progression import (
     PauseSurvey, ResumeSurvey, SetSurveyPriority, StartScientificExploration, SetScientificExplorationPriority,
     PauseScientificExploration, ResumeScientificExploration,
     AssignExplorationFleet, UnassignExplorationFleet,
+    CreateResearchProviderAssignment, ResizeResearchProviderAssignment,
+    SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment,
+    ResumeResearchProviderAssignment, ReleaseResearchProviderAssignment,
 )
 from .app_contracts.transport import (
     ProduceVehicle, PauseVehicleProduction, ResumeVehicleProduction,
@@ -44,6 +47,9 @@ Command: TypeAlias = (
     SetResearchPriority | SetResearchDemonstrationSite | StartSurvey | PauseSurvey |
     ResumeSurvey | SetSurveyPriority | StartScientificExploration | SetScientificExplorationPriority | PauseScientificExploration |
     ResumeScientificExploration | AssignExplorationFleet | UnassignExplorationFleet |
+    CreateResearchProviderAssignment | ResizeResearchProviderAssignment |
+    SetResearchProviderAssignmentPriority | PauseResearchProviderAssignment |
+    ResumeResearchProviderAssignment | ReleaseResearchProviderAssignment |
     ProduceVehicle | PauseVehicleProduction | ResumeVehicleProduction | SetVehicleProductionSettings |
     CreateTransportAllocation | UpdateTransportAllocation | ChangeTransportAllocationMode |
     PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |

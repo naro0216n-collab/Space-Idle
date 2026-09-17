@@ -69,10 +69,10 @@ class ServiceCapacityRegistry:
     """Resolve finite Service Capacity without knowing the owning Domain.
 
     The composition root binds one provider source after all Domains are
-    composed.  Consumers such as SiteRequirements can then ask the shared
-    registry for a service by type instead of assuming that FacilityBook is
-    the only possible provider.  The registry is derived runtime wiring, not
-    persisted state.
+    composed. Execution/allocation code can then resolve a finite service by
+    type instead of assuming that FacilityBook is the only possible provider.
+    Eligibility remains in SiteRequirements; finite Service Capacity does not.
+    The registry is derived runtime wiring, not persisted state.
     """
 
     def __init__(self) -> None:

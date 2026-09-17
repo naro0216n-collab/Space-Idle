@@ -142,7 +142,7 @@ def build_base_simulation() -> Simulation:
 
     research = ResearchService(
         build_research_definitions(), build_research_providers(),
-        facilities, inventory, power, service_capacity_registry, technology_state=technology,
+        facilities, inventory, power, service_capacity_registry, transport, technology_state=technology,
         experience_rules=build_experience_contribution_rules(),
     )
     scientific_exploration = ScientificExplorationService(
@@ -154,6 +154,9 @@ def build_base_simulation() -> Simulation:
     )
     transport.register_fleet_commitment_owner_resolver(
         "scientific_exploration", lambda owner_id: owner_id in scientific_exploration.campaigns
+    )
+    transport.register_fleet_commitment_owner_resolver(
+        "research_provider_assignment", lambda owner_id: owner_id in research.provider_assignments
     )
     logistics.register_policy_owner_resolver(
         "project", lambda owner_id: owner_id in projects.projects

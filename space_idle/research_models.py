@@ -141,6 +141,7 @@ class ResearchProviderLevelSpec:
     level: int
     generation_points_per_day: float
     storage_capacity_points: float
+    research_execution_per_day: float = 0.0
 
     def __post_init__(self) -> None:
         if self.level < 1:
@@ -149,6 +150,8 @@ class ResearchProviderLevelSpec:
             raise ValueError("research provider generation must be non-negative")
         if self.storage_capacity_points < 0:
             raise ValueError("research provider storage must be non-negative")
+        if self.research_execution_per_day < 0:
+            raise ValueError("research provider execution must be non-negative")
 
 
 class ResearchProviderSourceKind(str, Enum):
@@ -163,15 +166,13 @@ class ResearchProviderSpec:
     source_definition_id: DefinitionId
     tier: int
     levels: tuple[ResearchProviderLevelSpec, ...]
-    fleet_units_per_level: int = 1
+    site_requirements: SiteRequirements = SiteRequirements()
 
     def __post_init__(self) -> None:
         if self.tier < 1:
             raise ValueError("research provider tier must be positive")
         if not self.levels:
             raise ValueError("research provider must define at least one level")
-        if self.fleet_units_per_level <= 0:
-            raise ValueError("research provider fleet units per level must be positive")
         seen: set[int] = set()
         for level in self.levels:
             if level.level in seen:

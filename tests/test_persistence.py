@@ -7,6 +7,7 @@ import pytest
 
 from space_idle import (
     AdvanceTime,
+    CreateResearchProviderAssignment,
     CreateTransportAllocation,
     DevelopSurfaceCell,
     GetDependencyAnalytics,
@@ -42,7 +43,10 @@ from space_idle.content.base_game import (
 from space_idle.content import base_ids as ids
 from space_idle.persistence import SaveFormatError, capture_state, load_game, save_game
 from space_idle.industry import ProcessSpec
-from space_idle.research import ResearchStage, ResearchState
+from space_idle.research import (
+    ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
+    ResearchStage, ResearchState,
+)
 from space_idle.shared import EntityId, CelestialBodyId, DefinitionId
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
@@ -261,7 +265,7 @@ def test_save_load_preserves_research_execution_site(tmp_path):
         stage_progress=0.0,
         stage_started_day=sim.day,
     )
-    app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
 
     before = sim.research.active[research_id].execution_context
     assert before is not None
@@ -501,3 +505,50 @@ def test_load_rejects_cross_domain_runtime_invariant_violation(tmp_path):
 
     with pytest.raises(SaveFormatError, match="invalid saved runtime state"):
         load_game(path, build_game_application_for_load)
+
+
+def test_research_provider_assignment_persists_commitment_reference_without_quantity_copy(tmp_path):
+    provider_id = DefinitionId("test.research_provider.persistence_fleet")
+
+    def factory(*, for_load: bool):
+        app = build_game_application_for_load() if for_load else build_game_application()
+        app._simulation.research.providers[provider_id] = ResearchProviderSpec(
+            provider_id,
+            ResearchProviderSourceKind.FLEET,
+            ids.REUSABLE_ORBITAL_CARGO_TUG,
+            tier=2,
+            levels=(ResearchProviderLevelSpec(1, 2.0, 25.0, 1.5),),
+        )
+        return app
+
+    app = factory(for_load=False)
+    result = app.execute(CreateResearchProviderAssignment(
+        str(provider_id), str(ids.LEO), 1, priority=4
+    ))
+    assignment_id = result.created_id
+    assert assignment_id is not None
+    assignment = next(iter(app._simulation.research.provider_assignments.values()))
+    before_commitment = app._simulation.transport.fleet_commitment_snapshot(
+        assignment.fleet_commitment_ref
+    )
+    assert before_commitment is not None and before_commitment.quantity == 1
+
+    path = tmp_path / "research-provider-assignment.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    saved_assignment = raw["state"]["research"]["provider_assignments"][0]
+    assert saved_assignment["fleet_commitment_ref"] == str(assignment.fleet_commitment_ref)
+    assert "quantity" not in saved_assignment
+    assert saved_assignment["vehicle_definition_id"] == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+
+    loaded, _ = load_game(path, lambda: factory(for_load=True))
+    loaded_assignment = next(iter(loaded._simulation.research.provider_assignments.values()))
+    assert str(loaded_assignment.id) == assignment_id
+    assert loaded_assignment.provider_definition_id == provider_id
+    assert loaded_assignment.priority == 4
+    loaded_commitment = loaded._simulation.transport.fleet_commitment_snapshot(
+        loaded_assignment.fleet_commitment_ref
+    )
+    assert loaded_commitment is not None
+    assert loaded_commitment.quantity == 1
+    assert loaded_commitment.owner_activity_ref.activity_id == loaded_assignment.id

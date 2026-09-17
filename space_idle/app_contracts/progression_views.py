@@ -22,14 +22,40 @@ class ResearchExecutionSiteRow:
 
 @dataclass(frozen=True)
 class ResearchProviderRow:
-    facility_id: str
-    facility_definition_id: str
+    id: str
+    provider_definition_id: str
+    source_kind: str
+    source_definition_id: str
     operational_node_id: str
     tier: int
-    level: int
+    level: int | None
+    committed_units: int | None
+    fleet_commitment_id: str | None
+    paused: bool
+    priority: ActivityPriority
     generation_points_per_day: float
+    admitted_generation_points_per_day: float
     storage_capacity_points: float
+    research_execution_per_day: float
     blockers: tuple[tuple[str, str], ...]
+    can_pause: bool
+    can_resume: bool
+    can_resize: bool
+    can_release: bool
+    # Facility identity remains explicit for inspection links; Fleet rows use None.
+    facility_id: str | None = None
+    facility_definition_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ResearchProviderAssignmentOptionRow:
+    provider_definition_id: str
+    source_definition_id: str
+    operational_node_id: str
+    tier: int
+    free_units: int
+    blockers: tuple[tuple[str, str], ...]
+    can_create: bool
 
 
 @dataclass(frozen=True)
@@ -98,8 +124,10 @@ class ResearchView:
     stored_points: float
     storage_capacity_points: float
     generation_points_per_day: float
+    admitted_generation_points_per_day: float
     over_capacity: bool
     providers: tuple[ResearchProviderRow, ...]
+    provider_assignment_options: tuple[ResearchProviderAssignmentOptionRow, ...]
     knowledge: tuple[ResearchKnowledgeRow, ...]
     items: tuple[ResearchRow, ...]
 

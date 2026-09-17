@@ -38,7 +38,7 @@ def _restore_execution_site(data: dict[str, Any] | None) -> ResearchExecutionSit
 
 def capture_research(sim: Any) -> dict[str, Any]:
     if sim.research is None:
-        return {"stored_points": 0.0, "knowledge": {}, "active": [], "provider_assignments": []}
+        return {"stored_points": 0.0, "knowledge": {}, "active": [], "provider_assignment_counter": 0, "provider_assignments": []}
     return {
         "stored_points": sim.research.stored_points,
         "knowledge": dict(sorted(sim.research.knowledge_state.experience_by_category.items())),
@@ -54,7 +54,19 @@ def capture_research(sim: Any) -> dict[str, Any]:
             }
             for r in sorted(sim.research.active.values(), key=lambda row: str(row.definition_id))
         ],
-        "provider_assignments": [],
+        "provider_assignment_counter": sim.research._provider_assignment_counter,
+        "provider_assignments": [
+            {
+                "id": str(row.id),
+                "provider_definition_id": str(row.provider_definition_id),
+                "vehicle_definition_id": str(row.vehicle_definition_id),
+                "operational_node_id": str(row.operational_node_id),
+                "priority": row.priority,
+                "paused": row.paused,
+                "fleet_commitment_ref": str(row.fleet_commitment_ref),
+            }
+            for row in sorted(sim.research.provider_assignments.values(), key=lambda item: str(item.id))
+        ],
     }
 
 
@@ -67,6 +79,7 @@ def restore_research(sim: Any, data: dict[str, Any]) -> None:
     }
     sim.research.active.clear()
     sim.research.provider_assignments.clear()
+    sim.research._provider_assignment_counter = int(data.get("provider_assignment_counter", 0))
     sim.research.last_point_allocations.clear()
     sim.research.last_point_requests.clear()
     sim.research.last_execution_allocations.clear()
@@ -81,6 +94,18 @@ def restore_research(sim: Any, data: dict[str, Any]) -> None:
             paused=bool(row["paused"]),
             execution_context=_restore_execution_site(row.get("execution_context")),
             stage_started_day=int(row.get("stage_started_day", 0)),
+        )
+    from .research import ResearchProviderAssignmentState
+    for row in data.get("provider_assignments", []):
+        assignment_id = EntityId(row["id"])
+        sim.research.provider_assignments[assignment_id] = ResearchProviderAssignmentState(
+            id=assignment_id,
+            provider_definition_id=DefinitionId(row["provider_definition_id"]),
+            vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
+            operational_node_id=SpatialNodeId(row["operational_node_id"]),
+            priority=row["priority"],
+            paused=bool(row["paused"]),
+            fleet_commitment_ref=EntityId(row["fleet_commitment_ref"]),
         )
 
 
@@ -149,12 +174,29 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         visiting.remove(node); visited.add(node)
     for research_id in definitions: visit(research_id)
 
+    facility_provider_sources: set[DefinitionId] = set()
     for provider_id, provider in sim.research.providers.items():
         _require(provider_id == provider.id, f"research provider key mismatch: {provider_id}")
+        _validate_site_requirements(
+            provider.site_requirements, ctx.known_capabilities, f"research_provider:{provider_id}"
+        )
         if provider.source_kind is ResearchProviderSourceKind.FACILITY:
             _require(provider.source_definition_id in ctx.facility_defs, f"research provider references unknown facility: {provider_id}")
+            _require(
+                provider.source_definition_id not in facility_provider_sources,
+                f"multiple Research Providers reference one facility definition: {provider.source_definition_id}",
+            )
+            facility_provider_sources.add(provider.source_definition_id)
         else:
+            _require(
+                not requires_surface_cell_context(provider.site_requirements),
+                f"Fleet Research Provider cannot require a surface-cell execution context: {provider_id}",
+            )
             _require(sim.transport.vehicle_definition(provider.source_definition_id) is not None, f"research provider references unknown vehicle: {provider_id}")
+            _require(
+                len(provider.levels) == 1 and provider.levels[0].level == 1,
+                f"Fleet research provider must define one per-unit level: {provider_id}",
+            )
         _require(provider.tier >= 1, f"invalid research provider tier: {provider_id}")
         levels = [level.level for level in provider.levels]
         _require(len(levels) == len(set(levels)), f"duplicate research provider level: {provider_id}")
@@ -180,6 +222,31 @@ def validate_runtime(sim: Any) -> None:
         if location is not None:
             _require(site.surface_cell_id in location.developed_cell_ids, f"research stage references undeveloped cell: {research_id}/{spec.stage_id}/{site.surface_cell_id}")
         _require(needs_cell, f"research stage stores unnecessary surface cell: {research_id}/{spec.stage_id}")
+
+    for facility in sim.facilities.facilities.values():
+        provider = sim.research.facility_provider_spec(facility.id)
+        if provider is not None:
+            _require(
+                any(level.level == facility.level for level in provider.levels),
+                f"Research Provider has no contribution definition for Facility Level: {facility.id}/L{facility.level}",
+            )
+
+    for assignment_id, assignment in sim.research.provider_assignments.items():
+        _require(assignment_id == assignment.id, f"research provider assignment key mismatch: {assignment_id}")
+        provider = sim.research.providers.get(assignment.provider_definition_id)
+        _require(provider is not None, f"research assignment references unknown provider: {assignment_id}")
+        if provider is None:
+            continue
+        _require(provider.source_kind is ResearchProviderSourceKind.FLEET, f"research assignment references non-Fleet provider: {assignment_id}")
+        commitment = sim.transport.fleet_commitment_snapshot(assignment.fleet_commitment_ref)
+        _require(commitment is not None, f"research assignment missing Fleet commitment: {assignment_id}")
+        if commitment is not None:
+            _require(commitment.owner_activity_ref.activity_type == "research_provider_assignment", f"research assignment Fleet owner type mismatch: {assignment_id}")
+            _require(commitment.owner_activity_ref.activity_id == assignment_id, f"research assignment Fleet owner id mismatch: {assignment_id}")
+            _require(assignment.vehicle_definition_id == provider.source_definition_id, f"research assignment Provider vehicle mismatch: {assignment_id}")
+            _require(commitment.vehicle_definition_id == assignment.vehicle_definition_id, f"research assignment Fleet definition mismatch: {assignment_id}")
+            _require(commitment.operational_node_id == assignment.operational_node_id, f"research assignment Fleet location mismatch: {assignment_id}")
+            _require(commitment.quantity > 0, f"research assignment has empty Fleet commitment: {assignment_id}")
 
     allowed_reservations: dict[EntityId, tuple[DefinitionId, str, SpatialNodeId, ResearchPrototypeStageSpec]] = {}
     for research_id, state in sim.research.active.items():
@@ -222,4 +289,5 @@ DOMAIN_EXTENSION = DomainExtension(
     "research", state_codec=STATE_CODEC, configuration_validator=validate_configuration,
     runtime_validator=validate_runtime, referenced_resources=referenced_resources,
     allocation_pool_provider=lambda sim: sim.research,
+    service_capacity_provider=lambda sim: sim.research,
 )

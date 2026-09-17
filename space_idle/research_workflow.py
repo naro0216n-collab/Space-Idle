@@ -219,10 +219,12 @@ class ResearchWorkflowMixin:
     def can_select_demonstration_site(self, research_id, location_id, day=0, surface_cell_id=None) -> bool:
         return not self._structural_site_blockers(self.demonstration_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
 
-    def set_prototype_site(self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0, surface_cell_id: SurfaceCellId | None = None) -> None:
+    def set_prototype_site(self, research_id: DefinitionId, stage_id: str, location_id: SpatialNodeId, day: int = 0, surface_cell_id: SurfaceCellId | None = None) -> None:
         state = self.active.get(research_id)
-        spec = None if state is None else self.current_stage_spec(research_id)
-        if state is None or not isinstance(spec, ResearchPrototypeStageSpec):
+        if state is None or state.current_stage_id != stage_id:
+            raise ValueError("research stage changed; refresh current stage")
+        spec = self.current_stage_spec(research_id)
+        if not isinstance(spec, ResearchPrototypeStageSpec):
             raise ValueError("研究は試作段階ではありません")
         structural = self._structural_site_blockers(self.prototype_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
         if structural:
@@ -232,10 +234,12 @@ class ResearchWorkflowMixin:
             self._release_stage_reservations(research_id, spec.stage_id)
         state.execution_context = site
 
-    def set_demonstration_site(self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0, surface_cell_id: SurfaceCellId | None = None) -> None:
+    def set_demonstration_site(self, research_id: DefinitionId, stage_id: str, location_id: SpatialNodeId, day: int = 0, surface_cell_id: SurfaceCellId | None = None) -> None:
         state = self.active.get(research_id)
-        spec = None if state is None else self.current_stage_spec(research_id)
-        if state is None or not isinstance(spec, ResearchDemonstrationStageSpec):
+        if state is None or state.current_stage_id != stage_id:
+            raise ValueError("research stage changed; refresh current stage")
+        spec = self.current_stage_spec(research_id)
+        if not isinstance(spec, ResearchDemonstrationStageSpec):
             raise ValueError("研究は実証段階ではありません")
         structural = self._structural_site_blockers(self.demonstration_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
         if structural:

@@ -14,6 +14,7 @@ class ResumeResearch: research_id: str
 @dataclass(frozen=True)
 class SetResearchPrototypeSite:
     research_id: str
+    stage_id: str
     operational_node_id: str
     surface_cell_id: str | None = None
 @dataclass(frozen=True)
@@ -23,8 +24,38 @@ class SetResearchPriority:
 @dataclass(frozen=True)
 class SetResearchDemonstrationSite:
     research_id: str
+    stage_id: str
     operational_node_id: str
     surface_cell_id: str | None = None
+
+@dataclass(frozen=True)
+class CreateResearchProviderAssignment:
+    provider_definition_id: str
+    operational_node_id: str
+    quantity: int
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+
+@dataclass(frozen=True)
+class ResizeResearchProviderAssignment:
+    assignment_id: str
+    quantity: int
+
+@dataclass(frozen=True)
+class SetResearchProviderAssignmentPriority:
+    assignment_id: str
+    priority: ActivityPriority
+
+@dataclass(frozen=True)
+class PauseResearchProviderAssignment:
+    assignment_id: str
+
+@dataclass(frozen=True)
+class ResumeResearchProviderAssignment:
+    assignment_id: str
+
+@dataclass(frozen=True)
+class ReleaseResearchProviderAssignment:
+    assignment_id: str
 
 @dataclass(frozen=True)
 class StartSurvey:

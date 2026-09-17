@@ -7,8 +7,10 @@ from .inventory import InventoryBook
 from .knowledge import ExperienceContributionRule, KnowledgeState
 from .power import PowerService
 from .service_capacity import ServiceCapacityRegistry
-from .shared import DefinitionId, EntityId
+from .shared import DefinitionId, EntityId, SpatialNodeId
 from .technology import TechnologyState
+from .priority import ActivityPriority
+from .transport.service import TransportService
 from .research_models import (
     ResearchDefinition,
     ResearchTheoryStageSpec,
@@ -33,10 +35,13 @@ class ResearchProviderAssignmentState:
     id: EntityId
     provider_definition_id: DefinitionId
     vehicle_definition_id: DefinitionId
-    operational_node_id: object
-    priority: int
+    operational_node_id: SpatialNodeId
+    priority: ActivityPriority
+    fleet_commitment_ref: EntityId
     paused: bool = False
-    fleet_commitment_ref: EntityId | None = None
+
+    def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
 
 
 @dataclass
@@ -47,12 +52,14 @@ class ResearchService(ResearchWorkflowMixin, ResearchCapacityMixin, ResearchExec
     inventory: InventoryBook
     power: PowerService
     service_capacity_registry: ServiceCapacityRegistry
+    transport: TransportService
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     active: dict[DefinitionId, ResearchState] = field(default_factory=dict)
     stored_points: float = 0.0
     knowledge_state: KnowledgeState = field(default_factory=KnowledgeState)
     experience_rules: tuple[ExperienceContributionRule, ...] = ()
     provider_assignments: dict[EntityId, ResearchProviderAssignmentState] = field(default_factory=dict)
+    _provider_assignment_counter: int = 0
     last_point_allocations: dict[DefinitionId, float] = field(default_factory=dict, init=False)
     last_point_requests: dict[DefinitionId, float] = field(default_factory=dict, init=False)
     last_execution_allocations: dict[DefinitionId, float] = field(default_factory=dict, init=False)
