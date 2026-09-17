@@ -148,6 +148,12 @@ def build_base_simulation() -> Simulation:
         build_scientific_exploration_definitions(),
         facilities, inventory, power, transport, research, service_capacity_registry,
     )
+    transport.register_fleet_commitment_owner_resolver(
+        "founding", lambda owner_id: owner_id in founding.projects
+    )
+    transport.register_fleet_commitment_owner_resolver(
+        "scientific_exploration", lambda owner_id: owner_id in scientific_exploration.campaigns
+    )
     extraction = ExtractionService(build_extraction_specs(), graph, environment, surface_infrastructure)
 
     # Keep the Contract Domain composed and available for future events,

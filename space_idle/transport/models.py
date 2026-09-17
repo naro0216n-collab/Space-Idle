@@ -42,12 +42,21 @@ class TransportControlMode(str, Enum):
     CAPACITY = "capacity"
 
 
-class FleetReservationKind(str, Enum):
-    TRANSPORT = "transport"
-    SCIENTIFIC_EXPLORATION = "scientific_exploration"
-    SPECIAL_MISSION = "special_mission"
-    RETIREMENT = "retirement"
-    OTHER = "other"
+@dataclass(frozen=True)
+class FleetActivityRef:
+    """Open owner reference for an exclusive Fleet commitment.
+
+    ``activity_type`` is a stable Domain/Application category, not a closed Core
+    enum. New Fleet-backed activities can therefore participate without changing
+    Fleet state ownership.
+    """
+
+    activity_type: str
+    activity_id: EntityId
+
+    def __post_init__(self) -> None:
+        if not self.activity_type:
+            raise ValueError("fleet activity type must be non-empty")
 
 
 @dataclass(frozen=True)
@@ -80,33 +89,45 @@ class FleetPoolSnapshot:
     transport_units: int
     exploration_units: int
     retirement_units: int
-    other_reserved_units: int
+    other_committed_units: int
     relocating_units: int
     releasing_units: int
 
 
 @dataclass
-class FleetReservation:
+class FleetCommitmentState:
     id: EntityId
-    owner_id: EntityId
-    kind: FleetReservationKind
+    owner_activity_ref: FleetActivityRef
     vehicle_definition_id: DefinitionId
-    operational_node_id: SpatialNodeId
-    units: int
+    quantity: int
+    operational_node_id: SpatialNodeId | None = None
+    movement_execution_id: EntityId | None = None
 
     def __post_init__(self) -> None:
-        if self.units <= 0:
-            raise ValueError("fleet reservation units must be positive")
+        if self.quantity <= 0:
+            raise ValueError("fleet commitment quantity must be positive")
+        if (self.operational_node_id is None) == (self.movement_execution_id is None):
+            raise ValueError(
+                "fleet commitment must be at exactly one Operational Node or Movement execution"
+            )
+
+    @property
+    def in_movement(self) -> bool:
+        return self.movement_execution_id is not None
 
 
 @dataclass(frozen=True)
-class FleetReservationSnapshot:
+class FleetCommitmentSnapshot:
     id: EntityId
-    owner_id: EntityId
-    kind: FleetReservationKind
+    owner_activity_ref: FleetActivityRef
     vehicle_definition_id: DefinitionId
-    operational_node_id: SpatialNodeId
-    units: int
+    quantity: int
+    operational_node_id: SpatialNodeId | None
+    movement_execution_id: EntityId | None
+
+    @property
+    def in_movement(self) -> bool:
+        return self.movement_execution_id is not None
 
 
 @dataclass(frozen=True)
@@ -124,7 +145,8 @@ class FleetRelocationResourceNeed:
 class FleetRelocation:
     id: EntityId
     vehicle_definition_id: DefinitionId
-    units: int
+    requested_units: int
+    fleet_commitment_id: EntityId
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
     requested_day: int
@@ -135,8 +157,8 @@ class FleetRelocation:
 
     def __post_init__(self) -> None:
         self.priority = ActivityPriority(self.priority)
-        if self.units <= 0:
-            raise ValueError("fleet relocation units must be positive")
+        if self.requested_units <= 0:
+            raise ValueError("fleet relocation requested units must be positive")
         if self.source_id == self.destination_id:
             raise ValueError("fleet relocation endpoints must differ")
         if not self.path:
@@ -178,14 +200,8 @@ class FleetRelocationPlan:
 class FleetRelease:
     id: EntityId
     allocation_id: EntityId
-    vehicle_definition_id: DefinitionId
-    operational_node_id: SpatialNodeId
-    units: int
+    fleet_commitment_id: EntityId
     release_day: int
-
-    def __post_init__(self) -> None:
-        if self.units <= 0:
-            raise ValueError("fleet releasing units must be positive")
 
 
 @dataclass
@@ -566,8 +582,7 @@ class MovementExecution:
     id: EntityId
     owner_id: EntityId
     kind: MovementExecutionKind
-    vehicle_definition_id: DefinitionId
-    units: int
+    fleet_commitment_id: EntityId
     legs: tuple[MovementExecutionLeg, ...]
     payload_t_per_unit: float
     started_day: int
@@ -575,8 +590,6 @@ class MovementExecution:
     payload_resources: tuple[MovementExecutionPayloadResource, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.units <= 0:
-            raise ValueError("movement execution units must be positive")
         if not self.legs:
             raise ValueError("movement execution requires at least one leg")
         if self.payload_t_per_unit < -1e-9:
@@ -588,9 +601,6 @@ class MovementExecution:
         payload_resource_ids = [row.resource_id for row in self.payload_resources]
         if len(set(payload_resource_ids)) != len(payload_resource_ids):
             raise ValueError("movement execution payload resources must be unique")
-        resource_payload_t = sum(row.amount_t for row in self.payload_resources)
-        if resource_payload_t > self.payload_t_per_unit * self.units + 1e-9:
-            raise ValueError("movement execution resource payload exceeds total payload")
 
     @property
     def latency_days(self) -> int:
@@ -758,7 +768,8 @@ class FleetRetirementState:
     id: EntityId
     vehicle_definition_id: DefinitionId
     operational_node_id: SpatialNodeId
-    units: int
+    requested_units: int
+    fleet_commitment_id: EntityId
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     progress_work: float = 0.0
     phase: FleetRetirementPhase = FleetRetirementPhase.COMMITTED
@@ -768,8 +779,8 @@ class FleetRetirementState:
 
     def __post_init__(self) -> None:
         self.priority = ActivityPriority(self.priority)
-        if self.units <= 0:
-            raise ValueError("retirement units must be positive")
+        if self.requested_units <= 0:
+            raise ValueError("retirement requested units must be positive")
         if self.progress_work < 0:
             raise ValueError("retirement progress must be non-negative")
 

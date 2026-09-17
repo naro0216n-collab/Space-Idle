@@ -23,7 +23,7 @@ from space_idle.site import (
 )
 from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.shared import DefinitionId, EntityId
-from space_idle.transport.models import FleetReservationKind, FleetRetirementPhase
+from space_idle.transport.models import FleetActivityRef, FleetRetirementPhase
 
 
 def test_fleet_retirement_commits_only_free_units_and_is_reversible_before_dismantling():
@@ -32,10 +32,9 @@ def test_fleet_retirement_commits_only_free_units_and_is_reversible_before_disma
     pool = sim.transport.fleet_pool(ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH)
     pool.total_units = 2
 
-    sim.transport.reserve_fleet_units(
+    sim.transport.commit_fleet_units(
         EntityId("test.exploration"),
-        EntityId("test.owner"),
-        FleetReservationKind.SCIENTIFIC_EXPLORATION,
+        FleetActivityRef("test_exploration", EntityId("test.owner")),
         ids.REUSABLE_LAUNCH_VEHICLE,
         ids.EARTH,
         1,
@@ -110,7 +109,7 @@ def test_fleet_retirement_application_projection_and_save_load_preserve_commitme
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
     loaded_retirement = loaded._simulation.transport.fleet_retirements[EntityId(retirement_id)]
     assert loaded_retirement.phase is FleetRetirementPhase.COMMITTED
-    assert loaded_retirement.units == 1
+    assert loaded_retirement.requested_units == 1
 
 
 def test_fleet_retirement_rechecks_site_requirements_during_execution():
@@ -187,7 +186,7 @@ def test_fleet_retirement_salvage_blocker_uses_shared_storage_class_headroom():
     ).created_id)
     state = sim.transport.fleet_retirements[retirement_id]
     definition = sim.transport.vehicle_defs[state.vehicle_definition_id]
-    required_work = definition.retirement.work_days_per_unit * state.units
+    required_work = definition.retirement.work_days_per_unit * state.requested_units
 
     for _ in range(10):
         app.execute(AdvanceTime(1))
@@ -198,9 +197,9 @@ def test_fleet_retirement_salvage_blocker_uses_shared_storage_class_headroom():
 
     storage_class = sim.inventory.resource_storage_class[ids.STRUCTURAL_COMPONENTS]
     salvage = tuple(
-        (resource_id, amount_per_unit * state.units)
+        (resource_id, amount_per_unit * state.requested_units)
         for resource_id, amount_per_unit in definition.retirement.recovery_resources_per_unit
-        if amount_per_unit * state.units > 0.0
+        if amount_per_unit * state.requested_units > 0.0
     )
     salvage_total = sum(
         amount

@@ -15,8 +15,8 @@ from .models import (
     FleetRelocation,
     FleetRelocationResourceNeed,
     FleetRelease,
-    FleetReservation,
-    FleetReservationKind,
+    FleetActivityRef,
+    FleetCommitmentState,
     FleetRetirementPhase,
     FleetRetirementState,
     MovementEndpoint,
@@ -59,8 +59,7 @@ def _capture_movement_execution(row: MovementExecution) -> dict[str, Any]:
         "id": str(row.id),
         "owner_id": str(row.owner_id),
         "kind": row.kind.value,
-        "vehicle_definition_id": str(row.vehicle_definition_id),
-        "units": row.units,
+        "fleet_commitment_id": str(row.fleet_commitment_id),
         "payload_t_per_unit": row.payload_t_per_unit,
         "started_day": row.started_day,
         "completion_day": row.completion_day,
@@ -100,8 +99,7 @@ def _restore_movement_execution(data: dict[str, Any]) -> MovementExecution:
         id=EntityId(data["id"]),
         owner_id=EntityId(data["owner_id"]),
         kind=MovementExecutionKind(data["kind"]),
-        vehicle_definition_id=DefinitionId(data["vehicle_definition_id"]),
-        units=int(data["units"]),
+        fleet_commitment_id=EntityId(data["fleet_commitment_id"]),
         legs=tuple(
             MovementExecutionLeg(
                 movement_plan_id=MovementPlanId(leg["movement_plan_id"]),
@@ -157,16 +155,17 @@ def capture_transport(sim: Any) -> dict[str, Any]:
             for pool in sorted(tr.fleet_pools.values(), key=lambda row: (str(row.vehicle_definition_id), str(row.operational_node_id)))
             if pool.total_units > 0
         ],
-        "fleet_reservations": [
+        "fleet_commitments": [
             {
                 "id": str(row.id),
-                "owner_id": str(row.owner_id),
-                "kind": row.kind.value,
+                "owner_activity_type": row.owner_activity_ref.activity_type,
+                "owner_activity_id": str(row.owner_activity_ref.activity_id),
                 "vehicle_definition_id": str(row.vehicle_definition_id),
-                "operational_node_id": str(row.operational_node_id),
-                "units": row.units,
+                "quantity": row.quantity,
+                "operational_node_id": None if row.operational_node_id is None else str(row.operational_node_id),
+                "movement_execution_id": None if row.movement_execution_id is None else str(row.movement_execution_id),
             }
-            for row in sorted(tr.fleet_reservations.values(), key=lambda row: str(row.id))
+            for row in sorted(tr.fleet_commitments.values(), key=lambda row: str(row.id))
         ],
         "transport_allocations": [
             {
@@ -192,7 +191,8 @@ def capture_transport(sim: Any) -> dict[str, Any]:
             {
                 "id": str(row.id),
                 "vehicle_definition_id": str(row.vehicle_definition_id),
-                "units": row.units,
+                "requested_units": row.requested_units,
+                "fleet_commitment_id": str(row.fleet_commitment_id),
                 "source_id": str(row.source_id),
                 "destination_id": str(row.destination_id),
                 "requested_day": row.requested_day,
@@ -218,9 +218,7 @@ def capture_transport(sim: Any) -> dict[str, Any]:
             {
                 "id": str(row.id),
                 "allocation_id": str(row.allocation_id),
-                "vehicle_definition_id": str(row.vehicle_definition_id),
-                "operational_node_id": str(row.operational_node_id),
-                "units": row.units,
+                "fleet_commitment_id": str(row.fleet_commitment_id),
                 "release_day": row.release_day,
             }
             for row in sorted(tr.fleet_releases.values(), key=lambda row: str(row.id))
@@ -230,7 +228,8 @@ def capture_transport(sim: Any) -> dict[str, Any]:
                 "id": str(state.id),
                 "vehicle_definition_id": str(state.vehicle_definition_id),
                 "operational_node_id": str(state.operational_node_id),
-                "units": state.units,
+                "requested_units": state.requested_units,
+                "fleet_commitment_id": str(state.fleet_commitment_id),
                 "priority": int(state.priority),
                 "progress_work": state.progress_work,
                 "phase": state.phase.value,
@@ -268,12 +267,24 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
         )
         for row in data.get("fleet_pools", [])
     }
-    tr.fleet_reservations = {
-        EntityId(row["id"]): FleetReservation(
-            EntityId(row["id"]), EntityId(row["owner_id"]), FleetReservationKind(row["kind"]),
-            DefinitionId(row["vehicle_definition_id"]), SpatialNodeId(row["operational_node_id"]), int(row["units"])
+    tr.fleet_commitments = {
+        EntityId(row["id"]): FleetCommitmentState(
+            id=EntityId(row["id"]),
+            owner_activity_ref=FleetActivityRef(
+                str(row["owner_activity_type"]), EntityId(row["owner_activity_id"])
+            ),
+            vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
+            quantity=int(row["quantity"]),
+            operational_node_id=(
+                None if row.get("operational_node_id") is None
+                else SpatialNodeId(row["operational_node_id"])
+            ),
+            movement_execution_id=(
+                None if row.get("movement_execution_id") is None
+                else EntityId(row["movement_execution_id"])
+            ),
         )
-        for row in data.get("fleet_reservations", [])
+        for row in data.get("fleet_commitments", [])
     }
     tr.transport_allocations = {}
     for row in data.get("transport_allocations", []):
@@ -291,15 +302,20 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
         tr.transport_allocations[allocation.id] = allocation
     tr.fleet_relocations = {
         EntityId(row["id"]): FleetRelocation(
-            EntityId(row["id"]), DefinitionId(row["vehicle_definition_id"]), int(row["units"]),
-            SpatialNodeId(row["source_id"]), SpatialNodeId(row["destination_id"]), int(row["requested_day"]),
-            tuple(MovementPlanId(value) for value in row["path"]),
-            tuple(
+            id=EntityId(row["id"]),
+            vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
+            requested_units=int(row["requested_units"]),
+            fleet_commitment_id=EntityId(row["fleet_commitment_id"]),
+            source_id=SpatialNodeId(row["source_id"]),
+            destination_id=SpatialNodeId(row["destination_id"]),
+            requested_day=int(row["requested_day"]),
+            path=tuple(MovementPlanId(value) for value in row["path"]),
+            resource_needs=tuple(
                 FleetRelocationResourceNeed(SpatialNodeId(need["operational_node_id"]), DefinitionId(need["resource_id"]), float(need["required_t"]))
                 for need in row.get("resource_needs", [])
             ),
-            int(row["priority"]),
-            None if row.get("movement_execution_id") is None else EntityId(row["movement_execution_id"]),
+            priority=int(row["priority"]),
+            movement_execution_id=None if row.get("movement_execution_id") is None else EntityId(row["movement_execution_id"]),
         )
         for row in data.get("fleet_relocations", [])
     }
@@ -311,8 +327,8 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
     }
     tr.fleet_releases = {
         EntityId(row["id"]): FleetRelease(
-            EntityId(row["id"]), EntityId(row["allocation_id"]), DefinitionId(row["vehicle_definition_id"]),
-            SpatialNodeId(row["operational_node_id"]), int(row["units"]), int(row["release_day"])
+            EntityId(row["id"]), EntityId(row["allocation_id"]),
+            EntityId(row["fleet_commitment_id"]), int(row["release_day"])
         )
         for row in data.get("fleet_releases", [])
     }
@@ -321,7 +337,8 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
             id=EntityId(row["id"]),
             vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
             operational_node_id=SpatialNodeId(row["operational_node_id"]),
-            units=int(row["units"]),
+            requested_units=int(row["requested_units"]),
+            fleet_commitment_id=EntityId(row["fleet_commitment_id"]),
             priority=int(row["priority"]),
             progress_work=float(row.get("progress_work", 0.0)),
             phase=FleetRetirementPhase(row.get("phase", "committed")),
@@ -512,43 +529,67 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             _validate_site_requirements(vehicle.production.site_requirements, known_capabilities, f"vehicle_production:{vehicle_id}")
 def validate_transport_runtime(sim: Any) -> None:
     tr = sim.transport
+
     for (vehicle_definition_id, location_id), pool in tr.fleet_pools.items():
-        _require(pool.vehicle_definition_id == vehicle_definition_id and pool.operational_node_id == location_id, f"fleet pool key mismatch: {vehicle_definition_id}/{location_id}")
+        _require(
+            pool.vehicle_definition_id == vehicle_definition_id
+            and pool.operational_node_id == location_id,
+            f"fleet pool key mismatch: {vehicle_definition_id}/{location_id}",
+        )
         _require(vehicle_definition_id in tr.vehicle_defs, f"fleet pool references unknown vehicle definition: {vehicle_definition_id}")
         _require(sim.graph.has_operational_node(location_id), f"fleet pool references unknown location: {vehicle_definition_id}/{location_id}")
         _require(pool.total_units >= 0, f"negative fleet total: {vehicle_definition_id}/{location_id}")
         _require(tr.fleet_free_units(vehicle_definition_id, location_id) >= 0, f"fleet pool overcommitted: {vehicle_definition_id}/{location_id}")
-    for reservation_id, reservation in tr.fleet_reservations.items():
-        _require(reservation_id == reservation.id, f"fleet reservation key mismatch: {reservation_id}")
-        _require(reservation.vehicle_definition_id in tr.vehicle_defs, f"fleet reservation references unknown vehicle definition: {reservation_id}")
-        _require(sim.graph.has_operational_node(reservation.operational_node_id), f"fleet reservation references unknown location: {reservation_id}")
-        _require(reservation.units > 0, f"fleet reservation has non-positive units: {reservation_id}")
-        if reservation.kind is FleetReservationKind.TRANSPORT:
-            _require(
-                reservation.owner_id in tr.transport_allocations,
-                f"transport fleet reservation references unknown allocation: {reservation_id}/{reservation.owner_id}",
-            )
-            allocation = tr.transport_allocations[reservation.owner_id]
-            _require(
-                reservation_id == tr._transport_reservation_id(allocation.id),
-                f"transport fleet reservation id mismatch: {reservation_id}/{allocation.id}",
-            )
-            _require(
-                reservation.vehicle_definition_id == allocation.vehicle_definition_id,
-                f"transport fleet reservation vehicle mismatch: {reservation_id}/{allocation.id}",
-            )
-            _require(
-                reservation.operational_node_id == allocation.anchor_node_id,
-                f"transport fleet reservation location mismatch: {reservation_id}/{allocation.id}",
-            )
-        if reservation.kind is FleetReservationKind.RETIREMENT:
-            state = tr.fleet_retirements.get(reservation.owner_id)
-            _require(state is not None, f"retirement fleet reservation references unknown retirement: {reservation_id}/{reservation.owner_id}")
+
+    movement_commitments: dict[EntityId, EntityId] = {}
+    for commitment_id, commitment in tr.fleet_commitments.items():
+        _require(commitment_id == commitment.id, f"fleet commitment key mismatch: {commitment_id}")
+        _require(commitment.vehicle_definition_id in tr.vehicle_defs, f"fleet commitment references unknown vehicle definition: {commitment_id}")
+        _require(commitment.quantity > 0, f"fleet commitment has non-positive quantity: {commitment_id}")
+        _require(
+            (commitment.operational_node_id is None) != (commitment.movement_execution_id is None),
+            f"fleet commitment location ownership is ambiguous: {commitment_id}",
+        )
+        if commitment.operational_node_id is not None:
+            _require(sim.graph.has_operational_node(commitment.operational_node_id), f"fleet commitment references unknown location: {commitment_id}")
+        if commitment.movement_execution_id is not None:
+            _require(commitment.movement_execution_id in tr.movement_executions, f"moving Fleet commitment references missing MovementExecution: {commitment_id}")
+            _require(commitment.movement_execution_id not in movement_commitments, f"MovementExecution is owned by multiple Fleet commitments: {commitment.movement_execution_id}")
+            movement_commitments[commitment.movement_execution_id] = commitment_id
+
+        owner = commitment.owner_activity_ref
+        _require(
+            owner.activity_type in tr._fleet_commitment_owner_resolvers,
+            f"Fleet commitment owner activity type is not registered: {commitment_id}/{owner.activity_type}",
+        )
+        _require(
+            tr.fleet_commitment_owner_exists(owner),
+            f"orphan Fleet commitment owner: {commitment_id}/{owner.activity_type}/{owner.activity_id}",
+        )
+        if owner.activity_type == "transport_allocation":
+            allocation = tr.transport_allocations.get(owner.activity_id)
+            _require(allocation is not None, f"transport Fleet commitment references unknown allocation: {commitment_id}/{owner.activity_id}")
+            if allocation is not None:
+                _require(commitment_id == tr._transport_commitment_id(allocation.id), f"transport Fleet commitment id mismatch: {commitment_id}/{allocation.id}")
+                _require(commitment.vehicle_definition_id == allocation.vehicle_definition_id, f"transport Fleet commitment vehicle mismatch: {commitment_id}/{allocation.id}")
+                _require(commitment.operational_node_id == allocation.anchor_node_id, f"transport Fleet commitment location mismatch: {commitment_id}/{allocation.id}")
+                _require(commitment.movement_execution_id is None, f"transport Allocation Fleet commitment cannot be in one-shot Movement: {commitment_id}")
+        elif owner.activity_type == "fleet_relocation":
+            relocation = tr.fleet_relocations.get(owner.activity_id)
+            _require(relocation is not None, f"relocation Fleet commitment references unknown relocation: {commitment_id}/{owner.activity_id}")
+            if relocation is not None:
+                _require(commitment_id == relocation.fleet_commitment_id, f"relocation Fleet commitment id mismatch: {commitment_id}/{relocation.id}")
+        elif owner.activity_type == "fleet_release":
+            release = tr.fleet_releases.get(owner.activity_id)
+            _require(release is not None, f"release Fleet commitment references unknown release: {commitment_id}/{owner.activity_id}")
+            if release is not None:
+                _require(commitment_id == release.fleet_commitment_id, f"release Fleet commitment id mismatch: {commitment_id}/{release.id}")
+        elif owner.activity_type == "fleet_retirement":
+            state = tr.fleet_retirements.get(owner.activity_id)
+            _require(state is not None, f"retirement Fleet commitment references unknown retirement: {commitment_id}/{owner.activity_id}")
             if state is not None:
-                _require(reservation_id == tr._retirement_reservation_id(state.id), f"retirement fleet reservation id mismatch: {reservation_id}/{state.id}")
-                _require(reservation.vehicle_definition_id == state.vehicle_definition_id, f"retirement fleet reservation vehicle mismatch: {reservation_id}/{state.id}")
-                _require(reservation.operational_node_id == state.operational_node_id, f"retirement fleet reservation location mismatch: {reservation_id}/{state.id}")
-                _require(reservation.units == state.units, f"retirement fleet reservation unit mismatch: {reservation_id}/{state.id}")
+                _require(commitment_id == state.fleet_commitment_id, f"retirement Fleet commitment id mismatch: {commitment_id}/{state.id}")
+
     for allocation_id, allocation in tr.transport_allocations.items():
         _require(allocation_id == allocation.id, f"transport allocation key mismatch: {allocation_id}")
         _require(allocation.vehicle_definition_id in tr.vehicle_defs, f"transport allocation references unknown vehicle definition: {allocation_id}")
@@ -558,25 +599,42 @@ def validate_transport_runtime(sim: Any) -> None:
         required = tr.allocation_required_units(allocation_id, sim.day)
         active_units = tr.transport_active_units(allocation_id)
         _require(active_units <= required, f"transport allocation exceeds target: {allocation_id}")
+
     for relocation_id, relocation in tr.fleet_relocations.items():
         _require(relocation_id == relocation.id, f"fleet relocation key mismatch: {relocation_id}")
         _require(relocation.vehicle_definition_id in tr.vehicle_defs, f"fleet relocation references unknown vehicle definition: {relocation_id}")
         _require(sim.graph.has_operational_node(relocation.source_id) and sim.graph.has_operational_node(relocation.destination_id), f"fleet relocation references unknown endpoint: {relocation_id}")
+        _require(relocation.requested_units > 0, f"fleet relocation has non-positive requested units: {relocation_id}")
         _require(bool(relocation.path), f"fleet relocation has empty path: {relocation_id}")
+        commitment = tr.fleet_commitments.get(relocation.fleet_commitment_id)
+        _require(commitment is not None, f"fleet relocation missing Fleet commitment: {relocation_id}")
+        if commitment is not None:
+            _require(commitment.owner_activity_ref == FleetActivityRef("fleet_relocation", relocation_id), f"fleet relocation commitment owner mismatch: {relocation_id}")
+            _require(commitment.vehicle_definition_id == relocation.vehicle_definition_id, f"fleet relocation commitment vehicle mismatch: {relocation_id}")
+            _require(commitment.quantity == relocation.requested_units, f"fleet relocation commitment quantity mismatch: {relocation_id}")
+            if relocation.movement_execution_id is None:
+                _require(commitment.operational_node_id == relocation.source_id, f"pending fleet relocation commitment source mismatch: {relocation_id}")
+                _require(commitment.movement_execution_id is None, f"pending fleet relocation commitment is moving: {relocation_id}")
+            else:
+                _require(commitment.movement_execution_id == relocation.movement_execution_id, f"moving fleet relocation commitment execution mismatch: {relocation_id}")
         if relocation.movement_execution_id is not None:
             execution = tr.movement_executions.get(relocation.movement_execution_id)
             _require(execution is not None, f"fleet relocation missing MovementExecution: {relocation_id}")
             if execution is not None:
                 _require(execution.owner_id == relocation.id, f"fleet relocation MovementExecution owner mismatch: {relocation_id}")
                 _require(execution.kind is MovementExecutionKind.FLEET_RELOCATION, f"fleet relocation MovementExecution kind mismatch: {relocation_id}")
-                _require(execution.vehicle_definition_id == relocation.vehicle_definition_id, f"fleet relocation MovementExecution vehicle mismatch: {relocation_id}")
-                _require(execution.units == relocation.units, f"fleet relocation MovementExecution units mismatch: {relocation_id}")
+                _require(execution.fleet_commitment_id == relocation.fleet_commitment_id, f"fleet relocation MovementExecution commitment mismatch: {relocation_id}")
                 _require(execution.origin.operational_node_id == relocation.source_id, f"fleet relocation MovementExecution origin mismatch: {relocation_id}")
                 _require(execution.destination.operational_node_id == relocation.destination_id, f"fleet relocation MovementExecution destination mismatch: {relocation_id}")
+
     known_execution_owners: set[tuple[MovementExecutionKind, EntityId]] = set()
     for execution_id, execution in tr.movement_executions.items():
         _require(execution_id == execution.id, f"movement execution key mismatch: {execution_id}")
-        _require(execution.vehicle_definition_id in tr.vehicle_defs, f"movement execution references unknown vehicle definition: {execution_id}")
+        commitment = tr.fleet_commitments.get(execution.fleet_commitment_id)
+        _require(commitment is not None, f"movement execution references missing Fleet commitment: {execution_id}")
+        if commitment is not None:
+            _require(commitment.movement_execution_id == execution_id, f"movement execution is not owned by its Fleet commitment: {execution_id}")
+            _require(commitment.vehicle_definition_id in tr.vehicle_defs, f"movement Fleet commitment references unknown vehicle definition: {execution_id}")
         _require(execution.started_day < execution.completion_day, f"movement execution has invalid timing: {execution_id}")
         _require(bool(execution.legs), f"movement execution has no legs: {execution_id}")
         _require(execution.latency_days == execution.completion_day - execution.started_day, f"movement execution latency mismatch: {execution_id}")
@@ -587,33 +645,41 @@ def validate_transport_runtime(sim: Any) -> None:
             _require(bool(leg.operations), f"movement execution leg has no operations: {execution_id}")
             _require(leg.latency_days > 0, f"movement execution leg has invalid latency: {execution_id}")
             _require(leg.payload_capacity_t + 1e-9 >= execution.payload_t_per_unit, f"movement execution payload exceeds frozen leg capacity: {execution_id}")
+
     for release_id, release in tr.fleet_releases.items():
         _require(release_id == release.id, f"fleet release key mismatch: {release_id}")
-        # The source allocation may have been deleted while its units are still
-        # physically returning. The release record itself owns the recovery
-        # identity until release_day.
-        _require(release.vehicle_definition_id in tr.vehicle_defs, f"fleet release references unknown vehicle definition: {release_id}")
-        _require(sim.graph.has_operational_node(release.operational_node_id), f"fleet release references unknown location: {release_id}")
-        _require(release.units > 0, f"fleet release has non-positive units: {release_id}")
+        commitment = tr.fleet_commitments.get(release.fleet_commitment_id)
+        _require(commitment is not None, f"fleet release missing Fleet commitment: {release_id}")
+        if commitment is not None:
+            _require(commitment.owner_activity_ref == FleetActivityRef("fleet_release", release_id), f"fleet release commitment owner mismatch: {release_id}")
+            _require(commitment.operational_node_id is not None, f"fleet release commitment must remain node-local: {release_id}")
+            _require(commitment.movement_execution_id is None, f"fleet release commitment unexpectedly moving: {release_id}")
+
     for retirement_id, state in tr.fleet_retirements.items():
         _require(retirement_id == state.id, f"fleet retirement state key mismatch: {retirement_id}")
         _require(state.vehicle_definition_id in tr.vehicle_defs, f"fleet retirement references unknown vehicle definition: {retirement_id}")
         _require(sim.graph.has_operational_node(state.operational_node_id), f"fleet retirement references unknown location: {retirement_id}")
-        _require(state.units > 0, f"fleet retirement has non-positive units: {retirement_id}")
+        _require(state.requested_units > 0, f"fleet retirement has non-positive requested units: {retirement_id}")
         definition = tr.vehicle_defs[state.vehicle_definition_id]
-        total_work = definition.retirement.work_days_per_unit * state.units
+        total_work = definition.retirement.work_days_per_unit * state.requested_units
         _require(state.progress_work >= -1e-9 and state.progress_work <= total_work + 1e-9, f"fleet retirement progress outside work requirement: {retirement_id}")
-        reservation = tr.fleet_reservations.get(tr._retirement_reservation_id(retirement_id))
+        commitment = tr.fleet_commitments.get(state.fleet_commitment_id)
         if state.phase in {FleetRetirementPhase.COMMITTED, FleetRetirementPhase.DISMANTLING}:
-            _require(reservation is not None, f"active fleet retirement missing reservation: {retirement_id}")
+            _require(commitment is not None, f"active fleet retirement missing Fleet commitment: {retirement_id}")
+            if commitment is not None:
+                _require(commitment.owner_activity_ref == FleetActivityRef("fleet_retirement", retirement_id), f"fleet retirement commitment owner mismatch: {retirement_id}")
+                _require(commitment.vehicle_definition_id == state.vehicle_definition_id, f"fleet retirement commitment vehicle mismatch: {retirement_id}")
+                _require(commitment.operational_node_id == state.operational_node_id, f"fleet retirement commitment location mismatch: {retirement_id}")
+                _require(commitment.quantity == state.requested_units, f"fleet retirement commitment quantity mismatch: {retirement_id}")
         else:
-            _require(reservation is None, f"inactive fleet retirement retains reservation: {retirement_id}")
+            _require(commitment is None, f"inactive fleet retirement retains Fleet commitment: {retirement_id}")
         if state.irreversible_started:
             _require(state.phase is not FleetRetirementPhase.COMMITTED, f"irreversible fleet retirement remains committed: {retirement_id}")
         if state.phase is FleetRetirementPhase.DISMANTLING:
             _require(state.irreversible_started, f"dismantling retirement is reversible: {retirement_id}")
         if state.salvage_wait_started_day is not None:
             _require(state.progress_work + 1e-9 >= total_work, f"fleet retirement waits for salvage before work completion: {retirement_id}")
+
     for project_id, state in tr.vehicle_production_projects.items():
         _require(project_id == state.id, f"vehicle production state key mismatch: {project_id}")
         _require(state.vehicle_definition_id in tr.vehicle_defs, f"vehicle production references unknown definition: {project_id}")
@@ -624,20 +690,13 @@ def validate_transport_runtime(sim: Any) -> None:
         for resource_id, required_t in definition.production.resources:
             staged = tr._vehicle_production_staged_t(state, resource_id)
             if state.phase is VehicleProductionPhase.AWAITING_INPUTS:
-                _require(
-                    staged >= -1e-9 and staged <= required_t + 1e-9,
-                    f"vehicle production staged material outside requirement: {project_id}/{resource_id}",
-                )
+                _require(staged >= -1e-9 and staged <= required_t + 1e-9, f"vehicle production staged material outside requirement: {project_id}/{resource_id}")
             else:
-                _require(
-                    staged <= 1e-9,
-                    f"started vehicle production retains staged input: {project_id}/{resource_id}",
-                )
+                _require(staged <= 1e-9, f"started vehicle production retains staged input: {project_id}/{resource_id}")
         if state.phase is VehicleProductionPhase.COMPLETE:
             _require(state.completed_units == 1, f"completed vehicle production has invalid completed unit count: {project_id}")
         else:
             _require(state.completed_units == 0, f"incomplete vehicle production has completed units: {project_id}")
-
 
 
 

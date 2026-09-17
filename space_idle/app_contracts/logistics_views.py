@@ -75,9 +75,21 @@ class FleetPoolRow:
     transport_units: int
     exploration_units: int
     retirement_units: int
-    other_reserved_units: int
+    other_committed_units: int
     relocating_units: int
     releasing_units: int
+
+
+@dataclass(frozen=True)
+class FleetCommitmentRow:
+    id: str
+    owner_activity_type: str
+    owner_activity_id: str
+    vehicle_definition_id: str
+    display_name: str
+    quantity: int
+    operational_node_id: str | None
+    movement_execution_id: str | None
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_transport_support import infrastructure_requirement_rows
 from .application_views import (
-    CargoFlowRow, CargoFlowsView, DirectionalCapacityRow, FleetPoolRow,
+    CargoFlowRow, CargoFlowsView, DirectionalCapacityRow, FleetPoolRow, FleetCommitmentRow,
     FleetRelocationPreviewView, FleetRelocationResourceRequirementRow,
     FleetRelocationRow, FleetReleaseRow, FleetRetirementRow, FleetView, TransportAllocationRow,
     TransportAllocationsView, VehicleProductionOptionRow, VehicleProductionRow,
@@ -39,7 +39,8 @@ class LogisticsStateProjectorMixin:
         )
         keys.update(
             (row.vehicle_definition_id, row.operational_node_id)
-            for row in sim.transport.fleet_reservation_snapshots()
+            for row in sim.transport.fleet_commitment_snapshots()
+            if row.operational_node_id is not None
         )
         rows: list[FleetPoolRow] = []
         for definition_id, node_id in sorted(keys, key=lambda row: (str(row[0]), str(row[1]))):
@@ -58,11 +59,38 @@ class LogisticsStateProjectorMixin:
                     snapshot.transport_units,
                     snapshot.exploration_units,
                     snapshot.retirement_units,
-                    snapshot.other_reserved_units,
+                    snapshot.other_committed_units,
                     snapshot.relocating_units,
                     snapshot.releasing_units,
                 )
             )
+        return tuple(rows)
+
+    def _fleet_commitment_rows(
+        self,
+        *,
+        location_id: str | None = None,
+        vehicle_definition_id: str | None = None,
+    ) -> tuple[FleetCommitmentRow, ...]:
+        rows: list[FleetCommitmentRow] = []
+        for commitment in self._simulation.transport.fleet_commitment_snapshots():
+            if location_id is not None and (
+                commitment.operational_node_id is None
+                or str(commitment.operational_node_id) != location_id
+            ):
+                continue
+            if vehicle_definition_id is not None and str(commitment.vehicle_definition_id) != vehicle_definition_id:
+                continue
+            rows.append(FleetCommitmentRow(
+                id=str(commitment.id),
+                owner_activity_type=commitment.owner_activity_ref.activity_type,
+                owner_activity_id=str(commitment.owner_activity_ref.activity_id),
+                vehicle_definition_id=str(commitment.vehicle_definition_id),
+                display_name=self._vehicle_definition(commitment.vehicle_definition_id).display_name,
+                quantity=commitment.quantity,
+                operational_node_id=None if commitment.operational_node_id is None else str(commitment.operational_node_id),
+                movement_execution_id=None if commitment.movement_execution_id is None else str(commitment.movement_execution_id),
+            ))
         return tuple(rows)
 
     def _fleet_relocation_rows(
@@ -76,16 +104,16 @@ class LogisticsStateProjectorMixin:
             FleetRelocationRow(
                 str(row.id), str(row.vehicle_definition_id),
                 self._vehicle_definition(row.vehicle_definition_id).display_name,
-                row.units, str(row.source_id), str(row.destination_id),
+                row.requested_units, str(row.source_id), str(row.destination_id),
                 (
                     None
                     if row.movement_execution_id is None
-                    else sim.transport.movement_executions[row.movement_execution_id].started_day
+                    else sim.transport.movement_execution_snapshot(row.movement_execution_id).started_day
                 ),
                 (
                     None
                     if row.movement_execution_id is None
-                    else sim.transport.movement_executions[row.movement_execution_id].completion_day
+                    else sim.transport.movement_execution_snapshot(row.movement_execution_id).completion_day
                 ),
             )
             for row in sim.transport.fleet_relocation_snapshots()
@@ -104,21 +132,26 @@ class LogisticsStateProjectorMixin:
         vehicle_definition_id: str | None = None,
     ) -> tuple[FleetReleaseRow, ...]:
         sim = self._simulation
-        return tuple(
-            FleetReleaseRow(
+        rows: list[FleetReleaseRow] = []
+        for row in sim.transport.fleet_release_snapshots():
+            commitment = sim.transport.fleet_commitment_snapshot(row.fleet_commitment_id)
+            if commitment is None or commitment.operational_node_id is None:
+                raise RuntimeError(f"Fleet release projection missing commitment: {row.id}")
+            if location_id is not None and str(commitment.operational_node_id) != location_id:
+                continue
+            if vehicle_definition_id is not None and str(commitment.vehicle_definition_id) != vehicle_definition_id:
+                continue
+            rows.append(FleetReleaseRow(
                 str(row.id),
                 str(row.allocation_id),
-                str(row.vehicle_definition_id),
-                self._vehicle_definition(row.vehicle_definition_id).display_name,
-                str(row.operational_node_id),
-                row.units,
+                str(commitment.vehicle_definition_id),
+                self._vehicle_definition(commitment.vehicle_definition_id).display_name,
+                str(commitment.operational_node_id),
+                commitment.quantity,
                 row.release_day,
                 max(0, row.release_day - sim.day),
-            )
-            for row in sim.transport.fleet_release_snapshots()
-            if (location_id is None or str(row.operational_node_id) == location_id)
-            and (vehicle_definition_id is None or str(row.vehicle_definition_id) == vehicle_definition_id)
-        )
+            ))
+        return tuple(rows)
 
     def _transport_allocation_rows(self) -> tuple[TransportAllocationRow, ...]:
         sim = self._simulation
@@ -290,14 +323,14 @@ class LogisticsStateProjectorMixin:
                 vehicle_definition_id=str(state.vehicle_definition_id),
                 display_name=definition.display_name,
                 operational_node_id=str(state.operational_node_id),
-                units=state.units,
+                units=state.requested_units,
                 phase=state.phase.value,
                 irreversible_started=state.irreversible_started,
                 progress_work=state.progress_work,
-                required_work=definition.retirement.work_days_per_unit * state.units,
+                required_work=definition.retirement.work_days_per_unit * state.requested_units,
                 priority=state.priority,
                 expected_salvage=tuple(
-                    (str(resource_id), amount * state.units)
+                    (str(resource_id), amount * state.requested_units)
                     for resource_id, amount in definition.retirement.recovery_resources_per_unit
                 ),
                 blockers=sim.transport.fleet_retirement_blockers(state.id, day=sim.day),
@@ -307,6 +340,10 @@ class LogisticsStateProjectorMixin:
     def _fleet_view(self, query) -> FleetView:
         return FleetView(
             self._fleet_pool_rows(
+                location_id=query.operational_node_id,
+                vehicle_definition_id=query.vehicle_definition_id,
+            ),
+            self._fleet_commitment_rows(
                 location_id=query.operational_node_id,
                 vehicle_definition_id=query.vehicle_definition_id,
             ),

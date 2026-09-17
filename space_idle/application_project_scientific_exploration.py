@@ -24,7 +24,7 @@ class ScientificExplorationProjectorMixin:
                 progress_days = 0.0
                 awarded = 0.0
                 assigned_vehicle_definition_id = None
-                reserved_units = 0
+                committed_units = 0
                 blockers: tuple[str, ...] = ()
                 priority = 3
                 can_set_priority = False
@@ -36,7 +36,11 @@ class ScientificExplorationProjectorMixin:
                 assigned_vehicle_definition_id = (
                     None if state.vehicle_definition_id is None else str(state.vehicle_definition_id)
                 )
-                reserved_units = state.reserved_units
+                commitment = (
+                    None if state.fleet_commitment_id is None
+                    else sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
+                )
+                committed_units = 0 if commitment is None else commitment.quantity
                 priority = state.priority
                 can_set_priority = state.phase.value != "complete"
                 blockers = service.blockers(
@@ -187,7 +191,7 @@ class ScientificExplorationProjectorMixin:
                     minimum_payload_t=definition.minimum_payload_t,
                     required_vehicle_capabilities=definition.required_vehicle_capabilities,
                     assigned_vehicle_definition_id=assigned_vehicle_definition_id,
-                    reserved_units=reserved_units,
+                    committed_units=committed_units,
                     blockers=blockers,
                     can_start=service.can_start(definition.id),
                     can_pause=service.can_pause(definition.id),

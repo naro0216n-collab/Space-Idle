@@ -16,7 +16,7 @@ from .execution_requirements import (
 from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
-from .transport.models import FleetReservationKind, MovementExecutionKind, PathPolicy
+from .transport.models import FleetActivityRef, MovementExecutionKind, PathPolicy
 
 if TYPE_CHECKING:
     from .transport.service import TransportService
@@ -74,7 +74,7 @@ class ScientificExplorationState:
     definition_id: DefinitionId
     phase: ScientificExplorationPhase = ScientificExplorationPhase.AWAITING_FLEET
     vehicle_definition_id: DefinitionId | None = None
-    reserved_units: int = 0
+    fleet_commitment_id: EntityId | None = None
     progress_days: float = 0.0
     research_points_awarded: float = 0.0
     inputs_consumed: bool = False
@@ -323,17 +323,16 @@ class ScientificExplorationService:
                 + "; ".join(failures)
             )
         definition = self.definitions[definition_id]
-        reservation_id = EntityId(f"scientific_exploration:{definition_id}")
-        self.transport.reserve_fleet_units(
-            reservation_id,
-            reservation_id,
-            FleetReservationKind.SCIENTIFIC_EXPLORATION,
+        commitment_id = EntityId(f"fleet.commitment.scientific_exploration:{definition_id}")
+        self.transport.commit_fleet_units(
+            commitment_id,
+            FleetActivityRef("scientific_exploration", EntityId(str(definition_id))),
             vehicle_definition_id,
             definition.origin_id,
             definition.required_units,
         )
         state.vehicle_definition_id = vehicle_definition_id
-        state.reserved_units = definition.required_units
+        state.fleet_commitment_id = commitment_id
         state.phase = ScientificExplorationPhase.PREPARING
 
     def unassign_fleet(self, definition_id: DefinitionId, *, day: int = 0) -> None:
@@ -345,10 +344,12 @@ class ScientificExplorationService:
         if not self.can_unassign_fleet(definition_id):
             raise ValueError("started scientific exploration cannot release its Fleet")
         self.inventory.release_reservation(self._input_reservation_owner_id(definition_id))
-        reservation_id = EntityId(f"scientific_exploration:{definition_id}")
-        self.transport.release_fleet_reservation(reservation_id, day=day)
+        commitment_id = state.fleet_commitment_id
+        if commitment_id is None:
+            raise RuntimeError("scientific exploration Fleet assignment lacks commitment")
+        self.transport.release_fleet_commitment(commitment_id, day=day)
         state.vehicle_definition_id = None
-        state.reserved_units = 0
+        state.fleet_commitment_id = None
         state.phase = ScientificExplorationPhase.AWAITING_FLEET
 
     @staticmethod
@@ -740,27 +741,28 @@ class ScientificExplorationService:
     ) -> None:
         assert state.vehicle_definition_id is not None
         plans = self.movement_path(definition, state.vehicle_definition_id, day)
-        reservation_id = EntityId(f"scientific_exploration:{definition.id}")
+        commitment_id = state.fleet_commitment_id
+        if commitment_id is None:
+            raise RuntimeError("scientific exploration Fleet assignment lacks commitment")
         execution = self.transport.start_movement_execution_for_path(
             self._movement_execution_id(definition.id),
-            reservation_id,
+            EntityId(str(definition.id)),
             MovementExecutionKind.SCIENTIFIC_EXPLORATION,
-            state.vehicle_definition_id,
-            definition.required_units,
+            commitment_id,
             tuple(plan.id for plan in plans),
             payload_t_per_unit=definition.minimum_payload_t,
             day=day,
         )
         try:
-            dispatched = self.transport.dispatch_fleet_reservation(
-                reservation_id, day=day
+            dispatched = self.transport.dispatch_fleet_commitment(
+                commitment_id, execution.id, day=day
             )
         except Exception:
             self.transport.finish_movement_execution(execution.id)
             raise
         if (
             dispatched.vehicle_definition_id != state.vehicle_definition_id
-            or dispatched.units != definition.required_units
+            or dispatched.quantity != definition.required_units
             or dispatched.operational_node_id != definition.origin_id
         ):
             self.transport.finish_movement_execution(execution.id)
@@ -778,27 +780,28 @@ class ScientificExplorationService:
         plans = self.movement_path(
             definition, state.vehicle_definition_id, day, reverse=True
         )
-        reservation_id = EntityId(f"scientific_exploration:{definition.id}")
+        commitment_id = state.fleet_commitment_id
+        if commitment_id is None:
+            raise RuntimeError("scientific exploration Fleet assignment lacks commitment")
         execution = self.transport.start_movement_execution_for_path(
             self._movement_execution_id(definition.id, returning=True),
-            reservation_id,
+            EntityId(str(definition.id)),
             MovementExecutionKind.SCIENTIFIC_EXPLORATION,
-            state.vehicle_definition_id,
-            definition.required_units,
+            commitment_id,
             tuple(plan.id for plan in plans),
             payload_t_per_unit=definition.minimum_payload_t,
             day=day,
         )
         try:
-            dispatched = self.transport.dispatch_fleet_reservation(
-                reservation_id, day=day
+            dispatched = self.transport.dispatch_fleet_commitment(
+                commitment_id, execution.id, day=day
             )
         except Exception:
             self.transport.finish_movement_execution(execution.id)
             raise
         if (
             dispatched.vehicle_definition_id != state.vehicle_definition_id
-            or dispatched.units != definition.required_units
+            or dispatched.quantity != definition.required_units
             or dispatched.operational_node_id != definition.destination_id
         ):
             self.transport.finish_movement_execution(execution.id)
@@ -816,38 +819,36 @@ class ScientificExplorationService:
             execution_id = state.movement_execution_id
             if execution_id is None:
                 raise RuntimeError(f"scientific exploration movement state lacks execution: {definition_id}")
-            execution = self.transport.movement_executions.get(execution_id)
+            execution = self.transport.movement_execution_snapshot(execution_id)
             if execution is None:
                 raise RuntimeError(f"scientific exploration MovementExecution missing: {definition_id}")
             if execution.completion_day > day:
                 continue
             definition = self.definitions[definition_id]
-            reservation_id = EntityId(f"scientific_exploration:{definition_id}")
+            commitment_id = state.fleet_commitment_id
+            if commitment_id is None:
+                raise RuntimeError("scientific exploration Movement lacks Fleet commitment")
             if state.phase is ScientificExplorationPhase.OUTBOUND:
-                assert state.vehicle_definition_id is not None
-                self.transport.receive_reserved_fleet_units(
-                    reservation_id,
-                    reservation_id,
-                    FleetReservationKind.SCIENTIFIC_EXPLORATION,
-                    state.vehicle_definition_id,
+                self.transport.receive_fleet_commitment(
+                    commitment_id,
                     definition.destination_id,
-                    definition.required_units,
+                    execution_id=execution_id,
                     day=day,
                 )
                 self.transport.finish_movement_execution(execution_id)
                 state.movement_execution_id = None
                 state.phase = ScientificExplorationPhase.ACTIVE
             else:
-                assert state.vehicle_definition_id is not None
-                self.transport.add_fleet_units(
-                    state.vehicle_definition_id,
-                    definition.required_units,
+                self.transport.receive_fleet_commitment(
+                    commitment_id,
                     definition.origin_id,
+                    execution_id=execution_id,
                     day=day,
                 )
                 self.transport.finish_movement_execution(execution_id)
                 state.movement_execution_id = None
-                state.reserved_units = 0
+                self.transport.release_fleet_commitment(commitment_id, day=day)
+                state.fleet_commitment_id = None
                 state.phase = ScientificExplorationPhase.COMPLETE
 
     def advance_day(
@@ -946,7 +947,9 @@ class ScientificExplorationService:
         state: ScientificExplorationState,
         day: int,
     ) -> None:
-        reservation_id = EntityId(f"scientific_exploration:{definition.id}")
-        self.transport.release_fleet_reservation(reservation_id, day=day)
-        state.reserved_units = 0
+        commitment_id = state.fleet_commitment_id
+        if commitment_id is None:
+            raise RuntimeError("scientific exploration completion lacks Fleet commitment")
+        self.transport.release_fleet_commitment(commitment_id, day=day)
+        state.fleet_commitment_id = None
         state.phase = ScientificExplorationPhase.COMPLETE

@@ -12,15 +12,15 @@ from ..execution_requirements import (
 from ..priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from ..shared import DefinitionId, EntityId, SpatialNodeId
 from ..site import evaluate_site_requirements
-from .models import FleetReservation, FleetReservationKind, FleetRetirementPhase, FleetRetirementState
+from .models import FleetActivityRef, FleetRetirementPhase, FleetRetirementState
 
 _EPS = 1e-9
 
 
 class FleetRetirementMixin:
     @staticmethod
-    def _retirement_reservation_id(retirement_id: EntityId) -> EntityId:
-        return EntityId(f"fleet.retirement:{retirement_id}")
+    def _retirement_commitment_id(retirement_id: EntityId) -> EntityId:
+        return EntityId(f"fleet.commitment.retirement:{retirement_id}")
 
     @staticmethod
     def _retirement_bundle_id(retirement_id: EntityId) -> EntityId:
@@ -62,34 +62,34 @@ class FleetRetirementMixin:
             raise ValueError("retirement requires free Fleet units")
         self._fleet_retirement_counter += 1
         retirement_id = EntityId(f"fleet_retirement:{self._fleet_retirement_counter}")
-        state = FleetRetirementState(
-            id=retirement_id,
-            vehicle_definition_id=vehicle_definition_id,
-            operational_node_id=operational_node_id,
-            units=units,
-            priority=ActivityPriority(priority),
-            created_day=day,
-        )
-        self.fleet_retirements[retirement_id] = state
-        reservation_id = self._retirement_reservation_id(retirement_id)
-        self.fleet_reservations[reservation_id] = FleetReservation(
-            reservation_id,
-            retirement_id,
-            FleetReservationKind.RETIREMENT,
+        commitment_id = self._retirement_commitment_id(retirement_id)
+        self.commit_fleet_units(
+            commitment_id,
+            FleetActivityRef("fleet_retirement", retirement_id),
             vehicle_definition_id,
             operational_node_id,
             units,
         )
+        state = FleetRetirementState(
+            id=retirement_id,
+            vehicle_definition_id=vehicle_definition_id,
+            operational_node_id=operational_node_id,
+            requested_units=units,
+            fleet_commitment_id=commitment_id,
+            priority=ActivityPriority(priority),
+            created_day=day,
+        )
+        self.fleet_retirements[retirement_id] = state
         return retirement_id
 
-    def cancel_fleet_retirement(self, retirement_id: EntityId) -> None:
+    def cancel_fleet_retirement(self, retirement_id: EntityId, *, day: int = 0) -> None:
         state = self.fleet_retirements[retirement_id]
         if state.irreversible_started:
             raise ValueError("fleet retirement cannot be cancelled after dismantling starts")
         if state.phase in {FleetRetirementPhase.COMPLETE, FleetRetirementPhase.CANCELLED}:
             raise ValueError("fleet retirement is no longer active")
+        self.release_fleet_commitment(state.fleet_commitment_id, day=day)
         state.phase = FleetRetirementPhase.CANCELLED
-        self.fleet_reservations.pop(self._retirement_reservation_id(retirement_id), None)
 
     def set_fleet_retirement_priority(
         self, retirement_id: EntityId, priority: ActivityPriority
@@ -104,14 +104,14 @@ class FleetRetirementMixin:
 
     def _retirement_total_work(self, state: FleetRetirementState) -> float:
         definition = self.vehicle_defs[state.vehicle_definition_id]
-        return definition.retirement.work_days_per_unit * state.units
+        return definition.retirement.work_days_per_unit * state.requested_units
 
     def _retirement_salvage(self, state: FleetRetirementState) -> tuple[tuple[DefinitionId, float], ...]:
         definition = self.vehicle_defs[state.vehicle_definition_id]
         return tuple(
-            (resource_id, amount_per_unit * state.units)
+            (resource_id, amount_per_unit * state.requested_units)
             for resource_id, amount_per_unit in definition.retirement.recovery_resources_per_unit
-            if amount_per_unit * state.units > _EPS
+            if amount_per_unit * state.requested_units > _EPS
         )
 
     def fleet_retirement_blockers(self, retirement_id: EntityId, *, day: int = 0) -> tuple[str, ...]:
@@ -142,7 +142,7 @@ class FleetRetirementMixin:
                     blockers.append(f"service:{spec.service_type}")
             fraction_remaining = remaining_work / total_work
             for resource_id, amount_per_unit in spec.resources_per_unit:
-                required = amount_per_unit * state.units * fraction_remaining
+                required = amount_per_unit * state.requested_units * fraction_remaining
                 if required > self.inventory.available(state.operational_node_id, resource_id) + _EPS:
                     blockers.append(f"resource:{resource_id}")
             return tuple(blockers)
@@ -184,9 +184,9 @@ class FleetRetirementMixin:
                 if spec.service_type is not None:
                     requirements.append(ServiceCapacityRequirement(spec.service_type, remaining_work))
                 requirements.extend(
-                    ResourceRequirement(resource_id, amount_per_unit * state.units * fraction_remaining)
+                    ResourceRequirement(resource_id, amount_per_unit * state.requested_units * fraction_remaining)
                     for resource_id, amount_per_unit in spec.resources_per_unit
-                    if amount_per_unit * state.units * fraction_remaining > _EPS
+                    if amount_per_unit * state.requested_units * fraction_remaining > _EPS
                 )
                 rows.append(ExecutionRequirementBundle(
                     id=self._retirement_bundle_id(state.id),
@@ -247,7 +247,7 @@ class FleetRetirementMixin:
                     state.phase = FleetRetirementPhase.DISMANTLING
                 fraction_remaining = remaining_work / total_work
                 for resource_id, amount_per_unit in spec.resources_per_unit:
-                    amount = amount_per_unit * state.units * fraction_remaining * factor
+                    amount = amount_per_unit * state.requested_units * fraction_remaining * factor
                     if amount > _EPS:
                         self.inventory.consume_allocated(state.operational_node_id, resource_id, amount)
                 state.progress_work = min(total_work, state.progress_work + remaining_work * factor)
@@ -262,11 +262,7 @@ class FleetRetirementMixin:
             if factor < 1.0 - _EPS:
                 continue
             salvage = self._retirement_salvage(state)
-            pool = self.fleet_pools[(state.vehicle_definition_id, state.operational_node_id)]
-            if pool.total_units < state.units:
-                raise RuntimeError("retirement would make Fleet total negative")
             for resource_id, amount_t in salvage:
                 self.inventory.admit(state.operational_node_id, resource_id, amount_t)
-            pool.total_units -= state.units
-            self.fleet_reservations.pop(self._retirement_reservation_id(state.id), None)
+            self.consume_fleet_commitment(state.fleet_commitment_id, day=day)
             state.phase = FleetRetirementPhase.COMPLETE

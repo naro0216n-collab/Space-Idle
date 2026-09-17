@@ -136,7 +136,7 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performan
     ))
     assigned = _row(app)
     assert assigned.assigned_vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
-    assert assigned.reserved_units == required_units
+    assert assigned.committed_units == required_units
     assert assigned.can_unassign is True
     fleet = _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
     assert fleet.exploration_units == required_units
@@ -197,7 +197,7 @@ def test_scientific_exploration_fleet_contract_checks_usable_payload_and_generic
     assert row.required_vehicle_capabilities == ("docking",)
 
 
-def test_exploration_reservation_excludes_transport_and_release_refills_target():
+def test_exploration_commitment_excludes_transport_and_release_refills_target():
     app = build_game_application()
     app.execute(StartScientificExploration(str(ids.CISLUNAR_SCIENCE_EXPLORATION)))
     app.execute(AssignExplorationFleet(
@@ -229,7 +229,7 @@ def test_exploration_reservation_excludes_transport_and_release_refills_target()
     assert allocation.unfilled_units == 0
 
 
-def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future_result(tmp_path):
+def test_scientific_exploration_save_load_preserves_fleet_commitment_and_future_result(tmp_path):
     app = build_game_application()
     _seed_exploration_movement_resources(app)
     app.execute(StartScientificExploration(str(ids.CISLUNAR_SCIENCE_EXPLORATION)))
@@ -256,7 +256,11 @@ def test_scientific_exploration_save_load_preserves_fleet_reservation_and_future
     loaded_campaign = loaded._simulation.scientific_exploration.campaigns[
         ids.CISLUNAR_SCIENCE_EXPLORATION
     ]
-    assert loaded_campaign.reserved_units == _row(loaded).required_units
+    loaded_commitment = loaded._simulation.transport.fleet_commitment_snapshot(
+        loaded_campaign.fleet_commitment_id
+    )
+    assert loaded_commitment is not None
+    assert loaded_commitment.quantity == _row(loaded).required_units
     assert loaded_campaign.movement_execution_id in loaded._simulation.transport.movement_executions
 
     _advance_outbound_campaign_to_completion(app, ids.CISLUNAR_SCIENCE_EXPLORATION)
@@ -399,7 +403,9 @@ def test_started_exploration_movement_keeps_frozen_latency_after_vehicle_definit
     app.execute(AdvanceTime(frozen_completion - sim.day))
     assert state.phase.value == "active"
     assert state.movement_execution_id is None
-    assert _fleet_row(app, vehicle_id, ids.LUNAR_ORBIT).exploration_units == state.reserved_units
+    commitment = sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
+    assert commitment is not None
+    assert _fleet_row(app, vehicle_id, ids.LUNAR_ORBIT).exploration_units == commitment.quantity
 
 
 def test_partial_exploration_inputs_are_reserved_and_unassign_releases_them():

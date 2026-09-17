@@ -5,7 +5,7 @@ from typing import Any
 from .domain import DomainExtension, StateCodec
 from .founding import FoundingStatus, LocationFoundingProject
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
-from .transport.models import FleetReservationKind, MovementExecutionKind
+from .transport.models import FleetActivityRef, MovementExecutionKind
 from .validation_support import ValidationContext, require as _require, validate_site_requirements
 
 
@@ -27,6 +27,7 @@ def capture_founding(sim: Any) -> dict[str, Any]:
                 "vehicle_definition_id": str(p.vehicle_definition_id),
                 "priority": p.priority,
                 "preferred_source_id": None if p.preferred_source_id is None else str(p.preferred_source_id),
+                "fleet_commitment_id": None if p.fleet_commitment_id is None else str(p.fleet_commitment_id),
                 "status": p.status.value,
                 "preparation_done": p.preparation_done,
                 "inputs_consumed": p.inputs_consumed,
@@ -57,6 +58,7 @@ def restore_founding(sim: Any, data: dict[str, Any]) -> None:
             vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
             priority=row["priority"],
             preferred_source_id=None if row.get("preferred_source_id") is None else SpatialNodeId(row["preferred_source_id"]),
+            fleet_commitment_id=None if row.get("fleet_commitment_id") is None else EntityId(row["fleet_commitment_id"]),
             status=FoundingStatus(row.get("status", FoundingStatus.PREPARING.value)),
             preparation_done=float(row.get("preparation_done", 0.0)),
             inputs_consumed=bool(row.get("inputs_consumed", False)),
@@ -106,7 +108,6 @@ def validate_runtime(sim: Any) -> None:
         package = service.packages.get(p.founding_package_id)
         if package is not None:
             _require(-1e-9 <= p.preparation_done <= package.preparation_work + 1e-9, f"founding preparation out of range: {project_id}")
-        reservation_id = service.fleet_reservation_id(project_id)
         payload_owner_id = service.payload_owner_id(project_id)
         if package is not None:
             required = service.project_resource_requirements(project_id)
@@ -135,7 +136,7 @@ def validate_runtime(sim: Any) -> None:
                     f"founding payload completion flag mismatch: {project_id}",
                 )
         active = p.status in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}
-        reservation = sim.transport.fleet_reservation_snapshot(reservation_id)
+        commitment = None if p.fleet_commitment_id is None else sim.transport.fleet_commitment_snapshot(p.fleet_commitment_id)
         if active:
             _require(p.target_core_cell_id not in active_cells, f"duplicate active founding cell: {p.target_core_cell_id}")
             _require(p.new_location_id not in active_locations, f"duplicate active founding location id: {p.new_location_id}")
@@ -143,30 +144,38 @@ def validate_runtime(sim: Any) -> None:
             active_locations.add(p.new_location_id)
             _require(p.new_location_id not in sim.graph.locations, f"active founding location already exists: {project_id}")
         if p.status is FoundingStatus.PREPARING:
-            _require(reservation is not None, f"preparing founding missing fleet reservation: {project_id}")
-            if reservation is not None and package is not None:
-                _require(reservation.kind is FleetReservationKind.SPECIAL_MISSION, f"founding reservation kind mismatch: {project_id}")
-                _require(reservation.vehicle_definition_id == p.vehicle_definition_id, f"founding reservation vehicle mismatch: {project_id}")
-                _require(reservation.operational_node_id == p.staging_node_id, f"founding reservation staging mismatch: {project_id}")
-                _require(reservation.units == package.required_units, f"founding reservation units mismatch: {project_id}")
+            _require(commitment is not None, f"preparing founding missing Fleet commitment: {project_id}")
+            if commitment is not None and package is not None:
+                _require(commitment.owner_activity_ref == FleetActivityRef("founding", EntityId(str(project_id))), f"founding Fleet commitment owner mismatch: {project_id}")
+                _require(commitment.vehicle_definition_id == p.vehicle_definition_id, f"founding Fleet commitment vehicle mismatch: {project_id}")
+                _require(commitment.operational_node_id == p.staging_node_id, f"founding Fleet commitment staging mismatch: {project_id}")
+                _require(commitment.quantity == package.required_units, f"founding Fleet commitment units mismatch: {project_id}")
+                _require(commitment.movement_execution_id is None, f"preparing founding Fleet commitment is moving: {project_id}")
+        elif p.status is FoundingStatus.DEPLOYING:
+            _require(commitment is not None, f"deploying founding missing Fleet commitment: {project_id}")
+            if commitment is not None and package is not None:
+                _require(commitment.owner_activity_ref == FleetActivityRef("founding", EntityId(str(project_id))), f"founding Fleet commitment owner mismatch: {project_id}")
+                _require(commitment.vehicle_definition_id == p.vehicle_definition_id, f"founding Fleet commitment vehicle mismatch: {project_id}")
+                _require(commitment.quantity == package.required_units, f"founding Fleet commitment units mismatch: {project_id}")
+                _require(commitment.movement_execution_id == p.movement_execution_id, f"founding Fleet commitment movement mismatch: {project_id}")
         else:
-            _require(reservation is None, f"non-preparing founding retains fleet reservation: {project_id}")
+            _require(p.fleet_commitment_id is None, f"inactive founding retains Fleet commitment reference: {project_id}")
+            _require(commitment is None, f"inactive founding retains Fleet commitment: {project_id}")
         if p.status is FoundingStatus.PREPARING:
             _require(p.movement_execution_id is None, f"preparing founding has MovementExecution: {project_id}")
         elif p.status is FoundingStatus.DEPLOYING:
             _require(p.movement_execution_id is not None, f"deploying founding lacks MovementExecution: {project_id}")
             _require(not p.paused, f"deploying founding cannot be paused: {project_id}")
             if p.movement_execution_id is not None:
-                execution = sim.transport.movement_executions.get(p.movement_execution_id)
+                execution = sim.transport.movement_execution_snapshot(p.movement_execution_id)
                 _require(execution is not None, f"deploying founding MovementExecution missing: {project_id}")
                 if execution is not None:
                     _require(execution.kind is MovementExecutionKind.FOUNDING_DEPLOYMENT, f"founding MovementExecution kind mismatch: {project_id}")
                     _require(execution.owner_id == EntityId(str(project_id)), f"founding MovementExecution owner mismatch: {project_id}")
-                    _require(execution.vehicle_definition_id == p.vehicle_definition_id, f"founding MovementExecution vehicle mismatch: {project_id}")
+                    _require(execution.fleet_commitment_id == p.fleet_commitment_id, f"founding MovementExecution Fleet commitment mismatch: {project_id}")
                     _require(execution.origin.operational_node_id == p.staging_node_id, f"founding MovementExecution origin mismatch: {project_id}")
                     _require(execution.destination.physical_target_cell_id == p.target_core_cell_id, f"founding MovementExecution target mismatch: {project_id}")
                     if package is not None:
-                        _require(execution.units == package.required_units, f"founding MovementExecution unit mismatch: {project_id}")
                         _require(abs(execution.payload_t_per_unit - package.payload_t_per_unit) <= 1e-9, f"founding MovementExecution payload mismatch: {project_id}")
                         expected_payload = {
                             req.resource_id: req.amount_t for req in package.payload_resources

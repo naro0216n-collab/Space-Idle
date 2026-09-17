@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from collections.abc import Callable
 
 from ..facilities import FacilityBook
 from ..facility_lifecycle import FacilityLifecycleBlocker
@@ -13,10 +14,11 @@ from .compatibility import TransportCompatibilityMixin
 from .fleet_allocations import FleetAllocationMixin
 from .executions import MovementExecutionMixin
 from .models import (
+    FleetActivityRef,
     FleetPool,
     FleetRelocation,
     FleetRelease,
-    FleetReservation,
+    FleetCommitmentState,
     MovementExecution,
     MovementPlan,
     TransportAllocation,
@@ -58,7 +60,7 @@ class TransportService(
     _movement_plan_cache: dict[MovementPlanId, MovementPlan] = field(default_factory=dict, repr=False)
     _movement_plan_options_cache: tuple[MovementPlan, ...] | None = field(default=None, repr=False)
     fleet_pools: dict[tuple[DefinitionId, SpatialNodeId], FleetPool] = field(default_factory=dict)
-    fleet_reservations: dict[EntityId, FleetReservation] = field(default_factory=dict)
+    fleet_commitments: dict[EntityId, FleetCommitmentState] = field(default_factory=dict)
     transport_allocations: dict[EntityId, TransportAllocation] = field(default_factory=dict)
     fleet_relocations: dict[EntityId, FleetRelocation] = field(default_factory=dict)
     movement_executions: dict[EntityId, MovementExecution] = field(default_factory=dict)
@@ -71,6 +73,39 @@ class TransportService(
     _fleet_release_counter: int = 0
     _vehicle_production_counter: int = 0
     _fleet_retirement_counter: int = 0
+    _fleet_commitment_owner_resolvers: dict[str, Callable[[EntityId], bool]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        # Fleet owns exclusivity, while each activity Domain remains authoritative
+        # for whether its owner State exists. Register existence resolvers instead
+        # of encoding a closed purpose enum in Fleet State.
+        self.register_fleet_commitment_owner_resolver(
+            "transport_allocation", lambda owner_id: owner_id in self.transport_allocations
+        )
+        self.register_fleet_commitment_owner_resolver(
+            "fleet_relocation", lambda owner_id: owner_id in self.fleet_relocations
+        )
+        self.register_fleet_commitment_owner_resolver(
+            "fleet_release", lambda owner_id: owner_id in self.fleet_releases
+        )
+        self.register_fleet_commitment_owner_resolver(
+            "fleet_retirement", lambda owner_id: owner_id in self.fleet_retirements
+        )
+
+    def register_fleet_commitment_owner_resolver(
+        self, activity_type: str, resolver: Callable[[EntityId], bool]
+    ) -> None:
+        if not activity_type:
+            raise ValueError("Fleet commitment owner activity type must be non-empty")
+        if activity_type in self._fleet_commitment_owner_resolvers:
+            raise ValueError(f"Fleet commitment owner resolver already registered: {activity_type}")
+        self._fleet_commitment_owner_resolvers[activity_type] = resolver
+
+    def fleet_commitment_owner_exists(self, owner: FleetActivityRef) -> bool:
+        resolver = self._fleet_commitment_owner_resolvers.get(owner.activity_type)
+        return False if resolver is None else bool(resolver(owner.activity_id))
 
     @property
     def unlocked_technologies(self) -> set[DefinitionId]:

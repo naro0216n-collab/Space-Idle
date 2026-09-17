@@ -39,10 +39,12 @@ def test_domain_authoritative_state_is_not_read_directly_across_domain_boundarie
         "transport": {
             "vehicle_defs",
             "fleet_pools",
-            "fleet_reservations",
+            "fleet_commitments",
             "transport_allocations",
             "fleet_relocations",
+            "movement_executions",
             "fleet_releases",
+            "fleet_retirements",
             "vehicle_production_projects",
         },
         "logistics": {

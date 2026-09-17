@@ -18,9 +18,9 @@ from .models import (
     FleetRelocationResourceRequirement,
     MovementExecutionKind,
     FleetRelease,
-    FleetReservation,
-    FleetReservationKind,
-    FleetReservationSnapshot,
+    FleetActivityRef,
+    FleetCommitmentSnapshot,
+    FleetCommitmentState,
     OperationAssetDisposition,
     OperationSupportLocation,
     PathPolicy,
@@ -102,62 +102,28 @@ class FleetAllocationMixin:
         self.reconcile_fleet_allocations(day)
 
     @staticmethod
-    def _transport_reservation_id(allocation_id: EntityId) -> EntityId:
-        return EntityId(f"fleet.transport:{allocation_id}")
+    def _transport_commitment_id(allocation_id: EntityId) -> EntityId:
+        return EntityId(f"fleet.commitment.transport:{allocation_id}")
 
     def transport_active_units(self, allocation_id: EntityId) -> int:
-        reservation = self.fleet_reservations.get(
-            self._transport_reservation_id(allocation_id)
+        commitment = self.fleet_commitments.get(
+            self._transport_commitment_id(allocation_id)
         )
-        if reservation is None:
+        if commitment is None:
             return 0
-        if (
-            reservation.kind is not FleetReservationKind.TRANSPORT
-            or reservation.owner_id != allocation_id
-        ):
-            raise RuntimeError(f"invalid transport fleet reservation: {allocation_id}")
-        return reservation.units
+        expected_owner = FleetActivityRef("transport_allocation", allocation_id)
+        if commitment.owner_activity_ref != expected_owner:
+            raise RuntimeError(f"invalid transport Fleet commitment: {allocation_id}")
+        return commitment.quantity
 
-    def _allocation_units_at(
+    def _commitment_units_at(
         self, vehicle_definition_id: DefinitionId, location_id: SpatialNodeId
     ) -> int:
         return sum(
-            reservation.units
-            for reservation in self.fleet_reservations.values()
-            if reservation.kind is FleetReservationKind.TRANSPORT
-            and reservation.vehicle_definition_id == vehicle_definition_id
-            and reservation.operational_node_id == location_id
-        )
-
-    def _reserved_units_at(
-        self, vehicle_definition_id: DefinitionId, location_id: SpatialNodeId
-    ) -> int:
-        return sum(
-            reservation.units
-            for reservation in self.fleet_reservations.values()
-            if reservation.vehicle_definition_id == vehicle_definition_id
-            and reservation.operational_node_id == location_id
-        )
-
-    def _relocating_units_from(
-        self, vehicle_definition_id: DefinitionId, location_id: SpatialNodeId
-    ) -> int:
-        return sum(
-            relocation.units
-            for relocation in self.fleet_relocations.values()
-            if relocation.vehicle_definition_id == vehicle_definition_id
-            and relocation.source_id == location_id
-            and not relocation.started
-        )
-
-    def _releasing_units_at(
-        self, vehicle_definition_id: DefinitionId, location_id: SpatialNodeId
-    ) -> int:
-        return sum(
-            release.units
-            for release in self.fleet_releases.values()
-            if release.vehicle_definition_id == vehicle_definition_id
-            and release.operational_node_id == location_id
+            commitment.quantity
+            for commitment in self.fleet_commitments.values()
+            if commitment.vehicle_definition_id == vehicle_definition_id
+            and commitment.operational_node_id == location_id
         )
 
     def fleet_free_units(
@@ -165,11 +131,7 @@ class FleetAllocationMixin:
     ) -> int:
         pool = self.fleet_pools.get(self._pool_key(vehicle_definition_id, location_id))
         total_units = 0 if pool is None else pool.total_units
-        committed = (
-            self._reserved_units_at(vehicle_definition_id, location_id)
-            + self._relocating_units_from(vehicle_definition_id, location_id)
-            + self._releasing_units_at(vehicle_definition_id, location_id)
-        )
+        committed = self._commitment_units_at(vehicle_definition_id, location_id)
         free = total_units - committed
         if free < 0:
             raise RuntimeError(
@@ -178,33 +140,33 @@ class FleetAllocationMixin:
             )
         return free
 
-    def fleet_reservation_snapshot(
-        self, reservation_id: EntityId
-    ) -> FleetReservationSnapshot | None:
-        reservation = self.fleet_reservations.get(reservation_id)
-        if reservation is None:
+    def fleet_commitment_snapshot(
+        self, commitment_id: EntityId
+    ) -> FleetCommitmentSnapshot | None:
+        commitment = self.fleet_commitments.get(commitment_id)
+        if commitment is None:
             return None
-        return FleetReservationSnapshot(
-            reservation.id,
-            reservation.owner_id,
-            reservation.kind,
-            reservation.vehicle_definition_id,
-            reservation.operational_node_id,
-            reservation.units,
+        return FleetCommitmentSnapshot(
+            commitment.id,
+            commitment.owner_activity_ref,
+            commitment.vehicle_definition_id,
+            commitment.quantity,
+            commitment.operational_node_id,
+            commitment.movement_execution_id,
         )
 
-    def fleet_reservation_snapshots(self) -> tuple[FleetReservationSnapshot, ...]:
+    def fleet_commitment_snapshots(self) -> tuple[FleetCommitmentSnapshot, ...]:
         return tuple(
-            FleetReservationSnapshot(
-                reservation.id,
-                reservation.owner_id,
-                reservation.kind,
-                reservation.vehicle_definition_id,
-                reservation.operational_node_id,
-                reservation.units,
+            FleetCommitmentSnapshot(
+                commitment.id,
+                commitment.owner_activity_ref,
+                commitment.vehicle_definition_id,
+                commitment.quantity,
+                commitment.operational_node_id,
+                commitment.movement_execution_id,
             )
-            for reservation in sorted(
-                self.fleet_reservations.values(), key=lambda row: str(row.id)
+            for commitment in sorted(
+                self.fleet_commitments.values(), key=lambda row: str(row.id)
             )
         )
 
@@ -213,30 +175,38 @@ class FleetAllocationMixin:
     ) -> FleetPoolSnapshot:
         pool = self.fleet_pools.get(self._pool_key(vehicle_definition_id, location_id))
         total_units = 0 if pool is None else pool.total_units
-        transport_units = self._allocation_units_at(vehicle_definition_id, location_id)
-        exploration_units = sum(
-            reservation.units
-            for reservation in self.fleet_reservations.values()
-            if reservation.vehicle_definition_id == vehicle_definition_id
-            and reservation.operational_node_id == location_id
-            and reservation.kind is FleetReservationKind.SCIENTIFIC_EXPLORATION
+        by_type: dict[str, int] = {}
+        for commitment in self.fleet_commitments.values():
+            if (
+                commitment.vehicle_definition_id != vehicle_definition_id
+                or commitment.operational_node_id != location_id
+            ):
+                continue
+            activity_type = commitment.owner_activity_ref.activity_type
+            by_type[activity_type] = by_type.get(activity_type, 0) + commitment.quantity
+        transport_units = by_type.get("transport_allocation", 0)
+        exploration_units = by_type.get("scientific_exploration", 0)
+        retirement_units = by_type.get("fleet_retirement", 0)
+        relocating_units = by_type.get("fleet_relocation", 0)
+        releasing_units = by_type.get("fleet_release", 0)
+        categorized = (
+            transport_units
+            + exploration_units
+            + retirement_units
+            + relocating_units
+            + releasing_units
         )
-        retirement_units = sum(
-            reservation.units
-            for reservation in self.fleet_reservations.values()
-            if reservation.vehicle_definition_id == vehicle_definition_id
-            and reservation.operational_node_id == location_id
-            and reservation.kind is FleetReservationKind.RETIREMENT
-        )
-        reserved_units = self._reserved_units_at(vehicle_definition_id, location_id)
-        relocating_units = self._relocating_units_from(vehicle_definition_id, location_id)
-        releasing_units = self._releasing_units_at(vehicle_definition_id, location_id)
         return FleetPoolSnapshot(
-            vehicle_definition_id, location_id, total_units,
+            vehicle_definition_id,
+            location_id,
+            total_units,
             self.fleet_free_units(vehicle_definition_id, location_id),
-            transport_units, exploration_units, retirement_units,
-            max(0, reserved_units - transport_units - exploration_units - retirement_units),
-            relocating_units, releasing_units,
+            transport_units,
+            exploration_units,
+            retirement_units,
+            max(0, self._commitment_units_at(vehicle_definition_id, location_id) - categorized),
+            relocating_units,
+            releasing_units,
         )
 
     def fleet_campaign_failures(
@@ -282,131 +252,165 @@ class FleetAllocationMixin:
         failures.extend(definition.endurance_failures(float(travel_days) + max(0.0, activity_days)))
         return tuple(dict.fromkeys(failures))
 
-    def reserve_fleet_units(
+    def commit_fleet_units(
         self,
-        reservation_id: EntityId,
-        owner_id: EntityId,
-        kind: FleetReservationKind,
+        commitment_id: EntityId,
+        owner_activity_ref: FleetActivityRef,
         vehicle_definition_id: DefinitionId,
         location_id: SpatialNodeId,
-        units: int,
+        quantity: int,
     ) -> None:
-        if reservation_id in self.fleet_reservations:
-            raise ValueError(f"fleet reservation already exists: {reservation_id}")
-        if units <= 0:
-            raise ValueError("fleet reservation units must be positive")
-        if self.fleet_free_units(vehicle_definition_id, location_id) < units:
+        if commitment_id in self.fleet_commitments:
+            raise ValueError(f"fleet commitment already exists: {commitment_id}")
+        if quantity <= 0:
+            raise ValueError("fleet commitment quantity must be positive")
+        if self.fleet_free_units(vehicle_definition_id, location_id) < quantity:
             raise ValueError("insufficient free fleet units")
-        self.fleet_reservations[reservation_id] = FleetReservation(
-            reservation_id,
-            owner_id,
-            kind,
-            vehicle_definition_id,
-            location_id,
-            units,
+        self.fleet_commitments[commitment_id] = FleetCommitmentState(
+            id=commitment_id,
+            owner_activity_ref=owner_activity_ref,
+            vehicle_definition_id=vehicle_definition_id,
+            quantity=quantity,
+            operational_node_id=location_id,
         )
 
-    def resize_fleet_reservation(
-        self, reservation_id: EntityId, units: int
+    def resize_fleet_commitment(
+        self, commitment_id: EntityId, quantity: int
     ) -> None:
-        """Resize an existing exclusive Fleet commitment.
-
-        This is a Fleet-domain state transition. Callers may request a new
-        commitment size but never mutate Fleet reservation state directly.
-        """
-        reservation = self.fleet_reservations.get(reservation_id)
-        if reservation is None:
-            raise KeyError(reservation_id)
-        if units < 0:
-            raise ValueError("fleet reservation units must be non-negative")
-        if units == reservation.units:
+        commitment = self.fleet_commitments.get(commitment_id)
+        if commitment is None:
+            raise KeyError(commitment_id)
+        if commitment.operational_node_id is None:
+            raise ValueError("in-movement Fleet commitment cannot be resized")
+        if quantity < 0:
+            raise ValueError("fleet commitment quantity must be non-negative")
+        if quantity == commitment.quantity:
             return
-        if units == 0:
-            del self.fleet_reservations[reservation_id]
+        if quantity == 0:
+            del self.fleet_commitments[commitment_id]
             return
-        if units > reservation.units:
-            additional = units - reservation.units
+        if quantity > commitment.quantity:
+            additional = quantity - commitment.quantity
             if self.fleet_free_units(
-                reservation.vehicle_definition_id, reservation.operational_node_id
+                commitment.vehicle_definition_id, commitment.operational_node_id
             ) < additional:
                 raise ValueError("insufficient free fleet units")
-        reservation.units = units
+        commitment.quantity = quantity
 
-    def release_fleet_reservation(
-        self, reservation_id: EntityId, *, day: int = 0
+    def split_fleet_commitment(
+        self,
+        commitment_id: EntityId,
+        new_commitment_id: EntityId,
+        owner_activity_ref: FleetActivityRef,
+        quantity: int,
     ) -> None:
-        if reservation_id not in self.fleet_reservations:
-            raise KeyError(reservation_id)
-        del self.fleet_reservations[reservation_id]
-        # Releasing an exclusive use creates free Fleet. Fulfillment is part of
-        # this Fleet-domain state transition, not a responsibility of the caller.
+        commitment = self.fleet_commitments.get(commitment_id)
+        if commitment is None:
+            raise KeyError(commitment_id)
+        if commitment.operational_node_id is None:
+            raise ValueError("in-movement Fleet commitment cannot be split")
+        if new_commitment_id in self.fleet_commitments:
+            raise ValueError(f"fleet commitment already exists: {new_commitment_id}")
+        if quantity <= 0 or quantity > commitment.quantity:
+            raise ValueError("invalid Fleet commitment split quantity")
+        location_id = commitment.operational_node_id
+        if quantity == commitment.quantity:
+            del self.fleet_commitments[commitment_id]
+        else:
+            commitment.quantity -= quantity
+        self.fleet_commitments[new_commitment_id] = FleetCommitmentState(
+            id=new_commitment_id,
+            owner_activity_ref=owner_activity_ref,
+            vehicle_definition_id=commitment.vehicle_definition_id,
+            quantity=quantity,
+            operational_node_id=location_id,
+        )
+
+    def release_fleet_commitment(
+        self, commitment_id: EntityId, *, day: int = 0
+    ) -> None:
+        commitment = self.fleet_commitments.get(commitment_id)
+        if commitment is None:
+            raise KeyError(commitment_id)
+        if commitment.operational_node_id is None:
+            raise ValueError("in-movement Fleet commitment cannot be released")
+        del self.fleet_commitments[commitment_id]
         self.reconcile_fleet_allocations(day)
 
-    def dispatch_fleet_reservation(
-        self, reservation_id: EntityId, *, day: int = 0
-    ) -> FleetReservationSnapshot:
-        """Move an exclusive node reservation into in-transit ownership.
+    def consume_fleet_commitment(
+        self, commitment_id: EntityId, *, day: int = 0
+    ) -> None:
+        """Remove committed Fleet units from ownership, e.g. after Retirement."""
+        commitment = self.fleet_commitments.get(commitment_id)
+        if commitment is None:
+            raise KeyError(commitment_id)
+        location_id = commitment.operational_node_id
+        if location_id is None:
+            raise ValueError("in-movement Fleet commitment cannot be consumed")
+        pool = self.fleet_pool(commitment.vehicle_definition_id, location_id)
+        if pool.total_units < commitment.quantity:
+            raise RuntimeError("Fleet commitment exceeds node pool")
+        pool.total_units -= commitment.quantity
+        del self.fleet_commitments[commitment_id]
+        self.reconcile_fleet_allocations(day)
 
-        The Fleet disappears from the source Operational Node at dispatch.  The
-        owning MovementExecution then represents those units until a later Boundary
-        settlement places them at an Operational Node again.
-        """
-        reservation = self.fleet_reservations.get(reservation_id)
-        if reservation is None:
-            raise KeyError(reservation_id)
-        source = self.fleet_pool(
-            reservation.vehicle_definition_id, reservation.operational_node_id
-        )
-        if source.total_units < reservation.units:
-            raise RuntimeError("fleet reservation exceeds source pool")
-        snapshot = FleetReservationSnapshot(
-            reservation.id,
-            reservation.owner_id,
-            reservation.kind,
-            reservation.vehicle_definition_id,
-            reservation.operational_node_id,
-            reservation.units,
-        )
-        source.total_units -= reservation.units
-        del self.fleet_reservations[reservation_id]
+    def dispatch_fleet_commitment(
+        self, commitment_id: EntityId, execution_id: EntityId, *, day: int = 0
+    ) -> FleetCommitmentSnapshot:
+        """Move an exclusive node commitment into authoritative Movement ownership."""
+        commitment = self.fleet_commitments.get(commitment_id)
+        if commitment is None:
+            raise KeyError(commitment_id)
+        source_id = commitment.operational_node_id
+        if source_id is None:
+            raise ValueError("Fleet commitment is already in Movement")
+        execution = self.movement_executions.get(execution_id)
+        if execution is None:
+            raise KeyError(execution_id)
+        if execution.fleet_commitment_id != commitment_id:
+            raise ValueError("MovementExecution Fleet commitment mismatch")
+        if execution.origin.operational_node_id != source_id:
+            raise ValueError("MovementExecution origin does not match Fleet commitment")
+        source = self.fleet_pool(commitment.vehicle_definition_id, source_id)
+        if source.total_units < commitment.quantity:
+            raise RuntimeError("fleet commitment exceeds source pool")
+        snapshot = self.fleet_commitment_snapshot(commitment_id)
+        assert snapshot is not None
+        source.total_units -= commitment.quantity
+        commitment.operational_node_id = None
+        commitment.movement_execution_id = execution_id
         self.reconcile_fleet_allocations(day)
         return snapshot
 
-    def receive_reserved_fleet_units(
+    def receive_fleet_commitment(
         self,
-        reservation_id: EntityId,
-        owner_id: EntityId,
-        kind: FleetReservationKind,
-        vehicle_definition_id: DefinitionId,
+        commitment_id: EntityId,
         location_id: SpatialNodeId,
-        units: int,
         *,
+        execution_id: EntityId | None = None,
         day: int = 0,
     ) -> None:
-        """Place arrived in-transit Fleet directly into an exclusive reservation.
-
-        Pool quantity and the exclusive reservation are created atomically so the
-        arriving units cannot transiently satisfy an unrelated Transport target.
-        """
-        if reservation_id in self.fleet_reservations:
-            raise ValueError(f"fleet reservation already exists: {reservation_id}")
-        if units <= 0:
-            raise ValueError("fleet reservation units must be positive")
-        if vehicle_definition_id not in self.vehicle_defs:
-            raise KeyError(vehicle_definition_id)
+        """Settle an in-transit commitment at an Operational Node without freeing it."""
+        commitment = self.fleet_commitments.get(commitment_id)
+        if commitment is None:
+            raise KeyError(commitment_id)
+        active_execution_id = commitment.movement_execution_id
+        if active_execution_id is None:
+            raise ValueError("Fleet commitment is not in Movement")
+        if execution_id is not None and active_execution_id != execution_id:
+            raise ValueError("Fleet commitment MovementExecution mismatch")
+        execution = self.movement_executions.get(active_execution_id)
+        if execution is None:
+            raise RuntimeError("Fleet commitment references missing MovementExecution")
+        destination_id = execution.destination.operational_node_id
+        if destination_id is not None and destination_id != location_id:
+            raise ValueError("Fleet commitment arrival location mismatch")
         if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
-        pool = self.fleet_pool(vehicle_definition_id, location_id)
-        pool.total_units += units
-        self.fleet_reservations[reservation_id] = FleetReservation(
-            reservation_id,
-            owner_id,
-            kind,
-            vehicle_definition_id,
-            location_id,
-            units,
-        )
-        self.reconcile_fleet_allocations(day)
+        pool = self.fleet_pool(commitment.vehicle_definition_id, location_id)
+        pool.total_units += commitment.quantity
+        commitment.operational_node_id = location_id
+        commitment.movement_execution_id = None
 
     def _movement_path_for_vehicle(
         self,
@@ -930,49 +934,62 @@ class FleetAllocationMixin:
     def delete_transport_allocation(self, allocation_id: EntityId, *, day: int = 0) -> None:
         allocation = self.transport_allocations[allocation_id]
         active_units = self.transport_active_units(allocation_id)
+        commitment_id = self._transport_commitment_id(allocation_id)
+        release_created = False
         if active_units > 0 and allocation.last_operated_day is not None:
-            self._new_release(allocation, active_units, day)
-        reservation_id = self._transport_reservation_id(allocation_id)
-        if reservation_id in self.fleet_reservations:
-            self.resize_fleet_reservation(reservation_id, 0)
+            release_created = self._new_release(allocation, active_units, day)
         del self.transport_allocations[allocation_id]
+        if not release_created and commitment_id in self.fleet_commitments:
+            del self.fleet_commitments[commitment_id]
         self.reconcile_fleet_allocations(day)
 
     def _new_release(
-        self, allocation: TransportAllocation, units: int, day: int
-    ) -> None:
-        if units <= 0:
-            return
-        plan = self.derive_transport_service_plan(allocation.id, day)
-        self._fleet_release_counter += 1
-        release_id = EntityId(f"fleet.release.{self._fleet_release_counter}")
-        cycle_days = max(1, int(math.ceil(max(plan.cycle_days, 1.0))))
+        self, allocation: TransportAllocation, quantity: int, day: int
+    ) -> bool:
+        if quantity <= 0:
+            return False
         last_operated_day = allocation.last_operated_day
         if last_operated_day is None:
-            return
+            return False
+        plan = self.derive_transport_service_plan(allocation.id, day)
+        cycle_days = max(1, int(math.ceil(max(plan.cycle_days, 1.0))))
         recovery_day = last_operated_day + cycle_days
         if recovery_day <= day:
-            return
-        self.fleet_releases[release_id] = FleetRelease(
-            release_id,
-            allocation.id,
-            allocation.vehicle_definition_id,
-            allocation.anchor_node_id,
-            units,
-            recovery_day,
+            return False
+        source_commitment_id = self._transport_commitment_id(allocation.id)
+        source_commitment = self.fleet_commitments.get(source_commitment_id)
+        if source_commitment is None or source_commitment.quantity < quantity:
+            raise RuntimeError(f"transport Fleet commitment missing for release: {allocation.id}")
+        self._fleet_release_counter += 1
+        release_id = EntityId(f"fleet.release.{self._fleet_release_counter}")
+        release_commitment_id = EntityId(f"fleet.commitment.release:{release_id}")
+        self.split_fleet_commitment(
+            source_commitment_id,
+            release_commitment_id,
+            FleetActivityRef("fleet_release", release_id),
+            quantity,
         )
+        self.fleet_releases[release_id] = FleetRelease(
+            release_id, allocation.id, release_commitment_id, recovery_day
+        )
+        return True
 
     def advance_fleet_state(self, day: int) -> None:
-        # Release recovery completes without changing pool totals.
+        # Release recovery ends the exclusive commitment; node pool totals do not change.
         for release_id in sorted(
             [rid for rid, row in self.fleet_releases.items() if row.release_day <= day],
             key=str,
         ):
-            del self.fleet_releases[release_id]
+            release = self.fleet_releases.pop(release_id)
+            commitment = self.fleet_commitments.get(release.fleet_commitment_id)
+            if commitment is None:
+                raise RuntimeError(f"fleet release missing commitment: {release_id}")
+            if commitment.operational_node_id is None:
+                raise RuntimeError(f"fleet release commitment unexpectedly in Movement: {release_id}")
+            del self.fleet_commitments[release.fleet_commitment_id]
 
-        # Started relocations are owned by MovementExecution while in transit.
-        # Boundary completion places the units at the destination pool.
-        for relocation_id in sorted(self.fleet_relocations, key=str):
+        # Relocation keeps the same Fleet commitment through dispatch and arrival.
+        for relocation_id in sorted(tuple(self.fleet_relocations), key=str):
             relocation = self.fleet_relocations[relocation_id]
             execution_id = relocation.movement_execution_id
             if execution_id is None:
@@ -982,11 +999,15 @@ class FleetAllocationMixin:
                 raise RuntimeError(f"fleet relocation missing movement execution: {relocation_id}")
             if execution.completion_day > day:
                 continue
+            self.receive_fleet_commitment(
+                relocation.fleet_commitment_id,
+                relocation.destination_id,
+                execution_id=execution_id,
+                day=day,
+            )
             self.finish_movement_execution(execution_id)
-            relocation = self.fleet_relocations.pop(relocation_id)
-            self.fleet_pool(
-                relocation.vehicle_definition_id, relocation.destination_id
-            ).total_units += relocation.units
+            self.fleet_relocations.pop(relocation_id)
+            self.release_fleet_commitment(relocation.fleet_commitment_id, day=day)
         self.reconcile_fleet_allocations(day)
 
     def fleet_relocation_plan(
@@ -1149,10 +1170,19 @@ class FleetAllocationMixin:
             for row in plan.resource_requirements
             if row.required_t > 1e-12
         )
+        commitment_id = EntityId(f"fleet.commitment.relocation:{relocation_id}")
+        self.commit_fleet_units(
+            commitment_id,
+            FleetActivityRef("fleet_relocation", relocation_id),
+            vehicle_definition_id,
+            source_id,
+            units,
+        )
         self.fleet_relocations[relocation_id] = FleetRelocation(
             relocation_id,
             vehicle_definition_id,
             units,
+            commitment_id,
             source_id,
             destination_id,
             day,
@@ -1266,21 +1296,20 @@ class FleetAllocationMixin:
                 execution_id,
                 relocation.id,
                 MovementExecutionKind.FLEET_RELOCATION,
-                relocation.vehicle_definition_id,
-                relocation.units,
+                relocation.fleet_commitment_id,
                 relocation.path,
                 day=day,
             )
             if execution.destination.operational_node_id != relocation.destination_id:
                 self.finish_movement_execution(execution_id)
                 raise RuntimeError("fleet relocation MovementExecution destination mismatch")
-            source = self.fleet_pool(
-                relocation.vehicle_definition_id, relocation.source_id
-            )
-            if source.total_units < relocation.units:
+            try:
+                self.dispatch_fleet_commitment(
+                    relocation.fleet_commitment_id, execution_id, day=day
+                )
+            except Exception:
                 self.finish_movement_execution(execution_id)
-                raise RuntimeError("fleet relocation exceeds source pool")
-            source.total_units -= relocation.units
+                raise
             relocation.movement_execution_id = execution_id
 
 
@@ -1304,12 +1333,12 @@ class FleetAllocationMixin:
         )
 
     def reconcile_fleet_allocations(self, day: int = 0) -> None:
-        """Fulfill Transport targets through Fleet-owned reservations.
+        """Fulfill Transport targets through Fleet-owned commitments.
 
-        Transport owns target intent and priority. Fleet owns the exclusive unit
-        commitment.  Reconciliation therefore computes desired commitments from
-        Transport state, then changes only Fleet reservation/release state through
-        Fleet-domain operations.
+        Transport owns target intent and provisioning priority. Fleet owns every
+        exclusive quantity. Recently operated units that are removed from a
+        Transport target remain committed to a Fleet release activity until the
+        recovery boundary is reached.
         """
         groups: dict[tuple[DefinitionId, SpatialNodeId], list[TransportAllocation]] = {}
         for allocation in self.transport_allocations.values():
@@ -1321,16 +1350,12 @@ class FleetAllocationMixin:
             groups.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
         ):
             pool = self.fleet_pool(definition_id, location_id)
-            non_transport = (
-                sum(
-                    reservation.units
-                    for reservation in self.fleet_reservations.values()
-                    if reservation.kind is not FleetReservationKind.TRANSPORT
-                    and reservation.vehicle_definition_id == definition_id
-                    and reservation.operational_node_id == location_id
-                )
-                + self._relocating_units_from(definition_id, location_id)
-                + self._releasing_units_at(definition_id, location_id)
+            non_transport = sum(
+                commitment.quantity
+                for commitment in self.fleet_commitments.values()
+                if commitment.owner_activity_ref.activity_type != "transport_allocation"
+                and commitment.vehicle_definition_id == definition_id
+                and commitment.operational_node_id == location_id
             )
             allocatable = max(0, pool.total_units - non_transport)
             desired: dict[EntityId, int] = {}
@@ -1346,53 +1371,48 @@ class FleetAllocationMixin:
                 desired[allocation.id] = grant
                 remaining -= grant
 
-            # First shrink displaced commitments. Recovery remains a Fleet
-            # commitment when recently operated, so shrinking never teleports a
-            # unit into the free pool.
             for allocation in ordered:
-                current_units = self.transport_active_units(allocation.id)
-                target_active = desired[allocation.id]
-                if current_units <= target_active:
+                current_quantity = self.transport_active_units(allocation.id)
+                target_quantity = desired[allocation.id]
+                if current_quantity <= target_quantity:
                     continue
-                delta = current_units - target_active
+                delta = current_quantity - target_quantity
+                release_created = False
                 if allocation.last_operated_day is not None:
-                    self._new_release(allocation, delta, day)
-                reservation_id = self._transport_reservation_id(allocation.id)
-                self.resize_fleet_reservation(reservation_id, target_active)
+                    release_created = self._new_release(allocation, delta, day)
+                if not release_created:
+                    commitment_id = self._transport_commitment_id(allocation.id)
+                    self.resize_fleet_commitment(commitment_id, target_quantity)
 
-            # Newly created releases still consume Fleet ownership. Fill target
-            # deficits only from the actual free pool.
             free = self.fleet_free_units(definition_id, location_id)
             for allocation in ordered:
-                current_units = self.transport_active_units(allocation.id)
-                target_active = desired[allocation.id]
-                if current_units >= target_active or free <= 0:
+                current_quantity = self.transport_active_units(allocation.id)
+                target_quantity = desired[allocation.id]
+                if current_quantity >= target_quantity or free <= 0:
                     continue
-                delta = min(target_active - current_units, free)
-                reservation_id = self._transport_reservation_id(allocation.id)
-                if current_units == 0:
-                    self.reserve_fleet_units(
-                        reservation_id,
-                        allocation.id,
-                        FleetReservationKind.TRANSPORT,
+                delta = min(target_quantity - current_quantity, free)
+                commitment_id = self._transport_commitment_id(allocation.id)
+                if current_quantity == 0:
+                    self.commit_fleet_units(
+                        commitment_id,
+                        FleetActivityRef("transport_allocation", allocation.id),
                         definition_id,
                         location_id,
                         delta,
                     )
                 else:
-                    self.resize_fleet_reservation(
-                        reservation_id, current_units + delta
+                    self.resize_fleet_commitment(
+                        commitment_id, current_quantity + delta
                     )
                 free -= delta
 
-        # Remove stale Transport reservations whose Allocation no longer exists.
-        for reservation_id, reservation in tuple(self.fleet_reservations.items()):
-            if (
-                reservation.kind is FleetReservationKind.TRANSPORT
-                and reservation.owner_id not in self.transport_allocations
-            ):
+        for commitment in tuple(self.fleet_commitments.values()):
+            if commitment.owner_activity_ref.activity_type != "transport_allocation":
+                continue
+            owner_id = commitment.owner_activity_ref.activity_id
+            if owner_id not in self.transport_allocations:
                 raise RuntimeError(
-                    f"orphan transport fleet reservation: {reservation.owner_id}"
+                    f"orphan transport Fleet commitment: {owner_id}"
                 )
 
     def record_transport_operation(self, allocation_id: EntityId, day: int) -> None:

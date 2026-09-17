@@ -141,7 +141,7 @@ class ScientificExplorationRow:
     minimum_payload_t: float
     required_vehicle_capabilities: tuple[str, ...]
     assigned_vehicle_definition_id: str | None
-    reserved_units: int
+    committed_units: int
     blockers: tuple[str, ...]
     can_start: bool
     can_pause: bool

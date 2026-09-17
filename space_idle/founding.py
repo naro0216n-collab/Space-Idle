@@ -24,7 +24,7 @@ from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialN
 from .site import SiteRequirements, evaluate_physical_site_requirements, evaluate_site_requirements
 from .storage import StorageService
 from .transport.models import (
-    FleetReservationKind, MovementExecutionKind, MovementExecutionPayloadResource,
+    FleetActivityRef, MovementExecutionKind, MovementExecutionPayloadResource,
     OperationAssetDisposition,
 )
 
@@ -125,6 +125,7 @@ class LocationFoundingProject:
     vehicle_definition_id: DefinitionId
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     preferred_source_id: SpatialNodeId | None = None
+    fleet_commitment_id: EntityId | None = None
     status: FoundingStatus = FoundingStatus.PREPARING
     preparation_done: float = 0.0
     inputs_consumed: bool = False
@@ -198,8 +199,8 @@ class LocationFoundingService:
         return candidate
 
     @staticmethod
-    def fleet_reservation_id(project_id: ProjectId) -> EntityId:
-        return EntityId(f"founding.fleet:{project_id}")
+    def fleet_commitment_id(project_id: ProjectId) -> EntityId:
+        return EntityId(f"fleet.commitment.founding:{project_id}")
 
     @staticmethod
     def requirement_id(project_id: ProjectId, resource_id: DefinitionId) -> EntityId:
@@ -334,14 +335,15 @@ class LocationFoundingService:
         )
         self.projects[project_id] = project
         package = self.packages[package_id]
-        self.transport.reserve_fleet_units(
-            self.fleet_reservation_id(project_id),
-            EntityId(project_id),
-            FleetReservationKind.SPECIAL_MISSION,
+        commitment_id = self.fleet_commitment_id(project_id)
+        self.transport.commit_fleet_units(
+            commitment_id,
+            FleetActivityRef("founding", EntityId(str(project_id))),
             vehicle_definition_id,
             staging_node_id,
             package.required_units,
         )
+        project.fleet_commitment_id = commitment_id
         return project_id
 
     def resource_requirements_for(
@@ -611,9 +613,9 @@ class LocationFoundingService:
             raise ValueError("founding cannot be cancelled after deployment begins")
         self._restore_prepared_payload(project)
         project.inputs_consumed = False
-        reservation_id = self.fleet_reservation_id(project_id)
-        if self.transport.fleet_reservation_snapshot(reservation_id) is not None:
-            self.transport.release_fleet_reservation(reservation_id, day=day)
+        if project.fleet_commitment_id is not None:
+            self.transport.release_fleet_commitment(project.fleet_commitment_id, day=day)
+            project.fleet_commitment_id = None
         project.status = FoundingStatus.CANCELLED
         project.paused = False
 
@@ -657,12 +659,13 @@ class LocationFoundingService:
                         day=day,
                     )
                     execution_id = EntityId(f"movement.founding:{project.id}")
+                    if project.fleet_commitment_id is None:
+                        raise RuntimeError("founding Fleet commitment missing")
                     execution = self.transport.start_movement_execution_for_plan(
                         execution_id,
                         EntityId(str(project.id)),
                         MovementExecutionKind.FOUNDING_DEPLOYMENT,
-                        project.vehicle_definition_id,
-                        package.required_units,
+                        project.fleet_commitment_id,
                         movement_plan,
                         payload_t_per_unit=package.payload_t_per_unit,
                         payload_resources=tuple(
@@ -671,21 +674,13 @@ class LocationFoundingService:
                         ),
                         day=day,
                     )
-                    reservation_id = self.fleet_reservation_id(project.id)
                     try:
-                        dispatched = self.transport.dispatch_fleet_reservation(
-                            reservation_id, day=day
+                        self.transport.dispatch_fleet_commitment(
+                            project.fleet_commitment_id, execution.id, day=day
                         )
                     except Exception:
                         self.transport.finish_movement_execution(execution.id)
                         raise
-                    if (
-                        dispatched.vehicle_definition_id != project.vehicle_definition_id
-                        or dispatched.units != package.required_units
-                        or dispatched.operational_node_id != project.staging_node_id
-                    ):
-                        self.transport.finish_movement_execution(execution.id)
-                        raise RuntimeError("founding Fleet dispatch mismatch")
                     self._release_prepared_payload(project)
                     project.status = FoundingStatus.DEPLOYING
                     project.movement_execution_id = execution.id
@@ -698,7 +693,7 @@ class LocationFoundingService:
                 continue
             if project.movement_execution_id is None:
                 raise RuntimeError(f"deploying founding lacks MovementExecution: {project.id}")
-            execution = self.transport.movement_executions.get(project.movement_execution_id)
+            execution = self.transport.movement_execution_snapshot(project.movement_execution_id)
             if execution is None:
                 raise RuntimeError(f"founding MovementExecution missing: {project.id}")
             if execution.completion_day <= day:
@@ -713,7 +708,7 @@ class LocationFoundingService:
         execution_id = project.movement_execution_id
         if execution_id is None:
             raise RuntimeError(f"founding completion lacks MovementExecution: {project.id}")
-        execution = self.transport.movement_executions.get(execution_id)
+        execution = self.transport.movement_execution_snapshot(execution_id)
         if execution is None:
             raise RuntimeError(f"founding completion MovementExecution missing: {project.id}")
         package = self.packages[project.founding_package_id]
@@ -764,10 +759,14 @@ class LocationFoundingService:
             if execution.final_asset_disposition is OperationAssetDisposition.DESTINATION
             else project.staging_node_id
         )
-        self.transport.add_fleet_units(
-            execution.vehicle_definition_id, execution.units, final_location, day=day
+        if project.fleet_commitment_id is None:
+            raise RuntimeError(f"founding completion lacks Fleet commitment: {project.id}")
+        self.transport.receive_fleet_commitment(
+            project.fleet_commitment_id, final_location, execution_id=execution_id, day=day
         )
         self.transport.finish_movement_execution(execution_id)
+        self.transport.release_fleet_commitment(project.fleet_commitment_id, day=day)
+        project.fleet_commitment_id = None
         project.movement_execution_id = None
         project.status = FoundingStatus.COMPLETE
         project.completed_day = day

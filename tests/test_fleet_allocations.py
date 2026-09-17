@@ -11,7 +11,7 @@ from space_idle.validation import validate_runtime_state
 from space_idle.validation_support import ConfigurationError
 from space_idle.transport.models import (
     DirectionalCapacity,
-    FleetReservationKind,
+    FleetActivityRef,
     OperationSupportLocation,
     OperationSupportRequirement,
     ResourceSupportRequirement,
@@ -27,13 +27,12 @@ def _fleet_sim(count: int = 5):
 
 
 
-def test_fleet_commitments_are_reservation_owned_and_free_units_are_derived():
+def test_fleet_commitments_are_owner_activity_owned_and_free_units_are_derived():
     sim = _fleet_sim(5)
     lg = sim.transport
-    lg.reserve_fleet_units(
-        EntityId("reservation.exploration"),
-        EntityId("exploration.alpha"),
-        FleetReservationKind.SCIENTIFIC_EXPLORATION,
+    lg.commit_fleet_units(
+        EntityId("commitment.exploration"),
+        FleetActivityRef("test_exploration", EntityId("exploration.alpha")),
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
         1,
@@ -47,18 +46,18 @@ def test_fleet_commitments_are_reservation_owned_and_free_units_are_derived():
     )
 
     allocation = lg.transport_allocations[allocation_id]
-    reservation = next(
-        row for row in lg.fleet_reservation_snapshots()
-        if row.kind is FleetReservationKind.TRANSPORT and row.owner_id == allocation_id
+    commitment = next(
+        row for row in lg.fleet_commitment_snapshots()
+        if row.owner_activity_ref == FleetActivityRef("transport_allocation", allocation_id)
     )
-    assert reservation.units == 3
-    assert reservation.vehicle_definition_id == allocation.vehicle_definition_id
-    assert reservation.operational_node_id == allocation.anchor_node_id
+    assert commitment.quantity == 3
+    assert commitment.vehicle_definition_id == allocation.vehicle_definition_id
+    assert commitment.operational_node_id == allocation.anchor_node_id
     assert lg.transport_active_units(allocation_id) == 3
     assert lg.fleet_pool_snapshot(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).transport_units == 3
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 1
 
-def test_runtime_validation_rejects_transport_reservation_outside_allocation_contract():
+def test_runtime_validation_rejects_transport_commitment_outside_allocation_contract():
     sim = _fleet_sim(1)
     lg = sim.transport
     allocation_id = lg.create_transport_allocation(
@@ -68,24 +67,85 @@ def test_runtime_validation_rejects_transport_reservation_outside_allocation_con
         target_units=1,
         day=sim.day,
     )
-    reservation = next(
-        row for row in lg.fleet_reservations.values()
-        if row.kind is FleetReservationKind.TRANSPORT and row.owner_id == allocation_id
+    commitment = next(
+        row for row in lg.fleet_commitments.values()
+        if row.owner_activity_ref == FleetActivityRef("transport_allocation", allocation_id)
     )
-    reservation.operational_node_id = ids.LUNAR_ORBIT
+    commitment.operational_node_id = ids.LUNAR_ORBIT
 
-    with pytest.raises(ConfigurationError, match="transport fleet reservation location mismatch"):
+    with pytest.raises(ConfigurationError, match="transport Fleet commitment location mismatch"):
         validate_runtime_state(sim)
 
+
+
+def test_fleet_commitment_cannot_double_commit_the_same_free_units():
+    sim = _fleet_sim(2)
+    lg = sim.transport
+    lg.commit_fleet_units(
+        EntityId("commitment.alpha"),
+        FleetActivityRef("test_activity", EntityId("alpha")),
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        ids.LEO,
+        2,
+    )
+
+    with pytest.raises(ValueError, match="insufficient free fleet units"):
+        lg.commit_fleet_units(
+            EntityId("commitment.beta"),
+            FleetActivityRef("test_activity", EntityId("beta")),
+            ids.REUSABLE_ORBITAL_CARGO_TUG,
+            ids.LEO,
+            1,
+        )
+
+    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 0
+
+
+def test_runtime_validation_detects_orphan_transport_commitment():
+    sim = _fleet_sim(1)
+    lg = sim.transport
+    allocation_id = lg.create_transport_allocation(
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        ids.LEO,
+        ids.LUNAR_ORBIT,
+        target_units=1,
+        day=sim.day,
+    )
+    assert lg.transport_active_units(allocation_id) == 1
+
+    del lg.transport_allocations[allocation_id]
+    with pytest.raises(ConfigurationError, match="orphan Fleet commitment owner"):
+        validate_runtime_state(sim)
+
+
+def test_runtime_validation_detects_orphan_commitment_for_registered_external_activity():
+    sim = _fleet_sim(1)
+    lg = sim.transport
+    owner_id = EntityId("external.alpha")
+    active_owners = {owner_id}
+    lg.register_fleet_commitment_owner_resolver(
+        "external_test_activity", lambda candidate: candidate in active_owners
+    )
+    lg.commit_fleet_units(
+        EntityId("commitment.external.alpha"),
+        FleetActivityRef("external_test_activity", owner_id),
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        ids.LEO,
+        1,
+    )
+    validate_runtime_state(sim)
+
+    active_owners.clear()
+    with pytest.raises(ConfigurationError, match="orphan Fleet commitment owner"):
+        validate_runtime_state(sim)
 
 def test_transport_target_refills_immediately_when_fleet_availability_increases():
     sim = _fleet_sim(2)
     lg = sim.transport
-    reservation_id = EntityId("reservation.special")
-    lg.reserve_fleet_units(
-        reservation_id,
-        EntityId("mission.special"),
-        FleetReservationKind.SPECIAL_MISSION,
+    commitment_id = EntityId("commitment.special")
+    lg.commit_fleet_units(
+        commitment_id,
+        FleetActivityRef("test_mission", EntityId("mission.special")),
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
         1,
@@ -102,20 +162,19 @@ def test_transport_target_refills_immediately_when_fleet_availability_increases(
     lg.add_fleet_units(ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO, day=sim.day)
     assert lg.transport_active_units(allocation_id) == 2
 
-    lg.release_fleet_reservation(reservation_id, day=sim.day)
+    lg.release_fleet_commitment(commitment_id, day=sim.day)
     assert lg.transport_active_units(allocation_id) == 3
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 0
 
-def test_fleet_query_exposes_other_exclusive_reservations_in_pool_balance():
+def test_fleet_query_exposes_other_exclusive_commitments_in_pool_balance():
     app = build_game_application()
     sim = app._simulation
     lg = sim.transport
     lg.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).total_units = 2
-    reservation_id = EntityId("reservation.special.query")
-    lg.reserve_fleet_units(
-        reservation_id,
-        EntityId("mission.special.query"),
-        FleetReservationKind.SPECIAL_MISSION,
+    commitment_id = EntityId("commitment.special.query")
+    lg.commit_fleet_units(
+        commitment_id,
+        FleetActivityRef("test_mission", EntityId("mission.special.query")),
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
         1,
@@ -130,12 +189,16 @@ def test_fleet_query_exposes_other_exclusive_reservations_in_pool_balance():
 
     assert row.total_units == 2
     assert row.free_units == 1
-    assert row.other_reserved_units == 1
+    assert row.other_committed_units == 1
+    view = app.query(GetFleet())
+    commitment = next(item for item in view.commitments if item.id == str(commitment_id))
+    assert commitment.owner_activity_type == "test_mission"
+    assert commitment.quantity == 1
     assert (
         row.free_units
         + row.transport_units
         + row.exploration_units
-        + row.other_reserved_units
+        + row.other_committed_units
         + row.relocating_units
         + row.releasing_units
         == row.total_units
@@ -609,12 +672,24 @@ def test_relocation_keeps_units_exclusive_until_arrival():
         ids.LUNAR_ORBIT,
         day=0,
     )
+    relocation = lg.fleet_relocations[relocation_id]
+    commitment_id = relocation.fleet_commitment_id
+    commitment = lg.fleet_commitment_snapshot(commitment_id)
+    assert commitment is not None
+    assert commitment.owner_activity_ref == FleetActivityRef("fleet_relocation", relocation_id)
+    assert commitment.quantity == 2
+    assert commitment.operational_node_id == ids.LEO
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 1
     sim.advance_days(1)
     relocation = lg.fleet_relocations[relocation_id]
     assert relocation.movement_execution_id is not None
     execution = lg.movement_executions[relocation.movement_execution_id]
     assert execution.started_day == 0
+    moving_commitment = lg.fleet_commitment_snapshot(commitment_id)
+    assert moving_commitment is not None
+    assert moving_commitment.operational_node_id is None
+    assert moving_commitment.movement_execution_id == execution.id
+    assert execution.fleet_commitment_id == commitment_id
     assert lg.fleet_pool(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO
     ).total_units == source_before - 2
@@ -625,6 +700,7 @@ def test_relocation_keeps_units_exclusive_until_arrival():
     assert relocation_id in lg.fleet_relocations
     lg.advance_fleet_state(execution.completion_day)
     assert relocation_id not in lg.fleet_relocations
+    assert lg.fleet_commitment_snapshot(commitment_id) is None
     assert lg.fleet_pool(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO
     ).total_units == source_before - 2

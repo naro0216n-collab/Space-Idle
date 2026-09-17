@@ -54,8 +54,7 @@ class MovementExecutionMixin:
         execution_id: EntityId,
         owner_id: EntityId,
         kind: MovementExecutionKind,
-        vehicle_definition_id: DefinitionId,
-        units: int,
+        fleet_commitment_id: EntityId,
         plans: tuple[MovementPlan, ...],
         *,
         payload_t_per_unit: float = 0.0,
@@ -64,13 +63,19 @@ class MovementExecutionMixin:
     ) -> MovementExecution:
         if execution_id in self.movement_executions:
             raise ValueError(f"movement execution already exists: {execution_id}")
-        if vehicle_definition_id not in self.vehicle_defs:
-            raise KeyError(vehicle_definition_id)
-        if units <= 0:
-            raise ValueError("movement execution units must be positive")
+        commitment = self.fleet_commitments.get(fleet_commitment_id)
+        if commitment is None:
+            raise KeyError(fleet_commitment_id)
+        if commitment.operational_node_id is None:
+            raise ValueError("movement execution requires a node-local Fleet commitment")
         if not plans:
             raise ValueError("movement execution requires a movement plan")
 
+        vehicle_definition_id = commitment.vehicle_definition_id
+        units = commitment.quantity
+        resource_payload_t = sum(row.amount_t for row in payload_resources)
+        if resource_payload_t > payload_t_per_unit * units + 1e-9:
+            raise ValueError("movement execution resource payload exceeds total payload")
         vehicle = self.vehicle_defs[vehicle_definition_id]
         legs: list[MovementExecutionLeg] = []
         expected_origin = plans[0].origin
@@ -132,8 +137,7 @@ class MovementExecutionMixin:
             id=execution_id,
             owner_id=owner_id,
             kind=kind,
-            vehicle_definition_id=vehicle_definition_id,
-            units=units,
+            fleet_commitment_id=fleet_commitment_id,
             legs=tuple(legs),
             payload_t_per_unit=payload_t_per_unit,
             started_day=day,
@@ -148,8 +152,7 @@ class MovementExecutionMixin:
         execution_id: EntityId,
         owner_id: EntityId,
         kind: MovementExecutionKind,
-        vehicle_definition_id: DefinitionId,
-        units: int,
+        fleet_commitment_id: EntityId,
         path: tuple[MovementPlanId, ...],
         *,
         payload_t_per_unit: float = 0.0,
@@ -161,8 +164,7 @@ class MovementExecutionMixin:
             execution_id,
             owner_id,
             kind,
-            vehicle_definition_id,
-            units,
+            fleet_commitment_id,
             plans,
             payload_t_per_unit=payload_t_per_unit,
             payload_resources=payload_resources,
@@ -174,8 +176,7 @@ class MovementExecutionMixin:
         execution_id: EntityId,
         owner_id: EntityId,
         kind: MovementExecutionKind,
-        vehicle_definition_id: DefinitionId,
-        units: int,
+        fleet_commitment_id: EntityId,
         plan: MovementPlan,
         *,
         payload_t_per_unit: float = 0.0,
@@ -189,8 +190,7 @@ class MovementExecutionMixin:
             execution_id,
             owner_id,
             kind,
-            vehicle_definition_id,
-            units,
+            fleet_commitment_id,
             (plan,),
             payload_t_per_unit=payload_t_per_unit,
             payload_resources=payload_resources,
