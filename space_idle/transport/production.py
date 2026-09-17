@@ -5,9 +5,13 @@ from enum import Enum
 
 from ..power import PowerSnapshot
 from ..priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
-from ..resource_claim import ResourceAllocationPlan, ResourceClaim
+from ..execution_requirements import (
+    ExecutionAllocationPlan,
+    ExecutionRequirementBundle,
+    ResourceRequirement,
+    ServiceCapacityRequirement,
+)
 from ..supply import SupplyRequirement
-from ..service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from ..shared import DefinitionId, EntityId, SpatialNodeId
 from ..site import SiteRequirementFailure, evaluate_site_requirements
 
@@ -171,10 +175,10 @@ class VehicleProductionMixin:
         return EntityId(f"requirement.{project_id}:{resource_id}")
 
     @staticmethod
-    def _vehicle_production_claim_id(
+    def _vehicle_production_resource_execution_id(
         project_id: EntityId, resource_id: DefinitionId
     ) -> EntityId:
-        return EntityId(f"claim.vehicle_production:{project_id}:{resource_id}")
+        return EntityId(f"execution.vehicle_production_input:{project_id}:{resource_id}")
 
     @staticmethod
     def _vehicle_production_staging_owner_id(project_id: EntityId) -> EntityId:
@@ -190,7 +194,7 @@ class VehicleProductionMixin:
         )
 
     def _stage_vehicle_production_allocations(
-        self, state: VehicleProductionState, allocations: ResourceAllocationPlan
+        self, state: VehicleProductionState, allocations: ExecutionAllocationPlan
     ) -> None:
         if state.phase is not VehicleProductionPhase.AWAITING_INPUTS:
             return
@@ -205,7 +209,7 @@ class VehicleProductionMixin:
                 continue
             try:
                 allocated = allocations.allocated(
-                    self._vehicle_production_claim_id(state.id, resource_id)
+                    self._vehicle_production_resource_execution_id(state.id, resource_id)
                 )
             except KeyError:
                 allocated = 0.0
@@ -267,40 +271,59 @@ class VehicleProductionMixin:
                 )
         return tuple(requirements)
 
-    def vehicle_production_resource_claims(
+    @staticmethod
+    def vehicle_production_work_execution_id(project_id: EntityId) -> EntityId:
+        return EntityId(f"execution.vehicle_production_work:{project_id}")
+
+    def vehicle_production_execution_requirement_bundles(
         self, day: int = 0
-    ) -> tuple[ResourceClaim, ...]:
-        claims: list[ResourceClaim] = []
+    ) -> tuple[ExecutionRequirementBundle, ...]:
+        del day
+        bundles: list[ExecutionRequirementBundle] = []
         for state in sorted(
             self.vehicle_production_projects.values(), key=lambda row: (-row.priority, str(row.id))
         ):
-            if state.phase is not VehicleProductionPhase.AWAITING_INPUTS or state.paused:
+            if state.phase is VehicleProductionPhase.COMPLETE or state.paused:
                 continue
             definition = self.vehicle_defs[state.vehicle_definition_id]
-            for resource_id, required_t in sorted(
-                definition.production.resources, key=lambda row: str(row[0])
-            ):
-                staged = self._vehicle_production_staged_t(state, resource_id)
-                remaining = max(0.0, required_t - staged)
-                if remaining <= 1e-12:
-                    continue
-                claims.append(ResourceClaim(
-                    self._vehicle_production_claim_id(state.id, resource_id),
-                    state.operational_node_id,
-                    resource_id,
-                    remaining,
-                    state.priority,
-                    "vehicle_production",
-                    state.id,
-                    "production_inputs",
-                    requirement_id=self._vehicle_production_requirement_id(state.id, resource_id),
+            if state.phase is VehicleProductionPhase.AWAITING_INPUTS:
+                for resource_id, required_t in sorted(
+                    definition.production.resources, key=lambda row: str(row[0])
+                ):
+                    staged = self._vehicle_production_staged_t(state, resource_id)
+                    remaining = max(0.0, required_t - staged)
+                    if remaining <= 1e-12:
+                        continue
+                    bundles.append(ExecutionRequirementBundle(
+                        id=self._vehicle_production_resource_execution_id(state.id, resource_id),
+                        owner_kind="vehicle_production",
+                        owner_id=state.id,
+                        purpose="production_inputs",
+                        operational_node_id=state.operational_node_id,
+                        requested_execution=remaining,
+                        priority=state.priority,
+                        requirements=(ResourceRequirement(resource_id, 1.0),),
+                    ))
+
+            service_type = definition.production.service_type
+            remaining_work = max(0.0, definition.production.days - state.progress_days)
+            if service_type is not None and remaining_work > 1e-12:
+                bundles.append(ExecutionRequirementBundle(
+                    id=self.vehicle_production_work_execution_id(state.id),
+                    owner_kind="vehicle_production",
+                    owner_id=state.id,
+                    purpose="production_work",
+                    operational_node_id=state.operational_node_id,
+                    requested_execution=min(1.0, remaining_work),
+                    priority=state.priority,
+                    requirements=(ServiceCapacityRequirement(service_type, 1.0),),
                 ))
-        return tuple(claims)
+        return tuple(bundles)
 
     def _consume_ready_vehicle_production_inputs(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
-        resource_allocations: ResourceAllocationPlan,
+        execution_allocations: ExecutionAllocationPlan,
         day: int,
     ) -> None:
         waiting = sorted(
@@ -313,7 +336,7 @@ class VehicleProductionMixin:
             key=lambda row: (-row.priority, str(row.id)),
         )
         for state in waiting:
-            self._stage_vehicle_production_allocations(state, resource_allocations)
+            self._stage_vehicle_production_allocations(state, execution_allocations)
             power = power_by_location[state.operational_node_id]
             if self.vehicle_production_blockers(
                 state.id,
@@ -324,49 +347,14 @@ class VehicleProductionMixin:
             self._consume_staged_vehicle_production_inputs(state)
             state.phase = VehicleProductionPhase.BUILDING
 
-    @staticmethod
-    def vehicle_production_service_request_id(project_id: EntityId) -> EntityId:
-        return EntityId(f"service.vehicle_production:{project_id}")
-
-    def vehicle_production_service_requests(
-        self, day: int = 0
-    ) -> tuple[ServiceCapacityRequest, ...]:
-        requests: list[ServiceCapacityRequest] = []
-        for state in sorted(
-            self.vehicle_production_projects.values(), key=lambda row: str(row.id)
-        ):
-            if state.phase is VehicleProductionPhase.COMPLETE or state.paused:
-                continue
-            definition = self.vehicle_defs[state.vehicle_definition_id]
-            service_type = definition.production.service_type
-            if service_type is None or definition.production.days <= 1e-12:
-                continue
-            remaining = max(0.0, definition.production.days - state.progress_days)
-            if remaining <= 1e-12:
-                continue
-            requests.append(
-                ServiceCapacityRequest(
-                    self.vehicle_production_service_request_id(state.id),
-                    state.operational_node_id,
-                    service_type,
-                    min(1.0, remaining),
-                    state.priority,
-                    "vehicle_production",
-                    state.id,
-                    "production_work",
-                )
-            )
-        return tuple(requests)
-
     def advance_vehicle_production_day(
         self,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
-        resource_allocations: ResourceAllocationPlan,
-        service_allocations: ServiceCapacityAllocationPlan,
+        execution_allocations: ExecutionAllocationPlan,
         day: int,
     ) -> None:
         self._consume_ready_vehicle_production_inputs(
-            power_by_location, resource_allocations, day
+            power_by_location, execution_allocations, day
         )
 
         for state in sorted(
@@ -385,8 +373,8 @@ class VehicleProductionMixin:
             if blockers:
                 continue
             try:
-                allocated = service_allocations.allocated(
-                    self.vehicle_production_service_request_id(state.id)
+                allocated = execution_allocations.allocated(
+                    self.vehicle_production_work_execution_id(state.id)
                 )
             except KeyError:
                 allocated = 0.0

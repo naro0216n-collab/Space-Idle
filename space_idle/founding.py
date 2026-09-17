@@ -11,9 +11,13 @@ from .inventory import InventoryBook
 from .transport.service import TransportService
 from .power import PowerService, PowerSnapshot
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
-from .resource_claim import ResourceAllocationPlan, ResourceClaim
+from .execution_requirements import (
+    ExecutionAllocationPlan,
+    ExecutionRequirementBundle,
+    ResourceRequirement,
+    ServiceCapacityRequirement,
+)
 from .supply import SupplyRequirement
-from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .site import SiteRequirements, evaluate_physical_site_requirements, evaluate_site_requirements
 from .storage import StorageService
@@ -439,34 +443,57 @@ class LocationFoundingService:
         return tuple(rows)
 
     @staticmethod
-    def claim_id(project_id: ProjectId, resource_id: DefinitionId) -> EntityId:
-        return EntityId(f"claim.founding:{project_id}:{resource_id}")
+    def payload_execution_id(project_id: ProjectId, resource_id: DefinitionId) -> EntityId:
+        return EntityId(f"execution.founding_payload:{project_id}:{resource_id}")
 
-    def resource_claims(self) -> tuple[ResourceClaim, ...]:
-        rows: list[ResourceClaim] = []
+    @staticmethod
+    def preparation_execution_id(project_id: ProjectId) -> EntityId:
+        return EntityId(f"execution.founding_preparation:{project_id}")
+
+    def execution_requirement_bundles(
+        self, day: int = 0
+    ) -> tuple[ExecutionRequirementBundle, ...]:
+        del day
+        rows: list[ExecutionRequirementBundle] = []
         for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
-            if project.status is not FoundingStatus.PREPARING or project.inputs_consumed or project.paused:
+            if project.status is not FoundingStatus.PREPARING or project.paused:
                 continue
-            for requirement in self.project_resource_requirements(project.id):
-                staged = self.staged_payload_t(project.id, requirement.resource_id)
-                missing = max(0.0, requirement.amount_t - staged)
-                if missing <= 1e-9:
-                    continue
-                rows.append(ResourceClaim(
-                    self.claim_id(project.id, requirement.resource_id),
-                    project.staging_node_id,
-                    requirement.resource_id,
-                    missing,
-                    project.priority,
-                    "founding",
-                    EntityId(project.id),
-                    "payload_preparation",
-                    requirement_id=self.requirement_id(project.id, requirement.resource_id),
+            if not project.inputs_consumed:
+                for requirement in self.project_resource_requirements(project.id):
+                    staged = self.staged_payload_t(project.id, requirement.resource_id)
+                    missing = max(0.0, requirement.amount_t - staged)
+                    if missing <= 1e-9:
+                        continue
+                    rows.append(ExecutionRequirementBundle(
+                        id=self.payload_execution_id(project.id, requirement.resource_id),
+                        owner_kind="founding",
+                        owner_id=EntityId(project.id),
+                        purpose="payload_preparation",
+                        operational_node_id=project.staging_node_id,
+                        requested_execution=missing,
+                        priority=project.priority,
+                        requirements=(ResourceRequirement(requirement.resource_id, 1.0),),
+                    ))
+
+            package = self.packages[project.founding_package_id]
+            remaining = max(0.0, package.preparation_work - project.preparation_done)
+            if remaining > 1e-12:
+                rows.append(ExecutionRequirementBundle(
+                    id=self.preparation_execution_id(project.id),
+                    owner_kind="founding",
+                    owner_id=EntityId(project.id),
+                    purpose="preparation_work",
+                    operational_node_id=project.staging_node_id,
+                    requested_execution=remaining,
+                    priority=project.priority,
+                    requirements=(
+                        ServiceCapacityRequirement(package.preparation_service_type, 1.0),
+                    ),
                 ))
         return tuple(rows)
 
     def _commit_allocated_payload(
-        self, project: LocationFoundingProject, allocations: ResourceAllocationPlan
+        self, project: LocationFoundingProject, allocations: ExecutionAllocationPlan
     ) -> bool:
         """Move this tick's founding allocation into durable payload staging."""
         payload_owner = self.payload_owner_id(project.id)
@@ -479,7 +506,9 @@ class LocationFoundingService:
             if missing <= 1e-9:
                 continue
             try:
-                allocated = allocations.allocated(self.claim_id(project.id, resource_id))
+                allocated = allocations.allocated(
+                    self.payload_execution_id(project.id, resource_id)
+                )
             except KeyError:
                 allocated = 0.0
             commit = min(missing, max(0.0, allocated))
@@ -579,37 +608,9 @@ class LocationFoundingService:
         project.status = FoundingStatus.CANCELLED
         project.paused = False
 
-    @staticmethod
-    def service_request_id(project_id: ProjectId) -> EntityId:
-        return EntityId(f"service.founding_preparation:{project_id}")
-
-    def service_requests(self, day: int = 0) -> tuple[ServiceCapacityRequest, ...]:
-        requests: list[ServiceCapacityRequest] = []
-        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
-            if project.status is not FoundingStatus.PREPARING or project.paused:
-                continue
-            package = self.packages[project.founding_package_id]
-            remaining = max(0.0, package.preparation_work - project.preparation_done)
-            if remaining <= 1e-12:
-                continue
-            requests.append(
-                ServiceCapacityRequest(
-                    self.service_request_id(project.id),
-                    project.staging_node_id,
-                    package.preparation_service_type,
-                    remaining,
-                    project.priority,
-                    "founding",
-                    EntityId(str(project.id)),
-                    "preparation_work",
-                )
-            )
-        return tuple(requests)
-
     def advance_day(
         self,
-        allocations: ResourceAllocationPlan,
-        service_allocations: ServiceCapacityAllocationPlan,
+        allocations: ExecutionAllocationPlan,
         day: int,
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> None:
@@ -628,8 +629,8 @@ class LocationFoundingService:
                     continue
                 package = self.packages[project.founding_package_id]
                 try:
-                    allocated_service = service_allocations.allocated(
-                        self.service_request_id(project.id)
+                    allocated_service = allocations.allocated(
+                        self.preparation_execution_id(project.id)
                     )
                 except KeyError:
                     allocated_service = 0.0

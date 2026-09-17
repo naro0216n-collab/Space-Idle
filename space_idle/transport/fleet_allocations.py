@@ -4,7 +4,7 @@ from dataclasses import replace
 import math
 
 from ..priority import DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PROVISIONING_PRIORITY, ProvisioningPriority
-from ..resource_claim import ResourceAllocationPlan, ResourceClaim
+from ..execution_requirements import ExecutionAllocationPlan, ExecutionRequirementBundle, ResourceRequirement
 from ..supply import SupplyRequirement
 from ..service_capacity import ServiceCapacityRequest
 from ..shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
@@ -1162,11 +1162,11 @@ class FleetAllocationMixin:
         return relocation_id
 
     @staticmethod
-    def _relocation_claim_id(
+    def _relocation_resource_execution_id(
         relocation_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId
     ) -> EntityId:
         return EntityId(
-            f"claim.fleet_relocation:{relocation_id}:{operational_node_id}:{resource_id}"
+            f"execution.fleet_relocation_resource:{relocation_id}:{operational_node_id}:{resource_id}"
         )
 
     @staticmethod
@@ -1177,8 +1177,11 @@ class FleetAllocationMixin:
             f"requirement.fleet_relocation:{relocation_id}:{operational_node_id}:{resource_id}"
         )
 
-    def fleet_relocation_resource_claims(self, day: int) -> tuple[ResourceClaim, ...]:
-        claims: list[ResourceClaim] = []
+    def fleet_relocation_execution_requirement_bundles(
+        self, day: int
+    ) -> tuple[ExecutionRequirementBundle, ...]:
+        del day
+        bundles: list[ExecutionRequirementBundle] = []
         for relocation in sorted(self.fleet_relocations.values(), key=lambda row: str(row.id)):
             if relocation.started:
                 continue
@@ -1189,19 +1192,19 @@ class FleetAllocationMixin:
                 missing = max(0.0, need.required_t - staged)
                 if missing <= 1e-12:
                     continue
-                claims.append(ResourceClaim(
-                    self._relocation_claim_id(
+                bundles.append(ExecutionRequirementBundle(
+                    id=self._relocation_resource_execution_id(
                         relocation.id, need.operational_node_id, need.resource_id
                     ),
-                    need.operational_node_id,
-                    need.resource_id,
-                    missing,
-                    relocation.priority,
-                    "fleet_relocation",
-                    relocation.id,
-                    "operation_resource",
+                    owner_kind="fleet_relocation",
+                    owner_id=relocation.id,
+                    purpose="operation_resource",
+                    operational_node_id=need.operational_node_id,
+                    requested_execution=missing,
+                    priority=relocation.priority,
+                    requirements=(ResourceRequirement(need.resource_id, 1.0),),
                 ))
-        return tuple(claims)
+        return tuple(bundles)
 
     def fleet_relocation_supplys(self, day: int) -> tuple[SupplyRequirement, ...]:
         requirements: list[SupplyRequirement] = []
@@ -1229,17 +1232,17 @@ class FleetAllocationMixin:
         return tuple(requirements)
 
     def advance_fleet_relocations(
-        self, allocations: ResourceAllocationPlan, day: int
+        self, allocations: ExecutionAllocationPlan, day: int
     ) -> None:
         for relocation in sorted(self.fleet_relocations.values(), key=lambda row: str(row.id)):
             if relocation.started:
                 continue
             for need in relocation.resource_needs:
-                claim_id = self._relocation_claim_id(
+                execution_id = self._relocation_resource_execution_id(
                     relocation.id, need.operational_node_id, need.resource_id
                 )
                 try:
-                    amount = allocations.allocated(claim_id)
+                    amount = allocations.allocated(execution_id)
                 except KeyError:
                     amount = 0.0
                 if amount > 1e-12:

@@ -87,8 +87,6 @@ class TickPhysicalSnapshot:
 class TickIntents:
     supplys: tuple[SupplyRequirement, ...]
     execution_requirements: tuple[AllocationIntent, ...]
-    resource_claims: tuple[ResourceClaim, ...]
-    service_requests: tuple[ServiceCapacityRequest, ...]
 
 
 @dataclass(frozen=True)
@@ -363,6 +361,10 @@ class Simulation:
         rows: list[AllocationIntent] = []
         rows.extend(self.projects.reservation_acquisition_requirements(self.day))
         rows.extend(self.projects.execution_requirement_bundles(self.day))
+        if self.founding is not None:
+            rows.extend(self.founding.execution_requirement_bundles(self.day))
+        rows.extend(self.transport.vehicle_production_execution_requirement_bundles(self.day))
+        rows.extend(self.transport.fleet_relocation_execution_requirement_bundles(self.day))
         if self.maintenance is not None:
             rows.extend(self.maintenance.execution_requirement_bundles(self.day))
         for location_id in sorted(self._active_locations(), key=str):
@@ -399,37 +401,6 @@ class Simulation:
         if len(set(ids)) != len(ids):
             raise RuntimeError("duplicate execution requirement id")
         return tuple(rows)
-
-    def _resource_claims(self) -> tuple[ResourceClaim, ...]:
-        # Only Domains not yet migrated to Execution Requirement Bundles remain
-        # here. Migrated Domains must not retain a parallel ResourceClaim path.
-        claims: list[ResourceClaim] = []
-        if self.founding is not None:
-            claims.extend(self.founding.resource_claims())
-        claims.extend(self.transport.vehicle_production_resource_claims(self.day))
-        claims.extend(self.transport.fleet_relocation_resource_claims(self.day))
-        seen: set[object] = set()
-        for claim in claims:
-            if claim.id in seen:
-                raise RuntimeError(f"duplicate resource claim id: {claim.id}")
-            seen.add(claim.id)
-        return tuple(claims)
-
-    def _service_capacity_requests(self) -> tuple[ServiceCapacityRequest, ...]:
-        # Consumer requests for Domains not yet migrated to Bundle settlement.
-        requests: list[ServiceCapacityRequest] = list(
-            self.transport.vehicle_production_service_requests(self.day)
-        )
-        if self.founding is not None:
-            requests.extend(self.founding.service_requests(self.day))
-        # Surface infrastructure's own load is a provider dependency and is
-        # injected by _allocate_tick_services, not duplicated here.
-        seen: set[object] = set()
-        for request in requests:
-            if request.id in seen:
-                raise RuntimeError(f"duplicate service capacity request id: {request.id}")
-            seen.add(request.id)
-        return tuple(requests)
 
     def service_capacity_dependencies(self) -> tuple[ServiceCapacityDependency, ...]:
         """Declare static same-tick Service Capacity provider dependencies.
@@ -671,7 +642,7 @@ class Simulation:
         requests: tuple[ServiceCapacityRequest, ...] | None = None,
     ) -> ServiceCapacityAllocationPlan:
         """Standalone Service projection; normal ticks use the full DAG."""
-        requests = self._service_capacity_requests() if requests is None else requests
+        requests = () if requests is None else requests
         if self.surface_infrastructure is not None:
             request_ids = {request.id for request in requests}
             upstream = tuple(
@@ -800,8 +771,6 @@ class Simulation:
         return TickIntents(
             supplys=self._gross_supplys(),
             execution_requirements=self._execution_requirements(),
-            resource_claims=self._resource_claims(),
-            service_requests=self._service_capacity_requests(),
         )
 
     def _plan_tick(self, intents: TickIntents) -> TickPlan:
@@ -856,36 +825,6 @@ class Simulation:
     @staticmethod
     def _as_execution_bundle(intent: AllocationIntent) -> ExecutionRequirementBundle:
         return intent.as_bundle() if isinstance(intent, ReservationAcquisitionRequirement) else intent
-
-    def _resource_claim_execution_bundle(self, claim: ResourceClaim) -> ExecutionRequirementBundle:
-        return ExecutionRequirementBundle(
-            id=claim.id,
-            owner_kind=claim.owner_kind,
-            owner_id=claim.owner_id,
-            purpose=claim.purpose,
-            operational_node_id=claim.operational_node_id,
-            requested_execution=claim.requested_amount,
-            priority=claim.priority,
-            requirements=(ResourceRequirement(claim.resource_id, 1.0),),
-            minimum_execution=claim.minimum_amount,
-            atomic=claim.atomic,
-            wait_started_day=self.day if claim.effective_minimum_amount > 1e-12 else None,
-        )
-
-    def _service_request_execution_bundle(self, request: ServiceCapacityRequest) -> ExecutionRequirementBundle:
-        return self._with_organization_service_envelopes(ExecutionRequirementBundle(
-            id=request.id,
-            owner_kind=request.owner_kind,
-            owner_id=request.owner_id,
-            purpose=request.purpose,
-            operational_node_id=request.operational_node_id,
-            requested_execution=request.requested_rate,
-            priority=request.priority,
-            requirements=(ServiceCapacityRequirement(request.service_type, 1.0),),
-            minimum_execution=request.minimum_rate,
-            atomic=request.atomic,
-            wait_started_day=self.day if request.effective_minimum_rate > 1e-12 else None,
-        ))
 
     def _constraint_capacities(
         self,
@@ -981,6 +920,85 @@ class Simulation:
                 max(0.0, claim.requested_amount - amount),
             ))
         return ResourceAllocationPlan(claims, tuple(allocations))
+
+    @staticmethod
+    def _resource_projection_from_execution(
+        execution: ExecutionAllocationPlan,
+    ) -> tuple[tuple[ResourceClaim, ...], dict[EntityId, float]]:
+        """Adapt root Bundle Resource constraints for Application reporting only.
+
+        Settlement is already authoritative in ``ExecutionAllocationPlan``.  This
+        projection keeps the existing Resource allocation view without creating a
+        second ResourceClaim settlement path.
+        """
+        claims: list[ResourceClaim] = []
+        overrides: dict[EntityId, float] = {}
+        for bundle in execution.bundles:
+            if bundle.owner_kind == "logistics_dispatch":
+                continue
+            requirements = tuple(
+                requirement
+                for requirement in bundle.requirements
+                if isinstance(requirement, ResourceRequirement)
+                and requirement.amount_per_execution > 1e-12
+            )
+            for index, requirement in enumerate(requirements):
+                node_id = requirement.constraint_node(bundle.operational_node_id)
+                claim_id = EntityId(
+                    f"projection.resource:{bundle.id}:{index}:{node_id}:{requirement.resource_id}"
+                )
+                requested = bundle.requested_execution * requirement.amount_per_execution
+                allocated = execution.allocated(bundle.id) * requirement.amount_per_execution
+                claims.append(ResourceClaim(
+                    claim_id,
+                    node_id,
+                    requirement.resource_id,
+                    requested,
+                    bundle.priority,
+                    bundle.owner_kind,
+                    bundle.owner_id,
+                    bundle.purpose,
+                    minimum_amount=bundle.minimum_execution * requirement.amount_per_execution,
+                    atomic=bundle.atomic,
+                ))
+                overrides[claim_id] = allocated
+        return tuple(claims), overrides
+
+    @staticmethod
+    def _service_projection_requests_from_execution(
+        execution: ExecutionAllocationPlan,
+    ) -> tuple[tuple[ServiceCapacityRequest, ...], dict[EntityId, float]]:
+        """Adapt node-scoped Bundle Service constraints for reporting only."""
+        requests: list[ServiceCapacityRequest] = []
+        overrides: dict[EntityId, float] = {}
+        for bundle in execution.bundles:
+            if bundle.owner_kind == "logistics_dispatch":
+                continue
+            for index, requirement in enumerate(bundle.requirements):
+                if not isinstance(requirement, ServiceCapacityRequirement):
+                    continue
+                if requirement.scope is not ServiceCapacityScope.OPERATIONAL_NODE:
+                    continue
+                if requirement.amount_per_execution <= 1e-12:
+                    continue
+                node_id = requirement.constraint_node(bundle.operational_node_id)
+                request_id = EntityId(
+                    f"projection.service:{bundle.id}:{index}:{node_id}:{requirement.service_type}"
+                )
+                requested = bundle.requested_execution * requirement.amount_per_execution
+                allocated = execution.allocated(bundle.id) * requirement.amount_per_execution
+                requests.append(ServiceCapacityRequest(
+                    request_id,
+                    node_id,
+                    requirement.service_type,
+                    requested,
+                    bundle.priority,
+                    bundle.owner_kind,
+                    bundle.owner_id,
+                    bundle.purpose,
+                ))
+                overrides[request_id] = allocated
+        return tuple(requests), overrides
 
     @staticmethod
     def _service_plan_from_execution(
@@ -1229,16 +1247,12 @@ class Simulation:
         market_buys = self.market.plan_buy_allocations()
         authorized_logistics = plan.logistics
 
-        resource_claim_intents = tuple(intents.resource_claims)
         transport_requests = self.transport.transport_service_capacity_requests(
             self.day, authorized_logistics.planned_usage
         )
-        all_service_requests = self._complete_service_requests(
-            intents.service_requests + transport_requests
-        )
-        base_intents: tuple[AllocationIntent | ExecutionRequirementBundle, ...] = (
-            tuple(intents.execution_requirements)
-            + tuple(self._resource_claim_execution_bundle(claim) for claim in resource_claim_intents)
+        all_service_requests = self._complete_service_requests(transport_requests)
+        base_intents: tuple[AllocationIntent | ExecutionRequirementBundle, ...] = tuple(
+            intents.execution_requirements
         )
 
         def resolve_for_maintenance(maintenance_factors):
@@ -1253,22 +1267,7 @@ class Simulation:
             # fulfillment estimate. Consumer Service requirements join the same
             # root Execution Bundles as their Resource/Transport requirements.
             provider_plan = self._allocate_tick_services(power_by_location, requests=())
-            provider_ids = {request.id for request in provider_plan.requests}
-            service_request_intents = tuple(
-                request for request in all_service_requests
-                if request.id not in provider_ids
-                and not (
-                    request.owner_kind == "transport"
-                    and request.purpose == "turnaround_servicing"
-                )
-            )
-            static_intents = (
-                base_intents
-                + tuple(
-                    self._service_request_execution_bundle(request)
-                    for request in service_request_intents
-                )
-            )
+            static_intents = base_intents
 
             (
                 execution,
@@ -1292,7 +1291,6 @@ class Simulation:
             return (
                 power_by_location,
                 provider_plan,
-                service_request_intents,
                 execution,
                 next_maintenance_factors,
                 actual_usage,
@@ -1312,7 +1310,6 @@ class Simulation:
             (
                 power_by_location,
                 provider_plan,
-                service_request_intents,
                 execution,
                 next_maintenance_factors,
                 transport_usage,
@@ -1340,7 +1337,6 @@ class Simulation:
                 (
                     power_by_location,
                     provider_plan,
-                    service_request_intents,
                     execution,
                     verified_factors,
                     transport_usage,
@@ -1380,19 +1376,27 @@ class Simulation:
         logistics_projection_claims = self.logistics.resource_allocation_projection_claims(
             self.day, authorized_logistics, transport_reference_usage
         )
-        all_resource_claims = intents.resource_claims + logistics_projection_claims
+        bundle_resource_claims, bundle_resource_overrides = (
+            self._resource_projection_from_execution(execution)
+        )
+        all_resource_claims = bundle_resource_claims + logistics_projection_claims
         resource_overrides, service_overrides = (
             self.logistics.transport_operation_allocation_overrides(
                 self.day, transport_usage
             )
         )
+        resource_overrides = {**bundle_resource_overrides, **resource_overrides}
         resources = self._resource_plan_from_execution(
             all_resource_claims,
             execution,
             allocation_overrides=resource_overrides,
         )
+        bundle_service_requests, bundle_service_overrides = (
+            self._service_projection_requests_from_execution(execution)
+        )
+        service_overrides = {**bundle_service_overrides, **service_overrides}
         services = self._service_plan_from_execution(
-            all_service_requests,
+            all_service_requests + bundle_service_requests,
             execution,
             provider_plan,
             allocation_overrides=service_overrides,
@@ -1465,15 +1469,14 @@ class Simulation:
             self.survey.advance_day(powers, allocations.execution, self.day)
 
         self.transport.advance_vehicle_production_day(
-            powers, allocations.resources, allocations.services, self.day
+            powers, allocations.execution, self.day
         )
         self.transport.advance_fleet_retirements(allocations.execution, self.day)
         self.projects.finalize_procurement(allocations.execution, self.day)
         self.projects.advance_construction(powers, allocations.execution, self.day)
         if self.founding is not None:
             self.founding.advance_day(
-                allocations.resources,
-                allocations.services,
+                allocations.execution,
                 self.day,
                 powers,
             )
@@ -1487,7 +1490,7 @@ class Simulation:
         # Movement is deliberately after every Domain execution.  It may spend
         # only amounts authorized from the start-of-tick allocation and cannot
         # admit arriving Cargo to Inventory until the next boundary.
-        self.transport.advance_fleet_relocations(allocations.resources, self.day)
+        self.transport.advance_fleet_relocations(allocations.execution, self.day)
         return self.logistics.advance_capacity_logistics(
             self.day, allocations.logistics, allocations.transport
         )
