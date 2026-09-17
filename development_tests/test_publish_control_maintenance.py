@@ -54,59 +54,57 @@ def init_repo(tmp_path: Path) -> tuple[Path, str, str]:
     return repo, base, base_tree
 
 
-def expected_oids(repo: Path) -> dict[str, str]:
-    return {path: git(repo, "rev-parse", f"HEAD:{path}") for path in CONTROL_PATHS}
-
-
-def test_control_maintenance_uses_recorded_publish_base_and_exact_current_paths(tmp_path: Path) -> None:
+def test_control_maintenance_uses_content_tree_plan_and_direct_commit_to_ref_sequence(tmp_path: Path) -> None:
     repo, base, base_tree = init_repo(tmp_path)
     prepared = json.loads(run(repo, "prepare").stdout)
     assert prepared["control_paths"] == list(CONTROL_PATHS)
     plan = json.loads(run(repo, "connector-plan", "--publish-head", base).stdout)
     assert plan["base_tree"] == base_tree
-    assert len(plan["upload_packets"]) == 2
-    assert "expected_tree" in plan
+    assert plan["strategy"] == "publish-control-tree-content-batches"
+    assert plan["normal_pre_ref_helper_round_trips"] == 0
+    assert plan["tree_packets"]
 
-    oids = expected_oids(repo)
-    blob_args: list[str] = []
-    for path, oid in oids.items():
-        blob_args.extend(["--blob", f"{path}={oid}"])
-    tree = json.loads(run(repo, "connector-tree", *blob_args).stdout)
-    packet = json.loads(Path(tree["tree_packet"]).read_text(encoding="utf-8"))
-    assert packet["action"] == "GitHub.create_tree"
-    assert packet["action_args"]["base_tree_sha"] == base_tree
-    elements = packet["action_args"]["tree_elements"]
-    assert {e["path"] for e in elements} == set(CONTROL_PATHS)
+    observed: set[str] = set()
+    previous_tree = base_tree
+    for packet_path in plan["tree_packets"]:
+        packet = json.loads(Path(packet_path).read_text(encoding="utf-8"))
+        assert packet["action"] == "GitHub.create_tree"
+        assert packet["action_args"]["base_tree_sha"] == previous_tree
+        for element in packet["action_args"]["tree_elements"]:
+            assert "content" in element
+            assert "sha" not in element
+            observed.add(element["path"])
+        previous_tree = packet["expected_tree"]
+    assert observed == set(CONTROL_PATHS)
+    assert previous_tree == plan["expected_tree"]
 
-    wrong = run(repo, "connector-commit", "--tree-sha", "f" * 40, check=False)
-    assert wrong.returncode != 0
-    commit = json.loads(run(repo, "connector-commit", "--tree-sha", plan["expected_tree"]).stdout)
-    commit_packet = json.loads(Path(commit["commit_packet"]).read_text(encoding="utf-8"))
+    commit_packet = json.loads(Path(plan["commit_packet"]).read_text(encoding="utf-8"))
+    assert commit_packet["action"] == "GitHub.create_commit"
+    assert commit_packet["action_args"]["tree_sha"] == plan["expected_tree"]
     assert commit_packet["action_args"]["parent_sha"] == base
+    assert plan["post_commit_ref_update"]["force"] is False
 
     candidate = "a" * 40
-    update = json.loads(run(repo, "connector-update", "--commit-sha", candidate).stdout)
-    update_packet = json.loads(Path(update["update_packet"]).read_text(encoding="utf-8"))
-    assert update_packet["action_args"]["force"] is False
     recorded = json.loads(run(repo, "record-update", "--commit-sha", candidate, "--result", "success").stdout)
     assert recorded["normal_publish_base_updated"] is True
+    assert recorded["record_verification"] == "manifest-identity-and-successful-ref-update"
     state = json.loads((repo / ".git" / "space-idle-publish-state.json").read_text(encoding="utf-8"))
     assert state["publish_commit"] == candidate
     assert state["publish_tree"] == plan["expected_tree"]
     assert not transaction(repo).exists()
 
 
-def test_control_tree_rejects_blob_transfer_mismatch_before_tree_creation(tmp_path: Path) -> None:
+def test_control_record_rejects_manifest_mutation_after_plan(tmp_path: Path) -> None:
     repo, base, _ = init_repo(tmp_path)
     run(repo, "prepare")
     run(repo, "connector-plan", "--publish-head", base)
-    oids = expected_oids(repo)
-    args: list[str] = []
-    for index, (path, oid) in enumerate(oids.items()):
-        args.extend(["--blob", f"{path}={'f' * 40 if index == 0 else oid}"])
-    failed = run(repo, "connector-tree", *args, check=False)
+    manifest = transaction(repo) / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["message"] = "tampered"
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    failed = run(repo, "record-update", "--commit-sha", "b" * 40, "--result", "success", check=False)
     assert failed.returncode != 0
-    assert "control blob OID mismatch" in failed.stderr
+    assert "manifest changed" in failed.stderr
 
 
 def test_control_plan_rejects_moved_publish_head(tmp_path: Path) -> None:

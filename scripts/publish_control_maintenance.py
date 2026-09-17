@@ -164,17 +164,89 @@ def _summary(repo: Path, state: dict[str, object], **extra: object) -> dict[str,
     return result
 
 
-def _expected_control_tree(repo: Path, base_tree: str, files: list[dict[str, object]]) -> str:
+def _control_tree_packet(base_tree: str, elements: list[dict[str, object]], batch_index: int, expected_tree: str | None = None) -> dict[str, object]:
+    packet: dict[str, object] = {
+        "stage": "assemble-publish-control-tree",
+        "tree_batch_index": batch_index,
+        "action": "GitHub.create_tree",
+        "action_args": {
+            "repository_full_name": GITHUB_REPOSITORY,
+            "base_tree_sha": base_tree,
+            "tree_elements": elements,
+        },
+    }
+    if expected_tree is not None:
+        packet["expected_tree"] = expected_tree
+    return packet
+
+
+def _write_blob(repo: Path, content: str) -> str:
+    result = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=repo, input=content.encode("utf-8"),
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return _require_sha(result.stdout.decode("ascii").strip(), name="local control blob OID")
+
+
+def _pack_control_elements(base_tree: str, files: list[dict[str, object]]) -> list[list[dict[str, object]]]:
+    elements = [
+        {
+            "path": str(file["path"]),
+            "mode": str(file["mode"]),
+            "type": "blob",
+            "content": str(file["content"]),
+        }
+        for file in files
+    ]
+    batches: list[list[dict[str, object]]] = []
+    current: list[dict[str, object]] = []
+    for element in elements:
+        candidate = [*current, element]
+        packet = _control_tree_packet(base_tree, candidate, len(batches))
+        if _packet_bytes(packet) < CONNECTOR_CALL_HARD_CEILING_BYTES:
+            current = candidate
+            continue
+        if not current:
+            raise ControlMaintenanceError(f"single control file exceeds connector ceiling: {element['path']}")
+        batches.append(current)
+        current = [element]
+        if _packet_bytes(_control_tree_packet(base_tree, current, len(batches))) >= CONNECTOR_CALL_HARD_CEILING_BYTES:
+            raise ControlMaintenanceError(f"single control file exceeds connector ceiling: {element['path']}")
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _expected_control_batches(
+    repo: Path, base_tree: str, batches: list[list[dict[str, object]]],
+) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
     with tempfile.TemporaryDirectory(prefix="space-idle-control-index-") as tmp:
         env = os.environ.copy()
         env["GIT_INDEX_FILE"] = str(Path(tmp) / "index")
         _git("read-tree", base_tree, cwd=repo, env=env)
-        for file in files:
-            _git(
-                "update-index", "--add", "--cacheinfo", str(file["mode"]), str(file["blob_oid"]), str(file["path"]),
-                cwd=repo, env=env,
-            )
-        return _git("write-tree", cwd=repo, env=env)
+        current_tree = base_tree
+        for index, elements in enumerate(batches):
+            for element in elements:
+                oid = _write_blob(repo, str(element["content"]))
+                _git(
+                    "update-index", "--add", "--cacheinfo", str(element["mode"]), oid, str(element["path"]),
+                    cwd=repo, env=env,
+                )
+            expected_tree = _git("write-tree", cwd=repo, env=env)
+            result.append({
+                "batch_index": index,
+                "base_tree": current_tree,
+                "expected_tree": expected_tree,
+                "elements": elements,
+            })
+            current_tree = expected_tree
+    return result
+
+
+def _manifest_sha256(repo: Path) -> str:
+    import hashlib
+    return hashlib.sha256(_manifest_path(repo).read_bytes()).hexdigest()
 
 
 def cmd_prepare(_: argparse.Namespace) -> int:
@@ -185,8 +257,8 @@ def cmd_prepare(_: argparse.Namespace) -> int:
         raise ControlMaintenanceError("an active publish control maintenance transaction already exists; continue it")
     files: list[dict[str, object]] = []
     for path in CONTROL_PATHS:
-        mode, oid, text = _head_entry(repo, path)
-        files.append({"path": path, "mode": mode, "blob_oid": oid, "content": text})
+        mode, _oid, text = _head_entry(repo, path)
+        files.append({"path": path, "mode": mode, "content": text})
     manifest = {
         "version": MANIFEST_VERSION,
         "kind": "publish-control-maintenance",
@@ -223,161 +295,67 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         raise ControlMaintenanceError("recorded publish base tree is unavailable locally") from exc
     connector = _connector_dir(repo)
     if _state_path(repo).exists():
-        raise ControlMaintenanceError("publish control connector plan already exists; continue its stage")
+        raise ControlMaintenanceError("publish control connector plan already exists; continue it")
     connector.mkdir(parents=True, exist_ok=True)
 
-    packets: list[str] = []
-    packet_sizes: list[int] = []
     files = list(manifest["files"])
-    for index, file in enumerate(files):
-        packet = {
-            "action": "GitHub.create_blob",
-            "action_args": {
-                "repository_full_name": GITHUB_REPOSITORY,
-                "content": file["content"],
-                "encoding": "utf-8",
-            },
-            "control_path": file["path"],
-            "expected_blob_git_oid": file["blob_oid"],
-        }
-        path = connector / f"upload-control-{index:04d}.json"
-        packet_sizes.append(_write_packet(path, packet))
-        packets.append(str(path))
+    raw_batches = _pack_control_elements(base_tree, files)
+    batches = _expected_control_batches(repo, base_tree, raw_batches)
+    expected_tree = str(batches[-1]["expected_tree"])
 
-    expected_tree = _expected_control_tree(repo, base_tree, files)
-    state = {
-        "version": 2,
-        "stage": "uploads-planned",
-        "base_commit": base_commit,
-        "base_tree": base_tree,
-        "expected_tree": expected_tree,
-        "upload_packets": packets,
-    }
-    _write_json(_state_path(repo), state)
-    result = _summary(
-        repo, state,
-        upload_packets=packets,
-        upload_call_bytes=packet_sizes,
-        expected_tree=expected_tree,
-        next="execute each generated create_blob packet; pass returned PATH=SHA values to connector-tree",
-    )
-    print(json.dumps(result, indent=2))
-    return 0
-
-
-def _parse_observed_blobs(values: list[str]) -> dict[str, str]:
-    observed: dict[str, str] = {}
-    for value in values:
-        if "=" not in value:
-            raise ControlMaintenanceError("--blob must be PATH=SHA")
-        path, sha = value.rsplit("=", 1)
-        if not path or path in observed:
-            raise ControlMaintenanceError(f"invalid or duplicate observed blob path: {path}")
-        observed[path] = _require_sha(sha, name=f"blob SHA for {path}")
-    return observed
-
-
-def cmd_connector_tree(args: argparse.Namespace) -> int:
-    repo = _repo()
-    manifest = _load_manifest(repo)
-    state = _load_state(repo)
-    if state.get("stage") != "uploads-planned":
-        raise ControlMaintenanceError(f"connector-tree requires uploads-planned, found {state.get('stage')}")
-    observed = _parse_observed_blobs(args.blob)
-    expected = {str(file["path"]): str(file["blob_oid"]) for file in manifest["files"]}
-    if set(observed) != set(expected):
-        raise ControlMaintenanceError(
-            f"observed blob set mismatch; missing={sorted(set(expected)-set(observed))}, extra={sorted(set(observed)-set(expected))}"
+    tree_packets: list[str] = []
+    tree_call_bytes: list[int] = []
+    for batch in batches:
+        packet = _control_tree_packet(
+            str(batch["base_tree"]), list(batch["elements"]), int(batch["batch_index"]), expected_tree=str(batch["expected_tree"])
         )
-    for path, expected_oid in expected.items():
-        if observed[path] != expected_oid:
-            raise ControlMaintenanceError(
-                f"control blob OID mismatch for {path}: expected {expected_oid}, got {observed[path]}"
-            )
-    elements: list[dict[str, object]] = [
-        {"path": file["path"], "mode": file["mode"], "type": "blob", "sha": file["blob_oid"]}
-        for file in manifest["files"]
-    ]
-    packet = {
-        "action": "GitHub.create_tree",
-        "action_args": {
-            "repository_full_name": GITHUB_REPOSITORY,
-            "base_tree_sha": state["base_tree"],
-            "tree_elements": elements,
-        },
-    }
-    packet_path = _connector_dir(repo) / "assemble-control-tree.json"
-    size = _write_packet(packet_path, packet)
-    state["stage"] = "tree-packet-ready"
-    state["tree_packet"] = str(packet_path)
-    _write_json(_state_path(repo), state)
-    result = _summary(
-        repo, state, tree_packet=str(packet_path), tree_call_bytes=size,
-        expected_tree=state["expected_tree"],
-        next="execute GitHub.create_tree; pass only its returned tree SHA to connector-commit",
-    )
-    print(json.dumps(result, indent=2))
-    return 0
+        path = connector / f"control-tree-{int(batch['batch_index']):03d}.json"
+        tree_call_bytes.append(_write_packet(path, packet))
+        tree_packets.append(str(path))
 
-
-def cmd_connector_commit(args: argparse.Namespace) -> int:
-    repo = _repo()
-    manifest = _load_manifest(repo)
-    state = _load_state(repo)
-    if state.get("stage") != "tree-packet-ready":
-        raise ControlMaintenanceError(f"connector-commit requires tree-packet-ready, found {state.get('stage')}")
-    tree_sha = _require_sha(args.tree_sha, name="created control tree SHA")
-    if tree_sha != state["expected_tree"]:
-        raise ControlMaintenanceError(
-            f"created control tree mismatch: expected {state['expected_tree']}, got {tree_sha}; retry the create_tree transfer"
-        )
-    packet = {
+    commit_packet = {
         "action": "GitHub.create_commit",
         "action_args": {
             "repository_full_name": GITHUB_REPOSITORY,
             "message": manifest["message"],
-            "tree_sha": tree_sha,
-            "parent_sha": state["base_commit"],
+            "tree_sha": expected_tree,
+            "parent_sha": base_commit,
         },
     }
-    packet_path = _connector_dir(repo) / "create-control-commit.json"
-    _write_packet(packet_path, packet)
-    state["stage"] = "commit-packet-ready"
-    state["created_tree"] = tree_sha
-    state["commit_packet"] = str(packet_path)
+    commit_path = connector / "create-control-commit.json"
+    _write_packet(commit_path, commit_packet)
+
+    state = {
+        "version": 3,
+        "stage": "execution-plan-ready",
+        "base_commit": base_commit,
+        "base_tree": base_tree,
+        "expected_tree": expected_tree,
+        "manifest_sha256": _manifest_sha256(repo),
+        "tree_packets": tree_packets,
+        "commit_packet": str(commit_path),
+    }
     _write_json(_state_path(repo), state)
     result = _summary(
-        repo, state, commit_packet=str(packet_path),
-        next="execute GitHub.create_commit; pass only its returned commit SHA to connector-update",
-    )
-    print(json.dumps(result, indent=2))
-    return 0
-
-
-def cmd_connector_update(args: argparse.Namespace) -> int:
-    repo = _repo()
-    state = _load_state(repo)
-    if state.get("stage") != "commit-packet-ready":
-        raise ControlMaintenanceError(f"connector-update requires commit-packet-ready, found {state.get('stage')}")
-    commit_sha = _require_sha(args.commit_sha, name="created control commit SHA")
-    packet = {
-        "action": "GitHub.update_ref",
-        "action_args": {
+        repo, state,
+        strategy="publish-control-tree-content-batches",
+        tree_packets=tree_packets,
+        tree_call_bytes=tree_call_bytes,
+        expected_tree=expected_tree,
+        commit_packet=str(commit_path),
+        normal_pre_ref_helper_round_trips=0,
+        post_commit_ref_update={
+            "action": "GitHub.update_ref",
             "repository_full_name": GITHUB_REPOSITORY,
             "branch_name": TARGET_BRANCH,
-            "sha": commit_sha,
+            "sha": "<GitHub.create_commit returned SHA>",
             "force": False,
         },
-    }
-    packet_path = _connector_dir(repo) / "advance-publish-control-ref.json"
-    _write_packet(packet_path, packet)
-    state["stage"] = "update-packet-ready"
-    state["published_commit_candidate"] = commit_sha
-    state["update_packet"] = str(packet_path)
-    _write_json(_state_path(repo), state)
-    result = _summary(
-        repo, state, update_packet=str(packet_path),
-        next="execute the non-force GitHub.update_ref packet; after success run record-update with the same commit SHA",
+        next=(
+            "execute the generated create_tree packets in order and compare each returned SHA with packet expected_tree; "
+            "then execute create_commit and use its returned SHA directly in one non-force publish ref update. "
+            "No helper call is required between writes. After update_ref succeeds, run record-update with that commit SHA."
+        ),
     )
     print(json.dumps(result, indent=2))
     return 0
@@ -386,13 +364,13 @@ def cmd_connector_update(args: argparse.Namespace) -> int:
 def cmd_record_update(args: argparse.Namespace) -> int:
     repo = _repo()
     state = _load_state(repo)
-    if state.get("stage") != "update-packet-ready":
-        raise ControlMaintenanceError(f"record-update requires update-packet-ready, found {state.get('stage')}")
+    if state.get("stage") != "execution-plan-ready":
+        raise ControlMaintenanceError(f"record-update requires execution-plan-ready, found {state.get('stage')}")
     if args.result != "success":
         raise ControlMaintenanceError("publish control ref update did not succeed; keep the active transaction")
     commit_sha = _require_sha(args.commit_sha, name="updated publish commit SHA")
-    if commit_sha != state["published_commit_candidate"]:
-        raise ControlMaintenanceError("updated publish commit does not match the prepared control commit")
+    if _manifest_sha256(repo) != state.get("manifest_sha256"):
+        raise ControlMaintenanceError("publish control manifest changed after connector-plan")
     publish_state = _load_publish_state(repo)
     if publish_state["publish_commit"] != state["base_commit"] or publish_state["publish_tree"] != state["base_tree"]:
         raise ControlMaintenanceError("normal publish base changed during control maintenance")
@@ -405,6 +383,7 @@ def cmd_record_update(args: argparse.Namespace) -> int:
         "published_commit": commit_sha,
         "published_tree": state["expected_tree"],
         "normal_publish_base_updated": True,
+        "record_verification": "manifest-identity-and-successful-ref-update",
     }
     shutil.rmtree(_transaction_dir(repo))
     print(json.dumps(result, indent=2))
@@ -418,15 +397,6 @@ def build_parser() -> argparse.ArgumentParser:
     plan = sub.add_parser("connector-plan")
     plan.add_argument("--publish-head", required=True)
     plan.set_defaults(func=cmd_connector_plan)
-    tree = sub.add_parser("connector-tree")
-    tree.add_argument("--blob", action="append", required=True, help="Observed create_blob result as PATH=SHA")
-    tree.set_defaults(func=cmd_connector_tree)
-    commit = sub.add_parser("connector-commit")
-    commit.add_argument("--tree-sha", required=True)
-    commit.set_defaults(func=cmd_connector_commit)
-    update = sub.add_parser("connector-update")
-    update.add_argument("--commit-sha", required=True)
-    update.set_defaults(func=cmd_connector_update)
     record = sub.add_parser("record-update")
     record.add_argument("--commit-sha", required=True)
     record.add_argument("--result", required=True, choices=("success", "failure"))

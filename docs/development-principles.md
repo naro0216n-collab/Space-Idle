@@ -256,13 +256,11 @@ publish transportは実行環境ごとに一意にする。認証済みnative Gi
 
 現在のConnector実行環境では、publish対象を現在の `HEAD` commitへ固定し、記録済み `develop` commitを親、local target treeをtreeに持つ決定論的commitをGit bundleへ格納してPublish Gatewayへ渡す。source-snapshotは `develop` commit/treeだけでなく生成時点の `publish` commit/treeとそのGit objectを保持し、通常publishのtransport baseを追加network readなしでローカル再構築できる状態にする。repo-localな単一active transactionを正本とし、active transaction中に別requestを開始しない。
 
-通常transportは `.publish/transport/<target>` の固定slotだけを使用する。payloadをBase64 ASCIIの16 KiB固定logical chunkへ分割して連番partとして表現し、各chunkを独立したGit blobとしてConnectorへ転送する。helperはローカルGitで事前計算した期待blob OIDと返却OIDを機械比較し、通常系では生成packetをそのまま順番に送る。成功したchunkは確定済みとして再送しない。
+通常transportは `.publish/transport/<target>` の固定slotだけを使用する。payloadはBase64 ASCIIの16 KiB固定logical chunkへ分割して連番partとして表現するが、chunkごとの `create_blob` は行わない。helperはchunk本文を `create_tree` entryの `content` として直接指定し、Connectorの1 call上限未満に収まる複数batchへpackする。1 callの上限はtransport全体の上限へ昇格させず、最大part数までbatchを積み重ねて扱う。旧 `.publish` transport artifactは固定slotへ移行するtreeで削除し、同責務の新旧経路を併存させない。
 
-返却OIDが不一致となったchunkだけはlogical chunkを変更せず、転記単位を1/2ずつ細分化する。最初のretryは8 KiBずつ、継続失敗時は4 KiB、2 KiB、1 KiB…と同一本文を連続区間で読み出し、順番どおり連結して同じ16 KiB chunkとして再送する。細分化するのはLLMの転記単位だけであり、transport path、本文、期待OID、logical chunk境界は変えない。helperが一致を確認したら直ちに次chunkへ進む。旧 `.publish` transport artifactは固定slotへ移行するtreeで削除し、同責務の新旧経路を併存させない。
+helperはsource-snapshot由来の `publish` base tree、各chunk本文、削除対象pathから各batch後の期待root tree SHAをlocal Gitで事前計算する。第2batch以降は直前batchの期待treeをbaseとし、各 `create_tree` packet自身へ `expected_tree` を含める。返却SHAが期待値と異なる場合は同一packetを再実行し、成功済みbatchへ戻らない。正常系ではGitのcontent-addressed object identityを検証境界とし、tree writeのたびに返却SHAをhelperへ戻して次stageを生成する往復を置かない。
 
-全chunkのblob OIDが一致した後だけ、helperは確定したblob SHAを `create_tree` の各entryへ指定する。tree組立時に本文を再転記せず、Git object IDを参照させる。helperはsource-snapshot由来の `publish` base treeと確定blob OIDから期待root tree SHAをローカルGitで事前計算し、`create_tree` 返却SHAも機械比較する。通常運用はhelperが提示するpacketとConnectorの返却SHAだけを順に受け渡し、一致後に次stageへ進む。
-
-期待tree成立後だけ `create_commit` → non-force `update_ref` を行い、`publish` branchは1回だけ進める。Gatewayはcheckout済み固定slotを直接読み、連番partを連結してbundleを検証し、bundle自身からpublish commit、parent/base、target treeを導出する。GitHub Contents / Blob APIでpayloadを再取得せず、checkout済み `origin/<target>` とbundle parentをローカル比較する。成立後はexact publish commitをnon-force pushし、成功push後の `ls-remote` /再fetch、receipt書込み、pending commit status書込みを重ねない。Fast CIは `GITHUB_TOKEN` によるpushから別workflowが起動しないため明示dispatchする。
+全tree batchの成立後だけ、plan時に生成済みの `create_commit` を実行し、その返却commit SHAを直接non-force `update_ref` へ渡して `publish` branchを1回だけ進める。commit SHAをhelperへ戻す中間stageやcommit object再fetchは置かない。Gatewayはcheckout済み固定slotを直接読み、連番partを連結してbundleを検証し、bundle自身からpublish commit、parent/base、target treeを導出する。GitHub Contents / Blob APIでpayloadを再取得せず、checkout済み `origin/<target>` とbundle parentをローカル比較する。成立後はexact publish commitをnon-force pushし、成功push後の `ls-remote` /再fetch、receipt書込み、pending commit status書込みを重ねない。Fast CIは `GITHUB_TOKEN` によるpushから別workflowが起動しないため明示dispatchする。
 
 Gateway成功の記録は、そのtransport commitをheadに持つPublish Gateway workflow runの `completed / success` を観測してactive transactionへ記録する。receipt専用GitHub objectは作らない。ref更新後の一時的Gateway障害は同じworkflow run/transport commitをrerunし、retry generationとしてtransportを再公開しない。target移動やcontrol不一致等の意味のあるfailureは再送で隠さず原因を解消する。
 
@@ -270,7 +268,7 @@ Gateway成功の記録は、そのtransport commitをheadに持つPublish Gatewa
 
 通常Publish Gatewayの権限境界はgame/source publishを基本とし、`.github/workflows/**` を含むtargetはrequest生成前に識別する。一般のworkflow変更はworkflow maintenance経路へ分離する。Publish Gateway自身の `.github/workflows/publish-gateway.yml` だけは、先に固定 `publish` branchのcontrol maintenanceで同一blobが成立済みの場合に限り通常publishへの同梱を許可し、Gatewayがpublish targetのblob OIDと現在のcontrol branch blob OIDの一致をpush前に機械検証する。
 
-`publish` branch上のcontrol plane更新は独立したcontrol maintenance責務とする。対象pathをGateway workflowと現在使用するvalidatorへ固定し、各control fileを `GitHub.create_blob` して返却OIDをlocal正準OIDと照合する。その後の `create_tree` もlocal期待tree SHAと照合してから `create_commit` → non-force `update_ref` へ進む。source-snapshotに保持したpublish base treeを利用するため通常時にremote treeを再取得せず、ref update成功後も再readせずlocal publish stateを更新する。廃止したcontrol componentは同じcontrol treeから削除し、互換経路を残さない。
+`publish` branch上のcontrol plane更新は独立したcontrol maintenance責務とする。対象pathをGateway workflowと現在使用するvalidatorへ固定し、control file本文を `create_tree` entryの `content` として直接渡す。helperはsource-snapshotに保持したpublish base treeから各batchの期待tree SHAを事前計算し、正常系ではtree返却SHAをhelperへ戻す中間stageを置かない。期待tree成立後は生成済み `create_commit` を実行し、その返却SHAを直接non-force `update_ref` へ渡す。通常時にremote treeやcommit objectを再取得せず、ref update成功後も再readせずlocal publish stateを更新する。廃止したcontrol componentは同じcontrol treeから削除し、互換経路を残さない。
 
 `temp` は標準publishの中継やpromotion元にはしない。ユーザー指定時、またはGateway / workflow経路そのものを隔離検証する場合だけ使用する。その検証成果物を通常の `develop` publish入力として再利用しない。
 

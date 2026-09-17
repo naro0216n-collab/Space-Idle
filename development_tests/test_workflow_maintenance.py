@@ -78,10 +78,7 @@ def test_workflow_maintenance_is_separate_and_has_no_target_or_path_selectors() 
         "prepare": ("--repo", "--target-ref", "--output", "--target-branch"),
         "connector-plan": ("--repo", "--manifest", "--plan-dir", "--github-repository",
                            "--output-dir", "--connector-call-budget-bytes", "--target-branch"),
-        "connector-tree": ("--repo", "--manifest", "--plan-dir"),
-        "connector-commit": ("--repo", "--manifest", "--plan-dir"),
-        "connector-update": ("--repo", "--manifest", "--plan-dir", "--force"),
-        "verify-remote": ("--repo", "--manifest", "--plan-dir", "--target-branch"),
+        "record-update": ("--repo", "--manifest", "--plan-dir", "--target-branch", "--force"),
     }
     for command, flags in forbidden_by_command.items():
         help_text = run(MAINTENANCE, ROOT, command, "--help").stdout
@@ -115,7 +112,7 @@ def test_prepare_rejects_nonworkflow_mixed_and_second_active_transaction(tmp_pat
     assert "active workflow maintenance transaction" in second.stderr
 
 
-def test_workflow_maintenance_stages_exact_git_data_and_requires_rehydration(tmp_path: Path) -> None:
+def test_workflow_maintenance_generates_complete_content_tree_plan_and_requires_rehydration(tmp_path: Path) -> None:
     repo, base, _ = init_repo(tmp_path)
     workflow = repo / ".github" / "workflows" / "ci.yml"
     workflow.write_text("name: CI\non: [push, workflow_dispatch]\n", encoding="utf-8")
@@ -130,49 +127,41 @@ def test_workflow_maintenance_stages_exact_git_data_and_requires_rehydration(tmp
         MAINTENANCE, repo, "connector-plan", "--develop-head", base
     ).stdout)
     plan_path = maintenance_plan(repo)
-    assert plan["stage"] == "uploads-planned"
-    assert plan["upload_call_count"] == 1
-    assert "copy/paste" in plan["next"]
-    upload = json.loads(Path(plan["upload_packets"][0]).read_text(encoding="utf-8"))
-    assert upload["action"] == "GitHub.create_blob"
-    assert upload["action_args"]["repository_full_name"] == "naro0216n-collab/Space-Idle"
+    assert plan["stage"] == "execution-plan-ready"
+    assert plan["strategy"] == "workflow-maintenance-tree-content-batches"
+    assert plan["normal_pre_ref_helper_round_trips"] == 0
+    assert plan["tree_packets"]
 
-    tree_meta = json.loads(run(MAINTENANCE, repo, "connector-tree").stdout)
-    tree_packet = json.loads(Path(tree_meta["tree_packet"]).read_text(encoding="utf-8"))
-    assert tree_packet["action"] == "GitHub.create_tree"
-    assert tree_packet["expected_tree_git_oid"] == target_tree
+    previous_tree = plan["base_tree"]
+    for packet_path in plan["tree_packets"]:
+        packet = json.loads(Path(packet_path).read_text(encoding="utf-8"))
+        assert packet["action"] == "GitHub.create_tree"
+        assert packet["action_args"]["base_tree_sha"] == previous_tree
+        for element in packet["action_args"]["tree_elements"]:
+            if element.get("sha") is not None:
+                assert "content" in element
+        previous_tree = packet["expected_tree"]
+    assert previous_tree == target_tree
 
-    commit_meta = json.loads(run(
-        MAINTENANCE, repo, "connector-commit", "--tree-sha", target_tree
-    ).stdout)
-    commit_packet = json.loads(Path(commit_meta["commit_packet"]).read_text(encoding="utf-8"))
+    commit_packet = json.loads(Path(plan["commit_packet"]).read_text(encoding="utf-8"))
     assert commit_packet["action"] == "GitHub.create_commit"
     assert commit_packet["action_args"]["parent_sha"] == base
+    assert commit_packet["action_args"]["tree_sha"] == target_tree
+    assert plan["post_commit_ref_update"]["branch_name"] == "develop"
+    assert plan["post_commit_ref_update"]["force"] is False
 
     created_commit = git(repo, "rev-parse", "HEAD")
-    update_meta = json.loads(run(
-        MAINTENANCE, repo, "connector-update",
-        "--commit-sha", created_commit,
-        "--commit-tree-sha", target_tree,
-        "--commit-parent-sha", base,
+    recorded = json.loads(run(
+        MAINTENANCE, repo, "record-update", "--commit-sha", created_commit, "--result", "success"
     ).stdout)
-    update_packet = json.loads(Path(update_meta["update_packet"]).read_text(encoding="utf-8"))
-    assert update_packet["action"] == "GitHub.update_ref"
-    assert update_packet["action_args"]["branch_name"] == "develop"
-    assert update_packet["action_args"]["force"] is False
-
-    verified = json.loads(run(
-        MAINTENANCE, repo, "verify-remote", "--develop-head", created_commit,
-        "--develop-tree", target_tree,
-    ).stdout)
-    assert verified["verified"] is True
-    assert verified["rehydrate_required"] is True
+    assert recorded["verified"] is True
+    assert recorded["rehydrate_required"] is True
+    assert recorded["record_verification"] == "manifest-identity-and-successful-ref-update"
 
     blocked = run(PUBLISH, repo, "prepare", check=False)
     assert blocked.returncode != 0
     assert "source-snapshot" in blocked.stderr
 
-    # A verified source-snapshot init is the only route back to normal publish.
     refreshed_snapshot = tmp_path / "source-snapshot-after-maintenance"
     refreshed_snapshot.mkdir()
     (refreshed_snapshot / ".source-commit").write_text(created_commit + "\n", encoding="utf-8")
@@ -191,62 +180,32 @@ def test_workflow_maintenance_stages_exact_git_data_and_requires_rehydration(tmp
     assert not plan_path.exists()
 
 
-def test_workflow_stage_machine_rejects_skips_replanning_and_wrong_sha(tmp_path: Path) -> None:
+def test_workflow_plan_rejects_replan_moved_develop_and_manifest_mutation(tmp_path: Path) -> None:
     repo, base, _ = init_repo(tmp_path)
     workflow = repo / ".github" / "workflows" / "ci.yml"
     workflow.write_text("name: CI\non: [push, workflow_dispatch]\n", encoding="utf-8")
     commit_all(repo, "Update CI workflow")
     run(MAINTENANCE, repo, "prepare")
 
-    skipped = run(MAINTENANCE, repo, "connector-tree", check=False)
-    assert skipped.returncode != 0
-    assert "uploads-planned" in skipped.stderr or "state" in skipped.stderr
+    moved = run(MAINTENANCE, repo, "connector-plan", "--develop-head", "3" * 40, check=False)
+    assert moved.returncode != 0
+    assert "develop HEAD moved" in moved.stderr
+    assert not maintenance_plan(repo).exists()
 
     run(MAINTENANCE, repo, "connector-plan", "--develop-head", base)
     replan = run(MAINTENANCE, repo, "connector-plan", "--develop-head", base, check=False)
     assert replan.returncode != 0
     assert "already exists" in replan.stderr
 
-    run(MAINTENANCE, repo, "connector-tree")
-    wrong_tree = run(MAINTENANCE, repo, "connector-commit", "--tree-sha", "3" * 40, check=False)
-    assert wrong_tree.returncode != 0
-    assert "does not match expected target tree" in wrong_tree.stderr
-
-    target_tree = git(repo, "rev-parse", "HEAD^{tree}")
-    run(MAINTENANCE, repo, "connector-commit", "--tree-sha", target_tree)
-    created_commit = git(repo, "rev-parse", "HEAD")
-    wrong_commit_tree = run(
-        MAINTENANCE, repo, "connector-update",
-        "--commit-sha", created_commit,
-        "--commit-tree-sha", "4" * 40,
-        "--commit-parent-sha", base,
-        check=False,
+    manifest = maintenance_manifest(repo)
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["message"] = "tampered"
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    rejected = run(
+        MAINTENANCE, repo, "record-update", "--commit-sha", "4" * 40, "--result", "success", check=False
     )
-    assert wrong_commit_tree.returncode != 0
-    assert "does not match expected target tree" in wrong_commit_tree.stderr
-    wrong_commit_parent = run(
-        MAINTENANCE, repo, "connector-update",
-        "--commit-sha", created_commit,
-        "--commit-tree-sha", target_tree,
-        "--commit-parent-sha", "5" * 40,
-        check=False,
-    )
-    assert wrong_commit_parent.returncode != 0
-    assert "does not match recorded develop base" in wrong_commit_parent.stderr
-
-
-def test_workflow_plan_refuses_moved_develop_before_any_packets(tmp_path: Path) -> None:
-    repo, _, _ = init_repo(tmp_path)
-    workflow = repo / ".github" / "workflows" / "ci.yml"
-    workflow.write_text("name: CI\non: [push, workflow_dispatch]\n", encoding="utf-8")
-    commit_all(repo, "Update CI workflow")
-    run(MAINTENANCE, repo, "prepare")
-    result = run(
-        MAINTENANCE, repo, "connector-plan", "--develop-head", "3" * 40, check=False
-    )
-    assert result.returncode != 0
-    assert "develop HEAD moved" in result.stderr
-    assert not maintenance_plan(repo).exists()
+    assert rejected.returncode != 0
+    assert "manifest changed" in rejected.stderr
 
 
 def test_standard_publish_error_names_workflow_maintenance_as_only_entrypoint(tmp_path: Path) -> None:

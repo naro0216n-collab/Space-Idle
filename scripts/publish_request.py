@@ -20,7 +20,7 @@ CONNECTOR_CALL_BUDGET_BYTES = 144 * 1024
 TRANSPORT_CHUNK_BYTES = 16 * 1024
 MAX_PAYLOAD_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
-CONNECTOR_STATE_VERSION = 10
+CONNECTOR_STATE_VERSION = 11
 CONNECTOR_SUMMARY_NAME = "summary.json"
 TRANSACTION_DIR_NAME = "space-idle-publish-transaction"
 WORKFLOW_TRANSACTION_DIR_NAME = "space-idle-workflow-maintenance-transaction"
@@ -508,16 +508,16 @@ def _connector_call_bytes(packet: dict[str, object]) -> int:
     return len(json.dumps(args, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def _tree_blob_element(path: str, sha: str) -> dict[str, object]:
-    return {"path": path, "mode": "100644", "type": "blob", "sha": sha}
+def _tree_content_element(path: str, content: str) -> dict[str, object]:
+    return {"path": path, "mode": "100644", "type": "blob", "content": content}
 
 
 def _tree_delete_element(path: str, *, mode: str = "100644", object_type: str = "blob") -> dict[str, object]:
     return {"path": path, "mode": mode, "type": object_type, "sha": None}
 
 
-def _tree_packet(base_tree: str, elements: list[dict[str, object]], batch_index: int) -> dict[str, object]:
-    return {
+def _tree_packet(base_tree: str, elements: list[dict[str, object]], batch_index: int, expected_tree: str | None = None) -> dict[str, object]:
+    packet: dict[str, object] = {
         "stage": "assemble-publish-transport-tree",
         "tree_batch_index": batch_index,
         "action": "GitHub.create_tree",
@@ -527,20 +527,9 @@ def _tree_packet(base_tree: str, elements: list[dict[str, object]], batch_index:
             "tree_elements": elements,
         },
     }
-
-
-def _blob_packet(content: str, chunk_index: int, path: str) -> dict[str, object]:
-    return {
-        "stage": "upload-publish-transport-chunk",
-        "chunk_index": chunk_index,
-        "transport_path": path,
-        "action": "GitHub.create_blob",
-        "action_args": {
-            "repository_full_name": GITHUB_REPOSITORY,
-            "content": content,
-            "encoding": "utf-8",
-        },
-    }
+    if expected_tree is not None:
+        packet["expected_tree"] = expected_tree
+    return packet
 
 
 def _list_publish_paths(repo: Path, tree: str) -> list[str]:
@@ -605,7 +594,15 @@ def _compact_stale_delete_elements(
     return deletes
 
 
-def _payload_chunks(repo: Path, payload: str, *, target_branch: str) -> list[dict[str, object]]:
+def _write_blob(repo: Path, content: str) -> str:
+    result = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=repo, input=content.encode("utf-8"),
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return _require_hex_sha(result.stdout.decode("ascii").strip(), name="local transport blob OID")
+
+
+def _payload_chunks(payload: str, *, target_branch: str) -> list[dict[str, object]]:
     slot = f".publish/transport/{target_branch}"
     chunks: list[dict[str, object]] = []
     for start in range(0, len(payload), TRANSPORT_CHUNK_BYTES):
@@ -616,7 +613,6 @@ def _payload_chunks(repo: Path, payload: str, *, target_branch: str) -> list[dic
             "chunk_index": index,
             "path": path,
             "content": content,
-            "expected_blob": _write_blob(repo, content),
         })
     if not chunks:
         raise PublishStateError("publish payload is empty")
@@ -631,7 +627,7 @@ def _desired_transport_elements(
     repo: Path, prepared: dict[str, object], *, base_tree: str,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[str]]:
     target = str(prepared["target_branch"])
-    chunks = _payload_chunks(repo, str(prepared["payload_b64"]), target_branch=target)
+    chunks = _payload_chunks(str(prepared["payload_b64"]), target_branch=target)
     desired_paths = {str(chunk["path"]) for chunk in chunks}
     current_slot_prefix = f".publish/transport/{target}/"
     allowed_other_prefixes = tuple(
@@ -646,13 +642,12 @@ def _desired_transport_elements(
             continue
         if any(path.startswith(prefix) for prefix in allowed_other_prefixes):
             continue
-        # The fixed-slot transport owns .publish. Anything outside an allowed slot is obsolete transport state.
         stale.append(path)
     deletes = _compact_stale_delete_elements(
         repo, base_tree=base_tree, target=target, stale=stale
     )
     elements = [
-        *[_tree_blob_element(str(chunk["path"]), str(chunk["expected_blob"])) for chunk in chunks],
+        *[_tree_content_element(str(chunk["path"]), str(chunk["content"])) for chunk in chunks],
         *deletes,
     ]
     return chunks, elements, stale
@@ -675,14 +670,6 @@ def _pack_tree_elements(base_tree: str, elements: list[dict[str, object]]) -> li
     if current:
         batches.append(current)
     return batches
-
-
-def _write_blob(repo: Path, content: str) -> str:
-    result = subprocess.run(
-        ["git", "hash-object", "-w", "--stdin"], cwd=repo, input=content.encode("utf-8"),
-        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    return _require_hex_sha(result.stdout.decode("ascii").strip(), name="local transport blob OID")
 
 
 def _expected_tree_batches(
@@ -779,129 +766,45 @@ def _write_summary(repo: Path, summary: dict[str, object]) -> None:
     )
 
 
-def _write_transcription_segments(
-    repo: Path, *, chunk_index: int, content: str, retry_count: int,
-) -> tuple[int, list[str]]:
-    segment_dir = _connector_dir(repo) / f"blob-chunk-{chunk_index:04d}-transcription"
-    if segment_dir.exists():
-        shutil.rmtree(segment_dir)
-    if retry_count <= 0:
-        return len(content.encode("utf-8")), []
-
-    # Transport identity remains one fixed logical chunk. Only the LLM transcription
-    # unit is halved after each mismatch so the same content can be reconstructed
-    # more reliably without changing path, payload, or expected Git blob OID.
-    segment_count = min(1 << retry_count, max(1, len(content)))
-    segment_bytes = max(1, (len(content) + segment_count - 1) // segment_count)
-    segment_dir.mkdir(parents=True, exist_ok=True)
-    paths: list[str] = []
-    for index, start in enumerate(range(0, len(content), segment_bytes)):
-        path = segment_dir / f"{index:04d}.txt"
-        path.write_text(content[start:start + segment_bytes], encoding="utf-8")
-        paths.append(str(path))
-    return segment_bytes, paths
+def _manifest_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _write_blob_packet(repo: Path, state: dict[str, object]) -> dict[str, object]:
+def _write_execution_packets(
+    repo: Path, state: dict[str, object],
+) -> tuple[list[str], list[int], str]:
     plan = state["plan"]
     assert isinstance(plan, dict)
-    chunks = plan["chunks"]
-    assert isinstance(chunks, list)
-    index = int(state["blob_chunk_index"])
-    chunk = chunks[index]
-    assert isinstance(chunk, dict)
-    path_value = str(chunk["path"])
-    content = str(chunk["content"])
-    packet = _blob_packet(content, index, path_value)
-    call_bytes = _connector_call_bytes(packet)
-    if call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
-        raise PublishStateError("generated create_blob call exceeds Connector hard ceiling")
-    path = _connector_dir(repo) / f"blob-chunk-{index:04d}.json"
-    path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    state["stage"] = "blob-ready"
-    state["blob_packet"] = str(path)
-    _write_connector_state(repo, state)
-    retry_counts = state.setdefault("blob_retry_counts", {})
-    assert isinstance(retry_counts, dict)
-    retry_count = int(retry_counts.get(path_value, 0))
-    segment_bytes, segment_files = _write_transcription_segments(
-        repo, chunk_index=index, content=content, retry_count=retry_count,
-    )
-    if retry_count == 0:
-        next_step = (
-            "execute the generated GitHub.create_blob packet and pass only its returned blob SHA to connector-blob"
-        )
-    else:
-        next_step = (
-            "retranscribe the same logical chunk by reading the listed transcription segment files in order, "
-            "concatenate them without modification into the packet content, execute GitHub.create_blob, "
-            "and pass only its returned blob SHA to connector-blob"
-        )
-    summary = {
-        "stage": "blob-ready",
-        "request_id": state["request_id"],
-        "chunk_index": index,
-        "chunk_count": len(chunks),
-        "chunk_bytes": len(content.encode("utf-8")),
-        "blob_call_bytes": call_bytes,
-        "blob_packet": str(path),
-        "retry_count": retry_count,
-        "transcription_segment_bytes": segment_bytes,
-        "transcription_segment_files": segment_files,
-        "integrity_decision": "helper-owned",
-        "next": next_step,
-        "verified": True,
-    }
-    _write_summary(repo, summary)
-    return summary
-
-
-def _write_tree_packet(repo: Path, state: dict[str, object]) -> dict[str, object]:
-    plan = state["plan"]
-    assert isinstance(plan, dict)
-    chunks = plan["chunks"]
-    assert isinstance(chunks, list)
-    verified = state.get("verified_blob_shas", {})
-    if not isinstance(verified, dict):
-        raise PublishStateError("invalid verified blob state")
-    for chunk in chunks:
-        assert isinstance(chunk, dict)
-        path_value = str(chunk["path"])
-        if verified.get(path_value) != chunk["expected_blob"]:
-            raise PublishStateError(
-                f"transport chunk is not machine-verified: {path_value}"
-            )
     batches = plan["batches"]
     assert isinstance(batches, list)
-    index = int(state["tree_batch_index"])
-    batch = batches[index]
-    assert isinstance(batch, dict)
-    packet = _tree_packet(str(batch["base_tree"]), list(batch["elements"]), index)
-    call_bytes = _connector_call_bytes(packet)
-    if call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
-        raise PublishStateError("generated create_tree call exceeds Connector hard ceiling")
-    path = _connector_dir(repo) / f"tree-batch-{index:03d}.json"
-    path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    state["stage"] = "tree-ready"
-    state["tree_packet"] = str(path)
-    _write_connector_state(repo, state)
-    summary = {
-        "stage": "tree-ready",
-        "request_id": state["request_id"],
-        "tree_batch_index": index,
-        "tree_batch_count": len(batches),
-        "tree_call_bytes": call_bytes,
-        "tree_packet": str(path),
-        "tree_retry_count": int(state.get("tree_retry_count", 0)),
-        "integrity_decision": "helper-owned",
-        "next": (
-            "execute the generated GitHub.create_tree packet and pass only its returned tree SHA to connector-tree; "
-            "the helper compares it mechanically with the locally precomputed expected tree and emits the next action"
-        ),
-        "verified": True,
+    tree_packets: list[str] = []
+    tree_call_bytes: list[int] = []
+    for index, batch in enumerate(batches):
+        assert isinstance(batch, dict)
+        packet = _tree_packet(
+            str(batch["base_tree"]), list(batch["elements"]), index, str(batch["expected_tree"])
+        )
+        call_bytes = _connector_call_bytes(packet)
+        if call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
+            raise PublishStateError("generated create_tree call exceeds Connector hard ceiling")
+        path = _connector_dir(repo) / f"tree-batch-{index:03d}.json"
+        path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tree_packets.append(str(path))
+        tree_call_bytes.append(call_bytes)
+
+    commit_packet = {
+        "stage": "create-publish-transport-commit",
+        "action": "GitHub.create_commit",
+        "action_args": {
+            "repository_full_name": GITHUB_REPOSITORY,
+            "message": f"Publish transport {state['request_id']}",
+            "tree_sha": plan["final_tree"],
+            "parent_sha": state["publish_base_head"],
+        },
     }
-    _write_summary(repo, summary)
-    return summary
+    commit_path = _connector_dir(repo) / "create-transport-commit.json"
+    commit_path.write_text(json.dumps(commit_packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return tree_packets, tree_call_bytes, str(commit_path)
 
 
 def cmd_connector_plan(args: argparse.Namespace) -> int:
@@ -931,197 +834,55 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     )
     state: dict[str, object] = {
         "version": CONNECTOR_STATE_VERSION,
-        "stage": "blob-ready",
+        "stage": "execution-plan-ready",
         "request_id": prepared["request_id"],
         "develop_head": develop_head,
         "publish_base_head": publish_head,
         "publish_base_tree": state_base["publish_tree"],
-        "blob_chunk_index": 0,
-        "blob_retry_counts": {},
-        "verified_blob_shas": {},
-        "tree_batch_index": 0,
-        "tree_retry_count": 0,
+        "manifest_sha256": _manifest_sha256(manifest),
+        "prepared_publish_commit": prepared["publish_commit"],
+        "prepared_target_tree": prepared["target_tree"],
+        "local_target_commit": prepared["local_target_commit"],
+        "payload_sha256": prepared["payload_sha256"],
         "plan": plan,
         "request_verified": bool(verified["verified"]),
     }
-    summary = _write_blob_packet(repo, state)
-    summary.update({
-        "strategy": "fixed-slot-16kib-blob-verified",
+    tree_packets, tree_call_bytes, commit_packet = _write_execution_packets(repo, state)
+    state["tree_packets"] = tree_packets
+    state["commit_packet"] = commit_packet
+    _write_connector_state(repo, state)
+    summary = {
+        "stage": state["stage"],
+        "request_id": prepared["request_id"],
+        "strategy": "fixed-slot-16kib-tree-content-batches",
         "connector_call_budget_bytes": CONNECTOR_CALL_BUDGET_BYTES,
         "transport_chunk_bytes": TRANSPORT_CHUNK_BYTES,
         "payload_part_count": plan["payload_part_count"],
         "tree_call_count": plan["tree_call_count"],
+        "tree_packets": tree_packets,
+        "tree_call_bytes": tree_call_bytes,
+        "tree_expected_shas": [batch["expected_tree"] for batch in plan["batches"]],
+        "commit_packet": commit_packet,
         "stale_transport_path_count": plan["stale_transport_path_count"],
+        "normal_pre_ref_helper_round_trips": 0,
         "normal_pre_ref_verification_reads": 0,
-        "index_files": 0,
-        "trigger_files": 0,
-    })
-    _write_summary(repo, summary)
-    print(json.dumps(summary, indent=2))
-    return 0
-
-
-def _write_commit_packet(repo: Path, state: dict[str, object]) -> dict[str, object]:
-    plan = state["plan"]
-    assert isinstance(plan, dict)
-    request_id = str(state["request_id"])
-    final_tree = str(plan["final_tree"])
-    packet = {
-        "stage": "create-publish-transport-commit",
-        "action": "GitHub.create_commit",
-        "action_args": {
-            "repository_full_name": GITHUB_REPOSITORY,
-            "message": f"Publish transport {request_id}",
-            "tree_sha": final_tree,
-            "parent_sha": state["publish_base_head"],
-        },
-    }
-    path = _connector_dir(repo) / "create-transport-commit.json"
-    path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    state["stage"] = "commit-packet-ready"
-    state["created_tree"] = final_tree
-    state["commit_packet"] = str(path)
-    state.pop("tree_packet", None)
-    _write_connector_state(repo, state)
-    summary = {
-        "stage": state["stage"], "request_id": request_id, "commit_packet": str(path),
-        "created_tree": final_tree,
-        "next": "execute GitHub.create_commit and pass only the returned commit SHA to connector-commit",
-        "verified": True,
-    }
-    _write_summary(repo, summary)
-    return summary
-
-
-def cmd_connector_blob(args: argparse.Namespace) -> int:
-    repo = _repo_from_cwd()
-    state = _read_connector_state(repo)
-    if state.get("stage") != "blob-ready":
-        raise PublishStateError(f"connector-blob requires blob-ready, found {state.get('stage')}")
-    actual = _require_hex_sha(args.blob_sha, name="created publish transport blob SHA")
-    plan = state["plan"]
-    assert isinstance(plan, dict)
-    chunks = plan["chunks"]
-    assert isinstance(chunks, list)
-    index = int(state["blob_chunk_index"])
-    chunk = chunks[index]
-    assert isinstance(chunk, dict)
-    path_value = str(chunk["path"])
-    expected = str(chunk["expected_blob"])
-    retry_counts = state.setdefault("blob_retry_counts", {})
-    verified = state.setdefault("verified_blob_shas", {})
-    assert isinstance(retry_counts, dict)
-    assert isinstance(verified, dict)
-    if actual != expected:
-        retry_counts[path_value] = int(retry_counts.get(path_value, 0)) + 1
-        state["last_blob_mismatch"] = {
-            "chunk_index": index,
-            "path": path_value,
-            "expected": expected,
-            "actual": actual,
-        }
-        summary = _write_blob_packet(repo, state)
-        summary.update({
-            "stage": "blob-retry-ready",
-            "retry_failed_chunk_only": True,
-            "integrity_result": "mismatch",
-        })
-        _write_summary(repo, summary)
-        print(json.dumps(summary, indent=2))
-        return 0
-
-    verified[path_value] = actual
-    state.pop("last_blob_mismatch", None)
-    next_index = index + 1
-    if next_index < len(chunks):
-        state["blob_chunk_index"] = next_index
-        summary = _write_blob_packet(repo, state)
-        print(json.dumps(summary, indent=2))
-        return 0
-    state["tree_batch_index"] = 0
-    state["tree_retry_count"] = 0
-    state.pop("blob_packet", None)
-    summary = _write_tree_packet(repo, state)
-    print(json.dumps(summary, indent=2))
-    return 0
-
-
-def cmd_connector_tree(args: argparse.Namespace) -> int:
-    repo = _repo_from_cwd()
-    state = _read_connector_state(repo)
-    if state.get("stage") != "tree-ready":
-        raise PublishStateError(f"connector-tree requires tree-ready, found {state.get('stage')}")
-    actual = _require_hex_sha(args.tree_sha, name="created publish transport tree SHA")
-    plan = state["plan"]
-    assert isinstance(plan, dict)
-    batches = plan["batches"]
-    assert isinstance(batches, list)
-    index = int(state["tree_batch_index"])
-    batch = batches[index]
-    assert isinstance(batch, dict)
-    expected = str(batch["expected_tree"])
-    if actual != expected:
-        state["tree_retry_count"] = int(state.get("tree_retry_count", 0)) + 1
-        state["last_tree_mismatch"] = {"expected": expected, "actual": actual}
-        summary = _write_tree_packet(repo, state)
-        summary.update({
-            "stage": "tree-retry-ready",
-            "integrity_result": "mismatch",
-        })
-        _write_summary(repo, summary)
-        print(json.dumps(summary, indent=2))
-        return 0
-    next_index = index + 1
-    state["tree_retry_count"] = 0
-    state.pop("last_tree_mismatch", None)
-    if next_index < len(batches):
-        state["tree_batch_index"] = next_index
-        summary = _write_tree_packet(repo, state)
-        print(json.dumps(summary, indent=2))
-        return 0
-    summary = _write_commit_packet(repo, state)
-    print(json.dumps(summary, indent=2))
-    return 0
-
-
-def _write_update_packet(repo: Path, state: dict[str, object], commit_sha: str) -> dict[str, object]:
-    packet = {
-        "stage": "advance-publish-transport-ref",
-        "action": "GitHub.update_ref",
-        "action_args": {
+        "post_commit_ref_update": {
+            "action": "GitHub.update_ref",
             "repository_full_name": GITHUB_REPOSITORY,
             "branch_name": PUBLISH_BRANCH,
-            "sha": commit_sha,
+            "sha": "<GitHub.create_commit returned SHA>",
             "force": False,
         },
-    }
-    path = _connector_dir(repo) / "advance-publish-ref.json"
-    path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    state["stage"] = "update-packet-ready"
-    state["transport_commit_candidate"] = commit_sha
-    state["update_packet"] = str(path)
-    _write_connector_state(repo, state)
-    summary = {
-        "stage": state["stage"], "request_id": state["request_id"],
-        "update_packet": str(path), "transport_commit_candidate": commit_sha,
-        "payload_transport_verified": True,
         "next": (
-            "execute the non-force GitHub.update_ref packet. Then observe the Publish Gateway run for this "
-            "transport commit; on completed success call record with that run evidence"
+            "execute the generated GitHub.create_tree packets in order; each packet carries its expected_tree and "
+            "the next packet is based on that precomputed object identity. If a returned tree SHA differs, retry that "
+            "same packet and do not advance. Then execute GitHub.create_commit and immediately use its returned SHA "
+            "in one non-force GitHub.update_ref of publish. No helper call is required between these writes. After the "
+            "Publish Gateway run completes successfully, call record with that run evidence."
         ),
         "verified": True,
     }
     _write_summary(repo, summary)
-    return summary
-
-
-def cmd_connector_commit(args: argparse.Namespace) -> int:
-    repo = _repo_from_cwd()
-    state = _read_connector_state(repo)
-    if state.get("stage") != "commit-packet-ready":
-        raise PublishStateError(f"connector-commit requires commit-packet-ready, found {state.get('stage')}")
-    commit_sha = _require_hex_sha(args.commit_sha, name="created publish transport commit SHA")
-    summary = _write_update_packet(repo, state, commit_sha)
     print(json.dumps(summary, indent=2))
     return 0
 
@@ -1134,8 +895,8 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     prepared = _read_prepared_request(manifest)
     state = _read_state(repo)
     connector = _read_connector_state(repo)
-    if connector.get("stage") == "update-packet-ready":
-        raise PublishStateError("cannot cancel after a publish ref update may have occurred; inspect the Gateway run")
+    if connector.get("stage") != "execution-plan-ready":
+        raise PublishStateError(f"cancel requires execution-plan-ready, found {connector.get('stage')}")
     develop_head = _require_hex_sha(args.develop_head, name="observed develop HEAD")
     publish_head = _require_hex_sha(args.publish_head, name="observed publish HEAD")
     if develop_head != prepared["base_sha"] or develop_head != state["remote_commit"]:
@@ -1150,17 +911,35 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def _verify_record_identity(
+    repo: Path, prepared: dict[str, object], connector: dict[str, object],
+) -> None:
+    manifest = _manifest_path(repo)
+    if _manifest_sha256(manifest) != connector.get("manifest_sha256"):
+        raise PublishStateError("prepared publish manifest changed after connector-plan")
+    expected = {
+        "request_id": prepared["request_id"],
+        "prepared_publish_commit": prepared["publish_commit"],
+        "prepared_target_tree": prepared["target_tree"],
+        "local_target_commit": prepared["local_target_commit"],
+        "payload_sha256": prepared["payload_sha256"],
+    }
+    for key, value in expected.items():
+        if connector.get(key) != value:
+            raise PublishStateError(f"connector plan no longer matches prepared publish identity: {key}")
+    state = _read_state(repo)
+    if prepared["base_sha"] != state["remote_commit"]:
+        raise PublishStateError("prepared publish base no longer matches local publish state")
+
+
 def cmd_record(args: argparse.Namespace) -> int:
     repo = _repo_from_cwd()
-    state = _read_state(repo)
     prepared = _read_prepared_request(_manifest_path(repo))
-    _verify_prepared_request(repo, _manifest_path(repo))
     connector = _read_connector_state(repo)
-    if connector.get("stage") != "update-packet-ready":
-        raise PublishStateError(f"record requires update-packet-ready, found {connector.get('stage')}")
+    if connector.get("stage") != "execution-plan-ready":
+        raise PublishStateError(f"record requires execution-plan-ready, found {connector.get('stage')}")
+    _verify_record_identity(repo, prepared, connector)
     transport_commit = _require_hex_sha(args.gateway_transport_commit, name="Gateway transport commit")
-    if transport_commit != connector.get("transport_commit_candidate"):
-        raise PublishStateError("Gateway run does not correspond to the prepared transport commit")
     if args.gateway_conclusion != "success":
         raise PublishStateError("Gateway run has not completed successfully; keep the active transaction for rerun or diagnosis")
     try:
@@ -1189,6 +968,7 @@ def cmd_record(args: argparse.Namespace) -> int:
         "publish_tree": plan["final_tree"],
         "gateway_run_id": run_id,
         "gateway_conclusion": args.gateway_conclusion,
+        "record_verification": "manifest-identity-and-gateway-run",
         "working_tree_clean": _working_tree_clean(repo),
         "uncommitted_changes_excluded": not _working_tree_clean(repo),
         "verified": True,
@@ -1211,27 +991,6 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--develop-head", required=True)
     plan.add_argument("--publish-head", required=True)
     plan.set_defaults(func=cmd_connector_plan)
-
-    blob = sub.add_parser(
-        "connector-blob",
-        help="mechanically verify one returned transport chunk blob SHA and emit only the next required action",
-    )
-    blob.add_argument("--blob-sha", required=True)
-    blob.set_defaults(func=cmd_connector_blob)
-
-    tree = sub.add_parser(
-        "connector-tree",
-        help="verify returned create_tree SHA against the locally expected tree and advance or retry",
-    )
-    tree.add_argument("--tree-sha", required=True)
-    tree.set_defaults(func=cmd_connector_tree)
-
-    commit = sub.add_parser(
-        "connector-commit",
-        help="after the transport commit is created, generate the one non-force publish ref update",
-    )
-    commit.add_argument("--commit-sha", required=True)
-    commit.set_defaults(func=cmd_connector_commit)
 
     cancel = sub.add_parser("cancel", help="cancel a pre-ref active transaction after one combined ref observation")
     cancel.add_argument("--develop-head", required=True)

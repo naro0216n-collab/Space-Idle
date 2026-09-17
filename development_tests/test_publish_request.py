@@ -94,22 +94,6 @@ def plan(repo: Path, develop_head: str, publish_head: str) -> dict[str, object]:
     ).stdout)
 
 
-def verify_all_chunks(repo: Path, summary: dict[str, object]) -> dict[str, object]:
-    current = summary
-    while current["stage"] in {"blob-ready", "blob-retry-ready"}:
-        state = connector_state(repo)
-        plan_data = state["plan"]
-        assert isinstance(plan_data, dict)
-        chunks = plan_data["chunks"]
-        assert isinstance(chunks, list)
-        chunk = chunks[int(state["blob_chunk_index"])]
-        assert isinstance(chunk, dict)
-        current = json.loads(run_request(
-            repo, "connector-blob", "--blob-sha", str(chunk["expected_blob"])
-        ).stdout)
-    return current
-
-
 def test_init_requires_exact_develop_and_publish_base_metadata(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -187,146 +171,95 @@ def test_prepare_uses_head_only_and_excludes_uncommitted_work(tmp_path: Path) ->
     assert raw.partition(b"\n\n")[2] == b"checkpoint\n"
 
 
-def test_connector_transport_uses_fixed_verified_chunks_and_retries_only_current_chunk(tmp_path: Path) -> None:
+def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_budget(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
-    (repo / "large.bin").write_bytes(os.urandom(40_000))
+    (repo / "large.bin").write_bytes(os.urandom(420_000))
     commit_all(repo, "large checkpoint")
     run_request(repo, "prepare")
-    first = plan(repo, base, publish_head)
+    summary = plan(repo, base, publish_head)
 
-    assert first["strategy"] == "fixed-slot-16kib-blob-verified"
-    assert first["transport_chunk_bytes"] == 16 * 1024
-    assert first["payload_part_count"] > 1
+    assert summary["strategy"] == "fixed-slot-16kib-tree-content-batches"
+    assert summary["transport_chunk_bytes"] == 16 * 1024
+    assert summary["payload_part_count"] > 8
+    assert summary["tree_call_count"] > 1
+    assert summary["normal_pre_ref_helper_round_trips"] == 0
+
     state = connector_state(repo)
+    assert state["stage"] == "execution-plan-ready"
     plan_data = state["plan"]
     assert isinstance(plan_data, dict)
     chunks = plan_data["chunks"]
-    assert isinstance(chunks, list) and len(chunks) == first["payload_part_count"]
+    assert isinstance(chunks, list) and len(chunks) == summary["payload_part_count"]
     assert all(len(str(chunk["content"]).encode("utf-8")) <= 16 * 1024 for chunk in chunks)
 
-    first_packet = json.loads(Path(str(first["blob_packet"])).read_text(encoding="utf-8"))
-    assert first_packet["action"] == "GitHub.create_blob"
-    assert first_packet["action_args"]["encoding"] == "utf-8"
-    assert first_packet["action_args"]["content"] == chunks[0]["content"]
+    expected_paths = {str(chunk["path"]) for chunk in chunks}
+    observed_paths: set[str] = set()
+    previous_tree = state["publish_base_tree"]
+    tree_packets = [Path(path) for path in summary["tree_packets"]]
+    assert len(tree_packets) == summary["tree_call_count"]
+    for index, packet_path in enumerate(tree_packets):
+        packet = json.loads(packet_path.read_text(encoding="utf-8"))
+        assert packet["action"] == "GitHub.create_tree"
+        assert packet["tree_batch_index"] == index
+        assert packet["action_args"]["base_tree_sha"] == previous_tree
+        encoded_args = json.dumps(
+            packet["action_args"], ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        assert len(encoded_args) <= 144 * 1024
+        for entry in packet["action_args"]["tree_elements"]:
+            if str(entry["path"]).endswith(".b64"):
+                assert "content" in entry
+                assert "sha" not in entry
+                observed_paths.add(str(entry["path"]))
+        previous_tree = packet["expected_tree"]
 
-    expected_first_blob = str(chunks[0]["expected_blob"])
-    next_chunk = json.loads(run_request(
-        repo, "connector-blob", "--blob-sha", expected_first_blob
-    ).stdout)
-    assert next_chunk["chunk_index"] == 1
-    second_packet_text = Path(str(next_chunk["blob_packet"])).read_text(encoding="utf-8")
+    assert observed_paths == expected_paths
+    assert previous_tree == plan_data["final_tree"]
 
-    previous_segment_bytes = 16 * 1024
-    for attempt in range(1, 6):
-        failed = json.loads(run_request(
-            repo, "connector-blob", "--blob-sha", "a" * 40
-        ).stdout)
-        assert failed["stage"] == "blob-retry-ready"
-        assert failed["chunk_index"] == 1
-        assert failed["retry_count"] == attempt
-        assert failed["retry_failed_chunk_only"] is True
-        assert failed["transcription_segment_bytes"] <= max(1, previous_segment_bytes // 2)
-        segment_files = [Path(path) for path in failed["transcription_segment_files"]]
-        state_now = connector_state(repo)
-        chunk_now = state_now["plan"]["chunks"][1]
-        assert "".join(path.read_text(encoding="utf-8") for path in segment_files) == chunk_now["content"]
-        assert Path(str(failed["blob_packet"])).read_text(encoding="utf-8") == second_packet_text
-        assert state_now["blob_chunk_index"] == 1
-        assert state_now["verified_blob_shas"][".publish/transport/develop/0000.b64"] == expected_first_blob
-        assert not (transaction(repo) / "connector" / "create-transport-commit.json").exists()
-        assert not (transaction(repo) / "connector" / "advance-publish-ref.json").exists()
-        previous_segment_bytes = int(failed["transcription_segment_bytes"])
-
-    current = json.loads(run_request(
-        repo, "connector-blob", "--blob-sha", str(chunks[1]["expected_blob"])
-    ).stdout)
-    tree = verify_all_chunks(repo, current)
-    assert tree["stage"] == "tree-ready"
-
-    tree_packet = json.loads(Path(str(tree["tree_packet"])).read_text(encoding="utf-8"))
-    assert tree_packet["action"] == "GitHub.create_tree"
-    elements = tree_packet["action_args"]["tree_elements"]
-    payload_entries = {
-        entry["path"]: entry
-        for entry in elements
-        if entry["path"].endswith(".b64")
-    }
-    assert set(payload_entries) == {str(chunk["path"]) for chunk in chunks}
-    for chunk in chunks:
-        entry = payload_entries[str(chunk["path"])]
-        assert entry == {
-            "mode": "100644",
-            "path": str(chunk["path"]),
-            "sha": str(chunk["expected_blob"]),
-            "type": "blob",
-        }
-    encoded_args = json.dumps(
-        tree_packet["action_args"], ensure_ascii=False, separators=(",", ":")
-    ).encode("utf-8")
-    assert len(encoded_args) <= 144 * 1024
-
-    tree_state = connector_state(repo)
-    expected_tree = str(tree_state["plan"]["batches"][0]["expected_tree"])
-    succeeded = json.loads(run_request(
-        repo, "connector-tree", "--tree-sha", expected_tree
-    ).stdout)
-    assert succeeded["stage"] == "commit-packet-ready"
-    commit_packet = json.loads(Path(str(succeeded["commit_packet"])).read_text(encoding="utf-8"))
+    commit_packet = json.loads(Path(str(summary["commit_packet"])).read_text(encoding="utf-8"))
     assert commit_packet["action"] == "GitHub.create_commit"
-    assert commit_packet["action_args"]["tree_sha"] == expected_tree
-
-def test_tree_mismatch_is_machine_retried_without_commit_or_ref_packet(tmp_path: Path) -> None:
-    repo, base, _, publish_head, _ = init_repo(tmp_path)
-    prepare_change(repo)
-    tree = verify_all_chunks(repo, plan(repo, base, publish_head))
-    original_packet = Path(str(tree["tree_packet"])).read_text(encoding="utf-8")
-
-    for attempt in range(1, 6):
-        retry = json.loads(run_request(repo, "connector-tree", "--tree-sha", "e" * 40).stdout)
-        assert retry["stage"] == "tree-retry-ready"
-        assert retry["tree_retry_count"] == attempt
-        assert Path(str(retry["tree_packet"])).read_text(encoding="utf-8") == original_packet
-        assert not (transaction(repo) / "connector" / "create-transport-commit.json").exists()
-        assert not (transaction(repo) / "connector" / "advance-publish-ref.json").exists()
+    assert commit_packet["action_args"]["tree_sha"] == plan_data["final_tree"]
+    assert commit_packet["action_args"]["parent_sha"] == publish_head
+    assert summary["post_commit_ref_update"] == {
+        "action": "GitHub.update_ref",
+        "repository_full_name": PUBLISH_REQUEST.GITHUB_REPOSITORY,
+        "branch_name": "publish",
+        "sha": "<GitHub.create_commit returned SHA>",
+        "force": False,
+    }
 
 
-def test_commit_then_ref_is_only_remaining_normal_write_sequence_and_record_uses_gateway_run(tmp_path: Path) -> None:
+def test_record_uses_prepared_identity_without_reverifying_bundle_and_tracks_gateway_run(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     result = prepare_change(repo)
-    first = plan(repo, base, publish_head)
-    tree = verify_all_chunks(repo, first)
-    state = connector_state(repo)
-    expected_tree = str(state["plan"]["batches"][0]["expected_tree"])
-    commit = json.loads(run_request(repo, "connector-tree", "--tree-sha", expected_tree).stdout)
-    fake_transport_commit = "a" * 40
-    update = json.loads(run_request(repo, "connector-commit", "--commit-sha", fake_transport_commit).stdout)
-    update_packet = json.loads(Path(update["update_packet"]).read_text(encoding="utf-8"))
-    assert update_packet["action"] == "GitHub.update_ref"
-    assert update_packet["action_args"]["branch_name"] == "publish"
-    assert update_packet["action_args"]["force"] is False
-    assert not any((transaction(repo) / "connector").glob("*verify*"))
+    summary = plan(repo, base, publish_head)
+    candidate = "a" * 40
 
     recorded = json.loads(run_request(
         repo, "record",
-        "--gateway-transport-commit", fake_transport_commit,
+        "--gateway-transport-commit", candidate,
         "--gateway-run-id", "12345",
         "--gateway-conclusion", "success",
     ).stdout)
     assert recorded["verified"] is True
+    assert recorded["record_verification"] == "manifest-identity-and-gateway-run"
     assert recorded["remote_commit"] == result["publish_commit"]
-    assert recorded["publish_commit"] == fake_transport_commit
+    assert recorded["publish_commit"] == candidate
+    assert recorded["publish_tree"] == connector_state_from_summary_tree(summary)
     assert not transaction(repo).exists()
+
+
+def connector_state_from_summary_tree(summary: dict[str, object]) -> str:
+    expected = summary["tree_expected_shas"]
+    assert isinstance(expected, list) and expected
+    return str(expected[-1])
 
 
 def test_record_stays_bound_to_prepared_target_if_local_head_advances(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     first = prepare_change(repo, "first\n")
-    tree = verify_all_chunks(repo, plan(repo, base, publish_head))
-    state = connector_state(repo)
-    expected_tree = str(state["plan"]["batches"][0]["expected_tree"])
-    run_request(repo, "connector-tree", "--tree-sha", expected_tree)
+    plan(repo, base, publish_head)
     candidate = "b" * 40
-    run_request(repo, "connector-commit", "--commit-sha", candidate)
     (repo / "later.txt").write_text("later\n", encoding="utf-8")
     commit_all(repo, "later local work")
     recorded = json.loads(run_request(
@@ -337,6 +270,24 @@ def test_record_stays_bound_to_prepared_target_if_local_head_advances(tmp_path: 
     ).stdout)
     assert recorded["local_head"] == first["local_target_commit"]
     assert recorded["local_head"] != git(repo, "rev-parse", "HEAD")
+
+
+def test_record_rejects_manifest_mutation_after_plan(tmp_path: Path) -> None:
+    repo, base, _, publish_head, _ = init_repo(tmp_path)
+    prepare_change(repo)
+    plan(repo, base, publish_head)
+    manifest = prepared(repo)
+    manifest["request_id"] = "0" * 32
+    manifest_path(repo).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    rejected = run_request(
+        repo, "record",
+        "--gateway-transport-commit", "c" * 40,
+        "--gateway-run-id", "77",
+        "--gateway-conclusion", "success",
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "manifest changed" in rejected.stderr
 
 
 def test_combined_preflight_rejects_moved_develop_or_publish(tmp_path: Path) -> None:
@@ -413,6 +364,15 @@ def test_gateway_trusted_workflow_guard_requires_publish_control_blob_identity(t
     )
     assert blocked.returncode != 0
     assert "untrusted workflow change" in blocked.stderr
+
+
+def test_gateway_transport_path_gate_is_owned_by_trusted_workflow_only() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "publish-gateway.yml").read_text(encoding="utf-8")
+    validator = (ROOT / "scripts" / "publish_gateway_validate.py").read_text(encoding="utf-8")
+    assert "Invalid publish transport change" in workflow
+    assert "git diff-tree --no-commit-id --name-status" in workflow
+    assert "_validate_transport_commit_paths" not in validator
+    assert "diff-tree" not in validator
 
 
 def test_gateway_contract_validates_fixed_slot_then_publishes_exact_commit() -> None:

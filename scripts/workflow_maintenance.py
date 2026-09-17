@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import argparse
-import base64
+import hashlib
+import os
+import tempfile
 import json
 import subprocess
 from pathlib import Path
 
 PUBLISH_STATE_NAME = "space-idle-publish-state.json"
 REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
-MANIFEST_VERSION = 1
-CONNECTOR_CALL_BUDGET_BYTES = 96 * 1024
+MANIFEST_VERSION = 2
+CONNECTOR_CALL_BUDGET_BYTES = 144 * 1024
 CONNECTOR_STATE_NAME = "workflow-maintenance-state.json"
 SUMMARY_NAME = "summary.json"
 TRANSACTION_DIR_NAME = "space-idle-workflow-maintenance-transaction"
@@ -231,13 +233,17 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             raise WorkflowMaintenanceError(f"workflow target blob is missing: {path}")
         mode, oid = entry
         content = _git_bytes("cat-file", "blob", oid, cwd=repo)
+        try:
+            content_text = content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise WorkflowMaintenanceError(f"workflow file must be UTF-8 text: {path}") from exc
         manifest_changes.append(
             {
                 "status": status,
                 "path": path,
                 "mode": mode,
                 "blob_oid": oid,
-                "content_b64": base64.b64encode(content).decode("ascii"),
+                "content": content_text,
             }
         )
 
@@ -276,6 +282,108 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _workflow_tree_packet(
+    base_tree: str, elements: list[dict[str, object]], batch_index: int, expected_tree: str | None = None,
+) -> dict[str, object]:
+    packet: dict[str, object] = {
+        "stage": "assemble-workflow-maintenance-tree",
+        "tree_batch_index": batch_index,
+        "action": "GitHub.create_tree",
+        "action_args": {
+            "repository_full_name": GITHUB_REPOSITORY,
+            "base_tree_sha": base_tree,
+            "tree_elements": elements,
+        },
+    }
+    if expected_tree is not None:
+        packet["expected_tree"] = expected_tree
+    return packet
+
+
+def _workflow_elements(manifest: dict[str, object]) -> list[dict[str, object]]:
+    elements: list[dict[str, object]] = []
+    for change in manifest["changes"]:
+        assert isinstance(change, dict)
+        if change["status"] == "D":
+            elements.append({
+                "path": change["path"], "mode": change["mode"], "type": "blob", "sha": None,
+            })
+        else:
+            elements.append({
+                "path": change["path"], "mode": change["mode"], "type": "blob", "content": change["content"],
+            })
+    return elements
+
+
+def _pack_workflow_elements(base_tree: str, elements: list[dict[str, object]]) -> list[list[dict[str, object]]]:
+    batches: list[list[dict[str, object]]] = []
+    current: list[dict[str, object]] = []
+    for element in elements:
+        candidate = [*current, element]
+        if _connector_call_bytes(_workflow_tree_packet(base_tree, candidate, len(batches))) < CONNECTOR_CALL_BUDGET_BYTES:
+            current = candidate
+            continue
+        if not current:
+            raise WorkflowMaintenanceError(f"single workflow tree element exceeds connector budget: {element['path']}")
+        batches.append(current)
+        current = [element]
+        if _connector_call_bytes(_workflow_tree_packet(base_tree, current, len(batches))) >= CONNECTOR_CALL_BUDGET_BYTES:
+            raise WorkflowMaintenanceError(f"single workflow tree element exceeds connector budget: {element['path']}")
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _expected_workflow_batches(
+    repo: Path, base_tree: str, batches: list[list[dict[str, object]]], manifest: dict[str, object],
+) -> list[dict[str, object]]:
+    oid_by_path = {
+        str(change["path"]): str(change["blob_oid"])
+        for change in manifest["changes"]
+        if change["status"] != "D"
+    }
+    result: list[dict[str, object]] = []
+    with tempfile.TemporaryDirectory(prefix="space-idle-workflow-index-") as tmp:
+        env = os.environ.copy()
+        env["GIT_INDEX_FILE"] = str(Path(tmp) / "index")
+        subprocess.run(
+            ["git", "read-tree", base_tree], cwd=repo, env=env, check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        current_tree = base_tree
+        for index, elements in enumerate(batches):
+            for element in elements:
+                path = str(element["path"])
+                if element.get("sha") is None and "content" not in element:
+                    subprocess.run(
+                        ["git", "update-index", "--force-remove", "--", path], cwd=repo, env=env, check=True,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    )
+                else:
+                    subprocess.run(
+                        [
+                            "git", "update-index", "--add", "--cacheinfo",
+                            str(element["mode"]), oid_by_path[path], path,
+                        ],
+                        cwd=repo, env=env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    )
+            expected_tree = subprocess.check_output(
+                ["git", "write-tree"], cwd=repo, env=env, text=True
+            ).strip()
+            result.append({
+                "batch_index": index,
+                "base_tree": current_tree,
+                "expected_tree": expected_tree,
+                "elements": elements,
+            })
+            current_tree = expected_tree
+    return result
+
+
+def _manifest_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def cmd_connector_plan(args: argparse.Namespace) -> int:
     repo = _repo_from_cwd()
     manifest_path = _manifest_path(repo)
@@ -292,211 +400,100 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         )
     plan_dir.mkdir(parents=True, exist_ok=True)
 
-    upload_packets: list[str] = []
-    for index, change in enumerate(manifest["changes"]):
-        if change["status"] == "D":
-            continue
-        packet = {
-            "action": "GitHub.create_blob",
-            "action_args": {
-                "repository_full_name": GITHUB_REPOSITORY,
-                "content": change["content_b64"],
-                "encoding": "base64",
-            },
-            "expected_blob_git_oid": change["blob_oid"],
-            "workflow_path": change["path"],
-        }
+    elements = _workflow_elements(manifest)
+    raw_batches = _pack_workflow_elements(str(manifest["base_tree"]), elements)
+    batches = _expected_workflow_batches(repo, str(manifest["base_tree"]), raw_batches, manifest)
+    final_tree = str(batches[-1]["expected_tree"])
+    if final_tree != manifest["target_tree"]:
+        raise WorkflowMaintenanceError(
+            f"precomputed workflow tree mismatch: expected local target {manifest['target_tree']}, got {final_tree}"
+        )
+
+    tree_packets: list[str] = []
+    tree_call_bytes: list[int] = []
+    for batch in batches:
+        packet = _workflow_tree_packet(
+            str(batch["base_tree"]), list(batch["elements"]), int(batch["batch_index"]), str(batch["expected_tree"])
+        )
         size = _connector_call_bytes(packet)
         if size >= CONNECTOR_CALL_BUDGET_BYTES:
-            raise WorkflowMaintenanceError(
-                f"workflow blob exceeds the fixed GitHub connector call budget: {change['path']} ({size} bytes)"
-            )
-        packet_path = plan_dir / f"upload-workflow-{index:04d}.json"
-        _write_json(packet_path, packet)
-        upload_packets.append(str(packet_path))
+            raise WorkflowMaintenanceError("workflow tree packet exceeds the fixed connector call budget")
+        path = plan_dir / f"workflow-tree-{int(batch['batch_index']):03d}.json"
+        _write_json(path, packet)
+        tree_packets.append(str(path))
+        tree_call_bytes.append(size)
+
+    commit_packet = {
+        "action": "GitHub.create_commit",
+        "action_args": {
+            "repository_full_name": GITHUB_REPOSITORY,
+            "message": manifest["message"],
+            "tree_sha": manifest["target_tree"],
+            "parent_sha": manifest["base_commit"],
+        },
+    }
+    commit_path = plan_dir / "create-workflow-commit.json"
+    _write_json(commit_path, commit_packet)
 
     state = {
-        "version": 1,
-        "stage": "uploads-planned",
+        "version": 2,
+        "stage": "execution-plan-ready",
         "manifest": str(manifest_path),
+        "manifest_sha256": _manifest_digest(manifest_path),
         "github_repository": GITHUB_REPOSITORY,
         "target_branch": TARGET_BRANCH,
         "base_commit": manifest["base_commit"],
         "base_tree": manifest["base_tree"],
         "target_tree": manifest["target_tree"],
         "local_target_commit": manifest["local_target_commit"],
-        "upload_packets": upload_packets,
+        "tree_packets": tree_packets,
+        "commit_packet": str(commit_path),
     }
     _write_connector_state(plan_dir, state)
     summary = _write_summary(
         plan_dir,
         state,
-        upload_packets=upload_packets,
-        upload_call_count=len(upload_packets),
-        tree_packet=None,
-        commit_packet=None,
-        update_packet=None,
-        next="copy/paste each generated packet action_args into the matching Connector call in order, then run connector-tree",
-    )
-    print(json.dumps(summary, indent=2))
-    return 0
-
-
-def cmd_connector_tree(args: argparse.Namespace) -> int:
-    repo = _repo_from_cwd()
-    plan_dir = _connector_dir(repo)
-    state = _read_connector_state(plan_dir)
-    if state["stage"] != "uploads-planned":
-        raise WorkflowMaintenanceError(
-            f"connector-tree requires stage uploads-planned, found {state['stage']}"
-        )
-    manifest = _load_manifest(Path(state["manifest"]))
-    elements: list[dict[str, object]] = []
-    for change in manifest["changes"]:
-        element: dict[str, object] = {
-            "path": change["path"],
-            "mode": change["mode"],
-            "type": "blob",
-            "sha": None if change["status"] == "D" else change["blob_oid"],
-        }
-        elements.append(element)
-    packet = {
-        "action": "GitHub.create_tree",
-        "action_args": {
-            "repository_full_name": state["github_repository"],
-            "base_tree_sha": state["base_tree"],
-            "tree_elements": elements,
-        },
-        "expected_tree_git_oid": state["target_tree"],
-    }
-    if _connector_call_bytes(packet) >= CONNECTOR_CALL_BUDGET_BYTES:
-        raise WorkflowMaintenanceError("workflow tree packet exceeds the fixed connector call budget")
-    packet_path = plan_dir / "assemble-workflow-tree.json"
-    _write_json(packet_path, packet)
-    state["stage"] = "tree-packet-ready"
-    state["tree_packet"] = str(packet_path)
-    _write_connector_state(plan_dir, state)
-    summary = _write_summary(
-        plan_dir,
-        state,
-        tree_packet=str(packet_path),
-        expected_tree_git_oid=state["target_tree"],
-        next="copy/paste the workflow tree packet action_args into the matching Connector call; pass its returned tree SHA to connector-commit",
-    )
-    print(json.dumps(summary, indent=2))
-    return 0
-
-
-def cmd_connector_commit(args: argparse.Namespace) -> int:
-    repo = _repo_from_cwd()
-    plan_dir = _connector_dir(repo)
-    state = _read_connector_state(plan_dir)
-    if state["stage"] != "tree-packet-ready":
-        raise WorkflowMaintenanceError(
-            f"connector-commit requires stage tree-packet-ready, found {state['stage']}"
-        )
-    _require_hex_sha(args.tree_sha, name="created workflow tree SHA")
-    if args.tree_sha != state["target_tree"]:
-        raise WorkflowMaintenanceError(
-            f"created workflow tree {args.tree_sha} does not match expected target tree {state['target_tree']}"
-        )
-    manifest = _load_manifest(Path(state["manifest"]))
-    packet = {
-        "action": "GitHub.create_commit",
-        "action_args": {
-            "repository_full_name": state["github_repository"],
-            "message": manifest["message"],
-            "tree_sha": state["target_tree"],
-            "parent_sha": state["base_commit"],
-        },
-    }
-    packet_path = plan_dir / "create-workflow-commit.json"
-    _write_json(packet_path, packet)
-    state["stage"] = "commit-packet-ready"
-    state["commit_packet"] = str(packet_path)
-    _write_connector_state(plan_dir, state)
-    summary = _write_summary(
-        plan_dir,
-        state,
-        commit_packet=str(packet_path),
-        next="copy/paste the workflow commit packet action_args into the matching Connector call; pass its returned commit SHA to connector-update",
-    )
-    print(json.dumps(summary, indent=2))
-    return 0
-
-
-def cmd_connector_update(args: argparse.Namespace) -> int:
-    repo = _repo_from_cwd()
-    plan_dir = _connector_dir(repo)
-    state = _read_connector_state(plan_dir)
-    if state["stage"] != "commit-packet-ready":
-        raise WorkflowMaintenanceError(
-            f"connector-update requires stage commit-packet-ready, found {state['stage']}"
-        )
-    _require_hex_sha(args.commit_sha, name="created workflow commit SHA")
-    _require_hex_sha(args.commit_tree_sha, name="created workflow commit tree SHA")
-    _require_hex_sha(args.commit_parent_sha, name="created workflow commit parent SHA")
-    if args.commit_tree_sha != state["target_tree"]:
-        raise WorkflowMaintenanceError(
-            f"created workflow commit tree {args.commit_tree_sha} does not match expected target tree {state['target_tree']}"
-        )
-    if args.commit_parent_sha != state["base_commit"]:
-        raise WorkflowMaintenanceError(
-            f"created workflow commit parent {args.commit_parent_sha} does not match recorded develop base {state['base_commit']}"
-        )
-    packet = {
-        "action": "GitHub.update_ref",
-        "action_args": {
-            "repository_full_name": state["github_repository"],
+        strategy="workflow-maintenance-tree-content-batches",
+        tree_packets=tree_packets,
+        tree_call_bytes=tree_call_bytes,
+        commit_packet=str(commit_path),
+        normal_pre_ref_helper_round_trips=0,
+        post_commit_ref_update={
+            "action": "GitHub.update_ref",
+            "repository_full_name": GITHUB_REPOSITORY,
             "branch_name": TARGET_BRANCH,
-            "sha": args.commit_sha,
+            "sha": "<GitHub.create_commit returned SHA>",
             "force": False,
         },
-    }
-    packet_path = plan_dir / "advance-workflow-ref.json"
-    _write_json(packet_path, packet)
-    state["stage"] = "update-packet-ready"
-    state["published_commit_candidate"] = args.commit_sha
-    state["verified_commit_tree"] = args.commit_tree_sha
-    state["verified_commit_parent"] = args.commit_parent_sha
-    state["update_packet"] = str(packet_path)
-    _write_connector_state(plan_dir, state)
-    summary = _write_summary(
-        plan_dir,
-        state,
-        update_packet=str(packet_path),
-        published_commit_candidate=args.commit_sha,
-        next="copy/paste the ref update packet action_args into the matching Connector call, fetch develop once, then run verify-remote",
+        next=(
+            "execute the generated create_tree packets in order and require each returned SHA to equal packet expected_tree; "
+            "execute create_commit, then use its returned SHA directly in one non-force develop ref update. "
+            "After update_ref succeeds, run record-update with the same commit SHA; no commit refetch or remote ref/tree read is required."
+        ),
     )
     print(json.dumps(summary, indent=2))
     return 0
 
 
-def cmd_verify_remote(args: argparse.Namespace) -> int:
+def cmd_record_update(args: argparse.Namespace) -> int:
     repo = _repo_from_cwd()
     plan_dir = _connector_dir(repo)
     state = _read_connector_state(plan_dir)
-    if state["stage"] != "update-packet-ready":
+    if state.get("stage") != "execution-plan-ready":
         raise WorkflowMaintenanceError(
-            f"verify-remote requires stage update-packet-ready, found {state['stage']}"
+            f"record-update requires execution-plan-ready, found {state.get('stage')}"
         )
-    _require_hex_sha(args.develop_head, name="remote develop HEAD")
-    _require_hex_sha(args.develop_tree, name="remote develop tree")
-    if args.develop_head != state["published_commit_candidate"]:
-        raise WorkflowMaintenanceError(
-            f"remote develop HEAD mismatch: expected {state['published_commit_candidate']}, got {args.develop_head}"
-        )
-    if args.develop_tree != state["target_tree"]:
-        raise WorkflowMaintenanceError(
-            f"remote develop tree mismatch: expected {state['target_tree']}, got {args.develop_tree}"
-        )
-    state["stage"] = "remote-verified"
-    _write_connector_state(plan_dir, state)
+    if args.result != "success":
+        raise WorkflowMaintenanceError("workflow develop ref update did not succeed; keep the active transaction")
+    _require_hex_sha(args.commit_sha, name="updated workflow commit SHA")
+    manifest_path = Path(str(state["manifest"]))
+    if _manifest_digest(manifest_path) != state.get("manifest_sha256"):
+        raise WorkflowMaintenanceError("workflow maintenance manifest changed after connector-plan")
     _rehydrate_marker_path(repo).write_text(
         json.dumps(
             {
-                "published_commit": args.develop_head,
-                "published_tree": args.develop_tree,
+                "published_commit": args.commit_sha,
+                "published_tree": state["target_tree"],
                 "local_target_commit": state["local_target_commit"],
             },
             sort_keys=True,
@@ -507,9 +504,10 @@ def cmd_verify_remote(args: argparse.Namespace) -> int:
     summary = _write_summary(
         plan_dir,
         state,
-        develop_head=args.develop_head,
-        develop_tree=args.develop_tree,
+        published_commit=args.commit_sha,
+        published_tree=state["target_tree"],
         verified=True,
+        record_verification="manifest-identity-and-successful-ref-update",
         rehydrate_required=True,
         next="restore the new develop source-snapshot and run publish_request.py init before normal development/publish",
     )
@@ -530,7 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.set_defaults(func=cmd_prepare)
 
     connector_plan = sub.add_parser(
-        "connector-plan", help="after one develop HEAD check, generate workflow blob upload packets only"
+        "connector-plan", help="after one develop HEAD check, generate the complete workflow Git-data execution plan"
     )
     connector_plan.add_argument(
         "--develop-head",
@@ -539,50 +537,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     connector_plan.set_defaults(func=cmd_connector_plan)
 
-    connector_tree = sub.add_parser(
-        "connector-tree", help="after workflow blob uploads, generate the exact target tree packet"
+    record = sub.add_parser(
+        "record-update", help="record one successful non-force develop ref update and require source-snapshot rehydration"
     )
-    connector_tree.set_defaults(func=cmd_connector_tree)
-
-    connector_commit = sub.add_parser(
-        "connector-commit", help="after target tree creation, verify its SHA and generate commit packet"
-    )
-    connector_commit.add_argument(
-        "--tree-sha",
-        required=True,
-        help="tree SHA returned by the executed create_tree packet; verification input",
-    )
-    connector_commit.set_defaults(func=cmd_connector_commit)
-
-    connector_update = sub.add_parser(
-        "connector-update", help="after commit creation, generate the non-force develop ref update packet"
-    )
-    connector_update.add_argument(
-        "--commit-sha", required=True,
-        help="commit SHA returned by the executed create_commit packet",
-    )
-    connector_update.add_argument(
-        "--commit-tree-sha", required=True,
-        help="tree SHA observed when reading the created commit; verification input",
-    )
-    connector_update.add_argument(
-        "--commit-parent-sha", required=True,
-        help="parent SHA observed when reading the created commit; verification input",
-    )
-    connector_update.set_defaults(func=cmd_connector_update)
-
-    verify_remote = sub.add_parser(
-        "verify-remote", help="verify develop ref/tree after update and require source-snapshot rehydration"
-    )
-    verify_remote.add_argument(
-        "--develop-head", required=True,
-        help="develop HEAD observed after the non-force ref update; verification input",
-    )
-    verify_remote.add_argument(
-        "--develop-tree", required=True,
-        help="develop tree observed after the non-force ref update; verification input",
-    )
-    verify_remote.set_defaults(func=cmd_verify_remote)
+    record.add_argument("--commit-sha", required=True)
+    record.add_argument("--result", required=True, choices=("success", "failure"))
+    record.set_defaults(func=cmd_record_update)
     return parser
 
 
