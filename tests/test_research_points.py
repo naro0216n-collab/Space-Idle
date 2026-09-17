@@ -8,7 +8,9 @@ from space_idle.facilities import FacilityDef, ServiceCapacitySupply
 from space_idle.service_capacity import ServiceCapacityScope
 from space_idle.research import (
     ResearchDefinition,
+    ResearchTheoryStageSpec,
     ResearchProviderLevelSpec,
+    ResearchProviderSourceKind,
     ResearchProviderSpec,
     ResearchStage,
 )
@@ -28,6 +30,8 @@ def test_research_point_storage_limits_generation_without_discarding_overcapacit
     )
     sim.research.providers = {
         provider_definition_id: ResearchProviderSpec(
+            provider_definition_id,
+            ResearchProviderSourceKind.FACILITY,
             provider_definition_id,
             tier=1,
             levels=(ResearchProviderLevelSpec(1, 2.0, 10.0),),
@@ -84,6 +88,8 @@ def test_global_research_points_are_progressively_allocated_without_upfront_or_s
     sim.research.providers = {
         provider_definition_id: ResearchProviderSpec(
             provider_definition_id,
+            ResearchProviderSourceKind.FACILITY,
+            provider_definition_id,
             tier=1,
             levels=(ResearchProviderLevelSpec(1, 0.0, 10.0),),
         )
@@ -93,12 +99,7 @@ def test_global_research_points_are_progressively_allocated_without_upfront_or_s
     assert capacity == 10.0
 
     research_id = DefinitionId("test.research.progressive_global_points")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Progressive global RP fixture",
-        research_point_cost=capacity * 2.0,
-        stages=(ResearchStage.THEORY,),
-    )
+    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Progressive global RP fixture", (ResearchTheoryStageSpec("theory", capacity * 2.0),), prerequisites=frozenset())
     sim.research.stored_points = capacity
 
     available = _research_row(app, research_id)

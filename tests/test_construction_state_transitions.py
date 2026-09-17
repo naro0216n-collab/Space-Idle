@@ -6,7 +6,7 @@ from space_idle import AdvanceTime, CancelBuild, PauseBuild, PlanBuild, build_ga
 from space_idle.content import base_ids as ids
 from space_idle.construction import BuildResourceRequirement, ConstructionRecipe, ProjectStatus
 from space_idle.facilities import FacilityDef
-from space_idle.research import ResearchDefinition, ResearchStage
+from space_idle.research import ResearchDefinition, ResearchStage, ResearchTheoryStageSpec
 from space_idle.shared import DefinitionId
 from space_idle.validation import validate_runtime_state, validate_simulation_configuration
 
@@ -63,10 +63,7 @@ def test_planned_project_with_unmet_technology_does_not_claim_inventory():
     sim.facilities.definitions[facility_id] = FacilityDef(
         facility_id, "Technology-locked fixture"
     )
-    sim.research.definitions[technology_id] = ResearchDefinition(
-        technology_id, "Required technology fixture",
-        research_point_cost=1.0, stages=(ResearchStage.THEORY,),
-    )
+    sim.research.definitions[technology_id] = ResearchDefinition(technology_id, "Required technology fixture", (ResearchTheoryStageSpec("theory", 1.0),), prerequisites=frozenset())
     sim.projects.recipes[facility_id] = ConstructionRecipe(
         facility_id,
         (

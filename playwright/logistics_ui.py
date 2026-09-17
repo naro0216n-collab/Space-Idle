@@ -70,7 +70,7 @@ def run() -> None:
             LEO,
             str(ids.ORBITAL_LOGISTICS_NODE),
             priority=5,
-            sourcing_policy="import_now",
+            procurement_policy="immediate",
         )
     ).data.created_id
     assert project_id is not None

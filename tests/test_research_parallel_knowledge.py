@@ -11,7 +11,8 @@ from space_idle.knowledge import ExperienceContributionRule
 from space_idle.power import PowerSpec
 from space_idle.research import (
     ResearchDefinition,
-    ResearchOperationalExperienceSpec,
+    ResearchTheoryStageSpec,
+    ResearchOperationalExperienceStageSpec,
     ResearchStage,
 )
 from space_idle.shared import DefinitionId
@@ -54,12 +55,7 @@ def _parallel_projection(
     sim = app._simulation
     _set_earth_research_execution_capacity(sim, execution_rate)
     for research_id in start_order:
-        sim.research.definitions[research_id] = ResearchDefinition(
-            research_id,
-            str(research_id),
-            research_point_cost=10.0,
-            stages=(ResearchStage.THEORY,),
-        )
+        sim.research.definitions[research_id] = ResearchDefinition(research_id, str(research_id), (ResearchTheoryStageSpec("theory", 10.0),), prerequisites=frozenset())
     sim.research.stored_points = stored_points
     for research_id in start_order:
         app.execute(StartResearch(str(research_id), priority=3))
@@ -138,12 +134,7 @@ def test_organization_research_execution_aggregates_provider_sites_after_local_p
     sim.facilities.install(leo_provider, ids.LEO)
 
     research_id = DefinitionId("test.research.organization_provider_power")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Organization Provider Power",
-        research_point_cost=10.0,
-        stages=(ResearchStage.THEORY,),
-    )
+    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Organization Provider Power", (ResearchTheoryStageSpec("theory", 10.0),), prerequisites=frozenset())
     sim.research.stored_points = 100.0
     app.execute(StartResearch(str(research_id), priority=3))
 
@@ -174,23 +165,11 @@ def test_operational_experience_is_driven_by_real_activity_not_research_time():
         ExperienceContributionRule("never_emitted", never_emitted, 1.0),
     )
     waiting_id = DefinitionId("test.research.operational_experience_wait")
-    sim.research.definitions[waiting_id] = ResearchDefinition(
-        waiting_id,
-        "Experience Wait",
-        0.0,
-        operational_experience=ResearchOperationalExperienceSpec({never_emitted: 1.0}),
-        stages=(ResearchStage.OPERATIONAL_EXPERIENCE,),
-    )
+    sim.research.definitions[waiting_id] = ResearchDefinition(waiting_id, "Experience Wait", (ResearchOperationalExperienceStageSpec("operational_experience", {never_emitted: 1.0}),), prerequisites=frozenset())
     extraction_id = DefinitionId("test.research.extraction_experience")
-    sim.research.definitions[extraction_id] = ResearchDefinition(
-        extraction_id,
-        "Extraction Experience",
-        0.0,
-        operational_experience=ResearchOperationalExperienceSpec({
+    sim.research.definitions[extraction_id] = ResearchDefinition(extraction_id, "Extraction Experience", (ResearchOperationalExperienceStageSpec("operational_experience", {
             ids.EXPERIENCE_EXTRACTION_OPERATIONS: 0.1,
-        }),
-        stages=(ResearchStage.OPERATIONAL_EXPERIENCE,),
-    )
+        }),), prerequisites=frozenset())
 
     sim.research.start(waiting_id, day=sim.day)
     sim.research.start(extraction_id, day=sim.day)

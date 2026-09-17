@@ -4,7 +4,7 @@ from .app_contracts.catalog_views import (
     RequirementConditionRow, CapabilityRequirementRow,
     SiteRequirementsDefinitionRow,
     OperationCapabilityDefinitionRow, ResourceDefinitionRow, FacilityDefinitionRow,
-    ProcessDefinitionRow, ResearchDefinitionRow, VehicleDefinitionRow, MovementPlanDefinitionRow,
+    ProcessDefinitionRow, ResearchDefinitionRow, ResearchStageDefinitionRow, VehicleDefinitionRow, MovementPlanDefinitionRow,
     CelestialBodyDefinitionRow, OperationalNodeDefinitionRow,
     CatalogView, OperationalNodeSummary, WorldView,
 )

@@ -63,6 +63,9 @@ class ResearchRow:
     display_name: str
     status: str
     stages: tuple[str, ...]
+    stage_ids: tuple[str, ...]
+    current_stage_id: str | None
+    current_stage_type: str | None
     paused: bool
     priority: ActivityPriority
     can_start: bool

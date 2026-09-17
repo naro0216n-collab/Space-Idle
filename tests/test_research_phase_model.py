@@ -19,8 +19,9 @@ from space_idle.content import base_ids as ids, base_requirements as req
 from space_idle.content.base_game import EARTH, LEO
 from space_idle.research import (
     ResearchDefinition,
-    ResearchDemonstrationSpec,
-    ResearchPrototypeSpec,
+    ResearchTheoryStageSpec,
+    ResearchDemonstrationStageSpec,
+    ResearchPrototypeStageSpec,
     ResearchStage,
 )
 from space_idle.execution_requirements import ServiceCapacityRequirement
@@ -75,16 +76,10 @@ def test_explicit_empty_prototype_stage_progresses_automatically_after_site_sele
     app = build_game_application()
     sim = app._simulation
     research_id = DefinitionId("test.research.explicit_empty_prototype")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Explicit Prototype",
-        research_point_cost=0.0,
-        prototype=ResearchPrototypeSpec({}),
-        stages=(ResearchStage.PROTOTYPE,),
-    )
+    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Explicit Prototype", (ResearchPrototypeStageSpec("prototype", {}),), prerequisites=frozenset())
 
     sim.research.start(research_id, day=sim.day)
-    assert sim.research.active[research_id].stage is ResearchStage.PROTOTYPE
+    assert sim.research.active[research_id].current_stage_id == "prototype"
     assert _research_row(app, research_id).stages == ("prototype",)
     sim.research.set_prototype_site(research_id, EARTH, sim.day)
 
@@ -97,30 +92,20 @@ def test_explicit_empty_prototype_stage_progresses_automatically_after_site_sele
 def test_research_definition_requires_explicit_stage_composition():
     research_id = DefinitionId("test.research.implicit_stage_forbidden")
     with pytest.raises(ValueError, match="explicitly define its stages"):
-        ResearchDefinition(
-            research_id,
-            "Implicit Stage Forbidden",
-            research_point_cost=1.0,
-        )
+        ResearchDefinition(research_id, "Implicit Stage Forbidden", (), prerequisites=frozenset())
 
 
 def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structural_mismatch():
     app = build_game_application()
     sim = app._simulation
     research_id = DefinitionId("test.research.prototype_site_contract")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Prototype Site Contract",
-        research_point_cost=0.0,
-        prototype=ResearchPrototypeSpec(
+    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Prototype Site Contract", (ResearchPrototypeStageSpec("prototype",
             {},
             SiteRequirements(
                 spatial_classification_requirements=req.SURFACE_CLASSIFICATION,
             ),
             (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
-        ),
-        stages=(ResearchStage.PROTOTYPE,),
-    )
+        ),), prerequisites=frozenset())
     original = _remove_research_site_service(sim)
     app.execute(StartResearch(str(research_id)))
 
@@ -156,11 +141,7 @@ def test_cell_local_research_site_requires_and_persists_explicit_developed_cell(
     app = build_game_application()
     sim = app._simulation
     research_id = DefinitionId("test.research.cell_local_site")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Cell-local Site",
-        research_point_cost=0.0,
-        prototype=ResearchPrototypeSpec(
+    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Cell-local Site", (ResearchPrototypeStageSpec("prototype",
             {},
             SiteRequirements(
                 environment=(
@@ -174,9 +155,7 @@ def test_cell_local_research_site_requires_and_persists_explicit_developed_cell(
                 ),
                 spatial_classification_requirements=req.SURFACE_CLASSIFICATION,
             ),
-        ),
-        stages=(ResearchStage.PROTOTYPE,),
-    )
+        ),), prerequisites=frozenset())
     app.execute(StartResearch(str(research_id)))
 
     row = _research_row(app, research_id)
@@ -204,17 +183,11 @@ def test_prototype_resources_stage_durably_and_complete_without_manual_funding()
     sim = app._simulation
     research_id = DefinitionId("test.research.reserved_prototype")
     resource_id = DefinitionId("test.resource.prototype_material")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Reserved Prototype",
-        research_point_cost=0.0,
-        prototype=ResearchPrototypeSpec(
+    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Reserved Prototype", (ResearchPrototypeStageSpec("prototype",
             {resource_id: 1.0},
             SiteRequirements(),
             (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
-        ),
-        stages=(ResearchStage.PROTOTYPE,),
-    )
+        ),), prerequisites=frozenset())
     sim.inventory.add(EARTH, resource_id, 1.0)
 
     app.execute(StartResearch(str(research_id)))
@@ -238,11 +211,7 @@ def test_demonstration_site_selection_tolerates_transient_blockers_but_progress_
     app = build_game_application()
     sim = app._simulation
     research_id = DefinitionId("test.research.demonstration_runtime_contract")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Demonstration Runtime Contract",
-        research_point_cost=0.0,
-        demonstration=ResearchDemonstrationSpec(
+    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Demonstration Runtime Contract", (ResearchDemonstrationStageSpec("demonstration",
             2,
             SiteRequirements(
                 capability_requirements=(
@@ -253,9 +222,7 @@ def test_demonstration_site_selection_tolerates_transient_blockers_but_progress_
                 ),
             ),
             (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
-        ),
-        stages=(ResearchStage.DEMONSTRATION,),
-    )
+        ),), prerequisites=frozenset())
     site = _research_site_fixture(sim)
     app.execute(PauseFacility(str(site.id)))
     app.execute(StartResearch(str(research_id)))
@@ -292,26 +259,62 @@ def test_partial_prototype_staging_returns_to_previous_site_when_site_changes():
     research_id = DefinitionId("test.research.partial_prototype")
     resource_id = DefinitionId("test.resource.partial_prototype_material")
     missing_id = DefinitionId("test.resource.missing_prototype_material")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Partial Prototype",
-        research_point_cost=0.0,
-        prototype=ResearchPrototypeSpec({resource_id: 1.0, missing_id: 1.0}),
-        stages=(ResearchStage.PROTOTYPE,),
-    )
+    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Partial Prototype", (ResearchPrototypeStageSpec("prototype", {resource_id: 1.0, missing_id: 1.0}),), prerequisites=frozenset())
     sim.inventory.add(EARTH, resource_id, 0.25)
 
     app.execute(StartResearch(str(research_id)))
     app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
     app.execute(AdvanceTime(1))
 
-    assert sim.research.prototype_reserved_t(research_id, EARTH, resource_id) == 0.25
+    assert sim.research.prototype_reserved_t(research_id, "prototype", EARTH, resource_id) == 0.25
     assert sim.inventory.amount(EARTH, resource_id) == pytest.approx(0.25)
     assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.0)
 
     app.execute(SetResearchPrototypeSite(str(research_id), str(LEO)))
 
-    assert sim.research.prototype_reserved_t(research_id, EARTH, resource_id) == 0.0
+    assert sim.research.prototype_reserved_t(research_id, "prototype", EARTH, resource_id) == 0.0
     assert sim.inventory.amount(EARTH, resource_id) == pytest.approx(0.25)
     assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.25)
-    assert sim.research.prototype_reserved_t(research_id, LEO, resource_id) == 0.0
+    assert sim.research.prototype_reserved_t(research_id, "prototype", LEO, resource_id) == 0.0
+
+
+def test_repeated_stage_type_uses_stage_id_for_identity_and_transition():
+    app = build_game_application()
+    sim = app._simulation
+    research_id = DefinitionId("test.research.repeated_prototype")
+    sim.research.definitions[research_id] = ResearchDefinition(
+        research_id,
+        "Repeated Prototype",
+        (
+            ResearchPrototypeStageSpec("prototype-a", {}),
+            ResearchPrototypeStageSpec("prototype-b", {}),
+        ),
+    )
+
+    app.execute(StartResearch(str(research_id)))
+    assert sim.research.active[research_id].current_stage_id == "prototype-a"
+    app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+    first_bundle = sim.research.execution_requirement_bundles(sim.day)[0]
+    assert ":prototype-a:" in str(first_bundle.id)
+
+    app.execute(AdvanceTime(1))
+    state = sim.research.active[research_id]
+    assert state.current_stage_id == "prototype-b"
+    assert state.execution_context is None
+    app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
+    second_bundle = sim.research.execution_requirement_bundles(sim.day)[0]
+    assert ":prototype-b:" in str(second_bundle.id)
+    assert second_bundle.id != first_bundle.id
+
+
+def test_research_definition_rejects_duplicate_stage_id_not_repeated_type():
+    research_id = DefinitionId("test.research.duplicate_stage_id")
+    with pytest.raises(ValueError, match="stage ids must be unique"):
+        ResearchDefinition(
+            research_id,
+            "Duplicate Stage ID",
+            (
+                ResearchPrototypeStageSpec("same", {}),
+                ResearchPrototypeStageSpec("same", {}),
+            ),
+        )

@@ -257,18 +257,19 @@ def test_save_load_preserves_research_execution_site(tmp_path):
     research_id = ids.TECH_ORBITAL_OPERATIONS
     sim.research.active[research_id] = ResearchState(
         research_id,
-        ResearchStage.PROTOTYPE,
+        "prototype",
+        stage_progress=0.0,
         stage_started_day=sim.day,
     )
     app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
 
-    before = sim.research.active[research_id].prototype_execution_site
+    before = sim.research.active[research_id].execution_context
     assert before is not None
     path = tmp_path / "research-execution-site.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application_for_load)
 
-    after = loaded._simulation.research.active[research_id].prototype_execution_site
+    after = loaded._simulation.research.active[research_id].execution_context
     assert after == before
     assert capture_state(loaded._simulation)["research"] == capture_state(sim)["research"]
     assert loaded.query(GetResearch()) == app.query(GetResearch())

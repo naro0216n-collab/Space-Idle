@@ -23,7 +23,9 @@ from space_idle.facilities import FacilityDef
 from space_idle.persistence import load_game, save_game
 from space_idle.research import (
     ResearchDefinition,
+    ResearchTheoryStageSpec,
     ResearchProviderLevelSpec,
+    ResearchProviderSourceKind,
     ResearchProviderSpec,
     ResearchStage,
 )
@@ -49,13 +51,10 @@ def _build_upgrade_fixture_application(*, for_load: bool = False):
         UPGRADE_CONTRACTOR,
         "Upgrade contractor fixture",
     )
-    sim.research.definitions[UPGRADE_TECHNOLOGY] = ResearchDefinition(
-        UPGRADE_TECHNOLOGY,
-        "Upgrade prerequisite fixture",
-        research_point_cost=1.0,
-        stages=(ResearchStage.THEORY,),
-    )
+    sim.research.definitions[UPGRADE_TECHNOLOGY] = ResearchDefinition(UPGRADE_TECHNOLOGY, "Upgrade prerequisite fixture", (ResearchTheoryStageSpec("theory", 1.0),), prerequisites=frozenset())
     sim.research.providers[UPGRADE_FACILITY] = ResearchProviderSpec(
+        UPGRADE_FACILITY,
+        ResearchProviderSourceKind.FACILITY,
         UPGRADE_FACILITY,
         tier=1,
         levels=(

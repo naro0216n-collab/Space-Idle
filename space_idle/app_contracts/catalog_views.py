@@ -60,15 +60,21 @@ class ProcessDefinitionRow:
 
 
 @dataclass(frozen=True)
+class ResearchStageDefinitionRow:
+    stage_id: str
+    stage_type: str
+    required_progress: float | None
+    resources: tuple[tuple[str, float], ...] = ()
+    site_requirements: SiteRequirementsDefinitionRow = SiteRequirementsDefinitionRow()
+    operational_experience: tuple[tuple[str, float], ...] = ()
+
+
+@dataclass(frozen=True)
 class ResearchDefinitionRow:
     id: str
     display_name: str
-    research_point_cost: float
     prerequisites: tuple[str, ...]
-    prototype_resources: tuple[tuple[str, float], ...]
-    prototype_site_requirements: SiteRequirementsDefinitionRow
-    demonstration_days: int
-    demonstration_site_requirements: SiteRequirementsDefinitionRow
+    stages: tuple[ResearchStageDefinitionRow, ...]
 
 
 @dataclass(frozen=True)

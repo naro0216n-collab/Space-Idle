@@ -1,36 +1,53 @@
 from __future__ import annotations
 
-from .power import PowerSnapshot
 from .execution_requirements import (
     ExecutionAllocationPlan,
     ExecutionRequirementBundle,
     PoolRequirement,
     ReservationAcquisitionRequirement,
-    ServiceCapacityRequirement as ExecutionServiceRequirement,
 )
-from .service_capacity import ServiceCapacityScope
+from .power import PowerSnapshot
 from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
-from .site import (
-    SiteRequirementFailure,
-    SiteRequirements,
-    evaluate_site_requirements,
-    requires_surface_cell_context,
-)
+from .site import SiteRequirementFailure, SiteRequirements, evaluate_site_requirements, requires_surface_cell_context
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
-from .research_models import ResearchExecutionSite, ResearchStage, ResearchState
+from .research_models import (
+    ResearchExecutionSite,
+    ResearchTheoryStageSpec,
+    ResearchPrototypeStageSpec,
+    ResearchDemonstrationStageSpec,
+    ResearchOperationalExperienceStageSpec,
+    ResearchStage,
+    ResearchStageSpec,
+    ResearchState,
+)
 
 
 class ResearchWorkflowMixin:
-    RESEARCH_EXECUTION_SERVICE = "research_execution"
-    _TRANSIENT_SITE_BLOCKERS = frozenset({
-        "manual_pause",
-        "capability:active",
-    })
+    _TRANSIENT_SITE_BLOCKERS = frozenset({"manual_pause", "capability:active"})
 
     @staticmethod
     def _project_owner_id(research_id: DefinitionId) -> EntityId:
         return EntityId(f"research:{research_id}")
+
+    def stage_spec(self, research_id: DefinitionId, stage_id: str | None = None) -> ResearchStageSpec:
+        definition = self.definitions[research_id]
+        if stage_id is None:
+            state = self.active.get(research_id)
+            if state is None:
+                raise ValueError("research is not active")
+            stage_id = state.current_stage_id
+        return definition.stage_spec(stage_id)
+
+    def current_stage_spec(self, research_id: DefinitionId) -> ResearchStageSpec:
+        return self.stage_spec(research_id)
+
+    def current_stage_type(self, research_id: DefinitionId) -> ResearchStage:
+        return self.current_stage_spec(research_id).stage_type
+
+    @staticmethod
+    def _initial_progress(spec: ResearchStageSpec) -> float | None:
+        return None if isinstance(spec, ResearchOperationalExperienceStageSpec) else 0.0
 
     def _execution_site_failures(
         self,
@@ -39,64 +56,34 @@ class ResearchWorkflowMixin:
         day: int,
         power: PowerSnapshot | None = None,
     ) -> tuple[SiteRequirementFailure, ...]:
+        del power
         graph = self.facilities.environment.graph
         location_id = site.operational_node_id
         if not graph.has_operational_node(location_id):
             raise KeyError(location_id)
-
         failures: list[SiteRequirementFailure] = []
-        local_site_required = (
-            location_id in graph.locations and requires_surface_cell_context(requirements)
-        )
+        local_site_required = location_id in graph.locations and requires_surface_cell_context(requirements)
         if site.surface_cell_id is None:
             if local_site_required:
-                failures.append(
-                    SiteRequirementFailure(
-                        "surface_cell:required", "局所環境を評価するSurface Cellが必要"
-                    )
-                )
+                failures.append(SiteRequirementFailure("surface_cell:required", "局所環境を評価するSurface Cellが必要"))
         else:
             location = graph.locations.get(location_id)
             if location is None:
-                failures.append(
-                    SiteRequirementFailure(
-                        "surface_cell:non_surface_node", "Surface CellはSurface Locationでのみ指定可能"
-                    )
-                )
+                failures.append(SiteRequirementFailure("surface_cell:non_surface_node", "Surface CellはSurface Locationでのみ指定可能"))
             elif site.surface_cell_id not in location.developed_cell_ids:
-                failures.append(
-                    SiteRequirementFailure(
-                        "surface_cell:developed", "実行地点は所属Locationのdeveloped cellである必要がある"
-                    )
-                )
+                failures.append(SiteRequirementFailure("surface_cell:developed", "実行地点は所属Locationのdeveloped cellである必要がある"))
             elif not local_site_required:
-                failures.append(
-                    SiteRequirementFailure(
-                        "surface_cell:not_required", "この研究段階はCell-local execution siteを要求しない"
-                    )
-                )
-
+                failures.append(SiteRequirementFailure("surface_cell:not_required", "この研究段階はCell-local execution siteを要求しない"))
         context_id = site.surface_cell_id or location_id
         if not failures:
-            failures.extend(
-                evaluate_site_requirements(
-                    requirements,
-                    location_id,
-                    day,
-                    self.facilities.environment,
-                    self.facilities,
-                    environment_context_id=context_id,
-                )
-            )
+            failures.extend(evaluate_site_requirements(
+                requirements, location_id, day, self.facilities.environment, self.facilities,
+                environment_context_id=context_id,
+            ))
         return tuple(failures)
 
-    def start_blockers(
-        self,
-        research_id: DefinitionId,
-        *,
-        day: int = 0,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
-    ) -> tuple[tuple[str, str], ...]:
+    def start_blockers(self, research_id: DefinitionId, *, day: int = 0, power_by_location=None) -> tuple[tuple[str, str], ...]:
+        del day, power_by_location
         definition = self.definitions[research_id]
         blockers: list[tuple[str, str]] = []
         if research_id in self.completed:
@@ -108,26 +95,16 @@ class ResearchWorkflowMixin:
             blockers.append(("prerequisite", ",".join(str(item) for item in missing)))
         return tuple(blockers)
 
-    def can_start(
-        self,
-        research_id: DefinitionId,
-        *,
-        day: int = 0,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
-    ) -> bool:
-        return not self.start_blockers(
-            research_id, day=day, power_by_location=power_by_location
-        )
+    def can_start(self, research_id: DefinitionId, *, day: int = 0, power_by_location=None) -> bool:
+        return not self.start_blockers(research_id, day=day, power_by_location=power_by_location)
 
-    def start(
-        self, research_id: DefinitionId, *, day: int = 0, priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    ) -> None:
+    def start(self, research_id: DefinitionId, *, day: int = 0, priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY) -> None:
         blockers = self.start_blockers(research_id, day=day)
         if blockers:
             raise ValueError("; ".join(detail for _code, detail in blockers))
-        definition = self.definitions[research_id]
+        first = self.definitions[research_id].stage_specs[0]
         self.active[research_id] = ResearchState(
-            research_id, definition.stages[0], priority=priority, stage_started_day=day
+            research_id, first.stage_id, self._initial_progress(first), priority=priority, stage_started_day=day
         )
 
     def set_priority(self, research_id: DefinitionId, priority: ActivityPriority) -> None:
@@ -169,551 +146,304 @@ class ResearchWorkflowMixin:
             raise ValueError("; ".join(detail for _code, detail in blockers))
         self.active[research_id].paused = False
 
-    def prototype_failures(
-        self,
-        research_id: DefinitionId,
-        location_id: SpatialNodeId,
-        day: int = 0,
-        power: PowerSnapshot | None = None,
-        surface_cell_id: SurfaceCellId | None = None,
-    ) -> tuple[SiteRequirementFailure, ...]:
-        prototype = self.definitions[research_id].prototype
-        if prototype is None:
-            raise ValueError("research has no prototype stage")
-        return self._execution_site_failures(
-            prototype.site_requirements,
-            ResearchExecutionSite(location_id, surface_cell_id),
-            day,
-            power,
-        )
+    @staticmethod
+    def prototype_requirement_id(research_id: DefinitionId, stage_id: str, resource_id: DefinitionId) -> EntityId:
+        return EntityId(f"requirement.research:{research_id}:{stage_id}:{resource_id}")
 
     @staticmethod
-    def prototype_requirement_id(
-        research_id: DefinitionId, resource_id: DefinitionId
-    ) -> EntityId:
-        return EntityId(f"requirement.research:{research_id}:{resource_id}")
+    def _prototype_reservation_owner_id(research_id: DefinitionId, stage_id: str) -> EntityId:
+        return EntityId(f"research.stage:{research_id}:{stage_id}")
 
     @staticmethod
-    def _prototype_reservation_owner_id(research_id: DefinitionId) -> EntityId:
-        return EntityId(f"research.prototype:{research_id}")
+    def prototype_reservation_requirement_id(research_id: DefinitionId, stage_id: str, resource_id: DefinitionId) -> EntityId:
+        return EntityId(f"reservation.research:{research_id}:{stage_id}:{resource_id}")
 
-    @staticmethod
-    def prototype_reservation_requirement_id(
-        research_id: DefinitionId, resource_id: DefinitionId
-    ) -> EntityId:
-        return EntityId(f"reservation.research:{research_id}:{resource_id}")
-
-    def prototype_reserved_t(
-        self,
-        research_id: DefinitionId,
-        location_id: SpatialNodeId,
-        resource_id: DefinitionId,
-    ) -> float:
+    def prototype_reserved_t(self, research_id: DefinitionId, stage_id: str, location_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return self.inventory.reserved_for(
-            self._prototype_reservation_owner_id(research_id), location_id, resource_id
+            self._prototype_reservation_owner_id(research_id, stage_id), location_id, resource_id
         )
 
-    def _release_prototype_reservations(self, research_id: DefinitionId) -> None:
-        self.inventory.release_reservation(self._prototype_reservation_owner_id(research_id))
+    def _release_stage_reservations(self, research_id: DefinitionId, stage_id: str) -> None:
+        self.inventory.release_reservation(self._prototype_reservation_owner_id(research_id, stage_id))
 
-    def _consume_prototype_reservations(self, research_id: DefinitionId) -> None:
+    def _consume_stage_reservations(self, research_id: DefinitionId, stage_id: str, spec: ResearchPrototypeStageSpec) -> None:
         state = self.active[research_id]
-        site = state.prototype_execution_site
-        location_id = None if site is None else site.operational_node_id
-        prototype = self.definitions[research_id].prototype
-        if location_id is None or prototype is None:
+        site = state.execution_context
+        if site is None:
             return
-        owner_id = self._prototype_reservation_owner_id(research_id)
-        for resource_id, required in prototype.resources.items():
+        owner_id = self._prototype_reservation_owner_id(research_id, stage_id)
+        for resource_id, required in spec.resources.items():
             if required > 1e-12:
-                self.inventory.consume_reserved(owner_id, location_id, resource_id, required)
+                self.inventory.consume_reserved(owner_id, site.operational_node_id, resource_id, required)
 
-    def set_prototype_site(
-        self,
-        research_id: DefinitionId,
-        location_id: SpatialNodeId,
-        day: int = 0,
-        surface_cell_id: SurfaceCellId | None = None,
-    ) -> None:
+    def prototype_failures(self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0, power: PowerSnapshot | None = None, surface_cell_id: SurfaceCellId | None = None) -> tuple[SiteRequirementFailure, ...]:
+        spec = self.current_stage_spec(research_id)
+        if not isinstance(spec, ResearchPrototypeStageSpec):
+            raise ValueError("research is not in a prototype stage")
+        return self._execution_site_failures(spec.site_requirements, ResearchExecutionSite(location_id, surface_cell_id), day, power)
+
+    def demonstration_failures(self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0, power: PowerSnapshot | None = None, surface_cell_id: SurfaceCellId | None = None) -> tuple[SiteRequirementFailure, ...]:
+        spec = self.current_stage_spec(research_id)
+        if not isinstance(spec, ResearchDemonstrationStageSpec):
+            raise ValueError("research is not in a demonstration stage")
+        return self._execution_site_failures(spec.site_requirements, ResearchExecutionSite(location_id, surface_cell_id), day, power)
+
+    @classmethod
+    def _structural_site_blockers(cls, blockers: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+        return tuple(blocker for blocker in blockers if blocker[0] not in cls._TRANSIENT_SITE_BLOCKERS)
+
+    def _site_blockers(self, research_id: DefinitionId, expected_type: type, location_id: SpatialNodeId, day: int, power, surface_cell_id) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
-        if state is None or state.stage is not ResearchStage.PROTOTYPE:
-            raise ValueError("研究は試作段階ではありません")
-        structural = self._structural_site_blockers(
-            self.prototype_site_blockers(
-                research_id, location_id, day, surface_cell_id=surface_cell_id
-            )
+        if state is None or not isinstance(self.current_stage_spec(research_id), expected_type):
+            return (("research_stage", "研究段階が一致しません"),)
+        blockers: list[tuple[str, str]] = []
+        if state.paused:
+            blockers.append(("manual_pause", "研究が手動停止中"))
+        failures = (
+            self.prototype_failures(research_id, location_id, day, power, surface_cell_id)
+            if expected_type is ResearchPrototypeStageSpec
+            else self.demonstration_failures(research_id, location_id, day, power, surface_cell_id)
         )
+        blockers.extend((failure.code, failure.detail) for failure in failures)
+        return tuple(blockers)
+
+    def prototype_site_blockers(self, research_id, location_id, day=0, power=None, surface_cell_id=None):
+        return self._site_blockers(research_id, ResearchPrototypeStageSpec, location_id, day, power, surface_cell_id)
+
+    def demonstration_site_blockers(self, research_id, location_id, day=0, power=None, surface_cell_id=None):
+        return self._site_blockers(research_id, ResearchDemonstrationStageSpec, location_id, day, power, surface_cell_id)
+
+    def can_select_prototype_site(self, research_id, location_id, day=0, surface_cell_id=None) -> bool:
+        return not self._structural_site_blockers(self.prototype_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
+
+    def can_select_demonstration_site(self, research_id, location_id, day=0, surface_cell_id=None) -> bool:
+        return not self._structural_site_blockers(self.demonstration_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
+
+    def set_prototype_site(self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0, surface_cell_id: SurfaceCellId | None = None) -> None:
+        state = self.active.get(research_id)
+        spec = None if state is None else self.current_stage_spec(research_id)
+        if state is None or not isinstance(spec, ResearchPrototypeStageSpec):
+            raise ValueError("研究は試作段階ではありません")
+        structural = self._structural_site_blockers(self.prototype_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
         if structural:
-            raise ValueError(
-                "prototype site requirements not met: "
-                + "; ".join(detail for _code, detail in structural)
-            )
-        previous = state.prototype_execution_site
+            raise ValueError("prototype site requirements not met: " + "; ".join(detail for _code, detail in structural))
         site = ResearchExecutionSite(location_id, surface_cell_id)
-        if previous is not None and previous != site:
-            self._release_prototype_reservations(research_id)
-        state.prototype_execution_site = site
+        if state.execution_context is not None and state.execution_context != site:
+            self._release_stage_reservations(research_id, spec.stage_id)
+        state.execution_context = site
+
+    def set_demonstration_site(self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0, surface_cell_id: SurfaceCellId | None = None) -> None:
+        state = self.active.get(research_id)
+        spec = None if state is None else self.current_stage_spec(research_id)
+        if state is None or not isinstance(spec, ResearchDemonstrationStageSpec):
+            raise ValueError("研究は実証段階ではありません")
+        structural = self._structural_site_blockers(self.demonstration_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
+        if structural:
+            raise ValueError("demonstration site requirements not met: " + "; ".join(detail for _code, detail in structural))
+        state.execution_context = ResearchExecutionSite(location_id, surface_cell_id)
+        if state.stage_progress is None:
+            state.stage_progress = 0.0
 
     def supplys(self, day: int = 0) -> tuple[SupplyRequirement, ...]:
-        requirements: list[SupplyRequirement] = []
-        for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
-            if state.paused or state.stage is not ResearchStage.PROTOTYPE:
-                continue
-            site = state.prototype_execution_site
-            location_id = None if site is None else site.operational_node_id
-            if location_id is None:
-                continue
-            prototype = self.definitions[research_id].prototype
-            if prototype is None:
-                raise RuntimeError(f"prototype state has no prototype definition: {research_id}")
-            for resource_id, required_t in sorted(
-                prototype.resources.items(), key=lambda row: str(row[0])
-            ):
-                remaining = max(
-                    0.0,
-                    required_t - self.prototype_reserved_t(
-                        research_id, location_id, resource_id
-                    ),
-                )
-                if remaining <= 1e-9:
-                    continue
-                requirements.append(SupplyRequirement(
-                    self.prototype_requirement_id(research_id, resource_id),
-                    "research",
-                    self._project_owner_id(research_id),
-                    location_id,
-                    resource_id,
-                    remaining,
-                    state.priority,
-                ))
-        return tuple(requirements)
-
-    def reservation_acquisition_requirements(
-        self, day: int = 0
-    ) -> tuple[ReservationAcquisitionRequirement, ...]:
         del day
-        requirements: list[ReservationAcquisitionRequirement] = []
-        for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
-            if state.paused or state.stage is not ResearchStage.PROTOTYPE:
-                continue
-            site = state.prototype_execution_site
-            location_id = None if site is None else site.operational_node_id
-            if location_id is None:
-                continue
-            prototype = self.definitions[research_id].prototype
-            if prototype is None:
-                raise RuntimeError(f"prototype state has no prototype definition: {research_id}")
-            owner_id = self._prototype_reservation_owner_id(research_id)
-            for resource_id, required_t in sorted(prototype.resources.items(), key=lambda row: str(row[0])):
-                missing = max(0.0, required_t - self.prototype_reserved_t(research_id, location_id, resource_id))
-                if missing <= 1e-9:
-                    continue
-                requirements.append(ReservationAcquisitionRequirement(
-                    self.prototype_reservation_requirement_id(research_id, resource_id),
-                    owner_id,
-                    location_id,
-                    resource_id,
-                    missing,
-                    state.priority,
-                    "research_prototype",
-                ))
-        return tuple(requirements)
-
-    @staticmethod
-    def _theory_bundle_id(research_id: DefinitionId) -> EntityId:
-        return EntityId(f"execution.research:theory:{research_id}")
-
-    @staticmethod
-    def _stage_bundle_id(
-        research_id: DefinitionId, stage: ResearchStage, site: ResearchExecutionSite
-    ) -> EntityId:
-        suffix = (
-            str(site.operational_node_id)
-            if site.surface_cell_id is None
-            else f"{site.operational_node_id}:{site.surface_cell_id}"
-        )
-        return EntityId(f"execution.research:{stage.value}:{research_id}:{suffix}")
-
-    def execution_requirement_bundles(
-        self, day: int = 0
-    ) -> tuple[ExecutionRequirementBundle, ...]:
-        bundles: list[ExecutionRequirementBundle] = []
+        requirements: list[SupplyRequirement] = []
         for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
             if state.paused:
                 continue
-            definition = self.definitions[research_id]
-            if state.stage is ResearchStage.THEORY:
-                remaining = max(0.0, definition.research_point_cost - state.stage_progress)
+            spec = self.current_stage_spec(research_id)
+            if not isinstance(spec, ResearchPrototypeStageSpec) or state.execution_context is None:
+                continue
+            location_id = state.execution_context.operational_node_id
+            for resource_id, required_t in sorted(spec.resources.items(), key=lambda row: str(row[0])):
+                remaining = max(0.0, required_t - self.prototype_reserved_t(research_id, spec.stage_id, location_id, resource_id))
+                if remaining <= 1e-9:
+                    continue
+                requirements.append(SupplyRequirement(
+                    self.prototype_requirement_id(research_id, spec.stage_id, resource_id),
+                    "research", self._project_owner_id(research_id), location_id,
+                    resource_id, remaining, state.priority,
+                ))
+        return tuple(requirements)
+
+    def reservation_acquisition_requirements(self, day: int = 0) -> tuple[ReservationAcquisitionRequirement, ...]:
+        del day
+        rows: list[ReservationAcquisitionRequirement] = []
+        for research_id, state in sorted(self.active.items(), key=lambda row: str(row[0])):
+            if state.paused:
+                continue
+            spec = self.current_stage_spec(research_id)
+            if not isinstance(spec, ResearchPrototypeStageSpec) or state.execution_context is None:
+                continue
+            location_id = state.execution_context.operational_node_id
+            owner_id = self._prototype_reservation_owner_id(research_id, spec.stage_id)
+            for resource_id, required_t in sorted(spec.resources.items(), key=lambda row: str(row[0])):
+                missing = max(0.0, required_t - self.prototype_reserved_t(research_id, spec.stage_id, location_id, resource_id))
+                if missing <= 1e-9:
+                    continue
+                rows.append(ReservationAcquisitionRequirement(
+                    self.prototype_reservation_requirement_id(research_id, spec.stage_id, resource_id),
+                    owner_id, location_id, resource_id, missing, state.priority, "research_prototype",
+                ))
+        return tuple(rows)
+
+    @staticmethod
+    def _stage_bundle_id(research_id: DefinitionId, stage_id: str, stage_type: ResearchStage, site: ResearchExecutionSite | None = None) -> EntityId:
+        suffix = "organization" if site is None else (
+            str(site.operational_node_id) if site.surface_cell_id is None
+            else f"{site.operational_node_id}:{site.surface_cell_id}"
+        )
+        return EntityId(f"execution.research:{stage_type.value}:{research_id}:{stage_id}:{suffix}")
+
+    def execution_requirement_bundles(self, day: int = 0) -> tuple[ExecutionRequirementBundle, ...]:
+        rows: list[ExecutionRequirementBundle] = []
+        for research_id, state in sorted(self.active.items(), key=lambda row: (-row[1].priority, str(row[0]))):
+            if state.paused:
+                continue
+            spec = self.current_stage_spec(research_id)
+            if isinstance(spec, ResearchTheoryStageSpec):
+                progress = state.stage_progress or 0.0
+                remaining = max(0.0, spec.research_point_cost - progress)
                 if remaining <= 1e-12:
                     continue
-                bundles.append(ExecutionRequirementBundle(
-                    self._theory_bundle_id(research_id),
-                    "research_project",
-                    self._project_owner_id(research_id),
-                    ResearchStage.THEORY.value,
-                    None,
-                    remaining,
-                    state.priority,
-                    (
-                        ExecutionServiceRequirement(
-                            self.RESEARCH_EXECUTION_SERVICE,
-                            1.0,
-                            scope=ServiceCapacityScope.ORGANIZATION,
-                        ),
-                        PoolRequirement("research_points", 1.0, "organization"),
-                    ),
+                rows.append(ExecutionRequirementBundle(
+                    self._stage_bundle_id(research_id, spec.stage_id, spec.stage_type),
+                    "research_project", self._project_owner_id(research_id), spec.stage_id,
+                    None, remaining, state.priority,
+                    tuple(spec.execution_requirements) + (PoolRequirement("research_points", 1.0, "organization"),),
                 ))
                 continue
-
-            if state.stage is ResearchStage.PROTOTYPE:
-                site = state.prototype_execution_site
-                spec = definition.prototype
-                if site is None or spec is None:
-                    continue
-                location_id = site.operational_node_id
-                if self._structural_site_blockers(
-                    self.prototype_site_blockers(
-                        research_id,
-                        location_id,
-                        day,
-                        surface_cell_id=site.surface_cell_id,
-                    )
-                ):
-                    continue
-                resources_ready = all(
-                    self.prototype_reserved_t(research_id, location_id, resource_id) + 1e-9 >= required
-                    for resource_id, required in spec.resources.items()
-                )
-                if not resources_ready:
-                    continue
-            elif state.stage is ResearchStage.DEMONSTRATION:
-                site = state.demonstration_execution_site
-                spec = definition.demonstration
-                if site is None or spec is None:
-                    continue
-                location_id = site.operational_node_id
-                if self._structural_site_blockers(
-                    self.demonstration_site_blockers(
-                        research_id,
-                        location_id,
-                        day,
-                        surface_cell_id=site.surface_cell_id,
-                    )
-                ):
-                    continue
-            else:
+            if isinstance(spec, ResearchOperationalExperienceStageSpec):
                 continue
-
-            requirements = spec.execution_requirements
-            bundles.append(ExecutionRequirementBundle(
-                self._stage_bundle_id(research_id, state.stage, site),
-                "research_project",
-                self._project_owner_id(research_id),
-                state.stage.value,
-                location_id,
-                1.0,
-                state.priority,
-                requirements,
-                atomic=True,
-                wait_started_day=state.stage_started_day,
+            site = state.execution_context
+            if site is None:
+                continue
+            blockers = (
+                self.prototype_site_blockers(research_id, site.operational_node_id, day, surface_cell_id=site.surface_cell_id)
+                if isinstance(spec, ResearchPrototypeStageSpec)
+                else self.demonstration_site_blockers(research_id, site.operational_node_id, day, surface_cell_id=site.surface_cell_id)
+            )
+            if self._structural_site_blockers(blockers):
+                continue
+            if isinstance(spec, ResearchPrototypeStageSpec):
+                if not all(
+                    self.prototype_reserved_t(research_id, spec.stage_id, site.operational_node_id, resource_id) + 1e-9 >= required
+                    for resource_id, required in spec.resources.items()
+                ):
+                    continue
+                required_work = spec.required_work
+                requirements = spec.execution_requirements
+            else:
+                required_work = spec.required_work
+                requirements = spec.execution_requirements
+            remaining = max(0.0, required_work - (state.stage_progress or 0.0))
+            if remaining <= 1e-12:
+                continue
+            request = min(1.0, remaining)
+            rows.append(ExecutionRequirementBundle(
+                self._stage_bundle_id(research_id, spec.stage_id, spec.stage_type, site),
+                "research_project", self._project_owner_id(research_id), spec.stage_id,
+                site.operational_node_id, request, state.priority, requirements,
+                wait_started_day=state.stage_started_day if request > 0 and False else None,
             ))
-        return tuple(bundles)
+        return tuple(rows)
 
-    def set_demonstration_site(
-        self,
-        research_id: DefinitionId,
-        location_id: SpatialNodeId,
-        day: int = 0,
-        surface_cell_id: SurfaceCellId | None = None,
-    ) -> None:
+    def prototype_blockers(self, research_id: DefinitionId, day: int = 0, power_by_location=None) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
-        if state is None or state.stage is not ResearchStage.DEMONSTRATION:
-            raise ValueError("研究は実証段階ではありません")
-        structural = self._structural_site_blockers(
-            self.demonstration_site_blockers(
-                research_id, location_id, day, surface_cell_id=surface_cell_id
-            )
-        )
-        if structural:
-            raise ValueError(
-                "demonstration site requirements not met: "
-                + "; ".join(detail for _code, detail in structural)
-            )
-        state.demonstration_execution_site = ResearchExecutionSite(
-            location_id, surface_cell_id
-        )
-        state.stage_progress = 0.0
-
-    def demonstration_failures(
-        self,
-        research_id: DefinitionId,
-        location_id: SpatialNodeId,
-        day: int = 0,
-        power: PowerSnapshot | None = None,
-        surface_cell_id: SurfaceCellId | None = None,
-    ) -> tuple[SiteRequirementFailure, ...]:
-        demonstration = self.definitions[research_id].demonstration
-        if demonstration is None:
-            raise ValueError("research has no demonstration stage")
-        return self._execution_site_failures(
-            demonstration.site_requirements,
-            ResearchExecutionSite(location_id, surface_cell_id),
-            day,
-            power,
-        )
-
-    def prototype_site_blockers(
-        self,
-        research_id: DefinitionId,
-        location_id: SpatialNodeId,
-        day: int = 0,
-        power: PowerSnapshot | None = None,
-        surface_cell_id: SurfaceCellId | None = None,
-    ) -> tuple[tuple[str, str], ...]:
-        state = self.active.get(research_id)
-        if state is None or state.stage is not ResearchStage.PROTOTYPE:
+        if state is None or not isinstance(self.current_stage_spec(research_id), ResearchPrototypeStageSpec):
             return (("prototype_stage", "研究は試作段階ではありません"),)
+        spec = self.current_stage_spec(research_id)
+        assert isinstance(spec, ResearchPrototypeStageSpec)
         blockers: list[tuple[str, str]] = []
         if state.paused:
             blockers.append(("manual_pause", "研究が手動停止中"))
-        blockers.extend(
-            (failure.code, failure.detail)
-            for failure in self.prototype_failures(
-                research_id, location_id, day, power, surface_cell_id
-            )
-        )
-        return tuple(blockers)
-
-    def can_select_prototype_site(
-        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0,
-        surface_cell_id: SurfaceCellId | None = None,
-    ) -> bool:
-        state = self.active.get(research_id)
-        return (
-            state is not None
-            and state.stage is ResearchStage.PROTOTYPE
-            and not self._structural_site_blockers(
-                self.prototype_site_blockers(
-                    research_id, location_id, day, surface_cell_id=surface_cell_id
-                )
-            )
-        )
-
-    def demonstration_site_blockers(
-        self,
-        research_id: DefinitionId,
-        location_id: SpatialNodeId,
-        day: int = 0,
-        power: PowerSnapshot | None = None,
-        surface_cell_id: SurfaceCellId | None = None,
-    ) -> tuple[tuple[str, str], ...]:
-        state = self.active.get(research_id)
-        if state is None or state.stage is not ResearchStage.DEMONSTRATION:
-            return (("demonstration_stage", "研究は実証段階ではありません"),)
-        blockers: list[tuple[str, str]] = []
-        if state.paused:
-            blockers.append(("manual_pause", "研究が手動停止中"))
-        blockers.extend(
-            (failure.code, failure.detail)
-            for failure in self.demonstration_failures(
-                research_id, location_id, day, power, surface_cell_id
-            )
-        )
-        return tuple(blockers)
-
-    def can_select_demonstration_site(
-        self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0,
-        surface_cell_id: SurfaceCellId | None = None,
-    ) -> bool:
-        state = self.active.get(research_id)
-        return (
-            state is not None
-            and state.stage is ResearchStage.DEMONSTRATION
-            and not self._structural_site_blockers(
-                self.demonstration_site_blockers(
-                    research_id, location_id, day, surface_cell_id=surface_cell_id
-                )
-            )
-        )
-
-    @classmethod
-    def _structural_site_blockers(
-        cls, blockers: tuple[tuple[str, str], ...]
-    ) -> tuple[tuple[str, str], ...]:
-        return tuple(
-            blocker for blocker in blockers if blocker[0] not in cls._TRANSIENT_SITE_BLOCKERS
-        )
-
-    def prototype_blockers(
-        self,
-        research_id: DefinitionId,
-        day: int = 0,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
-    ) -> tuple[tuple[str, str], ...]:
-        state = self.active.get(research_id)
-        if state is None or state.stage is not ResearchStage.PROTOTYPE:
-            return (("prototype_stage", "研究は試作段階ではありません"),)
-        blockers: list[tuple[str, str]] = []
-        if state.paused:
-            blockers.append(("manual_pause", "研究が手動停止中"))
-        site = state.prototype_execution_site
+        site = state.execution_context
         if site is None:
             blockers.append(("prototype_site", "試作地点を選択してください"))
             return tuple(blockers)
-        location_id = site.operational_node_id
-        blockers.extend(
-            (failure.code, failure.detail)
-            for failure in self.prototype_failures(
-                research_id,
-                location_id,
-                day,
-                None if power_by_location is None else power_by_location.get(location_id),
-                site.surface_cell_id,
-            )
-        )
-        prototype = self.definitions[research_id].prototype
-        if prototype is None:
-            raise RuntimeError(f"prototype state has no prototype definition: {research_id}")
-        for resource_id, required in sorted(
-            prototype.resources.items(), key=lambda row: str(row[0])
-        ):
-            reserved = self.prototype_reserved_t(research_id, location_id, resource_id)
+        blockers.extend((f.code, f.detail) for f in self.prototype_failures(
+            research_id, site.operational_node_id, day,
+            None if power_by_location is None else power_by_location.get(site.operational_node_id),
+            site.surface_cell_id,
+        ))
+        for resource_id, required in sorted(spec.resources.items(), key=lambda row: str(row[0])):
+            reserved = self.prototype_reserved_t(research_id, spec.stage_id, site.operational_node_id, resource_id)
             if reserved + 1e-9 < required:
-                blockers.append((
-                    "prototype_resource",
-                    f"prototype resource shortfall: {resource_id}: {reserved:g}/{required:g} t",
-                ))
+                blockers.append(("prototype_resource", f"prototype resource shortfall: {resource_id}: {reserved:g}/{required:g} t"))
         return tuple(blockers)
 
-    def demonstration_blockers(
-        self,
-        research_id: DefinitionId,
-        day: int = 0,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
-    ) -> tuple[tuple[str, str], ...]:
+    def demonstration_blockers(self, research_id: DefinitionId, day: int = 0, power_by_location=None) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
-        if state is None or state.stage is not ResearchStage.DEMONSTRATION:
+        if state is None or not isinstance(self.current_stage_spec(research_id), ResearchDemonstrationStageSpec):
             return (("demonstration_stage", "研究は実証段階ではありません"),)
         blockers: list[tuple[str, str]] = []
         if state.paused:
             blockers.append(("manual_pause", "研究が手動停止中"))
-        site = state.demonstration_execution_site
+        site = state.execution_context
         if site is None:
             blockers.append(("demonstration_site", "実証地点を選択してください"))
             return tuple(blockers)
-        location_id = site.operational_node_id
-        blockers.extend(
-            (failure.code, failure.detail)
-            for failure in self.demonstration_failures(
-                research_id,
-                location_id,
-                day,
-                None if power_by_location is None else power_by_location.get(location_id),
-                site.surface_cell_id,
-            )
-        )
+        blockers.extend((f.code, f.detail) for f in self.demonstration_failures(
+            research_id, site.operational_node_id, day,
+            None if power_by_location is None else power_by_location.get(site.operational_node_id),
+            site.surface_cell_id,
+        ))
         return tuple(blockers)
 
-    def operational_experience_blockers(
-        self, research_id: DefinitionId
-    ) -> tuple[tuple[str, str], ...]:
+    def operational_experience_blockers(self, research_id: DefinitionId) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
-        if state is None or state.stage is not ResearchStage.OPERATIONAL_EXPERIENCE:
+        if state is None or not isinstance(self.current_stage_spec(research_id), ResearchOperationalExperienceStageSpec):
             return (("operational_experience_stage", "研究は運用経験段階ではありません"),)
+        spec = self.current_stage_spec(research_id)
+        assert isinstance(spec, ResearchOperationalExperienceStageSpec)
         blockers: list[tuple[str, str]] = []
         if state.paused:
             blockers.append(("manual_pause", "研究が手動停止中"))
-        spec = self.definitions[research_id].operational_experience
-        if spec is None:
-            raise RuntimeError(f"operational experience state has no definition: {research_id}")
         for category, required in sorted(spec.requirements.items()):
             current = self.knowledge_state.value(category)
             if current + 1e-9 < required:
-                blockers.append((
-                    "operational_experience",
-                    f"{category}: {current:g}/{required:g}",
-                ))
+                blockers.append(("operational_experience", f"{category}: {current:g}/{required:g}"))
         return tuple(blockers)
 
     def theory_remaining(self, research_id: DefinitionId) -> float:
         state = self.active.get(research_id)
-        definition = self.definitions[research_id]
-        if state is None:
-            return 0.0 if research_id in self.completed else definition.research_point_cost
-        stage_index = definition.stages.index(state.stage)
-        theory_index = (
-            definition.stages.index(ResearchStage.THEORY)
-            if ResearchStage.THEORY in definition.stages
-            else None
-        )
-        if theory_index is None:
-            return 0.0
-        if stage_index > theory_index:
-            return 0.0
-        if state.stage is ResearchStage.THEORY:
-            return max(0.0, definition.research_point_cost - state.stage_progress)
-        return definition.research_point_cost
-
-    def current_blockers(
-        self,
-        research_id: DefinitionId,
-        *,
-        day: int = 0,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
-    ) -> tuple[tuple[str, str], ...]:
-        state = self.active.get(research_id)
         if state is None:
             if research_id in self.completed:
-                return ()
-            return self.start_blockers(
-                research_id, day=day, power_by_location=power_by_location
-            )
+                return 0.0
+            first = self.definitions[research_id].stage_specs[0]
+            return first.research_point_cost if isinstance(first, ResearchTheoryStageSpec) else 0.0
+        spec = self.current_stage_spec(research_id)
+        if not isinstance(spec, ResearchTheoryStageSpec):
+            return 0.0
+        return max(0.0, spec.research_point_cost - (state.stage_progress or 0.0))
+
+    def current_blockers(self, research_id: DefinitionId, *, day: int = 0, power_by_location=None) -> tuple[tuple[str, str], ...]:
+        state = self.active.get(research_id)
+        if state is None:
+            return () if research_id in self.completed else self.start_blockers(research_id, day=day, power_by_location=power_by_location)
         if state.paused:
             return (("manual_pause", "研究が手動停止中"),)
-        if state.stage is ResearchStage.THEORY:
-            blockers: list[tuple[str, str]] = []
-            if self.stored_points <= 1e-12:
-                blockers.append(("research_points", "Research Point不足"))
-            return tuple(blockers)
-        if state.stage is ResearchStage.PROTOTYPE:
-            return self.prototype_blockers(
-                research_id, day, power_by_location=power_by_location
-            )
-        if state.stage is ResearchStage.DEMONSTRATION:
-            return self.demonstration_blockers(
-                research_id, day, power_by_location=power_by_location
-            )
-        if state.stage is ResearchStage.OPERATIONAL_EXPERIENCE:
-            return self.operational_experience_blockers(research_id)
-        return ()
+        spec = self.current_stage_spec(research_id)
+        if isinstance(spec, ResearchTheoryStageSpec):
+            return (("research_points", "Research Point不足"),) if self.stored_points <= 1e-12 else ()
+        if isinstance(spec, ResearchPrototypeStageSpec):
+            return self.prototype_blockers(research_id, day, power_by_location)
+        if isinstance(spec, ResearchDemonstrationStageSpec):
+            return self.demonstration_blockers(research_id, day, power_by_location)
+        return self.operational_experience_blockers(research_id)
 
-
-    def allocation_blockers(
-        self,
-        research_id: DefinitionId,
-        execution_allocations: ExecutionAllocationPlan,
-    ) -> tuple[tuple[str, str], ...]:
+    def allocation_blockers(self, research_id: DefinitionId, execution_allocations: ExecutionAllocationPlan) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
         if state is None or state.paused:
             return ()
         owner_id = self._project_owner_id(research_id)
         blockers: list[tuple[str, str]] = []
-        for allocation in execution_allocations.allocations_for_owner(
-            "research_project", owner_id
-        ):
+        for allocation in execution_allocations.allocations_for_owner("research_project", owner_id):
             bundle = execution_allocations.bundle(allocation.bundle_id)
-            if bundle.purpose != state.stage.value or allocation.unmet_execution <= 1e-9:
+            if bundle.purpose != state.current_stage_id or allocation.unmet_execution <= 1e-9:
                 continue
             for constraint in allocation.limiting_constraints:
-                if constraint.kind == "pool" and constraint.name == "research_points":
-                    code = "research_points:allocation"
-                else:
-                    code = f"{constraint.kind}:allocation"
-                detail = (
-                    f"{constraint.name}: {allocation.allocated_execution:g}/"
-                    f"{allocation.requested_execution:g}"
-                )
-                row = (code, detail)
+                code = "research_points:allocation" if constraint.kind == "pool" and constraint.name == "research_points" else f"{constraint.kind}:allocation"
+                row = (code, f"{constraint.name}: {allocation.allocated_execution:g}/{allocation.requested_execution:g}")
                 if row not in blockers:
                     blockers.append(row)
         return tuple(blockers)
@@ -725,14 +455,14 @@ class ResearchWorkflowMixin:
     def _advance_stage(self, research_id: DefinitionId, day: int) -> None:
         state = self.active[research_id]
         definition = self.definitions[research_id]
-        index = definition.stages.index(state.stage)
-        if state.stage is ResearchStage.PROTOTYPE:
-            self._consume_prototype_reservations(research_id)
-        if index + 1 >= len(definition.stages):
+        current = definition.stage_spec(state.current_stage_id)
+        if isinstance(current, ResearchPrototypeStageSpec):
+            self._consume_stage_reservations(research_id, current.stage_id, current)
+        next_spec = definition.next_stage_spec(current.stage_id)
+        if next_spec is None:
             self._complete(research_id)
             return
-        state.stage = definition.stages[index + 1]
-        state.stage_progress = 0.0
+        state.current_stage_id = next_spec.stage_id
+        state.stage_progress = self._initial_progress(next_spec)
         state.stage_started_day = day
-        if state.stage is ResearchStage.DEMONSTRATION:
-            state.demonstration_execution_site = None
+        state.execution_context = None

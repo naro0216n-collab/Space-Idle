@@ -3,6 +3,7 @@ from __future__ import annotations
 from .execution_requirements import pool_constraint
 from .power import PowerSnapshot
 from .shared import SpatialNodeId
+from .research_models import ResearchProviderSourceKind
 
 
 class ResearchCapacityMixin:
@@ -24,9 +25,19 @@ class ResearchCapacityMixin:
             ),
         )
 
+    def _facility_provider(self, facility_id):
+        facility = self.facilities.facilities[facility_id]
+        for provider in self.providers.values():
+            if (
+                provider.source_kind is ResearchProviderSourceKind.FACILITY
+                and provider.source_definition_id == facility.definition_id
+            ):
+                return provider
+        return None
+
     def _provider_level_spec(self, facility_id):
         facility = self.facilities.facilities[facility_id]
-        provider = self.providers.get(facility.definition_id)
+        provider = self._facility_provider(facility_id)
         return None if provider is None else provider.level_spec(facility.level)
 
     def provider_generation(self, facility_id, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int) -> float:
@@ -46,7 +57,7 @@ class ResearchCapacityMixin:
         return sum(
             self.provider_generation(facility.id, snapshots, day)
             for facility in self.facilities.facilities.values()
-            if facility.definition_id in self.providers
+            if self._facility_provider(facility.id) is not None
         )
 
     def storage_capacity(self, power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None, day: int = 0) -> float:
@@ -54,7 +65,7 @@ class ResearchCapacityMixin:
         return sum(
             self.provider_storage_capacity(facility.id, snapshots, day)
             for facility in self.facilities.facilities.values()
-            if facility.definition_id in self.providers
+            if self._facility_provider(facility.id) is not None
         )
 
     def allocation_pool_capacities(self, day: int):
