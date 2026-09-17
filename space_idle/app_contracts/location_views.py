@@ -24,7 +24,7 @@ class InventoryRow:
 
 
 @dataclass(frozen=True)
-class ResourceClaimRow:
+class ResourceAllocationRow:
     id: str
     resource_id: str
     display_name: str
@@ -207,7 +207,7 @@ class OperationalNodeView:
     service_capacities: tuple[ServiceCapacityRow, ...]
     surface_infrastructure: SurfaceInfrastructureRow | None
     inventory: tuple[InventoryRow, ...]
-    resource_claims: tuple[ResourceClaimRow, ...]
+    resource_allocations: tuple[ResourceAllocationRow, ...]
     storage: tuple[StorageRow, ...]
     facilities: tuple[FacilityRow, ...]
     industry: tuple[IndustryRow, ...]

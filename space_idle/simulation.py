@@ -19,7 +19,7 @@ from .maintenance import FacilityMaintenanceService
 from .power import PowerPhysicalSnapshot, PowerService, PowerSnapshot
 from .projects import ProjectService
 from .research import ResearchService
-from .resource_claim import ResourceAllocation, ResourceAllocationPlan, ResourceClaim
+from .allocation_projection import ResourceAllocationProjection, ResourceAllocationProjectionRow
 from .execution_requirements import (
     AllocationConstraintKey, AllocationIntent, ExecutionAllocation, ExecutionAllocationPlan,
     ExecutionRequirementBundle, PoolRequirement, ReservationAcquisitionRequirement,
@@ -101,7 +101,7 @@ class TickAllocations:
     market_buys: MarketBuyAllocationPlan
     logistics: LogisticsResourcePlan
     execution: ExecutionAllocationPlan
-    resources: ResourceAllocationPlan
+    resources: ResourceAllocationProjection
     power_by_location: dict[SpatialNodeId, PowerSnapshot]
     services: ServiceCapacityAllocationPlan
     transport: LogisticsExecutionAllocation
@@ -545,7 +545,7 @@ class Simulation:
         allocations = self._allocate_tick(snapshot, intents, plan)
         return TickDecisionProjection(snapshot, intents, plan, allocations)
 
-    def resource_allocation_projection(self) -> ResourceAllocationPlan:
+    def resource_allocation_projection(self) -> ResourceAllocationProjection:
         """Derive the current shared Resource allocation without mutating state."""
         return self.tick_decision_projection().allocations.resources
 
@@ -775,40 +775,11 @@ class Simulation:
         return capacities
 
     @staticmethod
-    def _resource_plan_from_execution(
-        claims: tuple[ResourceClaim, ...],
-        execution: ExecutionAllocationPlan,
-        allocation_overrides: dict[EntityId, float] | None = None,
-    ) -> ResourceAllocationPlan:
-        allocation_overrides = allocation_overrides or {}
-        allocations = []
-        for claim in claims:
-            if claim.id in allocation_overrides:
-                amount = allocation_overrides[claim.id]
-            else:
-                try:
-                    amount = execution.allocated(claim.id)
-                except KeyError:
-                    amount = 0.0
-            amount = min(claim.requested_amount, max(0.0, amount))
-            allocations.append(ResourceAllocation(
-                claim.id, claim.requested_amount, amount,
-                max(0.0, claim.requested_amount - amount),
-            ))
-        return ResourceAllocationPlan(claims, tuple(allocations))
-
-    @staticmethod
     def _resource_projection_from_execution(
         execution: ExecutionAllocationPlan,
-    ) -> tuple[tuple[ResourceClaim, ...], dict[EntityId, float]]:
-        """Adapt root Bundle Resource constraints for Application reporting only.
-
-        Settlement is already authoritative in ``ExecutionAllocationPlan``.  This
-        projection keeps the existing Resource allocation view without creating a
-        second ResourceClaim settlement path.
-        """
-        claims: list[ResourceClaim] = []
-        overrides: dict[EntityId, float] = {}
+    ) -> tuple[ResourceAllocationProjectionRow, ...]:
+        """Project physical Resource usage from authoritative root Bundles."""
+        rows: list[ResourceAllocationProjectionRow] = []
         for bundle in execution.bundles:
             if bundle.owner_kind == "logistics_dispatch":
                 continue
@@ -818,27 +789,31 @@ class Simulation:
                 if isinstance(requirement, ResourceRequirement)
                 and requirement.amount_per_execution > 1e-12
             )
+            allocated_execution = execution.allocated(bundle.id)
             for index, requirement in enumerate(requirements):
                 node_id = requirement.constraint_node(bundle.operational_node_id)
-                claim_id = EntityId(
-                    f"projection.resource:{bundle.id}:{index}:{node_id}:{requirement.resource_id}"
-                )
                 requested = bundle.requested_execution * requirement.amount_per_execution
-                allocated = execution.allocated(bundle.id) * requirement.amount_per_execution
-                claims.append(ResourceClaim(
-                    claim_id,
-                    node_id,
-                    requirement.resource_id,
-                    requested,
-                    bundle.priority,
-                    bundle.owner_kind,
-                    bundle.owner_id,
-                    bundle.purpose,
-                    minimum_amount=bundle.minimum_execution * requirement.amount_per_execution,
-                    atomic=bundle.atomic,
-                ))
-                overrides[claim_id] = allocated
-        return tuple(claims), overrides
+                allocated = allocated_execution * requirement.amount_per_execution
+                rows.append(
+                    ResourceAllocationProjectionRow(
+                        EntityId(
+                            f"allocation.resource:{bundle.id}:{index}:{node_id}:{requirement.resource_id}"
+                        ),
+                        node_id,
+                        requirement.resource_id,
+                        bundle.owner_kind,
+                        bundle.owner_id,
+                        bundle.purpose,
+                        bundle.priority,
+                        requested,
+                        min(requested, max(0.0, allocated)),
+                        minimum_amount=(
+                            bundle.minimum_execution * requirement.amount_per_execution
+                        ),
+                        atomic=bundle.atomic,
+                    )
+                )
+        return tuple(rows)
 
     @staticmethod
     def _service_projection_requests_from_execution(
@@ -1249,23 +1224,18 @@ class Simulation:
                 "tick allocation provider dependencies did not converge"
             )
 
-        logistics_projection_claims = self.logistics.resource_allocation_projection_claims(
-            self.day, authorized_logistics, transport_reference_usage
-        )
-        bundle_resource_claims, bundle_resource_overrides = (
+        resources = ResourceAllocationProjection(
             self._resource_projection_from_execution(execution)
-        )
-        all_resource_claims = bundle_resource_claims + logistics_projection_claims
-        resource_overrides, service_overrides = (
-            self.logistics.transport_operation_allocation_overrides(
-                self.day, transport_usage
+            + self.logistics.resource_allocation_projection(
+                self.day,
+                authorized_logistics,
+                execution,
+                transport_usage,
+                transport_reference_usage,
             )
         )
-        resource_overrides = {**bundle_resource_overrides, **resource_overrides}
-        resources = self._resource_plan_from_execution(
-            all_resource_claims,
-            execution,
-            allocation_overrides=resource_overrides,
+        service_overrides = self.logistics.transport_service_allocation_overrides(
+            self.day, transport_usage
         )
         bundle_service_requests, bundle_service_overrides = (
             self._service_projection_requests_from_execution(execution)

@@ -14,7 +14,7 @@ from .execution_requirements import (
     pool_constraint,
 )
 from .knowledge import DomainActivity
-from .resource_claim import ResourceClaim
+from .allocation_projection import ResourceAllocationProjectionRow
 from .supply import SupplyRequirement
 from .service_capacity import ServiceCapacityAllocationPlan
 from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
@@ -39,7 +39,7 @@ class _PlannedDispatch:
     requirement: SupplyRequirement
     path: tuple[TransportServiceSupply, ...]
     amount_t: float
-    cargo_claim_id: EntityId
+    cargo_execution_id: EntityId
 
 
 @dataclass(frozen=True)
@@ -191,11 +191,11 @@ class LogisticsFlowMixin:
         rows: list[ExecutionRequirementBundle] = []
         seen: set[EntityId] = set()
         for dispatch in plan.dispatches:
-            if dispatch.cargo_claim_id in seen:
+            if dispatch.cargo_execution_id in seen:
                 raise RuntimeError(
-                    "planned dispatches must have one root bundle per cargo claim"
+                    "planned dispatches must have one root execution bundle per cargo dispatch"
                 )
-            seen.add(dispatch.cargo_claim_id)
+            seen.add(dispatch.cargo_execution_id)
 
             resources: dict[tuple[SpatialNodeId, DefinitionId], float] = {
                 (dispatch.source_id, dispatch.requirement.resource_id): 1.0
@@ -259,7 +259,7 @@ class LogisticsFlowMixin:
             ]
             rows.append(
                 ExecutionRequirementBundle(
-                    id=dispatch.cargo_claim_id,
+                    id=dispatch.cargo_execution_id,
                     owner_kind="logistics_dispatch",
                     owner_id=dispatch.requirement.owner_id,
                     purpose=f"supply:{dispatch.requirement.id}",
@@ -278,7 +278,7 @@ class LogisticsFlowMixin:
         used: dict[EntityId, DirectionalCapacity] = {}
         for dispatch in plan.dispatches:
             try:
-                amount = execution.allocated(dispatch.cargo_claim_id)
+                amount = execution.allocated(dispatch.cargo_execution_id)
             except KeyError:
                 amount = 0.0
             amount = min(dispatch.amount_t, max(0.0, amount))
@@ -388,7 +388,7 @@ class LogisticsFlowMixin:
         operation_keys = self.transport_operation_constraint_keys(
             day, plan, reference_usage
         )
-        dispatch_by_id = {row.cargo_claim_id: row for row in plan.dispatches}
+        dispatch_by_id = {row.cargo_execution_id: row for row in plan.dispatches}
         factors = {
             dependency.allocation_id: max(
                 0.0, min(1.0, surface_factors.get(dependency.allocation_id, 1.0))
@@ -446,20 +446,13 @@ class LogisticsFlowMixin:
             for allocation_id in sorted(factors, key=str)
         )
 
-    def transport_operation_allocation_overrides(
+    def transport_service_allocation_overrides(
         self,
         day: int,
         used_by_allocation: Mapping[EntityId, DirectionalCapacity],
-    ) -> tuple[dict[EntityId, float], dict[EntityId, float]]:
-        """Project already-allocated Fleet operation use into query views."""
+    ) -> dict[EntityId, float]:
+        """Project allocated Fleet turnaround use into the Service query view."""
         usage = dict(used_by_allocation)
-        dynamic_resources = self._operational_resource_totals_by_allocation(usage, day)
-        resource_overrides = {
-            self._operation_claim_id(allocation_id, location_id, resource_id): amount
-            for (allocation_id, location_id, resource_id), amount
-            in dynamic_resources.items()
-        }
-
         dynamic_turnaround = {
             request.owner_id: request
             for request in self.transport.transport_service_capacity_requests(
@@ -468,78 +461,90 @@ class LogisticsFlowMixin:
             if request.owner_kind == "transport"
             and request.purpose == "turnaround_servicing"
         }
-        service_overrides = {
+        return {
             request.id: request.requested_rate
             for request in dynamic_turnaround.values()
         }
-        return resource_overrides, service_overrides
 
-    def resource_allocation_projection_claims(
+    def resource_allocation_projection(
         self,
         day: int,
         plan: LogisticsResourcePlan,
+        execution: ExecutionAllocationPlan,
+        used_by_allocation: Mapping[EntityId, DirectionalCapacity],
         reference_usage: Mapping[EntityId, DirectionalCapacity] | None = None,
-    ) -> tuple[ResourceClaim, ...]:
-        """Build transient Resource rows for Application allocation reporting.
-
-        Logistics planning no longer owns ResourceClaim settlement.  These rows
-        only adapt root Cargo Bundles and Transport operation requirements to the
-        generic Resource allocation projection consumed by existing reports.
-        """
+    ) -> tuple[ResourceAllocationProjectionRow, ...]:
+        """Project Cargo and Fleet Resource use from the common execution result."""
         cargo_totals: dict[EntityId, float] = {}
         cargo_meta: dict[EntityId, _PlannedDispatch] = {}
-        for row in plan.dispatches:
-            cargo_totals[row.cargo_claim_id] = (
-                cargo_totals.get(row.cargo_claim_id, 0.0) + row.amount_t
+        for dispatch in plan.dispatches:
+            cargo_totals[dispatch.cargo_execution_id] = (
+                cargo_totals.get(dispatch.cargo_execution_id, 0.0) + dispatch.amount_t
             )
-            cargo_meta.setdefault(row.cargo_claim_id, row)
+            cargo_meta.setdefault(dispatch.cargo_execution_id, dispatch)
 
-        claims: list[ResourceClaim] = []
-        for claim_id, requested in sorted(cargo_totals.items(), key=lambda row: str(row[0])):
-            row = cargo_meta[claim_id]
-            requirement = row.requirement
-            claims.append(
-                ResourceClaim(
-                    claim_id,
-                    row.source_id,
+        rows: list[ResourceAllocationProjectionRow] = []
+        for execution_id, requested in sorted(cargo_totals.items(), key=lambda row: str(row[0])):
+            dispatch = cargo_meta[execution_id]
+            requirement = dispatch.requirement
+            try:
+                allocated = execution.allocated(execution_id)
+            except KeyError:
+                allocated = 0.0
+            rows.append(
+                ResourceAllocationProjectionRow(
+                    execution_id,
+                    dispatch.source_id,
                     requirement.resource_id,
-                    requested,
-                    requirement.priority,
                     "logistics_dispatch",
                     requirement.owner_id,
                     f"supply:{requirement.id}",
+                    requirement.priority,
+                    requested,
+                    min(requested, max(0.0, allocated)),
                     requirement_id=requirement.id,
                 )
             )
 
-        usage = dict(plan.planned_usage) if reference_usage is None else dict(reference_usage)
+        requested_usage = dict(plan.planned_usage) if reference_usage is None else dict(reference_usage)
+        requested_operational = self._operational_resource_totals_by_allocation(
+            requested_usage, day
+        )
+        allocated_operational = self._operational_resource_totals_by_allocation(
+            dict(used_by_allocation), day
+        )
         dependencies = {
             row.allocation_id: row
             for row in self.transport.transport_operation_dependencies(day)
         }
-        operational = self._operational_resource_totals_by_allocation(usage, day)
         for (allocation_id, location_id, resource_id), requested in sorted(
-            operational.items(),
+            requested_operational.items(),
             key=lambda row: (str(row[0][0]), str(row[0][1]), str(row[0][2])),
         ):
             if requested <= 1e-12:
                 continue
+            allocated = allocated_operational.get(
+                (allocation_id, location_id, resource_id), 0.0
+            )
             dependency = dependencies.get(allocation_id)
             if dependency is None:
                 continue
-            claims.append(
-                ResourceClaim(
-                    self._operation_claim_id(allocation_id, location_id, resource_id),
+            rows.append(
+                ResourceAllocationProjectionRow(
+                    self._operation_projection_id(
+                        allocation_id, location_id, resource_id
+                    ),
                     location_id,
                     resource_id,
-                    requested,
-                    dependency.priority,
                     "transport_operation",
                     allocation_id,
                     "sustained_transport",
+                    dependency.priority,
+                    requested,
+                    min(requested, max(0.0, allocated)),
                 )
             )
-        return tuple(claims)
+        return tuple(rows)
 
     @staticmethod
     def _cargo_service_leg(edge: TransportServiceSupply) -> CargoServiceLeg:
@@ -776,15 +781,15 @@ class LogisticsFlowMixin:
         return totals
 
     @staticmethod
-    def _cargo_claim_id(source_id: SpatialNodeId, requirement_id: EntityId) -> EntityId:
-        return EntityId(f"claim.logistics.cargo:{source_id}:{requirement_id}")
+    def _cargo_execution_id(source_id: SpatialNodeId, requirement_id: EntityId) -> EntityId:
+        return EntityId(f"execution.logistics.cargo:{source_id}:{requirement_id}")
 
     @staticmethod
-    def _operation_claim_id(
+    def _operation_projection_id(
         allocation_id: EntityId, location_id: SpatialNodeId, resource_id: DefinitionId
     ) -> EntityId:
         return EntityId(
-            f"claim.transport.operation:{allocation_id}:{location_id}:{resource_id}"
+            f"allocation.transport.operation:{allocation_id}:{location_id}:{resource_id}"
         )
 
     def _operational_resource_totals_by_allocation(
@@ -910,7 +915,7 @@ class LogisticsFlowMixin:
                     requirement,
                     path,
                     amount,
-                    self._cargo_claim_id(source_id, requirement.id),
+                    self._cargo_execution_id(source_id, requirement.id),
                 )
             )
             used = self._allocation_used_after(used, path, amount)
@@ -1228,7 +1233,7 @@ class LogisticsFlowMixin:
         executable: list[tuple[_PlannedDispatch, float]] = []
         for row in plan.dispatches:
             try:
-                amount = execution.allocated(row.cargo_claim_id)
+                amount = execution.allocated(row.cargo_execution_id)
             except KeyError:
                 amount = 0.0
             amount = min(row.amount_t, max(0.0, amount))

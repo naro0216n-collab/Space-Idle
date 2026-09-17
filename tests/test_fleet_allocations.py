@@ -788,10 +788,10 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
         value.startswith("resource_allocation:")
         for value in available.limiting_factors
     )
-    assert decision.allocations.execution.allocated(dispatch.cargo_claim_id) == pytest.approx(
+    assert decision.allocations.execution.allocated(dispatch.cargo_execution_id) == pytest.approx(
         cargo_amount / 2.0
     )
-    assert decision.allocations.resources.allocated(dispatch.cargo_claim_id) == pytest.approx(
+    assert decision.allocations.resources.allocated(dispatch.cargo_execution_id) == pytest.approx(
         cargo_amount / 2.0
     )
     assert executable == pytest.approx(cargo_amount / 2.0)
@@ -825,7 +825,7 @@ def test_relocation_waits_for_common_execution_allocation_before_departure():
     assert required > 0.0
 
     # Exercise the canonical daily allocation path rather than the retired
-    # ResourceClaim-only allocator.  Without common execution allocation the
+    # A resource-only settlement would miss the cross-constraint execution result.
     # relocation remains pending and consumes nothing.
     sim.advance_days(1)
     assert relocation.movement_execution_id is None

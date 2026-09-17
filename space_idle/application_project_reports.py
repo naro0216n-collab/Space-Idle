@@ -44,8 +44,6 @@ class ApplicationReportProjectorMixin:
         scope = set(nodes)
         decision = self._tick_decision_projection()
         powers = decision.allocations.power_by_location
-        resource_allocations = decision.allocations.resources
-        service_allocations = decision.allocations.services
         execution_allocations = decision.allocations.execution
         logistics_execution = sim.logistics.capacity_logistics_execution_projection(
             decision.allocations.transport
@@ -94,20 +92,18 @@ class ApplicationReportProjectorMixin:
 
         # Recurring SupplyRequirement is the structural daily requirement before
         # current stock/pipeline masks a dependency. Transport operation demand is
-        # derived from the current authorized transport plan; ResourceClaim-shaped
-        # rows here are reporting projections, not an independent settlement path.
+        # read from the same derived Resource allocation projection used by queries.
         for requirement in decision.intents.supplys:
             if requirement.destination_id not in scope or requirement.recurring_rate_t_per_day is None:
                 continue
             recurring_demand[requirement.resource_id] += requirement.recurring_rate_t_per_day
-        transport_resource_rows = sim.logistics.resource_allocation_projection_claims(
-            sim.day,
-            decision.allocations.logistics,
-        )
-        for claim in transport_resource_rows:
-            if claim.owner_kind != "transport_operation" or claim.operational_node_id not in scope:
+        for allocation in decision.allocations.resources.rows:
+            if (
+                allocation.owner_kind != "transport_operation"
+                or allocation.operational_node_id not in scope
+            ):
                 continue
-            recurring_demand[claim.resource_id] += claim.requested_amount
+            recurring_demand[allocation.resource_id] += allocation.requested_amount
 
         # Current authorized dispatch is a one-day flow. Existing CargoFlow state is
         # a stock in the pipeline and therefore remains a separate quantity.
@@ -343,8 +339,6 @@ class ApplicationReportProjectorMixin:
                     operational_node_id=loc, entity_id=str(facility.id), definition_id=str(definition.id),
                 ))
 
-        resource_allocations = decision.allocations.resources
-        service_allocations = decision.allocations.services
         execution_allocations = decision.allocations.execution
         snapshots = {
             snap.facility_id: snap
@@ -594,8 +588,6 @@ class ApplicationReportProjectorMixin:
         inbound_transit: dict[object, float] = defaultdict(float)
         arrival_waiting: dict[object, float] = defaultdict(float)
 
-        resource_allocations = decision.allocations.resources
-        service_allocations = decision.allocations.services
         execution_allocations = decision.allocations.execution
         for snap in sim.industry.snapshots(
             location_id, sim.facilities, sim.inventory, sim.day,

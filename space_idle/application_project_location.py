@@ -12,7 +12,7 @@ from .application_views import (
     FacilityRow,
     IndustryRow,
     InventoryRow,
-    ResourceClaimRow,
+    ResourceAllocationRow,
     OperationalNodeView,
     SurfaceInfrastructureLoadRow,
     SurfaceInfrastructureRow,
@@ -288,28 +288,27 @@ class LocationProjectorMixin:
             )
 
         industry = []
-        resource_claim_rows = []
-        for claim in resource_allocations.claims:
-            if claim.operational_node_id != location_id:
+        resource_allocation_rows = []
+        for allocation in resource_allocations.rows:
+            if allocation.operational_node_id != location_id:
                 continue
-            allocation = resource_allocations.allocation(claim.id)
-            definition = self._catalog.resources.get(claim.resource_id)
-            resource_claim_rows.append(
-                ResourceClaimRow(
-                    str(claim.id),
-                    str(claim.resource_id),
-                    self._resource_name(claim.resource_id),
+            definition = self._catalog.resources.get(allocation.resource_id)
+            resource_allocation_rows.append(
+                ResourceAllocationRow(
+                    str(allocation.id),
+                    str(allocation.resource_id),
+                    self._resource_name(allocation.resource_id),
                     "t" if definition is None else definition.unit,
-                    claim.owner_kind,
-                    str(claim.owner_id),
-                    claim.purpose,
-                    claim.priority,
+                    allocation.owner_kind,
+                    str(allocation.owner_id),
+                    allocation.purpose,
+                    allocation.priority,
                     allocation.requested_amount,
                     allocation.allocated_amount,
                     allocation.unmet_amount,
-                    claim.effective_minimum_amount,
-                    claim.atomic,
-                    None if claim.requirement_id is None else str(claim.requirement_id),
+                    allocation.effective_minimum_amount,
+                    allocation.atomic,
+                    None if allocation.requirement_id is None else str(allocation.requirement_id),
                 )
             )
         snapshots = {
@@ -497,7 +496,7 @@ class LocationProjectorMixin:
             service_capacity_rows,
             surface_infrastructure,
             self._inventory_rows(location_id),
-            tuple(resource_claim_rows),
+            tuple(resource_allocation_rows),
             self._storage_rows(location_id),
             tuple(facilities),
             tuple(industry),

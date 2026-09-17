@@ -310,7 +310,7 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
     before = capture_state(sim)
 
     decision = sim.tick_decision_projection()
-    assert decision.allocations.resources.allocations
+    assert decision.allocations.resources.rows
     infrastructure_before = app.query(
         GetOperationalNode(str(ids.EARTH))
     ).surface_infrastructure
