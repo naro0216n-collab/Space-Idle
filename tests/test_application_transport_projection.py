@@ -29,7 +29,7 @@ from space_idle import (
     PlanBuild,
     ProduceVehicle,
     SetProjectPriority,
-    SetProjectSourcingPolicy,
+    SetProjectProcurementPolicy,
     SetVehicleProductionSettings,
     UpdateTransportAllocation,
     RelocateFleet,
@@ -468,7 +468,7 @@ def test_construction_command_rejects_unknown_logistics_policy_before_creating_p
 def test_construction_queries_expose_authoritative_project_controls():
     app = build_game_application()
     build_options = app.query(GetBuildOptions(str(EARTH)))
-    assert tuple(build_options.sourcing_policy_options) == app._simulation.projects.sourcing_policy_options()
+    assert tuple(build_options.procurement_policy_options) == app._simulation.projects.procurement_policy_options()
     assert str(app._simulation.logistics.global_policy_id) in build_options.logistics_policy_options
     policy_id = "logistics.policy.project-query"
     app.execute(CreateLogisticsPolicy(
@@ -477,19 +477,19 @@ def test_construction_queries_expose_authoritative_project_controls():
 
     project_id = app.execute(PlanBuild(
         str(EARTH), str(ids.SURFACE_POWER_GRID), priority=2,
-        sourcing_policy="local_priority", logistics_policy_id=policy_id,
+        procurement_policy="extended_wait", logistics_policy_id=policy_id,
         site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
     )).created_id
     assert project_id is not None
     row = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
-    assert row.settings_editable and row.sourcing_editable
+    assert row.settings_editable and row.procurement_editable
     assert row.projected_material_readiness_day is None
     assert row.logistics_policy_id == policy_id
     assert row.resolved_logistics_policy_id == policy_id
     app.execute(SetProjectPriority(project_id, 5))
-    app.execute(SetProjectSourcingPolicy(project_id, "import_now"))
+    app.execute(SetProjectProcurementPolicy(project_id, "immediate"))
     app.execute(UnassignLogisticsPolicy("project", project_id))
     updated = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
-    assert (updated.priority, updated.sourcing_policy, updated.logistics_policy_id) == (5, "import_now", None)
+    assert (updated.priority, updated.procurement_policy, updated.logistics_policy_id) == (5, "immediate", None)
     assert updated.resolved_logistics_policy_id == str(app._simulation.logistics.global_policy_id)
     assert updated.projected_material_readiness_day == app.query(GetWorld()).day

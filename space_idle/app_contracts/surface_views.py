@@ -27,7 +27,7 @@ class SurfaceFacilityPlacementOption:
     resources: tuple[tuple[str, float], ...]
     blockers: tuple[tuple[str, str], ...]
     can_plan: bool
-    sourcing_policy_options: tuple[str, ...] = ()
+    procurement_policy_options: tuple[str, ...] = ()
     logistics_policy_options: tuple[str, ...] = ()
 
 
@@ -61,7 +61,7 @@ class SurfaceCellDevelopmentOption:
     construction_required: float | None = None
     resources: tuple[tuple[str, float], ...] = ()
     active_project_id: str | None = None
-    sourcing_policy_options: tuple[str, ...] = ()
+    procurement_policy_options: tuple[str, ...] = ()
     logistics_policy_options: tuple[str, ...] = ()
 
 

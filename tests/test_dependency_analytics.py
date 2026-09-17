@@ -133,7 +133,7 @@ def test_current_authorized_transport_projects_boundary_flow_consumption_and_par
         ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
     )
     project_id = sim.projects.plan_build(
-        ids.ORBITAL_LOGISTICS_NODE, LEO, 3, "import_now", day=sim.day,
+        ids.ORBITAL_LOGISTICS_NODE, LEO, 3, "immediate", day=sim.day,
     )
     policy_id = EntityId("logistics.policy.analytics-earth")
     sim.logistics.create_logistics_policy(

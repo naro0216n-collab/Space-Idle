@@ -14,7 +14,7 @@ from .models import (
     ProjectBlocker,
     ProjectResourceState,
     ProjectStatus,
-    SourcingPolicy,
+    ProcurementTimingPolicy,
 )
 
 
@@ -105,14 +105,14 @@ class ConstructionPlanningMixin:
         target: ConstructionTarget,
         location_id: SpatialNodeId,
         priority: ActivityPriority,
-        sourcing_policy: SourcingPolicy,
+        procurement_policy: ProcurementTimingPolicy,
         site_cell_id: SurfaceCellId | None = None,
         day: int = 0,
     ) -> ProjectId:
         if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
-        if sourcing_policy not in self.sourcing_wait_days:
-            raise ValueError(f"unknown sourcing policy: {sourcing_policy}")
+        if procurement_policy not in self.procurement_wait_days:
+            raise ValueError(f"unknown procurement timing policy: {procurement_policy}")
 
         if isinstance(target, NewFacilityTarget):
             recipe = self.recipes[target.facility_def_id]
@@ -149,7 +149,7 @@ class ConstructionPlanningMixin:
             target,
             location_id,
             priority,
-            sourcing_policy,
+            procurement_policy,
             resources=resources,
             site_cell_id=site_cell_id,
         )
@@ -161,7 +161,7 @@ class ConstructionPlanningMixin:
         facility_def_id: DefinitionId,
         location_id: SpatialNodeId,
         priority: ActivityPriority,
-        sourcing_policy: SourcingPolicy,
+        procurement_policy: ProcurementTimingPolicy,
         day: int = 0,
         site_cell_id: SurfaceCellId | None = None,
     ) -> ProjectId:
@@ -173,14 +173,14 @@ class ConstructionPlanningMixin:
                 raise KeyError(facility_def_id)
             raise ValueError("; ".join(failure.detail for failure in failures))
         return self._create_project(
-            NewFacilityTarget(facility_def_id), location_id, priority, sourcing_policy, site_cell_id, day
+            NewFacilityTarget(facility_def_id), location_id, priority, procurement_policy, site_cell_id, day
         )
 
     def plan_upgrade(
         self,
         facility_id: EntityId,
         priority: ActivityPriority,
-        sourcing_policy: SourcingPolicy,
+        procurement_policy: ProcurementTimingPolicy,
         day: int = 0,
     ) -> ProjectId:
         failures = self.upgrade_plan_failures(facility_id)
@@ -196,7 +196,7 @@ class ConstructionPlanningMixin:
             FacilityUpgradeTarget(facility_id, target_level),
             facility.operational_node_id,
             priority,
-            sourcing_policy,
+            procurement_policy,
             day=day,
         )
 
@@ -204,7 +204,7 @@ class ConstructionPlanningMixin:
         self,
         facility_id: EntityId,
         priority: ActivityPriority,
-        sourcing_policy: SourcingPolicy = "mixed",
+        procurement_policy: ProcurementTimingPolicy = "standard_wait",
         day: int = 0,
     ) -> ProjectId:
         failures = self.decommission_plan_failures(facility_id)
@@ -217,7 +217,7 @@ class ConstructionPlanningMixin:
             FacilityDecommissionTarget(facility_id, facility.definition_id),
             facility.operational_node_id,
             priority,
-            sourcing_policy,
+            procurement_policy,
             day=day,
         )
 
@@ -226,7 +226,7 @@ class ConstructionPlanningMixin:
         location_id: SpatialNodeId,
         cell_id: SurfaceCellId,
         priority: ActivityPriority,
-        sourcing_policy: SourcingPolicy,
+        procurement_policy: ProcurementTimingPolicy,
         day: int = 0,
     ) -> ProjectId:
         recipe_id = self.surface_cell_development_recipe_id
@@ -242,7 +242,7 @@ class ConstructionPlanningMixin:
             SurfaceCellDevelopmentTarget(recipe_id, cell_id),
             location_id,
             priority,
-            sourcing_policy,
+            procurement_policy,
             day=day,
         )
 
@@ -254,35 +254,25 @@ class ConstructionPlanningMixin:
             raise ValueError("completed or cancelled project settings cannot change")
         self.projects[project_id].priority = ActivityPriority(priority)
 
-    def sourcing_mutable(self, project_id: ProjectId) -> bool:
+    def procurement_mutable(self, project_id: ProjectId) -> bool:
         project = self.projects[project_id]
-        return (
-            project.status in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}
-            and not any(
-                state.import_committed_t is not None
-                for state in project.resources.values()
-            )
-        )
+        return project.status in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}
 
-    def sourcing_policy_options(self) -> tuple[SourcingPolicy, ...]:
-        return tuple(self.sourcing_wait_days)
+    def procurement_policy_options(self) -> tuple[ProcurementTimingPolicy, ...]:
+        return tuple(self.procurement_wait_days)
 
-    def _ensure_sourcing_mutable(self, project: ConstructionProject) -> None:
-        if not self.sourcing_mutable(project.id):
-            if project.status not in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}:
-                raise ValueError("sourcing can only change before construction readiness")
-            raise ValueError("sourcing cannot change after import commitment")
+    def _ensure_procurement_mutable(self, project: ConstructionProject) -> None:
+        if not self.procurement_mutable(project.id):
+            raise ValueError("procurement timing can only change before construction readiness")
 
-    def set_sourcing_policy(
-        self, project_id: ProjectId, sourcing_policy: SourcingPolicy, day: int = 0
+    def set_procurement_policy(
+        self, project_id: ProjectId, procurement_policy: ProcurementTimingPolicy, day: int = 0
     ) -> None:
-        if sourcing_policy not in self.sourcing_wait_days:
-            raise ValueError(f"unknown sourcing policy: {sourcing_policy}")
+        if procurement_policy not in self.procurement_wait_days:
+            raise ValueError(f"unknown procurement timing policy: {procurement_policy}")
         project = self.projects[project_id]
-        self._ensure_sourcing_mutable(project)
-        for state in project.resources.values():
-            state.import_committed_t = None
-        project.sourcing_policy = sourcing_policy
+        self._ensure_procurement_mutable(project)
+        project.procurement_policy = procurement_policy
         project.procurement_started_day = None
         project.status = ProjectStatus.PLANNED
         self._activate_procurement_if_eligible(project, day)
@@ -362,12 +352,12 @@ class ConstructionPlanningMixin:
             blockers.append(ProjectBlocker(failure.code, failure.detail))
         if project.status in {ProjectStatus.PROCURING, ProjectStatus.READY} and not project.materials_committed:
             waited = 0 if project.procurement_started_day is None else day - project.procurement_started_day
-            wait_limit = self.sourcing_wait_days[project.sourcing_policy]
+            wait_limit = self.procurement_wait_days[project.procurement_policy]
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
                 if self.reserved_resource_t(project, requirement.resource_id) + 1e-9 >= requirement.amount_t:
                     continue
-                if state.import_committed_t is None and waited < wait_limit:
+                if waited < wait_limit:
                     blockers.append(ProjectBlocker("destination_supply_wait", str(requirement.resource_id)))
                     continue
                 blockers.append(ProjectBlocker("resource_shortage", str(requirement.resource_id)))

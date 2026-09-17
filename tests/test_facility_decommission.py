@@ -51,12 +51,12 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
     assert expected_salvage == {str(SALVAGE_RESOURCE): 5.0}
 
     # Planning is reversible and must not change the Facility lifecycle.
-    first = app.execute(PlanFacilityDecommission(facility_row.id, priority=5, sourcing_policy="local_priority"))
+    first = app.execute(PlanFacilityDecommission(facility_row.id, priority=5, procurement_policy="extended_wait"))
     assert first.created_id is not None
     app.execute(CancelBuild(first.created_id))
     assert sim.facilities.facilities[facility_id].lifecycle is FacilityLifecycle.NORMAL
 
-    result = app.execute(PlanFacilityDecommission(facility_row.id, priority=5, sourcing_policy="local_priority"))
+    result = app.execute(PlanFacilityDecommission(facility_row.id, priority=5, procurement_policy="extended_wait"))
     assert result.created_id is not None
     project_id = result.created_id
 
@@ -116,7 +116,7 @@ def test_decommission_lifecycle_registry_accepts_new_participants_without_projec
     assert any(row.code == "test_commitment" for row in failures)
 
     blocker.active = False
-    result = app.execute(PlanFacilityDecommission(str(facility_id), priority=5, sourcing_policy="local_priority"))
+    result = app.execute(PlanFacilityDecommission(str(facility_id), priority=5, procurement_policy="extended_wait"))
     assert result.created_id is not None
     for _ in range(30):
         row = _project_row(app, result.created_id)

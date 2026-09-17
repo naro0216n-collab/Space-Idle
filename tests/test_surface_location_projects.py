@@ -104,11 +104,10 @@ def test_founding_transport_path_and_site_requirements_follow_staging_and_target
         ids.LEO, ids.MOON, cell, package.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day
     )
     # Movement capability determines whether the cross-body deployment is
-    # physically possible. This lander supports the
-    # derived spaceflight + landing plan; the LEO staging context itself is what
-    # remains unsuitable here.
+    # physically possible. Finite preparation service is not an Eligibility gate;
+    # it is allocated after the project exists.
     assert not any(row.code == "deployment_vehicle" for row in cross_body)
-    assert any(row.code == "staging_service" for row in cross_body)
+    assert not any(row.code == "staging_service" for row in cross_body)
 
     earth_target = sim.founding.planning_failures(
         ids.LUNAR_ORBIT, ids.EARTH_BODY, ids.EARTH_CELL_COASTAL, package.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day
@@ -137,7 +136,7 @@ def test_surface_cell_development_changes_territory_only_after_project_completio
     recipe = sim.projects.spatial_recipes[sim.projects.surface_cell_development_recipe_id]
     for requirement in recipe.resources:
         sim.inventory.add(ids.EARTH, requirement.resource_id, requirement.amount_t + 1.0)
-    result = app.execute(DevelopSurfaceCell(str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"))
+    result = app.execute(DevelopSurfaceCell(str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), procurement_policy="immediate"))
     assert result.created_id is not None
     assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
     project = next(row for row in sim.projects.projects.values() if str(row.id) == result.created_id)
@@ -186,7 +185,7 @@ def test_founding_and_surface_development_claims_are_mutually_exclusive():
     app = build_game_application()
     sim = app._simulation
     # Existing Earth location starts a development claim.
-    dev_id = app.execute(DevelopSurfaceCell(str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now")).created_id
+    dev_id = app.execute(DevelopSurfaceCell(str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), procurement_policy="immediate")).created_id
     assert dev_id
     # A Founding service must see that same cell as claimed even if other package
     # prerequisites would also fail.

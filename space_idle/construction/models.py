@@ -13,7 +13,7 @@ CONSTRUCTION_SERVICE_TYPE = "construction_work"
 # Procurement policy controls how long a project waits for inventory already at
 # the destination before declaring an off-site Supply Requirement. It does not change the
 # recipe or substitute one material for another.
-SourcingPolicy = Literal["import_now", "mixed", "local_priority"]
+ProcurementTimingPolicy = Literal["immediate", "standard_wait", "extended_wait"]
 
 
 class ProjectStatus(str, Enum):
@@ -162,9 +162,6 @@ class ProjectResourceState:
     """Mutable accounting for a recipe resource at the build host Operational Node."""
 
     committed_t: float = 0.0
-    # None while the project is still waiting for host inventory. Once set,
-    # logistics may satisfy the remaining physical shortage from lanes.
-    import_committed_t: float | None = None
 
 
 @dataclass
@@ -176,7 +173,7 @@ class ConstructionProject:
     # expanded; for founding it is the explicit staging/provider Operational Node.
     operational_node_id: SpatialNodeId
     priority: ActivityPriority
-    sourcing_policy: SourcingPolicy
+    procurement_policy: ProcurementTimingPolicy
     status: ProjectStatus = ProjectStatus.PLANNED
     procurement_started_day: int | None = None
     construction_done: float = 0.0

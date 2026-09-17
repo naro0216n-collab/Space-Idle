@@ -23,7 +23,7 @@ def test_partial_construction_procurement_is_project_owned_until_cancelled():
         PlanBuild(
             str(ids.EARTH),
             str(ids.SURFACE_POWER_GRID),
-            sourcing_policy="local_priority",
+            procurement_policy="extended_wait",
             site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
         )
     )
@@ -77,7 +77,7 @@ def test_planned_project_with_unmet_technology_does_not_claim_inventory():
         prerequisite_technologies=frozenset({technology_id}),
     )
     app.execute(
-        PlanBuild(str(ids.EARTH), str(facility_id), sourcing_policy="local_priority")
+        PlanBuild(str(ids.EARTH), str(facility_id), procurement_policy="extended_wait")
     )
 
     app.execute(AdvanceTime(1))
@@ -100,10 +100,10 @@ def test_planned_project_with_unmet_technology_does_not_claim_inventory():
 def test_parallel_same_priority_projects_share_construction_service_capacity():
     app = build_game_application()
     first = app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.WATER_STORAGE), priority=5, sourcing_policy="local_priority")
+        PlanBuild(str(ids.EARTH), str(ids.WATER_STORAGE), priority=5, procurement_policy="extended_wait")
     ).created_id
     second = app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.BULK_STORAGE), priority=5, sourcing_policy="local_priority")
+        PlanBuild(str(ids.EARTH), str(ids.BULK_STORAGE), priority=5, procurement_policy="extended_wait")
     ).created_id
     assert first is not None and second is not None
 

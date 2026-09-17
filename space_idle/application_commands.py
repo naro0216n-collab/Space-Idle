@@ -3,7 +3,7 @@ from typing import TypeAlias
 from .app_contracts.common import ApplicationError, CommandResult
 from .app_contracts.construction import (
     PlanBuild, PlanFacilityUpgrade, PlanFacilityDecommission, FoundLocation, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, CancelBuild, PauseBuild, ResumeBuild, SetProjectPriority,
-    SetProjectSourcingPolicy,
+    SetProjectProcurementPolicy,
 )
 from .app_contracts.operations import (
     PauseFacility, ResumeFacility, SetFacilityProcess, SetFacilityActivityPriority,
@@ -38,7 +38,7 @@ from .app_contracts.queries import (
 
 Command: TypeAlias = (
     PlanBuild | PlanFacilityUpgrade | PlanFacilityDecommission | FoundLocation | CancelFounding | PauseFounding | ResumeFounding | SetFoundingPriority | DevelopSurfaceCell | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
-    SetProjectSourcingPolicy |
+    SetProjectProcurementPolicy |
     PauseFacility | ResumeFacility | SetFacilityProcess | SetFacilityActivityPriority | SetMaintenancePriority |
     SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
     SetResearchPriority | SetResearchDemonstrationSite | StartSurvey | PauseSurvey |

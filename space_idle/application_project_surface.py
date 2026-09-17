@@ -88,7 +88,7 @@ class SurfaceProjectorMixin:
                             (str(req.resource_id), req.amount_t) for req in development_recipe.resources
                         ),
                         active_project_id=None if active_spatial_project is None else str(active_spatial_project.id),
-                        sourcing_policy_options=tuple(sim.projects.sourcing_policy_options()),
+                        procurement_policy_options=tuple(sim.projects.procurement_policy_options()),
                         logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                     )
                 )
@@ -142,7 +142,7 @@ class SurfaceProjectorMixin:
                         can_plan=not sim.projects.build_plan_failures(
                             recipe.facility_def_id, owner, site_cell_id=cell.id
                         ),
-                        sourcing_policy_options=tuple(sim.projects.sourcing_policy_options()),
+                        procurement_policy_options=tuple(sim.projects.procurement_policy_options()),
                         logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                     )
                     for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id))

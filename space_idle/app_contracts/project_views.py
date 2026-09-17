@@ -12,7 +12,6 @@ class ProjectResourceRow:
     staged_t: float
     committed_t: float
     shortage_t: float
-    import_committed_t: float | None
     requirement_id: str | None
 
 
@@ -46,7 +45,7 @@ class FacilityUpgradeOption:
 @dataclass(frozen=True)
 class BuildOptionsView:
     operational_node_id: str
-    sourcing_policy_options: tuple[str, ...]
+    procurement_policy_options: tuple[str, ...]
     logistics_policy_options: tuple[str, ...]
     items: tuple[BuildOptionRow, ...]
 
@@ -63,12 +62,12 @@ class ProjectRow:
     status: str
     paused: bool
     priority: ActivityPriority
-    sourcing_policy: str
+    procurement_policy: str
     logistics_policy_id: str | None
     resolved_logistics_policy_id: str | None
     settings_editable: bool
-    sourcing_editable: bool
-    sourcing_policy_options: tuple[str, ...]
+    procurement_editable: bool
+    procurement_policy_options: tuple[str, ...]
     logistics_policy_options: tuple[str, ...]
     construction_done: float
     construction_required: float

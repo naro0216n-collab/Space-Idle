@@ -55,7 +55,7 @@ def capture_projects(sim: Any) -> dict[str, Any]:
                 "operational_node_id": str(project.operational_node_id),
                 "site_cell_id": None if project.site_cell_id is None else str(project.site_cell_id),
                 "priority": project.priority,
-                "sourcing_policy": project.sourcing_policy,
+                "procurement_policy": project.procurement_policy,
                 "status": project.status.value,
                 "procurement_started_day": project.procurement_started_day,
                 "construction_done": project.construction_done,
@@ -65,7 +65,7 @@ def capture_projects(sim: Any) -> dict[str, Any]:
                 "materials_committed": project.materials_committed,
                 "irreversible_started": project.irreversible_started,
                 "resources": [
-                    {"resource_id": str(resource_id), "committed_t": state.committed_t, "import_committed_t": state.import_committed_t}
+                    {"resource_id": str(resource_id), "committed_t": state.committed_t}
                     for resource_id, state in sorted(project.resources.items(), key=lambda row: str(row[0]))
                 ],
             }
@@ -82,7 +82,6 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
         resources = {
             DefinitionId(item["resource_id"]): ProjectResourceState(
                 committed_t=float(item["committed_t"]),
-                import_committed_t=None if item["import_committed_t"] is None else float(item["import_committed_t"]),
             )
             for item in row["resources"]
         }
@@ -92,7 +91,7 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
             operational_node_id=SpatialNodeId(row["operational_node_id"]),
             site_cell_id=None if row["site_cell_id"] is None else SurfaceCellId(row["site_cell_id"]),
             priority=int(row["priority"]),
-            sourcing_policy=row["sourcing_policy"],
+            procurement_policy=row["procurement_policy"],
             status=ProjectStatus(row["status"]),
             procurement_started_day=row["procurement_started_day"],
             construction_done=float(row["construction_done"]),
@@ -177,8 +176,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             )
     if sim.projects.surface_cell_development_recipe_id is not None:
         _require(sim.projects.surface_cell_development_recipe_id in sim.projects.spatial_recipes, "unknown surface cell development recipe")
-    _require(set(sim.projects.sourcing_wait_days) == {"import_now", "mixed", "local_priority"}, "invalid sourcing policy configuration")
-    _require(all(days >= 0 for days in sim.projects.sourcing_wait_days.values()), "negative sourcing wait period")
+    _require(set(sim.projects.procurement_wait_days) == {"immediate", "standard_wait", "extended_wait"}, "invalid procurement timing policy configuration")
+    _require(all(days >= 0 for days in sim.projects.procurement_wait_days.values()), "negative procurement wait period")
     for definition_id, spec in sim.projects.construction_providers.items():
         _require(definition_id == spec.facility_def_id, f"construction provider key mismatch: {definition_id}")
         _require(definition_id in ctx.facility_defs, f"construction provider references unknown facility: {definition_id}")
@@ -289,8 +288,6 @@ def validate_runtime(sim: Any) -> None:
         _require(set(project.resources) == expected_resources, f"project resource state mismatch: {project_id}")
         for resource_id, state in project.resources.items():
             _require(state.committed_t >= -1e-9, f"negative project resource accounting: {project_id}/{resource_id}")
-            if state.import_committed_t is not None:
-                _require(state.import_committed_t >= -1e-9, f"negative project import commitment: {project_id}/{resource_id}")
 
 
 DOMAIN_EXTENSION = DomainExtension(

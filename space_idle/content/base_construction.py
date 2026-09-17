@@ -197,8 +197,8 @@ def build_construction_resource_providers() -> dict:
     return {ids.CONSTRUCTION_EQUIPMENT: ConstructionResourceProviderSpec(ids.CONSTRUCTION_EQUIPMENT, 0.05)}
 
 
-def sourcing_wait_days() -> dict[str, int]:
-    return {"import_now": 0, "mixed": 45, "local_priority": 120}
+def procurement_wait_days() -> dict[str, int]:
+    return {"immediate": 0, "standard_wait": 45, "extended_wait": 120}
 
 
 def build_spatial_development_recipes() -> dict:

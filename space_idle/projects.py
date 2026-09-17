@@ -27,7 +27,7 @@ from .construction.models import (
     FacilityUpgradeTarget,
     FacilityDecommissionTarget,
     SurfaceCellDevelopmentTarget,
-    SourcingPolicy,
+    ProcurementTimingPolicy,
 )
 from .construction.rules import ConstructionRulesMixin
 from .construction.accounting import ConstructionAccountingMixin
@@ -46,7 +46,7 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     facilities: FacilityBook
     power: PowerService
     service_capacity_registry: ServiceCapacityRegistry
-    sourcing_wait_days: dict[SourcingPolicy, int]
+    procurement_wait_days: dict[ProcurementTimingPolicy, int]
     surface_infrastructure: SurfaceInfrastructureService | None = None
     surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
     surface_cell_claim_registry: SurfaceCellClaimRegistry = field(default_factory=SurfaceCellClaimRegistry)

@@ -121,7 +121,7 @@ def test_upgrade_query_owns_plan_eligibility_and_single_active_project_contract(
     assert option.active_project_id is None
 
     first = app.execute(
-        PlanFacilityUpgrade(before_row.id, priority=3, sourcing_policy="local_priority")
+        PlanFacilityUpgrade(before_row.id, priority=3, procurement_policy="extended_wait")
     )
     assert first.created_id is not None
 
@@ -132,7 +132,7 @@ def test_upgrade_query_owns_plan_eligibility_and_single_active_project_contract(
     assert active.active_project_id == first.created_id
     assert ("active_upgrade_project", first.created_id) in active.blockers
     with pytest.raises(ApplicationError):
-        app.execute(PlanFacilityUpgrade(before_row.id, sourcing_policy="local_priority"))
+        app.execute(PlanFacilityUpgrade(before_row.id, procurement_policy="extended_wait"))
 
 
 def test_upgrade_target_roundtrips_then_applies_resources_and_level_once(tmp_path):
@@ -148,7 +148,7 @@ def test_upgrade_target_roundtrips_then_applies_resources_and_level_once(tmp_pat
     investment_before = dict(facility.invested_resources)
 
     result = app.execute(
-        PlanFacilityUpgrade(before_row.id, priority=5, sourcing_policy="local_priority")
+        PlanFacilityUpgrade(before_row.id, priority=5, procurement_policy="extended_wait")
     )
     assert result.created_id is not None
     project_id = result.created_id

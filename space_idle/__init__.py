@@ -18,7 +18,7 @@ from .application import (
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
     ResumeVehicleProduction, SetFacilityProcess,
     SetMaintenancePriority, SetFacilityActivityPriority, SetProjectPriority,
-    SetProjectSourcingPolicy, SetResearchDemonstrationSite, SetResearchPrototypeSite,
+    SetProjectProcurementPolicy, SetResearchDemonstrationSite, SetResearchPrototypeSite,
     SetSurveyPriority, SetTimeControl, SetVehicleProductionSettings, StartResearch,
     StartScientificExploration, SetScientificExplorationPriority, StartSurvey, UnassignExplorationFleet,
     UpdateTransportAllocation, SetTargetStock, DeleteTargetStock, CreateLogisticsPolicy, UpdateLogisticsPolicy, AssignLogisticsPolicy, UnassignLogisticsPolicy, SetGlobalLogisticsPolicy, DeleteLogisticsPolicy,

@@ -224,7 +224,7 @@ def test_surface_cell_development_execution_reports_shared_bundle_fulfillment():
     app = build_game_application()
     sim = app._simulation
     project_id = app.execute(DevelopSurfaceCell(
-        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="local_priority"
+        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), procurement_policy="extended_wait"
     )).created_id
     assert project_id is not None
     _ensure_project_materials_on_hand(sim, project_id)
@@ -269,10 +269,10 @@ def test_concurrent_surface_development_projects_share_the_common_execution_allo
     app = build_game_application()
     sim = app._simulation
     coastal_id = app.execute(DevelopSurfaceCell(
-        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="local_priority"
+        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), procurement_policy="extended_wait"
     )).created_id
     inland_id = app.execute(DevelopSurfaceCell(
-        str(ids.EARTH), str(ids.EARTH_CELL_INLAND), sourcing_policy="local_priority"
+        str(ids.EARTH), str(ids.EARTH_CELL_INLAND), procurement_policy="extended_wait"
     )).created_id
     assert coastal_id is not None and inland_id is not None
     _ensure_project_materials_on_hand(sim, coastal_id, inland_id)

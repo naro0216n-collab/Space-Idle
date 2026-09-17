@@ -22,7 +22,7 @@ def test_facility_placement_scope_controls_surface_cell_requirement():
         ids.WATER_STORAGE,
         ids.EARTH,
         3,
-        "mixed",
+        "standard_wait",
     )
     assert sim.projects.projects[project_id].site_cell_id is None
     with pytest.raises(ValueError, match="must not specify"):
@@ -30,7 +30,7 @@ def test_facility_placement_scope_controls_surface_cell_requirement():
             ids.WATER_STORAGE,
             ids.EARTH,
             3,
-            "mixed",
+            "standard_wait",
             site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
         )
 
@@ -42,14 +42,14 @@ def test_facility_placement_scope_controls_surface_cell_requirement():
             ids.ROBOTIC_GEOLOGY_STATION,
             ids.EARTH,
             3,
-            "mixed",
+            "standard_wait",
         )
     with pytest.raises(ValueError, match="not developed"):
         sim.projects.plan_build(
             ids.ROBOTIC_GEOLOGY_STATION,
             ids.EARTH,
             3,
-            "mixed",
+            "standard_wait",
             site_cell_id=ids.EARTH_CELL_COASTAL,
         )
 
@@ -57,7 +57,7 @@ def test_facility_placement_scope_controls_surface_cell_requirement():
         ids.ROBOTIC_GEOLOGY_STATION,
         ids.EARTH,
         3,
-        "mixed",
+        "standard_wait",
         site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
     )
     assert sim.projects.projects[project_id].site_cell_id == ids.EARTH_CELL_INDUSTRIAL
@@ -103,7 +103,7 @@ def test_surface_map_owns_surface_buildability_and_location_build_options_do_not
     assert {detail for code, detail in option.blockers if code == "technology"} == {
         str(technology_id) for technology_id in recipe.prerequisite_technologies
     }
-    assert option.sourcing_policy_options == build_options.sourcing_policy_options
+    assert option.procurement_policy_options == build_options.procurement_policy_options
     assert option.logistics_policy_options == build_options.logistics_policy_options
 
     catalog = app.query(GetCatalog())

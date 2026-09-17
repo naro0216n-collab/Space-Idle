@@ -13,7 +13,7 @@ from .application_commands import (
     ResumeBuild, ResumeFacility, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
     ResumeVehicleProduction, SetFacilityProcess, SetMaintenancePriority,
-    SetFacilityActivityPriority, SetProjectPriority, SetProjectSourcingPolicy,
+    SetFacilityActivityPriority, SetProjectPriority, SetProjectProcurementPolicy,
     SetResearchDemonstrationSite, SetResearchPrototypeSite, SetSurveyPriority,
     SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration, SetScientificExplorationPriority,
     StartSurvey, UnassignExplorationFleet, UpdateTransportAllocation, AssignExplorationFleet, CreateTradeOrder,

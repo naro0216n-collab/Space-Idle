@@ -32,7 +32,7 @@ from ..content.base_construction import (
     build_facility_upgrade_recipes,
     build_facility_decommission_recipes,
     build_spatial_development_recipes,
-    sourcing_wait_days,
+    procurement_wait_days,
 )
 from ..content.base_contracts import build_contract_templates
 from ..content.base_facilities import build_facility_definitions
@@ -121,7 +121,7 @@ def build_base_simulation() -> Simulation:
         facilities=facilities,
         power=power,
         service_capacity_registry=service_capacity_registry,
-        sourcing_wait_days=sourcing_wait_days(),
+        procurement_wait_days=procurement_wait_days(),
         surface_infrastructure=surface_infrastructure,
         surface_knowledge_level_provider=survey.cell_knowledge_level,
         technology_state=technology,

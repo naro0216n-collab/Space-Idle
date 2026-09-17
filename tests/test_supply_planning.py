@@ -223,7 +223,7 @@ def test_explicit_supply_source_remains_visible_when_transport_is_not_provisione
             str(LEO),
             str(ORBITAL_LOGISTICS_NODE),
             priority=5,
-            sourcing_policy="import_now",
+            procurement_policy="immediate",
             logistics_policy_id=_create_pinned_source_policy(sim, "logistics.policy.project-earth", EARTH),
         )
     ).created_id
@@ -295,7 +295,7 @@ def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_
             str(LEO),
             str(ORBITAL_LOGISTICS_NODE),
             priority=3,
-            sourcing_policy="import_now",
+            procurement_policy="immediate",
             logistics_policy_id=_create_pinned_source_policy(sim, "logistics.policy.project-earth-2", EARTH),
         )
     ).created_id

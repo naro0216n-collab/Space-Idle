@@ -242,16 +242,6 @@ class LocationFoundingService:
             actual = self.surface_knowledge_level_provider(cell_id)
             if actual < package.minimum_survey_knowledge_level:
                 failures.append(FoundingBlocker("survey_knowledge", f"{actual}/{package.minimum_survey_knowledge_level}"))
-        snapshot = power
-        preparation_capacity = self.service_capacity_registry.available_at(
-            staging_node_id,
-            package.preparation_service_type,
-            self.facilities,
-            snapshot,
-            day,
-        )
-        if preparation_capacity <= 1e-12:
-            failures.append(FoundingBlocker("staging_service", package.preparation_service_type))
         for failure in evaluate_site_requirements(
             package.staging_requirements,
             staging_node_id,
@@ -561,16 +551,6 @@ class LocationFoundingService:
             failures.append(FoundingBlocker("cell_claimed", str(claim.claimant_id)))
         if project.status is FoundingStatus.PREPARING:
             package = self.packages[project.founding_package_id]
-            snapshot = power
-            preparation_capacity = self.service_capacity_registry.available_at(
-                project.staging_node_id,
-                package.preparation_service_type,
-                self.facilities,
-                snapshot,
-                day,
-            )
-            if preparation_capacity <= 1e-12:
-                failures.append(FoundingBlocker("staging_service", package.preparation_service_type))
             if not project.inputs_consumed:
                 for requirement in self.project_resource_requirements(project.id):
                     resource_id = requirement.resource_id
@@ -579,6 +559,41 @@ class LocationFoundingService:
                     if staged + 1e-9 < amount:
                         failures.append(FoundingBlocker("resource_shortage", str(resource_id)))
         return tuple(failures)
+
+
+    def preparation_fulfillment(
+        self, project_id: ProjectId, allocations: ExecutionAllocationPlan
+    ) -> float:
+        project = self.projects[project_id]
+        if project.status is not FoundingStatus.PREPARING:
+            return 1.0
+        package = self.packages[project.founding_package_id]
+        if project.preparation_done + 1e-12 >= package.preparation_work:
+            return 1.0
+        try:
+            return allocations.fulfillment(self.preparation_execution_id(project.id))
+        except KeyError:
+            return 0.0
+
+    def preparation_limiting_factors(
+        self, project_id: ProjectId, allocations: ExecutionAllocationPlan
+    ) -> tuple[str, ...]:
+        project = self.projects[project_id]
+        if project.status is not FoundingStatus.PREPARING:
+            return ()
+        try:
+            allocation = allocations.allocation(self.preparation_execution_id(project.id))
+        except KeyError:
+            return ()
+        if allocation.unmet_execution <= 1e-9:
+            return ()
+        factors: list[str] = []
+        for key in allocation.limiting_constraints:
+            if key.kind == "service":
+                factors.append(f"service:{key.name}")
+            else:
+                factors.append(f"{key.kind}:{key.name}")
+        return tuple(dict.fromkeys(factors))
 
     def pause(self, project_id: ProjectId) -> None:
         project = self.projects[project_id]

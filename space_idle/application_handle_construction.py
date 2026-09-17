@@ -16,7 +16,7 @@ from .application_commands import (
     DevelopSurfaceCell,
     ResumeBuild,
     SetProjectPriority,
-    SetProjectSourcingPolicy,
+    SetProjectProcurementPolicy,
 )
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SurfaceCellId
 
@@ -37,7 +37,7 @@ class ConstructionCommandHandlerMixin:
                 DefinitionId(command.facility_id),
                 self._require_operational_node(command.operational_node_id),
                 command.priority,
-                command.sourcing_policy,
+                command.procurement_policy,
                 day=sim.day,
                 site_cell_id=None if command.site_cell_id is None else SurfaceCellId(command.site_cell_id),
             )
@@ -49,7 +49,7 @@ class ConstructionCommandHandlerMixin:
             pid = sim.projects.plan_upgrade(
                 EntityId(command.facility_id),
                 command.priority,
-                command.sourcing_policy,
+                command.procurement_policy,
                 day=sim.day,
             )
             if logistics_policy_id is not None:
@@ -60,7 +60,7 @@ class ConstructionCommandHandlerMixin:
             pid = sim.projects.plan_decommission(
                 EntityId(command.facility_id),
                 command.priority,
-                command.sourcing_policy,
+                command.procurement_policy,
                 day=sim.day,
             )
             if logistics_policy_id is not None:
@@ -105,7 +105,7 @@ class ConstructionCommandHandlerMixin:
                 self._require_operational_node(command.location_id),
                 SurfaceCellId(command.cell_id),
                 command.priority,
-                command.sourcing_policy,
+                command.procurement_policy,
                 day=sim.day,
             )
             if logistics_policy_id is not None:
@@ -119,8 +119,8 @@ class ConstructionCommandHandlerMixin:
             sim.projects.resume(ProjectId(command.project_id), sim.day); return CommandResult()
         if isinstance(command, SetProjectPriority):
             sim.projects.set_priority(ProjectId(command.project_id), command.priority); return CommandResult()
-        if isinstance(command, SetProjectSourcingPolicy):
-            sim.projects.set_sourcing_policy(
-                ProjectId(command.project_id), command.sourcing_policy, sim.day
+        if isinstance(command, SetProjectProcurementPolicy):
+            sim.projects.set_procurement_policy(
+                ProjectId(command.project_id), command.procurement_policy, sim.day
             ); return CommandResult()
         return NotImplemented

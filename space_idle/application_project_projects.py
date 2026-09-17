@@ -198,12 +198,15 @@ class ProjectProjectorMixin:
                 state = project.resources[requirement.resource_id]
                 reserved_t = sim.projects.reserved_resource_t(project, requirement.resource_id)
                 shortage = max(0.0, requirement.amount_t - reserved_t - state.committed_t)
-                requirement_id = None
-                if state.import_committed_t is not None and shortage > 1e-9:
-                    requirement_id = f"requirement.project:{project.id}:{requirement.resource_id}"
+                candidate_requirement_id = f"requirement.project:{project.id}:{requirement.resource_id}"
+                requirement_id = (
+                    candidate_requirement_id
+                    if shortage > 1e-9 and candidate_requirement_id in external_requirements
+                    else None
+                )
                 resources.append(ProjectResourceRow(
                     str(requirement.resource_id), requirement.amount_t, reserved_t, 0.0, state.committed_t,
-                    shortage, state.import_committed_t, requirement_id,
+                    shortage, requirement_id,
                 ))
 
             target_facility_id = None
@@ -247,11 +250,11 @@ class ProjectProjectorMixin:
                 str(project.id), target_kind, str(project.operational_node_id),
                 None if facility_definition_id is None else str(facility_definition_id),
                 target_facility_id, target_level, display_name, project.status, project.paused,
-                project.priority, project.sourcing_policy,
+                project.priority, project.procurement_policy,
                 (None if (assigned_policy_id := sim.logistics.assigned_policy_id_for("project", EntityId(str(project.id)))) is None else str(assigned_policy_id)),
                 (None if (resolved_policy := sim.logistics.resolved_policy_for("project", EntityId(str(project.id)))) is None else str(resolved_policy.id)),
-                sim.projects.settings_mutable(project.id), sim.projects.sourcing_mutable(project.id),
-                tuple(sim.projects.sourcing_policy_options()),
+                sim.projects.settings_mutable(project.id), sim.projects.procurement_mutable(project.id),
+                tuple(sim.projects.procurement_policy_options()),
                 tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                 project.construction_done, recipe.construction_work,
                 project.materials_committed,
@@ -289,7 +292,6 @@ class ProjectProjectorMixin:
                         status.committed_t,
                         status.shortage_t,
                         None,
-                        None,
                     )
                     for status in sim.founding.project_resource_status(project.id)
                 ]
@@ -315,7 +317,7 @@ class ProjectProjectorMixin:
                     status=project.status.value,
                     paused=project.paused,
                     priority=project.priority,
-                    sourcing_policy="founding",
+                    procurement_policy="founding",
                     logistics_policy_id=(
                         None if (assigned_policy_id := sim.logistics.assigned_policy_id_for("founding", EntityId(str(project.id)))) is None
                         else str(assigned_policy_id)
@@ -325,8 +327,8 @@ class ProjectProjectorMixin:
                         else str(resolved_policy.id)
                     ),
                     settings_editable=project.status.value == "preparing",
-                    sourcing_editable=False,
-                    sourcing_policy_options=(),
+                    procurement_editable=False,
+                    procurement_policy_options=(),
                     logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                     construction_done=project.preparation_done,
                     construction_required=package.preparation_work,
@@ -338,8 +340,12 @@ class ProjectProjectorMixin:
                     target_cell_id=str(project.target_core_cell_id),
                     target_body_id=str(project.target_body_id),
                     target_location_id=str(project.new_location_id),
-                    construction_fulfillment=1.0,
-                    limiting_factors=(),
+                    construction_fulfillment=sim.founding.preparation_fulfillment(
+                        project.id, decision.allocations.execution
+                    ),
+                    limiting_factors=sim.founding.preparation_limiting_factors(
+                        project.id, decision.allocations.execution
+                    ),
                     projected_material_readiness_day=self._projected_material_readiness_day(
                         day=sim.day,
                         owner_kind="founding",
@@ -382,7 +388,7 @@ class ProjectProjectorMixin:
             ))
         return BuildOptionsView(
             str(location_id),
-            tuple(sim.projects.sourcing_policy_options()),
+            tuple(sim.projects.procurement_policy_options()),
             tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
             tuple(rows),
         )

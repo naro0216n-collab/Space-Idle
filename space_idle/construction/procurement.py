@@ -44,23 +44,7 @@ class ConstructionProcurementMixin:
             return False
         assert project.procurement_started_day is not None
         waited = day - project.procurement_started_day
-        return waited >= self.sourcing_wait_days[project.sourcing_policy]
-
-    def _mature_procurement_if_due(self, project, day: int) -> None:
-        """Persist a due sourcing transition at a canonical Boundary."""
-        if not self._procurement_policy_due(project, day):
-            return
-        recipe = self._recipe_for_project(project)
-        for requirement in recipe.resources:
-            state = project.resources[requirement.resource_id]
-            reserved = self._reserved_resource_t(project, requirement.resource_id)
-            if (
-                state.import_committed_t is None
-                and state.committed_t + reserved + 1e-9 < requirement.amount_t
-            ):
-                state.import_committed_t = max(
-                    0.0, requirement.amount_t - state.committed_t - reserved
-                )
+        return waited >= self.procurement_wait_days[project.procurement_policy]
 
     def supplys(self, day: int) -> tuple[SupplyRequirement, ...]:
         requirements: list[SupplyRequirement] = []
@@ -78,10 +62,7 @@ class ConstructionProcurementMixin:
                 missing = max(0.0, requirement.amount_t - state.committed_t - reserved)
                 if missing <= 1e-9:
                     continue
-                if (
-                    state.import_committed_t is None
-                    and not self._procurement_policy_due(project, day)
-                ):
+                if not self._procurement_policy_due(project, day):
                     continue
                 requirements.append(SupplyRequirement(
                     self._supply_id(project.id, requirement.resource_id),
@@ -124,7 +105,7 @@ class ConstructionProcurementMixin:
         return tuple(rows)
 
     def advance_procurement(self, day: int) -> None:
-        """Advance sourcing policy without consuming or reserving inventory."""
+        """Advance procurement timing without consuming or reserving inventory."""
         ordered = sorted(self.projects.values(), key=lambda project: (-project.priority, str(project.id)))
         for project in ordered:
             if project.paused or project.status in {
@@ -137,7 +118,6 @@ class ConstructionProcurementMixin:
             if project.status is ProjectStatus.PLANNED and not self._activate_procurement_if_eligible(project, day):
                 continue
 
-            self._mature_procurement_if_due(project, day)
 
     def finalize_procurement(
         self, allocations: ExecutionAllocationPlan, day: int

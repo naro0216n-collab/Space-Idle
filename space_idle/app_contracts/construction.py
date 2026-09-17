@@ -4,7 +4,7 @@ from typing import Literal
 
 from ..priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 
-SourcingPolicyValue = Literal["import_now", "mixed", "local_priority"]
+ProcurementTimingPolicyValue = Literal["immediate", "standard_wait", "extended_wait"]
 
 
 @dataclass(frozen=True)
@@ -12,7 +12,7 @@ class PlanBuild:
     operational_node_id: str
     facility_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    sourcing_policy: SourcingPolicyValue = "mixed"
+    procurement_policy: ProcurementTimingPolicyValue = "standard_wait"
     logistics_policy_id: str | None = None
     site_cell_id: str | None = None
 
@@ -21,7 +21,7 @@ class PlanBuild:
 class PlanFacilityUpgrade:
     facility_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    sourcing_policy: SourcingPolicyValue = "mixed"
+    procurement_policy: ProcurementTimingPolicyValue = "standard_wait"
     logistics_policy_id: str | None = None
 
 
@@ -29,7 +29,7 @@ class PlanFacilityUpgrade:
 class PlanFacilityDecommission:
     facility_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    sourcing_policy: SourcingPolicyValue = "mixed"
+    procurement_policy: ProcurementTimingPolicyValue = "standard_wait"
     logistics_policy_id: str | None = None
 
 
@@ -71,7 +71,7 @@ class DevelopSurfaceCell:
     location_id: str
     cell_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    sourcing_policy: SourcingPolicyValue = "mixed"
+    procurement_policy: ProcurementTimingPolicyValue = "standard_wait"
     logistics_policy_id: str | None = None
 
 
@@ -97,6 +97,6 @@ class SetProjectPriority:
 
 
 @dataclass(frozen=True)
-class SetProjectSourcingPolicy:
+class SetProjectProcurementPolicy:
     project_id: str
-    sourcing_policy: SourcingPolicyValue
+    procurement_policy: ProcurementTimingPolicyValue

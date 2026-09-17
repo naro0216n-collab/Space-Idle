@@ -66,7 +66,7 @@ def _make_nontrivial_state():
         PlanBuild(
             str(EARTH),
             str(surface_definition),
-            sourcing_policy="local_priority",
+            procurement_policy="extended_wait",
             site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
         )
     ).created_id
@@ -307,7 +307,7 @@ def test_offline_progress_uses_the_same_active_simulation_path_as_normal_time(tm
         site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
     )
     original.execute(DevelopSurfaceCell(
-        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), sourcing_policy="import_now"
+        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), procurement_policy="immediate"
     ))
 
     path = tmp_path / "offline-active-domains.json"
