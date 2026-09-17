@@ -62,7 +62,7 @@
 
 特定Location、特定Vehicle、特定Facility、特定fixtureだけに必要な条件が現れた場合は、まず一般モデルの不足か、Contentで表現すべき差か、Domain境界の誤りかを調べる。
 
-既存概念が新設計と重複・矛盾する場合は、旧概念を残したまま新概念を並設せず、State、Command、Query、Persistence、UIを含めて旧経路を撤去する。
+既存概念が新設計と重複・矛盾する場合は、変更後の責務を一つのState、Command、Query、Persistence、UI経路へ統合し、同じ責務を持つ複数経路を残さない。
 
 ### 3.4 縦方向に実装する
 
@@ -96,7 +96,7 @@ Generic Coreが将来増加するEntityや関係を扱う場合、正しさだ�
 確認対象：
 
 - 同じ概念を複数Domainが所有していないか
-- 旧概念・互換wrapper・一時的な変換層が残っていないか
+- 同じ責務を持つ複数経路・変換層が残っていないか
 - 登録順、呼出順、ID名、Location名への隠れた依存がないか
 - Queryと実行系が同じ判定を使っているか
 - Save / Loadで派生状態を二重管理していないか
@@ -152,7 +152,7 @@ Generic Coreが将来増加するEntityや関係を扱う場合、正しさだ�
 
 恒久テストを置くかどうかは、「このテストが失敗したとき、現在の `design.md` / `architecture.md` が要求する不変条件、状態遷移、Domain境界、Application契約のどれが破られたと言えるか」で判断する。対応する現行契約を説明できない検証は、恒久suiteへ残す根拠を持たない。
 
-バグ修正や移行作業を契機に検証を追加する場合も、個別の事故や旧実装の不存在そのものではなく、その事故が示した一般的な契約へ検証対象を引き上げる。例えば旧class名の不存在ではなくState ownership、旧call pathの不存在ではなくApplication境界、特定順序で偶然成立したScenarioではなく登録順非依存を検証する。
+不具合修正や構造変更を契機に検証を追加する場合も、個別事象の再現形状ではなく、その事象が示した一般的な契約へ検証対象を引き上げる。State ownership、Application境界、登録順非依存、保存則など、現在の設計から説明できる契約を直接検証する。
 
 ### 6.2 優先して検証する契約
 
@@ -179,7 +179,7 @@ Gameplay検証は実Application APIと実際の状態遷移を使い、複数Dom
 - 現在も同じ契約を検証するなら維持する。
 - 契約の表現が変わったなら、新しいpublic / Domain契約へ書き換える。
 - より上位の不変条件テストへ包含できるなら統合する。
-- 契約自体が廃止された、暫定Content値だけを固定する、旧API・旧class・旧fixture形状だけを保存する場合は削除する。
+- 現在の契約を表さず、暫定Content値や特定の内部表現だけを固定する場合は削除する。
 
 「過去に一度壊れたから」という理由だけで個別回帰テストを永久に積み上げない。過去の不具合が恒久的な設計契約を示している場合だけ、その契約を最小限のテストで保持する。
 
@@ -207,13 +207,7 @@ fixtureは検証したい状態を構築する入力であり、それ自体を�
 
 Content固有のvalidationが必要な場合は、Generic Coreの不変条件と分離してContent validationとして扱う。Gameplay ScenarioもContent評価とCore契約検証を混同しない。
 
-### 6.6 一時的な移行確認
-
-大規模移行では、旧経路が残っていないこと、旧schemaが参照されていないこと、特定migrationが完了したことを一時的に確認してよい。ただしこれは移行作業の完了確認であり、そのまま恒久suiteの仕様にはしない。
-
-移行完了後に長期的に守るべき内容がある場合は、「旧symbolが存在しない」という履歴依存の形ではなく、現在のArchitecture境界やauthoritative Stateが一意であることを検証する形へ置き換える。
-
-### 6.7 CIと検証範囲
+### 6.6 CIと検証範囲
 
 GreenなCIは設計妥当性の証明ではなく、選択された検証が通ったという証拠である。Redなテストも直ちに実装誤りとは限らず、正準仕様の変更に対してテスト契約が古くなっていないかを含めて原因を確認する。
 
@@ -232,7 +226,7 @@ GreenなCIは設計妥当性の証明ではなく、選択された検証が通�
 少なくとも以下を満たした時点で、検証可能な実装単位として扱う。
 
 - 変更後のDomain責務とState所有が明確である
-- 旧設計との重複経路・不要な互換層が整理されている
+- 同じ責務を持つ重複経路や不要な変換層が存在しない
 - Simulation、Application、Persistence、Content、UIが同じ契約で接続されている
 - 一般モデルに特定Content由来の特殊分岐を持ち込んでいない
 - 変更後のボトルネックと状態遷移をApplicationから説明できる
@@ -246,32 +240,15 @@ CI通過や特定Gameplay Scenarioの完走だけを完了判定には使わな�
 
 ## 8. GitHubへの反映
 
-独立作業は原則ローカルで行い、全体整合性を確認した差分を検証可能な単位で `develop` へ反映する。
+独立作業はローカルrepoで行い、責務としてまとまり、その時点で既知の不整合がないcheckpointを `develop` へ反映する。反映単位はファイル数やテスト実行単位ではなく、Domainから必要なApplication・Persistence・Content・UI境界まで一貫して成立した責務変更とする。
 
-`develop` への反映単位は「テストが通ったファイル群」ではなく、「一つの責務変更がDomainから外部境界まで一貫して成立した変更」とする。複数の成立済みlocal commitが未反映でも、publish都合でrebase・reset・squashして作り直さず、責務境界ごとに順次反映してよい。
+publish対象はcommit済みtarget treeとし、publish transportの都合をゲーム実装の構造、commit境界、State ownershipへ持ち込まない。成立済みlocal commitは履歴整理やtransport都合で作り直さず、責務境界に沿ったcheckpointとして保持する。
 
-GitHubへのtransport方式はゲーム実装の構造やcommit境界を決める根拠にしない。publish対象はcommitted target treeであり、その後にworking treeで別作業を続けていても対象commitへ未commit内容を混入させない。
+通常publishの操作手順、Publish Gatewayのtransport protocol、source-snapshotの復元方法、workflow maintenance、失敗時のrecoveryは `DEVELOPMENT.md` と各helperの生成手順を運用上の正本とする。開発原則はそれらの具体的なpacket形式、chunkサイズ、Connector実装、GitHub API呼出順へ依存しない。
 
-publish transportは実行環境ごとに一意にする。認証済みnative Gitを正式なtransportとして採用する環境では、その環境の単一publish入口が記録済みremote HEAD/treeを基点としてlocal target treeを指すcommitを生成し、non-force push後にremote ref/treeを再検証する。通常helperへnative Gitを並列サブコマンドとして露出し、Gatewayとの選択を作業者へ委ねない。
+branchの役割は次の通りとする。
 
-現在のConnector実行環境では、publish対象を現在の `HEAD` commitへ固定し、記録済み `develop` commitを親、local target treeをtreeに持つ決定論的commitをGit bundleへ格納してPublish Gatewayへ渡す。source-snapshotは `develop` commit/treeだけでなく生成時点の `publish` commit/treeとそのGit objectを保持し、通常publishのtransport baseを追加network readなしでローカル再構築できる状態にする。repo-localな単一active transactionを正本とし、active transaction中に別requestを開始しない。
-
-通常transportは `.publish/transport/<target>` の固定slotだけを使用する。payloadはBase64 ASCIIの16 KiB固定logical chunkへ分割して連番partとして表現するが、chunkごとの `create_blob` は行わない。helperはchunk本文を `create_tree` entryの `content` として直接指定し、Connectorの1 call上限未満に収まる複数batchへpackする。1 callの上限はtransport全体の上限へ昇格させず、最大part数までbatchを積み重ねて扱う。旧 `.publish` transport artifactは固定slotへ移行するtreeで削除し、同責務の新旧経路を併存させない。
-
-helperはsource-snapshot由来の `publish` base tree、各chunk本文、削除対象pathから各batch後の期待root tree SHAをlocal Gitで事前計算する。第2batch以降は直前batchの期待treeをbaseとし、各 `create_tree` packet自身へ `expected_tree` を含める。返却SHAが期待値と異なる場合は同一packetを再実行し、成功済みbatchへ戻らない。正常系ではGitのcontent-addressed object identityを検証境界とし、tree writeのたびに返却SHAをhelperへ戻して次stageを生成する往復を置かない。
-
-全tree batchの成立後だけ、plan時に生成済みの `create_commit` を実行し、その返却commit SHAを直接non-force `update_ref` へ渡して `publish` branchを1回だけ進める。commit SHAをhelperへ戻す中間stageやcommit object再fetchは置かない。Gatewayはcheckout済み固定slotを直接読み、連番partを連結してbundleを検証し、bundle自身からpublish commit、parent/base、target treeを導出する。GitHub Contents / Blob APIでpayloadを再取得せず、checkout済み `origin/<target>` とbundle parentをローカル比較する。成立後はexact publish commitをnon-force pushし、成功push後の `ls-remote` /再fetch、receipt書込み、pending commit status書込みを重ねない。Fast CIは `GITHUB_TOKEN` によるpushから別workflowが起動しないため明示dispatchする。
-
-Gateway成功の記録は、そのtransport commitをheadに持つPublish Gateway workflow runの `completed / success` を観測してactive transactionへ記録する。receipt専用GitHub objectは作らない。ref更新後の一時的Gateway障害は同じworkflow run/transport commitをrerunし、retry generationとしてtransportを再公開しない。target移動やcontrol不一致等の意味のあるfailureは再送で隠さず原因を解消する。
-
-通常publish前のremote観測はGitHub heads一覧1回から `develop` と `publish` の両HEADを得る。`publish` treeはlocal source stateを使う。prepared targetのcancelも同じ二つのHEADが未変化であることを機械確認して行い、transaction directoryの手動削除を標準手順にしない。
-
-通常Publish Gatewayの権限境界はgame/source publishを基本とし、`.github/workflows/**` を含むtargetはrequest生成前に識別する。一般のworkflow変更はworkflow maintenance経路へ分離する。Publish Gateway自身の `.github/workflows/publish-gateway.yml` だけは、先に固定 `publish` branchのcontrol maintenanceで同一blobが成立済みの場合に限り通常publishへの同梱を許可し、Gatewayがpublish targetのblob OIDと現在のcontrol branch blob OIDの一致をpush前に機械検証する。
-
-`publish` branch上のcontrol plane更新は独立したcontrol maintenance責務とする。対象pathをGateway workflowと現在使用するvalidatorへ固定し、control file本文を `create_tree` entryの `content` として直接渡す。helperはsource-snapshotに保持したpublish base treeから各batchの期待tree SHAを事前計算し、正常系ではtree返却SHAをhelperへ戻す中間stageを置かない。期待tree成立後は生成済み `create_commit` を実行し、その返却SHAを直接non-force `update_ref` へ渡す。通常時にremote treeやcommit objectを再取得せず、ref update成功後も再readせずlocal publish stateを更新する。廃止したcontrol componentは同じcontrol treeから削除し、互換経路を残さない。
-
-`temp` は標準publishの中継やpromotion元にはしない。ユーザー指定時、またはGateway / workflow経路そのものを隔離検証する場合だけ使用する。その検証成果物を通常の `develop` publish入力として再利用しない。
-
-旧transportや既存テストを通すためのcompatibility pathは維持しない。標準経路が成立したら、旧patch方式、手動record fallback、段階的Connector helper等の同責務経路を撤去する。
-
-`main` への統合とゲーム本体version変更はユーザーの明示的承認後のみ行う。
+- `develop`: 通常開発中の共有正本。検証済みcheckpointを通常publishで反映する。
+- `publish`: Publish Gateway専用のtransport control branch。game/sourceの開発履歴とは分離する。
+- `temp`: ユーザー指定、またはworkflow・publish経路そのものを隔離検証する場合に使用する。
+- `main`: ユーザー承認済みの正準branch。`develop` からの統合とゲーム本体version変更はユーザーの明示的承認後に行う。

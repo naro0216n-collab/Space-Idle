@@ -9,7 +9,7 @@
 - §11–12: Research / Knowledge / Scientific Exploration / Resource Survey
 - §13–16: Application API / Persistence / Validation / UI・Server・LLM
 - §17: 全節へ横断適用するArchitecture invariant
-- §18: 現時点のArchitecture定義
+- §18: Architecture定義の要約
 
 詳細規則は各担当節を正本とし、§17はそれらを再定義しない。現行moduleとの対応は非正準の `implementation-map.md` を参照する。
 
@@ -788,7 +788,7 @@ Domainごとに同じExperience値を重複保存しない。Experience category
 
 ### 11.4 Human operation abstraction
 
-現段階ではCrew個人・人口を独立Entity / Domainとして所有しない。有人運用はcrew-ratedなVehicle / Facility property、Habitation / Life Support等のCapability / Service Capacity、消耗Execution Requirement / Supply Requirement、Environment Requirementから表現する。Crew自体が主要な配置・成長・リスク判断になった場合にだけ独立Domainへ昇格する。
+有人運用はcrew-ratedなVehicle / Facility property、Habitation / Life Support等のCapability / Service Capacity、消耗Execution Requirement / Supply Requirement、Environment Requirementから表現する。Crew個人・人口の配置、成長、リスクが独立したプレイヤー判断を構成する場合は、そのState ownershipと状態遷移を独立Domainとして定義する。
 
 ---
 
@@ -1068,7 +1068,7 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 
 ---
 
-## 18. 現時点のアーキテクチャ定義
+## 18. アーキテクチャ定義の要約
 
 本作のCoreは、Research / Knowledgeの成長、物理的な産業拡大、空間的な拠点拡大、それを支えるResource / Service Capacity / Movement / Logisticsを一つの状態モデルへ接続する。
 
