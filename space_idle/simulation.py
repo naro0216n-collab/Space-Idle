@@ -26,7 +26,7 @@ from .execution_requirements import (
     ExecutionRequirementBundle, PoolRequirement, ReservationAcquisitionRequirement,
     ResourceRequirement, ServiceCapacityRequirement, StockOrPoolAdmissionRequirement,
     admission_constraint, allocate_execution_requirements, pool_constraint, resource_constraint,
-    service_constraint, service_pool_constraint,
+    service_constraint, service_pool_constraint, with_service_capacity_conservation,
 )
 from .service_capacity import (
     ServiceCapacityAllocation,
@@ -298,65 +298,6 @@ class Simulation:
         """Return off-site Supply Requirements from the shared tick plan."""
         return self.tick_decision_projection().plan.external_requirements
 
-    def _with_organization_service_envelopes(
-        self, bundle: ExecutionRequirementBundle
-    ) -> ExecutionRequirementBundle:
-        """Conserve organization-reachable service supply across local and shared use.
-
-        A provider whose service is organization-scoped is still physically located
-        at one Operational Node.  A node-local consumer therefore needs both the
-        local capacity constraint and the organization aggregate envelope so that a
-        Theory consumer cannot simultaneously reuse the same finite provider flow.
-
-        The extra envelope is planning-only.  Domain bundles keep expressing the
-        consumer's actual execution scope; provider reachability determines whether
-        the shared conservation constraint is added.
-        """
-
-        requirements = list(bundle.requirements)
-        existing_organization_services = {
-            requirement.service_type
-            for requirement in requirements
-            if isinstance(requirement, ServiceCapacityRequirement)
-            and requirement.scope is ServiceCapacityScope.ORGANIZATION
-        }
-        for requirement in tuple(requirements):
-            if not isinstance(requirement, ServiceCapacityRequirement):
-                continue
-            if requirement.scope is not ServiceCapacityScope.OPERATIONAL_NODE:
-                continue
-            if requirement.service_type in existing_organization_services:
-                continue
-            if (
-                self.facilities.service_capacity_scope(requirement.service_type)
-                is not ServiceCapacityScope.ORGANIZATION
-            ):
-                continue
-            requirements.append(
-                ServiceCapacityRequirement(
-                    requirement.service_type,
-                    requirement.amount_per_execution,
-                    scope=ServiceCapacityScope.ORGANIZATION,
-                )
-            )
-            existing_organization_services.add(requirement.service_type)
-
-        if tuple(requirements) == bundle.requirements:
-            return bundle
-        return ExecutionRequirementBundle(
-            bundle.id,
-            bundle.owner_kind,
-            bundle.owner_id,
-            bundle.purpose,
-            bundle.operational_node_id,
-            bundle.requested_execution,
-            bundle.priority,
-            tuple(requirements),
-            minimum_execution=bundle.minimum_execution,
-            atomic=bundle.atomic,
-            wait_started_day=bundle.wait_started_day,
-        )
-
     def _execution_requirements(self) -> tuple[AllocationIntent, ...]:
         rows: list[AllocationIntent] = []
         rows.extend(self.projects.reservation_acquisition_requirements(self.day))
@@ -391,8 +332,9 @@ class Simulation:
             rows.extend(self.scientific_exploration.execution_requirement_bundles(self.day))
         rows.extend(self.transport.fleet_retirement_execution_requirement_bundles(self.day))
         rows.extend(self.market.sell_execution_bundles())
+        service_scopes = self.service_capacity_scopes()
         rows = [
-            self._with_organization_service_envelopes(row)
+            with_service_capacity_conservation(row, service_scopes)
             if isinstance(row, ExecutionRequirementBundle)
             else row
             for row in rows
@@ -501,6 +443,23 @@ class Simulation:
             if provider is not None:
                 rows.append(provider)
         return tuple(rows)
+
+    def service_capacity_scopes(self) -> dict[str, ServiceCapacityScope]:
+        scopes: dict[str, ServiceCapacityScope] = {}
+        for provider in self.service_capacity_providers():
+            for service_type in provider.service_capacity_types():
+                scope = provider.service_capacity_scope(service_type)
+                prior = scopes.get(service_type)
+                if prior is not None and prior is not scope:
+                    raise RuntimeError(f"mixed service capacity scopes for {service_type}")
+                scopes[service_type] = scope
+        return scopes
+
+    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope:
+        try:
+            return self.service_capacity_scopes()[service_type]
+        except KeyError as exc:
+            raise KeyError(f"no service capacity provider for {service_type}") from exc
 
     def _service_supply_at(
         self,
@@ -814,7 +773,7 @@ class Simulation:
                             continue
                         if (
                             requirement.scope is ServiceCapacityScope.ORGANIZATION
-                            and self.facilities.service_capacity_scope(requirement.service_type)
+                            and self.service_capacity_scope(requirement.service_type)
                             is not ServiceCapacityScope.ORGANIZATION
                         ):
                             capacities[key] = 0.0

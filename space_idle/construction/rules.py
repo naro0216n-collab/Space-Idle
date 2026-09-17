@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ..execution_requirements import ExecutionAllocationPlan
 from ..power import PowerSnapshot
-from ..service_capacity import ServiceCapacityAllocationPlan
+from ..service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityScope
 from ..shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirementFailure, SiteRequirements, evaluate_site_requirements
 from .models import (
@@ -293,6 +293,11 @@ class ConstructionRulesMixin:
 
     def service_capacity_types(self) -> tuple[str, ...]:
         return (CONSTRUCTION_SERVICE_TYPE,)
+
+    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope:
+        if service_type != CONSTRUCTION_SERVICE_TYPE:
+            raise KeyError(service_type)
+        return ServiceCapacityScope.OPERATIONAL_NODE
 
     def service_capacity_supply_at(
         self,

@@ -221,6 +221,59 @@ class ReservationAcquisitionRequirement:
 AllocationIntent: TypeAlias = ExecutionRequirementBundle | ReservationAcquisitionRequirement
 
 
+def with_service_capacity_conservation(
+    bundle: ExecutionRequirementBundle,
+    service_scopes: Mapping[str, ServiceCapacityScope],
+) -> ExecutionRequirementBundle:
+    """Add shared supply conservation constraints without changing consumer scope.
+
+    A node-scoped consumer of an organization-scoped service still consumes the
+    physically local provider flow and the organization aggregate formed from
+    that same finite supply.  The extra organization constraint therefore
+    conserves supply across local and organization consumers; it does not change
+    the consumer's execution site.
+    """
+    requirements = list(bundle.requirements)
+    existing_organization_services = {
+        requirement.service_type
+        for requirement in requirements
+        if isinstance(requirement, ServiceCapacityRequirement)
+        and requirement.scope is ServiceCapacityScope.ORGANIZATION
+    }
+    for requirement in tuple(requirements):
+        if not isinstance(requirement, ServiceCapacityRequirement):
+            continue
+        if requirement.scope is not ServiceCapacityScope.OPERATIONAL_NODE:
+            continue
+        if requirement.service_type in existing_organization_services:
+            continue
+        if service_scopes.get(requirement.service_type) is not ServiceCapacityScope.ORGANIZATION:
+            continue
+        requirements.append(
+            ServiceCapacityRequirement(
+                requirement.service_type,
+                requirement.amount_per_execution,
+                scope=ServiceCapacityScope.ORGANIZATION,
+            )
+        )
+        existing_organization_services.add(requirement.service_type)
+    if tuple(requirements) == bundle.requirements:
+        return bundle
+    return ExecutionRequirementBundle(
+        bundle.id,
+        bundle.owner_kind,
+        bundle.owner_id,
+        bundle.purpose,
+        bundle.operational_node_id,
+        bundle.requested_execution,
+        bundle.priority,
+        tuple(requirements),
+        minimum_execution=bundle.minimum_execution,
+        atomic=bundle.atomic,
+        wait_started_day=bundle.wait_started_day,
+    )
+
+
 @dataclass(frozen=True)
 class ExecutionAllocation:
     bundle_id: EntityId

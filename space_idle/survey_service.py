@@ -6,6 +6,7 @@ import math
 from .facilities import FacilityBook
 from .power import PowerSnapshot
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
+from .service_capacity import ServiceCapacityScope
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .spatial import SpatialGraph
 from .execution_requirements import (
@@ -381,6 +382,11 @@ class SurveyService:
 
     def service_capacity_types(self) -> tuple[str, ...]:
         return (self.SERVICE_TYPE,)
+
+    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope:
+        if service_type != self.SERVICE_TYPE:
+            raise KeyError(service_type)
+        return ServiceCapacityScope.OPERATIONAL_NODE
 
     def service_capacity_supply_at(
         self,

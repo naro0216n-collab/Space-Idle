@@ -13,6 +13,7 @@ from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .knowledge import DomainActivity
 from .power import PowerSnapshot
+from .service_capacity import ServiceCapacityScope
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .site import evaluate_physical_site_requirements
 from .spatial import EnvironmentResolver, SpatialGraph
@@ -150,6 +151,11 @@ class ExtractionService:
         return tuple(sorted({
             self.service_type(spec.resource_id) for spec in self.specs.values()
         }))
+
+    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope:
+        if service_type not in self.service_capacity_types():
+            raise KeyError(service_type)
+        return ServiceCapacityScope.OPERATIONAL_NODE
 
     def service_capacity_supply_at(
         self,

@@ -11,6 +11,7 @@ from .execution_requirements import (
 from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .power import PowerSnapshot
+from .service_capacity import ServiceCapacityScope
 from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .production import (
@@ -88,6 +89,11 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         return tuple(sorted(
             self.process_service_type(process.id) for process in self.processes.values()
         ))
+
+    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope:
+        if service_type not in self.service_capacity_types():
+            raise KeyError(service_type)
+        return ServiceCapacityScope.OPERATIONAL_NODE
 
     def service_capacity_supply_at(
         self,

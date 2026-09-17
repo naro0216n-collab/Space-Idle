@@ -25,6 +25,12 @@ def validate_simulation_configuration(sim: Simulation) -> None:
                     f"service capacity type has multiple providers: {service_type}: {prior}, {extension.name}"
                 )
             service_owners[service_type] = extension.name
+            try:
+                provider.service_capacity_scope(service_type)
+            except (KeyError, ValueError) as exc:
+                raise ConfigurationError(
+                    f"service capacity provider has invalid scope: {extension.name}/{service_type}"
+                ) from exc
     for extension in sim.domain_extensions:
         validator = extension.configuration_validator
         if validator is not None:
