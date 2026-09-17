@@ -743,13 +743,21 @@ Research ProviderはTierとLevelを持てる。
 - Tier：研究手段の世代差・基礎効率差
 - Level：同一世代設備への増設・拡張・改良
 
+Research Provider Tierはprovider Definitionの設備世代であり、Technologyの表示上の研究段階区分とは別概念とする。Technologyの表示段階変更や完了によってprovider Tierを暗黙更新しない。
+
 Research Point storage capacityは有効なprovider群から導出する。容量低下で既獲得RPを消去せず、新規生成を制限する。
 
 ### 11.1 Technology State
 
 完了済みTechnology集合は単一のauthoritative `TechnologyState` が所有する。Facility、Process、Vehicle、Movement Operation等はprerequisite technologyを参照するだけで、各Domainへunlock flagを複製しない。
 
-研究技術IDをMovementの直接解除キーにしない。研究はVehicle、Facility、Process、推進、補給方式等を解禁し、実際の到達可否はSpatial Relation・Operation要件・Vehicle性能・Infrastructureから決める。既存Facilityの性能もResearch完了時に暗黙変更しない。
+Research DefinitionはTechnology間のdirect prerequisiteをContentとして定義できる。Technology dependency graphはacyclicなDAGとし、研究開始可否は完了済みTechnologyと個別prerequisiteから判定する。表示上の研究段階区分や専門区分を暗黙のprerequisiteにせず、「同段階を一定数完了」「前段階を全取得」等をGeneric Coreの進行条件にしない。
+
+研究段階区分はTechnologyの発展位置を可視化するContent metadataとして扱い、Research Projectの `THEORY / PROTOTYPE / DEMONSTRATION / OPERATIONAL_EXPERIENCE` stageとは別概念とする。段階数は固定上限を持たず、段階1〜4のContentから第5段階以降へDAGを拡張できる。専門区分も表示・探索用metadataであり、dependencyは区分を跨いでよい。Coreは区分ごとの研究数、段階ごとの研究数、特定区分の存在を固定しない。
+
+Content validationは少なくとも、Technology IDの一意性、prerequisite参照の存在、dependency cycle不存在、表示段階の自己矛盾を検証する。表示段階は依存関係を置き換えるルールではないが、後段階Technologyを前提として前段階Technologyを配置する等、可視化された発展方向とdependencyが逆転するContentはvalidation対象とする。
+
+研究技術IDをMovementの直接解除キーにしない。研究は一般化可能な技術的知識・工程・制御方法を表し、実際の到達可否はSpatial Relation・Operation要件・Vehicle性能・Infrastructureから決める。既存Facilityの性能もResearch完了時に暗黙変更しない。
 
 ### 11.2 Research Project / stage
 
@@ -916,6 +924,7 @@ Configuration Validation：
 - Founding Package / staging node / target Surface Cell / Deployment requirement参照不整合
 - SURFACE_CELL FacilityのOperational Node / site cell参照不整合
 - Research stage / Technology / Experience category参照不整合
+- Technology prerequisiteの未定義参照・自己参照・循環、および表示段階がdependency方向と逆転するContent
 - Market Provider / Market Provider State / Market Interface / buy-sell offer / Trade Order参照不整合
 - Research execution scope / Execution Site参照不整合
 - Facility Decommission / Fleet Retirement Definition参照不整合
