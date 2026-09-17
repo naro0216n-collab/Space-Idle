@@ -490,6 +490,18 @@ class Simulation:
             location_id, service_type, self.facilities, resolved_plan, self.day
         )
 
+    def service_capacity_providers(self) -> tuple[object, ...]:
+        """Return configured finite-service providers through Domain registration."""
+        rows: list[object] = []
+        for extension in self.domain_extensions:
+            factory = extension.service_capacity_provider
+            if factory is None:
+                continue
+            provider = factory(self)
+            if provider is not None:
+                rows.append(provider)
+        return tuple(rows)
+
     def _service_supply_at(
         self,
         location_id: SpatialNodeId,
@@ -497,86 +509,30 @@ class Simulation:
         power: PowerSnapshot,
         provider_factors: dict | None,
     ) -> tuple[float, float]:
-        key = (location_id, service_type)
-        if service_type == CONSTRUCTION_SERVICE_TYPE:
-            return (
-                self.projects.construction_nominal_capacity_at(location_id, self.day),
-                self.projects.construction_capacity_at(
-                    location_id, power, self.day, provider_factors=provider_factors
-                ),
-            )
-        if self.survey is not None and service_type == self.survey.SERVICE_TYPE:
-            return (
-                self.survey.nominal_service_capacity_at(location_id, self.day),
-                self.survey.enabled_service_capacity_at(
-                    location_id, power, self.day, provider_factors=provider_factors
-                ),
-            )
-        if (
-            self.surface_infrastructure is not None
-            and service_type == self.surface_infrastructure.service_type
-        ):
-            return (
-                self.facilities.nominal_service_capacity_at(
-                    location_id, service_type, self.day
-                ),
-                self.surface_infrastructure.provider_available_capacity(
-                    location_id, self.facilities, power, self.day
-                ),
-            )
-
-        industry_nominal, industry_enabled = self.industry.service_supply(
-            location_id, self.facilities, power, self.day,
-            provider_factors=provider_factors,
+        providers = tuple(
+            provider
+            for provider in self.service_capacity_providers()
+            if service_type in provider.service_capacity_types()
         )
-        if key in industry_nominal or key in industry_enabled:
-            return industry_nominal.get(key, 0.0), industry_enabled.get(key, 0.0)
-
-        if self.extraction is not None:
-            extraction_nominal, extraction_enabled = self.extraction.service_supply(
-                location_id, self.facilities, power, self.day,
-                provider_factors=provider_factors,
-            )
-            if key in extraction_nominal or key in extraction_enabled:
-                return (
-                    extraction_nominal.get(key, 0.0),
-                    extraction_enabled.get(key, 0.0),
-                )
-
-        return (
-            self.facilities.nominal_service_capacity_at(
-                location_id, service_type, self.day
-            ),
-            self.facilities.enabled_service_capacity_at(
-                location_id, service_type, power, self.day,
-                provider_factors=provider_factors,
-            ),
+        if len(providers) > 1:
+            raise RuntimeError(f"multiple service capacity providers own {service_type}")
+        if not providers:
+            return (0.0, 0.0)
+        return providers[0].service_capacity_supply_at(
+            location_id,
+            service_type,
+            self.facilities,
+            power,
+            self.day,
+            provider_factors=provider_factors,
         )
 
     def _service_allocation_types(
         self, requests: tuple[ServiceCapacityRequest, ...]
     ) -> tuple[str, ...]:
         service_types = {request.service_type for request in requests}
-        service_types.update(self.facilities.service_types())
-        service_types.add(CONSTRUCTION_SERVICE_TYPE)
-        service_types.update(
-            self.industry.process_service_type(process.id)
-            for process in self.industry.processes.values()
-        )
-        if self.extraction is not None:
-            service_types.update(
-                self.extraction.service_type(spec.resource_id)
-                for spec in self.extraction.specs.values()
-            )
-        if self.survey is not None:
-            service_types.add(self.survey.SERVICE_TYPE)
-        if self.surface_infrastructure is not None:
-            service_types.add(self.surface_infrastructure.service_type)
-        service_types.update(
-            definition.turnaround_service_type
-            for definition in self.transport.vehicle_definitions()
-            if definition.turnaround_service_type is not None
-        )
+        for provider in self.service_capacity_providers():
+            service_types.update(provider.service_capacity_types())
         return tuple(sorted(service_types))
 
     def _allocate_service_stage(

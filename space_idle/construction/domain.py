@@ -305,4 +305,5 @@ DOMAIN_EXTENSION = DomainExtension(
     configuration_validator=validate_configuration,
     runtime_validator=validate_runtime,
     referenced_resources=referenced_resources,
+    service_capacity_provider=lambda sim: sim.projects,
 )

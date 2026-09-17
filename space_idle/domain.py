@@ -10,6 +10,7 @@ RestoreFn = Callable[[Any, Any], None]
 ConfigurationValidator = Callable[[Any, Any], None]
 RuntimeValidator = Callable[[Any], None]
 ResourceReferenceProvider = Callable[[Any], set[DefinitionId]]
+ServiceCapacityProviderFactory = Callable[[Any], Any]
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class DomainExtension:
     configuration_validator: ConfigurationValidator | None = None
     runtime_validator: RuntimeValidator | None = None
     referenced_resources: ResourceReferenceProvider | None = None
+    service_capacity_provider: ServiceCapacityProviderFactory | None = None
 
 
 def validate_extension_registry(extensions: tuple[DomainExtension, ...]) -> None:

@@ -335,6 +335,30 @@ class FacilityBook:
             raise ValueError(f"mixed service capacity scopes for {service_type}: {sorted(scope.value for scope in scopes)}")
         return next(iter(scopes))
 
+    def service_capacity_types(self) -> tuple[str, ...]:
+        """Finite service types supplied directly by Facility definitions."""
+        return tuple(sorted(self.service_types()))
+
+    def service_capacity_supply_at(
+        self,
+        operational_node_id: SpatialNodeId,
+        service_type: str,
+        facilities: "FacilityBook",
+        power: "PowerSnapshot",
+        day: int = 0,
+        *,
+        provider_factors: Mapping[EntityId, float] | None = None,
+    ) -> tuple[float, float]:
+        if facilities is not self:
+            raise ValueError("facility service provider requires its owning FacilityBook")
+        return (
+            self.nominal_service_capacity_at(operational_node_id, service_type, day),
+            self.enabled_service_capacity_at(
+                operational_node_id, service_type, power, day,
+                provider_factors=provider_factors,
+            ),
+        )
+
     def nominal_service_capacity_at(
         self, operational_node_id: SpatialNodeId, service_type: str, day: int = 0
     ) -> float:

@@ -84,6 +84,27 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         """
         self.selected_process_by_facility.pop(facility_id, None)
 
+    def service_capacity_types(self) -> tuple[str, ...]:
+        return tuple(sorted(
+            self.process_service_type(process.id) for process in self.processes.values()
+        ))
+
+    def service_capacity_supply_at(
+        self,
+        location_id: SpatialNodeId,
+        service_type: str,
+        facilities: FacilityBook,
+        power: PowerSnapshot,
+        day: int = 0,
+        *,
+        provider_factors: dict[EntityId, float] | None = None,
+    ) -> tuple[float, float]:
+        nominal, enabled = self.service_supply(
+            location_id, facilities, power, day, provider_factors=provider_factors
+        )
+        key = (location_id, service_type)
+        return nominal.get(key, 0.0), enabled.get(key, 0.0)
+
     def service_supply(
         self,
         location_id: SpatialNodeId,

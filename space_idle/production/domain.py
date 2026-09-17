@@ -50,4 +50,5 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 DOMAIN_EXTENSION = DomainExtension(
     "production", state_codec=STATE_CODEC, configuration_validator=validate_configuration,
     referenced_resources=referenced_resources,
+    service_capacity_provider=lambda sim: sim.industry,
 )

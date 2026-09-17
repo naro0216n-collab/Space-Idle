@@ -6,6 +6,7 @@ from ..service_capacity import ServiceCapacityAllocationPlan
 from ..shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirementFailure, SiteRequirements, evaluate_site_requirements
 from .models import (
+    CONSTRUCTION_SERVICE_TYPE,
     ConstructionProject,
     FacilityDecommissionTarget,
     FacilityUpgradeRecipe,
@@ -289,6 +290,29 @@ class ConstructionRulesMixin:
         ) < 1.0 - 1e-9:
             return ("surface_infrastructure",)
         return ()
+
+    def service_capacity_types(self) -> tuple[str, ...]:
+        return (CONSTRUCTION_SERVICE_TYPE,)
+
+    def service_capacity_supply_at(
+        self,
+        location_id: SpatialNodeId,
+        service_type: str,
+        facilities,
+        power: PowerSnapshot,
+        day: int = 0,
+        *,
+        provider_factors: dict[EntityId, float] | None = None,
+    ) -> tuple[float, float]:
+        del facilities
+        if service_type != CONSTRUCTION_SERVICE_TYPE:
+            return (0.0, 0.0)
+        return (
+            self.construction_nominal_capacity_at(location_id, day),
+            self.construction_capacity_at(
+                location_id, power, day, provider_factors=provider_factors
+            ),
+        )
 
     def construction_nominal_capacity_at(
         self, location_id: SpatialNodeId, day: int = 0

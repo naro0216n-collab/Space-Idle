@@ -379,6 +379,30 @@ class SurveyService:
             ))
         return tuple(bundles)
 
+    def service_capacity_types(self) -> tuple[str, ...]:
+        return (self.SERVICE_TYPE,)
+
+    def service_capacity_supply_at(
+        self,
+        provider_operational_node_id: SpatialNodeId,
+        service_type: str,
+        facilities: FacilityBook,
+        power: PowerSnapshot,
+        day: int = 0,
+        *,
+        provider_factors: dict[EntityId, float] | None = None,
+    ) -> tuple[float, float]:
+        if facilities is not self.facilities:
+            raise ValueError("survey service provider requires its owning FacilityBook")
+        if service_type != self.SERVICE_TYPE:
+            return (0.0, 0.0)
+        return (
+            self.nominal_service_capacity_at(provider_operational_node_id, day),
+            self.enabled_service_capacity_at(
+                provider_operational_node_id, power, day, provider_factors=provider_factors
+            ),
+        )
+
     def nominal_service_capacity_at(self, provider_operational_node_id: SpatialNodeId, day: int = 0) -> float:
         return sum(
             spec.points_per_day

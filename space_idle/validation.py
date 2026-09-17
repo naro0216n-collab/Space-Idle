@@ -10,6 +10,21 @@ def validate_simulation_configuration(sim: Simulation) -> None:
     """Validate the configured simulation through domain-owned validators."""
     validate_extension_registry(sim.domain_extensions)
     ctx = ValidationContext.from_simulation(sim)
+    service_owners: dict[str, str] = {}
+    for extension in sim.domain_extensions:
+        factory = extension.service_capacity_provider
+        if factory is None:
+            continue
+        provider = factory(sim)
+        if provider is None:
+            continue
+        for service_type in provider.service_capacity_types():
+            prior = service_owners.get(service_type)
+            if prior is not None:
+                raise ConfigurationError(
+                    f"service capacity type has multiple providers: {service_type}: {prior}, {extension.name}"
+                )
+            service_owners[service_type] = extension.name
     for extension in sim.domain_extensions:
         validator = extension.configuration_validator
         if validator is not None:

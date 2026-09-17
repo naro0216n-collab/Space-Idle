@@ -202,10 +202,12 @@ SURVEY_EXTENSION = DomainExtension(
     configuration_validator=validate_survey_configuration,
     runtime_validator=validate_survey_runtime,
     referenced_resources=survey_referenced_resources,
+    service_capacity_provider=lambda sim: sim.survey,
 )
 EXTRACTION_EXTENSION = DomainExtension(
     "extraction",
     configuration_validator=validate_extraction_configuration,
     runtime_validator=validate_extraction_runtime,
     referenced_resources=extraction_referenced_resources,
+    service_capacity_provider=lambda sim: sim.extraction,
 )
