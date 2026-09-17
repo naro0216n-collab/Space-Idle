@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 
 from ..facilities import FacilityBook
+from ..facility_lifecycle import FacilityLifecycleBlocker
 from ..inventory import InventoryBook
 from ..power import PowerService
 from ..shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
@@ -80,18 +81,19 @@ class TransportService(
     def vehicle_definitions(self) -> tuple[VehicleDef, ...]:
         """Return immutable Vehicle definitions in deterministic order."""
         return tuple(sorted(self.vehicle_defs.values(), key=lambda row: str(row.id)))
-    def facility_decommission_blockers(self, facility_id: EntityId):
-        """Return durable Movement commitments that still require a gateway facility."""
-        from ..construction.models import ProjectBlocker
 
-        blockers = []
+    def facility_decommission_blockers(
+        self, facility_id: EntityId
+    ) -> tuple[FacilityLifecycleBlocker, ...]:
+        """Return durable Movement commitments that still require a gateway facility."""
+        blockers: list[FacilityLifecycleBlocker] = []
         for execution in sorted(self.movement_executions.values(), key=lambda row: str(row.id)):
             if any(
                 leg.origin.surface_interface_id == facility_id
                 or leg.destination.surface_interface_id == facility_id
                 for leg in execution.legs
             ):
-                blockers.append(ProjectBlocker("active_movement_commitment", str(execution.id)))
+                blockers.append(FacilityLifecycleBlocker("active_movement_commitment", str(execution.id)))
         return tuple(blockers)
 
     def movement_resolver(self) -> MovementResolver:

@@ -11,6 +11,7 @@ from space_idle.application_commands import ApplicationError
 from space_idle.content import base_ids as ids
 from space_idle.construction import FacilityDecommissionRecipe
 from space_idle.facilities import FacilityDef, FacilityLifecycle
+from space_idle.facility_lifecycle import FacilityLifecycleBlocker
 from space_idle.persistence import load_game, save_game
 from space_idle.shared import DefinitionId, EntityId
 
@@ -81,3 +82,53 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
     assert completed.status == "complete"
     assert facility_id not in loaded._simulation.facilities.facilities
     assert loaded._simulation.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(before_stock + 5.0)
+
+
+class _ToggleLifecycleBlocker:
+    def __init__(self):
+        self.active = True
+
+    def facility_decommission_blockers(self, facility_id):
+        if not self.active:
+            return ()
+        return (FacilityLifecycleBlocker("test_commitment", str(facility_id)),)
+
+
+class _TrackingReferenceReleaser:
+    def __init__(self):
+        self.released = []
+
+    def release_facility_reference(self, facility_id):
+        self.released.append(facility_id)
+
+
+def test_decommission_lifecycle_registry_accepts_new_participants_without_project_wiring():
+    app = _build_decommission_fixture_application()
+    sim = app._simulation
+    blocker = _ToggleLifecycleBlocker()
+    releaser = _TrackingReferenceReleaser()
+    registry = sim.projects.facility_lifecycle_registry
+    registry.register_blocker_provider("test_blocker", blocker)
+    registry.register_reference_releaser("test_releaser", releaser)
+
+    facility_id = sim.facilities.install(DECOMMISSION_TARGET, ids.EARTH)
+    sim.industry.selected_process_by_facility[facility_id] = DefinitionId("test.process.future_intent")
+    failures = sim.projects.decommission_plan_failures(facility_id)
+    assert any(row.code == "test_commitment" for row in failures)
+
+    blocker.active = False
+    result = app.execute(PlanFacilityDecommission(str(facility_id), priority=5, sourcing_policy="local_priority"))
+    assert result.created_id is not None
+    for _ in range(30):
+        row = _project_row(app, result.created_id)
+        if row.status == "complete":
+            break
+        before = (row.status, row.construction_done, row.irreversible_started)
+        app.execute(AdvanceTime(1))
+        after = _project_row(app, result.created_id)
+        assert (after.status, after.construction_done, after.irreversible_started) != before
+    else:
+        pytest.fail("decommission project did not complete")
+
+    assert releaser.released == [facility_id]
+    assert facility_id not in sim.industry.selected_process_by_facility

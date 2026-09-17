@@ -4,13 +4,13 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .facilities import FacilityBook
+from .facility_lifecycle import FacilityLifecycleRegistry
 from .inventory import InventoryBook
 from .power import PowerService
-from .shared import DefinitionId, EntityId, ProjectId, SurfaceCellId
+from .shared import DefinitionId, ProjectId, SurfaceCellId
 from .spatial_claims import SurfaceCellClaimRegistry
 from .technology import TechnologyState
 from .surface_infrastructure import SurfaceInfrastructureService
-from .storage import StorageService
 from .construction.models import (
     ProjectStatus,
     BuildResourceRequirement,
@@ -26,7 +26,6 @@ from .construction.models import (
     FacilityUpgradeTarget,
     FacilityDecommissionTarget,
     SurfaceCellDevelopmentTarget,
-    ProjectBlocker,
     SourcingPolicy,
 )
 from .construction.rules import ConstructionRulesMixin
@@ -46,12 +45,10 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     facilities: FacilityBook
     power: PowerService
     sourcing_wait_days: dict[SourcingPolicy, int]
-    storage: StorageService | None = None
     surface_infrastructure: SurfaceInfrastructureService | None = None
     surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
     surface_cell_claim_registry: SurfaceCellClaimRegistry = field(default_factory=SurfaceCellClaimRegistry)
-    external_decommission_blockers: Callable[[EntityId], tuple[ProjectBlocker, ...]] | None = None
-    decommission_finalizer: Callable[[EntityId], None] | None = None
+    facility_lifecycle_registry: FacilityLifecycleRegistry = field(default_factory=FacilityLifecycleRegistry)
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     construction_resource_providers: dict[DefinitionId, ConstructionResourceProviderSpec] = field(default_factory=dict)
     spatial_recipes: dict[DefinitionId, SpatialDevelopmentRecipe] = field(default_factory=dict)

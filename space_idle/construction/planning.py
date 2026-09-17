@@ -94,22 +94,10 @@ class ConstructionPlanningMixin:
             ):
                 blockers.append(ProjectBlocker("active_upgrade_commitment", str(project.id)))
 
-        if self.external_decommission_blockers is not None:
-            blockers.extend(self.external_decommission_blockers(facility_id))
-
-        if self.storage is not None:
-            provider = self.storage.providers.get(facility.definition_id)
-            if provider is not None:
-                node_id = facility.operational_node_id
-                for storage_class, target_capacity in provider.capacity_t_by_class.items():
-                    physical = self.inventory.physical_storage_capacity_t.get((node_id, storage_class), 0.0)
-                    remaining = max(0.0, physical - target_capacity)
-                    occupied = self.inventory.stored_in_class(node_id, storage_class)
-                    if occupied > remaining + 1e-9:
-                        blockers.append(ProjectBlocker(
-                            "storage_stock",
-                            f"{storage_class}: occupied={occupied:g}, remaining_physical={remaining:g}",
-                        ))
+        blockers.extend(
+            ProjectBlocker(blocker.code, blocker.detail)
+            for blocker in self.facility_lifecycle_registry.decommission_blockers(facility_id)
+        )
         return tuple(blockers)
 
     def _create_project(

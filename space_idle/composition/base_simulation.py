@@ -4,6 +4,7 @@ from .domain_extensions import BASE_DOMAIN_EXTENSIONS
 from ..contracts import ContractService
 from ..market import FundsState, MarketService
 from ..facilities import FacilityBook
+from ..facility_lifecycle import FacilityLifecycleRegistry
 from ..founding import LocationFoundingService
 from ..industry import IndustryService
 from ..inventory import InventoryBook
@@ -99,6 +100,11 @@ def build_base_simulation() -> Simulation:
 
     storage = StorageService(build_storage_provider_specs(), inventory, facilities)
 
+    facility_lifecycle_registry = FacilityLifecycleRegistry()
+    facility_lifecycle_registry.register_blocker_provider("transport", transport)
+    facility_lifecycle_registry.register_blocker_provider("storage", storage)
+    facility_lifecycle_registry.register_reference_releaser("industry", industry)
+
     surface_cell_claim_registry = SurfaceCellClaimRegistry()
 
     projects = ProjectService(
@@ -110,7 +116,6 @@ def build_base_simulation() -> Simulation:
         facilities=facilities,
         power=power,
         sourcing_wait_days=sourcing_wait_days(),
-        storage=storage,
         surface_infrastructure=surface_infrastructure,
         surface_knowledge_level_provider=survey.cell_knowledge_level,
         technology_state=technology,
@@ -118,6 +123,7 @@ def build_base_simulation() -> Simulation:
         spatial_recipes=build_spatial_development_recipes(),
         surface_cell_development_recipe_id=ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
         surface_cell_claim_registry=surface_cell_claim_registry,
+        facility_lifecycle_registry=facility_lifecycle_registry,
     )
 
     founding = LocationFoundingService(
@@ -125,9 +131,6 @@ def build_base_simulation() -> Simulation:
         surface_knowledge_level_provider=survey.cell_knowledge_level,
         surface_cell_claim_registry=surface_cell_claim_registry,
     )
-    projects.external_decommission_blockers = transport.facility_decommission_blockers
-    projects.decommission_finalizer = industry.release_facility_reference
-
     maintenance = FacilityMaintenanceService(facilities, inventory)
 
     research = ResearchService(

@@ -64,8 +64,7 @@ class ConstructionExecutionMixin:
                 result = self.inventory.admit(facility.operational_node_id, resource_id, amount)
                 if not result.fully_admitted:
                     raise RuntimeError("allocated decommission salvage admission changed before settlement")
-            if self.decommission_finalizer is not None:
-                self.decommission_finalizer(target.facility_id)
+            self.facility_lifecycle_registry.release_references(target.facility_id)
             self.facilities.finalize_decommission(target.facility_id)
         else:
             self.facilities.environment.graph.develop_surface_cell(

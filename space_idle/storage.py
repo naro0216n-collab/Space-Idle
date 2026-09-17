@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .facilities import FacilityBook, FacilityLifecycle
+from .facility_lifecycle import FacilityLifecycleBlocker
 from .inventory import InventoryBook, StorageClass
 from .power import PowerSnapshot
-from .shared import DefinitionId, SpatialNodeId
+from .shared import DefinitionId, EntityId, SpatialNodeId
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,28 @@ class StorageService:
     providers: dict[DefinitionId, StorageProviderSpec]
     inventory: InventoryBook
     facilities: FacilityBook
+
+    def facility_decommission_blockers(
+        self, facility_id: EntityId
+    ) -> tuple[FacilityLifecycleBlocker, ...]:
+        facility = self.facilities.facilities.get(facility_id)
+        if facility is None:
+            return ()
+        provider = self.providers.get(facility.definition_id)
+        if provider is None:
+            return ()
+        blockers: list[FacilityLifecycleBlocker] = []
+        node_id = facility.operational_node_id
+        for storage_class, target_capacity in provider.capacity_t_by_class.items():
+            physical = self.inventory.physical_storage_capacity_t.get((node_id, storage_class), 0.0)
+            remaining = max(0.0, physical - target_capacity)
+            occupied = self.inventory.stored_in_class(node_id, storage_class)
+            if occupied > remaining + 1e-9:
+                blockers.append(FacilityLifecycleBlocker(
+                    "storage_stock",
+                    f"{storage_class}: occupied={occupied:g}, remaining_physical={remaining:g}",
+                ))
+        return tuple(blockers)
 
     def refresh(self, day: int, power_by_operational_node: dict[SpatialNodeId, PowerSnapshot]) -> None:
         """Rebuild current physical and serviced capacities from static site state
