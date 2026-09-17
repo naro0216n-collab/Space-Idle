@@ -4,6 +4,7 @@ from ..execution_requirements import ExecutionAllocationPlan
 from ..power import PowerSnapshot
 from ..service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityScope
 from ..shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from ..spatial_claims import SurfaceCellClaim
 from ..site import SiteRequirementFailure, SiteRequirements, evaluate_site_requirements
 from .models import (
     CONSTRUCTION_SERVICE_TYPE,
@@ -98,6 +99,19 @@ class ConstructionRulesMixin:
             return target.cell_id
         return None
 
+    def surface_cell_claims(self) -> tuple[SurfaceCellClaim, ...]:
+        return tuple(
+            SurfaceCellClaim(
+                target_cell,
+                "construction_project",
+                EntityId(project.id),
+                "surface_cell_development",
+            )
+            for project in sorted(self.projects.values(), key=lambda row: str(row.id))
+            if project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
+            if (target_cell := self._spatial_target_cell(project)) is not None
+        )
+
     def active_spatial_project_for_cell(self, cell_id: SurfaceCellId):
         from .models import ProjectStatus
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
@@ -136,13 +150,8 @@ class ConstructionRulesMixin:
             return (SiteRequirementFailure("construction_recipe", "surface cell development recipe is not configured"),)
         graph = self.facilities.environment.graph
         failures = [SiteRequirementFailure(code, detail) for code, detail in graph.surface_cell_development_failures(location_id, cell_id)]
-        active = self.active_spatial_project_for_cell(cell_id)
-        if active is not None:
-            failures.append(SiteRequirementFailure("active_spatial_project", str(active.id)))
-        if self.external_surface_cell_claim_provider is not None:
-            external = self.external_surface_cell_claim_provider(cell_id)
-            if external is not None:
-                failures.append(SiteRequirementFailure("active_founding_project", str(external)))
+        for claim in self.surface_cell_claim_registry.claims_for(cell_id):
+            failures.append(SiteRequirementFailure("cell_claimed", str(claim.claimant_id)))
         if graph.has_operational_node(location_id):
             failures.extend(self._spatial_recipe_site_failures(recipe_id, location_id, cell_id, day, power))
         return tuple(dict.fromkeys(failures))
@@ -161,10 +170,11 @@ class ConstructionRulesMixin:
             SiteRequirementFailure(code, detail)
             for code, detail in graph.surface_cell_development_failures(project.operational_node_id, target.cell_id)
         ]
-        if self.external_surface_cell_claim_provider is not None:
-            external = self.external_surface_cell_claim_provider(target.cell_id)
-            if external is not None:
-                failures.append(SiteRequirementFailure("active_founding_project", str(external)))
+        for claim in self.surface_cell_claim_registry.claims_for(
+            target.cell_id,
+            exclude=("construction_project", EntityId(project.id)),
+        ):
+            failures.append(SiteRequirementFailure("cell_claimed", str(claim.claimant_id)))
         failures.extend(self._spatial_recipe_site_failures(
             target.recipe_id, project.operational_node_id, target.cell_id, day, power
         ))

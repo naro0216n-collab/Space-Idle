@@ -7,6 +7,7 @@ from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .power import PowerService
 from .shared import DefinitionId, EntityId, ProjectId, SurfaceCellId
+from .spatial_claims import SurfaceCellClaimRegistry
 from .technology import TechnologyState
 from .surface_infrastructure import SurfaceInfrastructureService
 from .storage import StorageService
@@ -48,7 +49,7 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     storage: StorageService | None = None
     surface_infrastructure: SurfaceInfrastructureService | None = None
     surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
-    external_surface_cell_claim_provider: Callable[[SurfaceCellId], EntityId | None] | None = None
+    surface_cell_claim_registry: SurfaceCellClaimRegistry = field(default_factory=SurfaceCellClaimRegistry)
     external_decommission_blockers: Callable[[EntityId], tuple[ProjectBlocker, ...]] | None = None
     decommission_finalizer: Callable[[EntityId], None] | None = None
     technology_state: TechnologyState = field(default_factory=TechnologyState)
@@ -57,6 +58,9 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     surface_cell_development_recipe_id: DefinitionId | None = None
     projects: dict[ProjectId, ConstructionProject] = field(default_factory=dict)
     _counter: int = 0
+
+    def __post_init__(self) -> None:
+        self.surface_cell_claim_registry.register(self)
 
     @property
     def unlocked_technologies(self) -> set[DefinitionId]:

@@ -20,7 +20,8 @@ from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
 from space_idle.founding import FoundingResourceRequirement
-from space_idle.shared import DefinitionId
+from space_idle.shared import DefinitionId, EntityId
+from space_idle.spatial_claims import SurfaceCellClaim
 
 
 def _survey_cell_to_l2(sim, cell_id):
@@ -197,6 +198,48 @@ def test_founding_and_surface_development_claims_are_mutually_exclusive():
     assert any(row.code == "cell_claimed" for row in failures)
 
 
+
+
+class _ExternalSurfaceCellClaimProvider:
+    def __init__(self, cell_id):
+        self.cell_id = cell_id
+
+    def surface_cell_claims(self):
+        return (
+            SurfaceCellClaim(
+                self.cell_id,
+                "external_operation",
+                EntityId("external.operation.1"),
+                "test_exclusive_operation",
+            ),
+        )
+
+
+def test_surface_cell_claim_registry_blocks_consumers_without_pairwise_domain_wiring():
+    app = build_game_application()
+    sim = app._simulation
+    cell = ids.EARTH_CELL_COASTAL
+    registry = sim.projects.surface_cell_claim_registry
+    assert registry is sim.founding.surface_cell_claim_registry
+    registry.register(_ExternalSurfaceCellClaimProvider(cell))
+
+    development_failures = sim.projects.surface_cell_development_failures(
+        ids.EARTH, cell, sim.day
+    )
+    assert any(
+        row.code == "cell_claimed" and row.detail == "external.operation.1"
+        for row in development_failures
+    )
+
+    package = sim.founding.packages[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    founding_failures = sim.founding.planning_failures(
+        ids.LUNAR_ORBIT, ids.EARTH_BODY, cell,
+        package.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
+    )
+    assert any(
+        row.code == "cell_claimed" and row.detail == "external.operation.1"
+        for row in founding_failures
+    )
 
 def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_restores_it():
     app = build_game_application()

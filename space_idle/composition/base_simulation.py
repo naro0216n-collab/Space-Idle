@@ -13,10 +13,10 @@ from ..maintenance import FacilityMaintenanceService
 from ..power import PowerService
 from ..projects import ProjectService
 from ..research import ResearchService
-from ..shared import EntityId
 from ..simulation import Simulation
 from ..storage import StorageService
 from ..surface_infrastructure import SurfaceInfrastructureService
+from ..spatial_claims import SurfaceCellClaimRegistry
 from ..survey import ExtractionService, SurveyService
 from ..technology import TechnologyState
 from ..scientific_exploration import ScientificExplorationService
@@ -99,6 +99,8 @@ def build_base_simulation() -> Simulation:
 
     storage = StorageService(build_storage_provider_specs(), inventory, facilities)
 
+    surface_cell_claim_registry = SurfaceCellClaimRegistry()
+
     projects = ProjectService(
         recipes=build_construction_recipes(),
         upgrade_recipes=build_facility_upgrade_recipes(),
@@ -115,20 +117,16 @@ def build_base_simulation() -> Simulation:
         construction_resource_providers=build_construction_resource_providers(),
         spatial_recipes=build_spatial_development_recipes(),
         surface_cell_development_recipe_id=ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
+        surface_cell_claim_registry=surface_cell_claim_registry,
     )
 
     founding = LocationFoundingService(
         build_founding_packages(), facilities, inventory, power, transport, storage,
         surface_knowledge_level_provider=survey.cell_knowledge_level,
-    )
-    projects.external_surface_cell_claim_provider = lambda cell_id: (
-        None if (project := founding.active_project_for_cell(cell_id)) is None else EntityId(project.id)
+        surface_cell_claim_registry=surface_cell_claim_registry,
     )
     projects.external_decommission_blockers = transport.facility_decommission_blockers
     projects.decommission_finalizer = industry.release_facility_reference
-    founding.external_cell_claim_provider = lambda cell_id: (
-        None if (project := projects.active_spatial_project_for_cell(cell_id)) is None else EntityId(project.id)
-    )
 
     maintenance = FacilityMaintenanceService(facilities, inventory)
 

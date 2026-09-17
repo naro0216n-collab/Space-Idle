@@ -18,6 +18,7 @@ from .execution_requirements import (
     ServiceCapacityRequirement,
 )
 from .supply import SupplyRequirement
+from .spatial_claims import SurfaceCellClaim, SurfaceCellClaimRegistry
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .site import SiteRequirements, evaluate_physical_site_requirements, evaluate_site_requirements
 from .storage import StorageService
@@ -158,9 +159,24 @@ class LocationFoundingService:
     transport: TransportService
     storage: StorageService
     surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
-    external_cell_claim_provider: Callable[[SurfaceCellId], EntityId | None] | None = None
+    surface_cell_claim_registry: SurfaceCellClaimRegistry = field(default_factory=SurfaceCellClaimRegistry)
     projects: dict[ProjectId, LocationFoundingProject] = field(default_factory=dict)
     _counter: int = 0
+
+    def __post_init__(self) -> None:
+        self.surface_cell_claim_registry.register(self)
+
+    def surface_cell_claims(self) -> tuple[SurfaceCellClaim, ...]:
+        return tuple(
+            SurfaceCellClaim(
+                project.target_core_cell_id,
+                "founding_project",
+                EntityId(project.id),
+                "location_founding",
+            )
+            for project in sorted(self.projects.values(), key=lambda row: str(row.id))
+            if project.status in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}
+        )
 
     def _generated_location_id(self, body_id: CelestialBodyId, cell_id: SurfaceCellId) -> SpatialNodeId:
         digest = sha256(f"{body_id}\0{cell_id}".encode("utf-8")).hexdigest()[:24]
@@ -211,13 +227,8 @@ class LocationFoundingService:
         failures: list[FoundingBlocker] = []
         for code, detail in graph.location_foundation_failures(body_id, cell_id):
             failures.append(FoundingBlocker(code, detail))
-        active = self.active_project_for_cell(cell_id)
-        if active is not None:
-            failures.append(FoundingBlocker("founding_active", str(active.id)))
-        if self.external_cell_claim_provider is not None:
-            owner = self.external_cell_claim_provider(cell_id)
-            if owner is not None:
-                failures.append(FoundingBlocker("cell_claimed", str(owner)))
+        for claim in self.surface_cell_claim_registry.claims_for(cell_id):
+            failures.append(FoundingBlocker("cell_claimed", str(claim.claimant_id)))
         package = self.packages.get(package_id)
         if package is None:
             failures.append(FoundingBlocker("founding_package", str(package_id)))
@@ -551,10 +562,11 @@ class LocationFoundingService:
         owner = graph.owner_of_cell(project.target_core_cell_id)
         if owner is not None:
             failures.append(FoundingBlocker("cell_owned", str(owner)))
-        if self.external_cell_claim_provider is not None:
-            claimant = self.external_cell_claim_provider(project.target_core_cell_id)
-            if claimant is not None:
-                failures.append(FoundingBlocker("cell_claimed", str(claimant)))
+        for claim in self.surface_cell_claim_registry.claims_for(
+            project.target_core_cell_id,
+            exclude=("founding_project", EntityId(project.id)),
+        ):
+            failures.append(FoundingBlocker("cell_claimed", str(claim.claimant_id)))
         if project.status is FoundingStatus.PREPARING:
             package = self.packages[project.founding_package_id]
             snapshot = power
