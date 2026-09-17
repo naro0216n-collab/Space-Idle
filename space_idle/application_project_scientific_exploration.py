@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .application_catalog_support import site_requirements_definition
+from .execution_requirements import pool_admission_constraint
 from .application_views import (
     ScientificExplorationFleetOptionRow,
     ScientificExplorationRow,
@@ -14,7 +15,16 @@ class ScientificExplorationProjectorMixin:
         service = sim.scientific_exploration
         if service is None:
             return ScientificExplorationsView(())
-        power_by_location = self._tick_decision_projection().allocations.power_by_location
+        projection = self._tick_decision_projection()
+        power_by_location = projection.allocations.power_by_location
+        execution = projection.allocations.execution
+        rp_admission_key = pool_admission_constraint(
+            sim.research.RESEARCH_POINT_POOL, scope_id="organization"
+        )
+        rp_admission_headroom = execution.capacity_by_constraint.get(
+            rp_admission_key,
+            max(0.0, sim.research.storage_capacity(power_by_location, sim.day) - sim.research.stored_points),
+        )
         rows: list[ScientificExplorationRow] = []
         for definition in sorted(service.definitions.values(), key=lambda row: str(row.id)):
             state = service.campaigns.get(definition.id)
@@ -24,6 +34,7 @@ class ScientificExplorationProjectorMixin:
                 progress_days = 0.0
                 awarded = 0.0
                 assigned_vehicle_definition_id = None
+                fleet_commitment_id = None
                 committed_units = 0
                 blockers: tuple[str, ...] = ()
                 priority = 3
@@ -40,6 +51,9 @@ class ScientificExplorationProjectorMixin:
                     None if state.fleet_commitment_id is None
                     else sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
                 )
+                fleet_commitment_id = (
+                    None if state.fleet_commitment_id is None else str(state.fleet_commitment_id)
+                )
                 committed_units = 0 if commitment is None else commitment.quantity
                 priority = state.priority
                 can_set_priority = state.phase.value != "complete"
@@ -48,6 +62,24 @@ class ScientificExplorationProjectorMixin:
                     day=sim.day,
                     power_by_location=power_by_location,
                 )
+
+            rp_requested_today = 0.0
+            rp_admitted_today = 0.0
+            rp_admission_blocker: str | None = None
+            if state is not None and state.phase.value == "active" and not state.paused:
+                try:
+                    allocation = execution.allocation(service.execution_bundle_id(definition.id))
+                except KeyError:
+                    allocation = None
+                if allocation is not None:
+                    rp_requested_today = allocation.requested_execution * definition.points_per_day
+                    rp_admitted_today = allocation.allocated_execution * definition.points_per_day
+                    if (
+                        allocation.unmet_execution > 1e-12
+                        and rp_admission_key in allocation.limiting_constraints
+                    ):
+                        rp_admission_blocker = "research_point_pool_headroom"
+                        blockers = blockers + (rp_admission_blocker,)
 
             movement_operations: tuple[tuple[str, float], ...] = ()
             outbound_latency_days: int | None = None
@@ -183,6 +215,10 @@ class ScientificExplorationProjectorMixin:
                     research_points_total=definition.research_points_total,
                     research_points_per_day=definition.points_per_day,
                     research_points_awarded=awarded,
+                    rp_admission_headroom=rp_admission_headroom,
+                    rp_requested_today=rp_requested_today,
+                    rp_admitted_today=rp_admitted_today,
+                    rp_admission_blocker=rp_admission_blocker,
                     consumable_resources=tuple(
                         (str(resource_id), amount)
                         for resource_id, amount in definition.consumable_resources
@@ -191,7 +227,10 @@ class ScientificExplorationProjectorMixin:
                     minimum_payload_t=definition.minimum_payload_t,
                     required_vehicle_capabilities=definition.required_vehicle_capabilities,
                     assigned_vehicle_definition_id=assigned_vehicle_definition_id,
+                    fleet_commitment_id=fleet_commitment_id,
                     committed_units=committed_units,
+                    completion_disposition=service.completion_disposition(definition.id),
+                    transition_options=service.transition_options(definition.id),
                     blockers=blockers,
                     can_start=service.can_start(definition.id),
                     can_pause=service.can_pause(definition.id),

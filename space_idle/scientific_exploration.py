@@ -11,7 +11,8 @@ from .service_capacity import ServiceCapacityRegistry
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .research import ResearchService
 from .execution_requirements import (
-    ExecutionAllocationPlan, ExecutionRequirementBundle, ReservationAcquisitionRequirement,
+    ExecutionAllocationPlan, ExecutionRequirementBundle, PoolAdmissionRequirement,
+    ReservationAcquisitionRequirement,
 )
 from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
@@ -248,6 +249,36 @@ class ScientificExplorationService:
 
     def can_start(self, definition_id: DefinitionId) -> bool:
         return definition_id in self.definitions and definition_id not in self.campaigns
+
+    def completion_disposition(self, definition_id: DefinitionId) -> str:
+        definition = self.definitions[definition_id]
+        return (
+            "return_to_origin_then_release"
+            if definition.return_to_origin
+            else "release_at_destination"
+        )
+
+    def transition_options(self, definition_id: DefinitionId) -> tuple[str, ...]:
+        state = self.campaigns.get(definition_id)
+        if state is None:
+            return ("start",)
+        if state.phase is ScientificExplorationPhase.COMPLETE:
+            return ()
+        if state.phase is ScientificExplorationPhase.AWAITING_FLEET:
+            return ("assign_fleet",)
+        if state.phase in {
+            ScientificExplorationPhase.OUTBOUND,
+            ScientificExplorationPhase.RETURNING,
+        }:
+            return ("continue",)
+        options: list[str] = []
+        if state.paused:
+            options.append("resume")
+        else:
+            options.extend(("continue", "pause"))
+        if self.can_unassign_fleet(definition_id):
+            options.append("unassign_fleet")
+        return tuple(options)
 
     def can_pause(self, definition_id: DefinitionId) -> bool:
         state = self.campaigns.get(definition_id)
@@ -576,7 +607,6 @@ class ScientificExplorationService:
     def execution_requirement_bundles(
         self, day: int = 0
     ) -> tuple[ExecutionRequirementBundle, ...]:
-        del day
         rows: list[ExecutionRequirementBundle] = []
         for definition_id, state in sorted(self.campaigns.items(), key=lambda row: str(row[0])):
             if (
@@ -586,6 +616,8 @@ class ScientificExplorationService:
             ):
                 continue
             definition = self.definitions[definition_id]
+            if self.blockers(definition_id, day=day):
+                continue
             remaining = max(0.0, definition.duration_days - state.progress_days)
             requested = min(1.0, remaining)
             if requested <= 1e-12:
@@ -598,6 +630,12 @@ class ScientificExplorationService:
                 operational_node_id=definition.destination_id,
                 requested_execution=requested,
                 priority=state.priority,
+                requirements=(
+                    PoolAdmissionRequirement(
+                        self.research.RESEARCH_POINT_POOL,
+                        definition.points_per_day,
+                    ),
+                ),
             ))
         return tuple(rows)
 
@@ -923,18 +961,15 @@ class ScientificExplorationService:
             remaining_points = max(
                 0.0, definition.research_points_total - state.research_points_awarded
             )
-            intended_day_fraction = min(allocated_execution, remaining_days)
-            requested_points = min(
-                remaining_points, definition.points_per_day * intended_day_fraction
+            admitted_day_fraction = min(allocated_execution, remaining_days)
+            admitted_points = min(
+                remaining_points, definition.points_per_day * admitted_day_fraction
             )
-            self.research.store_generated_points(
-                requested_points, power_by_location=power_by_location, day=day
-            )
-            state.progress_days += intended_day_fraction
-            state.research_points_awarded += requested_points
+            self.research.settle_admitted_points(admitted_points)
+            state.progress_days += admitted_day_fraction
+            state.research_points_awarded += admitted_points
             if state.progress_days + 1e-9 >= definition.duration_days:
                 state.progress_days = definition.duration_days
-                state.research_points_awarded = definition.research_points_total
                 if definition.return_to_origin:
                     state.phase = ScientificExplorationPhase.RETURN_PREPARING
                 else:

@@ -8,11 +8,15 @@ import pytest
 from space_idle import (
     AdvanceTime,
     AssignExplorationFleet,
+    CreateResearchProviderAssignment,
     CreateTransportAllocation,
     GetFleet,
+    GetResearch,
     GetScientificExplorations,
     GetTransportAllocations,
     PauseFacility,
+    PauseScientificExploration,
+    ResumeScientificExploration,
     StartScientificExploration,
     UnassignExplorationFleet,
     build_game_application,
@@ -20,6 +24,11 @@ from space_idle import (
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
+from space_idle.facilities import FacilityDef
+from space_idle.research import (
+    ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
+)
+from space_idle.shared import DefinitionId
 from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
 from space_idle.validation import validate_simulation_configuration
 from space_idle.validation_support import ConfigurationError
@@ -335,11 +344,30 @@ def test_scientific_exploration_definition_rejects_duplicate_resource_and_capabi
     ):
         validate_simulation_configuration(sim)
 
-def test_full_rp_storage_constrains_reward_retention_but_does_not_freeze_campaign():
+def test_rp_admission_blocks_only_active_science_and_resumes_after_headroom_recovers():
     app = build_game_application()
     sim = app._simulation
     exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
     definition = sim.scientific_exploration.definitions[exploration_id]
+    sim.scientific_exploration.definitions[exploration_id] = replace(
+        definition, return_to_origin=True
+    )
+    definition = sim.scientific_exploration.definitions[exploration_id]
+
+    storage_definition_id = DefinitionId("test.facility.exploration_rp_storage")
+    storage_provider_id = DefinitionId("test.research_provider.exploration_rp_storage")
+    sim.facilities.definitions[storage_definition_id] = FacilityDef(
+        storage_definition_id, "Exploration RP storage fixture"
+    )
+    sim.research.providers = {
+        storage_provider_id: ResearchProviderSpec(
+            storage_provider_id, ResearchProviderSourceKind.FACILITY,
+            storage_definition_id, tier=1,
+            levels=(ResearchProviderLevelSpec(1, 0.0, 100.0, 0.0),),
+        )
+    }
+    sim.facilities.install(storage_definition_id, ids.EARTH)
+
     for resource_id, amount_t in definition.consumable_resources:
         sim.inventory.add(definition.origin_id, resource_id, amount_t)
     _seed_exploration_movement_resources(app)
@@ -350,24 +378,136 @@ def test_full_rp_storage_constrains_reward_retention_but_does_not_freeze_campaig
     state = sim.scientific_exploration.campaigns[exploration_id]
 
     capacity = sim.research.storage_capacity(day=sim.day)
-    sim.research.store_generated_points(capacity, day=sim.day)
-    assert "rp_storage_full" not in sim.scientific_exploration.blockers(
-        exploration_id, day=sim.day
-    )
-    before_points = sim.research.stored_points
-    # Progress through the canonical reservation/start boundary, then derive the
-    # remaining transit from the frozen execution rather than a Content duration.
+    sim.research.stored_points = capacity
     app.execute(AdvanceTime(2))
-    execution = sim.transport.movement_executions[state.movement_execution_id]
-    app.execute(AdvanceTime(execution.completion_day - sim.day))
+    assert state.phase.value == "outbound"
+    outbound = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(outbound.completion_day - sim.day))
     assert state.phase.value == "active"
-    app.execute(AdvanceTime(1))
 
-    assert state.inputs_consumed is True
-    assert state.progress_days > 0.0
-    assert state.research_points_awarded > 0.0
-    assert sim.research.stored_points == pytest.approx(before_points)
-    assert _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT).exploration_units == _row(app).required_units
+    full = _row(app)
+    assert full.rp_admission_headroom == pytest.approx(0.0)
+    assert full.rp_requested_today == pytest.approx(definition.points_per_day)
+    assert full.rp_admitted_today == pytest.approx(0.0)
+    assert full.rp_admission_blocker == "research_point_pool_headroom"
+    before_progress = state.progress_days
+    before_awarded = state.research_points_awarded
+    commitment_id = state.fleet_commitment_id
+    assert commitment_id is not None
+
+    app.execute(PauseScientificExploration(str(exploration_id)))
+    paused = _row(app)
+    assert paused.can_resume is True
+    assert paused.transition_options == ("resume",)
+    assert paused.rp_requested_today == pytest.approx(0.0)
+    assert paused.rp_admitted_today == pytest.approx(0.0)
+    assert paused.fleet_commitment_id == str(commitment_id)
+    commitment = sim.transport.fleet_commitment_snapshot(commitment_id)
+    assert commitment is not None and commitment.quantity == definition.required_units
+    app.execute(AdvanceTime(1))
+    assert state.progress_days == pytest.approx(before_progress)
+    assert state.research_points_awarded == pytest.approx(before_awarded)
+    assert sim.transport.fleet_commitment_snapshot(commitment_id) is not None
+
+    app.execute(ResumeScientificExploration(str(exploration_id)))
+    assert _row(app).rp_admission_blocker == "research_point_pool_headroom"
+    app.execute(AdvanceTime(1))
+    assert state.progress_days == pytest.approx(before_progress)
+    assert state.research_points_awarded == pytest.approx(before_awarded)
+    assert sim.research.stored_points == pytest.approx(capacity)
+
+    sim.research.stored_points = 0.0
+    recovered = _row(app)
+    assert recovered.rp_admitted_today == pytest.approx(definition.points_per_day)
+    assert recovered.rp_admission_blocker is None
+    app.execute(AdvanceTime(1))
+    assert state.progress_days == pytest.approx(before_progress + 1.0)
+    assert state.research_points_awarded == pytest.approx(
+        before_awarded + definition.points_per_day
+    )
+    assert sim.research.stored_points == pytest.approx(definition.points_per_day)
+
+    # Finish ACTIVE science with ample headroom, then prove return Movement is
+    # independent from RP admission even when the pool is full again.
+    while state.phase.value == "active":
+        sim.research.stored_points = 0.0
+        app.execute(AdvanceTime(1))
+    assert state.phase.value == "return_preparing"
+    assert state.research_points_awarded == pytest.approx(definition.research_points_total)
+    sim.research.stored_points = sim.research.storage_capacity(day=sim.day)
+    _seed_exploration_movement_resources(app, returning=True)
+    app.execute(AdvanceTime(2))
+    assert state.phase.value == "returning"
+    returning = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(returning.completion_day - sim.day))
+    assert state.phase.value == "complete"
+
+
+def test_scientific_exploration_and_research_providers_share_rp_pool_admission():
+    app = build_game_application()
+    sim = app._simulation
+    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
+    definition = sim.scientific_exploration.definitions[exploration_id]
+
+    facility_definition_id = DefinitionId("test.facility.exploration_shared_rp")
+    facility_provider_id = DefinitionId("test.research_provider.facility.exploration_shared_rp")
+    fleet_provider_id = DefinitionId("test.research_provider.fleet.exploration_shared_rp")
+    sim.facilities.definitions[facility_definition_id] = FacilityDef(
+        facility_definition_id, "Exploration shared RP fixture"
+    )
+    sim.research.providers = {
+        facility_provider_id: ResearchProviderSpec(
+            facility_provider_id,
+            ResearchProviderSourceKind.FACILITY,
+            facility_definition_id,
+            tier=1,
+            levels=(ResearchProviderLevelSpec(1, 4.0, 100.0, 0.0),),
+        ),
+        fleet_provider_id: ResearchProviderSpec(
+            fleet_provider_id,
+            ResearchProviderSourceKind.FLEET,
+            ids.REUSABLE_LAUNCH_VEHICLE,
+            tier=1,
+            levels=(ResearchProviderLevelSpec(1, 4.0, 0.0, 0.0),),
+        ),
+    }
+    sim.facilities.install(facility_definition_id, ids.EARTH)
+    app.execute(CreateResearchProviderAssignment(
+        str(fleet_provider_id), str(ids.EARTH), 1
+    ))
+
+    for resource_id, amount_t in definition.consumable_resources:
+        sim.inventory.add(definition.origin_id, resource_id, amount_t)
+    _seed_exploration_movement_resources(app)
+    app.execute(StartScientificExploration(str(exploration_id)))
+    app.execute(AssignExplorationFleet(
+        str(exploration_id), str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+    ))
+    app.execute(AdvanceTime(2))
+    state = sim.scientific_exploration.campaigns[exploration_id]
+    outbound = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(outbound.completion_day - sim.day))
+    assert state.phase.value == "active"
+
+    capacity = sim.research.storage_capacity(day=sim.day)
+    headroom = 4.0
+    sim.research.stored_points = capacity - headroom
+    research = app.query(GetResearch())
+    exploration = _row(app)
+    provider_admitted = [row.admitted_generation_points_per_day for row in research.providers]
+
+    assert len(provider_admitted) == 2
+    assert provider_admitted[0] == pytest.approx(provider_admitted[1])
+    assert exploration.rp_admitted_today > 0.0
+    assert exploration.rp_admitted_today < exploration.rp_requested_today
+    assert sum(provider_admitted) + exploration.rp_admitted_today == pytest.approx(headroom)
+
+    before_awarded = state.research_points_awarded
+    app.execute(AdvanceTime(1))
+    assert sim.research.stored_points == pytest.approx(capacity)
+    assert state.research_points_awarded - before_awarded == pytest.approx(
+        exploration.rp_admitted_today
+    )
 
 
 def test_started_exploration_movement_keeps_frozen_latency_after_vehicle_definition_change():

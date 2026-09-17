@@ -471,35 +471,21 @@ class ResearchCapacityMixin:
             ))
         return tuple(rows)
 
+    def settle_admitted_points(self, points: float) -> float:
+        """Settle RP already admitted by the shared Pool Admission allocation."""
+        if points < -1e-9:
+            raise ValueError("admitted research points must be non-negative")
+        admitted = max(0.0, points)
+        self.stored_points += admitted
+        return admitted
+
     def settle_generated_points(self, execution: ExecutionAllocationPlan) -> float:
         generated = 0.0
         for bundle in execution.bundles:
             if bundle.owner_kind != "research_provider" or bundle.purpose != "research_point_generation":
                 continue
             generated += execution.allocated(bundle.id)
-        self.stored_points += generated
-        return generated
-
-    def store_generated_points(
-        self,
-        points: float,
-        *,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
-        day: int = 0,
-    ) -> float:
-        """Store external RP producers not yet migrated to common admission.
-
-        Scientific Exploration remains on this boundary until its dedicated
-        canonical migration. Normal Research Providers settle through the
-        common PoolAdmission allocation above.
-        """
-        if points < -1e-9:
-            raise ValueError("generated research points must be non-negative")
-        capacity = self.storage_capacity(power_by_location, day)
-        free = max(0.0, capacity - self.stored_points)
-        accepted = min(max(0.0, points), free)
-        self.stored_points += accepted
-        return accepted
+        return self.settle_admitted_points(generated)
 
     def is_over_capacity(
         self,

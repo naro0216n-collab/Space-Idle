@@ -167,12 +167,19 @@ class ScientificExplorationRow:
     research_points_total: float
     research_points_per_day: float
     research_points_awarded: float
+    rp_admission_headroom: float
+    rp_requested_today: float
+    rp_admitted_today: float
+    rp_admission_blocker: str | None
     consumable_resources: tuple[tuple[str, float], ...]
     required_units: int
     minimum_payload_t: float
     required_vehicle_capabilities: tuple[str, ...]
     assigned_vehicle_definition_id: str | None
+    fleet_commitment_id: str | None
     committed_units: int
+    completion_disposition: str
+    transition_options: tuple[str, ...]
     blockers: tuple[str, ...]
     can_start: bool
     can_pause: bool
