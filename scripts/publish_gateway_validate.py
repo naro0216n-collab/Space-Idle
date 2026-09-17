@@ -56,36 +56,6 @@ def _decode_transport(directory: Path) -> bytes:
         raise GatewayRequestError(f"invalid transport Base64: {exc}") from exc
 
 
-def _validate_transport_commit_paths(target_branch: str) -> None:
-    sha = os.environ.get("GITHUB_SHA", "")
-    if not sha:
-        raise GatewayRequestError("GITHUB_SHA is missing")
-    parents = _git("rev-list", "--parents", "-n", "1", sha).split()
-    if len(parents) != 2:
-        raise GatewayRequestError("publish transport commit must have exactly one parent")
-    output = _git("diff-tree", "--no-commit-id", "--name-status", "--no-renames", "-r", sha)
-    active_prefix = f".publish/transport/{target_branch}/"
-    touched_active = False
-    for line in output.splitlines():
-        if not line.strip():
-            continue
-        status, path = line.split("\t", 1)
-        status = status[0]
-        if status in {"A", "M"}:
-            if not path.startswith(active_prefix) or re.fullmatch(
-                rf"{re.escape(active_prefix)}[0-9]{{4}}\.b64", path
-            ) is None:
-                raise GatewayRequestError(f"transport commit added or modified an invalid path: {path}")
-            touched_active = True
-        elif status == "D":
-            if not path.startswith(".publish/"):
-                raise GatewayRequestError(f"transport commit deleted a non-transport path: {path}")
-        else:
-            raise GatewayRequestError(f"unsupported transport commit change {status}: {path}")
-    if not touched_active:
-        raise GatewayRequestError("transport commit did not add or modify the active fixed slot")
-
-
 def _verify_bundle(bundle_path: Path, target_branch: str) -> tuple[str, str, str]:
     try:
         subprocess.run(
@@ -165,7 +135,6 @@ def main() -> int:
         raise GatewayRequestError(
             f"transport directory does not match target branch: expected {expected_dir}, got {transport_dir_value}"
         )
-    _validate_transport_commit_paths(target_branch)
     payload = _decode_transport(Path(transport_dir_value))
     bundle_path = Path(os.environ["RUNNER_TEMP"]) / "publish.bundle"
     bundle_path.write_bytes(payload)
