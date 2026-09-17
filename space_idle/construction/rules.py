@@ -299,6 +299,20 @@ class ConstructionRulesMixin:
             raise KeyError(service_type)
         return ServiceCapacityScope.OPERATIONAL_NODE
 
+    def service_capacity_provider_definition_ids(
+        self, service_type: str
+    ) -> frozenset[DefinitionId]:
+        if service_type != CONSTRUCTION_SERVICE_TYPE:
+            raise KeyError(service_type)
+        return frozenset(self.construction_providers)
+
+    def service_capacity_upstream_services(
+        self, service_type: str
+    ) -> frozenset[str]:
+        if service_type != CONSTRUCTION_SERVICE_TYPE:
+            raise KeyError(service_type)
+        return frozenset()
+
     def service_capacity_supply_at(
         self,
         location_id: SpatialNodeId,

@@ -95,6 +95,24 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             raise KeyError(service_type)
         return ServiceCapacityScope.OPERATIONAL_NODE
 
+    def service_capacity_provider_definition_ids(
+        self, service_type: str
+    ) -> frozenset[DefinitionId]:
+        if service_type not in self.service_capacity_types():
+            raise KeyError(service_type)
+        return frozenset(
+            process.facility_def_id
+            for process in self.processes.values()
+            if self.process_service_type(process.id) == service_type
+        )
+
+    def service_capacity_upstream_services(
+        self, service_type: str
+    ) -> frozenset[str]:
+        if service_type not in self.service_capacity_types():
+            raise KeyError(service_type)
+        return frozenset()
+
     def service_capacity_supply_at(
         self,
         location_id: SpatialNodeId,

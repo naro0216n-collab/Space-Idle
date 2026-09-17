@@ -339,6 +339,25 @@ class FacilityBook:
         """Finite service types supplied directly by Facility definitions."""
         return tuple(sorted(self.service_types()))
 
+    def service_capacity_provider_definition_ids(
+        self, service_type: str
+    ) -> frozenset[DefinitionId]:
+        return frozenset(
+            definition.id
+            for definition in self.definitions.values()
+            if any(
+                supply.service_type == service_type
+                for supply in definition.service_capacity_supplies
+            )
+        )
+
+    def service_capacity_upstream_services(
+        self, service_type: str
+    ) -> frozenset[str]:
+        if service_type not in self.service_types():
+            raise KeyError(service_type)
+        return frozenset()
+
     def service_capacity_supply_at(
         self,
         operational_node_id: SpatialNodeId,

@@ -31,6 +31,20 @@ def validate_simulation_configuration(sim: Simulation) -> None:
                 raise ConfigurationError(
                     f"service capacity provider has invalid scope: {extension.name}/{service_type}"
                 ) from exc
+            try:
+                definition_ids = provider.service_capacity_provider_definition_ids(service_type)
+                provider.service_capacity_upstream_services(service_type)
+            except (KeyError, ValueError) as exc:
+                raise ConfigurationError(
+                    f"service capacity provider has invalid metadata: {extension.name}/{service_type}"
+                ) from exc
+            unknown_definitions = set(definition_ids) - set(ctx.facility_defs)
+            if unknown_definitions:
+                raise ConfigurationError(
+                    "service capacity provider references unknown facility definitions: "
+                    + f"{extension.name}/{service_type}: "
+                    + ",".join(sorted(map(str, unknown_definitions)))
+                )
     for extension in sim.domain_extensions:
         validator = extension.configuration_validator
         if validator is not None:

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Protocol
 
 from .allocation_graph import AllocationDependency, allocation_dependency_order
 from .priority import ActivityPriority
-from .shared import EntityId, SpatialNodeId
+from .shared import DefinitionId, EntityId, SpatialNodeId
 
 
 class ServiceCapacityScope(str, Enum):
@@ -20,6 +20,39 @@ class ServiceCapacityScope(str, Enum):
 
     OPERATIONAL_NODE = "OPERATIONAL_NODE"
     ORGANIZATION = "ORGANIZATION"
+
+
+class ServiceCapacityProvider(Protocol):
+    """Provider contract for finite Service Capacity planning.
+
+    Provider facility definitions are exposed so cross-cutting physical
+    infrastructure can derive provider dependencies without knowing the owning
+    Domain. Providers may also have non-Facility supply; an empty definition
+    set simply means that portion has no Facility-placement dependency.
+    """
+
+    def service_capacity_types(self) -> tuple[str, ...]: ...
+
+    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope: ...
+
+    def service_capacity_provider_definition_ids(
+        self, service_type: str
+    ) -> frozenset[DefinitionId]: ...
+
+    def service_capacity_upstream_services(
+        self, service_type: str
+    ) -> frozenset[str]: ...
+
+    def service_capacity_supply_at(
+        self,
+        operational_node_id: SpatialNodeId,
+        service_type: str,
+        facilities,
+        power,
+        day: int = 0,
+        *,
+        provider_factors: Mapping[EntityId, float] | None = None,
+    ) -> tuple[float, float]: ...
 
 
 @dataclass(frozen=True)

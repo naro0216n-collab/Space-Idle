@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .simulation import Simulation
-from .construction.models import CONSTRUCTION_SERVICE_TYPE
 from .site import FacetValueRange, RequiresFacet, SiteRequirements, SpatialClassificationRequirement
 
 class ConfigurationError(ValueError):
@@ -69,20 +68,8 @@ class ValidationContext:
         technologies = set(sim.technology.completed)
         if sim.research is not None:
             technologies.update(sim.research.definitions)
-        service_types = set(sim.facilities.service_types())
-        service_types.add(CONSTRUCTION_SERVICE_TYPE)
+        service_types = set(sim.service_capacity_scopes())
         service_types.add(sim.power.SERVICE_TYPE)
-        service_types.update(
-            sim.industry.process_service_type(process.id)
-            for process in sim.industry.processes.values()
-        )
-        if sim.extraction is not None:
-            service_types.update(
-                sim.extraction.service_type(spec.resource_id)
-                for spec in sim.extraction.specs.values()
-            )
-        if sim.survey is not None:
-            service_types.add(sim.survey.SERVICE_TYPE)
         return cls(
             sim.graph.nodes,
             sim.graph.operational_node_map(),

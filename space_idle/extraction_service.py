@@ -157,6 +157,24 @@ class ExtractionService:
             raise KeyError(service_type)
         return ServiceCapacityScope.OPERATIONAL_NODE
 
+    def service_capacity_provider_definition_ids(
+        self, service_type: str
+    ) -> frozenset[DefinitionId]:
+        if service_type not in self.service_capacity_types():
+            raise KeyError(service_type)
+        return frozenset(
+            definition_id
+            for definition_id, spec in self.specs.items()
+            if self.service_type(spec.resource_id) == service_type
+        )
+
+    def service_capacity_upstream_services(
+        self, service_type: str
+    ) -> frozenset[str]:
+        if service_type not in self.service_capacity_types():
+            raise KeyError(service_type)
+        return frozenset({self.surface_infrastructure.service_type})
+
     def service_capacity_supply_at(
         self,
         location_id: SpatialNodeId,

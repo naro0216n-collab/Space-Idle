@@ -5,10 +5,9 @@ import math
 
 from .allocation_graph import AllocationDependency, allocation_dependency_order
 from .contracts import ContractService
-from .construction.models import CONSTRUCTION_SERVICE_TYPE
 from .domain import DomainExtension
 from .market import MarketBuyAllocationPlan, MarketService
-from .facilities import FacilityBook, FacilityPlacementScope
+from .facilities import FacilityBook
 from .founding import LocationFoundingService
 from .industry import IndustryService
 from .inventory import InventoryBook
@@ -32,6 +31,7 @@ from .service_capacity import (
     ServiceCapacityAllocation,
     ServiceCapacityAllocationPlan,
     ServiceCapacityDependency,
+    ServiceCapacityProvider,
     ServiceCapacityRequest,
     ServiceCapacityScope,
     allocate_service_capacity,
@@ -345,52 +345,12 @@ class Simulation:
         return tuple(rows)
 
     def service_capacity_dependencies(self) -> tuple[ServiceCapacityDependency, ...]:
-        """Declare static same-tick Service Capacity provider dependencies.
-
-        The graph is derived from generic placement/provider metadata.  A
-        Surface-Cell provider depends on the Location's aggregate distribution
-        service unless it is itself a provider of that upstream service.
-        Service types that intrinsically use the network (for example cargo
-        handling) declare the same edge independent of provider placement.
-        """
+        """Declare static same-tick Service Capacity provider dependencies."""
         surface = self.surface_infrastructure
         if surface is None:
             return ()
-        upstream = surface.service_type
-        dependent = set(surface.network_dependent_service_types)
-        if self.extraction is not None:
-            dependent.update(
-                self.extraction.service_type(spec.resource_id)
-                for spec in self.extraction.specs.values()
-            )
-        remote_dependent: set[str] = set()
-        for definition_id, definition in self.facilities.definitions.items():
-            if definition.placement_scope is not FacilityPlacementScope.SURFACE_CELL:
-                continue
-            remote_dependent.update(
-                supply.service_type
-                for supply in definition.service_capacity_supplies
-                if supply.service_type != upstream
-            )
-            if definition_id in self.projects.construction_providers:
-                remote_dependent.add(CONSTRUCTION_SERVICE_TYPE)
-            if self.survey is not None and definition_id in self.survey.providers:
-                remote_dependent.add(self.survey.SERVICE_TYPE)
-            if self.extraction is not None and definition_id in self.extraction.specs:
-                remote_dependent.add(
-                    self.extraction.service_type(
-                        self.extraction.specs[definition_id].resource_id
-                    )
-                )
-            remote_dependent.update(
-                self.industry.process_service_type(process.id)
-                for process in self.industry.processes.values()
-                if process.facility_def_id == definition_id
-            )
-        dependent.update(remote_dependent)
-        return tuple(
-            ServiceCapacityDependency(service_type, upstream)
-            for service_type in sorted(dependent)
+        return surface.provider_dependencies(
+            self.service_capacity_providers(), self.facilities
         )
 
     def _service_provider_factors(
@@ -409,32 +369,16 @@ class Simulation:
             for edge in dependencies
         ):
             return None
-        if location_id not in self.graph.locations:
+        provider = self._service_capacity_provider(service_type)
+        if provider is None:
             return None
-        if self.extraction is not None and service_type.startswith(
-            self.extraction.SERVICE_TYPE_PREFIX
-        ):
-            try:
-                fulfillment = surface.fulfillment_from_plan(
-                    location_id, resolved_plan, self.day
-                )
-            except ValueError:
-                fulfillment = (
-                    1.0 if surface.demand(location_id, self.day) <= 1e-12 else 0.0
-                )
-            return {
-                facility.id: fulfillment
-                for facility in self.facilities.all_at(location_id)
-                if (spec := self.extraction.specs.get(facility.definition_id)) is not None
-                and self.extraction.service_type(spec.resource_id) == service_type
-            }
-        return surface.facility_availability_factors(
-            location_id, service_type, self.facilities, resolved_plan, self.day
+        return surface.provider_availability_factors(
+            location_id, service_type, provider, self.facilities, resolved_plan, self.day
         )
 
-    def service_capacity_providers(self) -> tuple[object, ...]:
+    def service_capacity_providers(self) -> tuple[ServiceCapacityProvider, ...]:
         """Return configured finite-service providers through Domain registration."""
-        rows: list[object] = []
+        rows: list[ServiceCapacityProvider] = []
         for extension in self.domain_extensions:
             factory = extension.service_capacity_provider
             if factory is None:
@@ -461,13 +405,9 @@ class Simulation:
         except KeyError as exc:
             raise KeyError(f"no service capacity provider for {service_type}") from exc
 
-    def _service_supply_at(
-        self,
-        location_id: SpatialNodeId,
-        service_type: str,
-        power: PowerSnapshot,
-        provider_factors: dict | None,
-    ) -> tuple[float, float]:
+    def _service_capacity_provider(
+        self, service_type: str
+    ) -> ServiceCapacityProvider | None:
         providers = tuple(
             provider
             for provider in self.service_capacity_providers()
@@ -475,9 +415,19 @@ class Simulation:
         )
         if len(providers) > 1:
             raise RuntimeError(f"multiple service capacity providers own {service_type}")
-        if not providers:
+        return providers[0] if providers else None
+
+    def _service_supply_at(
+        self,
+        location_id: SpatialNodeId,
+        service_type: str,
+        power: PowerSnapshot,
+        provider_factors: dict | None,
+    ) -> tuple[float, float]:
+        provider = self._service_capacity_provider(service_type)
+        if provider is None:
             return (0.0, 0.0)
-        return providers[0].service_capacity_supply_at(
+        return provider.service_capacity_supply_at(
             location_id,
             service_type,
             self.facilities,

@@ -4,10 +4,13 @@ from dataclasses import dataclass
 import heapq
 import math
 
-from .facilities import FacilityBook
+from .facilities import FacilityBook, FacilityPlacementScope
 from .power import PowerSnapshot
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
-from .service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityRequest
+from .service_capacity import (
+    ServiceCapacityAllocationPlan, ServiceCapacityDependency, ServiceCapacityProvider,
+    ServiceCapacityRequest,
+)
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .spatial import SpatialGraph, great_circle_distance_km
 
@@ -56,7 +59,6 @@ class SurfaceInfrastructureService:
     facilities: FacilityBook
     service_type: str = SURFACE_DISTRIBUTION_SERVICE
     access_anchor_capability_id: str = SURFACE_ACCESS_ANCHOR_CAPABILITY
-    network_dependent_service_types: frozenset[str] = frozenset({"cargo_transfer"})
 
     def active_access_anchors(
         self, location_id: SpatialNodeId, day: int = 0
@@ -296,28 +298,80 @@ class SurfaceInfrastructureService:
             ) from exc
         return max(0.0, min(1.0, allocated / demand))
 
-    def facility_availability_factors(
+    def provider_dependencies(
+        self, providers: tuple[ServiceCapacityProvider, ...], facilities: FacilityBook
+    ) -> tuple[ServiceCapacityDependency, ...]:
+        """Derive upstream service edges from provider contracts and physical placement.
+
+        A provider can declare an intrinsic upstream service dependency.  In
+        addition, supply emitted by a SURFACE_CELL Facility depends on this
+        Location's surface-distribution service.  The derivation is independent
+        of the Domain that owns the provider.
+        """
+        edges: set[tuple[str, str]] = set()
+        for provider in providers:
+            for service_type in provider.service_capacity_types():
+                for upstream_service_type in provider.service_capacity_upstream_services(
+                    service_type
+                ):
+                    edges.add((service_type, upstream_service_type))
+                if service_type == self.service_type:
+                    continue
+                definition_ids = provider.service_capacity_provider_definition_ids(service_type)
+                if any(
+                    facilities.definitions[definition_id].placement_scope
+                    is FacilityPlacementScope.SURFACE_CELL
+                    for definition_id in definition_ids
+                    if definition_id in facilities.definitions
+                ):
+                    edges.add((service_type, self.service_type))
+        return tuple(
+            ServiceCapacityDependency(service_type, upstream_service_type)
+            for service_type, upstream_service_type in sorted(edges)
+        )
+
+    def provider_availability_factors(
         self,
         location_id: SpatialNodeId,
         service_type: str,
+        provider: ServiceCapacityProvider,
         facilities: FacilityBook,
         allocation_plan: ServiceCapacityAllocationPlan,
         day: int = 0,
-    ) -> dict[EntityId, float]:
-        if location_id not in self.graph.locations:
-            return {}
+    ) -> dict[EntityId, float] | None:
+        """Return per-provider factors imposed by surface distribution."""
+        if location_id not in self.graph.locations or service_type == self.service_type:
+            return None
+        definition_ids = provider.service_capacity_provider_definition_ids(service_type)
+        intrinsic = self.service_type in provider.service_capacity_upstream_services(service_type)
+        placement_dependent_ids = {
+            definition_id
+            for definition_id in definition_ids
+            if definition_id in facilities.definitions
+            and facilities.definitions[definition_id].placement_scope
+            is FacilityPlacementScope.SURFACE_CELL
+        }
+        if not intrinsic and not placement_dependent_ids:
+            return None
+        try:
+            fulfillment = self.fulfillment_from_plan(location_id, allocation_plan, day)
+        except ValueError:
+            fulfillment = 1.0 if self.demand(location_id, day) <= 1e-12 else 0.0
         location = self.graph.locations[location_id]
-        fulfillment = self.fulfillment_from_plan(location_id, allocation_plan, day)
         factors: dict[EntityId, float] = {}
         for facility in facilities.all_at(location_id):
-            if service_type in self.network_dependent_service_types:
-                factors[facility.id] = fulfillment
-            elif facility.site_cell_id is None:
-                factors[facility.id] = 1.0
-            elif facility.site_cell_id in location.developed_cell_ids:
-                factors[facility.id] = fulfillment
+            if facility.definition_id not in definition_ids:
+                continue
+            if intrinsic or facility.definition_id in placement_dependent_ids:
+                if (
+                    facility.site_cell_id is not None
+                    and facility.site_cell_id not in location.developed_cell_ids
+                ):
+                    factors[facility.id] = 0.0
+                else:
+                    factors[facility.id] = fulfillment
             else:
-                factors[facility.id] = 0.0
+                factors[facility.id] = 1.0
         return factors
 
     def cell_access_factor(
