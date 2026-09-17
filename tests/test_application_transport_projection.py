@@ -162,6 +162,22 @@ def test_scoped_movement_query_does_not_expand_to_all_operational_node_pairs(mon
     assert {row.destination_id for row in view.items} == {str(LEO)}
 
 
+def test_single_application_query_reuses_tick_decision_projection(monkeypatch):
+    app = build_game_application()
+    sim = app._simulation
+    original = sim.tick_decision_projection
+    calls = 0
+
+    def counted_projection():
+        nonlocal calls
+        calls += 1
+        return original()
+
+    monkeypatch.setattr(sim, "tick_decision_projection", counted_projection)
+    app.query(GetLogistics())
+    assert calls == 1
+
+
 def test_application_decision_queries_are_observational():
     app = build_game_application()
     sim = app._simulation

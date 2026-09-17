@@ -94,6 +94,11 @@ class LogisticsFlowMixin:
     """
 
     def _service_edges(self, day: int) -> tuple[TransportServiceSupply, ...]:
+        cache = self._projection_service_edges_cache
+        if cache is not None:
+            cached = cache.get(day)
+            if cached is not None:
+                return cached
         rows: list[TransportServiceSupply] = []
         backpressure = self._arrival_backpressure_by_service()
         for edge in self.transport.transport_service_supplies(day):
@@ -110,7 +115,10 @@ class LogisticsFlowMixin:
                     ),
                 )
             )
-        return tuple(rows)
+        result = tuple(rows)
+        if cache is not None:
+            cache[day] = result
+        return result
 
     @staticmethod
     def _transport_capacity_pool_id(edge: TransportServiceSupply) -> str:
@@ -700,18 +708,41 @@ class LogisticsFlowMixin:
     ) -> tuple[TransportServiceSupply, ...]:
         available = self._service_edges(day) if edges is None else edges
         policy, preference, explicit_path = self._supply_path_preferences(requirement)
-        if explicit_path is None:
-            return self._automatic_service_path(
-                source_id, requirement.destination_id, available, preference, policy
-            )
-        return self._explicit_service_path(
-            source_id,
-            requirement.destination_id,
-            explicit_path,
-            available,
-            preference,
-            policy,
+        cache = self._projection_service_path_cache
+        service_keys = tuple(edge.key for edge in available)
+        cache_key = (
+            day, source_id, requirement.destination_id, service_keys, policy, preference, explicit_path
         )
+        if cache is not None:
+            cached_keys = cache.get(cache_key)
+            if cached_keys is not None:
+                current_by_key = {edge.key: edge for edge in available}
+                if all(key in current_by_key for key in cached_keys):
+                    return tuple(current_by_key[key] for key in cached_keys)
+        failure_cache = self._projection_service_path_failure_cache
+        if failure_cache is not None and cache_key in failure_cache:
+            raise ValueError(failure_cache[cache_key])
+        try:
+            if explicit_path is None:
+                result = self._automatic_service_path(
+                    source_id, requirement.destination_id, available, preference, policy
+                )
+            else:
+                result = self._explicit_service_path(
+                    source_id,
+                    requirement.destination_id,
+                    explicit_path,
+                    available,
+                    preference,
+                    policy,
+                )
+        except ValueError as exc:
+            if failure_cache is not None:
+                failure_cache[cache_key] = str(exc)
+            raise
+        if cache is not None:
+            cache[cache_key] = tuple(edge.key for edge in result)
+        return result
 
     def _candidate_supply_paths(
         self,
@@ -724,6 +755,22 @@ class LogisticsFlowMixin:
         from .path_selection import select_tradeoff_candidate
 
         policy, preference, _explicit_path = self._supply_path_preferences(requirement)
+        cache = self._projection_candidate_paths_cache
+        cache_key = (
+            day,
+            requirement.id,
+            requirement.owner_kind,
+            requirement.owner_id,
+            requirement.destination_id,
+            requirement.resource_id,
+            edges,
+            enforce_source_policy,
+            policy,
+        )
+        if cache is not None:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return cached
         source_ids = tuple(
             node_id
             for node_id in self.facilities.environment.graph.operational_node_ids()
@@ -747,18 +794,30 @@ class LogisticsFlowMixin:
 
         rows.sort(key=lambda row: (str(row[0]), tuple(edge.key for edge in row[1])))
         if not rows:
-            return ()
+            result = ()
+            if cache is not None:
+                cache[cache_key] = result
+            return result
         if policy is None:
             if enforce_source_policy and len(rows) > 1:
-                return ()
+                result = ()
+                if cache is not None:
+                    cache[cache_key] = result
+                return result
         elif policy.source_mode is SourceSelectionMode.PREFERRED:
             preferred = [row for row in rows if row[0] == policy.preferred_source_id]
             if preferred:
                 rest = [row for row in rows if row[0] != policy.preferred_source_id]
-                return tuple(preferred + rest)
+                result = tuple(preferred + rest)
+                if cache is not None:
+                    cache[cache_key] = result
+                return result
 
         if len(rows) == 1:
-            return tuple(rows)
+            result = tuple(rows)
+            if cache is not None:
+                cache[cache_key] = result
+            return result
         selected = select_tradeoff_candidate(
             rows,
             metric_time=lambda row: self._path_totals(row[1])[0],
@@ -766,7 +825,10 @@ class LogisticsFlowMixin:
             stable_key=lambda row: f"{row[0]}:" + ",".join(edge.key for edge in row[1]),
             preference=preference,
         )
-        return (selected,) + tuple(row for row in rows if row != selected)
+        result = (selected,) + tuple(row for row in rows if row != selected)
+        if cache is not None:
+            cache[cache_key] = result
+        return result
 
     @staticmethod
     def _dispatch_is_due(

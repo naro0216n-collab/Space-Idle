@@ -524,7 +524,7 @@ class Simulation:
 
     def tick_decision_projection(self) -> TickDecisionProjection:
         """Project current intent, planning and allocation without mutation."""
-        with self.transport.derived_projection_scope():
+        with self.transport.derived_projection_scope(), self.logistics.derived_projection_scope():
             snapshot = self._physical_tick_snapshot()
             intents = self._generate_tick_intents(snapshot)
             plan = self._plan_tick(intents)

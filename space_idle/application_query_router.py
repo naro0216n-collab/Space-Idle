@@ -19,21 +19,37 @@ class ApplicationQueryRouterMixin:
             return {name: self.query(query) for name, query in queries.items()}
         self._query_projection_cache = {}
         try:
-            return {name: self.query(query) for name, query in queries.items()}
+            with (
+                self._simulation.transport.derived_projection_scope(),
+                self._simulation.logistics.derived_projection_scope(),
+            ):
+                return {name: self.query(query) for name, query in queries.items()}
         finally:
             self._query_projection_cache = None
 
     def query(self, query: Query) -> QueryResult:
+        existing = getattr(self, "_query_projection_cache", None)
+        root_query = existing is None
+        if root_query:
+            self._query_projection_cache = {}
         try:
-            return self._query(query)
-        except ApplicationError:
-            raise
-        except KeyError as exc:
-            raise ApplicationError("not_found", str(exc)) from exc
-        except ValueError as exc:
-            raise ApplicationError("invalid_query", str(exc)) from exc
-        except RuntimeError as exc:
-            raise ApplicationError("state_conflict", str(exc)) from exc
+            with (
+                self._simulation.transport.derived_projection_scope(),
+                self._simulation.logistics.derived_projection_scope(),
+            ):
+                try:
+                    return self._query(query)
+                except ApplicationError:
+                    raise
+                except KeyError as exc:
+                    raise ApplicationError("not_found", str(exc)) from exc
+                except ValueError as exc:
+                    raise ApplicationError("invalid_query", str(exc)) from exc
+                except RuntimeError as exc:
+                    raise ApplicationError("state_conflict", str(exc)) from exc
+        finally:
+            if root_query:
+                self._query_projection_cache = None
 
     def _query(self, query: Query) -> QueryResult:
         if isinstance(query, GetCatalog):

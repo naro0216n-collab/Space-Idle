@@ -9,11 +9,11 @@ class ApplicationProjectionSupportMixin:
     def _tick_decision_projection(self):
         """Reuse one transient tick decision across an Application query snapshot.
 
-        A Runtime UI snapshot asks several read models about the same authoritative
-        simulation instant.  The decision projection is derived state and can be
-        expensive, so all projectors in that snapshot must observe the same derived
-        value instead of independently rebuilding it.  Standalone queries remain
-        uncached and therefore cannot retain stale derived state across commands.
+        A single Application query or Runtime UI snapshot may ask several read-model
+        projectors about the same authoritative simulation instant.  The decision
+        projection is derived state and can be expensive, so all projectors in that
+        query scope observe the same derived value.  The cache is discarded when the
+        outer query completes, so commands cannot observe stale derived state.
         """
         cache = getattr(self, "_query_projection_cache", None)
         if cache is None:

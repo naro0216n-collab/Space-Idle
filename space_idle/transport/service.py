@@ -15,6 +15,7 @@ from .compatibility import TransportCompatibilityMixin
 from .fleet_allocations import FleetAllocationMixin
 from .executions import MovementExecutionMixin
 from .models import (
+    DirectionalCapacity,
     FleetActivityRef,
     FleetPool,
     FleetRelocation,
@@ -24,7 +25,11 @@ from .models import (
     MovementPlan,
     PathPolicy,
     TransportAllocation,
+    TransportCapacitySnapshot,
+    TransportOperationDependencyProjection,
+    TransportOperationUsageRequirements,
     TransportServicePlan,
+    TransportServiceSupply,
     VehicleDef,
 )
 from .operations import OperationEvaluatorRegistry, build_default_operation_registry
@@ -71,6 +76,18 @@ class TransportService(
     _projection_service_plan_cache: dict[tuple[object, ...], TransportServicePlan] | None = field(
         default=None, init=False, repr=False
     )
+    _projection_service_supply_cache: dict[int, tuple[TransportServiceSupply, ...]] | None = field(
+        default=None, init=False, repr=False
+    )
+    _projection_operation_dependency_cache: dict[int, tuple[TransportOperationDependencyProjection, ...]] | None = field(
+        default=None, init=False, repr=False
+    )
+    _projection_capacity_snapshot_cache: dict[
+        tuple[EntityId, int, DirectionalCapacity], TransportCapacitySnapshot
+    ] | None = field(default=None, init=False, repr=False)
+    _projection_operation_usage_cache: dict[
+        tuple[EntityId, int, DirectionalCapacity], TransportOperationUsageRequirements
+    ] | None = field(default=None, init=False, repr=False)
     _projection_cache_depth: int = field(default=0, init=False, repr=False)
     fleet_pools: dict[tuple[DefinitionId, SpatialNodeId], FleetPool] = field(default_factory=dict)
     fleet_commitments: dict[EntityId, FleetCommitmentState] = field(default_factory=dict)
@@ -167,6 +184,10 @@ class TransportService(
         root_scope = self._projection_cache_depth == 0
         if root_scope:
             self._projection_service_plan_cache = {}
+            self._projection_service_supply_cache = {}
+            self._projection_operation_dependency_cache = {}
+            self._projection_capacity_snapshot_cache = {}
+            self._projection_operation_usage_cache = {}
         self._projection_cache_depth += 1
         try:
             yield
@@ -174,6 +195,10 @@ class TransportService(
             self._projection_cache_depth -= 1
             if root_scope:
                 self._projection_service_plan_cache = None
+                self._projection_service_supply_cache = None
+                self._projection_operation_dependency_cache = None
+                self._projection_capacity_snapshot_cache = None
+                self._projection_operation_usage_cache = None
 
     def movement_plan_candidates(
         self, origin_id: SpatialNodeId, destination_id: SpatialNodeId
@@ -312,6 +337,14 @@ class TransportService(
         self._movement_plan_inbound_index.clear()
         if self._projection_service_plan_cache is not None:
             self._projection_service_plan_cache.clear()
+        if self._projection_service_supply_cache is not None:
+            self._projection_service_supply_cache.clear()
+        if self._projection_operation_dependency_cache is not None:
+            self._projection_operation_dependency_cache.clear()
+        if self._projection_capacity_snapshot_cache is not None:
+            self._projection_capacity_snapshot_cache.clear()
+        if self._projection_operation_usage_cache is not None:
+            self._projection_operation_usage_cache.clear()
 
     def fleet_pool_keys(self) -> tuple[tuple[DefinitionId, SpatialNodeId], ...]:
         """Return Fleet pool identities without exposing the mutable pool container."""

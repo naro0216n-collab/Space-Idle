@@ -71,11 +71,12 @@ def run() -> None:
             str(ids.ORBITAL_LOGISTICS_NODE),
             priority=5,
             sourcing_policy="import_now",
-            import_source_id=EARTH,
         )
     ).data.created_id
     assert project_id is not None
-    # Establish source-constrained Supply Requirements before Fleet capacity exists.
+    # Establish Supply Requirements before Fleet capacity exists. The scenario-global
+    # policy provides the initial selection delegation; the browser flow below then
+    # assigns an explicit project policy without mutating Fleet provisioning.
     runtime.execute(AdvanceTime(1))
 
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
@@ -102,24 +103,38 @@ def run() -> None:
             assert "輸送能力阻害" in requirement_row.inner_text(), (
                 "Supply Requirement must remain visible while Transport Capacity is unavailable"
             )
-            assert "明示Supply Policyなし" in page.locator("#supplyPolicyTable").inner_text()
+            policy_table = page.locator("#logisticsPolicyTable")
+            assert "logistics.policy.standard" in policy_table.inner_text()
+            assert "GLOBAL" in policy_table.inner_text()
 
-            # Supply Policy is source/path intent only. It must not provision Fleet.
-            page.get_by_role("button", name="Supply Policyを設定").click()
-            page.locator("#supplyPolicyDialog").wait_for(state="visible", timeout=10000)
-            page.locator("#supplyPolicyDestination").select_option(LEO)
-            page.locator("#supplyPolicyResource").select_option(MACHINERY)
-            page.locator("#supplyPolicySource").select_option(EARTH)
-            page.locator("#supplyPolicyPathPolicy").select_option("fastest")
+            # Logistics Policy is reusable source/path intent only. Creating and
+            # assigning one to the project must not provision Fleet.
+            policy_id = "logistics.policy.e2e-earth-fast"
+            page.get_by_role("button", name="Logistics Policyを作成").click()
+            page.locator("#logisticsPolicyDialog").wait_for(state="visible", timeout=10000)
+            page.locator("#logisticsPolicyId").fill(policy_id)
+            page.locator("#logisticsPolicySourceMode").select_option("pinned")
+            page.locator("#logisticsPolicySource").select_option(EARTH)
+            page.locator("#logisticsPolicyPathMode").select_option("preferred")
+            page.locator("#logisticsPolicyPathPreference").select_option("fastest")
             page.get_by_role("button", name="方針を保存").click()
-            page.locator("#supplyPolicyDialog").wait_for(state="hidden", timeout=10000)
-            policy_delete = page.locator(
-                f'[data-supply-policy-delete="{LEO}"][data-resource-id="{MACHINERY}"]'
-            )
+            page.locator("#logisticsPolicyDialog").wait_for(state="hidden", timeout=10000)
+            policy_delete = page.locator(f'[data-logistics-policy-delete="{policy_id}"]')
             policy_delete.wait_for(timeout=10000)
-            assert "最速" in page.locator("#supplyPolicyTable").inner_text()
+            policy_row = policy_delete.locator("xpath=ancestor::tr")
+            assert "固定" in policy_row.inner_text() and "最速" in policy_row.inner_text()
+
+            requirement_policy = requirement_row.locator("[data-requirement-policy-select]")
+            requirement_policy.select_option(policy_id)
+            requirement_row.locator("[data-requirement-policy-apply]").click()
+            page.wait_for_function(
+                """({projectId, policyId}) => [...document.querySelectorAll('#requirementTable tbody tr')]
+                  .some(row => row.innerText.includes(projectId) && row.innerText.includes(policyId))""",
+                arg={"projectId": project_id, "policyId": policy_id},
+                timeout=10000,
+            )
             assert page.locator("#allocationTable [data-allocation-row]").count() == 0, (
-                "Supply Policy must not create or resize Transport Allocation"
+                "Logistics Policy must not create or resize Transport Allocation"
             )
 
             # Player Fleet provisioning is explicit and remains a separate decision.
@@ -144,7 +159,7 @@ def run() -> None:
             assert "t/日" in nominal_text and not nominal_text.startswith("0 / 0")
             assert "t/日" in available_text and not available_text.startswith("0 / 0")
             assert "1 unit" in allocation_row.inner_text(), (
-                "Supply Policy must not resize authoritative Fleet provisioning"
+                "Logistics Policy must not resize authoritative Fleet provisioning"
             )
 
             # A canonical day lets Supply Planning consume the now-available capacity.

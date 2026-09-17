@@ -885,6 +885,14 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
         return original_derive(allocation, day)
 
     monkeypatch.setattr(lg, "_derive_transport_service_plan", counted_derive)
+    with lg.derived_projection_scope(), sim.logistics.derived_projection_scope():
+        service_supplies = lg.transport_service_supplies(0)
+        operation_dependencies = lg.transport_operation_dependencies(0)
+        service_edges = sim.logistics._service_edges(0)
+        assert lg.transport_service_supplies(0) is service_supplies
+        assert lg.transport_operation_dependencies(0) is operation_dependencies
+        assert sim.logistics._service_edges(0) is service_edges
+    derive_calls = 0
     decision = sim.tick_decision_projection()
     assert derive_calls == 1
     dispatch, executable = next(

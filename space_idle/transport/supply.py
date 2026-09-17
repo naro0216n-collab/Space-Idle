@@ -18,6 +18,11 @@ class TransportSupplyMixin:
     """
 
     def transport_service_supplies(self, day: int) -> tuple[TransportServiceSupply, ...]:
+        cache = self._projection_service_supply_cache
+        if cache is not None:
+            cached = cache.get(day)
+            if cached is not None:
+                return cached
         supplies: list[TransportServiceSupply] = []
         for allocation in sorted(
             self.transport_allocations.values(),
@@ -98,11 +103,19 @@ class TransportSupplyMixin:
                     )
                 )
 
-        return tuple(supplies)
+        result = tuple(supplies)
+        if cache is not None:
+            cache[day] = result
+        return result
 
     def transport_operation_dependencies(
         self, day: int
     ) -> tuple[TransportOperationDependencyProjection, ...]:
+        cache = self._projection_operation_dependency_cache
+        if cache is not None:
+            cached = cache.get(day)
+            if cached is not None:
+                return cached
         rows: list[TransportOperationDependencyProjection] = []
         for allocation in sorted(self.transport_allocations.values(), key=lambda row: str(row.id)):
             definition = self.vehicle_defs[allocation.vehicle_definition_id]
@@ -127,4 +140,7 @@ class TransportSupplyMixin:
                     surface_service_locations=tuple(sorted(surface_locations, key=str)),
                 )
             )
-        return tuple(rows)
+        result = tuple(rows)
+        if cache is not None:
+            cache[day] = result
+        return result

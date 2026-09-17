@@ -1448,6 +1448,12 @@ class FleetAllocationMixin:
         at a self-consistent usage mix, summing Cargo Bundle requirements exactly
         reproduces the Transport service plan's aggregate operational demand.
         """
+        cache = self._projection_operation_usage_cache
+        cache_key = (allocation_id, day, reference_usage)
+        if cache is not None:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return cached
         allocation = self.transport_allocations[allocation_id]
         definition = self.vehicle_defs[allocation.vehicle_definition_id]
         plan = self.derive_transport_service_plan(allocation_id, day)
@@ -1533,7 +1539,7 @@ class FleetAllocationMixin:
             if servicing <= 1e-12
             else servicing * shared_reverse_scale
         )
-        return TransportOperationUsageRequirements(
+        result = TransportOperationUsageRequirements(
             allocation_id,
             tuple(forward_resources),
             tuple(reverse_resources),
@@ -1542,6 +1548,9 @@ class FleetAllocationMixin:
             forward_turnaround,
             reverse_turnaround,
         )
+        if cache is not None:
+            cache[cache_key] = result
+        return result
 
     @staticmethod
     def transport_service_request_id(allocation_id: EntityId) -> EntityId:
@@ -1610,6 +1619,12 @@ class FleetAllocationMixin:
         day: int = 0,
         used: DirectionalCapacity = DirectionalCapacity(),
     ) -> TransportCapacitySnapshot:
+        cache = self._projection_capacity_snapshot_cache
+        cache_key = (allocation_id, day, used)
+        if cache is not None:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return cached
         allocation = self.transport_allocations[allocation_id]
         plan = self.derive_transport_service_plan(allocation_id, day)
         required = self.allocation_required_units(allocation_id, day)
@@ -1706,7 +1721,7 @@ class FleetAllocationMixin:
         )
         if active < required:
             blockers.append(f"fleet_unfilled:{required - active}")
-        return TransportCapacitySnapshot(
+        result = TransportCapacitySnapshot(
             allocation.id,
             allocation.target_capacity,
             required,
@@ -1721,3 +1736,6 @@ class FleetAllocationMixin:
             tuple(dict.fromkeys(blockers)),
             tuple(dict.fromkeys(limiting)),
         )
+        if cache is not None:
+            cache[cache_key] = result
+        return result
