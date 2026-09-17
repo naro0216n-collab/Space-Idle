@@ -28,13 +28,13 @@ from space_idle import (
     GetWorld,
     PlanBuild,
     ProduceVehicle,
-    SetProjectImportSource,
     SetProjectPriority,
     SetProjectSourcingPolicy,
     SetVehicleProductionSettings,
     UpdateTransportAllocation,
     RelocateFleet,
-    SetSupplyPolicy, SetTargetStock, DeleteSupplyPolicy, DeleteTargetStock,
+    CreateLogisticsPolicy, AssignLogisticsPolicy, UnassignLogisticsPolicy,
+    DeleteLogisticsPolicy, SetTargetStock, DeleteTargetStock,
     build_game_application,
 )
 from space_idle.simulation import OfflineProgressPolicy
@@ -295,17 +295,19 @@ def test_supply_policy_and_target_stock_update_planning_intent_without_transport
         and row.operational_node_id == str(EARTH)
     )
 
-    policy_id = app.execute(SetSupplyPolicy(
-        str(LEO), str(ids.MACHINERY), preferred_source_id=str(EARTH),
-        path_policy="lowest_propellant",
-    )).created_id
+    policy_id = "logistics.policy.application"
+    app.execute(CreateLogisticsPolicy(
+        policy_id, source_mode="preferred", preferred_source_id=str(EARTH),
+        path_mode="preferred", path_preference="lowest_propellant",
+    ))
     target_id = app.execute(SetTargetStock(
         str(LEO), str(ids.MACHINERY), 3.5, priority=4,
     )).created_id
-    assert policy_id is not None and target_id is not None
+    assert target_id is not None
+    app.execute(AssignLogisticsPolicy("target_stock", target_id, policy_id))
 
     view = app.query(GetLogistics())
-    policy = next(row for row in view.supply_policies if row.id == policy_id)
+    policy = next(row for row in view.logistics_policies if row.id == policy_id)
     target = next(row for row in view.target_stocks if row.id == target_id)
     requirement = next(
         row for row in view.requirements
@@ -320,8 +322,12 @@ def test_supply_policy_and_target_stock_update_planning_intent_without_transport
     )
 
     assert policy.preferred_source_id == str(EARTH)
-    assert policy.destination_id == str(LEO)
-    assert policy.path_policy == "lowest_propellant"
+    assert policy.source_mode == "preferred"
+    assert policy.path_preference == "lowest_propellant"
+    assert requirement.assigned_policy_id == policy_id
+    assert requirement.resolved_policy_id == policy_id
+    assert requirement.preferred_source_id == str(EARTH)
+    assert requirement.path_preference == "lowest_propellant"
     assert target.target_quantity_t == 3.5
     assert target.priority == 4
     assert requirement.priority == 4
@@ -333,10 +339,13 @@ def test_supply_policy_and_target_stock_update_planning_intent_without_transport
     assert after_pool.transport_units == before_pool.transport_units
     assert after_pool.free_units == before_pool.free_units
 
-    app.execute(DeleteSupplyPolicy(str(LEO), str(ids.MACHINERY)))
+    with pytest.raises(ApplicationError):
+        app.execute(DeleteLogisticsPolicy(policy_id))
+    app.execute(UnassignLogisticsPolicy("target_stock", target_id))
+    app.execute(DeleteLogisticsPolicy(policy_id))
     app.execute(DeleteTargetStock(str(LEO), str(ids.MACHINERY)))
     cleared = app.query(GetLogistics())
-    assert not cleared.supply_policies
+    assert all(row.id != policy_id for row in cleared.logistics_policies)
     assert not cleared.target_stocks
 
 
@@ -424,24 +433,47 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
     assert "items" in payload["cargo_flows"]
 
 
+def test_construction_command_rejects_unknown_logistics_policy_before_creating_project():
+    app = build_game_application()
+    before = tuple(row.id for row in app.query(GetProjects(str(EARTH))).items)
+
+    with pytest.raises(ApplicationError):
+        app.execute(PlanBuild(
+            str(EARTH),
+            str(ids.SURFACE_POWER_GRID),
+            logistics_policy_id="logistics.policy.missing",
+            site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
+        ))
+
+    after = tuple(row.id for row in app.query(GetProjects(str(EARTH))).items)
+    assert after == before
+
+
 def test_construction_queries_expose_authoritative_project_controls():
     app = build_game_application()
     build_options = app.query(GetBuildOptions(str(EARTH)))
     assert tuple(build_options.sourcing_policy_options) == app._simulation.projects.sourcing_policy_options()
-    assert str(EARTH) not in build_options.import_source_options
-    assert str(LEO) in build_options.import_source_options
+    assert str(app._simulation.logistics.global_policy_id) in build_options.logistics_policy_options
+    policy_id = "logistics.policy.project-query"
+    app.execute(CreateLogisticsPolicy(
+        policy_id, source_mode="pinned", allowed_source_ids=(str(LEO),),
+    ))
 
     project_id = app.execute(PlanBuild(
         str(EARTH), str(ids.SURFACE_POWER_GRID), priority=2,
-        sourcing_policy="local_priority", import_source_id=str(LEO),
+        sourcing_policy="local_priority", logistics_policy_id=policy_id,
         site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
     )).created_id
     assert project_id is not None
     row = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
     assert row.settings_editable and row.sourcing_editable
     assert row.projected_material_readiness_day is None
+    assert row.logistics_policy_id == policy_id
+    assert row.resolved_logistics_policy_id == policy_id
     app.execute(SetProjectPriority(project_id, 5))
-    app.execute(SetProjectSourcingPolicy(project_id, "import_now")); app.execute(SetProjectImportSource(project_id, None))
+    app.execute(SetProjectSourcingPolicy(project_id, "import_now"))
+    app.execute(UnassignLogisticsPolicy("project", project_id))
     updated = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
-    assert (updated.priority, updated.sourcing_policy, updated.import_source_id) == (5, "import_now", None)
+    assert (updated.priority, updated.sourcing_policy, updated.logistics_policy_id) == (5, "import_now", None)
+    assert updated.resolved_logistics_policy_id == str(app._simulation.logistics.global_policy_id)
     assert updated.projected_material_readiness_day == app.query(GetWorld()).day

@@ -251,7 +251,7 @@ Requirementは少なくとも次の意味を分離する。
 
 Commitmentは将来executionやAsset利用のために既に確保済みのauthoritative Stateである。Resource Reservation、Fleet Commitment、Market Buy Commitment等は意味の異なるtyped Stateとして各所有Domainが保持し、同じ量を複数Domainへ保存しない。新しい資産種別が実際に同じ排他所有問題を持つまでは、万能なAsset Provisioning frameworkへ一般化しない。
 
-PolicyはPlayerが自動処理へ委任する範囲を表すauthoritative intentである。hard constraint、preference、selection delegationを区別し、Coreは未指定の戦略判断を暗黙defaultで補わない。
+PolicyはPlayerが自動処理へ委任する範囲を表すauthoritative intentである。hard constraint、preference、selection delegationを区別する。source等の戦略的選択は未指定を暗黙defaultで補わない。Movement pathの通常選択だけは、操作負荷を避ける正準ルールとして `BALANCED` をdefault Preferenceとし、所要時間と推進剤消費を正規化して同時評価する。
 
 ### 4.2 共通Activity control
 
@@ -703,7 +703,7 @@ Fleet Relocation、Scientific Exploration等の有限操作はone-shot Movement 
 - `UNITS`: 目標Fleet unit数。
 - `CAPACITY`: 方向別の目標定常capacity。
 
-Movement selectionは、特定のMovement Plan pathを `PINNED` として固定するか、成立候補の選択を `ALLOW_ANY` として明示的なPreferenceへ委任する。委任時のPreferenceは `FASTEST`、`LOWEST_PROPELLANT` 等のContent非依存な評価軸を利用できる。Playerが固定も委任もしていない場合にCore内部defaultでpathを選ばない。このselectionはTransport Serviceを構成する供給側intentであり、需要側Logistics Policyとは別Stateとする。
+Movement selectionは、特定のMovement Plan pathを `PINNED` として固定するか、成立候補をPreferenceで評価する。Preferenceは `BALANCED`、`FASTEST`、`LOWEST_PROPELLANT` のContent非依存な評価軸を利用する。`BALANCED` は所要時間と推進剤消費をそれぞれの最良候補で正規化して合成し、Playerが固定pathや別Preferenceを指定していない場合の正準defaultとする。このselectionはTransport Serviceを構成する供給側intentであり、需要側Logistics Policyとは別Stateとする。
 
 Provisioning Priorityは1〜5、標準値3とし、Transport Allocation間でfree Fleetをどこへ配備するかを決める。Activity Priorityとは別Stateであり、Priority変更だけでScientific Exploration等の別ownerへcommit済みFleetをpreemptしない。
 
@@ -730,12 +730,12 @@ LogisticsPolicyState
   path_mode: PINNED | PREFERRED | ALLOW_ANY
   explicit_path?
   allowed_handoffs / services?
-  path_preference?   # e.g. fastest / lower-propellant among allowed candidates
+  path_preference: BALANCED | FASTEST | LOWEST_PROPELLANT
 ```
 
 Supply Requirement、Target Stock、Project等のowner intentは必要に応じて `logistics_policy_ref` を持てる。同じPolicyを複数intentから再利用してよい。明示参照されたPolicyを最優先し、参照がない場合だけScenarioのglobal Policyを利用する。Core内部に第三の暗黙Policyを持たない。
 
-`ALLOW_ANY` はPlayer / Scenarioが許可候補内の選択をPlannerへ委任したことを表す。resolved Policyがなく複数の戦略的に異なる候補が残る場合、Generic Coreは `FASTEST` や任意sourceを暗黙defaultにせずpolicy blockerと候補を返す。候補が一つしかない場合、またはPolicy上等価な候補だけが残る場合はstable tie-breakで決定してよい。Scenarioはnew game初期Stateとして明示的なglobal Policyを構成できる。
+source dimensionの `ALLOW_ANY` はPlayer / Scenarioが許可source候補内の選択をPlannerへ委任したことを表す。resolved Policyがなく複数の戦略的に異なるsource候補が残る場合、Generic Coreは任意sourceを暗黙defaultにせずpolicy blockerと候補を返す。source候補が一つしかない場合は決定してよい。path dimensionは固定constraintがなければPreferenceで評価し、Preference未指定時は `BALANCED` を用いる。評価同値の候補はstable tie-breakで決定する。Scenarioはnew game初期Stateとしてsource選択を明示委任するglobal Policyを構成できる。
 
 PlanningはTransport Allocation target、Fleet provisioning、Trade Orderを暗黙変更しない。発送候補Resourceはsource側Execution Requirementとして現地用途と共通Allocationで競合する。Policy変更は未dispatch Planningへだけ作用し、dispatch済みCargo / Movement条件を遡及変更しない。
 
@@ -776,7 +776,7 @@ Cargoが目的地またはhandoff Operational Nodeへ到着した場合、Cargo 
 
 Spatial hierarchy上の中間context自体はhandoff pointにならない。同じFleetがCargoを保持したまま複数Movement Operationを連続実行できる場合は一つのTransport Serviceとして扱い、実在Operational Nodeで別ServiceへResourceを引き渡す場合だけhandoffとなる。
 
-Path constraint / preferenceは既存Serviceの利用方法を決める。需要側PolicyがTransport AllocationのVehicle / operation configurationを暗黙変更しない。hard constraintを満たすPathがなければblocker、Policyが選択を委任しておらず戦略的に異なる複数候補が残る場合はambiguityをQueryへ返す。
+Path constraint / preferenceは既存Serviceの利用方法を決める。需要側PolicyがTransport AllocationのVehicle / operation configurationを暗黙変更しない。hard constraintを満たすPathがなければblockerを返す。固定pathがない場合は明示Preference、未指定なら `BALANCED` により候補を評価し、同評価時だけstable tie-breakを使う。source ambiguityはpath評価で隠さず別blockerとしてQueryへ返す。
 
 ### 10.9 External Resource Market / Funds
 
@@ -999,7 +999,7 @@ Runtime Validationは、Inventory / Reservation / Cargo / Funds / Fleetの保存
 - Eligibility判定だけで有限Serviceを消費扱いにせず、同じServiceを複数Activityが共通Allocationで競合する。
 - PriorityLevelが5段階ordinal bandとして機能し、同順位結果が登録順に依存しない。
 - Supply Planningが現地用途と同じInventory / Transport Capacityを二重利用せず、Inbound Cargoを重複dispatchしない。
-- Logistics Policy未指定時にCoreが戦略的に異なるsource / pathを暗黙選択せず、明示委任時だけ自動選択する。
+- Logistics Policy未指定時にCoreが戦略的に異なるsourceを暗黙選択しない。pathは固定constraint / 明示Preferenceを優先し、未指定時は正準 `BALANCED` で所要時間と推進剤消費を評価する。
 - Cargo arrival / direct handoff / Inventory admission / arrival waitingが有限constraintとResource ownershipを一貫して扱う。
 - snapshot後の生成・到着・Commandが同tick過去phaseへ遡及しない。
 - 通常進行 / 高速進行 / Offlineで同じgame timeの結果が一致する。
@@ -1059,7 +1059,7 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 5. **Transport Provisioningと需要利用を分離する。** Provisioning PriorityはTransport Allocation間のfree Fleet配備を所有し、Activity Priorityは既存Transport Capacity利用を順位付けする。別Activityへcommit済みFleetをpriorityだけでpreemptしない。
 6. **MovementはSpatial relationと実能力から導出する。** 任意の成立済みOperational Node pairを一般則で評価し、静的OD列挙や技術IDによる直接航路解除を正本にしない。
 7. **通常物流はaggregate serviceとして扱いながら物理保存を守る。** Transport Capacity、Cargo Flow、direct handoff、Inventory admission、arrival waitingを一つのCargo lifecycleへ接続する。
-8. **Player判断をPolicyで明示する。** Logistics source / path selection等はPlayer / Scenarioが明示したconstraint、preference、selection delegationの範囲で行い、Core内部の暗黙strategyで補わない。
+8. **Player判断をPolicyで明示する。** Logistics source selectionはPlayer / Scenarioが明示したconstraint、preference、selection delegationの範囲で行い、Core内部の暗黙strategyで補わない。Movement pathは明示constraint / preferenceを優先し、未指定時だけ正準 `BALANCED` を共通defaultとして用いる。
 9. **Pauseは物理Stateを巻き戻さない。** 設定・progressを保持しつつ、reversible commitmentの保持 / releaseは所有Domainの明示契約で決め、開始済みMovement / Cargo / Market settlementを消去しない。
 10. **Surface Cellを万能Entityにしない。** Surface Cellは物理地理・資源・環境・開発領域の単位とし、通常Inventory / Logistics Nodeや一般Facility slotへ兼用しない。
 11. **同じ効果を複数係数で適用しない。** Surface Infrastructure、Maintenance fulfillment等の共通bottleneckは所有Requirement / Serviceへ一度だけ反映する。
@@ -1075,7 +1075,7 @@ World Definitionは静的宇宙・地理・物理基準を定義し、Scenario D
 
 有限Resource / Serviceの競合は5段階Activity PriorityとExecution Requirement Bundleで解き、Eligibilityと有限Allocationを分離する。Research ProjectはTheory / Prototype / Demonstration / Operational Experienceのtyped ordered Stageから必要な組合せを持ち、Technology表示段階とは別概念とする。Vehicleは同一Definition・所在NodeごとのFleet数量と排他的Fleet Commitmentで管理し、TransportのProvisioning PriorityはTransport Allocation間のfree Fleet配備だけを扱う。
 
-通常物流はTransport CapacityとCargo Flowで表し、Resource ownershipをInventory / Logistics間で一意に保つ。Logistics PlannerはPlayer / Scenarioが明示したPolicyの範囲でsource / pathを選び、未委任の戦略判断をCore内部defaultで代行しない。FundsはExternal Resource MarketにおけるResource ownership transfer専用の決済Stateとする。
+通常物流はTransport CapacityとCargo Flowで表し、Resource ownershipをInventory / Logistics間で一意に保つ。Logistics PlannerはPlayer / Scenarioが明示したPolicyの範囲でsourceを選び、未委任のsource戦略判断をCore内部defaultで代行しない。pathはconstraint / Preferenceに従い、指定がなければ正準 `BALANCED` で所要時間と推進剤消費を同時評価する。FundsはExternal Resource MarketにおけるResource ownership transfer専用の決済Stateとする。
 
 Simulationは1 game dayのcanonical boundary → snapshot → intent → planning → allocation → execution → movement → state transitionで決定論的に進行し、通常速度・高速進行・Offlineで同じgame timeの結果を一致させる。Saveはdomain-owned authoritative Stateだけを保持し、派生状態は再導出する。
 

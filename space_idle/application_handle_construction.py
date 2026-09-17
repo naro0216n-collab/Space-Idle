@@ -15,7 +15,6 @@ from .application_commands import (
     SetFoundingPriority,
     DevelopSurfaceCell,
     ResumeBuild,
-    SetProjectImportSource,
     SetProjectPriority,
     SetProjectSourcingPolicy,
 )
@@ -23,44 +22,52 @@ from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SurfaceC
 
 
 class ConstructionCommandHandlerMixin:
+    def _validated_logistics_policy_id(self, value: str | None) -> EntityId | None:
+        if value is None:
+            return None
+        policy_id = EntityId(value)
+        self._simulation.logistics.require_logistics_policy(policy_id)
+        return policy_id
+
     def _handle_construction_command(self, command: Command):
         sim = self._simulation
         if isinstance(command, PlanBuild):
+            logistics_policy_id = self._validated_logistics_policy_id(command.logistics_policy_id)
             pid = sim.projects.plan_build(
                 DefinitionId(command.facility_id),
                 self._require_operational_node(command.operational_node_id),
                 command.priority,
                 command.sourcing_policy,
                 day=sim.day,
-                import_source_id=(
-                    None if command.import_source_id is None else self._require_operational_node(command.import_source_id)
-                ),
                 site_cell_id=None if command.site_cell_id is None else SurfaceCellId(command.site_cell_id),
             )
+            if logistics_policy_id is not None:
+                sim.logistics.assign_logistics_policy("project", EntityId(str(pid)), logistics_policy_id)
             return CommandResult(str(pid))
         if isinstance(command, PlanFacilityUpgrade):
+            logistics_policy_id = self._validated_logistics_policy_id(command.logistics_policy_id)
             pid = sim.projects.plan_upgrade(
                 EntityId(command.facility_id),
                 command.priority,
                 command.sourcing_policy,
                 day=sim.day,
-                import_source_id=(
-                    None if command.import_source_id is None else self._require_operational_node(command.import_source_id)
-                ),
             )
+            if logistics_policy_id is not None:
+                sim.logistics.assign_logistics_policy("project", EntityId(str(pid)), logistics_policy_id)
             return CommandResult(str(pid))
         if isinstance(command, PlanFacilityDecommission):
+            logistics_policy_id = self._validated_logistics_policy_id(command.logistics_policy_id)
             pid = sim.projects.plan_decommission(
                 EntityId(command.facility_id),
                 command.priority,
                 command.sourcing_policy,
                 day=sim.day,
-                import_source_id=(
-                    None if command.import_source_id is None else self._require_operational_node(command.import_source_id)
-                ),
             )
+            if logistics_policy_id is not None:
+                sim.logistics.assign_logistics_policy("project", EntityId(str(pid)), logistics_policy_id)
             return CommandResult(str(pid))
         if isinstance(command, FoundLocation):
+            logistics_policy_id = self._validated_logistics_policy_id(command.logistics_policy_id)
             if sim.founding is None:
                 raise ValueError("founding domain is not configured")
             pid = sim.founding.plan(
@@ -71,9 +78,10 @@ class ConstructionCommandHandlerMixin:
                 DefinitionId(command.founding_package_id),
                 DefinitionId(command.vehicle_definition_id),
                 priority=command.priority,
-                preferred_source_id=(None if command.preferred_source_id is None else self._require_operational_node(command.preferred_source_id)),
                 day=sim.day,
             )
+            if logistics_policy_id is not None:
+                sim.logistics.assign_logistics_policy("founding", EntityId(str(pid)), logistics_policy_id)
             return CommandResult(str(pid))
         if isinstance(command, CancelFounding):
             if sim.founding is None:
@@ -92,14 +100,16 @@ class ConstructionCommandHandlerMixin:
                 raise ValueError("founding domain is not configured")
             sim.founding.set_priority(ProjectId(command.project_id), command.priority); return CommandResult()
         if isinstance(command, DevelopSurfaceCell):
+            logistics_policy_id = self._validated_logistics_policy_id(command.logistics_policy_id)
             pid = sim.projects.plan_surface_cell_development(
                 self._require_operational_node(command.location_id),
                 SurfaceCellId(command.cell_id),
                 command.priority,
                 command.sourcing_policy,
                 day=sim.day,
-                import_source_id=(None if command.import_source_id is None else self._require_operational_node(command.import_source_id)),
             )
+            if logistics_policy_id is not None:
+                sim.logistics.assign_logistics_policy("project", EntityId(str(pid)), logistics_policy_id)
             return CommandResult(str(pid))
         if isinstance(command, CancelBuild):
             sim.projects.cancel(ProjectId(command.project_id)); return CommandResult()
@@ -112,10 +122,5 @@ class ConstructionCommandHandlerMixin:
         if isinstance(command, SetProjectSourcingPolicy):
             sim.projects.set_sourcing_policy(
                 ProjectId(command.project_id), command.sourcing_policy, sim.day
-            ); return CommandResult()
-        if isinstance(command, SetProjectImportSource):
-            sim.projects.set_import_source(
-                ProjectId(command.project_id),
-                None if command.operational_node_id is None else self._require_operational_node(command.operational_node_id),
             ); return CommandResult()
         return NotImplemented

@@ -77,7 +77,7 @@
         <div class="workspace-heading logistics-heading"><div><div class="eyebrow">LOGISTICS NETWORK</div><h1>物流ネットワーク</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
         <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
         <div class="logistics-bottom-grid">
-          <section class="card"><div class="card-heading"><h3>Supply Policy / Target Stock</h3><span id="supplyPolicyCountBadge" class="badge"></span></div><div id="supplyPolicyTable" class="table-wrap"></div></section>
+          <section class="card"><div class="card-heading"><h3>Logistics Policy / Target Stock</h3><span id="logisticsPolicyCountBadge" class="badge"></span></div><div id="logisticsPolicyTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Supply Requirement</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Fleet</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Transport Allocation</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
@@ -93,15 +93,19 @@
       </aside>
     </main>
 
-    <dialog id="supplyPolicyDialog" class="modal-dialog">
-      <form method="dialog" id="supplyPolicyForm">
-        <div class="dialog-heading"><div><div class="eyebrow">SUPPLY POLICY</div><h2>供給方針を設定</h2></div><button type="button" class="icon-button" id="supplyPolicyCloseButton">×</button></div>
-        <label>需要地<select id="supplyPolicyDestination" required></select></label>
-        <label>資源<select id="supplyPolicyResource" required></select></label>
-        <label>優先供給元<select id="supplyPolicySource"><option value="">自動選択</option></select></label>
-        <label>経路方針<select id="supplyPolicyPathPolicy"><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label>
-        <div class="cell-sub">供給方針はsource/pathのPlayer Policyです。Transport CapacityやFleet配備量は変更しません。</div>
-        <div class="dialog-actions"><button type="button" class="secondary" id="supplyPolicyCancelButton">取消</button><button type="submit" class="primary">方針を保存</button></div>
+    <dialog id="logisticsPolicyDialog" class="modal-dialog">
+      <form method="dialog" id="logisticsPolicyForm">
+        <div class="dialog-heading"><div><div class="eyebrow">LOGISTICS POLICY</div><h2>物流方針を設定</h2></div><button type="button" class="icon-button" id="logisticsPolicyCloseButton">×</button></div>
+        <label>Policy ID<input id="logisticsPolicyId" required placeholder="logistics.policy.custom"></label>
+        <div class="field-pair"><label>供給元選択<select id="logisticsPolicySourceMode"><option value="allow_any">許可候補から自動選択</option><option value="preferred">優先供給元</option><option value="pinned">供給元固定</option></select></label><label>固定 / 優先供給元<select id="logisticsPolicySource"><option value="">—</option></select></label></div>
+        <label>許可供給元集合<input id="logisticsPolicyAllowedSources" placeholder="空欄=全候補。複数はcomma区切り"></label>
+        <div class="field-pair"><label>経路選択<select id="logisticsPolicyPathMode"><option value="allow_any">標準BALANCED</option><option value="preferred">Preference指定</option><option value="pinned">経路固定</option></select></label><label>経路Preference<select id="logisticsPolicyPathPreference"><option value="balanced" selected>時間・推進剤バランス</option><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label></div>
+        <label>固定Movement Plan列<input id="logisticsPolicyExplicitPath" placeholder="movement.plan.a, movement.plan.b"></label>
+        <label>許可handoff Operational Node<input id="logisticsPolicyAllowedHandoffs" placeholder="空欄=制限なし。複数はcomma区切り"></label>
+        <label>許可Transport Service identity<input id="logisticsPolicyAllowedServices" placeholder="空欄=制限なし。複数はcomma区切り"></label>
+        <label><input id="logisticsPolicyGlobal" type="checkbox"> Scenario globalの代わりに全未割当intentへ適用</label>
+        <div class="cell-sub">供給元選択は明示Policyの範囲だけで行います。経路は未固定時にBALANCEDが標準で、Playerは最速・推進剤最少へ変更できます。Transport AllocationのFleet構成は変更しません。</div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="logisticsPolicyCancelButton">取消</button><button type="submit" class="primary">方針を保存</button></div>
       </form>
     </dialog>
 
@@ -121,7 +125,7 @@
         <div class="field-pair"><label>Vehicle type<div id="relocationVehicle" class="cell-main">—</div></label><label>出発地<div id="relocationSource" class="cell-main">—</div></label></div>
         <div class="cell-sub">現在free: <span id="relocationFree">0</span> unit。移動中はsource Fleetとして拘束され、到着時にdestination Poolへ移ります。</div>
         <label>到着地<select id="relocationDestination" required></select></label>
-        <div class="field-pair"><label>移動unit数<input id="relocationUnits" type="number" min="1" step="1" value="1" required></label><label>経路方針<select id="relocationPolicy"><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label></div>
+        <div class="field-pair"><label>移動unit数<input id="relocationUnits" type="number" min="1" step="1" value="1" required></label><label>経路方針<select id="relocationPolicy"><option value="balanced" selected>時間・推進剤バランス</option><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label></div>
         <div id="relocationPreview" class="inspector-section"><div class="cell-sub">到着地・unit数・経路方針から移動計画を確認します。</div></div>
         <div class="dialog-actions"><button type="button" class="secondary" id="relocationCancelButton">取消</button><button type="submit" class="primary" id="relocationSubmitButton">移動開始</button></div>
       </form>
@@ -136,7 +140,7 @@
         <div class="field-pair"><label>Control mode<select id="allocationMode"><option value="units">UNITS</option><option value="capacity">CAPACITY</option></select></label><label>配備優先度<select id="allocationPriority" required><option value="1">1 最低</option><option value="2">2 低</option><option value="3" selected>3 標準</option><option value="4">4 高</option><option value="5">5 最高</option></select></label></div>
         <div id="allocationUnitsGroup"><label>Authoritative target units<input id="allocationUnits" type="number" min="0" step="1" value="1" required></label></div>
         <div id="allocationCapacityGroup" hidden><div class="field-pair"><label>Forward target (t/日)<input id="allocationForward" type="number" min="0" step="0.01" value="1"></label><label>Reverse target (t/日)<input id="allocationReverse" type="number" min="0" step="0.01" value="0"></label></div></div>
-        <label>経路方針<select id="allocationPolicy"><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label>
+        <label>経路方針<select id="allocationPolicy"><option value="balanced" selected>時間・推進剤バランス</option><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label>
         <div id="allocationServiceOptions" class="inspector-section"><div class="cell-sub">出発地と到着地からTransport Service候補を取得します。</div></div>
         <div class="cell-sub">UNITSではunit数だけ、CAPACITYでは方向別capacityだけが正本です。Fleet不足でもtargetは保持され、active / unfilledとして表示されます。</div>
         <div class="dialog-actions"><button type="button" class="secondary" id="allocationCancelButton">取消</button><button type="submit" class="primary">Allocation作成</button></div>

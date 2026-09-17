@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from math import isfinite
 from typing import TYPE_CHECKING, Iterable
 
@@ -29,7 +30,6 @@ class SupplyRequirement:
     resource_id: DefinitionId
     amount_t: float
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    source_id: SpatialNodeId | None = None
     recurring_rate_t_per_day: float | None = None
     forecast_requirement_day: int | None = None
     purpose: str = "replenishment"
@@ -38,8 +38,6 @@ class SupplyRequirement:
         object.__setattr__(self, "priority", ActivityPriority(self.priority))
         if not isfinite(self.amount_t) or self.amount_t < 0:
             raise ValueError("supply requirement amount must be finite and non-negative")
-        if self.source_id is not None and self.source_id == self.destination_id:
-            raise ValueError("supply requirement source and destination must differ")
         if self.recurring_rate_t_per_day is not None and (
             not isfinite(self.recurring_rate_t_per_day) or self.recurring_rate_t_per_day <= 0
         ):
@@ -67,35 +65,108 @@ class TargetStockPolicy:
 
     def requirement(self, day: int) -> SupplyRequirement:
         return SupplyRequirement(
-            EntityId(f"supply.target_stock:{self.destination_id}:{self.resource_id}"),
-            "target_stock",
-            self.id,
-            self.destination_id,
-            self.resource_id,
-            self.target_quantity_t,
-            self.priority,
-            None,
-            None,
-            day,
-            "target_stock",
+            id=EntityId(f"supply.target_stock:{self.destination_id}:{self.resource_id}"),
+            owner_kind="target_stock",
+            owner_id=self.id,
+            destination_id=self.destination_id,
+            resource_id=self.resource_id,
+            amount_t=self.target_quantity_t,
+            priority=self.priority,
+            forecast_requirement_day=day,
+            purpose="target_stock",
         )
 
 
+class SourceSelectionMode(str, Enum):
+    PINNED = "pinned"
+    PREFERRED = "preferred"
+    ALLOW_ANY = "allow_any"
+
+
+class PathSelectionMode(str, Enum):
+    PINNED = "pinned"
+    PREFERRED = "preferred"
+    ALLOW_ANY = "allow_any"
+
+
 @dataclass(frozen=True)
-class SupplyPolicy:
-    """Player sourcing/path preference; never owns Transport Capacity."""
+class LogisticsPolicyState:
+    """Reusable Player/Scenario intent for source and path/handoff selection.
+
+    Source constraints are represented by ``allowed_source_ids``. PINNED fixes
+    that set to exactly one source, PREFERRED names a preferred source while
+    retaining fallback inside the allowed set, and ALLOW_ANY delegates selection
+    across the allowed set. Path constraints may whitelist handoff nodes and/or
+    existing Transport Service identities. PINNED fixes the Movement Plan path,
+    PREFERRED records an explicit route metric, and ALLOW_ANY uses the canonical
+    BALANCED metric.
+    """
 
     id: EntityId
-    destination_id: SpatialNodeId
-    resource_id: DefinitionId
+    source_mode: SourceSelectionMode = SourceSelectionMode.ALLOW_ANY
+    allowed_source_ids: tuple[SpatialNodeId, ...] | None = None
     preferred_source_id: SpatialNodeId | None = None
-    path_policy: PathPolicy = PathPolicy.FASTEST
+    path_mode: PathSelectionMode = PathSelectionMode.ALLOW_ANY
     explicit_path: tuple[MovementPlanId, ...] | None = None
+    allowed_handoff_ids: tuple[SpatialNodeId, ...] | None = None
+    allowed_service_ids: tuple[str, ...] | None = None
+    path_preference: PathPolicy = PathPolicy.BALANCED
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "path_policy", PathPolicy(self.path_policy))
-        if self.preferred_source_id == self.destination_id:
-            raise ValueError("supply source and destination must differ")
+        object.__setattr__(self, "source_mode", SourceSelectionMode(self.source_mode))
+        object.__setattr__(self, "path_mode", PathSelectionMode(self.path_mode))
+        object.__setattr__(self, "path_preference", PathPolicy(self.path_preference))
+        if self.allowed_source_ids is not None:
+            normalized_sources = tuple(dict.fromkeys(self.allowed_source_ids))
+            if not normalized_sources:
+                raise ValueError("allowed source set must be non-empty when provided")
+            object.__setattr__(self, "allowed_source_ids", normalized_sources)
+        if self.allowed_handoff_ids is not None:
+            normalized_handoffs = tuple(dict.fromkeys(self.allowed_handoff_ids))
+            object.__setattr__(self, "allowed_handoff_ids", normalized_handoffs)
+        if self.allowed_service_ids is not None:
+            normalized_services = tuple(dict.fromkeys(self.allowed_service_ids))
+            if any(not value for value in normalized_services):
+                raise ValueError("allowed service identities must be non-empty")
+            object.__setattr__(self, "allowed_service_ids", normalized_services)
+
+        if self.source_mode is SourceSelectionMode.PINNED:
+            if self.allowed_source_ids is None or len(self.allowed_source_ids) != 1:
+                raise ValueError("pinned source policy requires exactly one allowed source")
+            if self.preferred_source_id is not None:
+                raise ValueError("pinned source policy cannot also prefer a source")
+        elif self.source_mode is SourceSelectionMode.PREFERRED:
+            if self.preferred_source_id is None:
+                raise ValueError("preferred source policy requires preferred_source_id")
+            if (
+                self.allowed_source_ids is not None
+                and self.preferred_source_id not in self.allowed_source_ids
+            ):
+                raise ValueError("preferred source must belong to allowed source set")
+        elif self.preferred_source_id is not None:
+            raise ValueError("ALLOW_ANY source policy cannot carry a preferred source")
+
+        if self.path_mode is PathSelectionMode.PINNED:
+            if not self.explicit_path:
+                raise ValueError("pinned path policy requires explicit_path")
+        elif self.explicit_path is not None:
+            raise ValueError("non-pinned path policy cannot carry explicit_path")
+        if (
+            self.path_mode is PathSelectionMode.ALLOW_ANY
+            and self.path_preference is not PathPolicy.BALANCED
+        ):
+            raise ValueError("ALLOW_ANY path policy uses the canonical BALANCED preference")
+
+
+@dataclass(frozen=True)
+class LogisticsPolicyAssignmentState:
+    owner_kind: str
+    owner_id: EntityId
+    policy_id: EntityId
+
+    def __post_init__(self) -> None:
+        if not self.owner_kind:
+            raise ValueError("logistics policy owner kind must be non-empty")
 
 
 @dataclass(frozen=True)
@@ -117,17 +188,16 @@ class SupplyRequirementResolution:
             return None
         requirement = self.requirement
         return SupplyRequirement(
-            requirement.id,
-            requirement.owner_kind,
-            requirement.owner_id,
-            requirement.destination_id,
-            requirement.resource_id,
-            self.external_required_t,
-            requirement.priority,
-            requirement.source_id,
-            requirement.recurring_rate_t_per_day,
-            requirement.forecast_requirement_day,
-            requirement.purpose,
+            id=requirement.id,
+            owner_kind=requirement.owner_kind,
+            owner_id=requirement.owner_id,
+            destination_id=requirement.destination_id,
+            resource_id=requirement.resource_id,
+            amount_t=self.external_required_t,
+            priority=requirement.priority,
+            recurring_rate_t_per_day=requirement.recurring_rate_t_per_day,
+            forecast_requirement_day=requirement.forecast_requirement_day,
+            purpose=requirement.purpose,
         )
 
 

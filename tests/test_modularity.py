@@ -48,7 +48,8 @@ def test_domain_authoritative_state_is_not_read_directly_across_domain_boundarie
             "vehicle_production_projects",
         },
         "logistics": {
-            "target_stocks", "supply_policies", "cargo_flows", "arrival_waiting",
+            "target_stocks", "logistics_policies", "policy_assignments",
+            "global_policy_id", "cargo_flows", "arrival_waiting",
         },
     }
     service_fields = {

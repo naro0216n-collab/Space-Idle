@@ -8,6 +8,7 @@ from .application_views import (
 )
 from .application_commands import GetDependencyAnalytics
 from .shared import CelestialBodyId, SpatialNodeId
+from .supply import SourceSelectionMode
 
 
 class ApplicationReportProjectorMixin:
@@ -182,9 +183,14 @@ class ApplicationReportProjectorMixin:
             if remaining <= 1e-12:
                 continue
             unmet[requirement.resource_id] += remaining
-            policy = sim.logistics.supply_policy_for(requirement)
-            preferred_source = requirement.source_id or (
-                None if policy is None else policy.preferred_source_id
+            policy = sim.logistics.logistics_policy_for(requirement)
+            preferred_source = (
+                None if policy is None
+                else (
+                    policy.allowed_source_ids[0]
+                    if policy.source_mode is SourceSelectionMode.PINNED and policy.allowed_source_ids
+                    else policy.preferred_source_id
+                )
             )
             if preferred_source is not None and preferred_source not in scope:
                 dependency_sources[requirement.resource_id].add(preferred_source)

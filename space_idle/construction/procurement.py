@@ -91,7 +91,6 @@ class ConstructionProcurementMixin:
                     requirement.resource_id,
                     missing,
                     project.priority,
-                    project.import_source_id,
                 ))
         return tuple(requirements)
 

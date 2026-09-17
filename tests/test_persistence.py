@@ -27,7 +27,8 @@ from space_idle import (
     SetFacilityProcess,
     StartResearch,
     StartSurvey,
-    SetSupplyPolicy,
+    CreateLogisticsPolicy,
+    SetGlobalLogisticsPolicy,
     SetTargetStock,
     build_game_application,
 )
@@ -92,9 +93,12 @@ def _make_nontrivial_state():
     target = sim.survey.targets[survey_key]
     sim.survey.knowledge_progress[survey_key] = target.thresholds[0] / 2.0
 
-    app.execute(
-        SetSupplyPolicy(str(LEO), str(ids.MACHINERY), preferred_source_id=str(EARTH))
-    )
+    app.execute(CreateLogisticsPolicy(
+        "logistics.policy.persistence",
+        source_mode="preferred",
+        preferred_source_id=str(EARTH),
+    ))
+    app.execute(SetGlobalLogisticsPolicy("logistics.policy.persistence"))
     app.execute(SetTargetStock(str(LEO), str(ids.MACHINERY), 1.0, priority=4))
     allocation_id = app.execute(
         CreateTransportAllocation(
@@ -122,6 +126,66 @@ def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
     assert offline is None
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
+    app.execute(AdvanceTime(1))
+    loaded.execute(AdvanceTime(1))
+    assert capture_state(loaded._simulation) == capture_state(app._simulation)
+
+
+
+def test_logistics_policy_assignment_roundtrips_and_preserves_future_resolution(tmp_path):
+    app = build_game_application()
+    policy_id = "logistics.policy.assignment-roundtrip"
+    app.execute(CreateLogisticsPolicy(
+        policy_id, source_mode="preferred",
+        allowed_source_ids=(str(EARTH), str(ids.LUNAR_ORBIT)),
+        preferred_source_id=str(EARTH),
+        path_mode="preferred", path_preference="lowest_propellant",
+        allowed_handoff_ids=(str(LEO),),
+        allowed_service_ids=("service.persistence.constraint",),
+    ))
+    target_id = app.execute(
+        SetTargetStock(str(LEO), str(ids.MACHINERY), 2.0, priority=4)
+    ).created_id
+    assert target_id is not None
+    from space_idle import AssignLogisticsPolicy, GetLogistics
+    app.execute(AssignLogisticsPolicy("target_stock", target_id, policy_id))
+
+    path = tmp_path / "logistics-policy-assignment.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, offline = load_game(path, build_game_application_for_load)
+    assert offline is None
+
+    row = next(
+        item for item in loaded.query(GetLogistics()).requirements
+        if item.owner_kind == "target_stock" and item.owner_id == target_id
+    )
+    assert row.assigned_policy_id == policy_id
+    assert row.resolved_policy_id == policy_id
+    assert row.allowed_source_ids == (str(EARTH), str(ids.LUNAR_ORBIT))
+    assert row.preferred_source_id == str(EARTH)
+    assert row.path_preference == "lowest_propellant"
+    policy = next(
+        item for item in loaded.query(GetLogistics()).logistics_policies
+        if item.id == policy_id
+    )
+    assert policy.allowed_handoff_ids == (str(LEO),)
+    assert policy.allowed_service_ids == ("service.persistence.constraint",)
+
+    app.execute(AdvanceTime(1))
+    loaded.execute(AdvanceTime(1))
+    assert capture_state(loaded._simulation) == capture_state(app._simulation)
+
+
+def test_load_does_not_reapply_scenario_global_logistics_policy(tmp_path):
+    app = build_game_application()
+    assert app._simulation.logistics.global_policy_id is not None
+    app.execute(SetGlobalLogisticsPolicy(None))
+
+    path = tmp_path / "no-global-policy.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application_for_load)
+
+    assert loaded._simulation.logistics.global_policy_id is None
 
 
 def test_facility_owned_process_selection_roundtrips_in_facility_state(tmp_path):
@@ -284,9 +348,6 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
 
     sim.inventory.stock[(ids.LEO, ids.MACHINERY)] = 0.0
     sim.inventory.add(ids.EARTH, ids.MACHINERY, 1.0)
-    sim.logistics.set_supply_policy(
-        ids.LEO, ids.MACHINERY, preferred_source_id=ids.EARTH
-    )
     target_id = sim.logistics.set_target_stock(ids.LEO, ids.MACHINERY, 0.5, 5)
     sim.advance_days(1)
     assert any(

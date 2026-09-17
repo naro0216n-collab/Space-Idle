@@ -13,7 +13,7 @@ class PlanBuild:
     facility_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     sourcing_policy: SourcingPolicyValue = "mixed"
-    import_source_id: str | None = None
+    logistics_policy_id: str | None = None
     site_cell_id: str | None = None
 
 
@@ -22,7 +22,7 @@ class PlanFacilityUpgrade:
     facility_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     sourcing_policy: SourcingPolicyValue = "mixed"
-    import_source_id: str | None = None
+    logistics_policy_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ class PlanFacilityDecommission:
     facility_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     sourcing_policy: SourcingPolicyValue = "mixed"
-    import_source_id: str | None = None
+    logistics_policy_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ class FoundLocation:
     founding_package_id: str
     vehicle_definition_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    preferred_source_id: str | None = None
+    logistics_policy_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,7 +72,7 @@ class DevelopSurfaceCell:
     cell_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     sourcing_policy: SourcingPolicyValue = "mixed"
-    import_source_id: str | None = None
+    logistics_policy_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,9 +100,3 @@ class SetProjectPriority:
 class SetProjectSourcingPolicy:
     project_id: str
     sourcing_policy: SourcingPolicyValue
-
-
-@dataclass(frozen=True)
-class SetProjectImportSource:
-    project_id: str
-    operational_node_id: str | None

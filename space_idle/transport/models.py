@@ -33,6 +33,7 @@ class OperationAssetDisposition(str, Enum):
 
 
 class PathPolicy(str, Enum):
+    BALANCED = "balanced"
     FASTEST = "fastest"
     LOWEST_PROPELLANT = "lowest_propellant"
 
@@ -215,7 +216,7 @@ class TransportAllocation:
     target_units: int | None = None
     target_capacity: DirectionalCapacity | None = None
     path: tuple[MovementPlanId, ...] | None = None
-    path_policy: PathPolicy = PathPolicy.FASTEST
+    path_policy: PathPolicy = PathPolicy.BALANCED
     paused: bool = False
     last_operated_day: int | None = None
 

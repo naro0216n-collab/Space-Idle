@@ -8,7 +8,8 @@ from space_idle import GetSurfaceMap, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
-from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId, StarSystemId, SurfaceCellId
+from space_idle.shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId, StarSystemId, SurfaceCellId
+from space_idle.supply import SourceSelectionMode
 from space_idle.spatial import (
     CelestialBodyDef,
     CharacteristicTransportGeometry,
@@ -197,7 +198,11 @@ def test_non_operational_spatial_context_cannot_own_facility_supply_policy_or_in
     with pytest.raises(KeyError):
         sim.facilities.install(facility_definition_id, dormant)
     with pytest.raises(KeyError):
-        sim.logistics.set_supply_policy(dormant, ids.WATER, preferred_source_id=ids.EARTH)
+        sim.logistics.create_logistics_policy(
+            EntityId("logistics.policy.dormant"),
+            source_mode=SourceSelectionMode.PINNED,
+            allowed_source_ids=(dormant,),
+        )
 
     sim.inventory.stock[(dormant, ids.WATER)] = 1.0
     with pytest.raises(ValueError, match="inventory references unknown location"):

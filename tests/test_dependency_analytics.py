@@ -10,6 +10,8 @@ from space_idle.shared import DefinitionId, EntityId
 from space_idle.validation import validate_catalog_coverage
 from space_idle.validation_support import ConfigurationError
 from space_idle.logistics_models import CargoFlowSegment, CargoServiceLeg
+from space_idle.production import ProcessSpec
+from space_idle.supply import SourceSelectionMode
 
 
 def _resource(view, resource_id):
@@ -81,6 +83,18 @@ def test_content_defined_resource_group_aggregates_members_without_cross_resourc
     app._catalog.resource_groups[group_id] = ResourceGroupDef(
         group_id, "Non-substitutable", (ids.WATER, ids.MACHINERY)
     )
+    # Build an explicit recurring Machinery requirement instead of depending on
+    # the opening scenario's temporary balance. The existing Earth facility is
+    # only a fixture carrier; the contract under test is that Water production
+    # cannot satisfy Machinery demand merely because both belong to one group.
+    process = app._simulation.industry.processes[ids.PROCESS_BASIC_MACHINERY]
+    app._simulation.industry.processes[ids.PROCESS_BASIC_MACHINERY] = ProcessSpec(
+        process.id,
+        process.display_name,
+        process.facility_def_id,
+        {ids.MACHINERY: 0.5},
+        {ids.STRUCTURAL_COMPONENTS: 0.1},
+    )
 
     view = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),)))
     water = _resource(view, ids.WATER)
@@ -118,10 +132,14 @@ def test_current_authorized_transport_projects_boundary_flow_consumption_and_par
     sim.transport.create_transport_allocation(
         ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
     )
-    sim.projects.plan_build(
+    project_id = sim.projects.plan_build(
         ids.ORBITAL_LOGISTICS_NODE, LEO, 3, "import_now", day=sim.day,
-        import_source_id=EARTH,
     )
+    policy_id = EntityId("logistics.policy.analytics-earth")
+    sim.logistics.create_logistics_policy(
+        policy_id, source_mode=SourceSelectionMode.PINNED, allowed_source_ids=(EARTH,)
+    )
+    sim.logistics.assign_logistics_policy("project", EntityId(str(project_id)), policy_id)
     sim.projects.advance_procurement(sim.day)
     demands = sim.projects.supplys(sim.day)
     for demand in demands:

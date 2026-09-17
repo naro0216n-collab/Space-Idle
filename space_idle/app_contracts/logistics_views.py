@@ -231,7 +231,6 @@ class SupplyRequirementRow:
     id: str
     owner_kind: str
     owner_id: str
-    source_id: str | None
     destination_id: str
     resource_id: str
     requested_t: float
@@ -240,6 +239,18 @@ class SupplyRequirementRow:
     pipeline_t: float
     remaining_t: float
     priority: ActivityPriority
+    assigned_policy_id: str | None = None
+    resolved_policy_id: str | None = None
+    source_mode: str | None = None
+    allowed_source_ids: tuple[str, ...] | None = None
+    preferred_source_id: str | None = None
+    path_mode: str | None = None
+    path_preference: str = "balanced"
+    explicit_path: tuple[str, ...] | None = None
+    source_candidate_ids: tuple[str, ...] = ()
+    operational_source_ids: tuple[str, ...] = ()
+    stocked_source_ids: tuple[str, ...] = ()
+    path_candidates: tuple[tuple[str, tuple[str, ...]], ...] = ()
     forecast_requirement_day: int | None = None
     recurring_rate_t_per_day: float | None = None
     local_runway_days: float | None = None
@@ -253,13 +264,18 @@ class SupplyRequirementRow:
 
 
 @dataclass(frozen=True)
-class SupplyPolicyRow:
+class LogisticsPolicyRow:
     id: str
-    destination_id: str
-    resource_id: str
+    source_mode: str
+    allowed_source_ids: tuple[str, ...] | None
     preferred_source_id: str | None
-    path_policy: str
+    path_mode: str
+    path_preference: str
     explicit_path: tuple[str, ...] | None
+    allowed_handoff_ids: tuple[str, ...] | None
+    allowed_service_ids: tuple[str, ...] | None
+    is_global: bool
+    assigned_owners: tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -282,7 +298,7 @@ class LogisticsView:
     vehicle_production_options: tuple[VehicleProductionOptionRow, ...]
     vehicle_production: tuple[VehicleProductionRow, ...]
     cargo_flows: tuple[CargoFlowRow, ...]
-    supply_policies: tuple[SupplyPolicyRow, ...]
+    logistics_policies: tuple[LogisticsPolicyRow, ...]
     target_stocks: tuple[TargetStockRow, ...]
     requirements: tuple[SupplyRequirementRow, ...]
 

@@ -77,15 +77,14 @@ class FacilityMaintenanceService:
                     required * self.target_stock_days if key in refill_keys else required
                 )
                 rows.append(SupplyRequirement(
-                    self._requirement_id(facility.id, resource_id),
-                    "facility_maintenance",
-                    facility.id,
-                    facility.operational_node_id,
-                    resource_id,
-                    planning_amount,
-                    facility.maintenance_priority,
-                    None,
-                    required,
+                    id=self._requirement_id(facility.id, resource_id),
+                    owner_kind="facility_maintenance",
+                    owner_id=facility.id,
+                    destination_id=facility.operational_node_id,
+                    resource_id=resource_id,
+                    amount_t=planning_amount,
+                    priority=facility.maintenance_priority,
+                    recurring_rate_t_per_day=required,
                 ))
         return tuple(rows)
 

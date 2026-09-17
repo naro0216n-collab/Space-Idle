@@ -448,7 +448,7 @@ Transport Allocationは次のどちらか一方をauthoritative targetとして�
 - Units：投入するFleet数を指定し、そのFleet数から輸送能力を導出する。
 - Capacity：必要な定常輸送能力を指定し、Vehicle性能と通常運用条件から必要Fleet数を導出する。
 
-Transport AllocationはVehicleとorigin / destinationに加え、反復Serviceへ使うMovement pathの選択方法をPlayer intentとして明示する。特定Movement Plan列を固定するか、成立候補の中から `FASTEST`、`LOWEST_PROPELLANT` 等の明示Preferenceで選択を委任できる。明示されていない方式をCore内部defaultで選ばず、需要側Logistics PolicyがこのVehicle / Movement構成を変更しない。
+Transport AllocationはVehicleとorigin / destinationに加え、反復Serviceへ使うMovement pathの選択方法をPlayer intentとして保持する。特定Movement Plan列を固定するか、成立候補の中から `BALANCED`、`FASTEST`、`LOWEST_PROPELLANT` のPreferenceを選択できる。固定もPreference指定もない場合の標準Preferenceは `BALANCED` とし、所要時間と推進剤消費を双方の最良候補に対して正規化したtrade-offとして評価する。これにより単位系や絶対値の差だけで一方の指標が支配しない。PlayerはいつでもPreferenceまたは固定pathを変更できる。需要側Logistics PolicyはこのVehicle / Movement構成を変更しない。
 
 Transport AllocationのProvisioning Priorityは1〜5、標準値3とする。これはfree Fleetを複数Transport Allocationへ配備するときの優先順位であり、Cargo需要のActivity Priorityとは別の判断とする。Priority変更だけで既に別Activityへ排他的にcommitされたFleetを奪わない。
 
@@ -470,7 +470,7 @@ Projectの進捗や物流条件が変化した場合はProjected Material Readin
 
 Logistics PolicyはPlannerへ許可する戦略範囲を表す再利用可能なPlayer-owned Stateとし、少なくともsource選択とpath / handoff選択を明示できる。各dimensionは、特定候補へ固定するhard constraint、許可候補内のPreference、許可候補の選択をPlannerへ委任するmodeを区別する。Supply Requirement、Target Stock、Project等のowner intentは必要に応じてPolicyを明示参照し、参照がない場合だけScenarioが設定したglobal Policyを利用する。
 
-Policy未指定をCore内部の `FASTEST` や任意source選択へ読み替えない。候補が一つしかない場合、またはPlayer / Scenarioが許可候補の自動選択を明示的に委任した場合は決定論的に選択できる。戦略的に異なる複数候補が残り、選択の委任もない場合はApplicationへPolicy不足と候補差をblockerとして返す。標準Scenarioが自動物流を成立させたい場合は、new game初期Stateとして明示的なglobal Policyを構成する。
+source選択についてPolicy未指定を任意source選択へ読み替えない。source候補が一つしかない場合、またはPlayer / Scenarioが許可候補の自動選択を明示的に委任した場合は決定論的に選択できる。戦略的に異なる複数source候補が残り、選択の委任もない場合はApplicationへPolicy不足と候補差をblockerとして返す。一方、path選択は通常操作を不要にするため `BALANCED` を正準defaultとし、Player / Scenarioが `FASTEST`、`LOWEST_PROPELLANT`、固定path等を指定した場合はそのintentを優先する。標準Scenarioが自動物流を成立させたい場合は、new game初期Stateとしてsource選択を明示委任するglobal Policyを構成する。
 
 Policyは既存Transport Serviceの利用方法を決めるものであり、Transport Allocation target、Fleet配備、Trade Orderを暗黙変更・生成しない。External Resource Marketで購入したResourceも、Market InterfaceでPlayer ownershipへ移った後のInventoryだけを通常source候補として扱う。
 
@@ -488,13 +488,13 @@ Resourceはsource Inventoryからdispatchされた時点でLogistics上の輸送
 
 ### 9.5 End-to-End輸送
 
-Playerはorigin Operational Nodeと最終destination Operational Nodeを指定できる。経路を個別固定していない場合は、現在成立しているMovement / Transport ServiceとOperational Nodeのうち、resolved Logistics Policyのpath / handoff dimensionを満たす候補からend-to-end pathを導出する。中継Nodeごとの再発送Commandを通常操作として要求しない。
+Playerはorigin Operational Nodeと最終destination Operational Nodeを指定できる。経路を個別固定していない場合は、現在成立しているMovement / Transport ServiceとOperational Nodeのうち、resolved Logistics Policyのpath / handoff constraintを満たす候補からend-to-end pathを導出し、Policyに別Preferenceがなければ `BALANCED` で所要時間と推進剤消費のtrade-offを評価する。中継Nodeごとの再発送Commandを通常操作として要求しない。
 
 Logistics Policyのpath / handoff dimensionは既存Serviceの利用規則であり、特定Transport AllocationがどのVehicleとMovement Operationで反復Serviceを供給するかを定めるMovement / operation Policyとは別Stateとする。需要側のpath選択が供給側Fleet configurationを暗黙変更しない。
 
 同一Vehicle / Transport Serviceが途中でCargoを保持したまま運行を継続できる場合、Movement上に複数Operationが存在していても一つの物流Legとして扱える。実在するOperational Nodeで別Fleet / Transport ServiceへCargoを引き渡す地点だけが物流上のhandoff pointとなる。Spatial hierarchy上の中間contextそれ自体はhandoff pointではない。
 
-Playerが明示したService、handoff、Logistics Policyのhard constraintが成立しなくなった場合、Plannerは戦略上異なる方式へ勝手にfallbackせずblockerを返す。Policyが `ALLOW_ANY` を明示していない状態で戦略的に異なる複数候補が残る場合もPlayerへ候補を返す。Policy上同値、または選択委任済みの候補だけstable tie-breakで自動化する。
+Playerが明示したService、handoff、Logistics Policyのhard constraintが成立しなくなった場合、Plannerは戦略上異なるsourceや固定pathへ勝手にfallbackせずblockerを返す。source選択が委任されていない状態で戦略的に異なる複数source候補が残る場合はPlayerへ候補を返す。pathは固定constraintがない限り選択可能な候補をPreferenceで評価し、Preference未指定時は `BALANCED` を使う。同評価の候補だけstable tie-breakで決定する。
 
 LEOや月周回軌道等は有力な補給・積替え・整備Nodeになり得るが必須進行ゲートではない。有限・状況依存のFounding、Fleet relocation、Scientific Exploration等は一回限りのMovementとして同じMovement評価契約を利用し、通常物流を個体Missionの反復へ戻さない。
 
@@ -767,7 +767,7 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 - Execution Requirement Bundleが複数Resource / Service / output admissionを同じexecution fulfillmentでsettleする。
 - Eligibility判定だけで有限Serviceを消費済みにせず、Allocationで競合させる。
 - PriorityLevelが1〜5の順序尺度として機能し、同順位結果が登録順へ依存しない。
-- Logistics Policyがhard constraintとselection delegationを守り、未委任の戦略差をCoreが暗黙選択しない。
+- Logistics Policyがsourceのhard constraintとselection delegationを守り、未委任のsource戦略差をCoreが暗黙選択しない。pathは明示constraint / preferenceを優先し、未指定時は正準 `BALANCED` で所要時間と推進剤消費を評価する。
 - Transport AllocationのProvisioning Priorityと需要Activity Priorityが別責務で、別Activityへcommit済みFleetをpreemptしない。
 - Pause / Resumeが設定・progressを保持し、開始済み物理obligationを巻き戻さず、Transportはsafe releaseを行う。
 - Operational Node Foundingがprepared Resource / FleetをMovement payloadへ移し、target typeに応じたStateへ一度だけsettleする。

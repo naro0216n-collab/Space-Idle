@@ -241,7 +241,7 @@ class FleetAllocationMixin:
                     movement_plan.origin_id,
                     vehicle_definition_id,
                     day,
-                    PathPolicy.FASTEST,
+                    PathPolicy.BALANCED,
                 )
                 travel_days += sum(
                     self.performance_movement_transit_days(self.require_movement_plan(movement_plan_id), definition.performance)
@@ -451,44 +451,39 @@ class FleetAllocationMixin:
                     )
             return explicit_path
 
-        # Dijkstra over physical compatibility only. Current resource/support
-        # availability belongs to Available Capacity, not Nominal planning.
-        import heapq
+        # Select across physically compatible paths with the canonical route
+        # preference. Availability belongs to current Capacity, not Nominal pathing.
+        from ..path_selection import select_tradeoff_path
 
-        queue: list[tuple[float, tuple[str, ...], SpatialNodeId, tuple[MovementPlanId, ...]]] = [
-            (0.0, (), source_id, ())
-        ]
-        best: dict[SpatialNodeId, tuple[float, tuple[str, ...]]] = {}
-        while queue:
-            score, key_path, node, path = heapq.heappop(queue)
-            prior = best.get(node)
-            if prior is not None and prior <= (score, key_path):
-                continue
-            best[node] = (score, key_path)
-            if node == destination_id:
-                return path
+        definition = self.vehicle_defs[vehicle_definition_id]
+
+        def outgoing(node: SpatialNodeId):
             for plan in self.outbound_movement_plans(node):
                 if self.vehicle_movement_physical_failures(plan.id, vehicle_definition_id, day):
                     continue
-                definition = self.vehicle_defs[vehicle_definition_id]
                 if (
                     require_destination_disposition
                     and definition.movement_asset_disposition(plan)
                     is not OperationAssetDisposition.DESTINATION
                 ):
                     continue
-                if policy is PathPolicy.FASTEST:
-                    edge = self.performance_movement_transit_days(plan, definition.performance)
-                elif policy is PathPolicy.LOWEST_PROPELLANT:
-                    edge = definition.propellant_t(plan, max(definition.max_cargo_for_movement(plan), 0.0))
-                else:
-                    raise ValueError(f"unsupported path policy: {policy}")
-                new_path = path + (plan.id,)
-                heapq.heappush(
-                    queue,
-                    (score + float(edge), tuple(str(r) for r in new_path), plan.destination_id, new_path),
-                )
-        raise ValueError(f"no physically compatible path {source_id} -> {destination_id}")
+                yield plan
+
+        plans = select_tradeoff_path(
+            source_id,
+            destination_id,
+            outgoing=outgoing,
+            edge_destination=lambda plan: plan.destination_id,
+            edge_time=lambda plan: self.performance_movement_transit_days(
+                plan, definition.performance
+            ),
+            edge_propellant=lambda plan: definition.propellant_t(
+                plan, max(definition.max_cargo_for_movement(plan), 0.0)
+            ),
+            edge_key=lambda plan: str(plan.id),
+            preference=policy,
+        )
+        return tuple(plan.id for plan in plans)
 
     def _vehicle_path_infrastructure_requirements(
         self,
@@ -551,7 +546,7 @@ class FleetAllocationMixin:
         *,
         day: int = 0,
         path: tuple[MovementPlanId, ...] | None = None,
-        path_policy: PathPolicy = PathPolicy.FASTEST,
+        path_policy: PathPolicy = PathPolicy.BALANCED,
     ) -> TransportServicePlan:
         """Derive a deterministic service plan without creating authoritative state."""
         preview = TransportAllocation(
@@ -800,7 +795,7 @@ class FleetAllocationMixin:
         target_units: int | None = 0,
         target_capacity: DirectionalCapacity | None = None,
         path: tuple[MovementPlanId, ...] | None = None,
-        path_policy: PathPolicy = PathPolicy.FASTEST,
+        path_policy: PathPolicy = PathPolicy.BALANCED,
         paused: bool = False,
         day: int = 0,
     ) -> EntityId:
@@ -1018,7 +1013,7 @@ class FleetAllocationMixin:
         destination_id: SpatialNodeId,
         *,
         path: tuple[MovementPlanId, ...] | None = None,
-        path_policy: PathPolicy = PathPolicy.FASTEST,
+        path_policy: PathPolicy = PathPolicy.BALANCED,
         day: int = 0,
     ) -> FleetRelocationPlan:
         """Derive the exact decision contract used to start a Fleet relocation."""
@@ -1136,7 +1131,7 @@ class FleetAllocationMixin:
         destination_id: SpatialNodeId,
         *,
         path: tuple[MovementPlanId, ...] | None = None,
-        path_policy: PathPolicy = PathPolicy.FASTEST,
+        path_policy: PathPolicy = PathPolicy.BALANCED,
         day: int = 0,
     ) -> EntityId:
         plan = self.fleet_relocation_plan(

@@ -13,7 +13,7 @@ from .construction.models import (
     ProjectStatus, SurfaceCellDevelopmentTarget,
 )
 from .facilities import FacilityPlacementScope
-from .shared import SpatialNodeId
+from .shared import EntityId, SpatialNodeId
 
 
 class ProjectProjectorMixin:
@@ -248,10 +248,11 @@ class ProjectProjectorMixin:
                 None if facility_definition_id is None else str(facility_definition_id),
                 target_facility_id, target_level, display_name, project.status, project.paused,
                 project.priority, project.sourcing_policy,
-                None if project.import_source_id is None else str(project.import_source_id),
+                (None if (assigned_policy_id := sim.logistics.assigned_policy_id_for("project", EntityId(str(project.id)))) is None else str(assigned_policy_id)),
+                (None if (resolved_policy := sim.logistics.resolved_policy_for("project", EntityId(str(project.id)))) is None else str(resolved_policy.id)),
                 sim.projects.settings_mutable(project.id), sim.projects.sourcing_mutable(project.id),
                 tuple(sim.projects.sourcing_policy_options()),
-                tuple(str(source_id) for source_id in sim.projects.import_source_options(project.id)),
+                tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                 project.construction_done, recipe.construction_work,
                 project.materials_committed,
                 None if project.completed_facility_id is None else str(project.completed_facility_id),
@@ -315,14 +316,18 @@ class ProjectProjectorMixin:
                     paused=project.paused,
                     priority=project.priority,
                     sourcing_policy="founding",
-                    import_source_id=(
-                        None if project.preferred_source_id is None
-                        else str(project.preferred_source_id)
+                    logistics_policy_id=(
+                        None if (assigned_policy_id := sim.logistics.assigned_policy_id_for("founding", EntityId(str(project.id)))) is None
+                        else str(assigned_policy_id)
+                    ),
+                    resolved_logistics_policy_id=(
+                        None if (resolved_policy := sim.logistics.resolved_policy_for("founding", EntityId(str(project.id)))) is None
+                        else str(resolved_policy.id)
                     ),
                     settings_editable=project.status.value == "preparing",
                     sourcing_editable=False,
                     sourcing_policy_options=(),
-                    import_source_options=(),
+                    logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                     construction_done=project.preparation_done,
                     construction_required=package.preparation_work,
                     materials_committed=project.inputs_consumed,
@@ -378,6 +383,6 @@ class ProjectProjectorMixin:
         return BuildOptionsView(
             str(location_id),
             tuple(sim.projects.sourcing_policy_options()),
-            tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(location_id)),
+            tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
             tuple(rows),
         )

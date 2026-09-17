@@ -9,7 +9,10 @@ from .logistics_models import (
     CargoServiceLeg,
 )
 from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
-from .supply import SupplyPolicy, TargetStockPolicy
+from .supply import (
+    LogisticsPolicyAssignmentState, LogisticsPolicyState, PathSelectionMode,
+    SourceSelectionMode, TargetStockPolicy,
+)
 from .transport.models import PathPolicy
 from .validation_support import require as _require
 
@@ -89,23 +92,29 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
             }
             for row in lg.target_stock_policies()
         ],
-        "supply_policies": [
+        "logistics_policies": [
             {
                 "id": str(row.id),
-                "destination_id": str(row.destination_id),
-                "resource_id": str(row.resource_id),
-                "preferred_source_id": (
-                    None if row.preferred_source_id is None else str(row.preferred_source_id)
-                ),
-                "path_policy": row.path_policy.value,
-                "explicit_path": (
-                    None
-                    if row.explicit_path is None
-                    else [str(movement_plan_id) for movement_plan_id in row.explicit_path]
-                ),
+                "source_mode": row.source_mode.value,
+                "allowed_source_ids": None if row.allowed_source_ids is None else [str(value) for value in row.allowed_source_ids],
+                "preferred_source_id": None if row.preferred_source_id is None else str(row.preferred_source_id),
+                "path_mode": row.path_mode.value,
+                "path_preference": row.path_preference.value,
+                "explicit_path": None if row.explicit_path is None else [str(value) for value in row.explicit_path],
+                "allowed_handoff_ids": None if row.allowed_handoff_ids is None else [str(value) for value in row.allowed_handoff_ids],
+                "allowed_service_ids": None if row.allowed_service_ids is None else list(row.allowed_service_ids),
             }
-            for row in lg.supply_policy_rows()
+            for row in lg.logistics_policy_rows()
         ],
+        "policy_assignments": [
+            {
+                "owner_kind": row.owner_kind,
+                "owner_id": str(row.owner_id),
+                "policy_id": str(row.policy_id),
+            }
+            for row in lg.logistics_policy_assignments()
+        ],
+        "global_policy_id": None if lg.global_policy_id is None else str(lg.global_policy_id),
     }
 
 
@@ -159,25 +168,30 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
         )
         for row in data.get("target_stocks", [])
     }
-    lg.supply_policies = {
-        EntityId(row["id"]): SupplyPolicy(
-            EntityId(row["id"]),
-            SpatialNodeId(row["destination_id"]),
-            DefinitionId(row["resource_id"]),
-            (
-                None
-                if row.get("preferred_source_id") is None
-                else SpatialNodeId(row["preferred_source_id"])
-            ),
-            PathPolicy(row.get("path_policy", "fastest")),
-            (
-                None
-                if row.get("explicit_path") is None
-                else tuple(MovementPlanId(value) for value in row["explicit_path"])
-            ),
+    lg.logistics_policies = {
+        EntityId(row["id"]): LogisticsPolicyState(
+            id=EntityId(row["id"]),
+            source_mode=SourceSelectionMode(row["source_mode"]),
+            allowed_source_ids=None if row.get("allowed_source_ids") is None else tuple(SpatialNodeId(value) for value in row["allowed_source_ids"]),
+            preferred_source_id=None if row.get("preferred_source_id") is None else SpatialNodeId(row["preferred_source_id"]),
+            path_mode=PathSelectionMode(row["path_mode"]),
+            explicit_path=None if row.get("explicit_path") is None else tuple(MovementPlanId(value) for value in row["explicit_path"]),
+            allowed_handoff_ids=None if row.get("allowed_handoff_ids") is None else tuple(SpatialNodeId(value) for value in row["allowed_handoff_ids"]),
+            allowed_service_ids=None if row.get("allowed_service_ids") is None else tuple(str(value) for value in row["allowed_service_ids"]),
+            path_preference=PathPolicy(row.get("path_preference", "balanced")),
         )
-        for row in data.get("supply_policies", [])
+        for row in data.get("logistics_policies", [])
     }
+    lg.policy_assignments = {
+        (row["owner_kind"], EntityId(row["owner_id"])): LogisticsPolicyAssignmentState(
+            row["owner_kind"], EntityId(row["owner_id"]), EntityId(row["policy_id"])
+        )
+        for row in data.get("policy_assignments", [])
+    }
+    lg.global_policy_id = (
+        None if data.get("global_policy_id") is None else EntityId(data["global_policy_id"])
+    )
+
 
 
 def _validate_leg(sim: Any, owner_label: str, leg: CargoServiceLeg) -> None:
@@ -229,16 +243,29 @@ def validate_logistics_runtime(sim: Any) -> None:
         _require(policy.target_quantity_t >= 0, f"target stock has negative quantity: {policy_id}")
         _require(1 <= int(policy.priority) <= 5, f"target stock priority must be 1..5: {policy_id}")
 
-    for policy_id, policy in lg.supply_policies.items():
-        _require(policy_id == policy.id, f"supply policy key mismatch: {policy_id}")
-        _require(sim.graph.has_operational_node(policy.destination_id), f"supply policy references unknown destination: {policy_id}")
+    for policy_id, policy in lg.logistics_policies.items():
+        _require(policy_id == policy.id, f"logistics policy key mismatch: {policy_id}")
+        for source_id in policy.allowed_source_ids or ():
+            _require(sim.graph.has_operational_node(source_id), f"logistics policy references unknown source: {policy_id}")
         if policy.preferred_source_id is not None:
-            _require(sim.graph.has_operational_node(policy.preferred_source_id), f"supply policy references unknown source: {policy_id}")
-            _require(policy.preferred_source_id != policy.destination_id, f"supply policy loops to same location: {policy_id}")
-        if policy.explicit_path is not None:
-            _require(policy.preferred_source_id is not None, f"explicit supply path has no preferred source: {policy_id}")
-            if policy.preferred_source_id is not None:
-                tr.validate_movement_path_structure(policy.preferred_source_id, policy.destination_id, policy.explicit_path)
+            _require(sim.graph.has_operational_node(policy.preferred_source_id), f"logistics policy references unknown preferred source: {policy_id}")
+        for handoff_id in policy.allowed_handoff_ids or ():
+            _require(sim.graph.has_operational_node(handoff_id), f"logistics policy references unknown handoff: {policy_id}")
+        if policy.path_mode is PathSelectionMode.PINNED and policy.explicit_path:
+            first = tr.require_movement_plan(policy.explicit_path[0])
+            last = tr.require_movement_plan(policy.explicit_path[-1])
+            tr.validate_movement_path_structure(
+                first.origin_id, last.destination_id, policy.explicit_path
+            )
+
+    if lg.global_policy_id is not None:
+        _require(lg.global_policy_id in lg.logistics_policies, "global logistics policy reference is invalid")
+
+    for key, assignment in lg.policy_assignments.items():
+        _require(key == (assignment.owner_kind, assignment.owner_id), f"logistics policy assignment key mismatch: {key}")
+        _require(assignment.policy_id in lg.logistics_policies, f"logistics policy assignment references unknown policy: {key}")
+        _require(lg.policy_owner_exists(assignment.owner_kind, assignment.owner_id), f"orphan logistics policy assignment: {assignment.owner_kind}:{assignment.owner_id}")
+
 
 
 LOGISTICS_STATE_CODEC = StateCodec("logistics", capture_logistics, restore_logistics)

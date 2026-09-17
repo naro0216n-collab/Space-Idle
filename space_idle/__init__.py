@@ -17,11 +17,11 @@ from .application import (
     ResumeBuild, ResumeFacility, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
     ResumeVehicleProduction, SetFacilityProcess,
-    SetMaintenancePriority, SetFacilityActivityPriority, SetProjectImportSource, SetProjectPriority,
+    SetMaintenancePriority, SetFacilityActivityPriority, SetProjectPriority,
     SetProjectSourcingPolicy, SetResearchDemonstrationSite, SetResearchPrototypeSite,
     SetSurveyPriority, SetTimeControl, SetVehicleProductionSettings, StartResearch,
     StartScientificExploration, SetScientificExplorationPriority, StartSurvey, UnassignExplorationFleet,
-    UpdateTransportAllocation, SetTargetStock, DeleteTargetStock, SetSupplyPolicy, DeleteSupplyPolicy,
+    UpdateTransportAllocation, SetTargetStock, DeleteTargetStock, CreateLogisticsPolicy, UpdateLogisticsPolicy, AssignLogisticsPolicy, UnassignLogisticsPolicy, SetGlobalLogisticsPolicy, DeleteLogisticsPolicy,
 )
 
 __all__ = [name for name in globals() if not name.startswith("_")]

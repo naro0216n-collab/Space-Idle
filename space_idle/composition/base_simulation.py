@@ -22,6 +22,7 @@ from ..spatial_claims import SurfaceCellClaimRegistry
 from ..survey import ExtractionService, SurveyService
 from ..technology import TechnologyState
 from ..scientific_exploration import ScientificExplorationService
+from ..shared import DefinitionId, EntityId, SpatialNodeId
 
 from ..content import base_ids as ids
 from ..content.base_construction import (
@@ -153,6 +154,50 @@ def build_base_simulation() -> Simulation:
     )
     transport.register_fleet_commitment_owner_resolver(
         "scientific_exploration", lambda owner_id: owner_id in scientific_exploration.campaigns
+    )
+    logistics.register_policy_owner_resolver(
+        "project", lambda owner_id: owner_id in projects.projects
+    )
+    logistics.register_policy_owner_resolver(
+        "founding", lambda owner_id: owner_id in founding.projects
+    )
+    logistics.register_policy_owner_resolver(
+        "facility_maintenance", lambda owner_id: owner_id in facilities.facilities
+    )
+    logistics.register_policy_owner_resolver(
+        "vehicle_production", lambda owner_id: owner_id in transport.vehicle_production_projects
+    )
+    logistics.register_policy_owner_resolver(
+        "fleet_relocation", lambda owner_id: owner_id in transport.fleet_relocations
+    )
+    logistics.register_policy_owner_resolver(
+        "market_sell", lambda owner_id: owner_id in market.orders
+    )
+
+    def industry_owner_exists(owner_id: EntityId) -> bool:
+        prefix = "industry.site:"
+        value = str(owner_id)
+        return value.startswith(prefix) and graph.has_operational_node(
+            SpatialNodeId(value[len(prefix):])
+        )
+
+    def research_owner_exists(owner_id: EntityId) -> bool:
+        prefix = "research:"
+        value = str(owner_id)
+        return value.startswith(prefix) and DefinitionId(value[len(prefix):]) in research.active
+
+    def exploration_owner_exists(owner_id: EntityId) -> bool:
+        prefix = "scientific_exploration:"
+        value = str(owner_id)
+        return (
+            value.startswith(prefix)
+            and DefinitionId(value[len(prefix):]) in scientific_exploration.campaigns
+        )
+
+    logistics.register_policy_owner_resolver("industry", industry_owner_exists)
+    logistics.register_policy_owner_resolver("research", research_owner_exists)
+    logistics.register_policy_owner_resolver(
+        "scientific_exploration", exploration_owner_exists
     )
     extraction = ExtractionService(build_extraction_specs(), graph, environment, surface_infrastructure)
 

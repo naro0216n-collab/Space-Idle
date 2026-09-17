@@ -24,7 +24,7 @@ class LogisticsProjectorMixin(
             vehicle_production_options=self._vehicle_production_option_rows(),
             vehicle_production=self._vehicle_production_rows(),
             cargo_flows=self._cargo_flow_rows(),
-            supply_policies=self._supply_policy_rows(),
+            logistics_policies=self._logistics_policy_rows(),
             target_stocks=self._target_stock_rows(),
             requirements=self._requirement_rows(
                 execution_allocation=decision.allocations.transport,
@@ -51,7 +51,7 @@ class LogisticsProjectorMixin(
             allocation_count=len(allocations),
             unfilled_allocation_units=sum(row.unfilled_units for row in allocations),
             cargo_flow_count=len(flows),
-            supply_policy_count=len(sim.logistics.supply_policy_rows()),
+            logistics_policy_count=len(sim.logistics.logistics_policy_rows()),
             target_stock_count=len(sim.logistics.target_stock_policies()),
             requirement_count=len(requirement_rows),
             queued_supply_t=sum(row.remaining_t for row in requirement_rows),

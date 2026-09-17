@@ -106,7 +106,6 @@ class ConstructionPlanningMixin:
         location_id: SpatialNodeId,
         priority: ActivityPriority,
         sourcing_policy: SourcingPolicy,
-        import_source_id: SpatialNodeId | None,
         site_cell_id: SurfaceCellId | None = None,
         day: int = 0,
     ) -> ProjectId:
@@ -114,10 +113,6 @@ class ConstructionPlanningMixin:
             raise KeyError(location_id)
         if sourcing_policy not in self.sourcing_wait_days:
             raise ValueError(f"unknown sourcing policy: {sourcing_policy}")
-        if import_source_id is not None and not self.facilities.environment.graph.has_operational_node(import_source_id):
-            raise KeyError(import_source_id)
-        if import_source_id == location_id:
-            raise ValueError("import source must differ from project location")
 
         if isinstance(target, NewFacilityTarget):
             recipe = self.recipes[target.facility_def_id]
@@ -155,7 +150,6 @@ class ConstructionPlanningMixin:
             location_id,
             priority,
             sourcing_policy,
-            import_source_id,
             resources=resources,
             site_cell_id=site_cell_id,
         )
@@ -169,7 +163,6 @@ class ConstructionPlanningMixin:
         priority: ActivityPriority,
         sourcing_policy: SourcingPolicy,
         day: int = 0,
-        import_source_id: SpatialNodeId | None = None,
         site_cell_id: SurfaceCellId | None = None,
     ) -> ProjectId:
         failures = self.build_plan_failures(
@@ -180,7 +173,7 @@ class ConstructionPlanningMixin:
                 raise KeyError(facility_def_id)
             raise ValueError("; ".join(failure.detail for failure in failures))
         return self._create_project(
-            NewFacilityTarget(facility_def_id), location_id, priority, sourcing_policy, import_source_id, site_cell_id, day
+            NewFacilityTarget(facility_def_id), location_id, priority, sourcing_policy, site_cell_id, day
         )
 
     def plan_upgrade(
@@ -189,7 +182,6 @@ class ConstructionPlanningMixin:
         priority: ActivityPriority,
         sourcing_policy: SourcingPolicy,
         day: int = 0,
-        import_source_id: SpatialNodeId | None = None,
     ) -> ProjectId:
         failures = self.upgrade_plan_failures(facility_id)
         if failures:
@@ -205,7 +197,6 @@ class ConstructionPlanningMixin:
             facility.operational_node_id,
             priority,
             sourcing_policy,
-            import_source_id,
             day=day,
         )
 
@@ -215,7 +206,6 @@ class ConstructionPlanningMixin:
         priority: ActivityPriority,
         sourcing_policy: SourcingPolicy = "mixed",
         day: int = 0,
-        import_source_id: SpatialNodeId | None = None,
     ) -> ProjectId:
         failures = self.decommission_plan_failures(facility_id)
         if failures:
@@ -228,7 +218,6 @@ class ConstructionPlanningMixin:
             facility.operational_node_id,
             priority,
             sourcing_policy,
-            import_source_id,
             day=day,
         )
 
@@ -239,7 +228,6 @@ class ConstructionPlanningMixin:
         priority: ActivityPriority,
         sourcing_policy: SourcingPolicy,
         day: int = 0,
-        import_source_id: SpatialNodeId | None = None,
     ) -> ProjectId:
         recipe_id = self.surface_cell_development_recipe_id
         if recipe_id is None or recipe_id not in self.spatial_recipes:
@@ -255,7 +243,6 @@ class ConstructionPlanningMixin:
             location_id,
             priority,
             sourcing_policy,
-            import_source_id,
             day=day,
         )
 
@@ -280,23 +267,6 @@ class ConstructionPlanningMixin:
     def sourcing_policy_options(self) -> tuple[SourcingPolicy, ...]:
         return tuple(self.sourcing_wait_days)
 
-    def import_source_options_for_location(self, location_id: SpatialNodeId) -> tuple[SpatialNodeId, ...]:
-        if not self.facilities.environment.graph.has_operational_node(location_id):
-            raise KeyError(location_id)
-        return tuple(
-            sorted(
-                (
-                    candidate_id
-                    for candidate_id in self.facilities.environment.graph.operational_node_ids()
-                    if candidate_id != location_id
-                ),
-                key=str,
-            )
-        )
-
-    def import_source_options(self, project_id: ProjectId) -> tuple[SpatialNodeId, ...]:
-        return self.import_source_options_for_location(self.projects[project_id].operational_node_id)
-
     def _ensure_sourcing_mutable(self, project: ConstructionProject) -> None:
         if not self.sourcing_mutable(project.id):
             if project.status not in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}:
@@ -317,15 +287,6 @@ class ConstructionPlanningMixin:
         project.status = ProjectStatus.PLANNED
         self._activate_procurement_if_eligible(project, day)
 
-
-    def set_import_source(self, project_id: ProjectId, location_id: SpatialNodeId | None) -> None:
-        project = self.projects[project_id]
-        if location_id is not None and not self.facilities.environment.graph.has_operational_node(location_id):
-            raise KeyError(location_id)
-        if location_id == project.operational_node_id:
-            raise ValueError("import source must differ from project location")
-        self._ensure_sourcing_mutable(project)
-        project.import_source_id = location_id
 
     def cancel(self, project_id: ProjectId) -> None:
         project = self.projects[project_id]

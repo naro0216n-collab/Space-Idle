@@ -42,7 +42,7 @@ class GetFleetRelocationPreview:
     units: int
     source_id: str
     destination_id: str
-    path_policy: str = "fastest"
+    path_policy: str = "balanced"
 @dataclass(frozen=True)
 class GetTransportAllocations: pass
 @dataclass(frozen=True)

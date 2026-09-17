@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .market import MarketInterfaceState
-from .shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from .shared import CelestialBodyId, DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
+from .supply import PathSelectionMode, SourceSelectionMode
+from .transport.models import PathPolicy
 from .spatial import OperationalNodeState
 
 
@@ -53,6 +55,20 @@ class ScenarioMarketInterface:
 
 
 @dataclass(frozen=True)
+class ScenarioLogisticsPolicy:
+    id: EntityId
+    source_mode: SourceSelectionMode = SourceSelectionMode.ALLOW_ANY
+    allowed_source_ids: tuple[SpatialNodeId, ...] = ()
+    preferred_source_id: SpatialNodeId | None = None
+    path_mode: PathSelectionMode = PathSelectionMode.ALLOW_ANY
+    explicit_path: tuple[MovementPlanId, ...] = ()
+    allowed_handoff_ids: tuple[SpatialNodeId, ...] = ()
+    allowed_service_ids: tuple[str, ...] = ()
+    path_preference: PathPolicy = PathPolicy.BALANCED
+    global_policy: bool = False
+
+
+@dataclass(frozen=True)
 class ScenarioDefinition:
     """Content-owned new-game state definition.
 
@@ -74,6 +90,7 @@ class ScenarioDefinition:
     funds_balance_musd: float = 0.0
     market_provider_ids: tuple[DefinitionId, ...] = ()
     market_interfaces: tuple[ScenarioMarketInterface, ...] = ()
+    logistics_policies: tuple[ScenarioLogisticsPolicy, ...] = ()
 
     def apply(self, sim) -> None:
         sim.require_uninitialized_runtime_state()
@@ -118,4 +135,22 @@ class ScenarioDefinition:
             sim.market.set_interface(
                 MarketInterfaceState(row.id, row.provider_id, row.operational_node_id, row.enabled)
             )
+        global_policy_id = None
+        for row in self.logistics_policies:
+            sim.logistics.create_logistics_policy(
+                row.id,
+                source_mode=row.source_mode,
+                allowed_source_ids=None if not row.allowed_source_ids else tuple(row.allowed_source_ids),
+                preferred_source_id=row.preferred_source_id,
+                path_mode=row.path_mode,
+                explicit_path=None if not row.explicit_path else tuple(row.explicit_path),
+                allowed_handoff_ids=None if not row.allowed_handoff_ids else tuple(row.allowed_handoff_ids),
+                allowed_service_ids=None if not row.allowed_service_ids else tuple(row.allowed_service_ids),
+                path_preference=row.path_preference,
+            )
+            if row.global_policy:
+                if global_policy_id is not None:
+                    raise ValueError("scenario defines multiple global logistics policies")
+                global_policy_id = row.id
+        sim.logistics.set_global_logistics_policy(global_policy_id)
         sim.mark_runtime_state_initialized()

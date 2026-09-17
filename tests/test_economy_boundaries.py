@@ -29,9 +29,6 @@ def test_transport_requires_player_owned_capacity_and_never_spends_market_funds(
     sim = app._simulation
     sim.inventory.stock[(LEO, CONSTRUCTION_EQUIPMENT)] = 0.0
     sim.inventory.add(EARTH, CONSTRUCTION_EQUIPMENT, 2.0)
-    sim.logistics.set_supply_policy(
-        LEO, CONSTRUCTION_EQUIPMENT, preferred_source_id=EARTH
-    )
     target_id = sim.logistics.set_target_stock(
         LEO, CONSTRUCTION_EQUIPMENT, 1.0, 5
     )

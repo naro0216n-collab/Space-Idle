@@ -89,7 +89,7 @@ class SurfaceProjectorMixin:
                         ),
                         active_project_id=None if active_spatial_project is None else str(active_spatial_project.id),
                         sourcing_policy_options=tuple(sim.projects.sourcing_policy_options()),
-                        import_source_options=tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(location.operational_node_id)),
+                        logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                     )
                 )
             development_options = tuple(development_options_list)
@@ -143,7 +143,7 @@ class SurfaceProjectorMixin:
                             recipe.facility_def_id, owner, site_cell_id=cell.id
                         ),
                         sourcing_policy_options=tuple(sim.projects.sourcing_policy_options()),
-                        import_source_options=tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(owner)),
+                        logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                     )
                     for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id))
                     if sim.facilities.definitions[recipe.facility_def_id].placement_scope is FacilityPlacementScope.SURFACE_CELL
@@ -193,7 +193,7 @@ class SurfaceProjectorMixin:
                                 blockers=tuple((failure.code, failure.detail) for failure in failures),
                                 can_plan=not failures,
                                 active_project_id=None if active_founding is None else str(active_founding.id),
-                                preferred_source_options=tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(staging_id)),
+                                logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                             ))
                 foundation_options = tuple(foundation_rows)
 

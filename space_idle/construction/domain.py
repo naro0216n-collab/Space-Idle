@@ -56,7 +56,6 @@ def capture_projects(sim: Any) -> dict[str, Any]:
                 "site_cell_id": None if project.site_cell_id is None else str(project.site_cell_id),
                 "priority": project.priority,
                 "sourcing_policy": project.sourcing_policy,
-                "import_source_id": None if project.import_source_id is None else str(project.import_source_id),
                 "status": project.status.value,
                 "procurement_started_day": project.procurement_started_day,
                 "construction_done": project.construction_done,
@@ -94,7 +93,6 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
             site_cell_id=None if row["site_cell_id"] is None else SurfaceCellId(row["site_cell_id"]),
             priority=int(row["priority"]),
             sourcing_policy=row["sourcing_policy"],
-            import_source_id=None if row["import_source_id"] is None else SpatialNodeId(row["import_source_id"]),
             status=ProjectStatus(row["status"]),
             procurement_started_day=row["procurement_started_day"],
             construction_done=float(row["construction_done"]),
@@ -196,9 +194,6 @@ def validate_runtime(sim: Any) -> None:
     active_spatial_cells: set[SurfaceCellId] = set()
     for project_id, project in sim.projects.projects.items():
         _require(sim.graph.has_operational_node(project.operational_node_id), f"project references unknown host location: {project_id}")
-        if project.import_source_id is not None:
-            _require(sim.graph.has_operational_node(project.import_source_id), f"project import source is unknown: {project_id}")
-            _require(project.import_source_id != project.operational_node_id, f"project import source equals destination: {project_id}")
         target = project.target
         if isinstance(target, NewFacilityTarget):
             _require(target.facility_def_id in sim.projects.recipes, f"project references unknown build recipe: {project_id}")

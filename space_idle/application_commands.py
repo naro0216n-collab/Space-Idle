@@ -3,7 +3,7 @@ from typing import TypeAlias
 from .app_contracts.common import ApplicationError, CommandResult
 from .app_contracts.construction import (
     PlanBuild, PlanFacilityUpgrade, PlanFacilityDecommission, FoundLocation, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, CancelBuild, PauseBuild, ResumeBuild, SetProjectPriority,
-    SetProjectSourcingPolicy, SetProjectImportSource,
+    SetProjectSourcingPolicy,
 )
 from .app_contracts.operations import (
     PauseFacility, ResumeFacility, SetFacilityProcess, SetFacilityActivityPriority,
@@ -23,7 +23,7 @@ from .app_contracts.transport import (
     DeleteTransportAllocation, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
 )
 from .app_contracts.logistics import (
-    SetTargetStock, DeleteTargetStock, SetSupplyPolicy, DeleteSupplyPolicy,
+    SetTargetStock, DeleteTargetStock, CreateLogisticsPolicy, UpdateLogisticsPolicy, AssignLogisticsPolicy, UnassignLogisticsPolicy, SetGlobalLogisticsPolicy, DeleteLogisticsPolicy,
 )
 from .app_contracts.contracts import AcceptContract, DeclineContract
 from .app_contracts.economy import (
@@ -38,7 +38,7 @@ from .app_contracts.queries import (
 
 Command: TypeAlias = (
     PlanBuild | PlanFacilityUpgrade | PlanFacilityDecommission | FoundLocation | CancelFounding | PauseFounding | ResumeFounding | SetFoundingPriority | DevelopSurfaceCell | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
-    SetProjectSourcingPolicy | SetProjectImportSource |
+    SetProjectSourcingPolicy |
     PauseFacility | ResumeFacility | SetFacilityProcess | SetFacilityActivityPriority | SetMaintenancePriority |
     SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
     SetResearchPriority | SetResearchDemonstrationSite | StartSurvey | PauseSurvey |
@@ -48,7 +48,7 @@ Command: TypeAlias = (
     CreateTransportAllocation | UpdateTransportAllocation | ChangeTransportAllocationMode |
     PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |
     RetireFleet | CancelFleetRetirement | SetFleetRetirementPriority |
-    SetTargetStock | DeleteTargetStock | SetSupplyPolicy | DeleteSupplyPolicy | AcceptContract |
+    SetTargetStock | DeleteTargetStock | CreateLogisticsPolicy | UpdateLogisticsPolicy | AssignLogisticsPolicy | UnassignLogisticsPolicy | SetGlobalLogisticsPolicy | DeleteLogisticsPolicy | AcceptContract |
     DeclineContract | CreateTradeOrder | UpdateTradeOrder | CancelTradeOrder | AdvanceTime
 )
 Query: TypeAlias = (

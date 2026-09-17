@@ -21,6 +21,7 @@ from .models import (
     FleetCommitmentState,
     MovementExecution,
     MovementPlan,
+    PathPolicy,
     TransportAllocation,
     VehicleDef,
 )
@@ -172,7 +173,7 @@ class TransportService(
     ) -> tuple[MovementPlan, ...]:
         from .models import PathPolicy
 
-        policy = PathPolicy.FASTEST if path_policy is None else PathPolicy(path_policy)
+        policy = PathPolicy.BALANCED if path_policy is None else PathPolicy(path_policy)
         path = self._movement_path_for_vehicle(
             origin_id,
             destination_id,
@@ -216,12 +217,18 @@ class TransportService(
             raise ValueError(
                 f"no executable movement plan {origin_id} -> physical target {target_cell_id}"
             )
-        return min(
+        from ..path_selection import select_tradeoff_candidate
+
+        return select_tradeoff_candidate(
             candidates,
-            key=lambda plan: (
-                self.performance_movement_transit_days(plan, vehicle.performance),
-                str(plan.id),
+            metric_time=lambda plan: self.performance_movement_transit_days(
+                plan, vehicle.performance
             ),
+            metric_propellant=lambda plan: vehicle.propellant_t(
+                plan, max(vehicle.max_cargo_for_movement(plan), 0.0)
+            ),
+            stable_key=lambda plan: str(plan.id),
+            preference=PathPolicy.BALANCED,
         )
 
     def outbound_movement_plans(self, origin_id: SpatialNodeId) -> tuple[MovementPlan, ...]:

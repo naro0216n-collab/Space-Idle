@@ -6,7 +6,7 @@ from ..priority import (
     ActivityPriority, DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PROVISIONING_PRIORITY, ProvisioningPriority,
 )
 
-PathPolicyLiteral = Literal["fastest", "lowest_propellant"]
+PathPolicyLiteral = Literal["balanced", "fastest", "lowest_propellant"]
 TransportControlModeLiteral = Literal["units", "capacity"]
 
 
@@ -44,7 +44,7 @@ class CreateTransportAllocation:
     target_forward_t_per_day: float | None = None
     target_reverse_t_per_day: float | None = None
     path: tuple[str, ...] | None = None
-    path_policy: PathPolicyLiteral = "fastest"
+    path_policy: PathPolicyLiteral = "balanced"
     paused: bool = False
 
 
@@ -105,4 +105,4 @@ class RelocateFleet:
     source_id: str
     destination_id: str
     path: tuple[str, ...] | None = None
-    path_policy: PathPolicyLiteral = "fastest"
+    path_policy: PathPolicyLiteral = "balanced"

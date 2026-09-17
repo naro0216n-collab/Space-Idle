@@ -177,7 +177,6 @@ class ConstructionProject:
     operational_node_id: SpatialNodeId
     priority: ActivityPriority
     sourcing_policy: SourcingPolicy
-    import_source_id: SpatialNodeId | None
     status: ProjectStatus = ProjectStatus.PLANNED
     procurement_started_day: int | None = None
     construction_done: float = 0.0

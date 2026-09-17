@@ -296,7 +296,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
             target_units=None if row.get("target_units") is None else int(row["target_units"]),
             target_capacity=None if target is None else DirectionalCapacity(float(target["forward_t_per_day"]), float(target["reverse_t_per_day"])),
             path=None if row.get("path") is None else tuple(MovementPlanId(value) for value in row["path"]),
-            path_policy=PathPolicy(row.get("path_policy", "fastest")), paused=bool(row.get("paused", False)),
+            path_policy=PathPolicy(row.get("path_policy", "balanced")), paused=bool(row.get("paused", False)),
             last_operated_day=None if row.get("last_operated_day") is None else int(row["last_operated_day"]),
         )
         tr.transport_allocations[allocation.id] = allocation

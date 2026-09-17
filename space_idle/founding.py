@@ -124,7 +124,6 @@ class LocationFoundingProject:
     founding_package_id: DefinitionId
     vehicle_definition_id: DefinitionId
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    preferred_source_id: SpatialNodeId | None = None
     fleet_commitment_id: EntityId | None = None
     status: FoundingStatus = FoundingStatus.PREPARING
     preparation_done: float = 0.0
@@ -306,16 +305,10 @@ class LocationFoundingService:
         vehicle_definition_id: DefinitionId,
         *,
         priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
-        preferred_source_id: SpatialNodeId | None = None,
         day: int = 0,
     ) -> ProjectId:
         if not display_name:
             raise ValueError("location display name must not be empty")
-        if preferred_source_id is not None:
-            if not self.facilities.environment.graph.has_operational_node(preferred_source_id):
-                raise KeyError(preferred_source_id)
-            if preferred_source_id == staging_node_id:
-                raise ValueError("preferred source must differ from staging node")
         failures = self.planning_failures(staging_node_id, body_id, cell_id, package_id, vehicle_definition_id, day)
         if failures:
             raise ValueError("; ".join(f"{row.code}: {row.detail}" for row in failures))
@@ -331,7 +324,6 @@ class LocationFoundingService:
             package_id,
             vehicle_definition_id,
             priority,
-            preferred_source_id,
         )
         self.projects[project_id] = project
         package = self.packages[package_id]
@@ -450,7 +442,6 @@ class LocationFoundingService:
                     resource_id,
                     remaining,
                     project.priority,
-                    project.preferred_source_id,
                 ))
         return tuple(rows)
 

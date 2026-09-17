@@ -576,17 +576,19 @@ class MarketService:
                 continue
             requirement_id = self.sell_requirement_id(order.id)
             rows.append(SupplyRequirement(
-                requirement_id,
-                "market_sell",
-                order.id,
-                interface.operational_node_id,
-                order.resource_id,
-                target,
-                order.priority,
-                None,
-                order.rate_target_t_per_day if order.control_mode is TradeControlMode.RATE else None,
-                None,
-                "market_sell_delivery",
+                id=requirement_id,
+                owner_kind="market_sell",
+                owner_id=order.id,
+                destination_id=interface.operational_node_id,
+                resource_id=order.resource_id,
+                amount_t=target,
+                priority=order.priority,
+                recurring_rate_t_per_day=(
+                    order.rate_target_t_per_day
+                    if order.control_mode is TradeControlMode.RATE
+                    else None
+                ),
+                purpose="market_sell_delivery",
             ))
         return tuple(rows)
 

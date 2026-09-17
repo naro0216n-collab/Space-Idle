@@ -189,15 +189,14 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 f"requirement.industry:{location_id}:{resource_id}:priority-{priority}"
             )
             requirements.append(SupplyRequirement(
-                requirement_id,
-                "industry",
-                owner_id,
-                location_id,
-                resource_id,
-                target_t,
-                priority,
-                None,
-                target_t,
+                id=requirement_id,
+                owner_kind="industry",
+                owner_id=owner_id,
+                destination_id=location_id,
+                resource_id=resource_id,
+                amount_t=target_t,
+                priority=priority,
+                recurring_rate_t_per_day=target_t,
             ))
         return tuple(requirements)
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-import heapq
 from typing import Mapping
 
 from .execution_requirements import (
@@ -15,7 +14,7 @@ from .execution_requirements import (
 )
 from .knowledge import DomainActivity
 from .allocation_projection import ResourceAllocationProjectionRow
-from .supply import SupplyRequirement
+from .supply import PathSelectionMode, SourceSelectionMode, SupplyRequirement
 from .service_capacity import ServiceCapacityAllocationPlan
 from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
 from .supply_planning import SupplyPlanningOptions
@@ -574,45 +573,56 @@ class LogisticsFlowMixin:
         return occupied
 
     @staticmethod
-    def _edge_score(edge: TransportServiceSupply, policy: PathPolicy) -> float:
-        if policy is PathPolicy.FASTEST:
-            return float(edge.latency_days)
-        return edge.propellant_t_per_t
+    def _path_totals(path: tuple[TransportServiceSupply, ...]) -> tuple[float, float]:
+        return (
+            sum(float(edge.latency_days) for edge in path),
+            sum(float(edge.propellant_t_per_t) for edge in path),
+        )
+
+    @staticmethod
+    def _service_edge_allowed(
+        policy, edge: TransportServiceSupply, destination_id: SpatialNodeId
+    ) -> bool:
+        if policy is None:
+            return True
+        if (
+            policy.allowed_service_ids is not None
+            and edge.key not in policy.allowed_service_ids
+        ):
+            return False
+        if (
+            edge.destination_id != destination_id
+            and policy.allowed_handoff_ids is not None
+            and edge.destination_id not in policy.allowed_handoff_ids
+        ):
+            return False
+        return True
 
     def _automatic_service_path(
         self,
         source_id: SpatialNodeId,
         destination_id: SpatialNodeId,
         edges: tuple[TransportServiceSupply, ...],
-        policy: PathPolicy,
+        preference: PathPolicy,
+        policy=None,
     ) -> tuple[TransportServiceSupply, ...]:
+        from .path_selection import select_tradeoff_path
+
         by_source: dict[SpatialNodeId, list[TransportServiceSupply]] = {}
         for edge in edges:
-            by_source.setdefault(edge.source_id, []).append(edge)
-        queue: list[tuple[float, tuple[str, ...], SpatialNodeId, tuple[TransportServiceSupply, ...]]] = [
-            (0.0, (), source_id, ())
-        ]
-        best: dict[SpatialNodeId, tuple[float, tuple[str, ...]]] = {}
-        while queue:
-            score, keys, node, path = heapq.heappop(queue)
-            prior = best.get(node)
-            if prior is not None and prior <= (score, keys):
+            if not self._service_edge_allowed(policy, edge, destination_id):
                 continue
-            best[node] = (score, keys)
-            if node == destination_id:
-                return path
-            for edge in sorted(by_source.get(node, ()), key=lambda row: row.key):
-                new_path = path + (edge,)
-                heapq.heappush(
-                    queue,
-                    (
-                        score + self._edge_score(edge, policy),
-                        keys + (edge.key,),
-                        edge.destination_id,
-                        new_path,
-                    ),
-                )
-        raise ValueError(f"no available transport service path {source_id} -> {destination_id}")
+            by_source.setdefault(edge.source_id, []).append(edge)
+        return select_tradeoff_path(
+            source_id,
+            destination_id,
+            outgoing=lambda node: by_source.get(node, ()),
+            edge_destination=lambda edge: edge.destination_id,
+            edge_time=lambda edge: float(edge.latency_days),
+            edge_propellant=lambda edge: float(edge.propellant_t_per_t),
+            edge_key=lambda edge: edge.key,
+            preference=preference,
+        )
 
     def _explicit_service_path(
         self,
@@ -620,45 +630,66 @@ class LogisticsFlowMixin:
         destination_id: SpatialNodeId,
         movement_plan_path: tuple[MovementPlanId, ...],
         edges: tuple[TransportServiceSupply, ...],
-        policy: PathPolicy,
+        preference: PathPolicy,
+        policy=None,
     ) -> tuple[TransportServiceSupply, ...]:
-        candidates = sorted(edges, key=lambda edge: (self._edge_score(edge, policy), edge.key))
+        from .path_selection import select_tradeoff_path
 
-        def search(node: SpatialNodeId, index: int) -> tuple[TransportServiceSupply, ...] | None:
-            if index == len(movement_plan_path):
-                return () if node == destination_id else None
-            for edge in candidates:
+        # A pinned Logistics path fixes the Movement Plan sequence, not a specific
+        # Transport Allocation. Existing service/handoff constraints still apply.
+        State = tuple[SpatialNodeId, int]
+        Edge = tuple[TransportServiceSupply, State]
+        ordered_edges = tuple(
+            sorted(
+                (
+                    edge
+                    for edge in edges
+                    if self._service_edge_allowed(policy, edge, destination_id)
+                ),
+                key=lambda edge: edge.key,
+            )
+        )
+
+        def outgoing(state: State):
+            node, index = state
+            for edge in ordered_edges:
                 if edge.source_id != node:
                     continue
                 size = len(edge.movement_plan_path)
-                if size == 0 or movement_plan_path[index : index + size] != edge.movement_plan_path:
+                if size == 0:
                     continue
-                suffix = search(edge.destination_id, index + size)
-                if suffix is not None:
-                    return (edge,) + suffix
-            return None
+                if movement_plan_path[index : index + size] != edge.movement_plan_path:
+                    continue
+                yield edge, (edge.destination_id, index + size)
 
-        result = search(source_id, 0)
-        if result is None:
-            raise ValueError("explicit supply path has no matching transport services")
-        return result
+        try:
+            selected = select_tradeoff_path(
+                (source_id, 0),
+                (destination_id, len(movement_plan_path)),
+                outgoing=outgoing,
+                edge_destination=lambda row: row[1],
+                edge_time=lambda row: float(row[0].latency_days),
+                edge_propellant=lambda row: float(row[0].propellant_t_per_t),
+                edge_key=lambda row: row[0].key,
+                preference=preference,
+            )
+        except ValueError as exc:
+            raise ValueError("explicit logistics path has no matching transport services") from exc
+        return tuple(row[0] for row in selected)
 
     def _supply_path_preferences(
         self, requirement: SupplyRequirement
-    ) -> tuple[SpatialNodeId | None, PathPolicy, tuple[MovementPlanId, ...] | None]:
-        policy = self.supply_policy_for(requirement)
-        source_id = requirement.source_id
-        if source_id is None and policy is not None:
-            source_id = policy.preferred_source_id
-        path_policy = PathPolicy.FASTEST if policy is None else policy.path_policy
+    ) -> tuple[object | None, PathPolicy, tuple[MovementPlanId, ...] | None]:
+        policy = self.logistics_policy_for(requirement)
         explicit_path = None
-        if (
-            policy is not None
-            and policy.explicit_path is not None
-            and source_id == policy.preferred_source_id
-        ):
-            explicit_path = policy.explicit_path
-        return source_id, path_policy, explicit_path
+        preference = PathPolicy.BALANCED
+        if policy is not None:
+            if policy.path_mode is PathSelectionMode.PREFERRED:
+                preference = policy.path_preference
+            elif policy.path_mode is PathSelectionMode.PINNED:
+                explicit_path = policy.explicit_path
+                preference = policy.path_preference
+        return policy, preference, explicit_path
 
     def supply_service_path(
         self,
@@ -668,13 +699,18 @@ class LogisticsFlowMixin:
         edges: tuple[TransportServiceSupply, ...] | None = None,
     ) -> tuple[TransportServiceSupply, ...]:
         available = self._service_edges(day) if edges is None else edges
-        _source, path_policy, explicit_path = self._supply_path_preferences(requirement)
+        policy, preference, explicit_path = self._supply_path_preferences(requirement)
         if explicit_path is None:
             return self._automatic_service_path(
-                source_id, requirement.destination_id, available, path_policy
+                source_id, requirement.destination_id, available, preference, policy
             )
         return self._explicit_service_path(
-            source_id, requirement.destination_id, explicit_path, available, path_policy
+            source_id,
+            requirement.destination_id,
+            explicit_path,
+            available,
+            preference,
+            policy,
         )
 
     def _candidate_supply_paths(
@@ -682,32 +718,55 @@ class LogisticsFlowMixin:
         requirement: SupplyRequirement,
         day: int,
         edges: tuple[TransportServiceSupply, ...],
+        *,
+        enforce_source_policy: bool = True,
     ) -> tuple[tuple[SpatialNodeId, tuple[TransportServiceSupply, ...]], ...]:
-        constrained_source, path_policy, _explicit_path = self._supply_path_preferences(requirement)
-        if constrained_source is not None:
-            source_ids = (constrained_source,)
-        else:
-            source_ids = tuple(
-                node_id
-                for node_id in self.facilities.environment.graph.operational_node_ids()
-                if node_id != requirement.destination_id
-                and self.inventory.available(node_id, requirement.resource_id) > 1e-12
-            )
+        from .path_selection import select_tradeoff_candidate
 
-        rows: list[tuple[float, str, SpatialNodeId, tuple[TransportServiceSupply, ...]]] = []
+        policy, preference, _explicit_path = self._supply_path_preferences(requirement)
+        source_ids = tuple(
+            node_id
+            for node_id in self.facilities.environment.graph.operational_node_ids()
+            if node_id != requirement.destination_id
+            and self.inventory.available(node_id, requirement.resource_id) > 1e-12
+            and (
+                policy is None
+                or policy.allowed_source_ids is None
+                or node_id in policy.allowed_source_ids
+            )
+        )
+
+        rows: list[tuple[SpatialNodeId, tuple[TransportServiceSupply, ...]]] = []
         for source_id in source_ids:
-            if source_id == requirement.destination_id:
-                continue
             try:
                 path = self.supply_service_path(requirement, source_id, day, edges)
             except ValueError:
                 continue
-            if not path:
-                continue
-            score = sum(self._edge_score(edge, path_policy) for edge in path)
-            rows.append((score, str(source_id), source_id, path))
-        rows.sort(key=lambda row: (row[0], row[1], tuple(edge.key for edge in row[3])))
-        return tuple((source_id, path) for _score, _key, source_id, path in rows)
+            if path:
+                rows.append((source_id, path))
+
+        rows.sort(key=lambda row: (str(row[0]), tuple(edge.key for edge in row[1])))
+        if not rows:
+            return ()
+        if policy is None:
+            if enforce_source_policy and len(rows) > 1:
+                return ()
+        elif policy.source_mode is SourceSelectionMode.PREFERRED:
+            preferred = [row for row in rows if row[0] == policy.preferred_source_id]
+            if preferred:
+                rest = [row for row in rows if row[0] != policy.preferred_source_id]
+                return tuple(preferred + rest)
+
+        if len(rows) == 1:
+            return tuple(rows)
+        selected = select_tradeoff_candidate(
+            rows,
+            metric_time=lambda row: self._path_totals(row[1])[0],
+            metric_propellant=lambda row: self._path_totals(row[1])[1],
+            stable_key=lambda row: f"{row[0]}:" + ",".join(edge.key for edge in row[1]),
+            preference=preference,
+        )
+        return (selected,) + tuple(row for row in rows if row != selected)
 
     @staticmethod
     def _dispatch_is_due(
@@ -1350,21 +1409,22 @@ class LogisticsFlowMixin:
         edges = self._service_edges_for_execution_allocation(
             day, execution_allocation
         )
-        constrained_source, _path_policy, _explicit_path = (
-            self._supply_path_preferences(requirement)
-        )
-        if constrained_source is not None:
-            source_ids = (constrained_source,)
-        else:
-            source_ids = tuple(
-                node_id
-                for node_id in self.facilities.environment.graph.operational_node_ids()
-                if node_id != requirement.destination_id
+        policy, _path_policy, _explicit_path = self._supply_path_preferences(requirement)
+        source_ids = tuple(
+            node_id
+            for node_id in self.facilities.environment.graph.operational_node_ids()
+            if node_id != requirement.destination_id
+            and (
+                policy is None
+                or policy.allowed_source_ids is None
+                or node_id in policy.allowed_source_ids
             )
+        )
 
         candidates: list[SpatialNodeId] = []
         operational: list[SpatialNodeId] = []
         stocked: list[SpatialNodeId] = []
+        path_candidates: list[tuple[SpatialNodeId, tuple[MovementPlanId, ...]]] = []
         blockers: list[str] = []
         for source_id in sorted(source_ids, key=str):
             # Source candidacy is independent of today's Transport Capacity.
@@ -1382,8 +1442,33 @@ class LogisticsFlowMixin:
                 continue
             if not physical_path:
                 continue
+            movement_plan_path = tuple(
+                plan_id
+                for edge in physical_path
+                for plan_id in edge.movement_plan_path
+            )
+            path_candidates.append((source_id, movement_plan_path))
             if min(edge.capacity_t_per_day for edge in physical_path) > 1e-12:
                 operational.append(source_id)
+
+        viable_sources = tuple(
+            source_id for source_id in operational
+            if source_id in stocked
+        )
+        if policy is None and len(viable_sources) > 1:
+            blockers.append("logistics_policy:source_selection_required")
+        elif policy is not None:
+            if policy.allowed_source_ids is not None and not any(
+                source_id in stocked for source_id in policy.allowed_source_ids
+            ):
+                blockers.append("logistics_policy:source_constraint_unavailable")
+            has_path_constraint = (
+                policy.path_mode is PathSelectionMode.PINNED
+                or policy.allowed_handoff_ids is not None
+                or policy.allowed_service_ids is not None
+            )
+            if has_path_constraint and stocked and not operational:
+                blockers.append("logistics_policy:path_constraint_unavailable")
 
         arrivals = [
             flow.first_arrival_day
@@ -1394,6 +1479,7 @@ class LogisticsFlowMixin:
             tuple(candidates),
             tuple(operational),
             tuple(stocked),
+            tuple(path_candidates),
             tuple(dict.fromkeys(blockers)),
             min(arrivals) if arrivals else None,
         )

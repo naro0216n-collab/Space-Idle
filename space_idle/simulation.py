@@ -575,6 +575,13 @@ class Simulation:
         if self.founding is not None and self.founding.settle_arrivals(self.day):
             self.transport.invalidate_movement_plans()
 
+        # Policy assignment is Logistics-owned intent while owner lifecycle is
+        # authoritative in each activity Domain. Boundary settlement completes
+        # movement-driven owner transitions first, then prunes any assignment
+        # whose owner no longer exists so no dangling reference survives the
+        # externally observable resting boundary.
+        self.logistics.prune_orphan_policy_assignments()
+
         self.logistics.prepare_cargo_arrivals(self.day)
         cargo_bundles = self.logistics.boundary_execution_bundles(self.day)
         buy_bundles = self.market.buy_boundary_bundles(self.day, self.inventory)

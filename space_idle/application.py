@@ -13,12 +13,12 @@ from .application_commands import (
     ResumeBuild, ResumeFacility, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
     ResumeVehicleProduction, SetFacilityProcess, SetMaintenancePriority,
-    SetFacilityActivityPriority, SetProjectImportSource, SetProjectPriority, SetProjectSourcingPolicy,
+    SetFacilityActivityPriority, SetProjectPriority, SetProjectSourcingPolicy,
     SetResearchDemonstrationSite, SetResearchPrototypeSite, SetSurveyPriority,
     SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration, SetScientificExplorationPriority,
     StartSurvey, UnassignExplorationFleet, UpdateTransportAllocation, AssignExplorationFleet, CreateTradeOrder,
     UpdateTradeOrder, CancelTradeOrder, GetMarket,
-    SetTargetStock, DeleteTargetStock, SetSupplyPolicy, DeleteSupplyPolicy,
+    SetTargetStock, DeleteTargetStock, CreateLogisticsPolicy, UpdateLogisticsPolicy, AssignLogisticsPolicy, UnassignLogisticsPolicy, SetGlobalLogisticsPolicy, DeleteLogisticsPolicy,
 )
 
 from .application_command_handlers import ApplicationCommandMixin

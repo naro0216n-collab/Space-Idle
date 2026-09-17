@@ -310,7 +310,7 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
                 units=int(_required(params, "units")),
                 source_id=_required(params, "source_id"),
                 destination_id=_required(params, "destination_id"),
-                path_policy=_one(params, "path_policy") or "fastest",
+                path_policy=_one(params, "path_policy") or "balanced",
             ))
             return
         if path == "/api/v1/logistics/transport-allocations":

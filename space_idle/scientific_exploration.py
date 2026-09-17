@@ -37,7 +37,7 @@ class ScientificExplorationDefinition:
     required_units: int = 1
     minimum_payload_t: float = 0.0
     required_vehicle_capabilities: tuple[str, ...] = ()
-    path_policy: PathPolicy = PathPolicy.FASTEST
+    path_policy: PathPolicy = PathPolicy.BALANCED
 
     def __post_init__(self) -> None:
         if self.origin_id == self.destination_id:
@@ -517,16 +517,15 @@ class ScientificExplorationService:
                 if remaining <= 1e-12:
                     continue
                 requirements.append(SupplyRequirement(
-                    self._supply_id(
+                    id=self._supply_id(
                         definition_id, node_id, resource_id, returning=returning
                     ),
-                    "scientific_exploration",
-                    EntityId(f"scientific_exploration:{definition_id}"),
-                    node_id,
-                    resource_id,
-                    remaining,
-                    state.priority,
-                    None,
+                    owner_kind="scientific_exploration",
+                    owner_id=EntityId(f"scientific_exploration:{definition_id}"),
+                    destination_id=node_id,
+                    resource_id=resource_id,
+                    amount_t=remaining,
+                    priority=state.priority,
                 ))
         return tuple(requirements)
 
