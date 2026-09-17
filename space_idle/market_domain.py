@@ -199,4 +199,5 @@ DOMAIN_EXTENSION = DomainExtension(
     state_codec=STATE_CODEC,
     configuration_validator=validate_configuration,
     runtime_validator=validate_runtime,
+    allocation_pool_provider=lambda sim: sim.market,
 )

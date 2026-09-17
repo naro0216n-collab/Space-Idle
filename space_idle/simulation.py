@@ -669,21 +669,32 @@ class Simulation:
             seen.add(request.id)
         return rows
 
-    def _allocation_pool_capacities(
-        self,
-        extra: dict[AllocationConstraintKey, float] | None = None,
-    ) -> dict[AllocationConstraintKey, float]:
-        capacities: dict[AllocationConstraintKey, float] = {}
-        for owner in (self.research, self.market):
-            if owner is None or not hasattr(owner, "allocation_pool_capacities"):
+    def allocation_pool_providers(self) -> tuple[object, ...]:
+        """Return composed owners of finite non-Resource allocation pools."""
+        rows: list[object] = []
+        for extension in self.domain_extensions:
+            factory = extension.allocation_pool_provider
+            if factory is None:
                 continue
-            for key, amount in owner.allocation_pool_capacities().items():
+            provider = factory(self)
+            if provider is not None:
+                rows.append(provider)
+        return tuple(rows)
+
+    def allocation_pool_capacities(
+        self,
+        overrides: dict[AllocationConstraintKey, float] | None = None,
+    ) -> dict[AllocationConstraintKey, float]:
+        """Collect finite allocation pools from composed Domain providers."""
+        capacities: dict[AllocationConstraintKey, float] = {}
+        for provider in self.allocation_pool_providers():
+            for key, amount in provider.allocation_pool_capacities(self.day).items():
                 if key in capacities:
                     raise RuntimeError(f"duplicate allocation pool capacity: {key}")
                 capacities[key] = amount
-        for key, amount in (extra or {}).items():
-            if key in capacities:
-                raise RuntimeError(f"duplicate allocation pool capacity: {key}")
+        for key, amount in (overrides or {}).items():
+            if key not in capacities:
+                raise RuntimeError(f"allocation pool override has no registered owner: {key}")
             capacities[key] = amount
         return capacities
 
@@ -697,11 +708,11 @@ class Simulation:
         *,
         resource_used: dict[AllocationConstraintKey, float] | None = None,
         service_supply: ServiceCapacityAllocationPlan | None = None,
-        extra_pool_capacities: dict[AllocationConstraintKey, float] | None = None,
+        pool_capacity_overrides: dict[AllocationConstraintKey, float] | None = None,
     ) -> dict[AllocationConstraintKey, float]:
         bundles = tuple(self._as_execution_bundle(row) for row in intents)
         resource_used = resource_used or {}
-        pool_capacities = self._allocation_pool_capacities(extra_pool_capacities)
+        pool_capacities = self.allocation_pool_capacities(pool_capacity_overrides)
         capacities: dict[AllocationConstraintKey, float] = {}
         for bundle in bundles:
             for requirement in bundle.requirements:
@@ -940,7 +951,7 @@ class Simulation:
             capacities = self._constraint_capacities(
                 allocation_intents,
                 service_supply=provider_plan,
-                extra_pool_capacities=self.logistics.transport_capacity_pool_capacities(
+                pool_capacity_overrides=self.logistics.allocation_pool_capacities(
                     day, surface
                 ),
             )

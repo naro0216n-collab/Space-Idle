@@ -468,7 +468,7 @@ def test_unchanged_daily_dispatches_extend_one_cargo_flow_segment():
             for bundle in bundles
             for key, _coefficient in bundle.coefficients()
         }
-        capacities.update(sim.logistics.transport_capacity_pool_capacities(day))
+        capacities.update(sim.logistics.allocation_pool_capacities(day))
         shared = allocate_execution_requirements(bundles, capacities)
         execution = sim.logistics.build_capacity_logistics_execution(
             day, plan, shared, ()

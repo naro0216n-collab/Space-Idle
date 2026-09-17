@@ -57,7 +57,7 @@ class ResearchCapacityMixin:
             if facility.definition_id in self.providers
         )
 
-    def allocation_pool_capacities(self):
+    def allocation_pool_capacities(self, day: int):
         """Expose organization-owned finite pools to the common allocator."""
         return {pool_constraint("research_points", scope_id="organization"): self.stored_points}
 

@@ -246,4 +246,5 @@ DOMAIN_EXTENSION = DomainExtension(
     "logistics",
     state_codec=LOGISTICS_STATE_CODEC,
     runtime_validator=validate_logistics_runtime,
+    allocation_pool_provider=lambda sim: sim.logistics,
 )

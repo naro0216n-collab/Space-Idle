@@ -179,3 +179,30 @@ def test_transport_operation_extension_does_not_require_central_enum_change():
     context = OperationEvaluationContext(7, None, None)
     assert registry.evaluate(requirement, TestCapability(3.0), context) == ()
     assert registry.evaluate(requirement, TestCapability(1.0), context) == ("limit",)
+
+
+def test_allocation_pool_provider_extension_does_not_require_central_enum_change():
+    from space_idle import build_game_application
+    from space_idle.domain import DomainExtension
+    from space_idle.execution_requirements import pool_constraint
+
+    sim = build_game_application()._simulation
+    custom_key = pool_constraint("test.custom_pool", scope_id="test")
+
+    @dataclass
+    class TestPoolProvider:
+        capacity: float
+
+        def allocation_pool_capacities(self, day: int):
+            return {custom_key: self.capacity}
+
+    provider = TestPoolProvider(7.0)
+    sim.domain_extensions += (
+        DomainExtension(
+            "test_custom_pool",
+            allocation_pool_provider=lambda _sim: provider,
+        ),
+    )
+
+    assert provider in sim.allocation_pool_providers()
+    assert sim.allocation_pool_capacities()[custom_key] == 7.0

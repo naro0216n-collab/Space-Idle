@@ -117,7 +117,7 @@ class LogisticsFlowMixin:
     def _transport_capacity_pool_id(edge: TransportServiceSupply) -> str:
         return edge.key
 
-    def transport_capacity_pool_capacities(
+    def allocation_pool_capacities(
         self,
         day: int,
         availability_factors: Mapping[EntityId, float] | None = None,

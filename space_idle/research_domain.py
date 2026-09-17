@@ -373,4 +373,5 @@ DOMAIN_EXTENSION = DomainExtension(
     configuration_validator=validate_configuration,
     runtime_validator=validate_runtime,
     referenced_resources=referenced_resources,
+    allocation_pool_provider=lambda sim: sim.research,
 )

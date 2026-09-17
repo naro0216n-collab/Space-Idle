@@ -621,7 +621,7 @@ class MarketService:
             ))
         return tuple(rows)
 
-    def allocation_pool_capacities(self) -> dict[AllocationConstraintKey, float]:
+    def allocation_pool_capacities(self, day: int) -> dict[AllocationConstraintKey, float]:
         return self.sell_pool_capacities()
 
     def sell_pool_capacities(self) -> dict[AllocationConstraintKey, float]:
