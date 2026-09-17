@@ -25,7 +25,7 @@
 | Movement / Transport / Logistics / Cargo / Fleet Retirement | §9–10 | §10 |
 | Scientific Exploration / Research / Knowledge | §11–13 | §11–12 |
 | Resource Survey | §14 | §12.2 |
-| Location development / external-dependency analytics | §15 | §5.4, §8.4, §9.5 |
+| Operational Node Founding / Location development / external-dependency analytics | §8.1, §15 | §5.4, §8.4, §9.5 |
 | Automation / canonical day / Offline | §16, §19 | §3.4, §14 |
 | Application / UI | §18 | §3.3, §13, §16 |
 | Save / Load / Validation / Test | §19 | §14–15 |
