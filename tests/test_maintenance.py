@@ -139,7 +139,7 @@ def test_maintenance_replenishment_uses_actual_stock_and_ignores_transient_reser
     assert baseline == after_reservation
 
 
-def test_current_tick_maintenance_allocation_controls_power_and_service_capacity():
+def test_current_tick_maintenance_allocation_controls_power_and_service_capacity(monkeypatch):
     app = build_game_application()
     sim = app._simulation
     resource_id = DefinitionId("test.resource.maintenance_service")
@@ -153,7 +153,20 @@ def test_current_tick_maintenance_allocation_controls_power_and_service_capacity
     sim.facilities.facilities = {facility.id: facility}
     sim.inventory.stock[(ids.EARTH, resource_id)] = 0.0
 
+    projection_calls = 0
+    original_projection = sim.maintenance.satisfaction_projection
+
+    def counted_projection(allocations):
+        nonlocal projection_calls
+        projection_calls += 1
+        return original_projection(allocations)
+
+    monkeypatch.setattr(sim.maintenance, "satisfaction_projection", counted_projection)
     decision = sim.tick_decision_projection()
+    # A stable projected fulfillment is verified directly as the fixed point;
+    # the allocation graph must not be re-run through geometric damping until
+    # an epsilon threshold is reached.
+    assert projection_calls <= 3
     power = decision.allocations.power_by_location[ids.EARTH]
     factor = power.maintenance_factor_by_facility[facility.id]
     service = decision.allocations.services.summary(ids.EARTH, service_type)

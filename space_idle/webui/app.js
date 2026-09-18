@@ -135,11 +135,22 @@
     }
     return control.defaultValue;
   };
-  const interactionValue=(control)=>({value:control.value,baseline:controlBaseline(control)});
+  const interactionValue=(control)=>{
+    const snapshot={value:control.value,baseline:controlBaseline(control)};
+    if(control?.type==='checkbox'||control?.type==='radio'){
+      snapshot.checked=control.checked;
+      snapshot.baselineChecked=control.defaultChecked;
+    }
+    return snapshot;
+  };
   const restoreDraftValue=(control,snapshot)=>{
     if(!control||!snapshot)return;
     const baseline=controlBaseline(control);
     if(baseline===snapshot.baseline||baseline===snapshot.value)control.value=snapshot.value;
+    if((control.type==='checkbox'||control.type==='radio')&&snapshot.checked!==undefined){
+      const baselineChecked=control.defaultChecked;
+      if(baselineChecked===snapshot.baselineChecked||baselineChecked===snapshot.checked)control.checked=snapshot.checked;
+    }
   };
   function captureInteraction(){
     const active=document.activeElement;

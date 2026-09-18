@@ -1209,6 +1209,20 @@ class Simulation:
         convergence_tolerance = 1e-8
         max_iterations = 64
         damping = 0.5
+        previous_target_factors: dict[EntityId, float] | None = None
+
+        def factor_delta(left, right) -> float:
+            facility_ids = set(left) | set(right)
+            return max(
+                (
+                    abs(
+                        left.get(facility_id, 1.0)
+                        - right.get(facility_id, 1.0)
+                    )
+                    for facility_id in facility_ids
+                ),
+                default=0.0,
+            )
 
         for _iteration in range(max_iterations):
             (
@@ -1223,20 +1237,17 @@ class Simulation:
             ) = resolve_for_maintenance(maintenance_factors)
 
             facility_ids = set(maintenance_factors) | set(next_maintenance_factors)
-            delta = max(
-                (
-                    abs(
-                        next_maintenance_factors.get(facility_id, 1.0)
-                        - maintenance_factors.get(facility_id, 1.0)
-                    )
-                    for facility_id in facility_ids
-                ),
-                default=0.0,
+            delta = factor_delta(next_maintenance_factors, maintenance_factors)
+            target_is_stable = (
+                previous_target_factors is not None
+                and factor_delta(next_maintenance_factors, previous_target_factors)
+                <= convergence_tolerance
             )
             if delta <= convergence_tolerance:
-                # Re-evaluate once at the actual fulfillment rather than at the
-                # damped estimate. This preserves exact 0/1 dependency states
-                # while accepting only a self-consistent result within tolerance.
+                # Preserve the original convergence path: once the damped state
+                # is already at the projected fulfillment, verify that exact
+                # state and continue from the verified projection if feedback
+                # still moves it.
                 maintenance_factors = dict(next_maintenance_factors)
                 (
                     power_by_location,
@@ -1248,22 +1259,37 @@ class Simulation:
                     transport_surface_factors,
                     transport_surface_limits,
                 ) = resolve_for_maintenance(maintenance_factors)
-                verify_ids = set(maintenance_factors) | set(verified_factors)
-                verification_delta = max(
-                    (
-                        abs(
-                            verified_factors.get(facility_id, 1.0)
-                            - maintenance_factors.get(facility_id, 1.0)
-                        )
-                        for facility_id in verify_ids
-                    ),
-                    default=0.0,
+                verification_delta = factor_delta(
+                    verified_factors, maintenance_factors
                 )
                 if verification_delta <= convergence_tolerance:
                     break
                 next_maintenance_factors = verified_factors
-                facility_ids = verify_ids
+                facility_ids = set(maintenance_factors) | set(verified_factors)
+            elif target_is_stable:
+                # The same projected fulfillment from consecutive damped states
+                # is a candidate fixed point. Verify the candidate directly. If
+                # it is self-consistent, geometrically approaching it adds no
+                # information. If it is not, discard the speculative evaluation
+                # and continue the original damped trajectory unchanged.
+                candidate_factors = dict(next_maintenance_factors)
+                candidate_result = resolve_for_maintenance(candidate_factors)
+                verified_factors = candidate_result[3]
+                if factor_delta(verified_factors, candidate_factors) <= convergence_tolerance:
+                    maintenance_factors = candidate_factors
+                    (
+                        power_by_location,
+                        provider_plan,
+                        execution,
+                        _verified_factors,
+                        transport_usage,
+                        transport_reference_usage,
+                        transport_surface_factors,
+                        transport_surface_limits,
+                    ) = candidate_result
+                    break
 
+            previous_target_factors = dict(next_maintenance_factors)
             maintenance_factors = {
                 facility_id: (
                     damping * maintenance_factors.get(facility_id, 1.0)
