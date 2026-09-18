@@ -283,14 +283,15 @@ def run() -> dict[str, object]:
             _assert(exploration_lifecycle.get_attribute('data-exploration-action') == 'start' and exploration_lifecycle.is_enabled(), "campaign lifecycle control must expose start when startable")
             page.locator('#explorationPriorityInput').select_option('4')
             exploration_lifecycle.click()
+            assignable_fleet = page.locator('#inspectorContent [data-exploration-assign]:not([disabled])').first
+            assignable_fleet.wait_for(timeout=10000)
+            _assert(assignable_fleet.count() == 1, "started exploration must expose an assignable Fleet option when projected")
+            assignable_fleet.click()
+            page.locator('#inspectorContent [data-exploration-unassign]').wait_for(timeout=10000)
             page.wait_for_function(
                 "() => document.querySelector('[data-lifecycle-control=exploration]')?.dataset.explorationAction === 'pause'",
                 timeout=10000,
             )
-            assignable_fleet = page.locator('#inspectorContent [data-exploration-assign]:not([disabled])').first
-            _assert(assignable_fleet.count() == 1, "started exploration must expose an assignable Fleet option when projected")
-            assignable_fleet.click()
-            page.locator('#inspectorContent [data-exploration-unassign]').wait_for(timeout=10000)
             exploration_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="exploration"]')
             exploration_lifecycle.click()
             page.wait_for_function(
