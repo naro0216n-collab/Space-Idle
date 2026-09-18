@@ -15,7 +15,14 @@ from space_idle.execution_requirements import (
     resource_constraint,
     service_constraint,
 )
-from space_idle.priority import ActivityPriority
+from space_idle.priority import (
+    ActivityPriority,
+    DEFAULT_ACTIVITY_PRIORITY,
+    DEFAULT_PRIORITY_LEVEL,
+    DEFAULT_PROVISIONING_PRIORITY,
+    PriorityLevel,
+    ProvisioningPriority,
+)
 from space_idle.shared import DefinitionId, EntityId, SpatialNodeId
 
 
@@ -64,6 +71,24 @@ def test_execution_bundle_settlement_uses_one_rate_and_requires_explicit_capacit
 
 
 def test_allocator_preserves_priority_progressive_fairness_and_registration_independence():
+    assert tuple(int(level) for level in PriorityLevel) == (1, 2, 3, 4, 5)
+    assert DEFAULT_PRIORITY_LEVEL is PriorityLevel.NORMAL
+    assert int(DEFAULT_ACTIVITY_PRIORITY) == 3
+    assert int(DEFAULT_PROVISIONING_PRIORITY) == 3
+
+    for value in (0, 6, -1, True, 1.5):
+        with pytest.raises(ValueError):
+            ActivityPriority(value)
+        with pytest.raises(ValueError):
+            ProvisioningPriority(value)
+
+    activity = ActivityPriority(4)
+    provisioning = ProvisioningPriority(4)
+    with pytest.raises(ValueError, match="different priority role"):
+        ProvisioningPriority(activity)
+    with pytest.raises(ValueError, match="different priority role"):
+        ActivityPriority(provisioning)
+
     high = bundle("high", 10, ResourceRequirement(ORE, 1), priority=5)
     low = bundle("low", 10, ResourceRequirement(ORE, 1), priority=1)
     priority_plan = allocate_execution_requirements(

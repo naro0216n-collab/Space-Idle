@@ -18,7 +18,7 @@ import tempfile
 import time
 from urllib.parse import urlsplit
 
-from space_idle import build_game_application
+from space_idle import GetSurfaceMap, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
@@ -167,18 +167,35 @@ def run() -> dict[str, object]:
     fixture_sim.technology.completed.update(fixture_recipe.prerequisite_technologies)
 
     # Keep the browser smoke focused on the player-facing site-selection and
-    # Founding command path rather than encoding Survey balance timing. Survey
-    # start/progression has its own domain/integration coverage, and the browser
-    # still exercises a real orbital Survey on another lunar cell below.
+    # Founding command path rather than encoding Survey balance timing. Satisfy
+    # the current recipe's knowledge contract, then select the option projected
+    # by the Application instead of preserving a historical UI selector tuple.
     founding_fixture_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    founding_survey_target = next(
-        target
-        for (cell_id, _resource_id), target in fixture_sim.survey.targets.items()
-        if cell_id == founding_fixture_cell
+    founding_recipe = fixture_sim.founding.deployment_recipes[
+        ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE
+    ]
+    for requirement in founding_recipe.knowledge_requirements:
+        target = fixture_sim.survey.targets[(
+            founding_fixture_cell, requirement.subject_resource_id
+        )]
+        fixture_sim.survey.knowledge_progress[(target.cell_id, target.resource_id)] = (
+            target.thresholds[int(requirement.minimum_level) - 1]
+        )
+    founding_cell_projection = next(
+        cell
+        for cell in runtime._app.query(GetSurfaceMap(str(ids.MOON))).cells
+        if cell.id == str(founding_fixture_cell)
     )
-    fixture_sim.survey.knowledge_progress[(
-        founding_survey_target.cell_id, founding_survey_target.resource_id
-    )] = founding_survey_target.thresholds[1]
+    founding_fixture_option = next(
+        option
+        for option in sorted(
+            founding_cell_projection.foundation_options,
+            key=lambda row: (
+                row.staging_node_id, row.deployment_recipe_id, row.vehicle_definition_id
+            ),
+        )
+        if option.can_plan
+    )
 
     server = create_server(
         runtime,
@@ -431,9 +448,10 @@ def run() -> dict[str, object]:
             founding_cell.wait_for(timeout=10000)
             founding_cell.click()
             founding_button = page.locator(
-                f'#inspectorContent [data-surface-found][data-staging-node-id="{ids.LUNAR_ORBIT}"]'
-                f'[data-package-id="{ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE}"]'
-                f'[data-vehicle-id="{ids.REUSABLE_SURFACE_CARGO_LANDER}"]'
+                '#inspectorContent [data-surface-found]'
+                f'[data-staging-node-id="{founding_fixture_option.staging_node_id}"]'
+                f'[data-recipe-id="{founding_fixture_option.deployment_recipe_id}"]'
+                f'[data-vehicle-id="{founding_fixture_option.vehicle_definition_id}"]'
             )
             _assert(founding_button.count() == 1, "surveyed lunar cell must expose the canonical Founding option")
             _assert(founding_button.is_enabled(), "surveyed lunar cell must allow player-selected Founding when planning requirements are met")

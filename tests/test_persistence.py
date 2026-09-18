@@ -184,18 +184,6 @@ def test_logistics_policy_assignment_roundtrips_and_preserves_future_resolution(
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
 
-def test_load_does_not_reapply_scenario_global_logistics_policy(tmp_path):
-    app = build_game_application()
-    assert app._simulation.logistics.global_policy_id is not None
-    app.execute(SetGlobalLogisticsPolicy(None))
-
-    path = tmp_path / "no-global-policy.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application_for_load)
-
-    assert loaded._simulation.logistics.global_policy_id is None
-
-
 def test_facility_owned_process_selection_roundtrips_in_facility_state(tmp_path):
     app = build_game_application()
     sim = app._simulation
@@ -289,7 +277,7 @@ def test_save_load_preserves_research_execution_site(tmp_path):
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
 
-def test_offline_progress_uses_the_same_active_simulation_path_as_normal_time(tmp_path):
+def test_offline_progress_matches_normal_time_and_is_fractionally_composable(tmp_path):
     saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     elapsed_days = 3
     policy = OfflineProgressPolicy(real_seconds_per_game_day=1.0, max_game_days_per_resume=20)
@@ -336,15 +324,13 @@ def test_offline_progress_uses_the_same_active_simulation_path_as_normal_time(tm
     assert offline._simulation.boundary_settled_day == offline._simulation.day
     assert direct._simulation.boundary_settled_day == direct._simulation.day
 
-
-def test_fractional_offline_time_is_composable():
-    app_a = build_game_application()
-    app_b = build_game_application()
-    policy = OfflineProgressPolicy(real_seconds_per_game_day=10.0)
-    app_a._simulation.advance_offline(6.0, policy)
-    app_a._simulation.advance_offline(6.0, policy)
-    app_b._simulation.advance_offline(12.0, policy)
-    assert capture_state(app_a._simulation) == capture_state(app_b._simulation)
+    fractional_a = build_game_application()
+    fractional_b = build_game_application()
+    fractional_policy = OfflineProgressPolicy(real_seconds_per_game_day=10.0)
+    fractional_a._simulation.advance_offline(6.0, fractional_policy)
+    fractional_a._simulation.advance_offline(6.0, fractional_policy)
+    fractional_b._simulation.advance_offline(12.0, fractional_policy)
+    assert capture_state(fractional_a._simulation) == capture_state(fractional_b._simulation)
 
 
 def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(tmp_path):

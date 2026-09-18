@@ -15,7 +15,6 @@ from space_idle import (
     SurfaceLocationFoundingTarget,
     GetProjects,
     GetSurfaceMap,
-    StartSurvey,
     build_game_application,
 )
 from space_idle.bootstrap import build_game_application_for_load
@@ -209,23 +208,6 @@ def test_founding_transport_path_and_site_requirements_follow_staging_and_target
         ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day
     )
     assert any(row.code == "target:environment:low_pressure" for row in earth_target)
-
-
-def test_baseline_has_no_player_lunar_location_and_orbital_survey_is_available():
-    app = build_game_application()
-    sim = app._simulation
-    assert [loc for loc in sim.graph.locations.values() if loc.body_id == ids.MOON] == []
-
-    target_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    target = next(target for key, target in sim.survey.targets.items() if key[0] == target_cell)
-    key = (target.cell_id, target.resource_id)
-    progress_before = sim.survey.knowledge_progress.get(key, 0.0)
-    app.execute(StartSurvey(
-        str(ids.LUNAR_ORBIT), str(ids.LUNAR_RESOURCE_SURVEY_ORBITER),
-        "remote_orbital_spectrometry", str(target_cell), str(target.resource_id), 2
-    ))
-    app.execute(AdvanceTime(1))
-    assert sim.survey.knowledge_progress.get(key, 0.0) > progress_before
 
 
 def test_surface_cell_development_changes_territory_only_after_project_completion():

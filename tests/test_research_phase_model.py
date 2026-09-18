@@ -91,10 +91,20 @@ def test_explicit_empty_prototype_stage_progresses_automatically_after_site_sele
     assert research_id not in sim.research.active
 
 
-def test_research_definition_requires_explicit_stage_composition():
-    research_id = DefinitionId("test.research.implicit_stage_forbidden")
+def test_research_definition_validates_stage_composition_and_stable_identity():
+    research_id = DefinitionId("test.research.invalid_stage_contract")
     with pytest.raises(ValueError, match="explicitly define its stages"):
         ResearchDefinition(research_id, "Implicit Stage Forbidden", (), prerequisites=frozenset())
+
+    with pytest.raises(ValueError, match="stage ids must be unique"):
+        ResearchDefinition(
+            research_id,
+            "Duplicate Stage ID",
+            (
+                ResearchPrototypeStageSpec("same", {}),
+                ResearchPrototypeStageSpec("same", {}),
+            ),
+        )
 
 
 def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structural_mismatch():
@@ -334,16 +344,3 @@ def test_repeated_stage_type_uses_stage_id_for_identity_and_transition():
     ) != sim.research.prototype_reservation_requirement_id(
         research_id, "prototype-b", resource_id
     )
-
-
-def test_research_definition_rejects_duplicate_stage_id_not_repeated_type():
-    research_id = DefinitionId("test.research.duplicate_stage_id")
-    with pytest.raises(ValueError, match="stage ids must be unique"):
-        ResearchDefinition(
-            research_id,
-            "Duplicate Stage ID",
-            (
-                ResearchPrototypeStageSpec("same", {}),
-                ResearchPrototypeStageSpec("same", {}),
-            ),
-        )

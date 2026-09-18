@@ -4,13 +4,9 @@ import http.client
 import json
 from threading import Thread
 
-from space_idle import (
-    NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding,
-    build_game_application,
-)
+from space_idle import build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
-from space_idle.api.codec import decode_command
 from space_idle.content import base_ids as ids
 
 
@@ -73,6 +69,30 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert required <= data.keys()
         assert data["operational_node"]["id"] == str(ids.EARTH)
         assert data["surface_map"]["body_id"] == str(ids.EARTH_BODY)
+
+        # Exercise nested command decoding through the real HTTP boundary.
+        # Domain validation should reject this not-yet-surveyed founding target,
+        # proving the typed target reached the application command contract.
+        status, _, payload = _request(
+            port, "POST", "/api/v1/commands",
+            {
+                "type": "PlanOperationalNodeFounding",
+                "payload": {
+                    "staging_node_id": str(ids.LUNAR_ORBIT),
+                    "display_name": "HTTP Lunar Target",
+                    "target_spec": {
+                        "target_type": "surface_location",
+                        "body_id": str(ids.MOON),
+                        "core_cell_id": str(ids.MOON_CELL_FARSIDE_HIGHLANDS),
+                    },
+                    "deployment_recipe_id": str(ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE),
+                    "vehicle_definition_id": str(ids.REUSABLE_SURFACE_CARGO_LANDER),
+                },
+            },
+        )
+        assert status == 400
+        assert payload["error"]["code"] == "invalid_command"
+        assert "knowledge_requirement" in payload["error"]["message"]
 
         status, _, payload = _request(port, "POST", "/api/v1/session/save", {"slot": "boundary"})
         assert status == 200 and payload["data"]["saved"] is True
@@ -137,22 +157,3 @@ def test_static_webui_is_served_and_path_traversal_is_rejected(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
-
-
-def test_api_codec_decodes_typed_nested_founding_target():
-    command = decode_command({
-        "type": "PlanOperationalNodeFounding",
-        "payload": {
-            "staging_node_id": str(ids.LEO),
-            "display_name": "Typed orbital target",
-            "target_spec": {
-                "target_type": "non_surface_operational_node",
-                "spatial_node_id": "test.node.orbital_target",
-            },
-            "deployment_recipe_id": "test.deployment_recipe.orbital",
-            "vehicle_definition_id": str(ids.REUSABLE_ORBITAL_CARGO_TUG),
-        },
-    })
-    assert isinstance(command, PlanOperationalNodeFounding)
-    assert isinstance(command.target_spec, NonSurfaceOperationalNodeFoundingTarget)
-    assert command.target_spec.spatial_node_id == "test.node.orbital_target"

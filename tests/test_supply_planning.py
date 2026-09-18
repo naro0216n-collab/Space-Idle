@@ -26,9 +26,13 @@ from space_idle.execution_requirements import (
     allocate_execution_requirements,
     resource_constraint,
 )
+from space_idle.inventory import InventoryBook
 from space_idle.logistics_models import CargoFlowSegment, CargoServiceLeg
 from space_idle.path_selection import select_tradeoff_path
-from space_idle.supply import SourceSelectionMode, SupplyRequirement
+from space_idle.supply import (
+    SourceSelectionMode, SupplyRequirement, external_supply_requirements,
+    resolve_local_supply,
+)
 from space_idle.shared import DefinitionId, EntityId
 from space_idle.transport.models import PathPolicy
 
@@ -212,7 +216,7 @@ def test_recurring_supply_uses_latency_coverage_without_turning_pipeline_into_a_
     dispatch = next(row for row in plan.dispatches if row.requirement.id == requirement.id)
     assert dispatch.amount_t == pytest.approx(2.0 * service.latency_days)
 
-def test_explicit_supply_source_remains_visible_when_transport_is_not_provisioned():
+def test_supply_projection_exposes_transport_blockers_only_when_external_transport_is_needed():
     app = build_game_application()
     sim = app._simulation
     sim.technology.completed.update(
@@ -241,6 +245,13 @@ def test_explicit_supply_source_remains_visible_when_transport_is_not_provisione
     assert all(row.operational_source_count == 0 for row in rows)
     assert all(row.supply_state == "transport_blocked" for row in rows)
     assert all("no_transport_capacity" in row.blockers for row in rows)
+
+    covered = [
+        row for row in app.query(GetLogistics()).requirements
+        if row.supply_state == "local_covered"
+    ]
+    assert covered
+    assert all(not row.blockers for row in covered)
 
 
 def test_logistics_policy_selects_preferred_source_without_provisioning_transport():
@@ -520,7 +531,50 @@ def test_cargo_arrival_waits_for_inventory_admission():
             break
     assert waiting.id not in sim.logistics.arrival_waiting
 
-def test_dispatch_source_requirement_competes_with_higher_priority_local_use():
+def test_supply_resource_competition_respects_priority_reservations_and_order_independence():
+    inventory = InventoryBook()
+    inventory.add(EARTH, MACHINERY, 5.0)
+    high = _requirement(
+        4.0, requirement_id="supply.local.high", destination=EARTH, priority=5
+    )
+    low = _requirement(
+        4.0, requirement_id="supply.local.low", destination=EARTH, priority=3
+    )
+    resolutions = resolve_local_supply((low, high), inventory)
+    by_id = {row.requirement.id: row for row in resolutions}
+    assert by_id[high.id].local_supply_t == pytest.approx(4.0)
+    assert by_id[high.id].external_required_t == pytest.approx(0.0)
+    assert by_id[low.id].local_supply_t == pytest.approx(1.0)
+    assert by_id[low.id].external_required_t == pytest.approx(3.0)
+    assert inventory.reserved == {}
+
+    constrained = InventoryBook()
+    constrained.add(EARTH, MACHINERY, 2.0)
+    first = _requirement(
+        3.0, requirement_id="supply.equal.a", destination=EARTH, priority=3
+    )
+    second = _requirement(
+        3.0, requirement_id="supply.equal.b", destination=EARTH, priority=3
+    )
+    forward = external_supply_requirements((first, second), constrained)
+    reverse = external_supply_requirements((second, first), constrained)
+    assert forward == reverse
+    assert [(row.id, row.amount_t) for row in forward] == [
+        (first.id, pytest.approx(2.0)),
+        (second.id, pytest.approx(2.0)),
+    ]
+    assert constrained.reserved == {}
+
+    reserved = InventoryBook()
+    reserved.add(EARTH, MACHINERY, 5.0)
+    reserved.reserve(EntityId("project.supply"), EARTH, MACHINERY, 4.0)
+    other = _requirement(
+        3.0, requirement_id="supply.reserved.other", destination=EARTH, priority=3
+    )
+    resolution = resolve_local_supply((other,), reserved)[0]
+    assert resolution.local_supply_t == pytest.approx(1.0)
+    assert resolution.external_required_t == pytest.approx(2.0)
+
     sim = build_game_application()._simulation
     _owned_earth_leo_capacity(sim)
     sim.inventory.stock[(EARTH, MACHINERY)] = 1.0
@@ -556,15 +610,6 @@ def test_dispatch_source_requirement_competes_with_higher_priority_local_use():
 
     assert allocation.allocated(local_bundle.id) == pytest.approx(1.0)
     assert allocation.allocated(cargo_bundle.id) == pytest.approx(0.0)
-
-def test_locally_covered_requirement_does_not_report_unused_transport_blockers():
-    app = build_game_application()
-    covered = [
-        row for row in app.query(GetLogistics()).requirements
-        if row.supply_state == "local_covered"
-    ]
-    assert covered
-    assert all(not row.blockers for row in covered)
 
 
 def test_unchanged_daily_dispatches_extend_one_cargo_flow_segment():

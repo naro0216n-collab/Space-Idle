@@ -123,6 +123,13 @@ def test_content_defined_resource_group_aggregates_members_without_cross_resourc
         ) / sum(row.local_demand_per_day for row in members)
     )
 
+    invalid_group_id = DefinitionId("test.group.invalid")
+    app._catalog.resource_groups[invalid_group_id] = ResourceGroupDef(
+        invalid_group_id, "Invalid", (DefinitionId("missing.resource"),)
+    )
+    with pytest.raises(ConfigurationError, match="references missing resources"):
+        validate_catalog_coverage(app._simulation, app._catalog)
+
 def test_current_authorized_transport_projects_boundary_flow_consumption_and_partial_unmet():
     app = build_game_application()
     sim = app._simulation
@@ -172,13 +179,3 @@ def test_current_authorized_transport_projects_boundary_flow_consumption_and_par
     propellant = _resource(earth, ids.PROPELLANT)
     assert propellant.local_demand_per_day > 0
     assert propellant.local_consumption_per_day > 0
-
-def test_resource_group_definition_fails_closed_when_member_resource_is_missing():
-    app = build_game_application()
-    group_id = DefinitionId("test.group.invalid")
-    app._catalog.resource_groups[group_id] = ResourceGroupDef(
-        group_id, "Invalid", (DefinitionId("missing.resource"),)
-    )
-
-    with pytest.raises(ConfigurationError, match="references missing resources"):
-        validate_catalog_coverage(app._simulation, app._catalog)

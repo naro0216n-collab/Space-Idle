@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle import GetFlowReport, GetOperationalNode, GetLogistics, SetMaintenancePriority, build_game_application
+from space_idle import (
+    GetFlowReport,
+    GetOperationalNode,
+    GetLogistics,
+    PauseFacility,
+    ResumeFacility,
+    SetFacilityActivityPriority,
+    SetMaintenancePriority,
+    build_game_application,
+)
 from space_idle.content import base_ids as ids
 from space_idle.execution_requirements import allocate_execution_requirements, resource_constraint
 from space_idle.facilities import FacilityDef, ServiceCapacitySupply
@@ -45,13 +54,22 @@ def test_facility_maintenance_priority_is_player_visible_and_command_driven():
     )
 
     app.execute(SetMaintenancePriority(str(facility.id), 5))
+    app.execute(SetFacilityActivityPriority(str(facility.id), 4))
+    app.execute(PauseFacility(str(facility.id)))
     row = next(
         item for item in app.query(GetOperationalNode(str(ids.EARTH))).facilities
         if item.id == str(facility.id)
     )
 
     assert facility.maintenance_priority == 5
+    assert facility.activity_priority == 4
+    assert facility.paused is True
     assert row.maintenance_priority == 5
+
+    app.execute(ResumeFacility(str(facility.id)))
+    assert facility.paused is False
+    assert facility.maintenance_priority == 5
+    assert facility.activity_priority == 4
 
 
 def test_maintenance_shortage_can_starve_lower_priority_facility_without_auto_rescue():

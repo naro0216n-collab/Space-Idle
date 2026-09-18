@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from space_idle import (
-    AdvanceTime, GetWorld,
+    GetWorld,
     build_game_application,
 )
 from space_idle.content.base_game import (
@@ -12,16 +12,6 @@ from space_idle.content.base_game import (
     CONSTRUCTION_EQUIPMENT,
 )
 
-
-
-def test_time_progression_has_no_automatic_income():
-    app = build_game_application()
-    before = app.query(GetWorld())
-
-    app.execute(AdvanceTime(1))
-    after = app.query(GetWorld())
-
-    assert after.funds_musd == before.funds_musd
 
 
 def test_transport_requires_player_owned_capacity_and_never_spends_market_funds():

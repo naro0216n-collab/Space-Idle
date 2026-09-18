@@ -58,25 +58,56 @@ def test_fleet_commitments_are_owner_activity_owned_and_free_units_are_derived()
     assert lg.fleet_pool_snapshot(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).transport_units == 3
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 1
 
-def test_runtime_validation_rejects_transport_commitment_outside_allocation_contract():
-    sim = _fleet_sim(1)
-    lg = sim.transport
-    allocation_id = lg.create_transport_allocation(
+def test_runtime_validation_enforces_fleet_commitment_owner_and_location_integrity():
+    mismatched = _fleet_sim(1)
+    transport = mismatched.transport
+    allocation_id = transport.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         ids.LEO,
         ids.LUNAR_ORBIT,
         target_units=1,
-        day=sim.day,
+        day=mismatched.day,
     )
     commitment = next(
-        row for row in lg.fleet_commitments.values()
+        row for row in transport.fleet_commitments.values()
         if row.owner_activity_ref == FleetActivityRef("transport_allocation", allocation_id)
     )
     commitment.operational_node_id = ids.LUNAR_ORBIT
-
     with pytest.raises(ConfigurationError, match="transport Fleet commitment location mismatch"):
-        validate_runtime_state(sim)
+        validate_runtime_state(mismatched)
 
+    orphaned_transport = _fleet_sim(1)
+    transport = orphaned_transport.transport
+    allocation_id = transport.create_transport_allocation(
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        ids.LEO,
+        ids.LUNAR_ORBIT,
+        target_units=1,
+        day=orphaned_transport.day,
+    )
+    assert transport.transport_active_units(allocation_id) == 1
+    del transport.transport_allocations[allocation_id]
+    with pytest.raises(ConfigurationError, match="orphan Fleet commitment owner"):
+        validate_runtime_state(orphaned_transport)
+
+    external = _fleet_sim(1)
+    transport = external.transport
+    owner_id = EntityId("external.alpha")
+    active_owners = {owner_id}
+    transport.register_fleet_commitment_owner_resolver(
+        "external_test_activity", lambda candidate: candidate in active_owners
+    )
+    transport.commit_fleet_units(
+        EntityId("commitment.external.alpha"),
+        FleetActivityRef("external_test_activity", owner_id),
+        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        ids.LEO,
+        1,
+    )
+    validate_runtime_state(external)
+    active_owners.clear()
+    with pytest.raises(ConfigurationError, match="orphan Fleet commitment owner"):
+        validate_runtime_state(external)
 
 
 def test_fleet_commitment_cannot_double_commit_the_same_free_units():
@@ -102,43 +133,7 @@ def test_fleet_commitment_cannot_double_commit_the_same_free_units():
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 0
 
 
-def test_runtime_validation_detects_orphan_transport_commitment():
-    sim = _fleet_sim(1)
-    lg = sim.transport
-    allocation_id = lg.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        target_units=1,
-        day=sim.day,
-    )
-    assert lg.transport_active_units(allocation_id) == 1
 
-    del lg.transport_allocations[allocation_id]
-    with pytest.raises(ConfigurationError, match="orphan Fleet commitment owner"):
-        validate_runtime_state(sim)
-
-
-def test_runtime_validation_detects_orphan_commitment_for_registered_external_activity():
-    sim = _fleet_sim(1)
-    lg = sim.transport
-    owner_id = EntityId("external.alpha")
-    active_owners = {owner_id}
-    lg.register_fleet_commitment_owner_resolver(
-        "external_test_activity", lambda candidate: candidate in active_owners
-    )
-    lg.commit_fleet_units(
-        EntityId("commitment.external.alpha"),
-        FleetActivityRef("external_test_activity", owner_id),
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        1,
-    )
-    validate_runtime_state(sim)
-
-    active_owners.clear()
-    with pytest.raises(ConfigurationError, match="orphan Fleet commitment owner"):
-        validate_runtime_state(sim)
 
 def test_transport_target_refills_immediately_when_fleet_availability_increases():
     sim = _fleet_sim(2)

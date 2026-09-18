@@ -5,22 +5,12 @@ import json
 
 import pytest
 
-from space_idle import build_game_application
+from space_idle import SetGlobalLogisticsPolicy, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.content.base_scenario import STANDARD_SCENARIO_ID, build_standard_scenario_definition
 from space_idle.content.base_spatial import BASE_WORLD_DEFINITION_ID, build_world_definition
 from space_idle.persistence import SaveFormatError, load_game, save_game
-
-
-def test_world_definition_builds_no_player_owned_operational_state():
-    graph, _environment = build_world_definition()
-
-    assert graph.operational_node_states == {}
-    assert graph.locations == {}
-    assert ids.LEO in graph.nodes
-    assert ids.LUNAR_ORBIT in graph.nodes
-    assert graph.surface_cells
 
 
 def test_standard_scenario_applies_initial_state_exactly_once_without_pre_founding_moon():
@@ -44,7 +34,14 @@ def test_standard_scenario_applies_initial_state_exactly_once_without_pre_foundi
         build_standard_scenario_definition().apply(sim)
 
 
-def test_load_composition_has_static_definitions_but_no_scenario_runtime_state():
+def test_world_and_load_composition_build_static_definitions_without_player_runtime_state():
+    graph, _environment = build_world_definition()
+    assert graph.operational_node_states == {}
+    assert graph.locations == {}
+    assert ids.LEO in graph.nodes
+    assert ids.LUNAR_ORBIT in graph.nodes
+    assert graph.surface_cells
+
     app = build_game_application_for_load()
     sim = app._simulation
 
@@ -67,13 +64,21 @@ def test_load_composition_has_static_definitions_but_no_scenario_runtime_state()
     assert sim.survey is not None and sim.survey.knowledge_progress == {}
 
 
-def test_load_rejects_world_or_scenario_identity_mismatch_without_reinitializing(tmp_path):
+def test_load_preserves_runtime_state_without_reapplying_scenario_and_rejects_identity_mismatch(tmp_path):
+    app = build_game_application()
+    assert app._simulation.logistics.global_policy_id is not None
+    app.execute(SetGlobalLogisticsPolicy(None))
+
     path = tmp_path / "identity.json"
     save_game(
-        build_game_application(),
+        app,
         path,
         saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
+    loaded, offline = load_game(path, build_game_application_for_load)
+    assert offline is None
+    assert loaded._simulation.logistics.global_policy_id is None
+
     original = json.loads(path.read_text(encoding="utf-8"))
 
     for field in ("world_definition_id", "scenario_id"):
