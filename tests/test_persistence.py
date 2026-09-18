@@ -731,3 +731,15 @@ def test_current_schema_rejects_removed_project_logistics_policy_field(tmp_path)
 
     with pytest.raises(SaveFormatError, match="construction project has invalid fields"):
         load_game(path, build_game_application_for_load)
+
+
+def test_current_schema_rejects_unexpected_envelope_fields(tmp_path):
+    app = _make_nontrivial_state()
+    path = tmp_path / "unexpected-envelope-field.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["legacy_state"] = {}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SaveFormatError, match="save file has invalid fields"):
+        load_game(path, build_game_application_for_load)

@@ -56,14 +56,14 @@ def capture_state(sim) -> dict[str, Any]:
 def restore_state(sim, data: dict[str, Any]) -> None:
     sim.day = int(data["day"])
     sim.restore_boundary_settled_day(sim.day)
-    sim.pending_offline_game_days = float(data.get("pending_offline_game_days", 0.0))
+    sim.pending_offline_game_days = float(data["pending_offline_game_days"])
     try:
         boundary_usage = tuple(
             (
                 AllocationConstraintKey(str(row["kind"]), str(row["scope_id"]), str(row["name"])),
                 float(row["amount"]),
             )
-            for row in data.get("boundary_used_by_constraint", [])
+            for row in data["boundary_used_by_constraint"]
         )
         sim.restore_boundary_capacity_usage(boundary_usage)
     except (KeyError, TypeError, ValueError) as exc:
@@ -159,8 +159,13 @@ def _read_envelope(path: str | Path) -> SaveEnvelope:
         "schema_version", "content_id", "world_definition_id", "scenario_id",
         "saved_at", "state",
     }
-    if not required.issubset(raw):
-        raise SaveFormatError("save file is missing required fields")
+    if set(raw) != required:
+        missing = sorted(required - set(raw))
+        unexpected = sorted(set(raw) - required)
+        raise SaveFormatError(
+            "save file has invalid fields; "
+            f"missing={missing}; unexpected={unexpected}"
+        )
     if raw["schema_version"] != SAVE_SCHEMA_VERSION:
         raise SaveFormatError(
             f"unsupported save schema: {raw['schema_version']} (expected {SAVE_SCHEMA_VERSION})"
