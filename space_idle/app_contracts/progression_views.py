@@ -84,12 +84,17 @@ class ResearchKnowledgeRow:
 
 
 @dataclass(frozen=True)
+class ResearchStageRow:
+    stage_id: str
+    stage_type: str
+
+
+@dataclass(frozen=True)
 class ResearchRow:
     id: str
     display_name: str
     status: str
-    stages: tuple[str, ...]
-    stage_ids: tuple[str, ...]
+    stages: tuple[ResearchStageRow, ...]
     current_stage_id: str | None
     current_stage_type: str | None
     paused: bool
@@ -98,7 +103,7 @@ class ResearchRow:
     can_pause: bool
     can_resume: bool
     can_set_priority: bool
-    research_point_cost: float
+    total_theory_research_point_cost: float
     stage_progress: float
     stage_required: float
     rp_requested: float
@@ -108,13 +113,9 @@ class ResearchRow:
     execution_allocated: float
     current_blockers: tuple[tuple[str, str], ...]
     start_blockers: tuple[tuple[str, str], ...]
-    prototype_resources: tuple[ResearchPrototypeResourceRow, ...]
-    prototype_execution_site: ResearchExecutionSiteRow | None
-    prototype_sites: tuple[ResearchSiteOptionRow, ...]
-    demonstration_execution_site: ResearchExecutionSiteRow | None
-    demonstration_sites: tuple[ResearchSiteOptionRow, ...]
-    demonstration_blockers: tuple[tuple[str, str], ...]
-    prototype_blockers: tuple[tuple[str, str], ...]
+    stage_resources: tuple[ResearchPrototypeResourceRow, ...]
+    execution_context: ResearchExecutionSiteRow | None
+    execution_context_options: tuple[ResearchSiteOptionRow, ...]
     operational_experience: tuple[ResearchExperienceRow, ...]
     prerequisites: tuple[str, ...]
 

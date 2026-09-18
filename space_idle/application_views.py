@@ -30,7 +30,7 @@ from .app_contracts.logistics_reports import (
 )
 from .app_contracts.progression_views import (
     ResearchProviderRow, ResearchProviderAssignmentOptionRow, ResearchPrototypeResourceRow, ResearchExperienceRow, ResearchKnowledgeRow,
-    ResearchRow, ResearchView, ScientificExplorationFleetOptionRow,
+    ResearchStageRow, ResearchRow, ResearchView, ScientificExplorationFleetOptionRow,
     ScientificExplorationRow, ScientificExplorationsView, SurveyStartOption, SurveyRow, SurveysView,
     ContractRow, ContractsView,
 )

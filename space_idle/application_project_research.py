@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_views import (
     ResearchExperienceRow, ResearchKnowledgeRow, ResearchPrototypeResourceRow,
-    ResearchProviderAssignmentOptionRow, ResearchProviderRow, ResearchRow, ResearchView,
+    ResearchProviderAssignmentOptionRow, ResearchProviderRow, ResearchStageRow, ResearchRow, ResearchView,
 )
 from .app_contracts.progression_views import ResearchExecutionSiteRow, ResearchSiteOptionRow
 from .research_models import (
@@ -203,11 +203,10 @@ class ResearchProgressionProjectorMixin:
             stage_progress = 0.0
             stage_required = 0.0
             execution_requested = execution_allocated = 0.0
-            prototype_resources: list[ResearchPrototypeResourceRow] = []
+            stage_resources: list[ResearchPrototypeResourceRow] = []
             experience_rows: list[ResearchExperienceRow] = []
-            prototype_sites = demonstration_sites = ()
-            prototype_blockers = demonstration_blockers = ()
-            prototype_execution_site = demonstration_execution_site = None
+            execution_context_options = ()
+            execution_context = None
 
             if state is not None and current_spec is not None:
                 execution_requested, execution_allocated = sim.research.execution_allocation_totals(
@@ -218,9 +217,8 @@ class ResearchProgressionProjectorMixin:
                     stage_required = current_spec.research_point_cost
                 elif isinstance(current_spec, ResearchPrototypeStageSpec):
                     stage_required = current_spec.required_work
-                    prototype_execution_site = self._site_row(state.execution_context)
-                    prototype_sites = self._research_site_options(definition, current_spec, power_by_location=power_by_location)
-                    prototype_blockers = sim.research.prototype_blockers(definition.id, sim.day, power_by_location=power_by_location)
+                    execution_context = self._site_row(state.execution_context)
+                    execution_context_options = self._research_site_options(definition, current_spec, power_by_location=power_by_location)
                     location_id = None if state.execution_context is None else state.execution_context.operational_node_id
                     for resource_id, required in sorted(current_spec.resources.items(), key=lambda row: str(row[0])):
                         reserved = requested = allocated = pipeline = 0.0
@@ -236,15 +234,14 @@ class ResearchProgressionProjectorMixin:
                             pipeline = sim.logistics.cargo_flow_pipeline_t(
                                 sim.research.prototype_requirement_id(definition.id, current_spec.stage_id, resource_id)
                             )
-                        prototype_resources.append(ResearchPrototypeResourceRow(
+                        stage_resources.append(ResearchPrototypeResourceRow(
                             str(resource_id), required, reserved, requested, allocated, pipeline,
                             max(0.0, requested - allocated),
                         ))
                 elif isinstance(current_spec, ResearchDemonstrationStageSpec):
                     stage_required = current_spec.required_work
-                    demonstration_execution_site = self._site_row(state.execution_context)
-                    demonstration_sites = self._research_site_options(definition, current_spec, power_by_location=power_by_location)
-                    demonstration_blockers = sim.research.demonstration_blockers(definition.id, sim.day, power_by_location=power_by_location)
+                    execution_context = self._site_row(state.execution_context)
+                    execution_context_options = self._research_site_options(definition, current_spec, power_by_location=power_by_location)
                 elif isinstance(current_spec, ResearchOperationalExperienceStageSpec):
                     stage_required = sum(current_spec.requirements.values())
                     stage_progress = sum(min(sim.research.knowledge_state.value(category), required) for category, required in current_spec.requirements.items())
@@ -258,23 +255,21 @@ class ResearchProgressionProjectorMixin:
             )
             rows.append(ResearchRow(
                 id=str(definition.id), display_name=definition.display_name, status=status,
-                stages=tuple(spec.stage_type.value for spec in definition.stage_specs),
-                stage_ids=tuple(spec.stage_id for spec in definition.stage_specs),
+                stages=tuple(ResearchStageRow(spec.stage_id, spec.stage_type.value) for spec in definition.stage_specs),
                 current_stage_id=None if state is None else state.current_stage_id,
                 current_stage_type=None if current_spec is None else current_spec.stage_type.value,
                 paused=False if state is None else state.paused, priority=priority,
                 can_start=not start_blockers, can_pause=sim.research.can_pause(definition.id),
                 can_resume=sim.research.can_resume(definition.id), can_set_priority=state is not None,
-                research_point_cost=total_theory_cost, stage_progress=stage_progress,
+                total_theory_research_point_cost=total_theory_cost, stage_progress=stage_progress,
                 stage_required=stage_required, rp_requested=point_requests.get(definition.id, 0.0),
                 rp_allocated=point_allocations.get(definition.id, 0.0),
                 rp_remaining=sim.research.theory_remaining(definition.id),
                 execution_requested=execution_requested, execution_allocated=execution_allocated,
                 current_blockers=current_blockers, start_blockers=start_blockers,
-                prototype_resources=tuple(prototype_resources), prototype_execution_site=prototype_execution_site,
-                prototype_sites=prototype_sites, demonstration_execution_site=demonstration_execution_site,
-                demonstration_sites=demonstration_sites, demonstration_blockers=demonstration_blockers,
-                prototype_blockers=prototype_blockers, operational_experience=tuple(experience_rows),
+                stage_resources=tuple(stage_resources), execution_context=execution_context,
+                execution_context_options=execution_context_options,
+                operational_experience=tuple(experience_rows),
                 prerequisites=tuple(sorted(str(item) for item in definition.prerequisites)),
             ))
         return ResearchView(

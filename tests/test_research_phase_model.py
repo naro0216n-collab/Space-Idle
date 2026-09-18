@@ -82,7 +82,7 @@ def test_explicit_empty_prototype_stage_progresses_automatically_after_site_sele
 
     sim.research.start(research_id, day=sim.day)
     assert sim.research.active[research_id].current_stage_id == "prototype"
-    assert _research_row(app, research_id).stages == ("prototype",)
+    assert tuple((stage.stage_id, stage.stage_type) for stage in _research_row(app, research_id).stages) == (("prototype", "prototype"),)
     sim.research.set_prototype_site(research_id, "prototype", EARTH, sim.day)
 
     sim.advance_days(1)
@@ -106,11 +106,11 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
     app.execute(StartResearch(str(research_id)))
 
     row = _research_row(app, research_id)
-    earth = next(site for site in row.prototype_sites if site.operational_node_id == str(EARTH))
+    earth = next(site for site in row.execution_context_options if site.operational_node_id == str(EARTH))
     assert not any(code.startswith("service") for code, _detail in earth.blockers)
     assert earth.can_select
 
-    leo = next(site for site in row.prototype_sites if site.operational_node_id == str(LEO))
+    leo = next(site for site in row.execution_context_options if site.operational_node_id == str(LEO))
     assert leo.blockers
     assert not leo.can_select
     with pytest.raises(ApplicationError, match="prototype site requirements not met"):
@@ -118,9 +118,9 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
 
     app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
     selected = _research_row(app, research_id)
-    assert selected.prototype_execution_site is not None
-    assert selected.prototype_execution_site.operational_node_id == str(EARTH)
-    assert selected.prototype_execution_site.surface_cell_id is None
+    assert selected.execution_context is not None
+    assert selected.execution_context.operational_node_id == str(EARTH)
+    assert selected.execution_context.surface_cell_id is None
     assert any(
         code == "service:allocation"
         for code, _detail in selected.current_blockers
@@ -157,7 +157,7 @@ def test_cell_local_research_site_requires_and_persists_explicit_developed_cell(
     row = _research_row(app, research_id)
     earth_options = [
         candidate
-        for candidate in row.prototype_sites
+        for candidate in row.execution_context_options
         if candidate.operational_node_id == str(EARTH)
     ]
     assert [candidate.surface_cell_id for candidate in earth_options] == [
@@ -169,7 +169,7 @@ def test_cell_local_research_site_requires_and_persists_explicit_developed_cell(
     app.execute(SetResearchPrototypeSite(
         str(research_id), "prototype", str(EARTH), str(ids.EARTH_CELL_INDUSTRIAL)
     ))
-    selected = _research_row(app, research_id).prototype_execution_site
+    selected = _research_row(app, research_id).execution_context
     assert selected is not None
     assert selected.operational_node_id == str(EARTH)
     assert selected.surface_cell_id == str(ids.EARTH_CELL_INDUSTRIAL)
@@ -201,7 +201,7 @@ def test_prototype_resource_staging_is_site_owned_durable_and_completes_when_run
 
     row = _research_row(app, research_id)
     assert row.status == "prototype"
-    resource = row.prototype_resources[0]
+    resource = row.stage_resources[0]
     assert resource.reserved_t == pytest.approx(0.25)
     assert resource.requested_t == pytest.approx(0.75)
     assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.0)
@@ -219,7 +219,7 @@ def test_prototype_resource_staging_is_site_owned_durable_and_completes_when_run
     sim.inventory.add(EARTH, resource_id, 0.75)
     app.execute(AdvanceTime(1))
     row = _research_row(app, research_id)
-    resource = row.prototype_resources[0]
+    resource = row.stage_resources[0]
     assert resource.reserved_t == pytest.approx(1.0)
     assert resource.requested_t == pytest.approx(0.0)
     assert not any(code == "prototype_resource" for code, _detail in row.current_blockers)
@@ -262,16 +262,16 @@ def test_demonstration_site_selection_tolerates_transient_blockers_but_progress_
     row = _research_row(app, research_id)
     earth = next(
         candidate
-        for candidate in row.demonstration_sites
+        for candidate in row.execution_context_options
         if candidate.operational_node_id == str(EARTH)
     )
     assert any(code == "capability:active" for code, _detail in earth.blockers)
     assert earth.can_select
     app.execute(SetResearchDemonstrationSite(str(research_id), "demonstration", str(EARTH)))
     selected = _research_row(app, research_id)
-    assert selected.demonstration_execution_site is not None
-    assert selected.demonstration_execution_site.operational_node_id == str(EARTH)
-    assert selected.demonstration_execution_site.surface_cell_id is None
+    assert selected.execution_context is not None
+    assert selected.execution_context.operational_node_id == str(EARTH)
+    assert selected.execution_context.surface_cell_id is None
     assert any(code == "capability:active" for code, _detail in selected.current_blockers)
 
     app.execute(ResumeFacility(str(site.id)))
@@ -313,8 +313,9 @@ def test_research_stage_identity_is_explicit_unique_and_stable_across_repeated_s
 
     app.execute(StartResearch(str(research_id)))
     row = _research_row(app, research_id)
-    assert row.stage_ids == ("prototype-a", "prototype-b")
-    assert row.stages == ("prototype", "prototype")
+    assert tuple((stage.stage_id, stage.stage_type) for stage in row.stages) == (
+        ("prototype-a", "prototype"), ("prototype-b", "prototype")
+    )
     assert sim.research.active[research_id].current_stage_id == "prototype-a"
     app.execute(SetResearchPrototypeSite(str(research_id), "prototype-a", str(EARTH)))
     first_bundle = sim.research.execution_requirement_bundles(sim.day)[0]

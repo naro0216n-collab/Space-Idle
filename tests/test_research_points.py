@@ -116,8 +116,8 @@ def test_global_research_points_are_progressively_allocated_without_upfront_or_s
     assert app.query(GetResearch()).stored_points == before
     assert started.status == "theory"
     assert started.priority == 4
-    assert started.rp_remaining == started.research_point_cost
-    assert started.research_point_cost > capacity
+    assert started.rp_remaining == started.total_theory_research_point_cost
+    assert started.total_theory_research_point_cost > capacity
     assert started.execution_allocated > 0.0
     assert started.rp_allocated > 0.0
 
@@ -126,7 +126,7 @@ def test_global_research_points_are_progressively_allocated_without_upfront_or_s
     progressed = _research_row(app, research_id)
     after = app.query(GetResearch())
     assert progressed.stage_progress == expected_consumption
-    assert progressed.rp_remaining == progressed.research_point_cost - expected_consumption
+    assert progressed.rp_remaining == progressed.total_theory_research_point_cost - expected_consumption
     assert isclose(after.stored_points, before - expected_consumption, abs_tol=1e-9)
 
 

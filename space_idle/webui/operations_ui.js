@@ -303,12 +303,12 @@
   function researchBlockers(r){return r.current_blockers||[];}
   function researchSiteLabel(site){if(!site)return '未選択';return `${locationName(site.operational_node_id)}${site.surface_cell_id?` / ${site.surface_cell_id}`:''}`;}
   function siteOptionsHtml(r,kind){
-    const options=kind==='prototype'?(r.prototype_sites||[]):(r.demonstration_sites||[]),selected=kind==='prototype'?r.prototype_execution_site:r.demonstration_execution_site;
+    const options=r.execution_context_options||[],selected=r.execution_context;
     if(!options.length)return '<div class="empty-state">候補地点なし</div>';
     return options.map((site)=>{const blockers=site.blockers||[],blocked=blockers.length,isSelected=Boolean(selected)&&site.operational_node_id===selected.operational_node_id&&(site.surface_cell_id||null)===(selected.surface_cell_id||null),canSelect=Boolean(site.can_select),attr=kind==='prototype'?'data-research-prototype-site':'data-research-demo-site';const badge=isSelected?'選択中':canSelect?(blocked?`選択可 · ${blocked} 稼働blocker`:'選択可'):`${blocked||1} blocker`;return `<div class="detail-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(researchSiteLabel(site))}</span><span class="badge ${blocked?'warn':canSelect||isSelected?'ok':''}">${badge}</span></div>${blocked?`<div class="issue-stack">${blockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:''}<button type="button" ${attr}="${esc(site.operational_node_id)}" data-surface-cell-id="${esc(site.surface_cell_id||'')}" data-id="${esc(r.id)}" data-stage-id="${esc(r.current_stage_id||'')}" ${!canSelect||isSelected?'disabled':''}>${kind==='prototype'?'試作地点に設定':'実証地点に設定'}</button></div>`;}).join('');
   }
   function prototypeResourceHtml(r){
-    const rows=r.prototype_resources||[];
+    const rows=r.stage_resources||[];
     if(!rows.length)return '<div class="empty-state">追加試作資材なし</div>';
     return rows.map((x)=>`<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(x.resource_id))}</span><span>${fmt(x.reserved_t)} / ${fmt(x.required_t)} t reserved</span></div><div class="cell-sub">current claim ${fmt(x.requested_t)} t · allocated ${fmt(x.allocated_t)} t · unmet ${fmt(x.unmet_t)} t · pipeline ${fmt(x.pipeline_t)} t</div></div>`).join('');
   }
@@ -324,16 +324,16 @@
     if(r.status==='theory'){
       phase=section('Theory',kv([['進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)} RP`],['RP requested',`${fmt(r.rp_requested,2)} /日`],['RP allocated',`${fmt(r.rp_allocated,2)} /日`],['Theory残り',`${fmt(r.rp_remaining,1)} RP`],['Research execution requested',`${fmt(r.execution_requested,2)} /日`],['Research execution allocated',`${fmt(r.execution_allocated,2)} /日`]]));
     }else if(r.status==='prototype'){
-      phase=section('Prototype',`<div class="cell-sub">地点 ${esc(researchSiteLabel(r.prototype_execution_site))} · Research execution ${fmt(r.execution_allocated,2)}/${fmt(r.execution_requested,2)} /日</div>${siteOptionsHtml(r,'prototype')}<h3>Resource Claim / staging / pipeline</h3>${prototypeResourceHtml(r)}`);
+      phase=section('Prototype',`<div class="cell-sub">地点 ${esc(researchSiteLabel(r.execution_context))} · Research execution ${fmt(r.execution_allocated,2)}/${fmt(r.execution_requested,2)} /日</div>${siteOptionsHtml(r,'prototype')}<h3>Resource Claim / staging / pipeline</h3>${prototypeResourceHtml(r)}`);
     }else if(r.status==='demonstration'){
-      phase=section('Demonstration',`<div class="cell-sub">進捗 ${fmt(r.stage_progress,1)}/${fmt(r.stage_required,1)}日 · 地点 ${esc(researchSiteLabel(r.demonstration_execution_site))} · Research execution ${fmt(r.execution_allocated,2)}/${fmt(r.execution_requested,2)} /日</div>${siteOptionsHtml(r,'demonstration')}`);
+      phase=section('Demonstration',`<div class="cell-sub">進捗 ${fmt(r.stage_progress,1)}/${fmt(r.stage_required,1)}日 · 地点 ${esc(researchSiteLabel(r.execution_context))} · Research execution ${fmt(r.execution_allocated,2)}/${fmt(r.execution_requested,2)} /日</div>${siteOptionsHtml(r,'demonstration')}`);
     }else if(r.status==='operational_experience'){
       phase=section('Operational Experience',experienceHtml(r));
     }
     const stageNames={theory:'Theory',prototype:'Prototype',demonstration:'Demonstration',operational_experience:'Operational Experience'};
-    const stageSequence=(r.stages||[]).map((x,i)=>`${stageNames[x]||x} [${(r.stage_ids||[])[i]||'—'}]`).join(' → ')||'—';
+    const stageSequence=(r.stages||[]).map((x)=>`${stageNames[x.stage_type]||x.stage_type} [${x.stage_id||'—'}]`).join(' → ')||'—';
     const startRows=[['Stage構成',esc(stageSequence)],['保有RP',fmt(state.research?.stored_points,1)],['RP Pool容量',fmt(state.research?.storage_capacity_points,1)]];
-    if((r.stages||[]).includes('theory'))startRows.splice(1,0,['Theory総必要RP',fmt(r.research_point_cost,1)]);
+    if((r.stages||[]).some((x)=>x.stage_type==='theory'))startRows.splice(1,0,['Theory総必要RP',fmt(r.total_theory_research_point_cost,1)]);
     const startState=['available','locked'].includes(r.status)?section('開始条件',kv(startRows)):'';
     const priorityControl=`<div class="form-row"><label>研究優先度<select id="researchPriorityInput" data-draft-key="research:${esc(r.id)}:priority">${priorityOptions(r.priority??3)}</select></label>${r.can_set_priority?`<button type="button" data-set-research-priority="${esc(r.id)}">優先度を適用</button>`:''}</div>`;
     setInspector(r.display_name,section('状態',kv([['段階',esc(stateLabels[r.status]||r.status)],['Stage ID',esc(r.current_stage_id||'—')],['優先度',fmt(r.priority,0)],['Stage進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)}`],['RP requested / allocated',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)}`],['Execution requested / allocated',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)}`]]))+section('前提',(r.prerequisites||[]).length?(r.prerequisites||[]).map((x)=>`<span class="badge">${esc(definitionName(x))}</span>`).join(' '):'<span class="badge ok">なし</span>')+startState+section('現在のblocker',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:'<span class="badge ok">なし</span>')+phase+section('研究操作',`<div class="action-stack">${priorityControl}${action}</div>`));

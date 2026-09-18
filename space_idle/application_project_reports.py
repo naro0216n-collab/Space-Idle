@@ -548,17 +548,11 @@ class ApplicationReportProjectorMixin:
             groups: list[tuple[str, tuple[tuple[str, str], ...], str | None]] = []
             if row.status in {"available", "locked"}:
                 groups.append(("research_start", row.start_blockers, None))
-            elif row.status == "prototype":
+            elif row.status in {"prototype", "demonstration"}:
                 groups.append((
-                    "research_prototype",
-                    row.prototype_blockers,
-                    None if row.prototype_execution_site is None else row.prototype_execution_site.operational_node_id,
-                ))
-            elif row.status == "demonstration":
-                groups.append((
-                    "research_demonstration",
-                    row.demonstration_blockers,
-                    None if row.demonstration_execution_site is None else row.demonstration_execution_site.operational_node_id,
+                    f"research_{row.status}",
+                    row.current_blockers,
+                    None if row.execution_context is None else row.execution_context.operational_node_id,
                 ))
 
             for source, blockers, selected_location in groups:
