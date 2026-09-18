@@ -50,6 +50,101 @@ def _dijkstra(
     raise ValueError(f"no path {origin} -> {destination}")
 
 
+
+def select_canonical_path(
+    origin: NodeT,
+    destination: NodeT,
+    *,
+    outgoing: Callable[[NodeT], Iterable[EdgeT]],
+    edge_destination: Callable[[EdgeT], NodeT],
+    edge_time: Callable[[EdgeT], float],
+    edge_propellant: Callable[[EdgeT], float],
+    edge_capacity: Callable[[EdgeT], float],
+    edge_key: Callable[[EdgeT], str],
+) -> tuple[EdgeT, ...]:
+    """Select the canonical operational path without player strategy modes.
+
+    Latency, operational propellant burden, handoff burden and currently
+    available capacity are normalized against the best achievable total for
+    the same candidate graph. Stable keys are only used to break equal scores.
+    """
+
+    best_time, _ = _dijkstra(
+        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        edge_weight=edge_time, edge_key=edge_key,
+    )
+    best_propellant, _ = _dijkstra(
+        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        edge_weight=edge_propellant, edge_key=edge_key,
+    )
+    best_hops, _ = _dijkstra(
+        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        edge_weight=lambda _edge: 1.0, edge_key=edge_key,
+    )
+    best_capacity_burden, _ = _dijkstra(
+        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        edge_weight=lambda edge: 1.0 / max(float(edge_capacity(edge)), _EPS),
+        edge_key=edge_key,
+    )
+    time_scale = max(best_time, _EPS)
+    propellant_scale = max(best_propellant, _EPS)
+    hop_scale = max(best_hops, 1.0)
+    capacity_scale = max(best_capacity_burden, _EPS)
+    return _dijkstra(
+        origin,
+        destination,
+        outgoing=outgoing,
+        edge_destination=edge_destination,
+        edge_weight=lambda edge: (
+            float(edge_time(edge)) / time_scale
+            + float(edge_propellant(edge)) / propellant_scale
+            + 1.0 / hop_scale
+            + (1.0 / max(float(edge_capacity(edge)), _EPS)) / capacity_scale
+        ),
+        edge_key=edge_key,
+    )[1]
+
+
+def select_canonical_candidate(
+    candidates: Iterable[EdgeT],
+    *,
+    metric_time: Callable[[EdgeT], float],
+    metric_propellant: Callable[[EdgeT], float],
+    metric_handoffs: Callable[[EdgeT], float],
+    metric_capacity_burden: Callable[[EdgeT], float],
+    stable_key: Callable[[EdgeT], str],
+) -> EdgeT:
+    """Compare complete candidates with unit-independent canonical metrics."""
+
+    rows = tuple(candidates)
+    if not rows:
+        raise ValueError("no path candidate")
+
+    metric_functions = (
+        metric_time, metric_propellant, metric_handoffs, metric_capacity_burden
+    )
+    bounds: list[tuple[float, float]] = []
+    for metric in metric_functions:
+        values = tuple(float(metric(row)) for row in rows)
+        bounds.append((min(values), max(values)))
+
+    def normalized(value: float, bounds: tuple[float, float]) -> float:
+        low, high = bounds
+        if high - low <= _EPS:
+            return 0.0
+        return (value - low) / (high - low)
+
+    return min(
+        rows,
+        key=lambda row: (
+            sum(
+                normalized(float(metric(row)), bound)
+                for metric, bound in zip(metric_functions, bounds, strict=True)
+            ),
+            stable_key(row),
+        ),
+    )
+
 def select_tradeoff_path(
     origin: NodeT,
     destination: NodeT,

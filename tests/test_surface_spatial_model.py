@@ -9,7 +9,7 @@ from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.persistence import load_game, save_game
 from space_idle.shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId, StarSystemId, SurfaceCellId
-from space_idle.supply import SourceSelectionMode
+from space_idle.supply import SupplyRoutingConstraintScope
 from space_idle.spatial import (
     CelestialBodyDef,
     CharacteristicTransportGeometry,
@@ -178,10 +178,9 @@ def test_operational_node_ownership_is_explicit_and_uniform_across_spatial_kinds
     with pytest.raises(KeyError):
         sim.facilities.install(facility_definition_id, dormant)
     with pytest.raises(KeyError):
-        sim.logistics.create_logistics_policy(
-            EntityId("logistics.policy.dormant"),
-            source_mode=SourceSelectionMode.PINNED,
-            allowed_source_ids=(dormant,),
+        sim.logistics.set_supply_routing_constraint(
+            SupplyRoutingConstraintScope(destination_id=ids.EARTH, resource_id=ids.WATER),
+            source_node_id=dormant,
         )
 
     sim.inventory.stock[(dormant, ids.WATER)] = 1.0

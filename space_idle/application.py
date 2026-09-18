@@ -18,7 +18,7 @@ from .application_commands import (
     SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration, SetScientificExplorationPriority,
     StartSurvey, UnassignExplorationFleet, UpdateTransportAllocation, AssignExplorationFleet, CreateResearchProviderAssignment, ResizeResearchProviderAssignment, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, ReleaseResearchProviderAssignment, CreateSurveyProviderAssignment, ResizeSurveyProviderAssignment, ReleaseSurveyProviderAssignment, CreateTradeOrder,
     UpdateTradeOrder, CancelTradeOrder, GetMarket,
-    SetTargetStock, DeleteTargetStock, CreateLogisticsPolicy, UpdateLogisticsPolicy, AssignLogisticsPolicy, UnassignLogisticsPolicy, SetGlobalLogisticsPolicy, DeleteLogisticsPolicy,
+    SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
 )
 
 from .application_command_handlers import ApplicationCommandMixin

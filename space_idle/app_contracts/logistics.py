@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 from ..priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
-from .transport import PathPolicyLiteral
-
-SourceSelectionModeLiteral = Literal["pinned", "preferred", "allow_any"]
-PathSelectionModeLiteral = Literal["pinned", "preferred", "allow_any"]
 
 
 @dataclass(frozen=True)
@@ -25,49 +20,19 @@ class DeleteTargetStock:
 
 
 @dataclass(frozen=True)
-class CreateLogisticsPolicy:
-    policy_id: str
-    source_mode: SourceSelectionModeLiteral = "allow_any"
-    allowed_source_ids: tuple[str, ...] | None = None
-    preferred_source_id: str | None = None
-    path_mode: PathSelectionModeLiteral = "allow_any"
-    explicit_path: tuple[str, ...] | None = None
-    allowed_handoff_ids: tuple[str, ...] | None = None
-    allowed_service_ids: tuple[str, ...] | None = None
-    path_preference: PathPolicyLiteral = "balanced"
+class SetSupplyRoutingConstraint:
+    destination_id: str
+    owner_kind: str | None = None
+    owner_id: str | None = None
+    resource_id: str | None = None
+    source_node_id: str | None = None
+    required_via_node_ids: tuple[str, ...] = ()
+    required_transport_allocation_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
-class UpdateLogisticsPolicy:
-    policy_id: str
-    source_mode: SourceSelectionModeLiteral
-    allowed_source_ids: tuple[str, ...] | None = None
-    preferred_source_id: str | None = None
-    path_mode: PathSelectionModeLiteral = "allow_any"
-    explicit_path: tuple[str, ...] | None = None
-    allowed_handoff_ids: tuple[str, ...] | None = None
-    allowed_service_ids: tuple[str, ...] | None = None
-    path_preference: PathPolicyLiteral = "balanced"
-
-
-@dataclass(frozen=True)
-class AssignLogisticsPolicy:
-    owner_kind: str
-    owner_id: str
-    policy_id: str
-
-
-@dataclass(frozen=True)
-class UnassignLogisticsPolicy:
-    owner_kind: str
-    owner_id: str
-
-
-@dataclass(frozen=True)
-class SetGlobalLogisticsPolicy:
-    policy_id: str | None
-
-
-@dataclass(frozen=True)
-class DeleteLogisticsPolicy:
-    policy_id: str
+class ClearSupplyRoutingConstraint:
+    destination_id: str
+    owner_kind: str | None = None
+    owner_id: str | None = None
+    resource_id: str | None = None

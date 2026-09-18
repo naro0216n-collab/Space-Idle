@@ -77,7 +77,7 @@
         <div class="workspace-heading logistics-heading"><div><div class="eyebrow">LOGISTICS NETWORK</div><h1>物流ネットワーク</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
         <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
         <div class="logistics-bottom-grid">
-          <section class="card"><div class="card-heading"><h3>Logistics Policy / Target Stock</h3><span id="logisticsPolicyCountBadge" class="badge"></span></div><div id="logisticsPolicyTable" class="table-wrap"></div></section>
+          <section class="card"><div class="card-heading"><h3>Supply Routing Constraint / Target Stock</h3><span id="routingConstraintCountBadge" class="badge"></span></div><div id="routingConstraintTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Supply Requirement</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Fleet</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
           <section class="card"><div class="card-heading"><h3>Transport Allocation</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
@@ -93,19 +93,17 @@
       </aside>
     </main>
 
-    <dialog id="logisticsPolicyDialog" class="modal-dialog">
-      <form method="dialog" id="logisticsPolicyForm">
-        <div class="dialog-heading"><div><div class="eyebrow">LOGISTICS POLICY</div><h2>物流方針を設定</h2></div><button type="button" class="icon-button" id="logisticsPolicyCloseButton">×</button></div>
-        <label>Policy ID<input id="logisticsPolicyId" required placeholder="logistics.policy.custom"></label>
-        <div class="field-pair"><label>供給元選択<select id="logisticsPolicySourceMode"><option value="allow_any">許可候補から自動選択</option><option value="preferred">優先供給元</option><option value="pinned">供給元固定</option></select></label><label>固定 / 優先供給元<select id="logisticsPolicySource"><option value="">—</option></select></label></div>
-        <label>許可供給元集合<input id="logisticsPolicyAllowedSources" placeholder="空欄=全候補。複数はcomma区切り"></label>
-        <div class="field-pair"><label>経路選択<select id="logisticsPolicyPathMode"><option value="allow_any">標準BALANCED</option><option value="preferred">Preference指定</option><option value="pinned">経路固定</option></select></label><label>経路Preference<select id="logisticsPolicyPathPreference"><option value="balanced" selected>時間・推進剤バランス</option><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label></div>
-        <label>固定Movement Plan列<input id="logisticsPolicyExplicitPath" placeholder="movement.plan.a, movement.plan.b"></label>
-        <label>許可handoff Operational Node<input id="logisticsPolicyAllowedHandoffs" placeholder="空欄=制限なし。複数はcomma区切り"></label>
-        <label>許可Transport Service identity<input id="logisticsPolicyAllowedServices" placeholder="空欄=制限なし。複数はcomma区切り"></label>
-        <label><input id="logisticsPolicyGlobal" type="checkbox"> Scenario globalの代わりに全未割当intentへ適用</label>
-        <div class="cell-sub">供給元選択は明示Policyの範囲だけで行います。経路は未固定時にBALANCEDが標準で、Playerは最速・推進剤最少へ変更できます。Transport AllocationのFleet構成は変更しません。</div>
-        <div class="dialog-actions"><button type="button" class="secondary" id="logisticsPolicyCancelButton">取消</button><button type="submit" class="primary">方針を保存</button></div>
+    <dialog id="routingConstraintDialog" class="modal-dialog">
+      <form method="dialog" id="routingConstraintForm">
+        <div class="dialog-heading"><div><div class="eyebrow">SUPPLY ROUTING CONSTRAINT</div><h2>供給経路を固定</h2></div><button type="button" class="icon-button" id="routingConstraintCloseButton">×</button></div>
+        <label>需要地<select id="routingConstraintDestination" required></select></label>
+        <div class="field-pair"><label>Owner kind<input id="routingConstraintOwnerKind" placeholder="project / founding / target_stock など"></label><label>Owner ID<input id="routingConstraintOwnerId" placeholder="空欄なら需要地全体"></label></div>
+        <label>Resource<select id="routingConstraintResource"><option value="">全Resource</option></select></label>
+        <label>固定供給元<select id="routingConstraintSource"><option value="">指定なし</option></select></label>
+        <label>必須経由Node<input id="routingConstraintViaNodes" placeholder="node.a, node.b（comma区切り）"></label>
+        <label>必須Transport Allocation<input id="routingConstraintAllocations" placeholder="allocation.a, allocation.b（comma区切り）"></label>
+        <div class="cell-sub">指定した条件は hard constraint です。満たす経路がない場合は別供給元・別経路へfallbackせず blocker になります。未指定部分だけ既存Network内で自動選択します。</div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="routingConstraintCancelButton">取消</button><button type="submit" class="primary">Constraintを保存</button></div>
       </form>
     </dialog>
 

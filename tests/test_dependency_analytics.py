@@ -12,7 +12,7 @@ from space_idle.validation import validate_catalog_coverage
 from space_idle.validation_support import ConfigurationError
 from space_idle.logistics_models import CargoFlowSegment, CargoServiceLeg
 from space_idle.production import ProcessSpec
-from space_idle.supply import SourceSelectionMode
+from space_idle.supply import SupplyRoutingConstraintScope
 
 
 def _resource(view, resource_id):
@@ -141,11 +141,12 @@ def test_current_authorized_transport_projects_boundary_flow_consumption_and_par
     project_id = sim.projects.plan_build(
         ids.ORBITAL_LOGISTICS_NODE, LEO, 3, "immediate", day=sim.day,
     )
-    policy_id = EntityId("logistics.policy.analytics-earth")
-    sim.logistics.create_logistics_policy(
-        policy_id, source_mode=SourceSelectionMode.PINNED, allowed_source_ids=(EARTH,)
+    sim.logistics.set_supply_routing_constraint(
+        SupplyRoutingConstraintScope(
+            destination_id=LEO, owner_kind="project", owner_id=EntityId(str(project_id))
+        ),
+        source_node_id=EARTH,
     )
-    sim.logistics.assign_logistics_policy("project", EntityId(str(project_id)), policy_id)
     sim.projects.advance_procurement(sim.day)
     demands = sim.projects.supplys(sim.day)
     for demand in demands:

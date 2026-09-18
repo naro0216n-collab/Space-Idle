@@ -1,19 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 from collections.abc import Callable
+from dataclasses import dataclass, replace
 
 from .priority import ActivityPriority
 from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
 from .supply import (
-    LogisticsPolicyAssignmentState,
-    LogisticsPolicyState,
-    PathSelectionMode,
-    SourceSelectionMode,
     SupplyRequirement,
+    SupplyRoutingConstraintScope,
+    SupplyRoutingConstraintState,
     TargetStockPolicy,
 )
-from .transport.models import PathPolicy
 
 
 @dataclass(frozen=True)
@@ -26,10 +23,18 @@ class SupplyPlanningOptions:
     path_candidates: tuple[tuple[SpatialNodeId, tuple[MovementPlanId, ...]], ...]
     blockers: tuple[str, ...]
     earliest_confirmed_arrival_day: int | None
+    selected_source_id: SpatialNodeId | None = None
+    selected_service_ids: tuple[str, ...] = ()
+    selected_movement_plan_ids: tuple[MovementPlanId, ...] = ()
+    projected_arrival_day: int | None = None
+    selected_latency_days: float | None = None
+    selected_propellant_t_per_t: float | None = None
+    selected_handoff_count: int | None = None
+    selected_bottleneck_capacity_t_per_day: float | None = None
 
 
 class SupplyPlanningMixin:
-    """Authoritative Logistics Policy state plus Target Stock player intent."""
+    """Target Stock intent and sparse hard routing constraints."""
 
     @staticmethod
     def _target_stock_id(
@@ -46,24 +51,32 @@ class SupplyPlanningMixin:
     ) -> EntityId:
         if not self.facilities.environment.graph.has_operational_node(destination_id):
             raise KeyError(destination_id)
-        policy_id = self._target_stock_id(destination_id, resource_id)
-        self.target_stocks[policy_id] = TargetStockPolicy(
-            policy_id,
+        if resource_id not in self.inventory.resource_definitions:
+            raise KeyError(resource_id)
+        target_stock_id = self._target_stock_id(destination_id, resource_id)
+        self.target_stocks[target_stock_id] = TargetStockPolicy(
+            target_stock_id,
             destination_id,
             resource_id,
             target_quantity_t,
             priority,
         )
-        return policy_id
+        return target_stock_id
 
     def delete_target_stock(
         self, destination_id: SpatialNodeId, resource_id: DefinitionId
     ) -> None:
-        policy_id = self._target_stock_id(destination_id, resource_id)
-        if policy_id not in self.target_stocks:
-            raise KeyError(policy_id)
-        self.policy_assignments.pop(("target_stock", policy_id), None)
-        del self.target_stocks[policy_id]
+        target_stock_id = self._target_stock_id(destination_id, resource_id)
+        if target_stock_id not in self.target_stocks:
+            raise KeyError(target_stock_id)
+        del self.target_stocks[target_stock_id]
+        self.routing_constraints = {
+            scope: row
+            for scope, row in self.routing_constraints.items()
+            if not (
+                scope.owner_kind == "target_stock" and scope.owner_id == target_stock_id
+            )
+        }
 
     def target_stock_policies(self) -> tuple[TargetStockPolicy, ...]:
         return tuple(
@@ -78,198 +91,160 @@ class SupplyPlanningMixin:
             if policy.target_quantity_t > 1e-12
         )
 
-    def register_policy_owner_resolver(
+    def register_supply_owner_resolver(
         self, owner_kind: str, resolver: Callable[[EntityId], bool]
     ) -> None:
         if not owner_kind:
-            raise ValueError("logistics policy owner kind must be non-empty")
-        if owner_kind in self._policy_owner_resolvers:
-            raise ValueError(f"logistics policy owner resolver already registered: {owner_kind}")
-        self._policy_owner_resolvers[owner_kind] = resolver
+            raise ValueError("supply owner kind must be non-empty")
+        if owner_kind in self._supply_owner_resolvers:
+            raise ValueError(f"supply owner resolver already registered: {owner_kind}")
+        self._supply_owner_resolvers[owner_kind] = resolver
 
-    def policy_owner_exists(self, owner_kind: str, owner_id: EntityId) -> bool:
-        resolver = self._policy_owner_resolvers.get(owner_kind)
+    def supply_owner_exists(self, owner_kind: str, owner_id: EntityId) -> bool:
+        resolver = self._supply_owner_resolvers.get(owner_kind)
         return False if resolver is None else bool(resolver(owner_id))
 
-    def create_logistics_policy(
-        self,
-        policy_id: EntityId,
-        *,
-        source_mode: SourceSelectionMode = SourceSelectionMode.ALLOW_ANY,
-        allowed_source_ids: tuple[SpatialNodeId, ...] | None = None,
-        preferred_source_id: SpatialNodeId | None = None,
-        path_mode: PathSelectionMode = PathSelectionMode.ALLOW_ANY,
-        explicit_path: tuple[MovementPlanId, ...] | None = None,
-        allowed_handoff_ids: tuple[SpatialNodeId, ...] | None = None,
-        allowed_service_ids: tuple[str, ...] | None = None,
-        path_preference: PathPolicy = PathPolicy.BALANCED,
-    ) -> EntityId:
-        if policy_id in self.logistics_policies:
-            raise ValueError(f"logistics policy already exists: {policy_id}")
-        policy = LogisticsPolicyState(
-            id=policy_id,
-            source_mode=source_mode,
-            allowed_source_ids=allowed_source_ids,
-            preferred_source_id=preferred_source_id,
-            path_mode=path_mode,
-            explicit_path=explicit_path,
-            allowed_handoff_ids=allowed_handoff_ids,
-            allowed_service_ids=allowed_service_ids,
-            path_preference=path_preference,
-        )
-        self._validate_policy_references(policy)
-        self.logistics_policies[policy_id] = policy
-        return policy_id
-
-    def update_logistics_policy(
-        self,
-        policy_id: EntityId,
-        *,
-        source_mode: SourceSelectionMode | None = None,
-        allowed_source_ids: tuple[SpatialNodeId, ...] | None | object = ...,
-        preferred_source_id: SpatialNodeId | None | object = ...,
-        path_mode: PathSelectionMode | None = None,
-        explicit_path: tuple[MovementPlanId, ...] | None | object = ...,
-        allowed_handoff_ids: tuple[SpatialNodeId, ...] | None | object = ...,
-        allowed_service_ids: tuple[str, ...] | None | object = ...,
-        path_preference: PathPolicy | None = None,
-    ) -> None:
-        current = self.logistics_policies[policy_id]
-        updated = LogisticsPolicyState(
-            id=current.id,
-            source_mode=current.source_mode if source_mode is None else source_mode,
-            allowed_source_ids=(
-                current.allowed_source_ids if allowed_source_ids is ... else allowed_source_ids
-            ),
-            preferred_source_id=(
-                current.preferred_source_id
-                if preferred_source_id is ...
-                else preferred_source_id
-            ),
-            path_mode=current.path_mode if path_mode is None else path_mode,
-            explicit_path=current.explicit_path if explicit_path is ... else explicit_path,
-            allowed_handoff_ids=(
-                current.allowed_handoff_ids
-                if allowed_handoff_ids is ...
-                else allowed_handoff_ids
-            ),
-            allowed_service_ids=(
-                current.allowed_service_ids
-                if allowed_service_ids is ...
-                else allowed_service_ids
-            ),
-            path_preference=(
-                current.path_preference if path_preference is None else path_preference
-            ),
-        )
-        self._validate_policy_references(updated)
-        self.logistics_policies[policy_id] = updated
-
-    def _validate_policy_references(self, policy: LogisticsPolicyState) -> None:
-        graph = self.facilities.environment.graph
-        for source_id in policy.allowed_source_ids or ():
-            if not graph.has_operational_node(source_id):
-                raise KeyError(source_id)
+    @staticmethod
+    def _scopes_overlap(
+        left: SupplyRoutingConstraintScope, right: SupplyRoutingConstraintScope
+    ) -> bool:
+        if left.destination_id != right.destination_id:
+            return False
         if (
-            policy.preferred_source_id is not None
-            and not graph.has_operational_node(policy.preferred_source_id)
+            left.resource_id is not None
+            and right.resource_id is not None
+            and left.resource_id != right.resource_id
         ):
-            raise KeyError(policy.preferred_source_id)
-        for handoff_id in policy.allowed_handoff_ids or ():
-            if not graph.has_operational_node(handoff_id):
-                raise KeyError(handoff_id)
-        if policy.path_mode is PathSelectionMode.PINNED and policy.explicit_path:
-            # Source and path are independent policy dimensions.  Validate the
-            # pinned Movement Plan sequence against its own endpoints here; a
-            # Supply Requirement source that cannot enter that path is rejected
-            # later by path resolution rather than forcing source_mode=PINNED.
-            first = self.transport.require_movement_plan(policy.explicit_path[0])
-            last = self.transport.require_movement_plan(policy.explicit_path[-1])
-            self.transport.validate_movement_path_structure(
-                first.origin_id, last.destination_id, policy.explicit_path
-            )
+            return False
+        if left.owner_kind is None or right.owner_kind is None:
+            return True
+        return left.owner_kind == right.owner_kind and left.owner_id == right.owner_id
 
-    def delete_logistics_policy(self, policy_id: EntityId) -> None:
-        if policy_id not in self.logistics_policies:
-            raise KeyError(policy_id)
-        if self.global_policy_id == policy_id:
-            raise ValueError("logistics policy is the active global policy")
-        refs = [
-            assignment
-            for assignment in self.policy_assignments.values()
-            if assignment.policy_id == policy_id
-        ]
-        if refs:
-            raise ValueError("logistics policy is still assigned")
-        del self.logistics_policies[policy_id]
-
-    def logistics_policy_rows(self) -> tuple[LogisticsPolicyState, ...]:
-        return tuple(
-            replace(row)
-            for row in sorted(self.logistics_policies.values(), key=lambda row: str(row.id))
+    @staticmethod
+    def _constraint_sort_key(row: SupplyRoutingConstraintState) -> tuple[str, ...]:
+        scope = row.scope
+        return (
+            str(scope.destination_id),
+            "" if scope.owner_kind is None else scope.owner_kind,
+            "" if scope.owner_id is None else str(scope.owner_id),
+            "" if scope.resource_id is None else str(scope.resource_id),
         )
 
-    def require_logistics_policy(self, policy_id: EntityId) -> LogisticsPolicyState:
-        return replace(self.logistics_policies[policy_id])
-
-    def prune_orphan_policy_assignments(self) -> None:
-        orphan_keys = [
-            key
-            for key, assignment in self.policy_assignments.items()
-            if not self.policy_owner_exists(assignment.owner_kind, assignment.owner_id)
-        ]
-        for key in orphan_keys:
-            self.policy_assignments.pop(key, None)
-
-    def assign_logistics_policy(
-        self, owner_kind: str, owner_id: EntityId, policy_id: EntityId
+    def _validate_routing_constraint_references(
+        self, constraint: SupplyRoutingConstraintState
     ) -> None:
-        if policy_id not in self.logistics_policies:
-            raise KeyError(policy_id)
-        if not self.policy_owner_exists(owner_kind, owner_id):
-            raise KeyError(f"unknown logistics policy owner: {owner_kind}:{owner_id}")
-        self.policy_assignments[(owner_kind, owner_id)] = LogisticsPolicyAssignmentState(
-            owner_kind, owner_id, policy_id
+        scope = constraint.scope
+        graph = self.facilities.environment.graph
+        if not graph.has_operational_node(scope.destination_id):
+            raise KeyError(scope.destination_id)
+        if scope.resource_id is not None and scope.resource_id not in self.inventory.resource_definitions:
+            raise KeyError(scope.resource_id)
+        if scope.owner_kind is not None and not self.supply_owner_exists(
+            scope.owner_kind, scope.owner_id
+        ):
+            raise KeyError(f"unknown supply owner: {scope.owner_kind}:{scope.owner_id}")
+        if constraint.source_node_id is not None and not graph.has_operational_node(
+            constraint.source_node_id
+        ):
+            raise KeyError(constraint.source_node_id)
+        for node_id in constraint.required_via_node_ids:
+            if not graph.has_operational_node(node_id):
+                raise KeyError(node_id)
+            if node_id == scope.destination_id:
+                raise ValueError("routing constraint destination cannot also be a required via node")
+        for allocation_id in constraint.required_transport_allocation_ids:
+            if self.transport.transport_allocation_snapshot(allocation_id) is None:
+                raise KeyError(allocation_id)
+
+    def set_supply_routing_constraint(
+        self,
+        scope: SupplyRoutingConstraintScope,
+        *,
+        source_node_id: SpatialNodeId | None = None,
+        required_via_node_ids: tuple[SpatialNodeId, ...] = (),
+        required_transport_allocation_ids: tuple[EntityId, ...] = (),
+    ) -> None:
+        constraint = SupplyRoutingConstraintState(
+            scope=scope,
+            source_node_id=source_node_id,
+            required_via_node_ids=required_via_node_ids,
+            required_transport_allocation_ids=required_transport_allocation_ids,
         )
+        self._validate_routing_constraint_references(constraint)
+        for existing_scope, existing in self.routing_constraints.items():
+            if existing_scope == scope or not self._scopes_overlap(existing_scope, scope):
+                continue
+            if (
+                existing.source_node_id is not None
+                and constraint.source_node_id is not None
+                and existing.source_node_id != constraint.source_node_id
+            ):
+                raise ValueError("overlapping routing constraints require conflicting source nodes")
+        self.routing_constraints[scope] = constraint
 
-    def unassign_logistics_policy(self, owner_kind: str, owner_id: EntityId) -> None:
-        self.policy_assignments.pop((owner_kind, owner_id), None)
+    def clear_supply_routing_constraint(self, scope: SupplyRoutingConstraintScope) -> None:
+        self.routing_constraints.pop(scope, None)
 
-    def logistics_policy_assignments(self) -> tuple[LogisticsPolicyAssignmentState, ...]:
+    def routing_constraint_rows(self) -> tuple[SupplyRoutingConstraintState, ...]:
         return tuple(
             replace(row)
-            for row in sorted(
-                self.policy_assignments.values(),
-                key=lambda row: (row.owner_kind, str(row.owner_id)),
-            )
+            for row in sorted(self.routing_constraints.values(), key=self._constraint_sort_key)
         )
 
-    def assigned_policy_id_for(self, owner_kind: str, owner_id: EntityId) -> EntityId | None:
-        assignment = self.policy_assignments.get((owner_kind, owner_id))
-        return None if assignment is None else assignment.policy_id
+    def exact_routing_constraint_for(
+        self, scope: SupplyRoutingConstraintScope
+    ) -> SupplyRoutingConstraintState | None:
+        row = self.routing_constraints.get(scope)
+        return None if row is None else replace(row)
 
-    def global_logistics_policy_id(self) -> EntityId | None:
-        return self.global_policy_id
-
-    def set_global_logistics_policy(self, policy_id: EntityId | None) -> None:
-        if policy_id is not None and policy_id not in self.logistics_policies:
-            raise KeyError(policy_id)
-        self.global_policy_id = policy_id
-
-    def resolved_policy_for(
-        self, owner_kind: str, owner_id: EntityId
-    ) -> LogisticsPolicyState | None:
-        assignment = self.policy_assignments.get((owner_kind, owner_id))
-        if assignment is not None:
-            return self.logistics_policies.get(assignment.policy_id)
-        if self.global_policy_id is None:
+    def routing_constraint_for(
+        self, requirement: SupplyRequirement
+    ) -> SupplyRoutingConstraintState | None:
+        rows = tuple(
+            row
+            for row in self.routing_constraints.values()
+            if row.scope.matches(requirement)
+        )
+        if not rows:
             return None
-        return self.logistics_policies.get(self.global_policy_id)
+        sources = {row.source_node_id for row in rows if row.source_node_id is not None}
+        if len(sources) > 1:
+            raise ValueError("overlapping routing constraints require conflicting source nodes")
+        via_nodes = tuple(
+            dict.fromkeys(
+                node_id
+                for row in sorted(rows, key=self._constraint_sort_key)
+                for node_id in row.required_via_node_ids
+            )
+        )
+        allocation_ids = tuple(
+            dict.fromkeys(
+                allocation_id
+                for row in sorted(rows, key=self._constraint_sort_key)
+                for allocation_id in row.required_transport_allocation_ids
+            )
+        )
+        return SupplyRoutingConstraintState(
+            scope=SupplyRoutingConstraintScope(
+                destination_id=requirement.destination_id,
+                owner_kind=requirement.owner_kind,
+                owner_id=requirement.owner_id,
+                resource_id=requirement.resource_id,
+            ),
+            source_node_id=next(iter(sources), None),
+            required_via_node_ids=via_nodes,
+            required_transport_allocation_ids=allocation_ids,
+        )
+
+    def prune_orphan_routing_constraints(self) -> None:
+        orphan_scopes = [
+            scope
+            for scope in self.routing_constraints
+            if scope.owner_kind is not None
+            and not self.supply_owner_exists(scope.owner_kind, scope.owner_id)
+        ]
+        for scope in orphan_scopes:
+            self.routing_constraints.pop(scope, None)
 
     def requirement_remaining_t(self, requirement: SupplyRequirement) -> float:
         return max(0.0, requirement.amount_t - self.cargo_flow_pipeline_t(requirement.id))
-
-    def logistics_policy_for(
-        self, requirement: SupplyRequirement
-    ) -> LogisticsPolicyState | None:
-        return self.resolved_policy_for(requirement.owner_kind, requirement.owner_id)

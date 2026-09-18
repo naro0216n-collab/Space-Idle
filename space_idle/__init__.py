@@ -21,7 +21,7 @@ from .application import (
     SetProjectProcurementPolicy, SetResearchDemonstrationSite, SetResearchPrototypeSite,
     SetSurveyPriority, SetTimeControl, SetVehicleProductionSettings, StartResearch,
     StartScientificExploration, SetScientificExplorationPriority, StartSurvey, UnassignExplorationFleet,
-    UpdateTransportAllocation, SetTargetStock, DeleteTargetStock, CreateLogisticsPolicy, UpdateLogisticsPolicy, AssignLogisticsPolicy, UnassignLogisticsPolicy, SetGlobalLogisticsPolicy, DeleteLogisticsPolicy,
+    UpdateTransportAllocation, SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
 )
 
 __all__ = [name for name in globals() if not name.startswith("_")]

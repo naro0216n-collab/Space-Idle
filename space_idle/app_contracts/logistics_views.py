@@ -239,14 +239,17 @@ class SupplyRequirementRow:
     pipeline_t: float
     remaining_t: float
     priority: ActivityPriority
-    assigned_policy_id: str | None = None
-    resolved_policy_id: str | None = None
-    source_mode: str | None = None
-    allowed_source_ids: tuple[str, ...] | None = None
-    preferred_source_id: str | None = None
-    path_mode: str | None = None
-    path_preference: str = "balanced"
-    explicit_path: tuple[str, ...] | None = None
+    routing_constraint_source_id: str | None = None
+    routing_constraint_via_node_ids: tuple[str, ...] = ()
+    routing_constraint_transport_allocation_ids: tuple[str, ...] = ()
+    selected_source_id: str | None = None
+    selected_service_ids: tuple[str, ...] = ()
+    selected_movement_plan_ids: tuple[str, ...] = ()
+    projected_arrival_day: int | None = None
+    selected_latency_days: float | None = None
+    selected_propellant_t_per_t: float | None = None
+    selected_handoff_count: int | None = None
+    selected_bottleneck_capacity_t_per_day: float | None = None
     source_candidate_ids: tuple[str, ...] = ()
     operational_source_ids: tuple[str, ...] = ()
     stocked_source_ids: tuple[str, ...] = ()
@@ -264,18 +267,14 @@ class SupplyRequirementRow:
 
 
 @dataclass(frozen=True)
-class LogisticsPolicyRow:
-    id: str
-    source_mode: str
-    allowed_source_ids: tuple[str, ...] | None
-    preferred_source_id: str | None
-    path_mode: str
-    path_preference: str
-    explicit_path: tuple[str, ...] | None
-    allowed_handoff_ids: tuple[str, ...] | None
-    allowed_service_ids: tuple[str, ...] | None
-    is_global: bool
-    assigned_owners: tuple[tuple[str, str], ...]
+class SupplyRoutingConstraintRow:
+    destination_id: str
+    owner_kind: str | None
+    owner_id: str | None
+    resource_id: str | None
+    source_node_id: str | None
+    required_via_node_ids: tuple[str, ...]
+    required_transport_allocation_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -298,7 +297,7 @@ class LogisticsView:
     vehicle_production_options: tuple[VehicleProductionOptionRow, ...]
     vehicle_production: tuple[VehicleProductionRow, ...]
     cargo_flows: tuple[CargoFlowRow, ...]
-    logistics_policies: tuple[LogisticsPolicyRow, ...]
+    routing_constraints: tuple[SupplyRoutingConstraintRow, ...]
     target_stocks: tuple[TargetStockRow, ...]
     requirements: tuple[SupplyRequirementRow, ...]
 

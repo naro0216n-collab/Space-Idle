@@ -8,7 +8,7 @@ from .application_views import (
 )
 from .application_commands import GetDependencyAnalytics
 from .shared import CelestialBodyId, SpatialNodeId
-from .supply import SourceSelectionMode, SupplyRequirement, resolve_local_supply
+from .supply import SupplyRequirement, resolve_local_supply
 
 
 class ApplicationReportProjectorMixin:
@@ -191,14 +191,10 @@ class ApplicationReportProjectorMixin:
             if remaining <= 1e-12:
                 continue
             unmet[requirement.resource_id] += remaining
-            policy = sim.logistics.logistics_policy_for(requirement)
-            preferred_source = None if policy is None else (
-                policy.allowed_source_ids[0]
-                if policy.source_mode is SourceSelectionMode.PINNED and policy.allowed_source_ids
-                else policy.preferred_source_id
-            )
-            if preferred_source is not None and preferred_source not in scope:
-                dependency_sources[requirement.resource_id].add(preferred_source)
+            constraint = sim.logistics.routing_constraint_for(requirement)
+            constrained_source = None if constraint is None else constraint.source_node_id
+            if constrained_source is not None and constrained_source not in scope:
+                dependency_sources[requirement.resource_id].add(constrained_source)
 
         resource_ids = (
             set(production) | set(consumption) | set(current_demand) |
@@ -291,14 +287,10 @@ class ApplicationReportProjectorMixin:
             if requirement.forecast_requirement_day is not None:
                 previous = earliest_day.get(resource_id)
                 earliest_day[resource_id] = requirement.forecast_requirement_day if previous is None else min(previous, requirement.forecast_requirement_day)
-            policy = sim.logistics.logistics_policy_for(requirement)
-            preferred_source = None if policy is None else (
-                policy.allowed_source_ids[0]
-                if policy.source_mode is SourceSelectionMode.PINNED and policy.allowed_source_ids
-                else policy.preferred_source_id
-            )
-            if preferred_source is not None and preferred_source not in scope:
-                dependency_sources[resource_id].add(preferred_source)
+            constraint = sim.logistics.routing_constraint_for(requirement)
+            constrained_source = None if constraint is None else constraint.source_node_id
+            if constrained_source is not None and constrained_source not in scope:
+                dependency_sources[resource_id].add(constrained_source)
 
         # Use snapshot production only to identify recurring future dependence;
         # unbuilt future facilities are never predicted.

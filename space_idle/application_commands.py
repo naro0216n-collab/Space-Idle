@@ -26,7 +26,7 @@ from .app_contracts.transport import (
     DeleteTransportAllocation, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
 )
 from .app_contracts.logistics import (
-    SetTargetStock, DeleteTargetStock, CreateLogisticsPolicy, UpdateLogisticsPolicy, AssignLogisticsPolicy, UnassignLogisticsPolicy, SetGlobalLogisticsPolicy, DeleteLogisticsPolicy,
+    SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
 )
 from .app_contracts.contracts import AcceptContract, DeclineContract
 from .app_contracts.economy import (
@@ -54,7 +54,7 @@ Command: TypeAlias = (
     CreateTransportAllocation | UpdateTransportAllocation | ChangeTransportAllocationMode |
     PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |
     RetireFleet | CancelFleetRetirement | SetFleetRetirementPriority |
-    SetTargetStock | DeleteTargetStock | CreateLogisticsPolicy | UpdateLogisticsPolicy | AssignLogisticsPolicy | UnassignLogisticsPolicy | SetGlobalLogisticsPolicy | DeleteLogisticsPolicy | AcceptContract |
+    SetTargetStock | DeleteTargetStock | SetSupplyRoutingConstraint | ClearSupplyRoutingConstraint | AcceptContract |
     DeclineContract | CreateTradeOrder | UpdateTradeOrder | CancelTradeOrder | AdvanceTime
 )
 Query: TypeAlias = (

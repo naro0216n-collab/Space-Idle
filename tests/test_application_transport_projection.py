@@ -33,8 +33,8 @@ from space_idle import (
     SetVehicleProductionSettings,
     UpdateTransportAllocation,
     RelocateFleet,
-    CreateLogisticsPolicy, AssignLogisticsPolicy, UnassignLogisticsPolicy,
-    DeleteLogisticsPolicy, SetTargetStock, DeleteTargetStock,
+    SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
+    SetTargetStock, DeleteTargetStock,
     build_game_application,
 )
 from space_idle.simulation import OfflineProgressPolicy
@@ -307,7 +307,7 @@ def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
     assert relocation.arrival_day == preview.arrival_day
 
 
-def test_supply_policy_and_target_stock_update_planning_intent_without_transport_reprovisioning():
+def test_supply_routing_constraint_and_target_stock_update_planning_intent_without_transport_reprovisioning():
     app = build_game_application()
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
@@ -324,19 +324,18 @@ def test_supply_policy_and_target_stock_update_planning_intent_without_transport
         and row.operational_node_id == str(EARTH)
     )
 
-    policy_id = "logistics.policy.application"
-    app.execute(CreateLogisticsPolicy(
-        policy_id, source_mode="preferred", preferred_source_id=str(EARTH),
-        path_mode="preferred", path_preference="lowest_propellant",
-    ))
     target_id = app.execute(SetTargetStock(
         str(LEO), str(ids.MACHINERY), 3.5, priority=4,
     )).created_id
     assert target_id is not None
-    app.execute(AssignLogisticsPolicy("target_stock", target_id, policy_id))
+    app.execute(SetSupplyRoutingConstraint(
+        destination_id=str(LEO), owner_kind="target_stock", owner_id=target_id,
+        resource_id=str(ids.MACHINERY), source_node_id=str(EARTH),
+        required_transport_allocation_ids=(allocation_id,),
+    ))
 
     view = app.query(GetLogistics())
-    policy = next(row for row in view.logistics_policies if row.id == policy_id)
+    constraint = next(row for row in view.routing_constraints if row.owner_id == target_id)
     target = next(row for row in view.target_stocks if row.id == target_id)
     requirement = next(
         row for row in view.requirements
@@ -350,13 +349,10 @@ def test_supply_policy_and_target_stock_update_planning_intent_without_transport
         and row.operational_node_id == str(EARTH)
     )
 
-    assert policy.preferred_source_id == str(EARTH)
-    assert policy.source_mode == "preferred"
-    assert policy.path_preference == "lowest_propellant"
-    assert requirement.assigned_policy_id == policy_id
-    assert requirement.resolved_policy_id == policy_id
-    assert requirement.preferred_source_id == str(EARTH)
-    assert requirement.path_preference == "lowest_propellant"
+    assert constraint.source_node_id == str(EARTH)
+    assert constraint.required_transport_allocation_ids == (allocation_id,)
+    assert requirement.routing_constraint_source_id == str(EARTH)
+    assert requirement.routing_constraint_transport_allocation_ids == (allocation_id,)
     assert target.target_quantity_t == 3.5
     assert target.priority == 4
     assert requirement.priority == 4
@@ -368,13 +364,13 @@ def test_supply_policy_and_target_stock_update_planning_intent_without_transport
     assert after_pool.transport_units == before_pool.transport_units
     assert after_pool.free_units == before_pool.free_units
 
-    with pytest.raises(ApplicationError):
-        app.execute(DeleteLogisticsPolicy(policy_id))
-    app.execute(UnassignLogisticsPolicy("target_stock", target_id))
-    app.execute(DeleteLogisticsPolicy(policy_id))
+    app.execute(ClearSupplyRoutingConstraint(
+        destination_id=str(LEO), owner_kind="target_stock", owner_id=target_id,
+        resource_id=str(ids.MACHINERY),
+    ))
     app.execute(DeleteTargetStock(str(LEO), str(ids.MACHINERY)))
     cleared = app.query(GetLogistics())
-    assert all(row.id != policy_id for row in cleared.logistics_policies)
+    assert not cleared.routing_constraints
     assert not cleared.target_stocks
 
 
@@ -464,39 +460,34 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
 
 def test_construction_queries_expose_authoritative_project_controls():
     app = build_game_application()
-    before = tuple(row.id for row in app.query(GetProjects(str(EARTH))).items)
-    with pytest.raises(ApplicationError):
-        app.execute(PlanBuild(
-            str(EARTH),
-            str(ids.SURFACE_POWER_GRID),
-            logistics_policy_id="logistics.policy.missing",
-            site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
-        ))
-    assert tuple(row.id for row in app.query(GetProjects(str(EARTH))).items) == before
-
     build_options = app.query(GetBuildOptions(str(EARTH)))
     assert tuple(build_options.procurement_policy_options) == app._simulation.projects.procurement_policy_options()
-    assert str(app._simulation.logistics.global_policy_id) in build_options.logistics_policy_options
-    policy_id = "logistics.policy.project-query"
-    app.execute(CreateLogisticsPolicy(
-        policy_id, source_mode="pinned", allowed_source_ids=(str(LEO),),
-    ))
 
     project_id = app.execute(PlanBuild(
         str(EARTH), str(ids.SURFACE_POWER_GRID), priority=2,
-        procurement_policy="extended_wait", logistics_policy_id=policy_id,
+        procurement_policy="immediate",
         site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
     )).created_id
     assert project_id is not None
     row = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
     assert row.settings_editable and row.procurement_editable
-    assert row.projected_material_readiness_day is None
-    assert row.logistics_policy_id == policy_id
-    assert row.resolved_logistics_policy_id == policy_id
+    assert row.projected_material_readiness_day == app.query(GetWorld()).day
+
+    requirement = next(
+        item for item in app.query(GetLogistics()).requirements
+        if item.owner_kind == "project" and item.owner_id == project_id
+    )
+    app.execute(SetSupplyRoutingConstraint(
+        destination_id=requirement.destination_id, owner_kind="project", owner_id=project_id,
+        resource_id=requirement.resource_id, source_node_id=str(LEO),
+    ))
+    constrained = next(
+        item for item in app.query(GetLogistics()).requirements
+        if item.id == requirement.id
+    )
+    assert constrained.routing_constraint_source_id == str(LEO)
+
     app.execute(SetProjectPriority(project_id, 5))
-    app.execute(SetProjectProcurementPolicy(project_id, "immediate"))
-    app.execute(UnassignLogisticsPolicy("project", project_id))
+    app.execute(SetProjectProcurementPolicy(project_id, "extended_wait"))
     updated = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
-    assert (updated.priority, updated.procurement_policy, updated.logistics_policy_id) == (5, "immediate", None)
-    assert updated.resolved_logistics_policy_id == str(app._simulation.logistics.global_policy_id)
-    assert updated.projected_material_readiness_day == app.query(GetWorld()).day
+    assert (updated.priority, updated.procurement_policy) == (5, "extended_wait")

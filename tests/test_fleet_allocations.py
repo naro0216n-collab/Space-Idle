@@ -9,7 +9,7 @@ from space_idle.shared import EntityId, SpatialNodeId
 from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
 from space_idle.validation import validate_runtime_state
 from space_idle.validation_support import ConfigurationError
-from space_idle.supply import SourceSelectionMode
+from space_idle.supply import SupplyRoutingConstraintScope
 from space_idle.transport.models import (
     DirectionalCapacity,
     FleetActivityRef,
@@ -691,33 +691,6 @@ def test_relocation_keeps_units_exclusive_until_arrival():
     ).total_units == destination_before + 2
 
 
-def test_completed_relocation_prunes_logistics_policy_assignment_at_canonical_transition():
-    sim = _fleet_sim(1)
-    lg = sim.transport
-    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 10.0)
-    relocation_id = lg.relocate_fleet(
-        ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO, ids.LUNAR_ORBIT, day=sim.day
-    )
-    policy_id = EntityId("logistics.policy.relocation-lifecycle")
-    sim.logistics.create_logistics_policy(
-        policy_id, source_mode=SourceSelectionMode.ALLOW_ANY
-    )
-    sim.logistics.assign_logistics_policy("fleet_relocation", relocation_id, policy_id)
-    assert sim.logistics.assigned_policy_id_for("fleet_relocation", relocation_id) == policy_id
-
-    sim.advance_days(1)
-    relocation = lg.fleet_relocations[relocation_id]
-    assert relocation.movement_execution_id is not None
-    execution = lg.movement_execution_snapshot(relocation.movement_execution_id)
-    assert execution is not None
-    sim.advance_to_day(execution.completion_day)
-
-    assert relocation_id not in lg.fleet_relocations
-    assert sim.logistics.assigned_policy_id_for("fleet_relocation", relocation_id) is None
-    validate_runtime_state(sim)
-
-
 def test_releasing_uses_remaining_cycle_time_not_a_new_full_cycle():
     sim = _fleet_sim(2)
     lg = sim.transport
@@ -851,11 +824,15 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
     target_id = sim.logistics.set_target_stock(
         ids.LUNAR_ORBIT, ids.MACHINERY, cargo_amount, 5
     )
-    policy_id = EntityId("logistics.policy.fleet-allocation")
-    sim.logistics.create_logistics_policy(
-        policy_id, source_mode=SourceSelectionMode.PREFERRED, preferred_source_id=ids.LEO
+    sim.logistics.set_supply_routing_constraint(
+        SupplyRoutingConstraintScope(
+            destination_id=ids.LUNAR_ORBIT,
+            owner_kind="target_stock",
+            owner_id=EntityId(str(target_id)),
+            resource_id=ids.MACHINERY,
+        ),
+        source_node_id=ids.LEO,
     )
-    sim.logistics.assign_logistics_policy("target_stock", EntityId(str(target_id)), policy_id)
 
     decision = sim.tick_decision_projection()
     dispatch, executable = next(

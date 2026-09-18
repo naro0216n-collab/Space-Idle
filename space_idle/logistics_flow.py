@@ -14,7 +14,7 @@ from .execution_requirements import (
 )
 from .knowledge import DomainActivity
 from .allocation_projection import ResourceAllocationProjectionRow
-from .supply import PathSelectionMode, SourceSelectionMode, SupplyRequirement
+from .supply import SupplyRequirement, SupplyRoutingConstraintState
 from .service_capacity import ServiceCapacityAllocationPlan
 from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
 from .supply_planning import SupplyPlanningOptions
@@ -25,7 +25,6 @@ from .logistics_models import (
 )
 from .transport.models import (
     DirectionalCapacity,
-    PathPolicy,
     TransportCapacitySnapshot,
     TransportOperationDependencyProjection,
     TransportServiceSupply,
@@ -581,123 +580,75 @@ class LogisticsFlowMixin:
         return occupied
 
     @staticmethod
-    def _path_totals(path: tuple[TransportServiceSupply, ...]) -> tuple[float, float]:
+    def _path_totals(
+        path: tuple[TransportServiceSupply, ...]
+    ) -> tuple[float, float, float, float]:
         return (
             sum(float(edge.latency_days) for edge in path),
             sum(float(edge.propellant_t_per_t) for edge in path),
+            float(max(0, len(path) - 1)),
+            sum(1.0 / max(float(edge.capacity_t_per_day), 1.0e-12) for edge in path),
         )
-
-    @staticmethod
-    def _service_edge_allowed(
-        policy, edge: TransportServiceSupply, destination_id: SpatialNodeId
-    ) -> bool:
-        if policy is None:
-            return True
-        if (
-            policy.allowed_service_ids is not None
-            and edge.key not in policy.allowed_service_ids
-        ):
-            return False
-        if (
-            edge.destination_id != destination_id
-            and policy.allowed_handoff_ids is not None
-            and edge.destination_id not in policy.allowed_handoff_ids
-        ):
-            return False
-        return True
 
     def _automatic_service_path(
         self,
         source_id: SpatialNodeId,
         destination_id: SpatialNodeId,
         edges: tuple[TransportServiceSupply, ...],
-        preference: PathPolicy,
-        policy=None,
+        constraint: SupplyRoutingConstraintState | None,
     ) -> tuple[TransportServiceSupply, ...]:
-        from .path_selection import select_tradeoff_path
+        from .path_selection import select_canonical_path
 
-        by_source: dict[SpatialNodeId, list[TransportServiceSupply]] = {}
-        for edge in edges:
-            if not self._service_edge_allowed(policy, edge, destination_id):
-                continue
-            by_source.setdefault(edge.source_id, []).append(edge)
-        return select_tradeoff_path(
-            source_id,
-            destination_id,
-            outgoing=lambda node: by_source.get(node, ()),
-            edge_destination=lambda edge: edge.destination_id,
-            edge_time=lambda edge: float(edge.latency_days),
-            edge_propellant=lambda edge: float(edge.propellant_t_per_t),
-            edge_key=lambda edge: edge.key,
-            preference=preference,
+        required_via = frozenset(
+            () if constraint is None else constraint.required_via_node_ids
         )
+        required_allocations = frozenset(
+            () if constraint is None else constraint.required_transport_allocation_ids
+        )
+        if constraint is not None and constraint.source_node_id is not None:
+            if source_id != constraint.source_node_id:
+                raise ValueError("routing constraint source does not match candidate source")
 
-    def _explicit_service_path(
-        self,
-        source_id: SpatialNodeId,
-        destination_id: SpatialNodeId,
-        movement_plan_path: tuple[MovementPlanId, ...],
-        edges: tuple[TransportServiceSupply, ...],
-        preference: PathPolicy,
-        policy=None,
-    ) -> tuple[TransportServiceSupply, ...]:
-        from .path_selection import select_tradeoff_path
-
-        # A pinned Logistics path fixes the Movement Plan sequence, not a specific
-        # Transport Allocation. Existing service/handoff constraints still apply.
-        State = tuple[SpatialNodeId, int]
+        State = tuple[SpatialNodeId, frozenset[SpatialNodeId], frozenset[EntityId]]
         Edge = tuple[TransportServiceSupply, State]
-        ordered_edges = tuple(
-            sorted(
-                (
-                    edge
-                    for edge in edges
-                    if self._service_edge_allowed(policy, edge, destination_id)
-                ),
-                key=lambda edge: edge.key,
-            )
+        ordered_edges = tuple(sorted(edges, key=lambda edge: edge.key))
+        start_state: State = (
+            source_id,
+            frozenset(node_id for node_id in required_via if node_id == source_id),
+            frozenset(),
         )
+        target_state: State = (destination_id, required_via, required_allocations)
 
         def outgoing(state: State):
-            node, index = state
+            node_id, visited_via, used_allocations = state
             for edge in ordered_edges:
-                if edge.source_id != node:
+                if edge.source_id != node_id:
                     continue
-                size = len(edge.movement_plan_path)
-                if size == 0:
-                    continue
-                if movement_plan_path[index : index + size] != edge.movement_plan_path:
-                    continue
-                yield edge, (edge.destination_id, index + size)
+                next_via = visited_via
+                if edge.destination_id in required_via:
+                    next_via = frozenset((*visited_via, edge.destination_id))
+                next_allocations = used_allocations
+                if edge.allocation_id in required_allocations:
+                    next_allocations = frozenset((*used_allocations, edge.allocation_id))
+                next_state: State = (edge.destination_id, next_via, next_allocations)
+                yield edge, next_state
 
         try:
-            selected = select_tradeoff_path(
-                (source_id, 0),
-                (destination_id, len(movement_plan_path)),
+            selected = select_canonical_path(
+                start_state,
+                target_state,
                 outgoing=outgoing,
                 edge_destination=lambda row: row[1],
                 edge_time=lambda row: float(row[0].latency_days),
                 edge_propellant=lambda row: float(row[0].propellant_t_per_t),
+                edge_capacity=lambda row: float(row[0].capacity_t_per_day),
                 edge_key=lambda row: row[0].key,
-                preference=preference,
             )
         except ValueError as exc:
-            raise ValueError("explicit logistics path has no matching transport services") from exc
+            if constraint is None:
+                raise
+            raise ValueError("routing hard constraint has no matching transport path") from exc
         return tuple(row[0] for row in selected)
-
-    def _supply_path_preferences(
-        self, requirement: SupplyRequirement
-    ) -> tuple[object | None, PathPolicy, tuple[MovementPlanId, ...] | None]:
-        policy = self.logistics_policy_for(requirement)
-        explicit_path = None
-        preference = PathPolicy.BALANCED
-        if policy is not None:
-            if policy.path_mode is PathSelectionMode.PREFERRED:
-                preference = policy.path_preference
-            elif policy.path_mode is PathSelectionMode.PINNED:
-                explicit_path = policy.explicit_path
-                preference = policy.path_preference
-        return policy, preference, explicit_path
 
     def supply_service_path(
         self,
@@ -707,11 +658,11 @@ class LogisticsFlowMixin:
         edges: tuple[TransportServiceSupply, ...] | None = None,
     ) -> tuple[TransportServiceSupply, ...]:
         available = self._service_edges(day) if edges is None else edges
-        policy, preference, explicit_path = self._supply_path_preferences(requirement)
+        constraint = self.routing_constraint_for(requirement)
         cache = self._projection_service_path_cache
         service_keys = tuple(edge.key for edge in available)
         cache_key = (
-            day, source_id, requirement.destination_id, service_keys, policy, preference, explicit_path
+            day, source_id, requirement.destination_id, service_keys, constraint
         )
         if cache is not None:
             cached_keys = cache.get(cache_key)
@@ -723,19 +674,9 @@ class LogisticsFlowMixin:
         if failure_cache is not None and cache_key in failure_cache:
             raise ValueError(failure_cache[cache_key])
         try:
-            if explicit_path is None:
-                result = self._automatic_service_path(
-                    source_id, requirement.destination_id, available, preference, policy
-                )
-            else:
-                result = self._explicit_service_path(
-                    source_id,
-                    requirement.destination_id,
-                    explicit_path,
-                    available,
-                    preference,
-                    policy,
-                )
+            result = self._automatic_service_path(
+                source_id, requirement.destination_id, available, constraint
+            )
         except ValueError as exc:
             if failure_cache is not None:
                 failure_cache[cache_key] = str(exc)
@@ -749,12 +690,10 @@ class LogisticsFlowMixin:
         requirement: SupplyRequirement,
         day: int,
         edges: tuple[TransportServiceSupply, ...],
-        *,
-        enforce_source_policy: bool = True,
     ) -> tuple[tuple[SpatialNodeId, tuple[TransportServiceSupply, ...]], ...]:
-        from .path_selection import select_tradeoff_candidate
+        from .path_selection import select_canonical_candidate
 
-        policy, preference, _explicit_path = self._supply_path_preferences(requirement)
+        constraint = self.routing_constraint_for(requirement)
         cache = self._projection_candidate_paths_cache
         cache_key = (
             day,
@@ -764,8 +703,7 @@ class LogisticsFlowMixin:
             requirement.destination_id,
             requirement.resource_id,
             edges,
-            enforce_source_policy,
-            policy,
+            constraint,
         )
         if cache is not None:
             cached = cache.get(cache_key)
@@ -777,9 +715,9 @@ class LogisticsFlowMixin:
             if node_id != requirement.destination_id
             and self.inventory.available(node_id, requirement.resource_id) > 1e-12
             and (
-                policy is None
-                or policy.allowed_source_ids is None
-                or node_id in policy.allowed_source_ids
+                constraint is None
+                or constraint.source_node_id is None
+                or node_id == constraint.source_node_id
             )
         )
 
@@ -798,32 +736,19 @@ class LogisticsFlowMixin:
             if cache is not None:
                 cache[cache_key] = result
             return result
-        if policy is None:
-            if enforce_source_policy and len(rows) > 1:
-                result = ()
-                if cache is not None:
-                    cache[cache_key] = result
-                return result
-        elif policy.source_mode is SourceSelectionMode.PREFERRED:
-            preferred = [row for row in rows if row[0] == policy.preferred_source_id]
-            if preferred:
-                rest = [row for row in rows if row[0] != policy.preferred_source_id]
-                result = tuple(preferred + rest)
-                if cache is not None:
-                    cache[cache_key] = result
-                return result
-
         if len(rows) == 1:
             result = tuple(rows)
             if cache is not None:
                 cache[cache_key] = result
             return result
-        selected = select_tradeoff_candidate(
+
+        selected = select_canonical_candidate(
             rows,
             metric_time=lambda row: self._path_totals(row[1])[0],
             metric_propellant=lambda row: self._path_totals(row[1])[1],
+            metric_handoffs=lambda row: self._path_totals(row[1])[2],
+            metric_capacity_burden=lambda row: self._path_totals(row[1])[3],
             stable_key=lambda row: f"{row[0]}:" + ",".join(edge.key for edge in row[1]),
-            preference=preference,
         )
         result = (selected,) + tuple(row for row in rows if row != selected)
         if cache is not None:
@@ -1470,15 +1395,15 @@ class LogisticsFlowMixin:
         edges = self._service_edges_for_execution_allocation(
             day, execution_allocation
         )
-        policy, _path_policy, _explicit_path = self._supply_path_preferences(requirement)
+        constraint = self.routing_constraint_for(requirement)
         source_ids = tuple(
             node_id
             for node_id in self.facilities.environment.graph.operational_node_ids()
             if node_id != requirement.destination_id
             and (
-                policy is None
-                or policy.allowed_source_ids is None
-                or node_id in policy.allowed_source_ids
+                constraint is None
+                or constraint.source_node_id is None
+                or node_id == constraint.source_node_id
             )
         )
 
@@ -1489,9 +1414,8 @@ class LogisticsFlowMixin:
         blockers: list[str] = []
         for source_id in sorted(source_ids, key=str):
             # Source candidacy is independent of today's Transport Capacity.
-            # A valid source remains visible while the player has not yet
-            # provisioned a Fleet allocation; transport feasibility/availability
-            # is projected separately through ``operational_source_ids``.
+            # Existing network feasibility and current capacity are projected
+            # separately rather than mutating strategic Transport state.
             candidates.append(source_id)
             if self.inventory.available(source_id, requirement.resource_id) > 1e-9:
                 stocked.append(source_id)
@@ -1512,25 +1436,33 @@ class LogisticsFlowMixin:
             if min(edge.capacity_t_per_day for edge in physical_path) > 1e-12:
                 operational.append(source_id)
 
-        viable_sources = tuple(
-            source_id for source_id in operational
-            if source_id in stocked
-        )
-        if policy is None and len(viable_sources) > 1:
-            blockers.append("logistics_policy:source_selection_required")
-        elif policy is not None:
-            if policy.allowed_source_ids is not None and not any(
-                source_id in stocked for source_id in policy.allowed_source_ids
+        if constraint is not None:
+            if (
+                constraint.source_node_id is not None
+                and constraint.source_node_id not in stocked
             ):
-                blockers.append("logistics_policy:source_constraint_unavailable")
-            has_path_constraint = (
-                policy.path_mode is PathSelectionMode.PINNED
-                or policy.allowed_handoff_ids is not None
-                or policy.allowed_service_ids is not None
-            )
-            if has_path_constraint and stocked and not operational:
-                blockers.append("logistics_policy:path_constraint_unavailable")
+                blockers.append("routing_constraint:source_unavailable")
+            elif stocked and not any(source_id in stocked for source_id in operational):
+                blockers.append("routing_constraint:path_unavailable")
 
+        selected_rows = self._candidate_supply_paths(requirement, day, edges)
+        selected_source_id = None
+        selected_path: tuple[TransportServiceSupply, ...] = ()
+        if selected_rows:
+            selected_source_id, selected_path = selected_rows[0]
+        selected_latency = (
+            None if not selected_path else sum(float(edge.latency_days) for edge in selected_path)
+        )
+        selected_propellant = (
+            None
+            if not selected_path
+            else sum(float(edge.propellant_t_per_t) for edge in selected_path)
+        )
+        selected_capacity = (
+            None
+            if not selected_path
+            else min(float(edge.capacity_t_per_day) for edge in selected_path)
+        )
         arrivals = [
             flow.first_arrival_day
             for flow in self.cargo_flows.values()
@@ -1543,4 +1475,16 @@ class LogisticsFlowMixin:
             tuple(path_candidates),
             tuple(dict.fromkeys(blockers)),
             min(arrivals) if arrivals else None,
+            selected_source_id=selected_source_id,
+            selected_service_ids=tuple(edge.key for edge in selected_path),
+            selected_movement_plan_ids=tuple(
+                plan_id for edge in selected_path for plan_id in edge.movement_plan_path
+            ),
+            projected_arrival_day=(
+                None if selected_latency is None else day + int(selected_latency)
+            ),
+            selected_latency_days=selected_latency,
+            selected_propellant_t_per_t=selected_propellant,
+            selected_handoff_count=(None if not selected_path else max(0, len(selected_path) - 1)),
+            selected_bottleneck_capacity_t_per_day=selected_capacity,
         )

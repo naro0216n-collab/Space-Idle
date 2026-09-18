@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
 from math import isfinite
 from typing import TYPE_CHECKING, Iterable
 
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
-from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
-from .transport.models import PathPolicy
+from .shared import DefinitionId, EntityId, SpatialNodeId
 
 if TYPE_CHECKING:
     from .inventory import InventoryBook
@@ -77,96 +75,62 @@ class TargetStockPolicy:
         )
 
 
-class SourceSelectionMode(str, Enum):
-    PINNED = "pinned"
-    PREFERRED = "preferred"
-    ALLOW_ANY = "allow_any"
 
+@dataclass(frozen=True)
+class SupplyRoutingConstraintScope:
+    """Sparse scope for a Player/Scenario hard supply-routing constraint."""
 
-class PathSelectionMode(str, Enum):
-    PINNED = "pinned"
-    PREFERRED = "preferred"
-    ALLOW_ANY = "allow_any"
+    destination_id: SpatialNodeId
+    owner_kind: str | None = None
+    owner_id: EntityId | None = None
+    resource_id: DefinitionId | None = None
+
+    def __post_init__(self) -> None:
+        if (self.owner_kind is None) != (self.owner_id is None):
+            raise ValueError("routing constraint owner_kind and owner_id must be set together")
+        if self.owner_kind is not None and not self.owner_kind:
+            raise ValueError("routing constraint owner kind must be non-empty")
+
+    def matches(self, requirement: SupplyRequirement) -> bool:
+        if requirement.destination_id != self.destination_id:
+            return False
+        if self.resource_id is not None and requirement.resource_id != self.resource_id:
+            return False
+        if self.owner_kind is not None and (
+            requirement.owner_kind != self.owner_kind or requirement.owner_id != self.owner_id
+        ):
+            return False
+        return True
 
 
 @dataclass(frozen=True)
-class LogisticsPolicyState:
-    """Reusable Player/Scenario intent for source and path/handoff selection.
+class SupplyRoutingConstraintState:
+    """Player-owned hard routing restriction over the existing logistics network.
 
-    Source constraints are represented by ``allowed_source_ids``. PINNED fixes
-    that set to exactly one source, PREFERRED names a preferred source while
-    retaining fallback inside the allowed set, and ALLOW_ANY delegates selection
-    across the allowed set. Path constraints may whitelist handoff nodes and/or
-    existing Transport Service identities. PINNED fixes the Movement Plan path,
-    PREFERRED records an explicit route metric, and ALLOW_ANY uses the canonical
-    BALANCED metric.
+    This state does not describe a preferred strategy.  Every populated field is
+    a mandatory filter.  Empty constraints are deliberately not representable.
     """
 
-    id: EntityId
-    source_mode: SourceSelectionMode = SourceSelectionMode.ALLOW_ANY
-    allowed_source_ids: tuple[SpatialNodeId, ...] | None = None
-    preferred_source_id: SpatialNodeId | None = None
-    path_mode: PathSelectionMode = PathSelectionMode.ALLOW_ANY
-    explicit_path: tuple[MovementPlanId, ...] | None = None
-    allowed_handoff_ids: tuple[SpatialNodeId, ...] | None = None
-    allowed_service_ids: tuple[str, ...] | None = None
-    path_preference: PathPolicy = PathPolicy.BALANCED
+    scope: SupplyRoutingConstraintScope
+    source_node_id: SpatialNodeId | None = None
+    required_via_node_ids: tuple[SpatialNodeId, ...] = ()
+    required_transport_allocation_ids: tuple[EntityId, ...] = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "source_mode", SourceSelectionMode(self.source_mode))
-        object.__setattr__(self, "path_mode", PathSelectionMode(self.path_mode))
-        object.__setattr__(self, "path_preference", PathPolicy(self.path_preference))
-        if self.allowed_source_ids is not None:
-            normalized_sources = tuple(dict.fromkeys(self.allowed_source_ids))
-            if not normalized_sources:
-                raise ValueError("allowed source set must be non-empty when provided")
-            object.__setattr__(self, "allowed_source_ids", normalized_sources)
-        if self.allowed_handoff_ids is not None:
-            normalized_handoffs = tuple(dict.fromkeys(self.allowed_handoff_ids))
-            object.__setattr__(self, "allowed_handoff_ids", normalized_handoffs)
-        if self.allowed_service_ids is not None:
-            normalized_services = tuple(dict.fromkeys(self.allowed_service_ids))
-            if any(not value for value in normalized_services):
-                raise ValueError("allowed service identities must be non-empty")
-            object.__setattr__(self, "allowed_service_ids", normalized_services)
-
-        if self.source_mode is SourceSelectionMode.PINNED:
-            if self.allowed_source_ids is None or len(self.allowed_source_ids) != 1:
-                raise ValueError("pinned source policy requires exactly one allowed source")
-            if self.preferred_source_id is not None:
-                raise ValueError("pinned source policy cannot also prefer a source")
-        elif self.source_mode is SourceSelectionMode.PREFERRED:
-            if self.preferred_source_id is None:
-                raise ValueError("preferred source policy requires preferred_source_id")
-            if (
-                self.allowed_source_ids is not None
-                and self.preferred_source_id not in self.allowed_source_ids
-            ):
-                raise ValueError("preferred source must belong to allowed source set")
-        elif self.preferred_source_id is not None:
-            raise ValueError("ALLOW_ANY source policy cannot carry a preferred source")
-
-        if self.path_mode is PathSelectionMode.PINNED:
-            if not self.explicit_path:
-                raise ValueError("pinned path policy requires explicit_path")
-        elif self.explicit_path is not None:
-            raise ValueError("non-pinned path policy cannot carry explicit_path")
+        object.__setattr__(
+            self, "required_via_node_ids", tuple(dict.fromkeys(self.required_via_node_ids))
+        )
+        object.__setattr__(
+            self,
+            "required_transport_allocation_ids",
+            tuple(dict.fromkeys(self.required_transport_allocation_ids)),
+        )
         if (
-            self.path_mode is PathSelectionMode.ALLOW_ANY
-            and self.path_preference is not PathPolicy.BALANCED
+            self.source_node_id is None
+            and not self.required_via_node_ids
+            and not self.required_transport_allocation_ids
         ):
-            raise ValueError("ALLOW_ANY path policy uses the canonical BALANCED preference")
-
-
-@dataclass(frozen=True)
-class LogisticsPolicyAssignmentState:
-    owner_kind: str
-    owner_id: EntityId
-    policy_id: EntityId
-
-    def __post_init__(self) -> None:
-        if not self.owner_kind:
-            raise ValueError("logistics policy owner kind must be non-empty")
+            raise ValueError("empty supply routing constraint is not authoritative state")
 
 
 @dataclass(frozen=True)

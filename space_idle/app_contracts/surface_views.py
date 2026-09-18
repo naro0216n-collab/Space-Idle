@@ -28,7 +28,6 @@ class SurfaceFacilityPlacementOption:
     blockers: tuple[tuple[str, str], ...]
     can_plan: bool
     procurement_policy_options: tuple[str, ...] = ()
-    logistics_policy_options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -47,7 +46,6 @@ class SurfaceCellFoundationOption:
     blockers: tuple[tuple[str, str], ...]
     can_plan: bool
     active_project_id: str | None = None
-    logistics_policy_options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -62,7 +60,6 @@ class SurfaceCellDevelopmentOption:
     resources: tuple[tuple[str, float], ...] = ()
     active_project_id: str | None = None
     procurement_policy_options: tuple[str, ...] = ()
-    logistics_policy_options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

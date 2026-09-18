@@ -8,12 +8,10 @@ from .logistics_models import (
     CargoFlowSegment,
     CargoServiceLeg,
 )
-from .shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
+from .shared import DefinitionId, EntityId, SpatialNodeId
 from .supply import (
-    LogisticsPolicyAssignmentState, LogisticsPolicyState, PathSelectionMode,
-    SourceSelectionMode, TargetStockPolicy,
+    SupplyRoutingConstraintScope, SupplyRoutingConstraintState, TargetStockPolicy,
 )
-from .transport.models import PathPolicy
 from .validation_support import require as _require
 
 
@@ -92,29 +90,20 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
             }
             for row in lg.target_stock_policies()
         ],
-        "logistics_policies": [
+        "routing_constraints": [
             {
-                "id": str(row.id),
-                "source_mode": row.source_mode.value,
-                "allowed_source_ids": None if row.allowed_source_ids is None else [str(value) for value in row.allowed_source_ids],
-                "preferred_source_id": None if row.preferred_source_id is None else str(row.preferred_source_id),
-                "path_mode": row.path_mode.value,
-                "path_preference": row.path_preference.value,
-                "explicit_path": None if row.explicit_path is None else [str(value) for value in row.explicit_path],
-                "allowed_handoff_ids": None if row.allowed_handoff_ids is None else [str(value) for value in row.allowed_handoff_ids],
-                "allowed_service_ids": None if row.allowed_service_ids is None else list(row.allowed_service_ids),
+                "destination_id": str(row.scope.destination_id),
+                "owner_kind": row.scope.owner_kind,
+                "owner_id": None if row.scope.owner_id is None else str(row.scope.owner_id),
+                "resource_id": None if row.scope.resource_id is None else str(row.scope.resource_id),
+                "source_node_id": None if row.source_node_id is None else str(row.source_node_id),
+                "required_via_node_ids": [str(value) for value in row.required_via_node_ids],
+                "required_transport_allocation_ids": [
+                    str(value) for value in row.required_transport_allocation_ids
+                ],
             }
-            for row in lg.logistics_policy_rows()
+            for row in lg.routing_constraint_rows()
         ],
-        "policy_assignments": [
-            {
-                "owner_kind": row.owner_kind,
-                "owner_id": str(row.owner_id),
-                "policy_id": str(row.policy_id),
-            }
-            for row in lg.logistics_policy_assignments()
-        ],
-        "global_policy_id": None if lg.global_policy_id is None else str(lg.global_policy_id),
     }
 
 
@@ -168,29 +157,31 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
         )
         for row in data.get("target_stocks", [])
     }
-    lg.logistics_policies = {
-        EntityId(row["id"]): LogisticsPolicyState(
-            id=EntityId(row["id"]),
-            source_mode=SourceSelectionMode(row["source_mode"]),
-            allowed_source_ids=None if row.get("allowed_source_ids") is None else tuple(SpatialNodeId(value) for value in row["allowed_source_ids"]),
-            preferred_source_id=None if row.get("preferred_source_id") is None else SpatialNodeId(row["preferred_source_id"]),
-            path_mode=PathSelectionMode(row["path_mode"]),
-            explicit_path=None if row.get("explicit_path") is None else tuple(MovementPlanId(value) for value in row["explicit_path"]),
-            allowed_handoff_ids=None if row.get("allowed_handoff_ids") is None else tuple(SpatialNodeId(value) for value in row["allowed_handoff_ids"]),
-            allowed_service_ids=None if row.get("allowed_service_ids") is None else tuple(str(value) for value in row["allowed_service_ids"]),
-            path_preference=PathPolicy(row.get("path_preference", "balanced")),
+    lg.routing_constraints = {}
+    for row in data.get("routing_constraints", []):
+        scope = SupplyRoutingConstraintScope(
+            destination_id=SpatialNodeId(row["destination_id"]),
+            owner_kind=row.get("owner_kind"),
+            owner_id=None if row.get("owner_id") is None else EntityId(row["owner_id"]),
+            resource_id=(
+                None if row.get("resource_id") is None else DefinitionId(row["resource_id"])
+            ),
         )
-        for row in data.get("logistics_policies", [])
-    }
-    lg.policy_assignments = {
-        (row["owner_kind"], EntityId(row["owner_id"])): LogisticsPolicyAssignmentState(
-            row["owner_kind"], EntityId(row["owner_id"]), EntityId(row["policy_id"])
+        lg.routing_constraints[scope] = SupplyRoutingConstraintState(
+            scope=scope,
+            source_node_id=(
+                None
+                if row.get("source_node_id") is None
+                else SpatialNodeId(row["source_node_id"])
+            ),
+            required_via_node_ids=tuple(
+                SpatialNodeId(value) for value in row.get("required_via_node_ids", [])
+            ),
+            required_transport_allocation_ids=tuple(
+                EntityId(value)
+                for value in row.get("required_transport_allocation_ids", [])
+            ),
         )
-        for row in data.get("policy_assignments", [])
-    }
-    lg.global_policy_id = (
-        None if data.get("global_policy_id") is None else EntityId(data["global_policy_id"])
-    )
 
 
 
@@ -204,7 +195,6 @@ def _validate_leg(sim: Any, owner_label: str, leg: CargoServiceLeg) -> None:
 
 def validate_logistics_runtime(sim: Any) -> None:
     lg = sim.logistics
-    tr = sim.transport
     for flow_id, flow in lg.cargo_flows.items():
         _require(flow_id == flow.id, f"cargo flow key mismatch: {flow_id}")
         _require(flow.amount_t > 0, f"cargo flow has non-positive amount: {flow_id}")
@@ -243,28 +233,52 @@ def validate_logistics_runtime(sim: Any) -> None:
         _require(policy.target_quantity_t >= 0, f"target stock has negative quantity: {policy_id}")
         _require(1 <= int(policy.priority) <= 5, f"target stock priority must be 1..5: {policy_id}")
 
-    for policy_id, policy in lg.logistics_policies.items():
-        _require(policy_id == policy.id, f"logistics policy key mismatch: {policy_id}")
-        for source_id in policy.allowed_source_ids or ():
-            _require(sim.graph.has_operational_node(source_id), f"logistics policy references unknown source: {policy_id}")
-        if policy.preferred_source_id is not None:
-            _require(sim.graph.has_operational_node(policy.preferred_source_id), f"logistics policy references unknown preferred source: {policy_id}")
-        for handoff_id in policy.allowed_handoff_ids or ():
-            _require(sim.graph.has_operational_node(handoff_id), f"logistics policy references unknown handoff: {policy_id}")
-        if policy.path_mode is PathSelectionMode.PINNED and policy.explicit_path:
-            first = tr.require_movement_plan(policy.explicit_path[0])
-            last = tr.require_movement_plan(policy.explicit_path[-1])
-            tr.validate_movement_path_structure(
-                first.origin_id, last.destination_id, policy.explicit_path
+    seen_constraints: list[SupplyRoutingConstraintState] = []
+    for scope, constraint in lg.routing_constraints.items():
+        _require(scope == constraint.scope, f"routing constraint key mismatch: {scope}")
+        _require(
+            sim.graph.has_operational_node(scope.destination_id),
+            f"routing constraint references unknown destination: {scope}",
+        )
+        if scope.resource_id is not None:
+            _require(
+                scope.resource_id in sim.inventory.resource_definitions,
+                f"routing constraint references unknown resource: {scope}",
             )
-
-    if lg.global_policy_id is not None:
-        _require(lg.global_policy_id in lg.logistics_policies, "global logistics policy reference is invalid")
-
-    for key, assignment in lg.policy_assignments.items():
-        _require(key == (assignment.owner_kind, assignment.owner_id), f"logistics policy assignment key mismatch: {key}")
-        _require(assignment.policy_id in lg.logistics_policies, f"logistics policy assignment references unknown policy: {key}")
-        _require(lg.policy_owner_exists(assignment.owner_kind, assignment.owner_id), f"orphan logistics policy assignment: {assignment.owner_kind}:{assignment.owner_id}")
+        if scope.owner_kind is not None:
+            _require(
+                lg.supply_owner_exists(scope.owner_kind, scope.owner_id),
+                f"orphan routing constraint: {scope.owner_kind}:{scope.owner_id}",
+            )
+        if constraint.source_node_id is not None:
+            _require(
+                sim.graph.has_operational_node(constraint.source_node_id),
+                f"routing constraint references unknown source: {scope}",
+            )
+        for node_id in constraint.required_via_node_ids:
+            _require(
+                sim.graph.has_operational_node(node_id),
+                f"routing constraint references unknown via node: {scope}",
+            )
+            _require(
+                node_id != scope.destination_id,
+                f"routing constraint destination cannot also be a via node: {scope}",
+            )
+        for allocation_id in constraint.required_transport_allocation_ids:
+            _require(
+                sim.transport.transport_allocation_snapshot(allocation_id) is not None,
+                f"routing constraint references unknown transport allocation: {scope}",
+            )
+        for prior in seen_constraints:
+            if not lg._scopes_overlap(prior.scope, scope):
+                continue
+            if (
+                prior.source_node_id is not None
+                and constraint.source_node_id is not None
+                and prior.source_node_id != constraint.source_node_id
+            ):
+                _require(False, "overlapping routing constraints require conflicting source nodes")
+        seen_constraints.append(constraint)
 
 
 

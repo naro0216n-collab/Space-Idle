@@ -21,7 +21,7 @@ from .app_contracts.location_views import (
 from .app_contracts.logistics_views import (
     InfrastructureRequirementRow, MovementEndpointRow, MovementServiceModeRow, MovementPlanRow, DirectionalCapacityRow, FleetPoolRow, FleetCommitmentRow, TransportAllocationRow,
     FleetRelocationResourceRequirementRow, FleetRelocationRow, FleetReleaseRow, FleetRetirementRow, CargoFlowRow, VehicleProductionOptionRow, VehicleProductionRow,
-    SupplyRequirementRow, LogisticsPolicyRow, TargetStockRow, LogisticsView, TransportAllocationOptionRow,
+    SupplyRequirementRow, SupplyRoutingConstraintRow, TargetStockRow, LogisticsView, TransportAllocationOptionRow,
     TransportAllocationOptionsView,
 )
 from .app_contracts.logistics_reports import (

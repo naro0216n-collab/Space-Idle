@@ -581,7 +581,7 @@ class Simulation:
         # movement-driven owner transitions first, then prunes any assignment
         # whose owner no longer exists so no dangling reference survives the
         # externally observable resting boundary.
-        self.logistics.prune_orphan_policy_assignments()
+        self.logistics.prune_orphan_routing_constraints()
 
         self.logistics.prepare_cargo_arrivals(self.day)
         cargo_bundles = self.logistics.boundary_execution_bundles(self.day)

@@ -6,7 +6,7 @@ import pytest
 
 from space_idle import (
     GetCargoFlows, GetLogistics, GetProjects, PauseTransportAllocation,
-    PlanBuild, ResumeTransportAllocation, build_game_application,
+    PlanBuild, ResumeTransportAllocation, SetSupplyRoutingConstraint, build_game_application,
 )
 from space_idle.content.base_game import (
     CONSTRUCTION_EQUIPMENT,
@@ -28,13 +28,12 @@ from space_idle.execution_requirements import (
 )
 from space_idle.inventory import InventoryBook
 from space_idle.logistics_models import CargoFlowSegment, CargoServiceLeg
-from space_idle.path_selection import select_tradeoff_path
+from space_idle.path_selection import select_canonical_path
 from space_idle.supply import (
-    SourceSelectionMode, SupplyRequirement, external_supply_requirements,
+    SupplyRequirement, SupplyRoutingConstraintScope, external_supply_requirements,
     resolve_local_supply,
 )
 from space_idle.shared import DefinitionId, EntityId
-from space_idle.transport.models import PathPolicy
 
 
 def _requirement(
@@ -56,26 +55,6 @@ def _requirement(
         priority,
         forecast_requirement_day=forecast_requirement_day,
     )
-
-
-def _set_global_source_preference(sim, source=EARTH) -> EntityId:
-    policy_id = sim.logistics.global_policy_id
-    assert policy_id is not None
-    sim.logistics.update_logistics_policy(
-        policy_id,
-        source_mode=SourceSelectionMode.PREFERRED,
-        allowed_source_ids=None,
-        preferred_source_id=source,
-    )
-    return policy_id
-
-
-def _create_pinned_source_policy(sim, policy_id: str, source=EARTH) -> str:
-    entity_id = EntityId(policy_id)
-    sim.logistics.create_logistics_policy(
-        entity_id, source_mode=SourceSelectionMode.PINNED, allowed_source_ids=(source,)
-    )
-    return str(entity_id)
 
 
 def _owned_earth_leo_capacity(sim, units: int = 1):
@@ -116,35 +95,34 @@ class _PathEdge:
     destination: str
     time: float
     propellant: float
+    capacity: float = 1.0
 
 
-def _selected_path_ids(edges: tuple[_PathEdge, ...], preference: PathPolicy) -> tuple[str, ...]:
+def _selected_path_ids(edges: tuple[_PathEdge, ...]) -> tuple[str, ...]:
     return tuple(
         edge.id
-        for edge in select_tradeoff_path(
+        for edge in select_canonical_path(
             "origin",
             "destination",
             outgoing=lambda node: tuple(edge for edge in edges if edge.source == node),
             edge_destination=lambda edge: edge.destination,
             edge_time=lambda edge: edge.time,
             edge_propellant=lambda edge: edge.propellant,
+            edge_capacity=lambda edge: edge.capacity,
             edge_key=lambda edge: edge.id,
-            preference=preference,
         )
     )
 
 
-def test_canonical_path_preferences_choose_time_propellant_tradeoff_deterministically():
+def test_canonical_path_combines_operational_metrics_and_is_registration_order_independent():
     edges = (
         _PathEdge("fast", "origin", "destination", 1.0, 10.0),
         _PathEdge("balanced", "origin", "destination", 2.0, 2.0),
         _PathEdge("efficient", "origin", "destination", 10.0, 1.0),
     )
 
-    assert _selected_path_ids(edges, PathPolicy.FASTEST) == ("fast",)
-    assert _selected_path_ids(edges, PathPolicy.LOWEST_PROPELLANT) == ("efficient",)
-    assert _selected_path_ids(edges, PathPolicy.BALANCED) == ("balanced",)
-    assert _selected_path_ids(tuple(reversed(edges)), PathPolicy.BALANCED) == ("balanced",)
+    assert _selected_path_ids(edges) == ("balanced",)
+    assert _selected_path_ids(tuple(reversed(edges))) == ("balanced",)
 
 def test_recurring_supply_uses_latency_coverage_without_turning_pipeline_into_a_rate_cap():
     sim = build_game_application()._simulation
@@ -192,10 +170,13 @@ def test_supply_projection_exposes_transport_blockers_only_when_external_transpo
             str(ORBITAL_LOGISTICS_NODE),
             priority=5,
             procurement_policy="immediate",
-            logistics_policy_id=_create_pinned_source_policy(sim, "logistics.policy.project-earth", EARTH),
         )
     ).created_id
     assert project_id is not None
+    app.execute(SetSupplyRoutingConstraint(
+        destination_id=str(LEO), owner_kind="project", owner_id=project_id,
+        source_node_id=str(EARTH),
+    ))
 
     sim.advance_days(1)
     rows = [
@@ -255,10 +236,13 @@ def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_
             str(ORBITAL_LOGISTICS_NODE),
             priority=3,
             procurement_policy="immediate",
-            logistics_policy_id=_create_pinned_source_policy(sim, "logistics.policy.project-earth-2", EARTH),
         )
     ).created_id
     assert project_id is not None
+    app.execute(SetSupplyRoutingConstraint(
+        destination_id=str(LEO), owner_kind="project", owner_id=project_id,
+        source_node_id=str(EARTH),
+    ))
 
     requirements = tuple(
         row for row in sim.projects.supplys(sim.day)
@@ -266,7 +250,7 @@ def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_
     )
     assert requirements
     assert all(
-        sim.logistics.logistics_policy_for(row).allowed_source_ids == (EARTH,)
+        sim.logistics.routing_constraint_for(row).source_node_id == EARTH
         for row in requirements
     )
     project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
@@ -306,105 +290,74 @@ def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_
     assert not allocation.paused and allocation.used.forward_t_per_day > 0.0
 
 
-def test_source_selection_policy_controls_ambiguity_pinning_and_scenario_default():
-    ambiguous = build_game_application()._simulation
-    ambiguous.transport.transport_allocations.clear()
-    _owned_multistage_capacity(ambiguous)
-    ambiguous.inventory.add(EARTH, MACHINERY, 1.0)
-    ambiguous.inventory.add(LEO, MACHINERY, 1.0)
-    ambiguous.logistics.set_global_logistics_policy(None)
-    ambiguous_requirement = _requirement(
-        1.0,
-        requirement_id="supply.ambiguous-source",
-        destination=LUNAR_ORBIT,
-        resource=MACHINERY,
+def test_auto_source_selection_and_hard_source_constraint_have_no_preference_fallback():
+    auto = build_game_application()._simulation
+    auto.transport.transport_allocations.clear()
+    _owned_multistage_capacity(auto)
+    auto.inventory.add(EARTH, MACHINERY, 1.0)
+    auto.inventory.add(LEO, MACHINERY, 1.0)
+    requirement = _requirement(
+        1.0, requirement_id="supply.auto-source",
+        destination=LUNAR_ORBIT, resource=MACHINERY,
     )
 
-    options = ambiguous.logistics.supply_planning_options(
-        ambiguous_requirement, ambiguous.day
-    )
-    assert EARTH in options.stocked_source_ids and LEO in options.stocked_source_ids
-    assert EARTH in options.operational_source_ids and LEO in options.operational_source_ids
-    assert "logistics_policy:source_selection_required" in options.blockers
-    assert not ambiguous.logistics.plan_capacity_logistics(
-        ambiguous.day, (ambiguous_requirement,)
-    ).dispatches
+    options = auto.logistics.supply_planning_options(requirement, auto.day)
+    assert {EARTH, LEO}.issubset(set(options.stocked_source_ids))
+    assert {EARTH, LEO}.issubset(set(options.operational_source_ids))
+    assert options.selected_source_id in {EARTH, LEO}
+    assert not options.blockers
+    first = auto.logistics.plan_capacity_logistics(auto.day, (requirement,)).dispatches[0]
 
-    pinned = build_game_application()._simulation
-    pinned.transport.transport_allocations.clear()
+    reordered = build_game_application()._simulation
+    reordered.transport.transport_allocations.clear()
+    _owned_multistage_capacity(reordered)
+    reordered.inventory.add(LEO, MACHINERY, 1.0)
+    reordered.inventory.add(EARTH, MACHINERY, 1.0)
+    same = _requirement(
+        1.0, requirement_id="supply.auto-source",
+        destination=LUNAR_ORBIT, resource=MACHINERY,
+    )
+    second = reordered.logistics.plan_capacity_logistics(reordered.day, (same,)).dispatches[0]
+    assert second.source_id == first.source_id
+    assert tuple(edge.key for edge in second.path) == tuple(edge.key for edge in first.path)
+
+    constrained = build_game_application()._simulation
+    constrained.transport.transport_allocations.clear()
     if not any(
         facility.definition_id == ORBITAL_LOGISTICS_NODE
         and facility.operational_node_id == LEO
-        for facility in pinned.facilities.facilities.values()
+        for facility in constrained.facilities.facilities.values()
     ):
-        pinned.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
+        constrained.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
     if not any(
         facility.definition_id == ORBITAL_LOGISTICS_NODE
         and facility.operational_node_id == LUNAR_ORBIT
-        for facility in pinned.facilities.facilities.values()
+        for facility in constrained.facilities.facilities.values()
     ):
-        pinned.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
-    pinned.refresh_storage()
-    pinned.inventory.add(LEO, PROPELLANT, 10.0)
-    pinned.transport.create_transport_allocation(
-        REUSABLE_ORBITAL_CARGO_TUG, LEO, LUNAR_ORBIT, target_units=1, day=pinned.day
+        constrained.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
+    constrained.refresh_storage()
+    constrained.inventory.add(LEO, PROPELLANT, 10.0)
+    constrained.transport.create_transport_allocation(
+        REUSABLE_ORBITAL_CARGO_TUG, LEO, LUNAR_ORBIT, target_units=1, day=constrained.day
     )
-    pinned.inventory.add(EARTH, MACHINERY, 1.0)
-    pinned.inventory.add(LEO, MACHINERY, 1.0)
-    pinned.logistics.set_global_logistics_policy(None)
-    pinned_requirement = _requirement(
-        1.0,
-        requirement_id="supply.pinned-no-fallback",
-        destination=LUNAR_ORBIT,
-        resource=MACHINERY,
+    constrained.inventory.add(EARTH, MACHINERY, 1.0)
+    constrained.inventory.add(LEO, MACHINERY, 1.0)
+    hard = _requirement(
+        1.0, requirement_id="supply.hard-source-no-fallback",
+        destination=LUNAR_ORBIT, resource=MACHINERY,
     )
-    policy_id = EntityId("logistics.policy.pinned-earth-no-fallback")
-    pinned.logistics.create_logistics_policy(
-        policy_id, source_mode=SourceSelectionMode.PINNED, allowed_source_ids=(EARTH,)
+    constrained.logistics.set_supply_routing_constraint(
+        SupplyRoutingConstraintScope(destination_id=LUNAR_ORBIT, resource_id=MACHINERY),
+        source_node_id=EARTH,
     )
-    pinned.logistics.register_policy_owner_resolver(
-        "test", lambda owner_id: owner_id == pinned_requirement.owner_id
-    )
-    pinned.logistics.assign_logistics_policy("test", pinned_requirement.owner_id, policy_id)
 
-    options = pinned.logistics.supply_planning_options(pinned_requirement, pinned.day)
-    assert options.candidate_source_ids == (EARTH,)
-    assert not options.operational_source_ids
-    assert not pinned.logistics.plan_capacity_logistics(
-        pinned.day, (pinned_requirement,)
+    blocked = constrained.logistics.supply_planning_options(hard, constrained.day)
+    assert blocked.candidate_source_ids == (EARTH,)
+    assert not blocked.operational_source_ids
+    assert "routing_constraint:path_unavailable" in blocked.blockers
+    assert not constrained.logistics.plan_capacity_logistics(
+        constrained.day, (hard,)
     ).dispatches
-
-    preferred_app = build_game_application()
-    preferred = preferred_app._simulation
-    allocation_count = len(preferred.transport.transport_allocations)
-    _set_global_source_preference(preferred, EARTH)
-    preferred.logistics.set_target_stock(LEO, MACHINERY, 3.0, 4)
-    preferred_view = preferred_app.query(GetLogistics())
-    assert len(preferred_view.logistics_policies) == 1
-    assert preferred_view.logistics_policies[0].preferred_source_id == str(EARTH)
-    assert preferred_view.logistics_policies[0].path_preference == "balanced"
-    assert len(preferred_view.target_stocks) == 1
-    assert any(row.resource_id == str(MACHINERY) for row in preferred_view.requirements)
-    assert len(preferred.transport.transport_allocations) == allocation_count
-
-    scenario_default = build_game_application()._simulation
-    _owned_earth_leo_capacity(scenario_default)
-    scenario_default.inventory.add(EARTH, WATER, 1.0)
-    default_requirement = _requirement(
-        1.0, requirement_id="supply.auto-source", resource=WATER
-    )
-
-    options = scenario_default.logistics.supply_planning_options(
-        default_requirement, scenario_default.day
-    )
-    assert EARTH in options.stocked_source_ids
-    plan = scenario_default.logistics.plan_capacity_logistics(
-        scenario_default.day, (default_requirement,)
-    )
-    dispatch = next(
-        row for row in plan.dispatches if row.requirement.id == default_requirement.id
-    )
-    assert dispatch.source_id == EARTH
 
 
 def test_multistage_cargo_lifecycle_freezes_service_conditions_and_preserves_ownership_until_final_arrival():
@@ -416,8 +369,11 @@ def test_multistage_cargo_lifecycle_freezes_service_conditions_and_preserves_own
     resource = CONSTRUCTION_EQUIPMENT
     sim.inventory.stock[(LUNAR_ORBIT, resource)] = 0.0
     sim.inventory.add(EARTH, resource, 0.1)
-    _set_global_source_preference(sim, EARTH)
     target_id = sim.logistics.set_target_stock(LUNAR_ORBIT, resource, 0.1, 5)
+    sim.logistics.set_supply_routing_constraint(
+        SupplyRoutingConstraintScope(destination_id=LUNAR_ORBIT, resource_id=resource),
+        source_node_id=EARTH,
+    )
 
     decision = sim.tick_decision_projection()
     dispatch = next(
@@ -615,14 +571,17 @@ def test_arrival_waiting_exposes_admission_blocker_and_backpressures_transport_u
     allocation_id = _owned_earth_leo_capacity(sim)
     baseline = sim.logistics.current_transport_capacity_snapshot(allocation_id, day=0)
 
-    cargo = DefinitionId("test.resource.backpressure-cargo")
-    filler = DefinitionId("test.resource.backpressure-filler")
+    cargo = WATER
+    filler = CONSTRUCTION_EQUIPMENT
     free = sim.inventory.admission_state(LEO, cargo).admission_capacity_t
     assert free is not None and free > 1.0
     sim.inventory.add(LEO, filler, free)
     sim.inventory.add(EARTH, cargo, 1.0)
-    _set_global_source_preference(sim, EARTH)
     target_id = sim.logistics.set_target_stock(LEO, cargo, 1.0, 5)
+    sim.logistics.set_supply_routing_constraint(
+        SupplyRoutingConstraintScope(destination_id=LEO, resource_id=cargo),
+        source_node_id=EARTH,
+    )
 
     sim.advance_days(1)
     flow = next(
@@ -664,53 +623,37 @@ def test_arrival_waiting_exposes_admission_blocker_and_backpressures_transport_u
     assert "arrival_backpressure" not in restored.limiting_factors
 
 
-def test_logistics_policy_source_handoff_and_service_constraints_are_hard_limits():
+def test_routing_via_and_transport_allocation_constraints_are_hard_limits():
     sim = build_game_application()._simulation
     sim.transport.transport_allocations.clear()
-    _owned_multistage_capacity(sim)
+    launch, tug = _owned_multistage_capacity(sim)
     sim.inventory.add(EARTH, MACHINERY, 2.0)
-    sim.inventory.add(LEO, MACHINERY, 2.0)
     requirement = _requirement(
-        1.0,
-        requirement_id="supply.policy-hard-path",
-        destination=LUNAR_ORBIT,
-        resource=MACHINERY,
+        1.0, requirement_id="supply.hard-route",
+        destination=LUNAR_ORBIT, resource=MACHINERY,
     )
-    policy_id = EntityId("logistics.policy.hard-path")
-    sim.logistics.create_logistics_policy(
-        policy_id,
-        source_mode=SourceSelectionMode.ALLOW_ANY,
-        allowed_source_ids=(EARTH,),
-        allowed_handoff_ids=(LEO,),
+    scope = SupplyRoutingConstraintScope(
+        destination_id=LUNAR_ORBIT, resource_id=MACHINERY
     )
-    sim.logistics.set_global_logistics_policy(policy_id)
+    sim.logistics.set_supply_routing_constraint(
+        scope, source_node_id=EARTH, required_via_node_ids=(LEO,),
+        required_transport_allocation_ids=(launch, tug),
+    )
 
     initial_path = sim.logistics.supply_service_path(requirement, EARTH, sim.day)
     assert len(initial_path) == 2
     assert initial_path[0].destination_id == LEO
+    assert {edge.allocation_id for edge in initial_path} == {launch, tug}
     options = sim.logistics.supply_planning_options(requirement, sim.day)
-    assert options.candidate_source_ids == (EARTH,)
     assert options.operational_source_ids == (EARTH,)
 
-    sim.logistics.update_logistics_policy(policy_id, allowed_handoff_ids=())
+    sim.transport.update_transport_allocation(tug, paused=True, day=sim.day)
     blocked = sim.logistics.supply_planning_options(requirement, sim.day)
     assert not blocked.operational_source_ids
-    assert "logistics_policy:path_constraint_unavailable" in blocked.blockers
+    assert "routing_constraint:path_unavailable" in blocked.blockers
     assert not sim.logistics.plan_capacity_logistics(sim.day, (requirement,)).dispatches
 
-    sim.logistics.update_logistics_policy(
-        policy_id,
-        allowed_handoff_ids=(LEO,),
-        allowed_service_ids=(initial_path[0].key,),
-    )
-    service_blocked = sim.logistics.supply_planning_options(requirement, sim.day)
-    assert not service_blocked.operational_source_ids
-    assert "logistics_policy:path_constraint_unavailable" in service_blocked.blockers
-
-    sim.logistics.update_logistics_policy(
-        policy_id,
-        allowed_service_ids=tuple(edge.key for edge in initial_path),
-    )
+    sim.transport.update_transport_allocation(tug, paused=False, day=sim.day)
     restored = sim.logistics.supply_planning_options(requirement, sim.day)
     assert restored.operational_source_ids == (EARTH,)
     dispatch = sim.logistics.plan_capacity_logistics(sim.day, (requirement,)).dispatches[0]

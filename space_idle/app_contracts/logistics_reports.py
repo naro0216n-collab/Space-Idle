@@ -16,7 +16,7 @@ class LogisticsSummaryView:
     allocation_count: int
     unfilled_allocation_units: int
     cargo_flow_count: int
-    logistics_policy_count: int
+    routing_constraint_count: int
     target_stock_count: int
     requirement_count: int
     queued_supply_t: float

@@ -89,7 +89,6 @@ class SurfaceProjectorMixin:
                         ),
                         active_project_id=None if active_spatial_project is None else str(active_spatial_project.id),
                         procurement_policy_options=tuple(sim.projects.procurement_policy_options()),
-                        logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                     )
                 )
             development_options = tuple(development_options_list)
@@ -143,7 +142,6 @@ class SurfaceProjectorMixin:
                             recipe.facility_def_id, owner, site_cell_id=cell.id
                         ),
                         procurement_policy_options=tuple(sim.projects.procurement_policy_options()),
-                        logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                     )
                     for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id))
                     if sim.facilities.definitions[recipe.facility_def_id].placement_scope is FacilityPlacementScope.SURFACE_CELL
@@ -189,7 +187,6 @@ class SurfaceProjectorMixin:
                                 blockers=tuple((failure.code, failure.detail) for failure in failures),
                                 can_plan=not failures,
                                 active_project_id=None if active_founding is None else str(active_founding.id),
-                                logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
                             ))
                 foundation_options = tuple(foundation_rows)
 

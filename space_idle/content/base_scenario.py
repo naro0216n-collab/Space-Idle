@@ -6,15 +6,11 @@ from ..scenario import (
     ScenarioFleet,
     ScenarioInventoryStock,
     ScenarioMarketInterface,
-    ScenarioLogisticsPolicy,
     ScenarioStorageInfrastructure,
     ScenarioSurfaceLocation,
 )
 from . import base_ids as ids
 from .base_market import EARTH_MARKET_INTERFACE, EARTH_MARKET_PROVIDER
-from ..shared import EntityId
-from ..supply import SourceSelectionMode
-from ..transport.models import PathPolicy
 
 STANDARD_SCENARIO_ID = "base.scenario.standard"
 
@@ -86,14 +82,6 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         market_interfaces=(
             ScenarioMarketInterface(
                 EARTH_MARKET_INTERFACE, EARTH_MARKET_PROVIDER, ids.EARTH, True
-            ),
-        ),
-        logistics_policies=(
-            ScenarioLogisticsPolicy(
-                EntityId("logistics.policy.standard"),
-                source_mode=SourceSelectionMode.ALLOW_ANY,
-                path_preference=PathPolicy.BALANCED,
-                global_policy=True,
             ),
         ),
     )

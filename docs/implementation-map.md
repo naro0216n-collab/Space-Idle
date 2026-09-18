@@ -17,7 +17,7 @@
 | `construction/` / `projects.py` | Construction Recipe、Project、調達、能力配分 |
 | maintenance domain | Facility maintenance demand / fulfillment |
 | `transport/` / movement domain | Movement Operation / Plan / Execution、Vehicle Definition、Fleet State、Vehicle production、Transport Allocation、派生Service Plan / Capacity、Fleet relocation |
-| `logistics.py` / logistics domain | Supply Requirement、Target Stock、sourcing / path Policy、共有Transport Capacity配分、Cargo Flow Segment、handoff / arrival waiting |
+| `logistics.py` / logistics domain | Supply Requirement、Target Stock、sparse hard Supply Routing Constraint、existing network上のcanonical source/path selection、共有Transport Capacity配分、Cargo Flow Segment、handoff / arrival waiting |
 | `research.py` | Research Point、Technology State、Research Project / stage、Operational Experience |
 | exploration domain | Scientific Exploration Campaign / Fleet reservation / RP reward |
 | `survey.py` | Surface Cell Resource Knowledge、Survey Campaign |

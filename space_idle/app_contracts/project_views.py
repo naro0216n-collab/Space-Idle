@@ -46,7 +46,6 @@ class FacilityUpgradeOption:
 class BuildOptionsView:
     operational_node_id: str
     procurement_policy_options: tuple[str, ...]
-    logistics_policy_options: tuple[str, ...]
     items: tuple[BuildOptionRow, ...]
 
 
@@ -72,12 +71,9 @@ class ProjectRow:
     paused: bool
     priority: ActivityPriority
     procurement_policy: str
-    logistics_policy_id: str | None
-    resolved_logistics_policy_id: str | None
     settings_editable: bool
     procurement_editable: bool
     procurement_policy_options: tuple[str, ...]
-    logistics_policy_options: tuple[str, ...]
     construction_done: float
     construction_required: float
     materials_committed: bool

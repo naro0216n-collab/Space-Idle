@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from space_idle import SetGlobalLogisticsPolicy, build_game_application
+from space_idle import build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.content.base_scenario import STANDARD_SCENARIO_ID, build_standard_scenario_definition
@@ -60,8 +60,7 @@ def test_world_scenario_and_load_boundaries_keep_static_definition_runtime_state
 
 
     app = build_game_application()
-    assert app._simulation.logistics.global_policy_id is not None
-    app.execute(SetGlobalLogisticsPolicy(None))
+    assert app._simulation.logistics.routing_constraints == {}
 
     path = tmp_path / "identity.json"
     save_game(
@@ -71,7 +70,7 @@ def test_world_scenario_and_load_boundaries_keep_static_definition_runtime_state
     )
     loaded, offline = load_game(path, build_game_application_for_load)
     assert offline is None
-    assert loaded._simulation.logistics.global_policy_id is None
+    assert loaded._simulation.logistics.routing_constraints == {}
 
     original = json.loads(path.read_text(encoding="utf-8"))
 

@@ -13,7 +13,6 @@ class PlanBuild:
     facility_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     procurement_policy: ProcurementTimingPolicyValue = "standard_wait"
-    logistics_policy_id: str | None = None
     site_cell_id: str | None = None
 
 
@@ -22,7 +21,6 @@ class PlanFacilityUpgrade:
     facility_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     procurement_policy: ProcurementTimingPolicyValue = "standard_wait"
-    logistics_policy_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -30,7 +28,6 @@ class PlanFacilityDecommission:
     facility_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     procurement_policy: ProcurementTimingPolicyValue = "standard_wait"
-    logistics_policy_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,7 +54,6 @@ class PlanOperationalNodeFounding:
     deployment_recipe_id: str
     vehicle_definition_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    logistics_policy_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,7 +83,6 @@ class DevelopSurfaceCell:
     cell_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     procurement_policy: ProcurementTimingPolicyValue = "standard_wait"
-    logistics_policy_id: str | None = None
 
 
 @dataclass(frozen=True)

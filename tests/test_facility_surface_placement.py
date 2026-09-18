@@ -104,7 +104,6 @@ def test_surface_map_owns_surface_buildability_and_location_build_options_do_not
         str(technology_id) for technology_id in recipe.prerequisite_technologies
     }
     assert option.procurement_policy_options == build_options.procurement_policy_options
-    assert option.logistics_policy_options == build_options.logistics_policy_options
 
     catalog = app.query(GetCatalog())
     robotic = next(
