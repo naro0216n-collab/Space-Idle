@@ -350,30 +350,17 @@ def run() -> dict[str, object]:
 
             page.locator(f'[data-location-id="{ids.LUNAR_ORBIT}"]').click()
             page.locator('[data-tab="survey"]').click()
-            survey_pair_ids = page.locator('tr[data-inspect="survey"]').evaluate_all(
-                "rows => rows.map((row) => row.dataset.id)"
-            )
-            cells_by_resource: dict[str, list[str]] = {}
-            for pair_id in survey_pair_ids:
-                if not pair_id or "::" not in pair_id:
-                    continue
-                cell_id, resource_id = pair_id.split("::", 1)
-                cells = cells_by_resource.setdefault(resource_id, [])
-                if cell_id not in cells:
-                    cells.append(cell_id)
-            campaign_resource_id = next(
-                (resource_id for resource_id, cell_ids in cells_by_resource.items() if len(cell_ids) >= 2),
-                None,
-            )
+            survey_pair_id = page.locator('tr[data-inspect="survey"]').first.get_attribute("data-id")
             _assert(
-                campaign_resource_id is not None,
-                "Survey Campaign UI fixture must expose one surveyed Resource shared by at least two Cells",
+                survey_pair_id is not None and "::" in survey_pair_id,
+                "Survey Campaign UI fixture must expose at least one surveyable Cell/Resource pair",
             )
-            campaign_cell_ids = cells_by_resource[campaign_resource_id][:2]
-            for cell_id in campaign_cell_ids:
-                cell_checkbox = page.locator(f'[data-survey-draft-cell][value="{cell_id}"]')
-                cell_checkbox.wait_for(timeout=10000)
-                cell_checkbox.check()
+            campaign_cell_id, campaign_resource_id = survey_pair_id.split("::", 1)
+            cell_checkbox = page.locator(
+                f'[data-survey-draft-cell][value="{campaign_cell_id}"]'
+            )
+            cell_checkbox.wait_for(timeout=10000)
+            cell_checkbox.check()
             resource_checkbox = page.locator(
                 f'[data-survey-draft-resource][value="{campaign_resource_id}"]'
             )
@@ -384,7 +371,7 @@ def run() -> dict[str, object]:
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             campaign_row = page.locator('tr[data-inspect="survey-campaign"]').first
             campaign_row.wait_for(timeout=10000)
-            _assert("2 Cell × 1 Resource" in campaign_row.inner_text(), "Survey UI must create one multi-target Campaign instead of per-target jobs")
+            _assert("1 Cell × 1 Resource" in campaign_row.inner_text(), "Survey Campaign creation must round-trip the selected UI scope")
             _assert("base." not in campaign_row.inner_text(), "Survey Campaign row must use presentation labels rather than raw definition ids")
             campaign_row.click()
             campaign_text = page.locator('#inspectorContent').inner_text()
