@@ -13,14 +13,14 @@ class InventoryRow:
     amount: float
     reserved: float
     available: float
-    storage_class: str | None
+    storage_pool_key: str
     physical_capacity: float | None
     usable_capacity: float | None
     free_capacity: float | None
     admission_capacity: float | None = None
     over_capacity: float = 0.0
-    conditioning_required: bool = False
     admission_blockers: tuple[str, ...] = ()
+    limiting_factors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -43,15 +43,15 @@ class ResourceAllocationRow:
 
 @dataclass(frozen=True)
 class StorageRow:
-    storage_class: str
+    storage_pool_key: str
     stock_t: float
     staging_t: float
     physical_capacity_t: float
     usable_capacity_t: float
     free_usable_t: float
     unusable_occupied_t: float
-    conditioning_required: bool = False
     admission_blockers: tuple[str, ...] = ()
+    limiting_factors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

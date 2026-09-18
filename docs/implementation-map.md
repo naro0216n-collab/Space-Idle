@@ -12,7 +12,7 @@
 | `site.py` | SiteRequirements / Capability / Service Capacity Requirement |
 | `facilities.py` | Facility Definition / State / placement scope / Capability / Service Capacity supply |
 | `power.py` | Power配分 |
-| `inventory.py` / `storage.py` | Inventory / Reservation / Stock admission / Storage |
+| `catalog.py` / `inventory.py` / `storage.py` / `storage_domain.py` | Resource→Storage Pool compatibility / Inventory・Reservation・Stock admission / Facility・Infrastructure由来Physical・Usable Storage Capacity projection |
 | `industry.py` / `production/` | Process inputs / outputs / production flow / Resource Potential extraction response |
 | `construction/` / `projects.py` | Construction Recipe、Project、調達、能力配分 |
 | maintenance domain | Facility maintenance demand / fulfillment |

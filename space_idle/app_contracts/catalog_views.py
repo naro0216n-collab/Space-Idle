@@ -35,7 +35,7 @@ class ResourceDefinitionRow:
     display_name: str
     unit: str
     category: str
-    storage_class: str | None
+    storage_pool_key: str
 
 
 @dataclass(frozen=True)

@@ -23,6 +23,7 @@ from ..survey import ExtractionService, SurveyService
 from ..technology import TechnologyState
 from ..scientific_exploration import ScientificExplorationService
 from ..shared import DefinitionId, EntityId, SpatialNodeId
+from ..catalog import GameCatalog
 
 from ..content import base_ids as ids
 from ..content.base_construction import (
@@ -38,7 +39,6 @@ from ..content.base_contracts import build_contract_templates
 from ..content.base_facilities import build_facility_definitions
 from ..content.base_founding import build_deployment_recipes
 from ..content.base_industry import build_process_specs
-from ..content.base_inventory import configure_inventory_definitions
 from ..content.base_power import build_power_specs
 from ..content.base_market import build_market_provider_definitions
 from ..content.base_progression import (
@@ -60,7 +60,7 @@ from ..content.base_transport import (
 )
 
 
-def build_base_simulation() -> Simulation:
+def build_base_simulation(catalog: GameCatalog) -> Simulation:
     """Compose static base-game definitions with empty authoritative runtime State."""
     graph, environment = build_world_definition()
 
@@ -68,8 +68,7 @@ def build_base_simulation() -> Simulation:
     facilities = FacilityBook(facility_definitions, environment)
     service_capacity_registry = ServiceCapacityRegistry()
 
-    inventory = InventoryBook()
-    configure_inventory_definitions(inventory)
+    inventory = InventoryBook(resource_definitions=catalog.resources)
 
     # Provider offers are static Content. Funds, provider availability and
     # Market Interfaces are Scenario-owned runtime State.

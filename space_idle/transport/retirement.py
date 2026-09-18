@@ -149,16 +149,14 @@ class FleetRetirementMixin:
 
         salvage_by_pool: dict[str, float] = {}
         for resource_id, amount_t in self._retirement_salvage(state):
-            storage_class = self.inventory.resource_storage_class.get(resource_id)
-            if storage_class is None:
-                continue
-            salvage_by_pool[storage_class] = salvage_by_pool.get(storage_class, 0.0) + amount_t
-        for storage_class, amount_t in sorted(salvage_by_pool.items()):
-            admission = self.inventory.admission_state_for_class(
-                state.operational_node_id, storage_class
+            pool_key = self.inventory.storage_pool_for_resource(resource_id)
+            salvage_by_pool[pool_key] = salvage_by_pool.get(pool_key, 0.0) + amount_t
+        for storage_pool_key, amount_t in sorted(salvage_by_pool.items()):
+            admission = self.inventory.admission_state_for_pool(
+                state.operational_node_id, storage_pool_key
             )
             if admission.admission_capacity_t is not None and admission.admission_capacity_t + _EPS < amount_t:
-                blockers.append(f"salvage_admission:{storage_class}")
+                blockers.append(f"salvage_admission:{storage_pool_key}")
         return tuple(blockers)
 
     def fleet_retirement_execution_requirement_bundles(
@@ -202,9 +200,7 @@ class FleetRetirementMixin:
             salvage = self._retirement_salvage(state)
             admission_by_pool: dict[str, float] = {}
             for resource_id, amount_t in salvage:
-                pool_id = self.inventory.resource_storage_class.get(resource_id)
-                if pool_id is None:
-                    continue
+                pool_id = self.inventory.storage_pool_for_resource(resource_id)
                 admission_by_pool[pool_id] = admission_by_pool.get(pool_id, 0.0) + amount_t
             requirements = tuple(
                 StockOrPoolAdmissionRequirement(pool_id, amount_t)

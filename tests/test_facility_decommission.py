@@ -22,7 +22,6 @@ SALVAGE_RESOURCE = DefinitionId("test.resource.decommission_salvage")
 def _build_decommission_fixture_application(*, for_load: bool = False):
     app = build_game_application_for_load() if for_load else build_game_application()
     sim = app._simulation
-    sim.inventory.register_storage_class(SALVAGE_RESOURCE, "general_cargo")
     sim.facilities.definitions[DECOMMISSION_TARGET] = FacilityDef(
         DECOMMISSION_TARGET, "Decommission target", decommission_recovery_fraction=0.5
     )

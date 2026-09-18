@@ -46,7 +46,7 @@ class LocationProjectorMixin:
             amount = sim.inventory.amount(location_id, resource_id)
             reserved = sim.inventory.reserved_total(location_id, resource_id)
             admission = sim.inventory.admission_state(location_id, resource_id)
-            storage_class = admission.storage_class
+            storage_pool_key = admission.storage_pool_key
             physical_capacity = admission.physical_capacity_t
             usable_capacity = admission.usable_capacity_t
             free = admission.admission_capacity_t
@@ -61,14 +61,14 @@ class LocationProjectorMixin:
                     amount,
                     reserved,
                     sim.inventory.available(location_id, resource_id),
-                    storage_class,
+                    storage_pool_key,
                     physical_capacity,
                     usable_capacity,
                     free,
                     admission.admission_capacity_t,
                     admission.over_capacity_t,
-                    admission.conditioning_required,
                     admission.blockers,
+                    admission.limiting_factors,
                 )
             )
         return tuple(rows)
@@ -81,33 +81,33 @@ class LocationProjectorMixin:
         } | {
             key for key in sim.inventory.usable_storage_capacity_t if key[0] == location_id
         }
-        for loc, storage_class in sorted(keys, key=lambda row: (str(row[0]), row[1])):
-            physical = sim.inventory.physical_storage_capacity_t.get((loc, storage_class), 0.0)
-            usable = sim.inventory.usable_storage_capacity_t.get((loc, storage_class), 0.0)
+        for loc, storage_pool_key in sorted(keys, key=lambda row: (str(row[0]), row[1])):
+            physical = sim.inventory.physical_storage_capacity_t.get((loc, storage_pool_key), 0.0)
+            usable = sim.inventory.usable_storage_capacity_t.get((loc, storage_pool_key), 0.0)
             stock = sum(
                 amount
                 for (stock_loc, resource_id), amount in sim.inventory.stock.items()
                 if stock_loc == location_id
-                and sim.inventory.resource_storage_class.get(resource_id) == storage_class
+                and sim.inventory.storage_pool_for_resource(resource_id) == storage_pool_key
             )
             staging = sum(
                 amount
                 for (_owner, occ_loc, resource_id), amount in sim.inventory.external_occupancy.items()
                 if occ_loc == location_id
-                and sim.inventory.resource_storage_class.get(resource_id) == storage_class
+                and sim.inventory.storage_pool_for_resource(resource_id) == storage_pool_key
             )
-            admission = sim.inventory.admission_state_for_class(location_id, storage_class)
+            admission = sim.inventory.admission_state_for_pool(location_id, storage_pool_key)
             rows.append(
                 StorageRow(
-                    storage_class,
+                    storage_pool_key,
                     stock,
                     staging,
                     physical,
                     usable,
                     0.0 if admission.admission_capacity_t is None else admission.admission_capacity_t,
                     admission.over_capacity_t,
-                    admission.conditioning_required,
                     admission.blockers,
+                    admission.limiting_factors,
                 )
             )
         return tuple(rows)

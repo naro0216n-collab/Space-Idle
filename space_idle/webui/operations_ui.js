@@ -3,7 +3,7 @@
 
   const A=window.SpaceIdleApp;
   if(!A)throw new Error('SpaceIdleApp must load before operations_ui.js');
-  const {state,$,$$,esc,fmt,pct,resourceName,locationName,definitionName,capabilityName,storageClassLabels,stateLabels,issueHtml,statHtml,signed,command,banner}=A;
+  const {state,$,$$,esc,fmt,pct,resourceName,locationName,definitionName,capabilityName,stateLabels,issueHtml,statHtml,signed,command,banner}=A;
 
   const section=(title,body)=>`<section class="inspector-section"><h3>${esc(title)}</h3>${body}</section>`;
   const kv=(rows)=>`<dl class="kv-grid">${rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
@@ -79,7 +79,7 @@
 
   function renderOverviewTab(){
     const loc=state.operationalNode,flow=state.flow,issues=state.bottlenecks?.items||[];
-    const storageRows=(loc.storage||[]).map((s)=>`<tr><td>${esc(storageClassLabels[s.storage_class]||s.storage_class)}</td><td>${fmt(s.stock_t)}</td><td>${fmt(s.physical_capacity_t)}</td><td>${fmt(s.usable_capacity_t)}</td><td>${fmt(s.free_usable_t)}</td><td>${fmt(s.unusable_occupied_t)}</td><td>${esc((s.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')}</td></tr>`).join('');
+    const storageRows=(loc.storage||[]).map((s)=>`<tr><td>${esc(s.storage_pool_key)}</td><td>${fmt(s.stock_t)}</td><td>${fmt(s.physical_capacity_t)}</td><td>${fmt(s.usable_capacity_t)}</td><td>${fmt(s.free_usable_t)}</td><td>${fmt(s.unusable_occupied_t)}</td><td>${esc((s.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')}</td></tr>`).join('');
     const capabilityRows=(loc.capabilities||[]).map((c)=>`<tr><td>${esc(capabilityName(c.id))}</td><td>${c.installed?'✓':'—'}</td><td>${c.active?'✓':'—'}</td></tr>`).join('');
     const serviceRows=(loc.service_capacities||[]).map((c)=>`<tr><td>${esc(capabilityName(c.service_type))}</td><td>${fmt(c.nominal)}</td><td>${fmt(c.enabled)}</td><td>${fmt(c.requested)}</td><td>${fmt(c.allocated)}</td><td>${fmt(c.spare)}</td><td>${esc((c.limiting_factors||[]).map(A.userFacingText).join(' / ')||'なし')}</td></tr>`).join('');
     const infra=loc.surface_infrastructure;
@@ -103,7 +103,7 @@
 
   function renderInventoryTab(){
     const flowMap=Object.fromEntries((state.flow?.resources||[]).map((r)=>[r.resource_id,r]));
-    const rows=(state.operationalNode?.inventory||[]).filter((r)=>r.amount||r.reserved||flowMap[r.resource_id]?.local_production_per_day||flowMap[r.resource_id]?.local_consumption_per_day||flowMap[r.resource_id]?.inbound_in_transit_t||flowMap[r.resource_id]?.arrival_waiting_t).map((r)=>{const f=flowMap[r.resource_id]||{};return `<tr class="selectable" data-inspect="resource" data-id="${esc(r.resource_id)}"><td><div class="cell-main">${esc(r.display_name)}</div><div class="cell-sub">${esc(r.storage_class)}</div></td><td>${fmt(r.amount)}</td><td>${fmt(r.available)}</td><td>${signed(f.local_net_per_day)}</td><td>${fmt(f.inbound_in_transit_t)}</td><td>${fmt(f.outbound_in_transit_t)}</td><td>${fmt(f.arrival_waiting_t)}</td><td>${fmt(r.admission_capacity)}</td><td>${r.over_capacity>1e-9?`<span class="badge warn">${fmt(r.over_capacity)}</span>`:'—'}</td></tr>`;}).join('');
+    const rows=(state.operationalNode?.inventory||[]).filter((r)=>r.amount||r.reserved||flowMap[r.resource_id]?.local_production_per_day||flowMap[r.resource_id]?.local_consumption_per_day||flowMap[r.resource_id]?.inbound_in_transit_t||flowMap[r.resource_id]?.arrival_waiting_t).map((r)=>{const f=flowMap[r.resource_id]||{};return `<tr class="selectable" data-inspect="resource" data-id="${esc(r.resource_id)}"><td><div class="cell-main">${esc(r.display_name)}</div><div class="cell-sub">${esc(r.storage_pool_key)}</div></td><td>${fmt(r.amount)}</td><td>${fmt(r.available)}</td><td>${signed(f.local_net_per_day)}</td><td>${fmt(f.inbound_in_transit_t)}</td><td>${fmt(f.outbound_in_transit_t)}</td><td>${fmt(f.arrival_waiting_t)}</td><td>${fmt(r.admission_capacity)}</td><td>${r.over_capacity>1e-9?`<span class="badge warn">${fmt(r.over_capacity)}</span>`:'—'}</td></tr>`;}).join('');
     const allocationRows=(state.operationalNode?.resource_allocations||[]).map((c)=>`<tr><td><div class="cell-main">${esc(c.display_name)}</div><div class="cell-sub">${esc(c.resource_id)}</div></td><td><div class="cell-main">${esc(A.userFacingText(c.owner_kind))}</div><div class="cell-sub">${esc(c.owner_id)}</div></td><td>${esc(A.userFacingText(c.purpose))}</td><td>${c.priority}</td><td>${fmt(c.requested,2)}</td><td>${fmt(c.allocated,2)}</td><td>${fmt(c.unmet,2)}</td></tr>`).join('');
     const allocationCard=`<section class="card"><div class="card-heading"><h3>Current Resource Allocations</h3><span class="badge ${(state.operationalNode?.resource_allocations||[]).some((c)=>Number(c.unmet)>1e-9)?'warn':'ok'}">${state.operationalNode?.resource_allocations?.length||0}</span></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>Owner</th><th>用途</th><th>Priority</th><th>Requested</th><th>Allocated</th><th>Unmet</th></tr></thead><tbody>${allocationRows||'<tr><td colspan="7">当tickのResource allocationなし</td></tr>'}</tbody></table></div></section>`;
     const currentAnalytics=state.dependencyAnalyticsCurrent;
@@ -255,7 +255,7 @@
   }
   function renderResourceInspector(id){
     const inv=state.operationalNode?.inventory?.find((x)=>x.resource_id===id),f=state.flow?.resources?.find((x)=>x.resource_id===id);if(!inv)return false;
-    setInspector(inv.display_name,section('在庫',kv([['在庫',fmt(inv.amount)],['予約',fmt(inv.reserved)],['利用可能',fmt(inv.available)],['Physical',fmt(inv.physical_capacity)],['Usable',fmt(inv.usable_capacity)],['入庫可能',fmt(inv.admission_capacity)],['超過',fmt(inv.over_capacity)],['Conditioning',inv.conditioning_required?'必要':'不要'],['入庫blocker',esc((inv.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')],['Storage',esc(inv.storage_class)]]))+section('フロー',kv([['生産/日',signed(f?.local_production_per_day)],['消費/日',signed(f?.local_consumption_per_day)],['Local net/日',signed(f?.local_net_per_day)],['入荷中',fmt(f?.inbound_in_transit_t)],['出荷中',fmt(f?.outbound_in_transit_t)],['到着待機',fmt(f?.arrival_waiting_t)]])));
+    setInspector(inv.display_name,section('在庫',kv([['在庫',fmt(inv.amount)],['予約',fmt(inv.reserved)],['利用可能',fmt(inv.available)],['Physical',fmt(inv.physical_capacity)],['Usable',fmt(inv.usable_capacity)],['入庫可能',fmt(inv.admission_capacity)],['超過',fmt(inv.over_capacity)],['制限要因',esc((inv.limiting_factors||[]).map(A.userFacingText).join(' / ')||'なし')],['入庫blocker',esc((inv.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')],['Storage pool',esc(inv.storage_pool_key)]]))+section('フロー',kv([['生産/日',signed(f?.local_production_per_day)],['消費/日',signed(f?.local_consumption_per_day)],['Local net/日',signed(f?.local_net_per_day)],['入荷中',fmt(f?.inbound_in_transit_t)],['出荷中',fmt(f?.outbound_in_transit_t)],['到着待機',fmt(f?.arrival_waiting_t)]])));
     return true;
   }
   function renderProjectInspector(id){

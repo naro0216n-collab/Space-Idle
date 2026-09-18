@@ -13,7 +13,7 @@ def project_resources(projector):
     return tuple(
         ResourceDefinitionRow(
             str(definition.id), definition.display_name, definition.unit, definition.category,
-            sim.inventory.resource_storage_class.get(definition.id),
+            sim.inventory.storage_pool_for_resource(definition.id),
         )
         for definition in sorted(projector._catalog.resources.values(), key=lambda d: str(d.id))
     )

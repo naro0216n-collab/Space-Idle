@@ -459,7 +459,7 @@ class ApplicationReportProjectorMixin:
             if row.unusable_occupied_t > 1e-9:
                 issues.append(self._issue(
                     "storage_usable_capacity_shortage",
-                    f"{row.storage_class} のUsable Capacity超過占有 {row.unusable_occupied_t:g} t",
+                    f"{row.storage_pool_key} のUsable Capacity超過占有 {row.unusable_occupied_t:g} t",
                     category="storage", source="storage", operational_node_id=loc, impact="limited",
                 ))
 

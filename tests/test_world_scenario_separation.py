@@ -34,7 +34,7 @@ def test_world_scenario_and_load_boundaries_keep_static_definition_runtime_state
     assert load_sim.facilities.facilities == {}
     assert load_sim.transport.fleet_pools == {}
     assert load_sim.inventory.stock == {}
-    assert load_sim.inventory.base_storage_capacity_t == {}
+    assert load_sim.storage.infrastructure_capacity_t == {}
     assert load_sim.market.funds.balance == 0.0
     assert load_sim.market.provider_states == {}
     assert load_sim.market.interfaces == {}

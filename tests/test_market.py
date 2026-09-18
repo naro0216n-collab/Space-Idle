@@ -132,8 +132,7 @@ def test_matured_buy_settles_funds_supply_and_inventory_atomically_and_waits_for
     market.update_order(order_id, priority=5)
 
     inventory = InventoryBook()
-    inventory.register_storage_class(resource, "dry")
-    inventory.add_capacity(node_id, "dry", 1.0)
+    inventory.set_capacity_snapshot({(node_id, "default"): 1.0}, {(node_id, "default"): 1.0})
     bundles = market.buy_boundary_bundles(1, inventory)
     bundle = next(row for row in bundles if row.owner_id == commitment.id)
     assert int(bundle.priority) == 5

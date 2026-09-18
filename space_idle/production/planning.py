@@ -12,13 +12,11 @@ class IndustryPlanningMixin:
     def _storage_delta_per_scale(process, inventory: InventoryBook) -> dict[str, float]:
         deltas: dict[str, float] = {}
         for resource_id, output in process.outputs_per_day.items():
-            storage_class = inventory.resource_storage_class.get(resource_id)
-            if storage_class is not None:
-                deltas[storage_class] = deltas.get(storage_class, 0.0) + output
+            pool_key = inventory.storage_pool_for_resource(resource_id)
+            deltas[pool_key] = deltas.get(pool_key, 0.0) + output
         for resource_id, need in process.inputs_per_day.items():
-            storage_class = inventory.resource_storage_class.get(resource_id)
-            if storage_class is not None:
-                deltas[storage_class] = deltas.get(storage_class, 0.0) - need
+            pool_key = inventory.storage_pool_for_resource(resource_id)
+            deltas[pool_key] = deltas.get(pool_key, 0.0) - need
         return deltas
 
     def _plan_site(

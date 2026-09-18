@@ -514,9 +514,8 @@ class MarketService:
             if interface is None or not interface.enabled:
                 continue
             requirements: list = [ServiceCapacityRequirement("cargo_transfer", 1.0)]
-            storage_class = inventory.resource_storage_class.get(commitment.resource_id)
-            if storage_class is not None:
-                requirements.append(StockOrPoolAdmissionRequirement(storage_class, 1.0))
+            pool_key = inventory.storage_pool_for_resource(commitment.resource_id)
+            requirements.append(StockOrPoolAdmissionRequirement(pool_key, 1.0))
             rows.append(ExecutionRequirementBundle(
                 id=self.buy_boundary_execution_id(commitment.id),
                 owner_kind="market_buy_boundary",

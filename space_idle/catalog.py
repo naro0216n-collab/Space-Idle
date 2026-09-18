@@ -11,6 +11,7 @@ class ResourceDef:
     display_name: str
     unit: str = "t"
     category: str = "material"
+    storage_pool_key: str | None = None
 
 
 @dataclass(frozen=True)

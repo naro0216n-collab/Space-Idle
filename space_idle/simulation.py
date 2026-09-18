@@ -775,7 +775,7 @@ class Simulation:
                 elif isinstance(requirement, StockOrPoolAdmissionRequirement):
                     if bundle.operational_node_id is None:
                         raise ValueError("stock/admission requirement requires an Operational Node")
-                    state = self.inventory.admission_state_for_class(
+                    state = self.inventory.admission_state_for_pool(
                         bundle.operational_node_id, requirement.pool_id
                     )
                     capacities[key] = state.admission_capacity_t or 0.0

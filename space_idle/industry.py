@@ -56,12 +56,12 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             requirements.append(
                 ServiceCapacityRequirement(self.process_service_type(process.id), 1.0)
             )
-            for storage_class, delta in sorted(
+            for storage_pool_key, delta in sorted(
                 self._storage_delta_per_scale(process, inventory).items()
             ):
                 if delta > 1e-12:
                     requirements.append(
-                        StockOrPoolAdmissionRequirement(storage_class, delta)
+                        StockOrPoolAdmissionRequirement(storage_pool_key, delta)
                     )
             rows.append(ExecutionRequirementBundle(
                 id=self.execution_bundle_id(facility.id),

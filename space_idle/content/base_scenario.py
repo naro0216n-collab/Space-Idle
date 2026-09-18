@@ -7,7 +7,7 @@ from ..scenario import (
     ScenarioInventoryStock,
     ScenarioMarketInterface,
     ScenarioLogisticsPolicy,
-    ScenarioStorageCapacity,
+    ScenarioStorageInfrastructure,
     ScenarioSurfaceLocation,
 )
 from . import base_ids as ids
@@ -35,13 +35,13 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         ScenarioFacility(ids.BASIC_STRUCTURAL_MATERIAL_PLANT, ids.EARTH, invested_resources=((S, 8.0), (M, 8.0))),
         ScenarioFacility(ids.BASIC_MACHINERY_WORKS, ids.EARTH, invested_resources=((S, 8.0), (M, 10.0), (E, 1.0))),
     )
-    capacities = tuple(
-        ScenarioStorageCapacity(ids.EARTH, storage_class, 100000.0)
-        for storage_class in ("general_cargo", "bulk", "liquid", "cryogenic")
-    ) + tuple(
-        ScenarioStorageCapacity(node_id, storage_class, amount)
-        for node_id in (ids.LEO, ids.LUNAR_ORBIT)
-        for storage_class, amount in (("general_cargo", 1000.0), ("cryogenic", 120.0))
+    storage_infrastructure = (
+        ScenarioStorageInfrastructure(ids.EARTH, "default", 100000.0),
+        ScenarioStorageInfrastructure(ids.EARTH, "cryogenic", 100000.0),
+        ScenarioStorageInfrastructure(ids.LEO, "default", 1000.0),
+        ScenarioStorageInfrastructure(ids.LEO, "cryogenic", 120.0),
+        ScenarioStorageInfrastructure(ids.LUNAR_ORBIT, "default", 1000.0),
+        ScenarioStorageInfrastructure(ids.LUNAR_ORBIT, "cryogenic", 120.0),
     )
     inventory = (
         ScenarioInventoryStock(ids.EARTH, ids.STRUCTURAL_COMPONENTS, 120.0),
@@ -73,7 +73,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
             ),
         ),
         facilities=facilities,
-        storage_capacities=capacities,
+        storage_infrastructure=storage_infrastructure,
         inventory_stock=inventory,
         fleet=(
             ScenarioFleet(ids.REUSABLE_LAUNCH_VEHICLE, 1, ids.EARTH),

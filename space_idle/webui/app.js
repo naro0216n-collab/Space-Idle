@@ -47,7 +47,6 @@
   };
   const operationLabels={powered_ascent:'動力離昇',launch:'打上げ',spaceflight:'宇宙航行',landing:'着陸',atmospheric_entry:'大気圏突入'};
   const locationKindLabels={surface:'地表',orbital:'軌道',orbit:'軌道'};
-  const storageClassLabels={bulk:'バルク',cryogenic:'極低温',general_cargo:'一般貨物',liquid:'液体'};
   const stateLabels={
     available:'利用可能',active:'稼働',paused:'停止',locked:'未解禁',complete:'完了',
     offered:'提示中',accepted:'受諾済み',declined:'辞退',failed:'失敗',waiting:'待機',
@@ -78,7 +77,6 @@
     text=text.replace(/storage_over_capacity/g,'Usable Storage Capacity超過');
     text=text.replace(/physical_storage_full/g,'Physical Storage Capacity満杯');
     text=text.replace(/usable_storage_full/g,'Usable Storage Capacity満杯');
-    text=text.replace(/storage_conditioning_required/g,'Storage Conditioning不足');
     for(const map of definitionMaps()){
       for(const [id,item] of Object.entries(map)){
         if(text.includes(id)&&item?.display_name)text=text.split(id).join(item.display_name);
@@ -313,7 +311,7 @@
 
   window.SpaceIdleApp={
     state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,operationName,
-    locationKindLabels,storageClassLabels,stateLabels,userFacingText,issueHtml,metricHtml,statHtml,signed,
+    locationKindLabels,stateLabels,userFacingText,issueHtml,metricHtml,statHtml,signed,
     api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveView,
   };
 

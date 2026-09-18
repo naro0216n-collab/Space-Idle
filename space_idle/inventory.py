@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Mapping
 
+from .catalog import ResourceDef
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
-StorageClass = str
+StoragePoolKey = str
+DEFAULT_STORAGE_POOL_KEY: StoragePoolKey = "default"
 
 _EPS = 1e-9
 
@@ -12,18 +15,14 @@ _EPS = 1e-9
 @dataclass(frozen=True)
 class InventoryAdmissionState:
     operational_node_id: SpatialNodeId
-    storage_class: StorageClass | None
-    physical_capacity_t: float | None
-    usable_capacity_t: float | None
+    storage_pool_key: StoragePoolKey
+    physical_capacity_t: float
+    usable_capacity_t: float
     occupied_t: float
-    admission_capacity_t: float | None
+    admission_capacity_t: float
     over_capacity_t: float
-    conditioning_required: bool
     blockers: tuple[str, ...] = ()
-
-    @property
-    def unlimited(self) -> bool:
-        return self.storage_class is None
+    limiting_factors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -41,76 +40,67 @@ class InventoryAdmissionResult:
 
 @dataclass
 class InventoryBook:
-    """Operational Node-scoped stock with reservations and optional storage limits.
+    """Operational Node-scoped stock and admission ownership.
 
-    Resources without a registered storage class remain unlimited. This keeps the
-    generic core lightweight while allowing gameplay content to opt into storage
-    as a real bottleneck where it matters.
+    Resource→pool compatibility comes from immutable Content definitions. All
+    ordinary physical Resources use the finite default pool; an explicit pool
+    key is only needed for genuinely special storage requirements.
     """
 
+    resource_definitions: Mapping[DefinitionId, ResourceDef] = field(default_factory=dict)
     stock: dict[tuple[SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
     reserved: dict[tuple[EntityId, SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
-    resource_storage_class: dict[DefinitionId, StorageClass] = field(default_factory=dict)
-    # Authoritative node-local base capacity is runtime State. Current
-    # physical/usable capacities are derived from it plus installed facilities.
-    base_storage_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float] = field(default_factory=dict)
-    physical_storage_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float] = field(default_factory=dict)
-    usable_storage_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float] = field(default_factory=dict)
+    physical_storage_capacity_t: dict[tuple[SpatialNodeId, StoragePoolKey], float] = field(default_factory=dict)
+    usable_storage_capacity_t: dict[tuple[SpatialNodeId, StoragePoolKey], float] = field(default_factory=dict)
+    storage_limiting_factors: dict[tuple[SpatialNodeId, StoragePoolKey], tuple[str, ...]] = field(default_factory=dict)
     external_occupancy: dict[tuple[EntityId, SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
 
-    def register_storage_class(self, resource_id: DefinitionId, storage_class: StorageClass) -> None:
-        existing = self.resource_storage_class.get(resource_id)
-        if existing is not None and existing != storage_class:
-            raise ValueError(f"storage class already defined for {resource_id}: {existing}")
-        self.resource_storage_class[resource_id] = storage_class
-
-    def add_capacity(self, operational_node_id: SpatialNodeId, storage_class: StorageClass, amount_t: float) -> None:
-        if amount_t < -1e-9:
-            raise ValueError("negative storage capacity")
-        key = (operational_node_id, storage_class)
-        self.base_storage_capacity_t[key] = self.base_storage_capacity_t.get(key, 0.0) + amount_t
-        self.physical_storage_capacity_t[key] = self.physical_storage_capacity_t.get(key, 0.0) + amount_t
-        self.usable_storage_capacity_t[key] = self.usable_storage_capacity_t.get(key, 0.0) + amount_t
+    def storage_pool_for_resource(self, resource_id: DefinitionId) -> StoragePoolKey:
+        definition = self.resource_definitions.get(resource_id)
+        if definition is None or definition.storage_pool_key is None:
+            return DEFAULT_STORAGE_POOL_KEY
+        return definition.storage_pool_key
 
     def set_capacity_snapshot(
         self,
-        physical_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float],
-        usable_capacity_t: dict[tuple[SpatialNodeId, StorageClass], float],
+        physical_capacity_t: dict[tuple[SpatialNodeId, StoragePoolKey], float],
+        usable_capacity_t: dict[tuple[SpatialNodeId, StoragePoolKey], float],
+        limiting_factors: dict[tuple[SpatialNodeId, StoragePoolKey], tuple[str, ...]] | None = None,
     ) -> None:
-        self.physical_storage_capacity_t = dict(physical_capacity_t)
+        self.physical_storage_capacity_t = {key: max(0.0, amount) for key, amount in physical_capacity_t.items()}
         self.usable_storage_capacity_t = {
-            key: min(physical_capacity_t.get(key, 0.0), max(0.0, amount))
+            key: min(self.physical_storage_capacity_t.get(key, 0.0), max(0.0, amount))
             for key, amount in usable_capacity_t.items()
         }
-        for key, amount in physical_capacity_t.items():
+        for key, amount in self.physical_storage_capacity_t.items():
             self.usable_storage_capacity_t.setdefault(key, amount)
+        self.storage_limiting_factors = {
+            key: tuple(dict.fromkeys(values))
+            for key, values in (limiting_factors or {}).items()
+            if key in self.physical_storage_capacity_t and values
+        }
 
-    def physical_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
-        storage_class = self.resource_storage_class.get(resource_id)
-        if storage_class is None:
-            return None
-        return self.physical_storage_capacity_t.get((operational_node_id, storage_class), 0.0)
+    def physical_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
+        pool_key = self.storage_pool_for_resource(resource_id)
+        return self.physical_storage_capacity_t.get((operational_node_id, pool_key), 0.0)
 
-    def usable_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
-        storage_class = self.resource_storage_class.get(resource_id)
-        if storage_class is None:
-            return None
-        return self.usable_storage_capacity_t.get((operational_node_id, storage_class), 0.0)
+    def usable_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
+        pool_key = self.storage_pool_for_resource(resource_id)
+        return self.usable_storage_capacity_t.get((operational_node_id, pool_key), 0.0)
 
-    def capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float | None:
-        """Current usable/admission capacity for this resource."""
+    def capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return self.usable_capacity(operational_node_id, resource_id)
 
-    def stored_in_class(self, operational_node_id: SpatialNodeId, storage_class: StorageClass) -> float:
+    def stored_in_pool(self, operational_node_id: SpatialNodeId, pool_key: StoragePoolKey) -> float:
         stock = sum(
             amount
             for (loc, resource_id), amount in self.stock.items()
-            if loc == operational_node_id and self.resource_storage_class.get(resource_id) == storage_class
+            if loc == operational_node_id and self.storage_pool_for_resource(resource_id) == pool_key
         )
         external = sum(
             amount
             for (_owner, loc, resource_id), amount in self.external_occupancy.items()
-            if loc == operational_node_id and self.resource_storage_class.get(resource_id) == storage_class
+            if loc == operational_node_id and self.storage_pool_for_resource(resource_id) == pool_key
         )
         return stock + external
 
@@ -118,8 +108,7 @@ class InventoryBook:
         if amount < -1e-9:
             raise ValueError("negative storage occupancy")
         state = self.admission_state(operational_node_id, resource_id)
-        free = state.admission_capacity_t
-        accepted = amount if free is None else min(amount, free)
+        accepted = min(amount, state.admission_capacity_t)
         if accepted <= 1e-12:
             return 0.0
         key = (owner_id, operational_node_id, resource_id)
@@ -139,41 +128,31 @@ class InventoryBook:
         else:
             self.external_occupancy[key] = left
 
-    def admission_state_for_class(
-        self, operational_node_id: SpatialNodeId, storage_class: StorageClass
+    def admission_state_for_pool(
+        self, operational_node_id: SpatialNodeId, pool_key: StoragePoolKey
     ) -> InventoryAdmissionState:
-        key = (operational_node_id, storage_class)
+        key = (operational_node_id, pool_key)
         physical = max(0.0, self.physical_storage_capacity_t.get(key, 0.0))
         usable = min(physical, max(0.0, self.usable_storage_capacity_t.get(key, 0.0)))
-        occupied = self.stored_in_class(operational_node_id, storage_class)
+        occupied = self.stored_in_pool(operational_node_id, pool_key)
         admission = max(0.0, usable - occupied)
         over_capacity = max(0.0, occupied - usable)
-        conditioning_required = usable + _EPS < physical
         blockers: list[str] = []
         if over_capacity > _EPS:
             blockers.append("storage_over_capacity")
         if admission <= _EPS:
             if occupied + _EPS >= physical:
-                blockers.append("physical_storage_full")
+                blockers.append("storage_capacity_unavailable" if physical <= _EPS else "physical_storage_full")
             elif occupied + _EPS >= usable:
-                blockers.append("usable_storage_full")
-        if conditioning_required:
-            blockers.append("storage_conditioning_required")
+                blockers.append("usable_storage_shortfall")
+        limiting = self.storage_limiting_factors.get(key, ())
         return InventoryAdmissionState(
-            operational_node_id, storage_class, physical, usable, occupied, admission,
-            over_capacity, conditioning_required, tuple(dict.fromkeys(blockers)),
+            operational_node_id, pool_key, physical, usable, occupied, admission,
+            over_capacity, tuple(dict.fromkeys(blockers)), limiting,
         )
 
-    def admission_state(
-        self, operational_node_id: SpatialNodeId, resource_id: DefinitionId
-    ) -> InventoryAdmissionState:
-        storage_class = self.resource_storage_class.get(resource_id)
-        if storage_class is None:
-            return InventoryAdmissionState(
-                operational_node_id, None, None, None,
-                self.amount(operational_node_id, resource_id), None, 0.0, False, (),
-            )
-        return self.admission_state_for_class(operational_node_id, storage_class)
+    def admission_state(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> InventoryAdmissionState:
+        return self.admission_state_for_pool(operational_node_id, self.storage_pool_for_resource(resource_id))
 
     def amount(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return self.stock.get((operational_node_id, resource_id), 0.0)
@@ -181,30 +160,24 @@ class InventoryBook:
     def reserved_total(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return sum(
             amount
-            for (owner, loc, res), amount in self.reserved.items()
+            for (_owner, loc, res), amount in self.reserved.items()
             if loc == operational_node_id and res == resource_id
         )
 
     def available(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return max(0.0, self.amount(operational_node_id, resource_id) - self.reserved_total(operational_node_id, resource_id))
 
-    def admit(
-        self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float
-    ) -> InventoryAdmissionResult:
+    def admit(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> InventoryAdmissionResult:
         if amount < -_EPS:
             raise ValueError("negative admission")
         requested = max(0.0, amount)
         before = self.admission_state(operational_node_id, resource_id)
-        accepted = requested if before.admission_capacity_t is None else min(
-            requested, before.admission_capacity_t
-        )
+        accepted = min(requested, before.admission_capacity_t)
         if accepted > _EPS:
             key = (operational_node_id, resource_id)
             self.stock[key] = self.stock.get(key, 0.0) + accepted
         after = self.admission_state(operational_node_id, resource_id)
-        return InventoryAdmissionResult(
-            requested, accepted, max(0.0, requested - accepted), before, after
-        )
+        return InventoryAdmissionResult(requested, accepted, max(0.0, requested - accepted), before, after)
 
     def add(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
         result = self.admit(operational_node_id, resource_id, amount)

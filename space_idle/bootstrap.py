@@ -9,9 +9,9 @@ from .validation import validate_catalog_coverage, validate_runtime_state, valid
 
 def _compose_base_application(*, apply_scenario: bool) -> GameApplication:
     scenario = build_standard_scenario_definition()
-    simulation = build_base_simulation()
-    simulation.scenario_id = scenario.id
     catalog = build_base_catalog()
+    simulation = build_base_simulation(catalog)
+    simulation.scenario_id = scenario.id
 
     # Static World / Content definitions must be valid independently of any
     # Scenario-owned runtime State.  This same validated composition is used

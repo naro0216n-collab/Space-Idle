@@ -208,7 +208,7 @@ def test_fleet_retirement_at_non_earth_node_uses_aggregate_salvage_headroom_and_
     assert state.progress_work == pytest.approx(required_work)
     assert state.phase is FleetRetirementPhase.DISMANTLING
 
-    storage_class = sim.inventory.resource_storage_class[ids.STRUCTURAL_COMPONENTS]
+    storage_pool_key = sim.inventory.storage_pool_for_resource(ids.STRUCTURAL_COMPONENTS)
     salvage = tuple(
         (resource_id, amount_per_unit * state.requested_units)
         for resource_id, amount_per_unit in definition.retirement.recovery_resources_per_unit
@@ -217,26 +217,26 @@ def test_fleet_retirement_at_non_earth_node_uses_aggregate_salvage_headroom_and_
     salvage_in_class = tuple(
         amount
         for resource_id, amount in salvage
-        if sim.inventory.resource_storage_class.get(resource_id) == storage_class
+        if sim.inventory.storage_pool_for_resource(resource_id) == storage_pool_key
     )
     salvage_total = sum(salvage_in_class)
     largest_component = max(salvage_in_class)
     assert salvage_total > largest_component
 
-    admission = sim.inventory.admission_state_for_class(ids.LUNAR_ORBIT, storage_class)
+    admission = sim.inventory.admission_state_for_pool(ids.LUNAR_ORBIT, storage_pool_key)
     assert admission.admission_capacity_t is not None
     target_headroom = (salvage_total + largest_component) / 2.0
     filler = ids.CONSTRUCTION_EQUIPMENT
     current_filler = sim.inventory.amount(ids.LUNAR_ORBIT, filler)
-    occupied = sim.inventory.stored_in_class(ids.LUNAR_ORBIT, storage_class)
+    occupied = sim.inventory.stored_in_pool(ids.LUNAR_ORBIT, storage_pool_key)
     sim.inventory.stock[(ids.LUNAR_ORBIT, filler)] = current_filler + max(
         0.0, admission.admission_capacity_t - target_headroom
     )
 
-    admission = sim.inventory.admission_state_for_class(ids.LUNAR_ORBIT, storage_class)
+    admission = sim.inventory.admission_state_for_pool(ids.LUNAR_ORBIT, storage_pool_key)
     assert admission.admission_capacity_t is not None
     assert largest_component < admission.admission_capacity_t < salvage_total
-    assert f"salvage_admission:{storage_class}" in sim.transport.fleet_retirement_blockers(
+    assert f"salvage_admission:{storage_pool_key}" in sim.transport.fleet_retirement_blockers(
         retirement_id, day=sim.day
     )
     assert sim.transport.fleet_pool_snapshot(

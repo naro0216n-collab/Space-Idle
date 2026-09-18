@@ -26,9 +26,9 @@ class ScenarioFacility:
 
 
 @dataclass(frozen=True)
-class ScenarioStorageCapacity:
+class ScenarioStorageInfrastructure:
     operational_node_id: SpatialNodeId
-    storage_class: str
+    storage_pool_key: str
     amount_t: float
 
 
@@ -82,7 +82,7 @@ class ScenarioDefinition:
     operational_node_ids: tuple[SpatialNodeId, ...] = ()
     surface_locations: tuple[ScenarioSurfaceLocation, ...] = ()
     facilities: tuple[ScenarioFacility, ...] = ()
-    storage_capacities: tuple[ScenarioStorageCapacity, ...] = ()
+    storage_infrastructure: tuple[ScenarioStorageInfrastructure, ...] = ()
     inventory_stock: tuple[ScenarioInventoryStock, ...] = ()
     fleet: tuple[ScenarioFleet, ...] = ()
     known_surface_resources: tuple[tuple[SurfaceCellId, DefinitionId], ...] = ()
@@ -105,8 +105,8 @@ class ScenarioDefinition:
                 location.core_cell_id,
             )
 
-        for row in self.storage_capacities:
-            sim.inventory.add_capacity(row.operational_node_id, row.storage_class, row.amount_t)
+        for row in self.storage_infrastructure:
+            sim.storage.set_infrastructure_capacity(row.operational_node_id, row.storage_pool_key, row.amount_t)
         for row in self.facilities:
             sim.facilities.install(
                 row.definition_id,
@@ -114,6 +114,7 @@ class ScenarioDefinition:
                 site_cell_id=row.site_cell_id,
                 invested_resources=dict(row.invested_resources),
             )
+        sim.refresh_storage()
         for row in self.inventory_stock:
             sim.inventory.add(row.operational_node_id, row.resource_id, row.amount_t)
         for row in self.fleet:

@@ -263,9 +263,9 @@ class ExtractionService:
                 continue
             requirements = [ServiceCapacityRequirement(self.service_type(spec.resource_id), nominal)]
             output = full_output.get(facility.id, 0.0)
-            storage_class = inventory.resource_storage_class.get(spec.output_resource_id)
-            if storage_class is not None and output > 1e-12:
-                requirements.append(StockOrPoolAdmissionRequirement(storage_class, output))
+            pool_key = inventory.storage_pool_for_resource(spec.output_resource_id)
+            if output > 1e-12:
+                requirements.append(StockOrPoolAdmissionRequirement(pool_key, output))
             rows.append(ExecutionRequirementBundle(
                 id=self.execution_bundle_id(facility.id),
                 owner_kind="extraction",

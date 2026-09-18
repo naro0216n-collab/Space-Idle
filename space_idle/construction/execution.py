@@ -28,15 +28,15 @@ class ConstructionExecutionMixin:
         return self.facilities.decommission_salvage(project.target.facility_id)
 
     def _decommission_admission_requirements(self, project: ConstructionProject):
-        by_class: dict[str, float] = {}
+        by_pool: dict[str, float] = {}
         for resource_id, amount in self.decommission_salvage_for_project(project).items():
-            storage_class = self.inventory.resource_storage_class.get(resource_id)
-            if storage_class is None or amount <= 1e-12:
+            pool_key = self.inventory.storage_pool_for_resource(resource_id)
+            if amount <= 1e-12:
                 continue
-            by_class[storage_class] = by_class.get(storage_class, 0.0) + amount
+            by_pool[pool_key] = by_pool.get(pool_key, 0.0) + amount
         return tuple(
-            StockOrPoolAdmissionRequirement(storage_class, amount)
-            for storage_class, amount in sorted(by_class.items())
+            StockOrPoolAdmissionRequirement(storage_pool_key, amount)
+            for storage_pool_key, amount in sorted(by_pool.items())
         )
 
     def _finish_project(self, project: ConstructionProject) -> None:

@@ -16,7 +16,9 @@ def build_base_catalog() -> GameCatalog:
         METAL_FEEDSTOCK: ResourceDef(METAL_FEEDSTOCK, "金属原料", category="bulk"),
         AGGREGATE: ResourceDef(AGGREGATE, "鉱物骨材", category="bulk"),
         METAL_ORE: ResourceDef(METAL_ORE, "金属鉱石", category="bulk"),
-        WATER: ResourceDef(WATER, "水"), OXYGEN: ResourceDef(OXYGEN, "酸素"), HYDROGEN: ResourceDef(HYDROGEN, "水素"),
-        PROPELLANT: ResourceDef(PROPELLANT, "化学推進剤"),
+        WATER: ResourceDef(WATER, "水"),
+        OXYGEN: ResourceDef(OXYGEN, "酸素", storage_pool_key="cryogenic"),
+        HYDROGEN: ResourceDef(HYDROGEN, "水素", storage_pool_key="cryogenic"),
+        PROPELLANT: ResourceDef(PROPELLANT, "化学推進剤", storage_pool_key="cryogenic"),
     }
     return GameCatalog(resources)
