@@ -6,6 +6,7 @@ from .application_commands import (
     CreateResearchProviderAssignment, ResizeResearchProviderAssignment,
     SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment,
     ResumeResearchProviderAssignment, ReleaseResearchProviderAssignment,
+    CreateSurveyProviderAssignment, ResizeSurveyProviderAssignment, ReleaseSurveyProviderAssignment,
     SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
 )
 from .exploration_models import KnowledgeLevel
@@ -100,6 +101,24 @@ class ProgressionCommandHandlerMixin:
                 )
             else:
                 sim.scientific_exploration.unassign_fleet(exploration_id, day=sim.day)
+            return CommandResult()
+        if isinstance(command, (
+            CreateSurveyProviderAssignment, ResizeSurveyProviderAssignment, ReleaseSurveyProviderAssignment,
+        )):
+            if sim.survey is None:
+                raise RuntimeError("survey is not configured")
+            if isinstance(command, CreateSurveyProviderAssignment):
+                assignment_id = sim.survey.create_provider_assignment(
+                    DefinitionId(command.provider_definition_id),
+                    self._require_operational_node(command.operational_node_id),
+                    int(command.quantity),
+                )
+                return CommandResult(str(assignment_id))
+            assignment_id = EntityId(command.assignment_id)
+            if isinstance(command, ResizeSurveyProviderAssignment):
+                sim.survey.resize_provider_assignment(assignment_id, int(command.quantity))
+            else:
+                sim.survey.release_provider_assignment(assignment_id, day=sim.day)
             return CommandResult()
         if isinstance(command, (StartSurvey, PauseSurvey, ResumeSurvey, SetSurveyPriority)):
             if sim.survey is None:

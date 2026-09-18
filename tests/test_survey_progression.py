@@ -2,17 +2,23 @@ from __future__ import annotations
 
 import pytest
 
+from space_idle.validation import validate_simulation_configuration
+from space_idle.validation_support import ConfigurationError
+
 from space_idle import (
-    AdvanceTime, ApplicationError, GetSurveys, PauseSurvey, ResumeSurvey, StartSurvey,
+    AdvanceTime, ApplicationError, CreateSurveyProviderAssignment, GetSurveys, PauseSurvey,
+    ReleaseSurveyProviderAssignment, ResizeSurveyProviderAssignment, ResumeSurvey, StartSurvey,
     build_game_application,
 )
 from space_idle.content import base_ids as ids
 from space_idle.facilities import FacilityDef
+from space_idle.content import base_requirements as req
 from space_idle.shared import DefinitionId
 from space_idle.survey import (
     KnowledgeLevel,
-    SurveyCoverage,
     SurveyObservationModeSpec,
+    SurveyReachScope,
+    SurveyReachSpec,
     SurveyProviderSourceKind,
     SurveyProviderSpec,
     SurveyTarget,
@@ -38,7 +44,7 @@ def test_survey_stops_at_selected_provider_mode_knowledge_limit_and_reveals_prec
     mode = SurveyObservationModeSpec(
         mode_id,
         100.0,
-        SurveyCoverage.BODY_REMOTE,
+        SurveyReachSpec(SurveyReachScope.SAME_BODY),
         limit,
         estimate_uncertainty_fraction=0.31,
         measurement_precision_fraction=0.07,
@@ -73,7 +79,11 @@ def test_survey_stops_at_selected_provider_mode_knowledge_limit_and_reveals_prec
     assert sim.survey.progress(*key) == target_threshold
     assert sim.survey.knowledge_level(*key) == limit
     assert not sim.survey.is_complete(*key)
-    assert sim.survey.visible_potential(*key) is not None
+    estimated = sim.survey.visible_potential(*key)
+    actual = sim.survey.actual_potential(*key)
+    assert estimated is not None
+    assert estimated != pytest.approx(actual)
+    assert abs(estimated - actual) <= actual * 0.31 + 1e-12
     assert sim.survey.visible_potential_precision_fraction(*key) == 0.31
     assert sim.survey.start_blockers(
         ids.LUNAR_ORBIT,
@@ -97,7 +107,39 @@ def test_survey_stops_at_selected_provider_mode_knowledge_limit_and_reveals_prec
     assert row.start_options == ()
 
 
-def test_fleet_backed_survey_commitment_releases_on_pause_boundary_and_recommits_on_resume():
+def test_survey_configuration_rejects_mode_capability_missing_from_provider_source():
+    app = build_game_application()
+    sim = app._simulation
+    provider_id = ids.LUNAR_RESOURCE_SURVEY_ORBITER
+    provider = sim.survey.provider(provider_id)
+    mode = provider.observation_modes[0]
+    invalid_mode = SurveyObservationModeSpec(
+        mode.id,
+        mode.survey_rate,
+        mode.reach,
+        mode.max_knowledge_level,
+        mode.estimate_uncertainty_fraction,
+        mode.measurement_precision_fraction,
+        site_requirements=mode.site_requirements,
+        required_source_capabilities=frozenset(("capability.not_supplied",)),
+        minimum_source_units=mode.minimum_source_units,
+    )
+    sim.survey.providers[provider_id] = SurveyProviderSpec(
+        provider.id,
+        provider.source_kind,
+        provider.source_definition_id,
+        (invalid_mode,),
+        capacity_units_per_source_per_day=provider.capacity_units_per_source_per_day,
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="requires capabilities not supplied by its provider source",
+    ):
+        validate_simulation_configuration(sim)
+
+
+def test_fleet_backed_survey_provider_assignment_owns_fleet_independently_of_campaign_pause():
     app = build_game_application()
     sim = app._simulation
     vehicle_id = ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT
@@ -109,39 +151,60 @@ def test_fleet_backed_survey_commitment_releases_on_pause_boundary_and_recommits
     sim.transport.add_fleet_units(vehicle_id, 1, ids.LUNAR_ORBIT, day=sim.day)
     assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 1
 
-    app.execute(StartSurvey(
-        str(ids.LUNAR_ORBIT), str(provider_id), mode_id,
-        str(first_key[0]), str(first_key[1]), int(KnowledgeLevel.PRESENCE_PROBABILITY),
+    with pytest.raises(ApplicationError, match="insufficient free fleet units"):
+        app.execute(CreateSurveyProviderAssignment(
+            str(provider_id), str(ids.LUNAR_ORBIT), 2
+        ))
+    assert sim.survey.provider_assignments == {}
+    assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 1
+
+    result = app.execute(CreateSurveyProviderAssignment(
+        str(provider_id), str(ids.LUNAR_ORBIT), 1
     ))
-    campaign = sim.survey.campaigns[first_key]
-    commitment_id = campaign.fleet_commitment_ref
-    assert commitment_id is not None
-    commitment = sim.transport.fleet_commitment(commitment_id)
+    assignment_id = result.created_id
+    assignment = sim.survey.provider_assignments[next(
+        key for key in sim.survey.provider_assignments if str(key) == assignment_id
+    )]
+    commitment = sim.transport.fleet_commitment(assignment.fleet_commitment_ref)
     assert commitment is not None
     assert commitment.quantity == 1
     assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 0
 
-    with pytest.raises(ApplicationError, match="fleet_units"):
+    for key in (first_key, second_key):
         app.execute(StartSurvey(
             str(ids.LUNAR_ORBIT), str(provider_id), mode_id,
-            str(second_key[0]), str(second_key[1]), int(KnowledgeLevel.PRESENCE_PROBABILITY),
+            str(key[0]), str(key[1]), int(KnowledgeLevel.PRESENCE_PROBABILITY),
         ))
+    assert set(sim.survey.campaigns) >= {first_key, second_key}
+    decision = sim.tick_decision_projection()
+    allocated = sum(
+        decision.allocations.execution.allocated(sim.survey.execution_bundle_id(*key))
+        for key in (first_key, second_key)
+    )
+    assert allocated <= sim.survey.provider_capacity_at(
+        provider_id, ids.LUNAR_ORBIT, day=sim.day
+    ) + 1e-12
+
+    with pytest.raises(ApplicationError, match="insufficient free fleet units"):
+        app.execute(ResizeSurveyProviderAssignment(assignment_id, 2))
+    assert sim.survey.provider_assignment_quantity(assignment.id) == 1
 
     progress_before_pause = sim.survey.progress(*first_key)
     app.execute(PauseSurvey(str(first_key[0]), str(first_key[1])))
-    assert campaign.fleet_commitment_ref == commitment_id
-    assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 0
-
     app.execute(AdvanceTime(1))
-    assert campaign.paused is True
-    assert campaign.fleet_commitment_ref is None
-    assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 1
+    assert sim.survey.campaigns[first_key].paused is True
+    assert sim.transport.fleet_commitment(assignment.fleet_commitment_ref) is not None
+    assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 0
     assert sim.survey.progress(*first_key) == pytest.approx(progress_before_pause)
+    assert sim.survey.progress(*second_key) > 0.0
 
     app.execute(ResumeSurvey(str(first_key[0]), str(first_key[1])))
-    assert campaign.paused is False
-    assert campaign.fleet_commitment_ref is not None
-    assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 0
+    assert sim.survey.campaigns[first_key].paused is False
+
+    app.execute(ReleaseSurveyProviderAssignment(assignment_id))
+    assert sim.survey.provider_assignments == {}
+    assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 1
+    assert "survey_capacity" in sim.survey.blockers(*first_key, day=sim.day)
 
 
 def test_survey_shared_provider_capacity_only_reallocates_among_requested_campaigns():
@@ -173,3 +236,49 @@ def test_survey_shared_provider_capacity_only_reallocates_among_requested_campai
     app.execute(AdvanceTime(1))
     assert set(sim.survey.campaigns) == set(requested)
     assert len(sim.survey.campaigns) == 2
+
+
+def test_survey_reach_and_dynamic_site_eligibility_are_domain_authoritative_during_execution():
+    app = build_game_application()
+    sim = app._simulation
+    provider_source_id = DefinitionId("test.facility.cross_body_survey")
+    provider_id = DefinitionId("test.survey_provider.cross_body")
+    mode_id = "same_system_supported_observation"
+    sim.facilities.definitions[provider_source_id] = FacilityDef(
+        provider_source_id, "Cross-body survey fixture", installation_requirements=req.ORBIT_SITE,
+        operating_requirements=req.ORBIT_SITE,
+    )
+    sim.facilities.install(provider_source_id, ids.LEO)
+    support_id = sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    mode = SurveyObservationModeSpec(
+        mode_id,
+        2.0,
+        SurveyReachSpec(SurveyReachScope.SAME_SYSTEM),
+        KnowledgeLevel.PRESENCE_PROBABILITY,
+        estimate_uncertainty_fraction=0.2,
+        measurement_precision_fraction=0.1,
+        site_requirements=req.with_capabilities(req.ORBIT_SITE, "spacecraft_servicing"),
+    )
+    sim.survey.providers[provider_id] = SurveyProviderSpec(
+        provider_id, SurveyProviderSourceKind.FACILITY, provider_source_id, (mode,)
+    )
+    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
+    sim.survey.knowledge_progress[key] = 0.0
+
+    # SAME_SYSTEM is a Content reach rule, so cross-body observation is not
+    # rejected by a hard-coded same-body shortcut.
+    assert sim.survey.start_blockers(
+        ids.LEO, provider_id, mode_id, *key, KnowledgeLevel.PRESENCE_PROBABILITY, sim.day
+    ) == ()
+    app.execute(StartSurvey(
+        str(ids.LEO), str(provider_id), mode_id, str(key[0]), str(key[1]),
+        int(KnowledgeLevel.PRESENCE_PROBABILITY),
+    ))
+    before = sim.survey.progress(*key)
+
+    # Eligibility is re-evaluated by execution, not just by start/query.
+    sim.facilities.pause(support_id)
+    blockers = sim.survey.blockers(*key, day=sim.day)
+    assert any(row.startswith("survey_eligibility:site:") for row in blockers)
+    app.execute(AdvanceTime(1))
+    assert sim.survey.progress(*key) == pytest.approx(before)

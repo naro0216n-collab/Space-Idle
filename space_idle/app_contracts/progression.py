@@ -58,6 +58,19 @@ class ReleaseResearchProviderAssignment:
     assignment_id: str
 
 @dataclass(frozen=True)
+class CreateSurveyProviderAssignment:
+    provider_definition_id: str
+    operational_node_id: str
+    quantity: int
+@dataclass(frozen=True)
+class ResizeSurveyProviderAssignment:
+    assignment_id: str
+    quantity: int
+@dataclass(frozen=True)
+class ReleaseSurveyProviderAssignment:
+    assignment_id: str
+
+@dataclass(frozen=True)
 class StartSurvey:
     provider_operational_node_id: str
     provider_definition_id: str

@@ -452,7 +452,7 @@ Transport AllocationはVehicleとorigin / destinationに加え、反復Service�
 
 Transport AllocationのProvisioning Priorityは1〜5、標準値3とする。これはfree Fleetを複数Transport Allocationへ配備するときの優先順位であり、Cargo需要のActivity Priorityとは別の判断とする。Priority変更だけで既に別Activityへ排他的にcommitされたFleetを奪わない。
 
-Transport以外のScientific Exploration、Fleet-backed Survey、Fleet-backed Research Provider等もFleetを利用する場合は同じFleet Domainの排他的commitmentを利用する。ただし、それらへTransportの自動Provisioning Priority semanticsを一律に適用しない。各Activityは開始・割当Command等、自身のゲーム上の操作から必要unitをcommitする。
+Transport以外のScientific ExplorationやFleet-backed ProviderもFleetを利用する場合は同じFleet Domainの排他的commitmentを利用する。ただし、それらへTransportの自動Provisioning Priority semanticsを一律に適用しない。one-shot Scientific ExplorationはCampaign自身が必要unitをcommitし、継続能力を供給するFleet-backed Research / Survey ProviderはProvider AssignmentがFleet commitmentを所有する。Provider Assignmentと、その能力を消費するResearch / Survey Activityを同じStateへ混在させない。
 
 Transport AllocationのCapacityは「どれだけ輸送能力を用意するか」を表し、物流需要からFleetを無条件に増員しない。Fleet不足、推進剤不足、整備能力不足、Infrastructure不足等は別々のlimiting factorとして示す。
 
@@ -641,7 +641,7 @@ Knowledge Levelごとにプレイヤーへ公開できる情報を区別する�
 
 Survey手段は観測位置・方式ごとに到達範囲と到達可能Knowledge Levelを持つ。軌道Remote SurveyはSurface Locationが存在しなくても対象天体の広域Cellを観測でき、最初のLocation候補比較に必要な粗いKnowledgeを与える。地表Surveyや近接観測は既設Location、展開Facility / Fleet、到達可能範囲等を必要とする代わりに、より高いKnowledge Levelまで精査できる。
 
-Survey開始条件を単なる「providerとtargetが同一天体」に縮退させない。ProviderのObservation / Sensor Capability、Spatial context、target coverage、必要Operation、到達可能Knowledge Levelから可否と進行を決める。Fleetを使用するSurveyはFleet Domainへ必要unitを排他的にcommitし、Survey Domain自身がFleet数量を重複所有しない。Transport用Provisioning PriorityをSurveyへ一律流用せず、Survey開始・配分というActivity固有のPlayer intentからcommitする。Fleet-backed SurveyをPauseした場合は観測progressを保持して新規観測を止め、所在Nodeで安全に解放可能なFleetはcanonical boundaryでfree poolへreleaseする。開始済みMovementがある場合は先にその物理obligationをsettleし、Resume時は必要unitを再commitする。
+Survey開始条件を単なる「providerとtargetが同一天体」に縮退させない。ProviderのObservation / Sensor Capability、Spatial context、target coverage、必要Operation、到達可能Knowledge Levelから可否と進行を決める。Fleet-backed Survey Providerは、継続的な観測能力へFleetを使う `Survey Provider Assignment` を明示し、そのAssignmentがFleet Domainの排他的commitmentを参照する。Assignmentはprovider、所在Operational Node、対象Vehicle、Fleet Commitment参照を所有し、割当unit数量そのものはFleet Domainだけがauthoritativeに所有する。Assignmentの作成・数量変更はPlayerのFleet配備判断であり、必要差分をfree Fleetから原子的にcommitできなければStateを部分変更しない。Transport用Provisioning Priorityを流用しない。Survey CampaignはFleet Commitmentを所有せず、Provider Assignmentから導出されるSurvey Service CapacityをActivity Priorityで競合利用する。Campaign Pauseはprogressを保持して観測需要だけを停止し、Provider Fleetを自動releaseしない。Fleetを他用途へ戻す操作はProvider Assignment releaseとして分離する。Movementを伴う有限Survey missionは共有Providerへ押し込まず、Scientific Exploration等と同じone-shot Movement-backed Activityとして表現する。
 
 Playerが指定した対象のうち、そのproviderで到達可能な目標Knowledge Levelまで完了した対象は能力配分対象から外し、余剰Survey能力を同じ指定範囲内の未完了対象へ再配分できる。未指定targetを自動追加しない。地球の一般鉱物等、開始時点で既知とする資源はSurface Cellごとの初期Knowledgeを高い状態で定義してよい。
 
@@ -678,7 +678,7 @@ Simulationは1 game dayをcanonicalな状態更新単位とする。一日の開
 
 プレイヤー判断として、研究対象、設備投資、Activity Priority、拠点間物流能力、Vehicle建造とFleet用途配分、Transport Allocation目標とProvisioning Priority、Target Stock、Logistics Policy、External Resource Market Order、輸送方式、新地域への進出、発電方式、技術経路、Asset廃止等を残す。
 
-施設、建設案件、研究、Survey、Scientific Exploration、Transport Allocation等は必要に応じて停止・再開できる。PauseはCancelと区別し、設定と成立済みprogressを保持し、開始済みMovement、dispatch済みCargo、Market Commitment等の物理obligationを巻き戻さない。一方、Pause中もすべての排他的Asset commitmentを永久保持するという共通ルールにはしない。各Domainは安全に解放可能なcommitmentを明示状態遷移でreleaseできる。
+施設、建設案件、研究、Survey、Scientific Exploration、Transport Allocation等は必要に応じて停止・再開できる。PauseはCancelと区別し、設定と成立済みprogressを保持し、開始済みMovement、dispatch済みCargo、Market Commitment等の物理obligationを巻き戻さない。一方、Pause中もすべての排他的Asset commitmentを永久保持するという共通ルールにはしない。継続能力を供給するResearch / Survey Provider AssignmentではActivity PauseとFleet releaseを分離し、one-shot CampaignやTransportでは各Domainが物理obligationに沿ったrelease / completion transitionを明示する。
 
 Transport AllocationのPauseはtargetとPolicyを保持しつつ新規dispatch / provisioningを止め、既に運用中のFleetは必要なrecovery / releaseを経てfree poolへ戻す。再開時は保持したtargetに対して再度Provisioningする。Scientific Explorationのような一回限りCampaignは、PauseだけでCampaign Fleetを別用途へ解放せず、必要ならAbort / Return / Cancel等の明示transitionを利用する。
 
@@ -721,8 +721,9 @@ LLMはプレイヤーの主要判断を代行させない。
 - 手動Cargo / 特殊Movement
 - Research開始・停止・再開・Activity Priority・current `stage_id` のPrototype / Demonstration Execution Context設定
 - Fleet-backed Research Provider Assignment作成・停止・再開・Fleet release
+- Fleet-backed Survey Provider Assignment作成・Fleet unit数変更・release
 - Scientific Exploration開始・停止・再開・Fleet unit割当・Abort / Return / completion disposition設定
-- Resource Survey開始・停止・再開・target / goal Knowledge Level・provider / Fleet unit割当設定
+- Resource Survey開始・停止・再開・target / goal Knowledge Level・provider設定
 - 位置依存FacilityのSurface Cell配置
 
 主要Query例：
@@ -747,7 +748,7 @@ LLMはプレイヤーの主要判断を代行させない。
 - Research Provider / Fleet-backed Assignment / Fleet commitment / RP generation・Research execution供給量
 - Research Projectのcurrent typed Stage、progress、Execution Context、Requirement、Reservation、blocker
 - Scientific Explorationのphase / science progress / RP budget / Fleet commitment / disposition
-- Resource Surveyのtarget、progress、provider、Fleet commitment、到達可能Knowledge Level
+- Resource Surveyのtarget、progress、provider、到達可能Knowledge LevelとSurvey Provider Assignment / Fleet commitment
 - Location領域、developed-cell Environment summary、Surface Infrastructure負荷、Gateway / access anchor候補
 - Operational Node集合のCURRENT / FORECAST Resource dependencyと必要ならService dependency
 - Bottleneck / blocker
@@ -779,7 +780,7 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 - 維持需要が累積投入Resourceとmaintenance fractionから決定論的に導出される。
 - Extraction responseがCapacityに対して単調非減少・限界収益逓減で、Content固有任意関数へ分岐しない。
 - Surface LocationのEnvironment / Movement / Surface Infrastructureをcore cellへ暗黙縮退させない。
-- Survey Provider coverage / max Knowledge LevelとKnowledge levelごとの公開情報が一貫する。
+- Survey Provider coverage / max Knowledge LevelとKnowledge levelごとの公開情報が一貫し、Fleet-backed Survey Provider AssignmentとCampaignのService Capacity消費が別State ownershipとして成立する。
 - CURRENT / FORECAST external-dependency Analyticsをauthoritative Stateとして保存しない。
 - Save / Load後の将来進行、通常速度・高速進行・Offlineの同game time進行が一致する。
 - Location固有ID、Vehicle用途名、暫定Content値によるGeneric Core分岐が存在しない。

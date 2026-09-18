@@ -20,8 +20,15 @@ from space_idle import (
 )
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
+from space_idle.content import base_requirements as req
 from space_idle.persistence import load_game, save_game
-from space_idle.founding import DeploymentRecipe, FoundingResourceRequirement
+from space_idle.founding import (
+    DeploymentRecipe, FoundingFacilityDeployment, FoundingResourceRequirement,
+    NonSurfaceOperationalNodeTargetSpec,
+)
+from space_idle.facilities import FacilityDef
+from space_idle.power import FixedGeneration, PowerSpec
+from space_idle.storage import StorageProviderSpec
 from space_idle.shared import DefinitionId, EntityId, SpatialNodeId
 from space_idle.spatial import CharacteristicTransportGeometry, SpatialNodeDef, SpatialNodeKind
 from space_idle.spatial_claims import SurfaceCellClaim
@@ -29,7 +36,10 @@ from space_idle.spatial_claims import SurfaceCellClaim
 
 def _survey_cell_to_l2(sim, cell_id):
     target = sim.survey.targets[(cell_id, ids.REGOLITH)]
-    sim.survey.knowledge_progress[(target.cell_id, target.resource_id)] = target.thresholds[1]
+    key = (target.cell_id, target.resource_id)
+    sim.survey.knowledge_progress[key] = target.thresholds[1]
+    sim.survey.estimated_potential[key] = sim.survey.actual_potential(*key) * 0.9
+    sim.survey.knowledge_precision_fraction[key] = 0.35
     assert sim.survey.knowledge_level(cell_id, ids.REGOLITH) >= 2
 
 
@@ -153,7 +163,8 @@ def test_non_surface_operational_node_founding_uses_common_lifecycle_without_ear
     sim.founding.deployment_recipes[recipe_id] = DeploymentRecipe(
         recipe_id, "Test orbital deployment", (), 0.0, "construction"
     )
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 1.0)
+    sim.inventory.add(ids.LEO, ids.PROPELLANT, 2.0)
+    sim.transport.add_fleet_units(ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO, day=sim.day)
 
     result = app.execute(PlanOperationalNodeFounding(
         staging_node_id=str(ids.LEO),
@@ -171,6 +182,18 @@ def test_non_surface_operational_node_founding_uses_common_lifecycle_without_ear
     assert target_id in sim.graph.nodes
     assert not sim.graph.has_operational_node(target_id)
     assert target_id not in sim.graph.locations
+
+    with pytest.raises(ApplicationError, match="target_claimed"):
+        app.execute(PlanOperationalNodeFounding(
+            staging_node_id=str(ids.LEO),
+            display_name="Duplicate orbital outpost",
+            target_spec=NonSurfaceOperationalNodeFoundingTarget(
+                "non_surface_operational_node", str(target_id)
+            ),
+            deployment_recipe_id=str(recipe_id),
+            vehicle_definition_id=str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+        ))
+    assert len([p for p in sim.founding.projects.values() if p.status.value == "preparing"]) == 1
 
     app.execute(AdvanceTime(1))
     assert project.status.value == "complete"
@@ -330,6 +353,88 @@ def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_
         stock_before_cancel + staged
     )
 
+def test_founding_target_preflight_uses_facility_site_and_powered_inventory_contracts_atomically():
+    app = build_game_application()
+    sim = app._simulation
+
+    def orbital_target(name: str, offset: float) -> SpatialNodeId:
+        target_id = SpatialNodeId(name)
+        sim.graph.add(SpatialNodeDef(
+            target_id, name, ids.SOL_SYSTEM,
+            CharacteristicTransportGeometry((9000.0 + offset, 0.0, 0.0), (0.1, 0.0, 0.0)),
+            body_id=ids.EARTH_BODY, kind=SpatialNodeKind.ORBITAL, inherits_parent_environment=False,
+        ))
+        return target_id
+
+    bad_site_facility = DefinitionId("test.facility.founding_bad_site")
+    sim.facilities.definitions[bad_site_facility] = FacilityDef(
+        bad_site_facility, "Bad-site founding fixture",
+        installation_requirements=req.SURFACE_SITE, operating_requirements=req.SURFACE_SITE,
+    )
+    bad_site_recipe = DefinitionId("test.deployment_recipe.bad_site")
+    sim.founding.deployment_recipes[bad_site_recipe] = DeploymentRecipe(
+        bad_site_recipe, "Bad-site deployment",
+        (FoundingFacilityDeployment(bad_site_facility),), 0.0, "construction",
+    )
+    bad_site_target = orbital_target("test.node.founding_bad_site", 0.0)
+    failures = sim.founding.planning_failures(
+        ids.LEO,
+        NonSurfaceOperationalNodeTargetSpec(bad_site_target),
+        bad_site_recipe, ids.REUSABLE_ORBITAL_CARGO_TUG, sim.day,
+    )
+    assert any(row.code == "facility_installation" for row in failures)
+    assert not sim.graph.has_operational_node(bad_site_target)
+
+    storage_facility = DefinitionId("test.facility.founding_powered_storage")
+    sim.facilities.definitions[storage_facility] = FacilityDef(
+        storage_facility, "Powered founding storage fixture",
+        installation_requirements=req.ORBIT_SITE, operating_requirements=req.ORBIT_SITE,
+    )
+    sim.storage.providers[storage_facility] = StorageProviderSpec(
+        storage_facility, {"cryogenic": 10.0}, frozenset(("cryogenic",))
+    )
+    sim.power.specs[storage_facility] = PowerSpec(load_mw=1.0)
+    storage_recipe = DefinitionId("test.deployment_recipe.powered_storage")
+    sim.founding.deployment_recipes[storage_recipe] = DeploymentRecipe(
+        storage_recipe, "Powered-storage deployment",
+        (FoundingFacilityDeployment(storage_facility),), 0.0, "construction",
+        initial_inventory=(FoundingResourceRequirement(ids.PROPELLANT, 1.0),),
+    )
+    blocked_target = orbital_target("test.node.founding_unpowered_storage", 100.0)
+    blocked_failures = sim.founding.planning_failures(
+        ids.LEO,
+        NonSurfaceOperationalNodeTargetSpec(blocked_target),
+        storage_recipe, ids.REUSABLE_ORBITAL_CARGO_TUG, sim.day,
+    )
+    assert any(row.code == "initial_inventory_admission" for row in blocked_failures)
+    assert not sim.graph.has_operational_node(blocked_target)
+
+    # A valid plan can still lose eligibility while in transit. Arrival must fail
+    # before any target-side State is materialized.
+    sim.power.specs[storage_facility] = PowerSpec(FixedGeneration(2.0), load_mw=1.0)
+    target_id = orbital_target("test.node.founding_atomic_preflight", 991000.0)
+    sim.inventory.add(ids.LEO, ids.PROPELLANT, 5.0)
+    project_id = app.execute(PlanOperationalNodeFounding(
+        staging_node_id=str(ids.LEO),
+        display_name="Atomic preflight outpost",
+        target_spec=NonSurfaceOperationalNodeFoundingTarget(
+            "non_surface_operational_node", str(target_id)
+        ),
+        deployment_recipe_id=str(storage_recipe),
+        vehicle_definition_id=str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+    )).created_id
+    project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)
+    execution = _advance_founding_to_deployment(app, project)
+    sim.power.specs[storage_facility] = PowerSpec(load_mw=1.0)
+    remaining = execution.completion_day - sim.day
+    assert remaining > 0
+    with pytest.raises(ApplicationError, match="founding settlement preflight failed"):
+        app.execute(AdvanceTime(remaining))
+    assert not sim.graph.has_operational_node(target_id)
+    assert not sim.facilities.all_at(target_id)
+    assert sim.inventory.amount(target_id, ids.PROPELLANT) == pytest.approx(0.0)
+
+
 def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     app = build_game_application()
     cell_id = ids.MOON_CELL_FARSIDE_HIGHLANDS
@@ -365,9 +470,22 @@ def test_founding_persistence_preserves_payload_ownership_and_materializes_locat
         current = build_game_application_for_load() if for_load else build_game_application()
         current_sim = current._simulation
         base = current_sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+        first_deployment = base.deployed_facilities[0]
+        duplicated_investment = replace(
+            first_deployment,
+            invested_resources=(
+                FoundingResourceRequirement(ids.STRUCTURAL_COMPONENTS, 0.4),
+                FoundingResourceRequirement(ids.STRUCTURAL_COMPONENTS, 1.0),
+                *tuple(
+                    row for row in first_deployment.invested_resources
+                    if row.resource_id != ids.STRUCTURAL_COMPONENTS
+                ),
+            ),
+        )
         current_sim.founding.deployment_recipes[recipe_id] = replace(
             base,
             id=recipe_id,
+            deployed_facilities=(duplicated_investment, *base.deployed_facilities[1:]),
             initial_inventory=(
                 FoundingResourceRequirement(ids.STRUCTURAL_COMPONENTS, 0.4),
             ),

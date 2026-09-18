@@ -153,9 +153,7 @@ def build_base_simulation() -> Simulation:
         "founding", lambda owner_id: owner_id in founding.projects
     )
     transport.register_fleet_commitment_owner_resolver(
-        "survey", lambda owner_id: any(
-            survey.campaign_owner_id(*key) == owner_id for key in survey.campaigns
-        )
+        "survey_provider_assignment", lambda owner_id: owner_id in survey.provider_assignments
     )
     transport.register_fleet_commitment_owner_resolver(
         "scientific_exploration", lambda owner_id: owner_id in scientific_exploration.campaigns

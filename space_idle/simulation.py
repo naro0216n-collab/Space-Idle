@@ -571,8 +571,6 @@ class Simulation:
         self._boundary_used_by_constraint = {}
         self.market.replenish_to_day(self.day)
         self.transport.advance_fleet_state(self.day)
-        if self.survey is not None:
-            self.survey.settle_boundary(self.day)
         if self.scientific_exploration is not None:
             self.scientific_exploration.settle_movement_arrivals(self.day)
         if self.founding is not None and self.founding.settle_arrivals(self.day):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 import math
@@ -105,6 +106,17 @@ class FacilityBook:
     environment: EnvironmentResolver
     facilities: dict[EntityId, FacilityState] = field(default_factory=dict)
     _counter: int = 0
+
+    def copy_for_environment(self, environment: EnvironmentResolver) -> "FacilityBook":
+        """Create an isolated mutable facility snapshot bound to another environment.
+
+        Planning/preflight code can evaluate normal Facility placement and Site
+        contracts without depending on FacilityBook's internal identity counter.
+        """
+
+        return FacilityBook(
+            self.definitions, environment, deepcopy(self.facilities), self._counter
+        )
 
     def placement_failures(
         self,

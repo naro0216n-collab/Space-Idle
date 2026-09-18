@@ -8,11 +8,13 @@ import pytest
 from space_idle import (
     AdvanceTime,
     CreateResearchProviderAssignment,
+    CreateSurveyProviderAssignment,
     CreateTransportAllocation,
     DevelopSurfaceCell,
     GetDependencyAnalytics,
     GetOperationalNode,
     GetResearch,
+    GetSurveys,
     GetWorld,
     PauseBuild,
     PauseFacility,
@@ -546,6 +548,52 @@ def test_research_authoritative_state_roundtrips_without_quantity_duplication(tm
     assert loaded_commitment is not None
     assert loaded_commitment.quantity == 1
     assert loaded_commitment.owner_activity_ref.activity_id == loaded_assignment.id
+
+    app.execute(AdvanceTime(1))
+    loaded.execute(AdvanceTime(1))
+    assert capture_state(loaded_sim) == capture_state(sim)
+
+
+def test_survey_provider_assignment_roundtrips_as_fleet_owned_capacity(tmp_path):
+    app = build_game_application()
+    sim = app._simulation
+    sim.transport.add_fleet_units(
+        ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=sim.day
+    )
+    assignment_id = app.execute(CreateSurveyProviderAssignment(
+        str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT), 1
+    )).created_id
+    assert assignment_id is not None
+    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
+    app.execute(StartSurvey(
+        str(ids.LUNAR_ORBIT), str(ids.LUNAR_FLEET_SURVEY_PROVIDER),
+        "fleet_remote_mapping", str(key[0]), str(key[1]), 1,
+    ))
+
+    assignment = next(iter(sim.survey.provider_assignments.values()))
+    commitment = sim.transport.fleet_commitment_snapshot(assignment.fleet_commitment_ref)
+    assert commitment is not None and commitment.quantity == 1
+    path = tmp_path / "survey-provider-assignment.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    saved_assignment = raw["state"]["survey"]["provider_assignments"][0]
+    assert saved_assignment["fleet_commitment_ref"] == str(assignment.fleet_commitment_ref)
+    assert "quantity" not in saved_assignment
+    saved_campaign = raw["state"]["survey"]["campaigns"][0]
+    assert "fleet_commitment_ref" not in saved_campaign
+
+    loaded, offline = load_game(path, build_game_application_for_load)
+    assert offline is None
+    loaded_sim = loaded._simulation
+    assert capture_state(loaded_sim)["survey"] == capture_state(sim)["survey"]
+    loaded_assignment = next(iter(loaded_sim.survey.provider_assignments.values()))
+    loaded_commitment = loaded_sim.transport.fleet_commitment_snapshot(
+        loaded_assignment.fleet_commitment_ref
+    )
+    assert loaded_commitment is not None
+    assert loaded_commitment.quantity == 1
+    assert loaded_commitment.owner_activity_ref.activity_type == "survey_provider_assignment"
+    assert loaded.query(GetSurveys(str(ids.LUNAR_ORBIT))) == app.query(GetSurveys(str(ids.LUNAR_ORBIT)))
 
     app.execute(AdvanceTime(1))
     loaded.execute(AdvanceTime(1))

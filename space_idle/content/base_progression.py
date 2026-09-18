@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..survey import (
-    ExtractionSpec, KnowledgeLevel, SurveyCoverage, SurveyObservationModeSpec,
+    ExtractionSpec, KnowledgeLevel, SurveyReachScope, SurveyReachSpec, SurveyObservationModeSpec,
     SurveyProviderSourceKind, SurveyProviderSpec, SurveyTarget,
 )
 from . import base_requirements as req
@@ -39,25 +39,25 @@ def build_survey_targets() -> dict:
 
 def build_survey_providers() -> dict:
     remote_orbital = SurveyObservationModeSpec(
-        "remote_orbital_spectrometry", 8.0, SurveyCoverage.BODY_REMOTE,
+        "remote_orbital_spectrometry", 8.0, SurveyReachSpec(SurveyReachScope.SAME_BODY),
         KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL, 0.35, 0.12,
         required_source_capabilities=frozenset(("survey_sensor",)),
     )
     local_robotic = SurveyObservationModeSpec(
-        "local_robotic_prospecting", 5.0, SurveyCoverage.LOCATION_TERRITORY,
+        "local_robotic_prospecting", 5.0, SurveyReachSpec(SurveyReachScope.LOCATION_TERRITORY),
         KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, 0.25, 0.10,
         required_source_capabilities=frozenset(("surface_survey",)),
     )
     local_geology = SurveyObservationModeSpec(
-        "local_geology_measurement", 9.0, SurveyCoverage.LOCATION_TERRITORY,
+        "local_geology_measurement", 9.0, SurveyReachSpec(SurveyReachScope.LOCATION_TERRITORY),
         KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, 0.15, 0.04,
         required_source_capabilities=frozenset(("surface_survey",)),
     )
     fleet_remote = SurveyObservationModeSpec(
-        "fleet_remote_mapping", 6.0, SurveyCoverage.BODY_REMOTE,
+        "fleet_remote_mapping", 6.0, SurveyReachSpec(SurveyReachScope.SAME_BODY),
         KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, 0.22, 0.08,
         required_source_capabilities=frozenset(("survey_sensor",)),
-        required_fleet_units=1,
+        minimum_source_units=1,
     )
     return {
         ids.LUNAR_RESOURCE_SURVEY_ORBITER: SurveyProviderSpec(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from hashlib import sha256
@@ -22,7 +23,7 @@ from .supply import SupplyRequirement
 from .spatial_claims import SurfaceCellClaim, SurfaceCellClaimRegistry
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .exploration_models import KnowledgeRequirement, KnowledgeRequirementSpec
-from .spatial import OperationalNodeState
+from .spatial import EnvironmentResolver, OperationalNodeState
 from .site import SiteRequirements, evaluate_physical_site_requirements, evaluate_site_requirements
 from .storage import StorageService
 from .transport.models import (
@@ -45,7 +46,14 @@ class FoundingResourceRequirement:
 class FoundingFacilityDeployment:
     facility_def_id: DefinitionId
     invested_resources: tuple[FoundingResourceRequirement, ...] = ()
-    place_at_core_cell: bool = False
+
+    def investment_totals(self) -> dict[DefinitionId, float]:
+        totals: dict[DefinitionId, float] = {}
+        for requirement in self.invested_resources:
+            totals[requirement.resource_id] = (
+                totals.get(requirement.resource_id, 0.0) + requirement.amount_t
+            )
+        return totals
 
 
 @dataclass(frozen=True)
@@ -291,6 +299,17 @@ class OperationalNodeFoundingService:
                 return project
         return None
 
+    def active_project_for_target_node(
+        self, operational_node_id: SpatialNodeId
+    ) -> OperationalNodeFoundingProject | None:
+        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
+            if (
+                self.target_operational_node_id(project.target_spec) == operational_node_id
+                and project.status in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}
+            ):
+                return project
+        return None
+
     def planning_failures(
         self,
         staging_node_id: SpatialNodeId,
@@ -308,6 +327,11 @@ class OperationalNodeFoundingService:
             return (FoundingBlocker("deployment_recipe", str(recipe_id)),)
         if not graph.has_operational_node(staging_node_id):
             return (FoundingBlocker("staging_node", str(staging_node_id)),)
+
+        target_node_id = self.target_operational_node_id(target_spec)
+        active_target = self.active_project_for_target_node(target_node_id)
+        if active_target is not None:
+            failures.append(FoundingBlocker("target_claimed", str(active_target.id)))
 
         if isinstance(target_spec, SurfaceLocationTargetSpec):
             for code, detail in graph.location_foundation_failures(
@@ -338,9 +362,9 @@ class OperationalNodeFoundingService:
                 ))
             for deployment in recipe.deployed_facilities:
                 definition = self.facilities.definitions.get(deployment.facility_def_id)
-                if definition is not None and (
-                    deployment.place_at_core_cell
-                    or definition.placement_scope is FacilityPlacementScope.SURFACE_CELL
+                if (
+                    definition is not None
+                    and definition.placement_scope is FacilityPlacementScope.SURFACE_CELL
                 ):
                     failures.append(FoundingBlocker(
                         "surface_facility_target", str(deployment.facility_def_id)
@@ -351,14 +375,19 @@ class OperationalNodeFoundingService:
             self.facilities.environment, self.facilities,
         ):
             failures.append(FoundingBlocker(f"staging:{failure.code}", failure.detail))
-        try:
-            target_context_id = self.target_context_id(target_spec)
-            for failure in evaluate_physical_site_requirements(
-                recipe.target_requirements, target_context_id, day, self.facilities.environment
-            ):
-                failures.append(FoundingBlocker(f"target:{failure.code}", failure.detail))
-        except KeyError as exc:
-            failures.append(FoundingBlocker("target_context", str(exc)))
+        target_identity_blocked = any(
+            row.code in {
+                "target_claimed", "unknown_body", "unknown_cell", "body_mismatch",
+                "cell_owned", "target_operational_node", "cell_claimed",
+                "target_spatial_node", "target_already_operational",
+                "surface_facility_target",
+            }
+            for row in failures
+        )
+        if not target_identity_blocked:
+            failures.extend(self._target_settlement_failures(
+                target_spec, recipe, "Founding preview", day
+            ))
 
         if self.transport.vehicle_definition(vehicle_definition_id) is None:
             failures.append(FoundingBlocker("vehicle_definition", str(vehicle_definition_id)))
@@ -627,6 +656,10 @@ class OperationalNodeFoundingService:
         ))
         # The project's own Surface Cell and Fleet commitments are already valid
         # claims; exclude the self-conflicts that planning a new project must reject.
+        failures = [
+            row for row in failures
+            if not (row.code == "target_claimed" and row.detail == str(project.id))
+        ]
         if isinstance(project.target_spec, SurfaceLocationTargetSpec):
             failures = [
                 row for row in failures
@@ -784,6 +817,239 @@ class OperationalNodeFoundingService:
                 physical_state_changed = True
         return physical_state_changed
 
+    def _create_target_state(
+        self, graph, target_spec: FoundingTargetSpec, display_name: str
+    ) -> tuple[SpatialNodeId, SurfaceCellId | None]:
+        target_node_id = self.target_operational_node_id(target_spec)
+        if isinstance(target_spec, SurfaceLocationTargetSpec):
+            graph.found_location(
+                target_spec.operational_node_id, display_name,
+                target_spec.body_id, target_spec.core_cell_id,
+            )
+            return target_node_id, target_spec.core_cell_id
+        graph.add_operational_node(OperationalNodeState(target_spec.spatial_node_id))
+        return target_node_id, None
+
+    def _install_deployment_facilities(
+        self,
+        facilities: FacilityBook,
+        recipe: DeploymentRecipe,
+        target_node_id: SpatialNodeId,
+        core_cell_id: SurfaceCellId | None,
+    ) -> tuple[EntityId, ...]:
+        facility_ids: list[EntityId] = []
+        for deployment in recipe.deployed_facilities:
+            definition = facilities.definitions[deployment.facility_def_id]
+            if (
+                definition.placement_scope is FacilityPlacementScope.SURFACE_CELL
+                and core_cell_id is None
+            ):
+                raise RuntimeError(
+                    f"surface Facility cannot settle on non-surface founding target: "
+                    f"{deployment.facility_def_id}"
+                )
+            site_cell_id = (
+                core_cell_id
+                if definition.placement_scope is FacilityPlacementScope.SURFACE_CELL
+                else None
+            )
+            facility_ids.append(facilities.install(
+                deployment.facility_def_id,
+                target_node_id,
+                site_cell_id=site_cell_id,
+                invested_resources=deployment.investment_totals(),
+            ))
+        return tuple(facility_ids)
+
+    @staticmethod
+    def _installation_requirement_failures(
+        facilities: FacilityBook, facility_ids: tuple[EntityId, ...], day: int
+    ) -> tuple[str, ...]:
+        failures: list[str] = []
+        for facility_id in facility_ids:
+            facility = facilities.facilities[facility_id]
+            definition = facilities.definitions[facility.definition_id]
+            context_id = facilities.facility_environment_context(facility)
+            failures.extend(
+                f"{facility.definition_id}:{failure.code}:{failure.detail}"
+                for failure in evaluate_site_requirements(
+                    definition.installation_requirements,
+                    facility.operational_node_id,
+                    day,
+                    facilities.environment,
+                    facilities,
+                    environment_context_id=context_id,
+                )
+            )
+        return tuple(failures)
+
+    def _target_settlement_failures(
+        self,
+        target_spec: FoundingTargetSpec,
+        recipe: DeploymentRecipe,
+        display_name: str,
+        day: int,
+    ) -> tuple[FoundingBlocker, ...]:
+        """Evaluate the complete target-side conversion on isolated State.
+
+        Planning and arrival settlement use the same Facility placement, Site,
+        Power, Storage and Inventory Admission contracts. The preview owns no
+        authoritative State and therefore cannot partially materialize a target.
+        """
+
+        graph = self.facilities.environment.graph
+        preview_graph = deepcopy(graph)
+        preview_environment = EnvironmentResolver(
+            preview_graph,
+            self.facilities.environment.static,
+            list(self.facilities.environment.overlays),
+        )
+        preview_facilities = self.facilities.copy_for_environment(preview_environment)
+        preview_inventory = deepcopy(self.inventory)
+        preview_storage = StorageService(
+            self.storage.providers, preview_inventory, preview_facilities
+        )
+        preview_power = PowerService(self.power.specs, preview_environment)
+        failures: list[FoundingBlocker] = []
+
+        try:
+            target_node_id, core_cell_id = self._create_target_state(
+                preview_graph, target_spec, display_name
+            )
+            facility_ids = self._install_deployment_facilities(
+                preview_facilities, recipe, target_node_id, core_cell_id
+            )
+        except (KeyError, ValueError, RuntimeError) as exc:
+            return (FoundingBlocker("target_settlement", str(exc)),)
+
+        target_context_id = core_cell_id if core_cell_id is not None else target_node_id
+        for failure in evaluate_site_requirements(
+            recipe.target_requirements,
+            target_node_id,
+            day,
+            preview_environment,
+            preview_facilities,
+            environment_context_id=target_context_id,
+        ):
+            failures.append(FoundingBlocker(f"target:{failure.code}", failure.detail))
+
+        failures.extend(
+            FoundingBlocker("facility_installation", detail)
+            for detail in self._installation_requirement_failures(
+                preview_facilities, facility_ids, day
+            )
+        )
+
+        target_power = preview_power.snapshot(target_node_id, preview_facilities, day)
+        preview_storage.refresh_node(target_node_id, day, target_power)
+        for resource_id, amount_t in recipe.initial_inventory_totals().items():
+            admission = preview_inventory.admit(target_node_id, resource_id, amount_t)
+            if not admission.fully_admitted:
+                failures.append(FoundingBlocker(
+                    "initial_inventory_admission",
+                    f"{resource_id}:{admission.admitted_t:g}/{amount_t:g}",
+                ))
+        return tuple(failures)
+
+    def _preflight_settlement(
+        self, project: OperationalNodeFoundingProject, recipe: DeploymentRecipe, day: int
+    ) -> None:
+        failures = list(self._target_settlement_failures(
+            project.target_spec, recipe, project.display_name, day
+        ))
+        failures.extend(self._fleet_settlement_failures(project, recipe, day))
+        if failures:
+            raise RuntimeError(
+                "founding settlement preflight failed: "
+                + "; ".join(f"{row.code}:{row.detail}" for row in failures)
+            )
+
+    def _fleet_settlement_failures(
+        self,
+        project: OperationalNodeFoundingProject,
+        recipe: DeploymentRecipe,
+        day: int,
+    ) -> tuple[FoundingBlocker, ...]:
+        """Validate every Fleet/Movement transition that follows target creation.
+
+        Target-side State must not be materialized and then discover that its
+        founding Fleet can no longer settle.  This mirrors the public Transport
+        invariants used by ``receive_fleet_commitment`` / ``finish_movement_execution``
+        without mutating Transport State.
+        """
+
+        if project.fleet_commitment_id is None:
+            return (FoundingBlocker("fleet_settlement", "missing Fleet commitment"),)
+        if project.movement_execution_id is None:
+            return (FoundingBlocker("fleet_settlement", "missing MovementExecution"),)
+
+        commitment = self.transport.fleet_commitment_snapshot(project.fleet_commitment_id)
+        if commitment is None:
+            return (FoundingBlocker("fleet_settlement", "Fleet commitment is missing"),)
+        execution = self.transport.movement_execution_snapshot(project.movement_execution_id)
+        if execution is None:
+            return (FoundingBlocker("fleet_settlement", "MovementExecution is missing"),)
+
+        failures: list[FoundingBlocker] = []
+        if commitment.owner_activity_ref.activity_type != "founding":
+            failures.append(FoundingBlocker(
+                "fleet_settlement", "Fleet commitment owner type is not founding"
+            ))
+        if commitment.owner_activity_ref.activity_id != EntityId(str(project.id)):
+            failures.append(FoundingBlocker(
+                "fleet_settlement", "Fleet commitment owner does not match project"
+            ))
+        if commitment.vehicle_definition_id != project.vehicle_definition_id:
+            failures.append(FoundingBlocker(
+                "fleet_settlement", "Fleet commitment Vehicle does not match project"
+            ))
+        if commitment.quantity != recipe.required_units:
+            failures.append(FoundingBlocker(
+                "fleet_settlement",
+                f"Fleet commitment quantity {commitment.quantity} != {recipe.required_units}",
+            ))
+        if commitment.operational_node_id is not None:
+            failures.append(FoundingBlocker(
+                "fleet_settlement", "Fleet commitment is not in Movement"
+            ))
+        if commitment.movement_execution_id != execution.id:
+            failures.append(FoundingBlocker(
+                "fleet_settlement", "Fleet commitment MovementExecution mismatch"
+            ))
+        if execution.fleet_commitment_id != commitment.id:
+            failures.append(FoundingBlocker(
+                "fleet_settlement", "MovementExecution Fleet commitment mismatch"
+            ))
+        if execution.owner_id != EntityId(str(project.id)):
+            failures.append(FoundingBlocker(
+                "fleet_settlement", "MovementExecution owner does not match project"
+            ))
+        if execution.kind is not MovementExecutionKind.FOUNDING_DEPLOYMENT:
+            failures.append(FoundingBlocker(
+                "fleet_settlement", "MovementExecution kind is not founding deployment"
+            ))
+        if execution.completion_day > day:
+            failures.append(FoundingBlocker(
+                "fleet_settlement", "MovementExecution has not reached completion day"
+            ))
+
+        target_node_id = self.target_operational_node_id(project.target_spec)
+        final_location = (
+            target_node_id
+            if execution.final_asset_disposition is OperationAssetDisposition.DESTINATION
+            else project.staging_node_id
+        )
+        destination_id = execution.destination.operational_node_id
+        if destination_id is not None and destination_id != final_location:
+            failures.append(FoundingBlocker(
+                "fleet_settlement", "MovementExecution arrival location mismatch"
+            ))
+        if final_location != target_node_id and not self.facilities.environment.graph.has_operational_node(final_location):
+            failures.append(FoundingBlocker(
+                "fleet_settlement", f"Fleet return node is not operational: {final_location}"
+            ))
+        return tuple(failures)
+
     def _complete(self, project: OperationalNodeFoundingProject, day: int) -> None:
         graph = self.facilities.environment.graph
         target_spec = project.target_spec
@@ -807,44 +1073,35 @@ class OperationalNodeFoundingService:
             for resource_id, amount_t in expected_payload.items()
         ):
             raise RuntimeError(f"founding MovementExecution payload manifest mismatch: {project.id}")
+        if project.fleet_commitment_id is None:
+            raise RuntimeError(f"founding completion lacks Fleet commitment: {project.id}")
 
-        target_node_id = self.target_operational_node_id(target_spec)
-        if isinstance(target_spec, SurfaceLocationTargetSpec):
-            graph.found_location(
-                target_spec.operational_node_id, project.display_name,
-                target_spec.body_id, target_spec.core_cell_id,
+        # No target-side live State is changed until the complete settlement has
+        # been shown to satisfy the same Facility, Power, Storage and admission
+        # contracts used after founding.
+        self._preflight_settlement(project, recipe, day)
+
+        target_node_id, core_cell_id = self._create_target_state(
+            graph, project.target_spec, project.display_name
+        )
+        facility_ids = self._install_deployment_facilities(
+            self.facilities, recipe, target_node_id, core_cell_id
+        )
+        installation_failures = self._installation_requirement_failures(
+            self.facilities, facility_ids, day
+        )
+        if installation_failures:
+            raise RuntimeError(
+                "Founding settlement diverged from preflight Facility eligibility: "
+                + "; ".join(installation_failures)
             )
-            core_cell_id: SurfaceCellId | None = target_spec.core_cell_id
-        else:
-            graph.add_operational_node(OperationalNodeState(target_spec.spatial_node_id))
-            core_cell_id = None
-
-        for deployment in recipe.deployed_facilities:
-            definition = self.facilities.definitions[deployment.facility_def_id]
-            if core_cell_id is None and (
-                deployment.place_at_core_cell
-                or definition.placement_scope is FacilityPlacementScope.SURFACE_CELL
-            ):
-                raise RuntimeError(
-                    f"surface Facility cannot settle on non-surface founding target: {deployment.facility_def_id}"
-                )
-            site_cell_id = core_cell_id if (
-                core_cell_id is not None
-                and (deployment.place_at_core_cell or definition.placement_scope is FacilityPlacementScope.SURFACE_CELL)
-            ) else None
-            self.facilities.install(
-                deployment.facility_def_id, target_node_id, site_cell_id=site_cell_id,
-                invested_resources={
-                    req.resource_id: req.amount_t for req in deployment.invested_resources
-                },
-            )
-
-        self.storage.refresh(day, {})
-        for req in recipe.initial_inventory:
-            admission = self.inventory.admit(target_node_id, req.resource_id, req.amount_t)
+        target_power = self.power.snapshot(target_node_id, self.facilities, day)
+        self.storage.refresh_node(target_node_id, day, target_power)
+        for resource_id, amount_t in recipe.initial_inventory_totals().items():
+            admission = self.inventory.admit(target_node_id, resource_id, amount_t)
             if not admission.fully_admitted:
                 raise RuntimeError(
-                    f"founding manifest exceeds Inventory Admission: {req.resource_id}"
+                    f"Founding settlement diverged from preflight Inventory Admission: {resource_id}"
                 )
 
         final_location = (
@@ -852,8 +1109,6 @@ class OperationalNodeFoundingService:
             if execution.final_asset_disposition is OperationAssetDisposition.DESTINATION
             else project.staging_node_id
         )
-        if project.fleet_commitment_id is None:
-            raise RuntimeError(f"founding completion lacks Fleet commitment: {project.id}")
         self.transport.receive_fleet_commitment(
             project.fleet_commitment_id, final_location, execution_id=execution_id, day=day
         )

@@ -680,7 +680,7 @@ FleetCommitmentState
   completion_disposition?
 ```
 
-`owner_activity_ref` はTransport、Scientific Exploration等の用途名をFleet Coreの閉じた分岐へ変換するためではなく、所有Activityへstableに参照する。Fleet Domainは用途固有progressを所有せず、数量保存、排他性、所在、commit / release / Movement settlementを保証する。Transport Allocation、Scientific Exploration、Fleet-backed Survey / Research Provider、Retirement等は必要unitをこの契約へcommitし、各Domainへ同じunit数量をauthoritativeに複製しない。
+`owner_activity_ref` はTransport、Scientific Exploration等の用途名をFleet Coreの閉じた分岐へ変換するためではなく、所有Activity / Provider Assignmentへstableに参照する。Fleet Domainは用途固有progressを所有せず、数量保存、排他性、所在、commit / release / Movement settlementを保証する。Transport Allocation、Scientific Exploration、Fleet-backed Research / Survey Provider Assignment、Retirement等は必要unitをこの契約へcommitし、各Domainへ同じunit数量をauthoritativeに複製しない。Survey CampaignのようにProvider Serviceを消費するActivityへFleet Commitmentを重複保持しない。
 
 free Fleetを継続的に自動配備する `Provisioning Priority` はTransport Allocationのゲーム上の判断として定義し、すべてのFleet利用Activityへ一律一般化しない。他Activityは開始・割当Command等、自身の意味に沿ってcommitする。
 
@@ -916,9 +916,9 @@ UNKNOWN
 
 Survey Provider Definitionはsurvey rate、coverage / reach model、max Knowledge Level、observation precision、必要Operation / Infrastructureを持つ。Survey ServiceはproviderのSpatial contextとtarget Cellの関係からreachabilityを判定する。軌道Remote Survey providerは対象天体にSurface Locationが存在しなくても広域Cellを観測できる。
 
-Fleet-backed Survey Activityは必要unitをFleet Domainへ排他的にcommitする。Survey DomainはFleet数量をauthoritativeに複製せず、Transport用Provisioning Priorityを一律流用しない。Pause時は観測progressを保持し、所在Nodeで安全にrelease可能なFleet commitmentはcanonical boundaryでfree poolへ戻す。開始済みMovementは先にsettleし、Resume時は必要unitを再commitする。Facility providerは通常Service CapacityとしてSurvey executionへ参加できる。
+Fleet-backed Survey ProviderはSurvey Domainが `SurveyProviderAssignmentState` をauthoritative intentとして所有し、そのAssignmentがFleet Domainへ必要unit数の排他的Fleet Commitmentを要求する。Fleet quantityと排他所有はFleet Domainだけが所有し、Survey Campaignへ複製しない。Assignment作成・数量変更Commandは希望quantityを入力としてCommitmentを原子的に作成・resizeし、必要差分をfree Fleetから即時に確保できなければStateを変更しない。Assignment releaseがcommitmentをfree poolへ戻す。Transport用Provisioning Priorityは一律流用しない。Provider AssignmentからSurvey Service Capacityを導出し、Facility providerの能力と同じExecution allocationへ供給する。Survey Campaignはtarget / goal Knowledge Level / provider / observation mode / Activity Priority / control state / progressだけを所有し、Pauseは観測需要を停止するがProvider Assignmentを変更しない。Movementを伴う有限Survey missionは共有Provider Capacityではなくone-shot Movement-backed Activityとして表す。
 
-Survey ActivityはPlayerが指定したtarget / goal Knowledge Level、provider / observation mode、Activity Priority、control state、progressを所有する。指定範囲内で完了targetをactive allocationから外し、余剰能力を未完了targetへ再配分できるが、未指定targetを勝手に追加しない。
+Survey CampaignはPlayerが指定したtarget / goal Knowledge Level、provider / observation mode、Activity Priority、control state、progressを所有する。Provider Assignmentから供給された有限Survey Service CapacityをExecution Requirement Bundleで競合利用する。指定範囲内で完了targetをactive allocationから外し、余剰能力を未完了targetへ再配分できるが、未指定targetを勝手に追加しない。
 
 Founding / Development等はSurvey内部Stateを直接読まず、typed Knowledge Eligibilityを通してtarget / subject / minimum levelを要求する。Survey KnowledgeはStatic Resource Potential自体とは分離し、Dynamic Physical Environmentも別Stateとして更新する。Scientific Exploration RPとSurvey Knowledgeを同一state machineへ混在させない。
 
@@ -944,7 +944,8 @@ Founding / Development等はSurvey内部Stateを直接読まず、typed Knowledg
 - Research start / pause / resume / Activity Priority / current `stage_id` Prototype or Demonstration Execution Context
 - Fleet-backed Research Provider Assignment create / pause / resume / release
 - Scientific Exploration start / pause / resume / Fleet assignment / Abort / Return / completion disposition
-- Resource Survey start / pause / resume / target / goal Knowledge Level / provider / Fleet assignment
+- Survey Provider Assignment create / resize / release
+- Resource Survey start / pause / resume / target / goal Knowledge Level / provider
 - External event response where an extension provides one
 
 ### 13.2 Query
@@ -967,7 +968,7 @@ Founding / Development等はSurvey内部Stateを直接読まず、typed Knowledg
 - Funds / Market Provider / Market Interface / buy-sell offer / Trade Order / commitment / settlement
 - Research Point / Technology State / Research Provider Assignment / Research Projects / current typed Stage / Requirement / Operational Experience
 - Scientific Exploration / Fleet commitment / RP admission blocker
-- Resource Survey / provider / Knowledge Level / Fleet commitment
+- Resource Survey / provider / Knowledge Level / Survey Provider Assignment / Fleet commitment
 - Location territory / Physical Environment summary / Surface Access Anchor / Surface Infrastructure demand and fulfillment
 - external dependency analytics for selected Operational Node scope with CURRENT / FORECAST basis
 - External Events where an extension provides them
@@ -980,7 +981,7 @@ Queryは要求されたscopeを不必要に拡大しない。origin / destinatio
 
 SaveはApplication単位のversion付きSnapshotとする。静的Definitionは `WorldDefinition` とContentから再構築し、可変Stateだけを復元する。Save metadataは `world_definition_id` と `scenario_id` を保持し、Load時にScenario初期化処理を再実行しない。
 
-保存対象はdomain-owned authoritative StateをApplication snapshot内のdomain sectionとして保持する。少なくともOperational Node / Surface Location affiliation、Facility lifecycle / Process selection、Inventory / Reservation、Build / Development / Decommission / Founding Project、Vehicle Production、FleetPool / Fleet Commitment / Relocation / Releasing、Transport Allocation target / Movement selection / Provisioning Priority、Movement Execution、Logistics Policy / Policy assignment / Target Stock、Cargo Flow / arrival waiting、Funds / Market State、Research Point / Technology / Research Project current Stage ID / Research Provider Assignment、Operational Experience、Exploration、Survey Knowledge、Dynamic Physical Environment、canonical game day等を含む。Domain sectionは各State ownershipを保ち、中央Snapshotへ内部fieldを無秩序に平坦化しない。
+保存対象はdomain-owned authoritative StateをApplication snapshot内のdomain sectionとして保持する。少なくともOperational Node / Surface Location affiliation、Facility lifecycle / Process selection、Inventory / Reservation、Build / Development / Decommission / Founding Project、Vehicle Production、FleetPool / Fleet Commitment / Relocation / Releasing、Transport Allocation target / Movement selection / Provisioning Priority、Movement Execution、Logistics Policy / Policy assignment / Target Stock、Cargo Flow / arrival waiting、Funds / Market State、Research Point / Technology / Research Project current Stage ID / Research Provider Assignment、Operational Experience、Exploration、Survey Knowledge / Survey Provider Assignment、Dynamic Physical Environment、canonical game day等を含む。Domain sectionは各State ownershipを保ち、中央Snapshotへ内部fieldを無秩序に平坦化しない。
 
 Static Star System / Celestial Body / Surface Cell topology / geology / Resource Potential / transport geometry / Market Provider DefinitionはWorld / Contentから再構築する。Movement Plan候補、Transport Service Plan、Nominal / Available Capacity、Location Environment summary、Projected Material Readiness、tick内Requirement / allocation結果、external-dependency Analytics等の派生・transient状態は保存せず再導出する。
 
@@ -1015,7 +1016,7 @@ Runtime Validationは、Inventory / Reservation / Cargo / Funds / Fleetの保存
 - Scientific ExplorationはRP Pool headroom不足時に有限RPを消失させず、science progress / RP settlementを整合させる。
 - Research Definitionのtyped ordered StageとProject current stageが一致し、最終Stage完了時だけTechnology Stateを更新する。
 - Prototype / DemonstrationのExecution ContextがOperational Node / optional Surface Cellを正しく検証し、有限ServiceはAllocationで競合する。
-- Survey Knowledge levelごとの公開情報、provider coverage / max level、Remote Surveyが正しく成立する。
+- Survey Knowledge levelごとの公開情報、provider coverage / max level、Remote Surveyが正しく成立し、Fleet-backed Survey Provider AssignmentのFleet ownershipとCampaignのService Capacity消費が分離される。
 - External-dependency AnalyticsがCURRENT / FORECASTを区別し、派生Stateとして再導出される。
 - Save / Load後の将来進行が一致し、Scenario初期化を再適用しない。
 - Generic CoreへLocation / Celestial Body / Vehicle用途名等のContent固有分岐が侵入しない。

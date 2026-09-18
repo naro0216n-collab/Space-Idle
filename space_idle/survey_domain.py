@@ -7,14 +7,14 @@ from .validation_support import (
     ValidationContext, require as _require, validate_site_requirements,
 )
 from .exploration_models import (
-    KnowledgeLevel, SurveyCampaign, SurveyProviderSourceKind,
+    KnowledgeLevel, SurveyCampaign, SurveyProviderAssignmentState, SurveyProviderSourceKind,
 )
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 
 
 def capture_survey(sim: Any) -> dict[str, Any]:
     if sim.survey is None:
-        return {"knowledge_progress": [], "knowledge_precision_fraction": [], "campaigns": []}
+        return {"knowledge_progress": [], "knowledge_precision_fraction": [], "estimated_potential": [], "campaigns": [], "provider_assignment_counter": 0, "provider_assignments": []}
     return {
         "knowledge_progress": [
             {"cell_id": str(cell), "resource_id": str(res), "progress": progress}
@@ -30,6 +30,13 @@ def capture_survey(sim: Any) -> dict[str, Any]:
                 key=lambda x: (str(x[0][0]), str(x[0][1])),
             )
         ],
+        "estimated_potential": [
+            {"cell_id": str(cell), "resource_id": str(res), "estimated_potential": estimate}
+            for (cell, res), estimate in sorted(
+                sim.survey.estimated_potential.items(),
+                key=lambda x: (str(x[0][0]), str(x[0][1])),
+            )
+        ],
         "campaigns": [
             {
                 "provider_definition_id": str(c.provider_definition_id),
@@ -40,12 +47,22 @@ def capture_survey(sim: Any) -> dict[str, Any]:
                 "target_knowledge_level": int(c.target_knowledge_level),
                 "priority": int(c.priority),
                 "paused": c.paused,
-                "fleet_commitment_ref": None if c.fleet_commitment_ref is None else str(c.fleet_commitment_ref),
             }
             for _, c in sorted(
                 sim.survey.campaigns.items(),
                 key=lambda x: (str(x[0][0]), str(x[0][1])),
             )
+        ],
+        "provider_assignment_counter": sim.survey._provider_assignment_counter,
+        "provider_assignments": [
+            {
+                "id": str(row.id),
+                "provider_definition_id": str(row.provider_definition_id),
+                "vehicle_definition_id": str(row.vehicle_definition_id),
+                "operational_node_id": str(row.operational_node_id),
+                "fleet_commitment_ref": str(row.fleet_commitment_ref),
+            }
+            for row in sorted(sim.survey.provider_assignments.values(), key=lambda item: str(item.id))
         ],
     }
 
@@ -61,11 +78,25 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
         (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): float(r["precision_fraction"])
         for r in data.get("knowledge_precision_fraction", [])
     }
+    sim.survey.estimated_potential = {
+        (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): float(r["estimated_potential"])
+        for r in data.get("estimated_potential", [])
+    }
     sim.survey.campaigns.clear()
+    sim.survey.provider_assignments.clear()
+    sim.survey._provider_assignment_counter = int(data.get("provider_assignment_counter", 0))
+    for r in data.get("provider_assignments", []):
+        assignment_id = EntityId(r["id"])
+        sim.survey.provider_assignments[assignment_id] = SurveyProviderAssignmentState(
+            assignment_id,
+            DefinitionId(r["provider_definition_id"]),
+            DefinitionId(r["vehicle_definition_id"]),
+            SpatialNodeId(r["operational_node_id"]),
+            EntityId(r["fleet_commitment_ref"]),
+        )
     for r in data.get("campaigns", []):
         cell_id = SurfaceCellId(r["cell_id"])
         resource_id = DefinitionId(r["resource_id"])
-        fleet_ref = r.get("fleet_commitment_ref")
         sim.survey.campaigns[(cell_id, resource_id)] = SurveyCampaign(
             DefinitionId(r["provider_definition_id"]),
             str(r["observation_mode_id"]),
@@ -75,7 +106,6 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
             KnowledgeLevel(int(r["target_knowledge_level"])),
             priority=int(r["priority"]),
             paused=bool(r["paused"]),
-            fleet_commitment_ref=None if fleet_ref is None else EntityId(fleet_ref),
         )
 
 
@@ -120,7 +150,28 @@ def validate_survey_configuration(sim: Any, ctx: ValidationContext) -> None:
             _require(sim.transport.vehicle_definition(provider.source_definition_id) is not None, f"survey provider references unknown Vehicle: {provider_id}")
         for mode in provider.observation_modes:
             _require(KnowledgeLevel.PRESENCE_PROBABILITY <= mode.max_knowledge_level <= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, f"invalid Survey Knowledge cap: {provider_id}/{mode.id}")
+            _require(mode.minimum_source_units > 0, f"invalid Survey minimum source units: {provider_id}/{mode.id}")
             validate_site_requirements(mode.site_requirements, ctx.known_capabilities, f"survey:{provider_id}/{mode.id}")
+            if provider.source_kind is SurveyProviderSourceKind.FACILITY:
+                source_definition = ctx.facility_defs.get(provider.source_definition_id)
+                available_source_capabilities = (
+                    set() if source_definition is None
+                    else {row.id for row in source_definition.capability_supplies}
+                )
+            else:
+                source_definition = sim.transport.vehicle_definition(provider.source_definition_id)
+                available_source_capabilities = (
+                    set() if source_definition is None
+                    else set(source_definition.generic_capabilities)
+                )
+            _require(
+                mode.required_source_capabilities.issubset(available_source_capabilities),
+                f"Survey mode requires capabilities not supplied by its provider source: {provider_id}/{mode.id}",
+            )
+            if mode.reach.required_operation_types:
+                _require(provider.source_kind is SurveyProviderSourceKind.FLEET, f"Survey movement operations require Fleet-backed provider: {provider_id}/{mode.id}")
+                for operation_type in mode.reach.required_operation_types:
+                    _require(sim.transport.operation_registry.supports(operation_type), f"Survey mode references unknown Movement Operation: {provider_id}/{mode.id}/{operation_type}")
 
 
 def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
@@ -166,6 +217,47 @@ def validate_survey_runtime(sim: Any) -> None:
         _require(key in sim.survey.targets, f"survey precision references unknown target: {key}")
         _require(0.0 <= precision <= 1.0, f"survey precision outside 0..1: {key}")
         _require(sim.survey.knowledge_level(*key) >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL, f"survey precision exists before estimated knowledge: {key}")
+    for key, estimate in sim.survey.estimated_potential.items():
+        _require(key in sim.survey.targets, f"survey estimate references unknown target: {key}")
+        _require(estimate >= 0.0, f"negative survey estimated potential: {key}")
+        _require(sim.survey.knowledge_level(*key) >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL, f"survey estimate exists before estimated knowledge: {key}")
+    for key in sim.survey.targets:
+        level = sim.survey.knowledge_level(*key)
+        if level >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+            _require(
+                key in sim.survey.knowledge_precision_fraction,
+                f"Survey Knowledge lacks uncertainty/precision metadata: {key}",
+            )
+        if level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+            _require(
+                key in sim.survey.estimated_potential,
+                f"estimated Survey Knowledge lacks an estimated potential value: {key}",
+            )
+    provider_node_keys: set[tuple[DefinitionId, SpatialNodeId]] = set()
+    for assignment_id, assignment in sim.survey.provider_assignments.items():
+        _require(assignment.id == assignment_id, f"Survey Provider assignment key mismatch: {assignment_id}")
+        _require(assignment.provider_definition_id in sim.survey.providers, f"Survey Provider assignment references unknown provider: {assignment_id}")
+        _require(sim.graph.has_operational_node(assignment.operational_node_id), f"Survey Provider assignment node is unknown: {assignment_id}")
+        provider = sim.survey.providers.get(assignment.provider_definition_id)
+        if provider is not None:
+            _require(provider.source_kind is SurveyProviderSourceKind.FLEET, f"Survey Provider assignment references non-Fleet provider: {assignment_id}")
+            _require(assignment.vehicle_definition_id == provider.source_definition_id, f"Survey Provider assignment Vehicle mismatch: {assignment_id}")
+        key = (assignment.provider_definition_id, assignment.operational_node_id)
+        _require(key not in provider_node_keys, f"duplicate Survey Provider assignment: {key}")
+        provider_node_keys.add(key)
+        _require(
+            assignment.fleet_commitment_ref == sim.survey.provider_assignment_commitment_id(assignment_id),
+            f"Survey Provider Fleet commitment id mismatch: {assignment_id}",
+        )
+        commitment = sim.transport.fleet_commitment(assignment.fleet_commitment_ref)
+        _require(commitment is not None, f"Survey Provider Fleet commitment missing: {assignment_id}")
+        if commitment is not None:
+            _require(commitment.owner_activity_ref.activity_type == "survey_provider_assignment", f"Survey Provider Fleet commitment owner type mismatch: {assignment_id}")
+            _require(commitment.owner_activity_ref.activity_id == assignment_id, f"Survey Provider Fleet commitment owner id mismatch: {assignment_id}")
+            _require(commitment.vehicle_definition_id == assignment.vehicle_definition_id, f"Survey Provider Fleet commitment Vehicle mismatch: {assignment_id}")
+            _require(commitment.operational_node_id == assignment.operational_node_id, f"Survey Provider Fleet commitment node mismatch: {assignment_id}")
+            _require(commitment.quantity > 0, f"Survey Provider Fleet commitment quantity must be positive: {assignment_id}")
+
     for key, campaign in sim.survey.campaigns.items():
         _require(key == (campaign.cell_id, campaign.resource_id), f"survey campaign key mismatch: {key}")
         _require(key in sim.survey.targets, f"campaign references unknown survey target: {key}")
@@ -179,13 +271,6 @@ def validate_survey_runtime(sim: Any) -> None:
                 _require(False, f"campaign references unknown observation mode: {key}")
                 continue
             _require(campaign.target_knowledge_level <= mode.max_knowledge_level, f"campaign exceeds observation mode Knowledge cap: {key}")
-            if provider.source_kind is SurveyProviderSourceKind.FLEET and campaign.fleet_commitment_ref is not None:
-                commitment = sim.transport.fleet_commitment(campaign.fleet_commitment_ref)
-                _require(commitment is not None, f"survey Fleet commitment missing: {key}")
-                if commitment is not None:
-                    _require(commitment.owner_activity_ref.activity_type == "survey", f"survey Fleet commitment owner type mismatch: {key}")
-                    _require(commitment.owner_activity_ref.activity_id == sim.survey.campaign_owner_id(*key), f"survey Fleet commitment owner id mismatch: {key}")
-                    _require(commitment.vehicle_definition_id == provider.source_definition_id, f"survey Fleet commitment Vehicle mismatch: {key}")
         _require(KnowledgeLevel.PRESENCE_PROBABILITY <= campaign.target_knowledge_level <= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, f"invalid survey campaign Knowledge target: {key}")
         _require(sim.survey.knowledge_level(*key) < campaign.target_knowledge_level, f"survey campaign already reached target: {key}")
         _require(1 <= int(campaign.priority) <= 5, f"survey priority must be 1..5: {key}")

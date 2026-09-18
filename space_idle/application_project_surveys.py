@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .application_views import SurveyRow, SurveyStartOption, SurveysView
+from .application_views import SurveyProviderAssignmentRow, SurveyProviderAssignmentOptionRow, SurveyRow, SurveyStartOption, SurveysView
 from .exploration_models import KnowledgeLevel, SurveyProviderSourceKind
 from .shared import SpatialNodeId
 
@@ -11,7 +11,7 @@ class SurveyProgressionProjectorMixin:
         if provider_operational_node_id is None or sim.survey is None:
             return ()
         current = sim.survey.knowledge_level(cell_id, resource_id)
-        power = powers[provider_operational_node_id]
+        power = powers.get(provider_operational_node_id)
         rows = []
         for provider in sorted(sim.survey.providers.values(), key=lambda row: str(row.id)):
             for mode in sorted(provider.observation_modes, key=lambda row: row.id):
@@ -20,16 +20,9 @@ class SurveyProgressionProjectorMixin:
                     blockers = sim.survey.start_blockers(
                         provider_operational_node_id, provider.id, mode.id, cell_id, resource_id, level, sim.day
                     )
-                    if provider.source_kind is SurveyProviderSourceKind.FACILITY:
-                        capacity = sim.survey.provider_capacity_at(
-                            provider.id, provider_operational_node_id, power, sim.day
-                        ) * mode.survey_rate
-                    else:
-                        capacity = (
-                            provider.capacity_units_per_source_per_day
-                            * mode.required_fleet_units
-                            * mode.survey_rate
-                        )
+                    capacity = sim.survey.provider_capacity_at(
+                        provider.id, provider_operational_node_id, power, sim.day
+                    ) * mode.survey_rate
                     rows.append(SurveyStartOption(
                         provider_operational_node_id=str(provider_operational_node_id),
                         provider_definition_id=str(provider.id),
@@ -41,20 +34,75 @@ class SurveyProgressionProjectorMixin:
                         capacity_points_per_day=capacity,
                         estimate_uncertainty_fraction=mode.estimate_uncertainty_fraction,
                         measurement_precision_fraction=mode.measurement_precision_fraction,
-                        required_fleet_units=mode.required_fleet_units,
+                        minimum_source_units=mode.minimum_source_units,
                         blockers=blockers,
                         can_start=not blockers,
                     ))
         return tuple(rows)
 
+    def _survey_provider_assignment_rows(
+        self, provider_operational_node_id: SpatialNodeId | None
+    ) -> tuple[SurveyProviderAssignmentRow, ...]:
+        sim = self._simulation
+        if sim.survey is None:
+            return ()
+        rows = []
+        for assignment_id, assignment in sorted(
+            sim.survey.provider_assignments.items(), key=lambda row: str(row[0])
+        ):
+            if (
+                provider_operational_node_id is not None
+                and assignment.operational_node_id != provider_operational_node_id
+            ):
+                continue
+            provider = sim.survey.provider(assignment.provider_definition_id)
+            quantity = sim.survey.provider_assignment_quantity(assignment_id)
+            rows.append(SurveyProviderAssignmentRow(
+                id=str(assignment_id),
+                provider_definition_id=str(provider.id),
+                source_definition_id=str(assignment.vehicle_definition_id),
+                operational_node_id=str(assignment.operational_node_id),
+                committed_units=quantity,
+                fleet_commitment_id=str(assignment.fleet_commitment_ref),
+                capacity_units_per_day=quantity * provider.capacity_units_per_source_per_day,
+                can_resize=True,
+                can_release=True,
+            ))
+        return tuple(rows)
+
+    def _survey_provider_assignment_options(
+        self, provider_operational_node_id: SpatialNodeId | None
+    ) -> tuple[SurveyProviderAssignmentOptionRow, ...]:
+        sim = self._simulation
+        if sim.survey is None or provider_operational_node_id is None:
+            return ()
+        rows = []
+        for provider in sorted(sim.survey.providers.values(), key=lambda row: str(row.id)):
+            if provider.source_kind is not SurveyProviderSourceKind.FLEET:
+                continue
+            existing = sim.survey.provider_assignment_for(provider.id, provider_operational_node_id)
+            free_units = sim.transport.fleet_free_units(
+                provider.source_definition_id, provider_operational_node_id
+            )
+            blockers = () if existing is None else ("assignment_exists",)
+            if free_units <= 0:
+                blockers = (*blockers, "fleet_units")
+            rows.append(SurveyProviderAssignmentOptionRow(
+                provider_definition_id=str(provider.id),
+                source_definition_id=str(provider.source_definition_id),
+                operational_node_id=str(provider_operational_node_id),
+                free_units=free_units,
+                can_create=not blockers,
+                blockers=blockers,
+            ))
+        return tuple(rows)
+
     def _surveys_view(self, provider_operational_node_id: SpatialNodeId | None) -> SurveysView:
         sim = self._simulation
         if sim.survey is None:
-            return SurveysView(())
-        provider_body_id = (
-            None if provider_operational_node_id is None
-            else sim.graph.operational_node(provider_operational_node_id).body_id
-        )
+            return SurveysView((), (), ())
+        provider_assignments = self._survey_provider_assignment_rows(provider_operational_node_id)
+        provider_assignment_options = self._survey_provider_assignment_options(provider_operational_node_id)
         decision = self._tick_decision_projection()
         execution_plan = decision.allocations.execution
         powers = decision.allocations.power_by_location
@@ -63,8 +111,6 @@ class SurveyProgressionProjectorMixin:
             sim.survey.targets.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
         ):
             cell = sim.graph.surface_cells[cell_id]
-            if provider_body_id is not None and cell.body_id != provider_body_id:
-                continue
             campaign = sim.survey.campaigns.get((cell_id, resource_id))
             active_provider_node = None if campaign is None else campaign.provider_operational_node_id
             complete = sim.survey.is_complete(cell_id, resource_id)
@@ -85,11 +131,10 @@ class SurveyProgressionProjectorMixin:
                 provider_definition_id = None
                 provider_source_kind = None
                 observation_mode_id = None
-                fleet_commitment_id = None
             else:
                 target_level = campaign.target_knowledge_level
                 progress_threshold = target.thresholds[int(target_level) - 1]
-                power = powers[campaign.provider_operational_node_id]
+                power = powers.get(campaign.provider_operational_node_id)
                 capacity = sim.survey.capacity_for_campaign(campaign, power, sim.day)
                 bundle_id = sim.survey.execution_bundle_id(cell_id, resource_id)
                 try:
@@ -104,7 +149,6 @@ class SurveyProgressionProjectorMixin:
                 provider_definition_id = str(provider.id)
                 provider_source_kind = provider.source_kind.value
                 observation_mode_id = campaign.observation_mode_id
-                fleet_commitment_id = None if campaign.fleet_commitment_ref is None else str(campaign.fleet_commitment_ref)
             start_options = self._survey_start_options(
                 provider_operational_node_id, cell_id, resource_id, powers
             ) if campaign is None and not complete else ()
@@ -117,7 +161,7 @@ class SurveyProgressionProjectorMixin:
                 active=campaign is not None,
                 provider_operational_node_id=None if active_provider_node is None else str(active_provider_node),
                 provider_definition_id=provider_definition_id, provider_source_kind=provider_source_kind,
-                observation_mode_id=observation_mode_id, fleet_commitment_id=fleet_commitment_id,
+                observation_mode_id=observation_mode_id,
                 complete=complete, paused=False if campaign is None else campaign.paused,
                 can_start=any(option.can_start for option in start_options),
                 can_pause=sim.survey.can_pause(cell_id, resource_id),
@@ -133,4 +177,4 @@ class SurveyProgressionProjectorMixin:
                 visible_potential_precision_fraction=sim.survey.visible_potential_precision_fraction(cell_id, resource_id),
                 capacity_points_per_day=capacity, blockers=blockers, start_options=start_options,
             ))
-        return SurveysView(tuple(rows))
+        return SurveysView(provider_assignments, provider_assignment_options, tuple(rows))

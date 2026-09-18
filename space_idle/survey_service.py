@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import TYPE_CHECKING, Mapping
 
 from .facilities import FacilityBook
@@ -18,12 +19,13 @@ from .execution_requirements import (
 from .exploration_models import (
     KnowledgeLevel,
     KnowledgeRequirement,
-    SurveyCoverage,
+    SurveyReachScope,
     SurveyProviderSourceKind,
     SurveyTarget,
     SurveyProviderSpec,
     SurveyObservationModeSpec,
     SurveyCampaign,
+    SurveyProviderAssignmentState,
 )
 from .transport.models import FleetActivityRef
 
@@ -42,7 +44,10 @@ class SurveyService:
     transport: "TransportService"
     knowledge_progress: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
     knowledge_precision_fraction: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
+    estimated_potential: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
     campaigns: dict[tuple[SurfaceCellId, DefinitionId], SurveyCampaign] = field(default_factory=dict)
+    provider_assignments: dict[EntityId, SurveyProviderAssignmentState] = field(default_factory=dict)
+    _provider_assignment_counter: int = 0
 
     @staticmethod
     def service_type_for_provider(provider_id: DefinitionId) -> str:
@@ -52,9 +57,9 @@ class SurveyService:
     def campaign_owner_id(cell_id: SurfaceCellId, resource_id: DefinitionId) -> EntityId:
         return EntityId(f"survey:{cell_id}:{resource_id}")
 
-    @classmethod
-    def fleet_commitment_id(cls, cell_id: SurfaceCellId, resource_id: DefinitionId) -> EntityId:
-        return EntityId(f"fleet.commitment.{cls.campaign_owner_id(cell_id, resource_id)}")
+    @staticmethod
+    def provider_assignment_commitment_id(assignment_id: EntityId) -> EntityId:
+        return EntityId(f"fleet.commitment.survey_provider:{assignment_id}")
 
     @staticmethod
     def execution_bundle_id(cell_id: SurfaceCellId, resource_id: DefinitionId) -> EntityId:
@@ -71,26 +76,62 @@ class SurveyService:
     ) -> SurveyObservationModeSpec:
         return self.provider(provider_id).observation_mode(observation_mode_id)
 
-    def _mode_covers_target(
+    def _mode_reach_failures(
         self,
+        provider: SurveyProviderSpec,
         provider_operational_node_id: SpatialNodeId,
         mode: SurveyObservationModeSpec,
         cell_id: SurfaceCellId,
-    ) -> bool:
+        day: int,
+    ) -> tuple[str, ...]:
         if not self.graph.has_operational_node(provider_operational_node_id):
-            return False
-        target = self.graph.surface_cells.get(cell_id)
-        if target is None:
-            return False
-        provider_node = self.graph.operational_node(provider_operational_node_id)
-        if provider_node.body_id != target.body_id:
-            return False
-        if mode.coverage is SurveyCoverage.BODY_REMOTE:
-            return True
-        if mode.coverage is SurveyCoverage.LOCATION_TERRITORY:
+            return ("unknown_provider_location",)
+        if cell_id not in self.graph.surface_cells:
+            return ("unknown_target",)
+        reach = mode.reach
+        failures: list[str] = []
+        provider_body = self.graph.context_body_id(provider_operational_node_id)
+        target_body = self.graph.context_body_id(cell_id)
+        if reach.scope is SurveyReachScope.SAME_BODY and provider_body != target_body:
+            failures.append("reach:body")
+        elif reach.scope is SurveyReachScope.SAME_SYSTEM:
+            if self.graph.context_star_system_id(provider_operational_node_id) != self.graph.context_star_system_id(cell_id):
+                failures.append("reach:star_system")
+        elif reach.scope is SurveyReachScope.LOCATION_TERRITORY:
             location = self.graph.locations.get(provider_operational_node_id)
-            return location is not None and cell_id in location.developed_cell_ids
-        return False
+            if location is None or cell_id not in location.developed_cell_ids:
+                failures.append("reach:location_territory")
+        separation = self.graph.characteristic_transport_separation(
+            provider_operational_node_id, cell_id
+        )
+        if (
+            reach.max_characteristic_distance_km is not None
+            and separation.distance_km > reach.max_characteristic_distance_km + 1e-9
+        ):
+            failures.append("reach:distance")
+        if (
+            reach.max_characteristic_delta_v_km_s is not None
+            and separation.delta_v_km_s > reach.max_characteristic_delta_v_km_s + 1e-9
+        ):
+            failures.append("reach:delta_v")
+        if reach.required_operation_types:
+            if provider.source_kind is not SurveyProviderSourceKind.FLEET:
+                failures.append("reach:movement_source")
+            else:
+                try:
+                    plan = self.transport.movement_plan_to_physical_target_for_vehicle(
+                        provider_operational_node_id, cell_id, provider.source_definition_id,
+                        payload_t_per_unit=0.0, day=day,
+                    )
+                except (KeyError, ValueError):
+                    failures.append("reach:movement_plan")
+                else:
+                    present = {operation.operation_type for operation in plan.operations}
+                    failures.extend(
+                        f"reach:operation:{operation_type}"
+                        for operation_type in sorted(reach.required_operation_types - present)
+                    )
+        return tuple(failures)
 
     def _mode_site_failures(
         self,
@@ -156,19 +197,61 @@ class SurveyService:
         infrastructure = 1.0 if provider_factors is None else provider_factors.get(facility.id, 1.0)
         return provider.capacity_units_per_source_per_day * utilization * maintenance * infrastructure
 
-    def _fleet_campaign_capacity(
-        self,
-        provider: SurveyProviderSpec,
-        campaign: SurveyCampaign,
-    ) -> float:
-        if campaign.paused or campaign.fleet_commitment_ref is None:
-            return 0.0
-        commitment = self.transport.fleet_commitment(campaign.fleet_commitment_ref)
-        if commitment is None or commitment.operational_node_id != campaign.provider_operational_node_id:
-            return 0.0
-        if commitment.vehicle_definition_id != provider.source_definition_id:
-            return 0.0
-        return commitment.quantity * provider.capacity_units_per_source_per_day
+    def provider_assignment_quantity(self, assignment_id: EntityId) -> int:
+        assignment = self.provider_assignments[assignment_id]
+        commitment = self.transport.fleet_commitment_snapshot(assignment.fleet_commitment_ref)
+        if commitment is None:
+            raise RuntimeError(f"Survey Provider assignment lost Fleet commitment: {assignment_id}")
+        return commitment.quantity
+
+    def provider_assignment_for(
+        self, provider_id: DefinitionId, operational_node_id: SpatialNodeId
+    ) -> SurveyProviderAssignmentState | None:
+        rows = [
+            row for row in self.provider_assignments.values()
+            if row.provider_definition_id == provider_id and row.operational_node_id == operational_node_id
+        ]
+        if len(rows) > 1:
+            raise RuntimeError(f"duplicate Survey Provider assignment: {provider_id}@{operational_node_id}")
+        return rows[0] if rows else None
+
+    def create_provider_assignment(
+        self, provider_id: DefinitionId, operational_node_id: SpatialNodeId, quantity: int
+    ) -> EntityId:
+        provider = self.provider(provider_id)
+        if provider.source_kind is not SurveyProviderSourceKind.FLEET:
+            raise ValueError("Survey Provider assignment requires a Fleet-backed provider")
+        if not self.graph.has_operational_node(operational_node_id):
+            raise KeyError(operational_node_id)
+        if quantity <= 0:
+            raise ValueError("Survey Provider assignment quantity must be positive")
+        if self.provider_assignment_for(provider_id, operational_node_id) is not None:
+            raise ValueError("Survey Provider assignment already exists at operational node")
+        next_counter = self._provider_assignment_counter + 1
+        assignment_id = EntityId(f"survey.provider_assignment.{next_counter}")
+        commitment_id = self.provider_assignment_commitment_id(assignment_id)
+        self.transport.commit_fleet_units(
+            commitment_id,
+            FleetActivityRef("survey_provider_assignment", assignment_id),
+            provider.source_definition_id, operational_node_id, quantity,
+        )
+        self.provider_assignments[assignment_id] = SurveyProviderAssignmentState(
+            assignment_id, provider_id, provider.source_definition_id,
+            operational_node_id, commitment_id,
+        )
+        self._provider_assignment_counter = next_counter
+        return assignment_id
+
+    def resize_provider_assignment(self, assignment_id: EntityId, quantity: int) -> None:
+        if quantity <= 0:
+            raise ValueError("Survey Provider assignment quantity must be positive")
+        assignment = self.provider_assignments[assignment_id]
+        self.transport.resize_fleet_commitment(assignment.fleet_commitment_ref, quantity)
+
+    def release_provider_assignment(self, assignment_id: EntityId, *, day: int = 0) -> None:
+        assignment = self.provider_assignments[assignment_id]
+        self.transport.release_fleet_commitment(assignment.fleet_commitment_ref, day=day)
+        del self.provider_assignments[assignment_id]
 
     def provider_capacity_at(
         self,
@@ -187,12 +270,31 @@ class SurveyService:
                     provider, provider_operational_node_id, active_only=True, day=day
                 )
             )
-        return sum(
-            self._fleet_campaign_capacity(provider, campaign)
-            for campaign in self.campaigns.values()
-            if campaign.provider_definition_id == provider_id
-            and campaign.provider_operational_node_id == provider_operational_node_id
-        )
+        assignment = self.provider_assignment_for(provider_id, provider_operational_node_id)
+        if assignment is None:
+            return 0.0
+        return self.provider_assignment_quantity(assignment.id) * provider.capacity_units_per_source_per_day
+
+    def _provider_mode_eligibility_failures(
+        self, provider_operational_node_id: SpatialNodeId, provider: SurveyProviderSpec,
+        mode: SurveyObservationModeSpec, cell_id: SurfaceCellId, day: int,
+    ) -> tuple[str, ...]:
+        failures: list[str] = []
+        failures.extend(self._mode_reach_failures(
+            provider, provider_operational_node_id, mode, cell_id, day
+        ))
+        failures.extend(self._mode_site_failures(provider_operational_node_id, mode, day))
+        failures.extend(self._source_capability_failures(provider, mode))
+        if provider.source_kind is SurveyProviderSourceKind.FACILITY:
+            source_count = len(self._facility_source_rows(
+                provider, provider_operational_node_id, active_only=True, day=day
+            ))
+        else:
+            assignment = self.provider_assignment_for(provider.id, provider_operational_node_id)
+            source_count = 0 if assignment is None else self.provider_assignment_quantity(assignment.id)
+        if source_count < mode.minimum_source_units:
+            failures.append(f"source_units:{source_count}/{mode.minimum_source_units}")
+        return tuple(dict.fromkeys(failures))
 
     def reachable_knowledge_level(
         self,
@@ -208,21 +310,10 @@ class SurveyService:
             mode = provider.observation_mode(observation_mode_id)
         except KeyError:
             return KnowledgeLevel.UNKNOWN
-        if not self._mode_covers_target(provider_operational_node_id, mode, cell_id):
+        if self._provider_mode_eligibility_failures(
+            provider_operational_node_id, provider, mode, cell_id, day
+        ):
             return KnowledgeLevel.UNKNOWN
-        if self._mode_site_failures(provider_operational_node_id, mode, day):
-            return KnowledgeLevel.UNKNOWN
-        if self._source_capability_failures(provider, mode):
-            return KnowledgeLevel.UNKNOWN
-        if provider.source_kind is SurveyProviderSourceKind.FACILITY:
-            if not self._facility_source_rows(
-                provider, provider_operational_node_id, active_only=False, day=day
-            ):
-                return KnowledgeLevel.UNKNOWN
-        else:
-            definition = self.transport.vehicle_definition(provider.source_definition_id)
-            if definition is None:
-                return KnowledgeLevel.UNKNOWN
         return mode.max_knowledge_level
 
     def start_blockers(
@@ -253,32 +344,14 @@ class SurveyService:
             return ("invalid_target_knowledge_level",)
         if target_level is KnowledgeLevel.UNKNOWN:
             return ("invalid_target_knowledge_level",)
-        provider_body = self.graph.operational_node(provider_operational_node_id).body_id
-        target_body = self.graph.surface_cells[cell_id].body_id
-        if provider_body != target_body:
-            return ("different_body",)
-        failures: list[str] = []
-        if not self._mode_covers_target(provider_operational_node_id, mode, cell_id):
-            failures.append("survey_coverage")
-        failures.extend(self._mode_site_failures(provider_operational_node_id, mode, day))
-        failures.extend(self._source_capability_failures(provider, mode))
+        failures: list[str] = list(self._provider_mode_eligibility_failures(
+            provider_operational_node_id, provider, mode, cell_id, day
+        ))
         current = self.knowledge_level(cell_id, resource_id)
         if current >= target_level:
             failures.append("knowledge_goal_reached")
         if target_level > mode.max_knowledge_level:
             failures.append("survey_provider_limit")
-        if provider.source_kind is SurveyProviderSourceKind.FACILITY:
-            if not self._facility_source_rows(
-                provider, provider_operational_node_id, active_only=False, day=day
-            ):
-                failures.append("survey_provider")
-        else:
-            if self.transport.vehicle_definition(provider.source_definition_id) is None:
-                failures.append("unknown_provider_source")
-            elif self.transport.fleet_free_units(
-                provider.source_definition_id, provider_operational_node_id
-            ) < mode.required_fleet_units:
-                failures.append("fleet_units")
         return tuple(dict.fromkeys(failures))
 
     def can_start(self, *args, **kwargs) -> bool:
@@ -307,18 +380,6 @@ class SurveyService:
         )
         if blockers:
             raise ValueError("; ".join(blockers))
-        provider = self.provider(provider_id)
-        mode = provider.observation_mode(observation_mode_id)
-        commitment_id: EntityId | None = None
-        if provider.source_kind is SurveyProviderSourceKind.FLEET:
-            commitment_id = self.fleet_commitment_id(cell_id, resource_id)
-            self.transport.commit_fleet_units(
-                commitment_id,
-                FleetActivityRef("survey", self.campaign_owner_id(cell_id, resource_id)),
-                provider.source_definition_id,
-                provider_operational_node_id,
-                mode.required_fleet_units,
-            )
         self.campaigns[(cell_id, resource_id)] = SurveyCampaign(
             provider_id,
             observation_mode_id,
@@ -328,7 +389,6 @@ class SurveyService:
             target_knowledge_level,
             priority,
             False,
-            commitment_id,
         )
 
     def pause_blockers(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> tuple[str, ...]:
@@ -354,13 +414,6 @@ class SurveyService:
             return ("not_active",)
         if not campaign.paused:
             return ("not_paused",)
-        provider = self.provider(campaign.provider_definition_id)
-        mode = provider.observation_mode(campaign.observation_mode_id)
-        if provider.source_kind is SurveyProviderSourceKind.FLEET and campaign.fleet_commitment_ref is None:
-            if self.transport.fleet_free_units(
-                provider.source_definition_id, campaign.provider_operational_node_id
-            ) < mode.required_fleet_units:
-                return ("fleet_units",)
         return ()
 
     def can_resume(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
@@ -370,33 +423,7 @@ class SurveyService:
         blockers = self.resume_blockers(cell_id, resource_id)
         if blockers:
             raise ValueError("; ".join(blockers))
-        campaign = self.campaigns[(cell_id, resource_id)]
-        provider = self.provider(campaign.provider_definition_id)
-        mode = provider.observation_mode(campaign.observation_mode_id)
-        if provider.source_kind is SurveyProviderSourceKind.FLEET and campaign.fleet_commitment_ref is None:
-            commitment_id = self.fleet_commitment_id(cell_id, resource_id)
-            self.transport.commit_fleet_units(
-                commitment_id,
-                FleetActivityRef("survey", self.campaign_owner_id(cell_id, resource_id)),
-                provider.source_definition_id,
-                campaign.provider_operational_node_id,
-                mode.required_fleet_units,
-            )
-            campaign.fleet_commitment_ref = commitment_id
-        campaign.paused = False
-
-    def settle_boundary(self, day: int = 0) -> None:
-        for campaign in self.campaigns.values():
-            if not campaign.paused or campaign.fleet_commitment_ref is None:
-                continue
-            commitment = self.transport.fleet_commitment(campaign.fleet_commitment_ref)
-            if commitment is None:
-                campaign.fleet_commitment_ref = None
-                continue
-            if commitment.operational_node_id is None:
-                continue
-            self.transport.release_fleet_commitment(campaign.fleet_commitment_ref, day=day)
-            campaign.fleet_commitment_ref = None
+        self.campaigns[(cell_id, resource_id)].paused = False
 
     def priority_blockers(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> tuple[str, ...]:
         return () if (cell_id, resource_id) in self.campaigns else ("not_active",)
@@ -448,6 +475,7 @@ class SurveyService:
             self.knowledge_progress.get(key, 0.0), self.targets[key].thresholds[-1]
         )
         self.knowledge_precision_fraction[key] = 0.0
+        self.estimated_potential.pop(key, None)
         self.campaigns.pop(key, None)
 
     def is_complete(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
@@ -465,10 +493,38 @@ class SurveyService:
             return None
         return self.targets[(cell_id, resource_id)].prior_presence_probability
 
+    def _estimated_potential_for_mode(
+        self,
+        cell_id: SurfaceCellId,
+        resource_id: DefinitionId,
+        provider_id: DefinitionId,
+        mode: SurveyObservationModeSpec,
+    ) -> float:
+        """Create a stable observation result without exposing static ground truth.
+
+        The uncertainty width is Content-owned. Core only derives a stable signed
+        observation error from the observation identity so results are independent
+        of registration order and survive Save / Load exactly once stored.
+        """
+
+        actual = self.actual_potential(cell_id, resource_id)
+        uncertainty = mode.estimate_uncertainty_fraction
+        if actual <= 0.0 or uncertainty <= 1e-12:
+            return actual
+        digest = sha256(
+            f"{cell_id}\0{resource_id}\0{provider_id}\0{mode.id}".encode("utf-8")
+        ).digest()
+        unit = int.from_bytes(digest[:8], "big") / float((1 << 64) - 1)
+        signed_error = (unit * 2.0) - 1.0
+        return max(0.0, actual * (1.0 + signed_error * uncertainty))
+
     def visible_potential(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> float | None:
-        if self.knowledge_level(cell_id, resource_id) < KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+        level = self.knowledge_level(cell_id, resource_id)
+        if level < KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
             return None
-        return self.actual_potential(cell_id, resource_id)
+        if level >= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
+            return self.actual_potential(cell_id, resource_id)
+        return self.estimated_potential.get((cell_id, resource_id))
 
     def visible_potential_precision_fraction(
         self, cell_id: SurfaceCellId, resource_id: DefinitionId
@@ -484,7 +540,10 @@ class SurveyService:
         day: int = 0,
     ) -> float:
         mode = self.observation_mode(campaign.provider_definition_id, campaign.observation_mode_id)
-        if not self._mode_covers_target(campaign.provider_operational_node_id, mode, campaign.cell_id):
+        provider = self.provider(campaign.provider_definition_id)
+        if self._provider_mode_eligibility_failures(
+            campaign.provider_operational_node_id, provider, mode, campaign.cell_id, day
+        ):
             return 0.0
         return self.provider_capacity_at(
             campaign.provider_definition_id,
@@ -509,8 +568,10 @@ class SurveyService:
             blockers.append("manual_pause")
         provider = self.provider(campaign.provider_definition_id)
         mode = provider.observation_mode(campaign.observation_mode_id)
-        if self._mode_site_failures(campaign.provider_operational_node_id, mode, day):
-            blockers.append("survey_site")
+        for failure in self._provider_mode_eligibility_failures(
+            campaign.provider_operational_node_id, provider, mode, campaign.cell_id, day
+        ):
+            blockers.append(f"survey_eligibility:{failure}")
         if self.capacity_for_campaign(campaign, power, day) <= 1e-12 and not campaign.paused:
             blockers.append("survey_capacity")
         if execution_allocations is not None and not campaign.paused:
@@ -529,7 +590,12 @@ class SurveyService:
         ):
             if campaign.paused:
                 continue
-            mode = self.observation_mode(campaign.provider_definition_id, campaign.observation_mode_id)
+            provider = self.provider(campaign.provider_definition_id)
+            mode = provider.observation_mode(campaign.observation_mode_id)
+            if self._provider_mode_eligibility_failures(
+                campaign.provider_operational_node_id, provider, mode, campaign.cell_id, day
+            ):
+                continue
             if self.knowledge_level(*key) >= campaign.target_knowledge_level:
                 continue
             threshold = self.targets[key].thresholds[int(campaign.target_knowledge_level) - 1]
@@ -605,11 +671,10 @@ class SurveyService:
                 for row in self._facility_source_rows(provider, operational_node_id, active_only=True, day=day)
             )
             return (nominal, enabled)
-        enabled = sum(
-            self._fleet_campaign_capacity(provider, campaign)
-            for campaign in self.campaigns.values()
-            if campaign.provider_definition_id == provider_id
-            and campaign.provider_operational_node_id == operational_node_id
+        assignment = self.provider_assignment_for(provider_id, operational_node_id)
+        enabled = (
+            0.0 if assignment is None
+            else self.provider_assignment_quantity(assignment.id) * provider.capacity_units_per_source_per_day
         )
         return (enabled, enabled)
 
@@ -644,6 +709,10 @@ class SurveyService:
             self.knowledge_progress[key] = min(threshold, current + gain)
             after_level = self.knowledge_level(*key)
             if after_level >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL and after_level > before_level:
+                if key not in self.estimated_potential:
+                    self.estimated_potential[key] = self._estimated_potential_for_mode(
+                        key[0], key[1], campaign.provider_definition_id, mode
+                    )
                 precision = mode.precision_for_level(after_level)
                 if precision is not None:
                     prior = self.knowledge_precision_fraction.get(key)
@@ -654,8 +723,4 @@ class SurveyService:
             campaign = self.campaigns.get(key)
             if campaign is None:
                 continue
-            if campaign.fleet_commitment_ref is not None:
-                commitment = self.transport.fleet_commitment(campaign.fleet_commitment_ref)
-                if commitment is not None and commitment.operational_node_id is not None:
-                    self.transport.release_fleet_commitment(campaign.fleet_commitment_ref, day=day)
             self.campaigns.pop(key, None)

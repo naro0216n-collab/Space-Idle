@@ -194,6 +194,30 @@ class ScientificExplorationsView:
     items: tuple[ScientificExplorationRow, ...]
 
 
+
+@dataclass(frozen=True)
+class SurveyProviderAssignmentRow:
+    id: str
+    provider_definition_id: str
+    source_definition_id: str
+    operational_node_id: str
+    committed_units: int
+    fleet_commitment_id: str
+    capacity_units_per_day: float
+    can_resize: bool
+    can_release: bool
+
+
+@dataclass(frozen=True)
+class SurveyProviderAssignmentOptionRow:
+    provider_definition_id: str
+    source_definition_id: str
+    operational_node_id: str
+    free_units: int
+    can_create: bool
+    blockers: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class SurveyStartOption:
     provider_operational_node_id: str
@@ -206,7 +230,7 @@ class SurveyStartOption:
     capacity_points_per_day: float
     estimate_uncertainty_fraction: float
     measurement_precision_fraction: float
-    required_fleet_units: int
+    minimum_source_units: int
     blockers: tuple[str, ...]
     can_start: bool
 
@@ -224,7 +248,6 @@ class SurveyRow:
     provider_definition_id: str | None
     provider_source_kind: str | None
     observation_mode_id: str | None
-    fleet_commitment_id: str | None
     complete: bool
     paused: bool
     can_start: bool
@@ -249,6 +272,8 @@ class SurveyRow:
 
 @dataclass(frozen=True)
 class SurveysView:
+    provider_assignments: tuple[SurveyProviderAssignmentRow, ...]
+    provider_assignment_options: tuple[SurveyProviderAssignmentOptionRow, ...]
     items: tuple[SurveyRow, ...]
 
 

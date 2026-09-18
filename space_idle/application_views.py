@@ -31,7 +31,7 @@ from .app_contracts.logistics_reports import (
 from .app_contracts.progression_views import (
     ResearchProviderRow, ResearchProviderAssignmentOptionRow, ResearchPrototypeResourceRow, ResearchExperienceRow, ResearchKnowledgeRow,
     ResearchStageRow, ResearchRow, ResearchView, ScientificExplorationFleetOptionRow,
-    ScientificExplorationRow, ScientificExplorationsView, SurveyStartOption, SurveyRow, SurveysView,
+    ScientificExplorationRow, ScientificExplorationsView, SurveyProviderAssignmentRow, SurveyProviderAssignmentOptionRow, SurveyStartOption, SurveyRow, SurveysView,
     ContractRow, ContractsView,
 )
 from .app_contracts.ui_reports import IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView

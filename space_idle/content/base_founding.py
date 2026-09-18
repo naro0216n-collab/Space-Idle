@@ -26,7 +26,6 @@ def build_deployment_recipes() -> dict:
             FoundingFacilityDeployment(
                 ids.SURFACE_DISTRIBUTION_HUB,
                 (_r(ids.STRUCTURAL_COMPONENTS, 0.9), _r(ids.MACHINERY, 0.4), _r(ids.PRECISION_ELECTRONICS, 0.2), _r(ids.CONSTRUCTION_EQUIPMENT, 0.1)),
-                place_at_core_cell=True,
             ),
             FoundingFacilityDeployment(
                 ids.CRYOGENIC_STORAGE,

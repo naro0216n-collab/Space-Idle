@@ -3,7 +3,7 @@
 from .version import VERSION as __version__
 from .bootstrap import build_game_application
 from .application import (
-    AcceptContract, AdvanceTime, ApplicationError, AssignExplorationFleet, CreateResearchProviderAssignment, ResizeResearchProviderAssignment, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, ReleaseResearchProviderAssignment, CancelBuild,
+    AcceptContract, AdvanceTime, ApplicationError, AssignExplorationFleet, CreateResearchProviderAssignment, ResizeResearchProviderAssignment, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, ReleaseResearchProviderAssignment, CreateSurveyProviderAssignment, ResizeSurveyProviderAssignment, ReleaseSurveyProviderAssignment, CancelBuild,
     CreateTradeOrder, UpdateTradeOrder, CancelTradeOrder,
     ChangeTransportAllocationMode, CreateTransportAllocation,
     DeclineContract, DeleteTransportAllocation,

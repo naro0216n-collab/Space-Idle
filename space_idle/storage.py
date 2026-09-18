@@ -60,6 +60,68 @@ class StorageService:
                 ))
         return tuple(blockers)
 
+    def _capacity_for_node(
+        self, operational_node_id: SpatialNodeId, day: int, power: PowerSnapshot | None
+    ) -> tuple[dict[StorageClass, float], dict[StorageClass, float]]:
+        """Derive physical/usable storage for one Operational Node.
+
+        Node-local derivation is the canonical primitive. Global refresh and
+        founding settlement both use it, so a newly founded node cannot receive
+        special storage semantics.
+        """
+
+        physical = {
+            storage_class: amount
+            for (node_id, storage_class), amount in self.inventory.base_storage_capacity_t.items()
+            if node_id == operational_node_id
+        }
+        usable = dict(physical)
+        for facility in self.facilities.all_at(operational_node_id):
+            if facility.lifecycle is FacilityLifecycle.DECOMMISSIONING:
+                continue
+            provider = self.providers.get(facility.definition_id)
+            if provider is None:
+                continue
+            compatible = self.facilities.is_environmentally_compatible(facility, day)
+            utilization = (
+                1.0
+                if power is None
+                else max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
+            )
+            maintenance = (
+                1.0
+                if power is None
+                else power.maintenance_factor_by_facility.get(facility.id, 1.0)
+            )
+            for storage_class, capacity in provider.capacity_t_by_class.items():
+                physical[storage_class] = physical.get(storage_class, 0.0) + capacity
+                if not compatible:
+                    factor = 0.0
+                elif storage_class in provider.power_sensitive_classes:
+                    factor = utilization * maintenance
+                else:
+                    factor = maintenance
+                usable[storage_class] = usable.get(storage_class, 0.0) + capacity * factor
+        return physical, usable
+
+    def refresh_node(
+        self, operational_node_id: SpatialNodeId, day: int, power: PowerSnapshot | None
+    ) -> None:
+        """Refresh derived storage only for one Operational Node."""
+
+        node_physical, node_usable = self._capacity_for_node(operational_node_id, day, power)
+        physical = {
+            key: amount for key, amount in self.inventory.physical_storage_capacity_t.items()
+            if key[0] != operational_node_id
+        }
+        usable = {
+            key: amount for key, amount in self.inventory.usable_storage_capacity_t.items()
+            if key[0] != operational_node_id
+        }
+        physical.update({(operational_node_id, storage_class): amount for storage_class, amount in node_physical.items()})
+        usable.update({(operational_node_id, storage_class): amount for storage_class, amount in node_usable.items()})
+        self.inventory.set_capacity_snapshot(physical, usable)
+
     def refresh(self, day: int, power_by_operational_node: dict[SpatialNodeId, PowerSnapshot]) -> None:
         """Rebuild current physical and serviced capacities from static site state
         plus installed facilities.
@@ -68,35 +130,14 @@ class StorageService:
         facilities and static content, then recompute storage capacity.
         """
 
-        physical = dict(self.inventory.base_storage_capacity_t)
-        usable = dict(self.inventory.base_storage_capacity_t)
-
-        for facility in self.facilities.facilities.values():
-            if facility.lifecycle is FacilityLifecycle.DECOMMISSIONING:
-                continue
-            provider = self.providers.get(facility.definition_id)
-            if provider is None:
-                continue
-            compatible = self.facilities.is_environmentally_compatible(facility, day)
-            snapshot = power_by_operational_node.get(facility.operational_node_id)
-            utilization = 1.0
-            if snapshot is not None:
-                utilization = max(0.0, min(1.0, snapshot.utilization_by_facility.get(facility.id, 1.0)))
-            maintenance = (
-                1.0
-                if snapshot is None
-                else snapshot.maintenance_factor_by_facility.get(facility.id, 1.0)
+        node_ids = {node_id for node_id, _storage_class in self.inventory.base_storage_capacity_t}
+        node_ids.update(facility.operational_node_id for facility in self.facilities.facilities.values())
+        physical: dict[tuple[SpatialNodeId, StorageClass], float] = {}
+        usable: dict[tuple[SpatialNodeId, StorageClass], float] = {}
+        for operational_node_id in sorted(node_ids, key=str):
+            node_physical, node_usable = self._capacity_for_node(
+                operational_node_id, day, power_by_operational_node.get(operational_node_id)
             )
-
-            for storage_class, capacity in provider.capacity_t_by_class.items():
-                key = (facility.operational_node_id, storage_class)
-                physical[key] = physical.get(key, 0.0) + capacity
-                if not compatible:
-                    factor = 0.0
-                elif storage_class in provider.power_sensitive_classes:
-                    factor = utilization * maintenance
-                else:
-                    factor = maintenance
-                usable[key] = usable.get(key, 0.0) + capacity * factor
-
+            physical.update({(operational_node_id, storage_class): amount for storage_class, amount in node_physical.items()})
+            usable.update({(operational_node_id, storage_class): amount for storage_class, amount in node_usable.items()})
         self.inventory.set_capacity_snapshot(physical, usable)

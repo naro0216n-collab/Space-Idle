@@ -41,9 +41,26 @@ class KnowledgeRequirementSpec:
         return KnowledgeRequirement(target_cell_id, self.subject_resource_id, self.minimum_level)
 
 
-class SurveyCoverage(str, Enum):
-    BODY_REMOTE = "body_remote"
+class SurveyReachScope(str, Enum):
+    SAME_BODY = "same_body"
+    SAME_SYSTEM = "same_system"
     LOCATION_TERRITORY = "location_territory"
+
+
+@dataclass(frozen=True)
+class SurveyReachSpec:
+    scope: SurveyReachScope
+    max_characteristic_distance_km: float | None = None
+    max_characteristic_delta_v_km_s: float | None = None
+    required_operation_types: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        if self.max_characteristic_distance_km is not None and self.max_characteristic_distance_km < 0:
+            raise ValueError("survey reach distance must be non-negative")
+        if self.max_characteristic_delta_v_km_s is not None and self.max_characteristic_delta_v_km_s < 0:
+            raise ValueError("survey reach delta-v must be non-negative")
+        if any(not operation_type for operation_type in self.required_operation_types):
+            raise ValueError("survey reach operation type must not be empty")
 
 
 class SurveyProviderSourceKind(str, Enum):
@@ -71,13 +88,13 @@ class SurveyTarget:
 class SurveyObservationModeSpec:
     id: str
     survey_rate: float
-    coverage: SurveyCoverage
+    reach: SurveyReachSpec
     max_knowledge_level: KnowledgeLevel
     estimate_uncertainty_fraction: float
     measurement_precision_fraction: float
     site_requirements: SiteRequirements = SiteRequirements()
     required_source_capabilities: frozenset[str] = frozenset()
-    required_fleet_units: int = 1
+    minimum_source_units: int = 1
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -91,8 +108,8 @@ class SurveyObservationModeSpec:
             raise ValueError("survey estimate uncertainty must be within 0..1")
         if not 0.0 <= self.measurement_precision_fraction <= 1.0:
             raise ValueError("survey measurement precision must be within 0..1")
-        if self.required_fleet_units <= 0:
-            raise ValueError("survey observation mode required Fleet units must be positive")
+        if self.minimum_source_units <= 0:
+            raise ValueError("survey observation mode minimum source units must be positive")
         if any(not capability for capability in self.required_source_capabilities):
             raise ValueError("survey source capabilities must not be empty")
 
@@ -139,7 +156,6 @@ class SurveyCampaign:
     target_knowledge_level: KnowledgeLevel
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     paused: bool = False
-    fleet_commitment_ref: EntityId | None = None
 
     def __post_init__(self) -> None:
         self.priority = ActivityPriority(self.priority)
@@ -148,6 +164,16 @@ class SurveyCampaign:
             raise ValueError("survey target knowledge level must be positive")
         if not self.observation_mode_id:
             raise ValueError("survey campaign observation mode id must not be empty")
+
+
+@dataclass
+class SurveyProviderAssignmentState:
+    id: EntityId
+    provider_definition_id: DefinitionId
+    vehicle_definition_id: DefinitionId
+    operational_node_id: SpatialNodeId
+    fleet_commitment_ref: EntityId
+
 
 
 @dataclass(frozen=True)
