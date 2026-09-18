@@ -13,10 +13,35 @@ from space_idle.content.base_spatial import BASE_WORLD_DEFINITION_ID, build_worl
 from space_idle.persistence import SaveFormatError, load_game, save_game
 
 
-def test_standard_scenario_applies_initial_state_exactly_once_without_pre_founding_moon():
+def test_world_definition_and_standard_scenario_keep_static_and_runtime_state_separate():
+    graph, _environment = build_world_definition()
+    assert graph.operational_node_states == {}
+    assert graph.locations == {}
+    assert ids.LEO in graph.nodes
+    assert ids.LUNAR_ORBIT in graph.nodes
+    assert graph.surface_cells
+
+    load_app = build_game_application_for_load()
+    load_sim = load_app._simulation
+    assert not load_sim.runtime_state_initialized
+    assert load_sim.graph.nodes
+    assert load_sim.graph.surface_cells
+    assert load_sim.facilities.definitions
+    assert load_sim.transport.vehicle_defs
+    assert load_sim.market.provider_defs
+    assert load_sim.graph.operational_node_states == {}
+    assert load_sim.graph.locations == {}
+    assert load_sim.facilities.facilities == {}
+    assert load_sim.transport.fleet_pools == {}
+    assert load_sim.inventory.stock == {}
+    assert load_sim.inventory.base_storage_capacity_t == {}
+    assert load_sim.market.funds.balance == 0.0
+    assert load_sim.market.provider_states == {}
+    assert load_sim.market.interfaces == {}
+    assert load_sim.survey is not None and load_sim.survey.knowledge_progress == {}
+
     app = build_game_application()
     sim = app._simulation
-
     assert app.world_definition_id == BASE_WORLD_DEFINITION_ID
     assert app.scenario_id == STANDARD_SCENARIO_ID
     assert sim.runtime_state_initialized
@@ -34,34 +59,6 @@ def test_standard_scenario_applies_initial_state_exactly_once_without_pre_foundi
         build_standard_scenario_definition().apply(sim)
 
 
-def test_world_and_load_composition_build_static_definitions_without_player_runtime_state():
-    graph, _environment = build_world_definition()
-    assert graph.operational_node_states == {}
-    assert graph.locations == {}
-    assert ids.LEO in graph.nodes
-    assert ids.LUNAR_ORBIT in graph.nodes
-    assert graph.surface_cells
-
-    app = build_game_application_for_load()
-    sim = app._simulation
-
-    assert not sim.runtime_state_initialized
-    assert sim.graph.nodes
-    assert sim.graph.surface_cells
-    assert sim.facilities.definitions
-    assert sim.transport.vehicle_defs
-    assert sim.market.provider_defs
-
-    assert sim.graph.operational_node_states == {}
-    assert sim.graph.locations == {}
-    assert sim.facilities.facilities == {}
-    assert sim.transport.fleet_pools == {}
-    assert sim.inventory.stock == {}
-    assert sim.inventory.base_storage_capacity_t == {}
-    assert sim.market.funds.balance == 0.0
-    assert sim.market.provider_states == {}
-    assert sim.market.interfaces == {}
-    assert sim.survey is not None and sim.survey.knowledge_progress == {}
 
 
 def test_load_preserves_runtime_state_without_reapplying_scenario_and_rejects_identity_mismatch(tmp_path):

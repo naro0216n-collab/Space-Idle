@@ -101,12 +101,12 @@ def test_maintenance_shortage_can_starve_lower_priority_facility_without_auto_re
     assert sim.inventory.amount(ids.EARTH, common) == pytest.approx(0.0)
 
 
-def test_maintenance_runway_reports_actual_site_stock_not_one_day_planning_amount():
+def test_maintenance_replenishment_uses_actual_stock_and_ignores_transient_reservations():
     app = build_game_application()
     sim = app._simulation
-    resource_id = DefinitionId("test.resource.maintenance_runway")
+    resource_id = DefinitionId("test.resource.maintenance_replenishment")
     facility = _install_maintenance_facility(
-        sim, ids.LEO, definition_suffix="runway", resource_id=resource_id
+        sim, ids.LEO, definition_suffix="replenishment", resource_id=resource_id
     )
     sim.facilities.facilities = {facility.id: facility}
     daily = sim.facilities.maintenance_requirements_per_day(facility.id)[resource_id]
@@ -117,10 +117,26 @@ def test_maintenance_runway_reports_actual_site_stock_not_one_day_planning_amoun
         demand for demand in app.query(GetLogistics()).requirements
         if demand.owner_id == str(facility.id) and demand.resource_id == str(resource_id)
     )
-
+    baseline = {
+        demand.resource_id: demand.amount_t
+        for demand in sim.maintenance.supplys(sim.day)
+    }
     assert row.requested_t == pytest.approx(daily)
     assert row.local_runway_days == pytest.approx(stock_days)
     assert row.supply_state == "local_covered"
+    assert baseline[resource_id] == pytest.approx(daily)
+
+    sim.inventory.reserve(
+        EntityId("test.transient"),
+        facility.operational_node_id,
+        resource_id,
+        daily * (stock_days / 2.0),
+    )
+    after_reservation = {
+        demand.resource_id: demand.amount_t
+        for demand in sim.maintenance.supplys(sim.day)
+    }
+    assert baseline == after_reservation
 
 
 def test_current_tick_maintenance_allocation_controls_power_and_service_capacity():
@@ -152,35 +168,6 @@ def test_current_tick_maintenance_allocation_controls_power_and_service_capacity
     assert service.enabled_rate == pytest.approx(0.0)
 
 
-def test_maintenance_replenishment_plan_is_independent_of_transient_reservations():
-    app = build_game_application()
-    sim = app._simulation
-    resource_id = DefinitionId("test.resource.maintenance_replenishment")
-    facility = _install_maintenance_facility(
-        sim, ids.EARTH, definition_suffix="replenishment", resource_id=resource_id
-    )
-    sim.facilities.facilities = {facility.id: facility}
-    daily = sim.facilities.maintenance_requirements_per_day(facility.id)[resource_id]
-    stock_days = sim.maintenance.reorder_point_days + 5.0
-    sim.inventory.stock[(ids.EARTH, resource_id)] = daily * stock_days
-
-    baseline = {
-        demand.resource_id: demand.amount_t
-        for demand in sim.maintenance.supplys(sim.day)
-    }
-    sim.inventory.reserve(
-        EntityId("test.transient"),
-        facility.operational_node_id,
-        resource_id,
-        daily * (stock_days / 2.0),
-    )
-    after_reservation = {
-        demand.resource_id: demand.amount_t
-        for demand in sim.maintenance.supplys(sim.day)
-    }
-
-    assert baseline == after_reservation
-    assert baseline[resource_id] == pytest.approx(daily)
 
 
 def test_flow_report_includes_current_facility_maintenance_consumption():

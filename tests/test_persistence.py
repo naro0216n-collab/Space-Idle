@@ -247,34 +247,6 @@ def test_facility_owned_process_selection_roundtrips_in_facility_state(tmp_path)
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
 
-def test_save_load_preserves_research_execution_site(tmp_path):
-    app = build_game_application()
-    sim = app._simulation
-    research_id = ids.TECH_ORBITAL_OPERATIONS
-    sim.research.active[research_id] = ResearchState(
-        research_id,
-        "prototype",
-        stage_progress=0.0,
-        stage_started_day=sim.day,
-    )
-    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
-
-    before = sim.research.active[research_id].execution_context
-    assert before is not None
-    path = tmp_path / "research-execution-site.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application_for_load)
-
-    after = loaded._simulation.research.active[research_id].execution_context
-    assert after == before
-    assert capture_state(loaded._simulation)["research"] == capture_state(sim)["research"]
-    assert loaded.query(GetResearch()) == app.query(GetResearch())
-
-    # Future-behavior equality only needs one canonical tick here. Multi-day
-    # composability is owned by the dedicated Offline Progress contract below.
-    app.execute(AdvanceTime(1))
-    loaded.execute(AdvanceTime(1))
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
 
 def test_offline_progress_matches_normal_time_and_is_fractionally_composable(tmp_path):
@@ -497,7 +469,7 @@ def test_load_rejects_cross_domain_runtime_invariant_violation(tmp_path):
         load_game(path, build_game_application_for_load)
 
 
-def test_research_provider_assignment_persists_commitment_reference_without_quantity_copy(tmp_path):
+def test_research_authoritative_state_roundtrips_without_quantity_duplication(tmp_path):
     provider_id = DefinitionId("test.research_provider.persistence_fleet")
 
     def factory(*, for_load: bool):
@@ -512,18 +484,30 @@ def test_research_provider_assignment_persists_commitment_reference_without_quan
         return app
 
     app = factory(for_load=False)
+    sim = app._simulation
+    research_id = ids.TECH_ORBITAL_OPERATIONS
+    sim.research.active[research_id] = ResearchState(
+        research_id,
+        "prototype",
+        stage_progress=0.0,
+        stage_started_day=sim.day,
+    )
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
+    execution_context = sim.research.active[research_id].execution_context
+    assert execution_context is not None
+
     result = app.execute(CreateResearchProviderAssignment(
         str(provider_id), str(ids.LEO), 1, priority=4
     ))
     assignment_id = result.created_id
     assert assignment_id is not None
-    assignment = next(iter(app._simulation.research.provider_assignments.values()))
-    before_commitment = app._simulation.transport.fleet_commitment_snapshot(
+    assignment = next(iter(sim.research.provider_assignments.values()))
+    before_commitment = sim.transport.fleet_commitment_snapshot(
         assignment.fleet_commitment_ref
     )
     assert before_commitment is not None and before_commitment.quantity == 1
 
-    path = tmp_path / "research-provider-assignment.json"
+    path = tmp_path / "research-authoritative-state.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     raw = json.loads(path.read_text(encoding="utf-8"))
     saved_assignment = raw["state"]["research"]["provider_assignments"][0]
@@ -531,14 +515,24 @@ def test_research_provider_assignment_persists_commitment_reference_without_quan
     assert "quantity" not in saved_assignment
     assert saved_assignment["vehicle_definition_id"] == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
 
-    loaded, _ = load_game(path, lambda: factory(for_load=True))
-    loaded_assignment = next(iter(loaded._simulation.research.provider_assignments.values()))
+    loaded, offline = load_game(path, lambda: factory(for_load=True))
+    assert offline is None
+    loaded_sim = loaded._simulation
+    assert loaded_sim.research.active[research_id].execution_context == execution_context
+    assert capture_state(loaded_sim)["research"] == capture_state(sim)["research"]
+    assert loaded.query(GetResearch()) == app.query(GetResearch())
+
+    loaded_assignment = next(iter(loaded_sim.research.provider_assignments.values()))
     assert str(loaded_assignment.id) == assignment_id
     assert loaded_assignment.provider_definition_id == provider_id
     assert loaded_assignment.priority == 4
-    loaded_commitment = loaded._simulation.transport.fleet_commitment_snapshot(
+    loaded_commitment = loaded_sim.transport.fleet_commitment_snapshot(
         loaded_assignment.fleet_commitment_ref
     )
     assert loaded_commitment is not None
     assert loaded_commitment.quantity == 1
     assert loaded_commitment.owner_activity_ref.activity_id == loaded_assignment.id
+
+    app.execute(AdvanceTime(1))
+    loaded.execute(AdvanceTime(1))
+    assert capture_state(loaded_sim) == capture_state(sim)

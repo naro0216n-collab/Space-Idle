@@ -92,12 +92,10 @@ def _found_command(name: str, cell_id):
     )
 
 
-def test_unrelated_resource_knowledge_does_not_satisfy_development_or_founding():
+def test_knowledge_requirements_are_subject_specific_and_gate_founding_without_early_materialization():
     app = build_game_application()
     sim = app._simulation
 
-    # Surface Development explicitly requires WATER knowledge. Keep another
-    # Resource fully characterized while removing only WATER knowledge.
     earth_cell = ids.EARTH_CELL_COASTAL
     water_key = (earth_cell, ids.WATER)
     unrelated_key = (earth_cell, ids.METAL_ORE)
@@ -111,21 +109,38 @@ def test_unrelated_resource_knowledge_does_not_satisfy_development_or_founding()
         for failure in development_failures
     )
 
-    # Lunar Founding explicitly requires REGOLITH knowledge. High WATER
-    # knowledge at the same Cell must not satisfy that requirement.
     lunar_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
     water_target = sim.survey.targets[(lunar_cell, ids.WATER)]
     sim.survey.knowledge_progress[(lunar_cell, ids.WATER)] = water_target.thresholds[-1]
     sim.survey.knowledge_progress[(lunar_cell, ids.REGOLITH)] = 0.0
     recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
     founding_failures = sim.founding.planning_failures(
-        ids.LUNAR_ORBIT, _surface_target(sim, ids.MOON, lunar_cell), recipe.id,
-        ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
+        ids.LUNAR_ORBIT,
+        _surface_target(sim, ids.MOON, lunar_cell),
+        recipe.id,
+        ids.REUSABLE_SURFACE_CARGO_LANDER,
+        sim.day,
     )
     assert any(
         failure.code == "knowledge_requirement" and str(ids.REGOLITH) in failure.detail
         for failure in founding_failures
     )
+    with pytest.raises(ApplicationError, match="knowledge_requirement"):
+        app.execute(_found_command("Farside", lunar_cell))
+
+    _survey_cell_to_l2(sim, lunar_cell)
+    _stage_founding_resources(sim)
+    result = app.execute(_found_command("Farside", lunar_cell))
+    assert result.created_id is not None
+    project = next(
+        row for row in sim.founding.projects.values()
+        if str(row.id) == result.created_id
+    )
+    target_id = sim.founding.target_operational_node_id(project.target_spec)
+    assert target_id not in sim.graph.locations
+    assert not sim.graph.has_operational_node(target_id)
+    assert all(location_id != target_id for location_id, _resource in sim.inventory.stock)
+    assert not sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, target_id)
 
 
 def test_non_surface_operational_node_founding_uses_common_lifecycle_without_early_node_creation():
@@ -241,25 +256,6 @@ def test_founding_resource_shortage_reports_supply_transport_blocker():
     assert any(code == "resource_shortage" for code, _detail in row.blockers)
 
 
-def test_founding_requires_orbital_survey_and_does_not_create_target_inventory_before_arrival():
-    app = build_game_application()
-    sim = app._simulation
-    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    with pytest.raises(ApplicationError, match="knowledge_requirement"):
-        app.execute(_found_command("Farside", cell))
-
-    _survey_cell_to_l2(sim, cell)
-    _stage_founding_resources(sim)
-    result = app.execute(_found_command("Farside", cell))
-    assert result.created_id is not None
-    project = next(
-        row for row in sim.founding.projects.values()
-        if str(row.id) == result.created_id
-    )
-    assert sim.founding.target_operational_node_id(project.target_spec) not in sim.graph.locations
-    assert not sim.graph.has_operational_node(sim.founding.target_operational_node_id(project.target_spec))
-    assert all(location_id != sim.founding.target_operational_node_id(project.target_spec) for location_id, _resource in sim.inventory.stock)
-    assert not sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, sim.founding.target_operational_node_id(project.target_spec))
 
 
 def test_founding_and_surface_development_claims_are_mutually_exclusive():

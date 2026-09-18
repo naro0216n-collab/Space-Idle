@@ -26,9 +26,9 @@ from space_idle.shared import DefinitionId, EntityId
 from space_idle.transport.models import FleetActivityRef, FleetRetirementPhase
 
 
-def test_fleet_retirement_commits_only_free_units_and_is_reversible_before_dismantling():
-    app = build_game_application()
-    sim = app._simulation
+def test_fleet_retirement_lifecycle_reserves_free_units_then_becomes_irreversible_and_settles_salvage():
+    reversible = build_game_application()
+    sim = reversible._simulation
     pool = sim.transport.fleet_pool(ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH)
     pool.total_units = 2
 
@@ -40,9 +40,9 @@ def test_fleet_retirement_commits_only_free_units_and_is_reversible_before_disma
         1,
     )
     with pytest.raises(ApplicationError, match="free Fleet"):
-        app.execute(RetireFleet(str(ids.REUSABLE_LAUNCH_VEHICLE), 2, str(ids.EARTH)))
+        reversible.execute(RetireFleet(str(ids.REUSABLE_LAUNCH_VEHICLE), 2, str(ids.EARTH)))
 
-    retirement_id = app.execute(
+    retirement_id = reversible.execute(
         RetireFleet(str(ids.REUSABLE_LAUNCH_VEHICLE), 1, str(ids.EARTH), priority=4)
     ).created_id
     assert retirement_id is not None
@@ -51,14 +51,12 @@ def test_fleet_retirement_commits_only_free_units_and_is_reversible_before_disma
     assert snapshot.free_units == 0
     assert snapshot.retirement_units == 1
 
-    app.execute(CancelFleetRetirement(retirement_id))
+    reversible.execute(CancelFleetRetirement(retirement_id))
     snapshot = sim.transport.fleet_pool_snapshot(ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH)
     assert snapshot.total_units == 2
     assert snapshot.retirement_units == 0
     assert snapshot.free_units == 1
 
-
-def test_fleet_retirement_becomes_irreversible_and_settles_salvage_before_decrement():
     app = build_game_application()
     sim = app._simulation
     control = build_game_application()
@@ -71,7 +69,9 @@ def test_fleet_retirement_becomes_irreversible_and_settles_salvage_before_decrem
     state = sim.transport.fleet_retirements[EntityId(retirement_id)]
     assert state.irreversible_started
     assert state.phase is FleetRetirementPhase.DISMANTLING
-    assert sim.transport.fleet_pool_snapshot(ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH).total_units == 1
+    assert sim.transport.fleet_pool_snapshot(
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH
+    ).total_units == 1
     with pytest.raises(ApplicationError, match="cannot be cancelled"):
         app.execute(CancelFleetRetirement(retirement_id))
 
@@ -85,6 +85,8 @@ def test_fleet_retirement_becomes_irreversible_and_settles_salvage_before_decrem
     assert sim.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS) == pytest.approx(
         control._simulation.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS) + 10.0
     )
+
+
 
 
 def test_fleet_retirement_application_projection_and_save_load_preserve_commitment(tmp_path):

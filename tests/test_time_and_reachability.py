@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
-from space_idle import AdvanceTime, GetMovementPlans, GetWorld, build_game_application
+from space_idle import AdvanceTime, GetMovementPlans, GetWorld, SetTimeControl, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import GameRuntime
 from space_idle.content import base_ids as ids
@@ -10,7 +11,62 @@ from space_idle.content.base_game import (
     REUSABLE_ORBITAL_CARGO_TUG,
 )
 from space_idle.simulation import OfflineProgressPolicy
-from space_idle.persistence import capture_state
+from space_idle.persistence import capture_state, load_game, save_game
+
+
+def test_time_control_persists_and_drives_direct_and_runtime_offline_progress(tmp_path):
+    saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    policy = OfflineProgressPolicy(real_seconds_per_game_day=10.0)
+
+    app = build_game_application()
+    app.execute(SetTimeControl(speed_multiplier=2.0))
+    path = tmp_path / "running.json"
+    save_game(app, path, saved_at=saved_at)
+    loaded, result = load_game(
+        path,
+        build_game_application_for_load,
+        now=saved_at + timedelta(seconds=20),
+        offline_policy=policy,
+    )
+    assert loaded.time_paused is False
+    assert loaded.time_speed_multiplier == 2.0
+    assert result is not None and result.advanced_days == 4
+    assert loaded.query(GetWorld()).day == 4
+
+    app.execute(SetTimeControl(paused=True))
+    paused_path = tmp_path / "paused.json"
+    save_game(app, paused_path, saved_at=saved_at)
+    paused, paused_result = load_game(
+        paused_path,
+        build_game_application_for_load,
+        now=saved_at + timedelta(hours=1),
+        offline_policy=policy,
+    )
+    assert paused.time_paused is True
+    assert paused.time_speed_multiplier == 2.0
+    assert paused_result is None
+    assert paused.query(GetWorld()).day == 0
+
+    wall = [saved_at]
+    runtime = GameRuntime(
+        new_game_factory=build_game_application,
+        load_factory=build_game_application_for_load,
+        save_dir=tmp_path,
+        offline_policy=policy,
+        clock=lambda: 100.0,
+        utcnow=lambda: wall[0],
+    )
+    runtime.set_time_control(speed_multiplier=2.0)
+    runtime.save("slot")
+    runtime.set_time_control(paused=True, speed_multiplier=1.0)
+    wall[0] += timedelta(seconds=30)
+    runtime_result = runtime.load("slot", apply_offline=True)
+
+    session = runtime_result.data["session"]
+    assert session["time_paused"] is False
+    assert session["time_speed_multiplier"] == 2.0
+    assert session["day"] == 6
+    assert runtime_result.data["offline_progress"]["advanced_days"] == 6
 
 
 def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ticks(tmp_path):

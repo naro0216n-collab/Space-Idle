@@ -491,45 +491,6 @@ def test_cargo_is_not_available_until_boundary_arrival_settlement():
         sim.advance_days(1)
     assert sim.inventory.amount(LEO, resource) == pytest.approx(before + dispatched)
 
-def test_cargo_arrival_waits_for_inventory_admission():
-    app = build_game_application()
-    sim = app._simulation
-    sim.transport.transport_allocations.clear()
-    sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
-    sim.refresh_storage()
-    _owned_earth_leo_capacity(sim)
-    sim.inventory.stock[(LEO, MACHINERY)] = 0.0
-    free = sim.inventory.admission_state(LEO, MACHINERY).admission_capacity_t
-    assert free is not None and free > 1.0
-    sim.inventory.add(LEO, CONSTRUCTION_EQUIPMENT, free)
-    sim.inventory.add(EARTH, MACHINERY, 1.0)
-    _set_global_source_preference(sim, EARTH)
-    target_id = sim.logistics.set_target_stock(LEO, MACHINERY, 1.0, 5)
-
-    sim.advance_days(1)
-    flow = next(
-        row for row in sim.logistics.cargo_flows.values()
-        if row.owner_id == target_id
-    )
-    ready_day = flow.first_arrival_day
-    sim.advance_to_day(ready_day)
-    waiting = next(
-        row for row in sim.logistics.arrival_waiting.values()
-        if row.owner_id == target_id
-    )
-    assert flow.id not in sim.logistics.cargo_flows
-    projected = next(
-        row for row in app.query(GetCargoFlows()).items if row.id == str(waiting.id)
-    )
-    assert projected.status == "arrival_waiting"
-    assert any("storage" in blocker for blocker in projected.admission_blockers)
-
-    sim.inventory.consume_allocated(LEO, CONSTRUCTION_EQUIPMENT, waiting.amount_t)
-    for _ in range(8):
-        sim.advance_days(1)
-        if waiting.id not in sim.logistics.arrival_waiting:
-            break
-    assert waiting.id not in sim.logistics.arrival_waiting
 
 def test_supply_resource_competition_respects_priority_reservations_and_order_independence():
     inventory = InventoryBook()
@@ -675,12 +636,15 @@ def test_multistage_boundary_handoff_preserves_logistics_ownership():
     assert sim.inventory.amount(handoff_node, resource) == pytest.approx(stock_before)
 
 
-def test_arrival_waiting_reduces_reusable_transport_capacity_until_cleared():
-    sim = build_game_application()._simulation
+def test_arrival_waiting_exposes_admission_blocker_and_backpressures_transport_until_cleared():
+    app = build_game_application()
+    sim = app._simulation
+    sim.transport.transport_allocations.clear()
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
     sim.refresh_storage()
     allocation_id = _owned_earth_leo_capacity(sim)
     baseline = sim.logistics.current_transport_capacity_snapshot(allocation_id, day=0)
+
     cargo = DefinitionId("test.resource.backpressure-cargo")
     filler = DefinitionId("test.resource.backpressure-filler")
     sim.inventory.register_storage_class(cargo, "general_cargo")
@@ -703,6 +667,13 @@ def test_arrival_waiting_reduces_reusable_transport_capacity_until_cleared():
         row for row in sim.logistics.arrival_waiting.values()
         if row.owner_id == target_id
     )
+    assert flow.id not in sim.logistics.cargo_flows
+
+    projected = next(
+        row for row in app.query(GetCargoFlows()).items if row.id == str(waiting.id)
+    )
+    assert projected.status == "arrival_waiting"
+    assert any("storage" in blocker for blocker in projected.admission_blockers)
 
     blocked = sim.logistics.current_transport_capacity_snapshot(
         allocation_id, day=ready_day
