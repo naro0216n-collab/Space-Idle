@@ -764,7 +764,7 @@ class FleetRetirementState:
     phase: FleetRetirementPhase = FleetRetirementPhase.COMMITTED
     irreversible_started: bool = False
     created_day: int = 0
-    salvage_wait_started_day: int | None = None
+    salvage_recovered_fraction: float | None = None
 
     def __post_init__(self) -> None:
         self.priority = ActivityPriority(self.priority)
@@ -772,6 +772,8 @@ class FleetRetirementState:
             raise ValueError("retirement requested units must be positive")
         if self.progress_work < 0:
             raise ValueError("retirement progress must be non-negative")
+        if self.salvage_recovered_fraction is not None and not 0.0 <= self.salvage_recovered_fraction <= 1.0:
+            raise ValueError("retirement salvage recovered fraction must be within 0..1")
 
 
 @dataclass(frozen=True)

@@ -160,6 +160,10 @@ class FleetRetirementRow:
     priority: ActivityPriority
     expected_salvage: tuple[tuple[str, float], ...]
     blockers: tuple[str, ...]
+    projected_salvage_fraction: float = 1.0
+    projected_salvage: tuple[tuple[str, float], ...] = ()
+    actual_salvage_fraction: float | None = None
+    actual_salvage: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)

@@ -8,6 +8,7 @@ from .application_views import (
     TransportAllocationsView, VehicleProductionOptionRow, VehicleProductionRow,
 )
 from .shared import DefinitionId, SpatialNodeId
+from .disposal import project_salvage_recovery
 
 
 class LogisticsStateProjectorMixin:
@@ -327,6 +328,15 @@ class LogisticsStateProjectorMixin:
             if vehicle_definition_id is not None and str(state.vehicle_definition_id) != vehicle_definition_id:
                 continue
             definition = self._vehicle_definition(state.vehicle_definition_id)
+            recovery_potential = tuple(
+                (resource_id, amount * state.requested_units)
+                for resource_id, amount in definition.retirement.recovery_resources_per_unit
+                if amount * state.requested_units > 1e-12
+            )
+            recovery_projection = project_salvage_recovery(
+                sim.inventory, state.operational_node_id, recovery_potential
+            )
+            actual_fraction = state.salvage_recovered_fraction
             rows.append(FleetRetirementRow(
                 id=str(state.id),
                 vehicle_definition_id=str(state.vehicle_definition_id),
@@ -339,10 +349,23 @@ class LogisticsStateProjectorMixin:
                 required_work=definition.retirement.work_days_per_unit * state.requested_units,
                 priority=state.priority,
                 expected_salvage=tuple(
-                    (str(resource_id), amount * state.requested_units)
-                    for resource_id, amount in definition.retirement.recovery_resources_per_unit
+                    (str(resource_id), amount) for resource_id, amount in recovery_potential
                 ),
                 blockers=sim.transport.fleet_retirement_blockers(state.id, day=sim.day),
+                projected_salvage_fraction=recovery_projection.recoverable_fraction,
+                projected_salvage=tuple(
+                    (str(resource_id), amount)
+                    for resource_id, amount in recovery_projection.recovered_by_resource
+                ),
+                actual_salvage_fraction=actual_fraction,
+                actual_salvage=(
+                    ()
+                    if actual_fraction is None
+                    else tuple(
+                        (str(resource_id), amount * actual_fraction)
+                        for resource_id, amount in recovery_potential
+                    )
+                ),
             ))
         return tuple(rows)
 

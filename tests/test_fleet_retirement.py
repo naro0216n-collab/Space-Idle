@@ -100,6 +100,7 @@ def test_fleet_retirement_lifecycle_preserves_commitment_across_projection_save_
     app.execute(AdvanceTime(5))
     state = sim.transport.fleet_retirements[EntityId(retirement_id)]
     assert state.phase is FleetRetirementPhase.COMPLETE
+    assert state.salvage_recovered_fraction == pytest.approx(1.0)
     snapshot = sim.transport.fleet_pool_snapshot(ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH)
     assert snapshot.total_units == 0
     assert snapshot.retirement_units == 0
@@ -107,6 +108,32 @@ def test_fleet_retirement_lifecycle_preserves_commitment_across_projection_save_
     assert sim.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS) == pytest.approx(
         control._simulation.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS) + 10.0
     )
+
+    completed_stock = {
+        resource_id: sim.inventory.amount(ids.EARTH, resource_id)
+        for resource_id, _amount in sim.transport.vehicle_defs[
+            ids.REUSABLE_LAUNCH_VEHICLE
+        ].retirement.recovery_resources_per_unit
+    }
+    completed_path = tmp_path / "retirement-complete.json"
+    save_game(app, completed_path, saved_at=datetime(2026, 9, 18, tzinfo=timezone.utc))
+    reloaded, offline = load_game(completed_path, build_game_application_for_load)
+    assert offline is None
+    control_after_load, offline = load_game(completed_path, build_game_application_for_load)
+    assert offline is None
+    control_after_load._simulation.transport.fleet_retirements.pop(EntityId(retirement_id))
+    reloaded.execute(AdvanceTime(1))
+    control_after_load.execute(AdvanceTime(1))
+    reloaded_state = reloaded._simulation.transport.fleet_retirements[EntityId(retirement_id)]
+    assert reloaded_state.phase is FleetRetirementPhase.COMPLETE
+    assert reloaded_state.salvage_recovered_fraction == pytest.approx(1.0)
+    assert reloaded._simulation.transport.fleet_pool_snapshot(
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH
+    ).total_units == 0
+    for resource_id in completed_stock:
+        assert reloaded._simulation.inventory.amount(ids.EARTH, resource_id) == pytest.approx(
+            control_after_load._simulation.inventory.amount(ids.EARTH, resource_id)
+        )
 
 
 
@@ -175,7 +202,7 @@ def test_fleet_retirement_priority_competes_for_shared_work_capacity():
     assert not low.irreversible_started
 
 
-def test_fleet_retirement_at_non_earth_node_uses_aggregate_salvage_headroom_and_waits_for_admission():
+def test_fleet_retirement_at_non_earth_node_settles_partial_salvage_with_one_fraction():
     app = build_game_application()
     sim = app._simulation
     workshop_definition_id = DefinitionId("test.facility.orbital_vehicle_workshop")
@@ -236,16 +263,36 @@ def test_fleet_retirement_at_non_earth_node_uses_aggregate_salvage_headroom_and_
     admission = sim.inventory.admission_state_for_pool(ids.LUNAR_ORBIT, storage_pool_key)
     assert admission.admission_capacity_t is not None
     assert largest_component < admission.admission_capacity_t < salvage_total
-    assert f"salvage_admission:{storage_pool_key}" in sim.transport.fleet_retirement_blockers(
-        retirement_id, day=sim.day
+    assert not any(
+        blocker.startswith("salvage_admission:")
+        for blocker in sim.transport.fleet_retirement_blockers(retirement_id, day=sim.day)
     )
     assert sim.transport.fleet_pool_snapshot(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
     ).total_units == 1
 
-    sim.inventory.stock[(ids.LUNAR_ORBIT, filler)] = max(0.0, current_filler - 10.0)
+    bundles = sim.transport.fleet_retirement_execution_requirement_bundles(sim.day)
+    salvage_bundle = next(
+        row for row in bundles if row.id == sim.transport._retirement_salvage_bundle_id(retirement_id)
+    )
+    assert not salvage_bundle.atomic
+    assert salvage_bundle.minimum_execution == pytest.approx(0.0)
+
+    expected_fraction = sim.tick_decision_projection().allocations.execution.fulfillment(
+        salvage_bundle.id
+    )
+    assert 0.0 < expected_fraction < 1.0
+
     app.execute(AdvanceTime(1))
-    assert sim.transport.fleet_retirements[retirement_id].phase is FleetRetirementPhase.COMPLETE
+    completed = sim.transport.fleet_retirements[retirement_id]
+    assert completed.phase is FleetRetirementPhase.COMPLETE
+    assert completed.salvage_recovered_fraction == pytest.approx(expected_fraction)
     assert sim.transport.fleet_pool_snapshot(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
     ).total_units == 0
+    completed_row = next(row for row in app.query(GetFleet()).retirements if row.id == str(retirement_id))
+    assert completed_row.actual_salvage_fraction == pytest.approx(expected_fraction)
+    assert dict(completed_row.actual_salvage) == {
+        str(resource_id): pytest.approx(potential * expected_fraction)
+        for resource_id, potential in salvage
+    }

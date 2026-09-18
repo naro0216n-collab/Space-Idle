@@ -14,6 +14,7 @@ from .construction.models import (
     ProjectStatus, SurfaceCellDevelopmentTarget,
 )
 from .facilities import FacilityPlacementScope
+from .disposal import project_salvage_recovery
 from .shared import EntityId, SpatialNodeId
 
 
@@ -247,6 +248,22 @@ class ProjectProjectorMixin:
                 decision.allocations.services, sim.day
             )
 
+            salvage_potential = {}
+            salvage_projection = None
+            if isinstance(project.target, FacilityDecommissionTarget):
+                salvage_potential = sim.projects.decommission_salvage_for_project(project)
+                facility = sim.facilities.facilities.get(project.target.facility_id)
+                if facility is not None:
+                    post_removal_headroom = sim.storage.post_decommission_admission_headroom(
+                        facility.id, sim.day, project_power
+                    )
+                    salvage_projection = project_salvage_recovery(
+                        sim.inventory,
+                        project.operational_node_id,
+                        salvage_potential,
+                        admission_headroom_by_pool=post_removal_headroom,
+                    )
+
             rows.append(ProjectRow(
                 str(project.id), target_kind, str(project.operational_node_id),
                 None if facility_definition_id is None else str(facility_definition_id),
@@ -271,9 +288,23 @@ class ProjectProjectorMixin:
                 project.irreversible_started,
                 tuple(
                     (str(resource_id), amount)
-                    for resource_id, amount in sorted(
-                        sim.projects.decommission_salvage_for_project(project).items(), key=lambda row: str(row[0])
+                    for resource_id, amount in sorted(salvage_potential.items(), key=lambda row: str(row[0]))
+                ),
+                projected_salvage_fraction=(
+                    None if salvage_projection is None else salvage_projection.recoverable_fraction
+                ),
+                projected_salvage=(
+                    ()
+                    if salvage_projection is None
+                    else tuple(
+                        (str(resource_id), amount)
+                        for resource_id, amount in salvage_projection.recovered_by_resource
                     )
+                ),
+                actual_salvage_fraction=project.salvage_recovered_fraction,
+                actual_salvage=tuple(
+                    (str(resource_id), amount)
+                    for resource_id, amount in sorted(project.salvage_recovered.items(), key=lambda row: str(row[0]))
                 ),
             ))
         if sim.founding is not None:

@@ -7,8 +7,8 @@ from ..execution_requirements import (
     ExecutionRequirementBundle,
     ResourceRequirement,
     ServiceCapacityRequirement,
-    StockOrPoolAdmissionRequirement,
 )
+from ..disposal import salvage_admission_requirements, settle_salvage_recovery
 from ..priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from ..shared import DefinitionId, EntityId, SpatialNodeId
 from ..site import evaluate_site_requirements
@@ -147,16 +147,9 @@ class FleetRetirementMixin:
                     blockers.append(f"resource:{resource_id}")
             return tuple(blockers)
 
-        salvage_by_pool: dict[str, float] = {}
-        for resource_id, amount_t in self._retirement_salvage(state):
-            pool_key = self.inventory.storage_pool_for_resource(resource_id)
-            salvage_by_pool[pool_key] = salvage_by_pool.get(pool_key, 0.0) + amount_t
-        for storage_pool_key, amount_t in sorted(salvage_by_pool.items()):
-            admission = self.inventory.admission_state_for_pool(
-                state.operational_node_id, storage_pool_key
-            )
-            if admission.admission_capacity_t is not None and admission.admission_capacity_t + _EPS < amount_t:
-                blockers.append(f"salvage_admission:{storage_pool_key}")
+        # Salvage recovery potential is not Player-owned stock yet. Limited
+        # admission therefore reduces the recoverable fraction at settlement;
+        # it never becomes a permanent retirement blocker.
         return tuple(blockers)
 
     def fleet_retirement_execution_requirement_bundles(
@@ -198,14 +191,7 @@ class FleetRetirementMixin:
                 ))
                 continue
             salvage = self._retirement_salvage(state)
-            admission_by_pool: dict[str, float] = {}
-            for resource_id, amount_t in salvage:
-                pool_id = self.inventory.storage_pool_for_resource(resource_id)
-                admission_by_pool[pool_id] = admission_by_pool.get(pool_id, 0.0) + amount_t
-            requirements = tuple(
-                StockOrPoolAdmissionRequirement(pool_id, amount_t)
-                for pool_id, amount_t in sorted(admission_by_pool.items())
-            )
+            requirements = salvage_admission_requirements(self.inventory, salvage)
             rows.append(ExecutionRequirementBundle(
                 id=self._retirement_salvage_bundle_id(state.id),
                 owner_kind="fleet_retirement",
@@ -215,9 +201,6 @@ class FleetRetirementMixin:
                 requested_execution=1.0,
                 priority=state.priority,
                 requirements=requirements,
-                minimum_execution=1.0,
-                atomic=True,
-                wait_started_day=state.salvage_wait_started_day if state.salvage_wait_started_day is not None else day,
             ))
         return tuple(rows)
 
@@ -249,16 +232,19 @@ class FleetRetirementMixin:
                 state.progress_work = min(total_work, state.progress_work + remaining_work * factor)
                 if total_work - state.progress_work <= _EPS:
                     state.progress_work = total_work
-                    state.salvage_wait_started_day = day
                 continue
             try:
                 factor = allocations.fulfillment(self._retirement_salvage_bundle_id(state.id))
             except KeyError:
-                factor = 0.0
-            if factor < 1.0 - _EPS:
+                # Work can reach completion in the current tick before the
+                # salvage bundle has participated in shared Allocation.  A
+                # missing allocation is not an authoritative zero recovery
+                # decision, so settle only after the next allocation pass.
                 continue
             salvage = self._retirement_salvage(state)
-            for resource_id, amount_t in salvage:
-                self.inventory.admit(state.operational_node_id, resource_id, amount_t)
+            settle_salvage_recovery(
+                self.inventory, state.operational_node_id, salvage, factor
+            )
+            state.salvage_recovered_fraction = min(1.0, max(0.0, factor))
             self.consume_fleet_commitment(state.fleet_commitment_id, day=day)
             state.phase = FleetRetirementPhase.COMPLETE

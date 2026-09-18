@@ -236,7 +236,7 @@ def capture_transport(sim: Any) -> dict[str, Any]:
                 "phase": state.phase.value,
                 "irreversible_started": state.irreversible_started,
                 "created_day": state.created_day,
-                "salvage_wait_started_day": state.salvage_wait_started_day,
+                "salvage_recovered_fraction": state.salvage_recovered_fraction,
             }
             for state in sorted(tr.fleet_retirements.values(), key=lambda row: str(row.id))
         ],
@@ -348,7 +348,11 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
             phase=FleetRetirementPhase(row.get("phase", "committed")),
             irreversible_started=bool(row.get("irreversible_started", False)),
             created_day=int(row.get("created_day", 0)),
-            salvage_wait_started_day=(None if row.get("salvage_wait_started_day") is None else int(row["salvage_wait_started_day"])),
+            salvage_recovered_fraction=(
+                None
+                if row.get("salvage_recovered_fraction") is None
+                else float(row["salvage_recovered_fraction"])
+            ),
         )
         for row in data.get("fleet_retirements", [])
     }
@@ -685,8 +689,17 @@ def validate_transport_runtime(sim: Any) -> None:
             _require(state.phase is not FleetRetirementPhase.COMMITTED, f"irreversible fleet retirement remains committed: {retirement_id}")
         if state.phase is FleetRetirementPhase.DISMANTLING:
             _require(state.irreversible_started, f"dismantling retirement is reversible: {retirement_id}")
-        if state.salvage_wait_started_day is not None:
-            _require(state.progress_work + 1e-9 >= total_work, f"fleet retirement waits for salvage before work completion: {retirement_id}")
+        if state.phase is FleetRetirementPhase.COMPLETE:
+            _require(
+                state.salvage_recovered_fraction is not None
+                and -1e-9 <= state.salvage_recovered_fraction <= 1.0 + 1e-9,
+                f"completed fleet retirement missing valid salvage fraction: {retirement_id}",
+            )
+        elif state.phase is FleetRetirementPhase.CANCELLED:
+            _require(
+                state.salvage_recovered_fraction is None,
+                f"cancelled fleet retirement has salvage result: {retirement_id}",
+            )
 
     for project_id, state in tr.vehicle_production_projects.items():
         _require(project_id == state.id, f"vehicle production state key mismatch: {project_id}")

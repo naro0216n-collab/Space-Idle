@@ -89,6 +89,10 @@ class ProjectRow:
     projected_material_readiness_day: int | None = None
     irreversible_started: bool = False
     expected_salvage: tuple[tuple[str, float], ...] = ()
+    projected_salvage_fraction: float | None = None
+    projected_salvage: tuple[tuple[str, float], ...] = ()
+    actual_salvage_fraction: float | None = None
+    actual_salvage: tuple[tuple[str, float], ...] = ()
     founding_target_type: str | None = None
     founding_knowledge_requirements: tuple[ProjectKnowledgeRequirementRow, ...] = ()
     fleet_commitment_id: str | None = None

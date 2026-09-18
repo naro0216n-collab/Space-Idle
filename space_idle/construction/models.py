@@ -182,12 +182,18 @@ class ConstructionProject:
     materials_committed: bool = False
     completed_facility_id: EntityId | None = None
     irreversible_started: bool = False
+    salvage_recovered_fraction: float | None = None
+    salvage_recovered: dict[DefinitionId, float] = field(default_factory=dict)
     # Facility placement state only. Geographic project target cells live on
     # their target type so one cell never has two authoritative fields.
     site_cell_id: SurfaceCellId | None = None
 
     def __post_init__(self) -> None:
         self.priority = ActivityPriority(self.priority)
+        if self.salvage_recovered_fraction is not None and not 0.0 <= self.salvage_recovered_fraction <= 1.0:
+            raise ValueError("salvage recovered fraction must be within 0..1")
+        if any(amount < 0.0 for amount in self.salvage_recovered.values()):
+            raise ValueError("salvage recovered amount must be non-negative")
 
 
 @dataclass(frozen=True)

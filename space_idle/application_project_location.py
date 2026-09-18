@@ -21,6 +21,7 @@ from .application_views import (
     StorageRow,
 )
 from .shared import SpatialNodeId
+from .disposal import project_salvage_recovery
 from .spatial import EnvironmentFieldScope, SpatialContextId
 
 
@@ -237,6 +238,16 @@ class LocationProjectorMixin:
                 power_utilization * maintenance_satisfaction
                 if active_and_compatible else 0.0
             )
+            recovery_potential = sim.facilities.decommission_salvage(facility.id)
+            post_removal_headroom = sim.storage.post_decommission_admission_headroom(
+                facility.id, sim.day, power
+            )
+            recovery_projection = project_salvage_recovery(
+                sim.inventory,
+                facility.operational_node_id,
+                recovery_potential,
+                admission_headroom_by_pool=post_removal_headroom,
+            )
             facilities.append(
                 FacilityRow(
                     str(facility.id),
@@ -281,8 +292,13 @@ class LocationProjectorMixin:
                     tuple(
                         (str(resource_id), amount)
                         for resource_id, amount in sorted(
-                            sim.facilities.decommission_salvage(facility.id).items(), key=lambda row: str(row[0])
+                            recovery_potential.items(), key=lambda row: str(row[0])
                         )
+                    ),
+                    recovery_projection.recoverable_fraction,
+                    tuple(
+                        (str(resource_id), amount)
+                        for resource_id, amount in recovery_projection.recovered_by_resource
                     ),
                 )
             )

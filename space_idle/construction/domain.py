@@ -64,6 +64,11 @@ def capture_projects(sim: Any) -> dict[str, Any]:
                 "completed_facility_id": None if project.completed_facility_id is None else str(project.completed_facility_id),
                 "materials_committed": project.materials_committed,
                 "irreversible_started": project.irreversible_started,
+                "salvage_recovered_fraction": project.salvage_recovered_fraction,
+                "salvage_recovered": [
+                    {"resource_id": str(resource_id), "amount_t": amount}
+                    for resource_id, amount in sorted(project.salvage_recovered.items(), key=lambda row: str(row[0]))
+                ],
                 "resources": [
                     {"resource_id": str(resource_id), "committed_t": state.committed_t}
                     for resource_id, state in sorted(project.resources.items(), key=lambda row: str(row[0]))
@@ -101,6 +106,15 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
             materials_committed=bool(row["materials_committed"]),
             completed_facility_id=None if row["completed_facility_id"] is None else EntityId(row["completed_facility_id"]),
             irreversible_started=bool(row.get("irreversible_started", False)),
+            salvage_recovered_fraction=(
+                None
+                if row.get("salvage_recovered_fraction") is None
+                else float(row["salvage_recovered_fraction"])
+            ),
+            salvage_recovered={
+                DefinitionId(item["resource_id"]): float(item["amount_t"])
+                for item in row.get("salvage_recovered", [])
+            },
         )
 
 
@@ -219,6 +233,15 @@ def validate_runtime(sim: Any) -> None:
                 _require(target.facility_definition_id in sim.projects.decommission_recipes, f"completed decommission references unknown recipe: {project_id}")
                 recipe = sim.projects.decommission_recipes[target.facility_definition_id]
                 _require(project.irreversible_started, f"completed decommission never crossed irreversible boundary: {project_id}")
+                _require(
+                    project.salvage_recovered_fraction is not None
+                    and -1e-9 <= project.salvage_recovered_fraction <= 1.0 + 1e-9,
+                    f"completed decommission missing valid salvage fraction: {project_id}",
+                )
+                _require(
+                    all(amount >= -1e-9 for amount in project.salvage_recovered.values()),
+                    f"completed decommission has negative salvage result: {project_id}",
+                )
             else:
                 _require(target.facility_id in sim.facilities.facilities, f"decommission project references unknown facility: {project_id}")
                 facility = sim.facilities.facilities[target.facility_id]

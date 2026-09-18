@@ -4,8 +4,8 @@ from ..execution_requirements import (
     ExecutionAllocationPlan,
     ExecutionRequirementBundle,
     ServiceCapacityRequirement,
-    StockOrPoolAdmissionRequirement,
 )
+from ..disposal import salvage_admission_requirements, settle_salvage_recovery
 from ..power import PowerSnapshot
 from ..shared import EntityId, SpatialNodeId
 from .models import (
@@ -28,18 +28,13 @@ class ConstructionExecutionMixin:
         return self.facilities.decommission_salvage(project.target.facility_id)
 
     def _decommission_admission_requirements(self, project: ConstructionProject):
-        by_pool: dict[str, float] = {}
-        for resource_id, amount in self.decommission_salvage_for_project(project).items():
-            pool_key = self.inventory.storage_pool_for_resource(resource_id)
-            if amount <= 1e-12:
-                continue
-            by_pool[pool_key] = by_pool.get(pool_key, 0.0) + amount
-        return tuple(
-            StockOrPoolAdmissionRequirement(storage_pool_key, amount)
-            for storage_pool_key, amount in sorted(by_pool.items())
+        return salvage_admission_requirements(
+            self.inventory, self.decommission_salvage_for_project(project)
         )
 
-    def _finish_project(self, project: ConstructionProject) -> None:
+    def _finish_project(
+        self, project: ConstructionProject, *, decommission_recoverable_fraction: float = 1.0
+    ) -> None:
         self._commit_materials(project)
         invested = self._committed_resources(project)
         target = project.target
@@ -59,11 +54,17 @@ class ConstructionExecutionMixin:
             project.completed_facility_id = target.facility_id
         elif isinstance(target, FacilityDecommissionTarget):
             facility = self.facilities.facilities[target.facility_id]
-            salvage = self.facilities.decommission_salvage(target.facility_id)
-            for resource_id, amount in salvage.items():
-                result = self.inventory.admit(facility.operational_node_id, resource_id, amount)
-                if not result.fully_admitted:
-                    raise RuntimeError("allocated decommission salvage admission changed before settlement")
+            recovery_potential = self.facilities.decommission_salvage(target.facility_id)
+            recovered = settle_salvage_recovery(
+                self.inventory,
+                facility.operational_node_id,
+                recovery_potential,
+                decommission_recoverable_fraction,
+            )
+            project.salvage_recovered_fraction = min(
+                1.0, max(0.0, float(decommission_recoverable_fraction))
+            )
+            project.salvage_recovered = dict(recovered)
             self.facility_lifecycle_registry.release_references(target.facility_id)
             self.facilities.finalize_decommission(target.facility_id)
         else:
@@ -136,9 +137,6 @@ class ConstructionExecutionMixin:
                         requested_execution=1.0,
                         priority=project.priority,
                         requirements=requirements,
-                        minimum_execution=1.0,
-                        atomic=True,
-                        wait_started_day=day,
                     ))
                 continue
             requirements = [
@@ -231,13 +229,18 @@ class ConstructionExecutionMixin:
                     if not project.irreversible_started:
                         continue
                     try:
-                        admitted = execution_allocations.allocated(
+                        recoverable_fraction = execution_allocations.fulfillment(
                             self.decommission_salvage_bundle_id(project.id)
                         )
                     except KeyError:
-                        admitted = 0.0
-                    if admitted < 1.0 - 1e-9:
+                        # Work may have reached completion in this same tick; the
+                        # salvage bundle becomes part of the next allocation pass.
                         continue
-                self._finish_project(project)
+                    self._finish_project(
+                        project,
+                        decommission_recoverable_fraction=recoverable_fraction,
+                    )
+                else:
+                    self._finish_project(project)
                 physical_state_changed = True
         return physical_state_changed

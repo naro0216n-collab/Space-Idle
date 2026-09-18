@@ -64,7 +64,8 @@ class StorageService:
         return tuple(blockers)
 
     def _capacity_for_node(
-        self, operational_node_id: SpatialNodeId, day: int, power: PowerSnapshot | None
+        self, operational_node_id: SpatialNodeId, day: int, power: PowerSnapshot | None,
+        *, excluded_facility_ids: frozenset[EntityId] = frozenset(),
     ) -> tuple[dict[StoragePoolKey, float], dict[StoragePoolKey, float], dict[StoragePoolKey, tuple[str, ...]]]:
         physical = {
             pool_key: amount
@@ -74,6 +75,8 @@ class StorageService:
         usable = dict(physical)
         limiter_lists: dict[StoragePoolKey, list[str]] = {}
         for facility in self.facilities.all_at(operational_node_id):
+            if facility.id in excluded_facility_ids:
+                continue
             if facility.lifecycle is FacilityLifecycle.DECOMMISSIONING:
                 continue
             provider = self.providers.get(facility.definition_id)
@@ -108,6 +111,38 @@ class StorageService:
                 usable[pool_key] = usable.get(pool_key, 0.0) + capacity * factor
         limiters = {key: tuple(dict.fromkeys(values)) for key, values in limiter_lists.items() if values}
         return physical, usable, limiters
+
+
+    def post_decommission_admission_headroom(
+        self, facility_id: EntityId, day: int, power: PowerSnapshot | None
+    ) -> dict[StoragePoolKey, float]:
+        """Preview pool headroom after removing one Facility.
+
+        The result is read-only decision support. Disposal settlement still uses
+        the shared Execution Allocation produced after the Facility has crossed
+        into DECOMMISSIONING and its active storage supply is no longer present.
+        """
+        facility = self.facilities.facilities.get(facility_id)
+        if facility is None:
+            return {}
+        _physical, usable, _limiters = self._capacity_for_node(
+            facility.operational_node_id, day, power,
+            excluded_facility_ids=frozenset((facility_id,)),
+        )
+        pools = set(usable)
+        pools.update(
+            self.inventory.storage_pool_for_resource(resource_id)
+            for (node_id, resource_id), amount in self.inventory.stock.items()
+            if node_id == facility.operational_node_id and amount > 1e-12
+        )
+        return {
+            pool_key: max(
+                0.0,
+                usable.get(pool_key, 0.0)
+                - self.inventory.stored_in_pool(facility.operational_node_id, pool_key),
+            )
+            for pool_key in pools
+        }
 
     def refresh_node(
         self, operational_node_id: SpatialNodeId, day: int, power: PowerSnapshot | None
