@@ -70,38 +70,38 @@ def capture_market(sim: Any) -> dict[str, Any]:
 def restore_market(sim: Any, data: dict[str, Any]) -> None:
     market = sim.market
     market.funds = FundsState(float(data["funds_balance_musd"]))
-    market._order_counter = int(data.get("order_counter", 0))
-    market._commitment_counter = int(data.get("commitment_counter", 0))
+    market._order_counter = int(data["order_counter"])
+    market._commitment_counter = int(data["commitment_counter"])
     market.provider_states = {}
-    for raw in data.get("provider_states", []):
+    for raw in data["provider_states"]:
         row = MarketProviderState(
             DefinitionId(raw["provider_id"]),
-            {DefinitionId(key): float(value) for key, value in raw.get("supply_available_t", {}).items()},
-            {DefinitionId(key): float(value) for key, value in raw.get("demand_available_t", {}).items()},
-            int(raw.get("last_replenished_day", 0)),
+            {DefinitionId(key): float(value) for key, value in raw["supply_available_t"].items()},
+            {DefinitionId(key): float(value) for key, value in raw["demand_available_t"].items()},
+            int(raw["last_replenished_day"]),
         )
         market.provider_states[row.provider_id] = row
     market.interfaces = {}
-    for raw in data.get("interfaces", []):
+    for raw in data["interfaces"]:
         row = MarketInterfaceState(
             EntityId(raw["id"]), DefinitionId(raw["provider_id"]),
-            SpatialNodeId(raw["operational_node_id"]), bool(raw.get("enabled", True)),
+            SpatialNodeId(raw["operational_node_id"]), bool(raw["enabled"]),
         )
         market.interfaces[row.id] = row
     market.orders = {}
-    for raw in data.get("orders", []):
+    for raw in data["orders"]:
         row = TradeOrderState(
             EntityId(raw["id"]), TradeDirection(raw["direction"]), DefinitionId(raw["resource_id"]),
             EntityId(raw["market_interface_id"]), ActivityPriority(int(raw["priority"])),
             TradeControlMode(raw["control_mode"]),
-            None if raw.get("quantity_target_t") is None else float(raw["quantity_target_t"]),
-            None if raw.get("rate_target_t_per_day") is None else float(raw["rate_target_t_per_day"]),
-            None if raw.get("price_limit_musd_per_t") is None else float(raw["price_limit_musd_per_t"]),
-            float(raw.get("settled_quantity_t", 0.0)),
+            None if raw["quantity_target_t"] is None else float(raw["quantity_target_t"]),
+            None if raw["rate_target_t_per_day"] is None else float(raw["rate_target_t_per_day"]),
+            None if raw["price_limit_musd_per_t"] is None else float(raw["price_limit_musd_per_t"]),
+            float(raw["settled_quantity_t"]),
         )
         market.orders[row.id] = row
     market.buy_commitments = {}
-    for raw in data.get("buy_commitments", []):
+    for raw in data["buy_commitments"]:
         row = BuyCommitment(
             EntityId(raw["id"]), EntityId(raw["order_id"]), DefinitionId(raw["resource_id"]),
             float(raw["remaining_quantity_t"]), float(raw["committed_price_musd_per_t"]),

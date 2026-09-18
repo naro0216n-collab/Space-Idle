@@ -74,7 +74,18 @@ def restore_state(sim, data: dict[str, Any]) -> None:
             continue
         if codec.key not in data:
             raise SaveFormatError(f"save state is missing domain section: {codec.key}")
-        codec.restore(sim, data[codec.key])
+        section = data[codec.key]
+        if not isinstance(section, dict):
+            raise SaveFormatError(f"save domain section must be an object: {codec.key}")
+        expected = codec.capture(sim)
+        if isinstance(expected, dict) and set(section) != set(expected):
+            missing = sorted(set(expected) - set(section))
+            unexpected = sorted(set(section) - set(expected))
+            raise SaveFormatError(
+                f"save domain section has invalid fields: {codec.key}; "
+                f"missing={missing}; unexpected={unexpected}"
+            )
+        codec.restore(sim, section)
     sim.mark_runtime_state_initialized()
     sim.transport.invalidate_movement_plans()
     sim.refresh_storage()
@@ -187,6 +198,21 @@ def load_game(
     if envelope.scenario_id != app.scenario_id:
         raise SaveFormatError(
             f"save scenario mismatch: {envelope.scenario_id} != {app.scenario_id}"
+        )
+    expected_state_fields = {
+        "day", "pending_offline_game_days", "boundary_used_by_constraint", "application",
+        *(
+            extension.state_codec.key
+            for extension in _extensions(app._simulation)
+            if extension.state_codec is not None
+        ),
+    }
+    if set(envelope.state) != expected_state_fields:
+        missing = sorted(expected_state_fields - set(envelope.state))
+        unexpected = sorted(set(envelope.state) - expected_state_fields)
+        raise SaveFormatError(
+            "save state has invalid fields; "
+            f"missing={missing}; unexpected={unexpected}"
         )
     try:
         restore_state(app._simulation, envelope.state)

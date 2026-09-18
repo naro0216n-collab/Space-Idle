@@ -45,12 +45,12 @@ def _capture_movement_endpoint(endpoint: MovementEndpoint) -> dict[str, Any]:
 
 def _restore_movement_endpoint(data: dict[str, Any]) -> MovementEndpoint:
     return MovementEndpoint(
-        operational_node_id=None if data.get("operational_node_id") is None else SpatialNodeId(data["operational_node_id"]),
-        surface_interface_id=None if data.get("surface_interface_id") is None else EntityId(data["surface_interface_id"]),
-        access_cell_id=None if data.get("access_cell_id") is None else SurfaceCellId(data["access_cell_id"]),
-        non_surface_interface=data.get("non_surface_interface"),
-        physical_target_cell_id=None if data.get("physical_target_cell_id") is None else SurfaceCellId(data["physical_target_cell_id"]),
-        physical_target_node_id=None if data.get("physical_target_node_id") is None else SpatialNodeId(data["physical_target_node_id"]),
+        operational_node_id=None if data["operational_node_id"] is None else SpatialNodeId(data["operational_node_id"]),
+        surface_interface_id=None if data["surface_interface_id"] is None else EntityId(data["surface_interface_id"]),
+        access_cell_id=None if data["access_cell_id"] is None else SurfaceCellId(data["access_cell_id"]),
+        non_surface_interface=data["non_surface_interface"],
+        physical_target_cell_id=None if data["physical_target_cell_id"] is None else SurfaceCellId(data["physical_target_cell_id"]),
+        physical_target_node_id=None if data["physical_target_node_id"] is None else SpatialNodeId(data["physical_target_node_id"]),
     )
 
 
@@ -107,13 +107,13 @@ def _restore_movement_execution(data: dict[str, Any]) -> MovementExecution:
                 destination=_restore_movement_endpoint(leg["destination"]),
                 operations=tuple(
                     TransportOperationRequirement(
-                        operation["operation_type"], float(operation.get("delta_v_km_s", 0.0))
+                        operation["operation_type"], float(operation["delta_v_km_s"])
                     )
-                    for operation in leg.get("operations", [])
+                    for operation in leg["operations"]
                 ),
                 latency_days=int(leg["latency_days"]),
                 payload_capacity_t=float(leg["payload_capacity_t"]),
-                propellant_t_per_unit=float(leg.get("propellant_t_per_unit", 0.0)),
+                propellant_t_per_unit=float(leg["propellant_t_per_unit"]),
                 asset_disposition=OperationAssetDisposition(leg["asset_disposition"]),
                 resource_requirements=tuple(
                     MovementExecutionResourceRequirement(
@@ -121,12 +121,12 @@ def _restore_movement_execution(data: dict[str, Any]) -> MovementExecution:
                         DefinitionId(requirement["resource_id"]),
                         float(requirement["required_t"]),
                     )
-                    for requirement in leg.get("resource_requirements", [])
+                    for requirement in leg["resource_requirements"]
                 ),
             )
-            for leg in data.get("legs", [])
+            for leg in data["legs"]
         ),
-        payload_t_per_unit=float(data.get("payload_t_per_unit", 0.0)),
+        payload_t_per_unit=float(data["payload_t_per_unit"]),
         started_day=int(data["started_day"]),
         completion_day=int(data["completion_day"]),
         payload_resources=tuple(
@@ -134,7 +134,7 @@ def _restore_movement_execution(data: dict[str, Any]) -> MovementExecution:
                 DefinitionId(payload["resource_id"]),
                 float(payload["amount_t"]),
             )
-            for payload in data.get("payload_resources", [])
+            for payload in data["payload_resources"]
         ),
     )
 
@@ -258,15 +258,15 @@ def capture_transport(sim: Any) -> dict[str, Any]:
 
 def restore_transport(sim: Any, data: dict[str, Any]) -> None:
     tr = sim.transport
-    tr._transport_allocation_counter = int(data.get("transport_allocation_counter", 0))
-    tr._fleet_relocation_counter = int(data.get("fleet_relocation_counter", 0))
-    tr._fleet_release_counter = int(data.get("fleet_release_counter", 0))
-    tr._fleet_retirement_counter = int(data.get("fleet_retirement_counter", 0))
+    tr._transport_allocation_counter = int(data["transport_allocation_counter"])
+    tr._fleet_relocation_counter = int(data["fleet_relocation_counter"])
+    tr._fleet_release_counter = int(data["fleet_release_counter"])
+    tr._fleet_retirement_counter = int(data["fleet_retirement_counter"])
     tr.fleet_pools = {
         (DefinitionId(row["vehicle_definition_id"]), SpatialNodeId(row["operational_node_id"])): FleetPool(
             DefinitionId(row["vehicle_definition_id"]), SpatialNodeId(row["operational_node_id"]), int(row["total_units"])
         )
-        for row in data.get("fleet_pools", [])
+        for row in data["fleet_pools"]
     }
     tr.fleet_commitments = {
         EntityId(row["id"]): FleetCommitmentState(
@@ -277,19 +277,28 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
             vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
             quantity=int(row["quantity"]),
             operational_node_id=(
-                None if row.get("operational_node_id") is None
+                None if row["operational_node_id"] is None
                 else SpatialNodeId(row["operational_node_id"])
             ),
             movement_execution_id=(
-                None if row.get("movement_execution_id") is None
+                None if row["movement_execution_id"] is None
                 else EntityId(row["movement_execution_id"])
             ),
         )
-        for row in data.get("fleet_commitments", [])
+        for row in data["fleet_commitments"]
     }
     tr.transport_allocations = {}
-    for row in data.get("transport_allocations", []):
+    allocation_fields = {
+        "id", "vehicle_definition_id", "anchor_node_id", "destination_id",
+        "provisioning_priority", "target_capacity", "movement_hard_constraint",
+        "paused", "last_operated_day",
+    }
+    for row in data["transport_allocations"]:
+        if set(row) != allocation_fields:
+            raise ValueError("transport allocation has invalid fields")
         target = row["target_capacity"]
+        if set(target) != {"forward_t_per_day", "reverse_t_per_day"}:
+            raise ValueError("transport allocation target capacity has invalid fields")
         allocation = TransportAllocation(
             id=EntityId(row["id"]), vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
             anchor_node_id=SpatialNodeId(row["anchor_node_id"]), destination_id=SpatialNodeId(row["destination_id"]),
@@ -297,11 +306,11 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
             target_capacity=DirectionalCapacity(float(target["forward_t_per_day"]), float(target["reverse_t_per_day"])),
             movement_hard_constraint=(
                 None
-                if row.get("movement_hard_constraint") is None
+                if row["movement_hard_constraint"] is None
                 else tuple(MovementPlanId(value) for value in row["movement_hard_constraint"])
             ),
-            paused=bool(row.get("paused", False)),
-            last_operated_day=None if row.get("last_operated_day") is None else int(row["last_operated_day"]),
+            paused=bool(row["paused"]),
+            last_operated_day=None if row["last_operated_day"] is None else int(row["last_operated_day"]),
         )
         tr.transport_allocations[allocation.id] = allocation
     tr.fleet_relocations = {
@@ -316,17 +325,17 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
             path=tuple(MovementPlanId(value) for value in row["path"]),
             resource_needs=tuple(
                 FleetRelocationResourceNeed(SpatialNodeId(need["operational_node_id"]), DefinitionId(need["resource_id"]), float(need["required_t"]))
-                for need in row.get("resource_needs", [])
+                for need in row["resource_needs"]
             ),
             priority=int(row["priority"]),
-            movement_execution_id=None if row.get("movement_execution_id") is None else EntityId(row["movement_execution_id"]),
+            movement_execution_id=None if row["movement_execution_id"] is None else EntityId(row["movement_execution_id"]),
         )
-        for row in data.get("fleet_relocations", [])
+        for row in data["fleet_relocations"]
     }
     tr.movement_executions = {
         execution.id: execution
         for execution in (
-            _restore_movement_execution(row) for row in data.get("movement_executions", [])
+            _restore_movement_execution(row) for row in data["movement_executions"]
         )
     }
     tr.fleet_releases = {
@@ -334,7 +343,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
             EntityId(row["id"]), EntityId(row["allocation_id"]),
             EntityId(row["fleet_commitment_id"]), int(row["release_day"])
         )
-        for row in data.get("fleet_releases", [])
+        for row in data["fleet_releases"]
     }
     tr.fleet_retirements = {
         EntityId(row["id"]): FleetRetirementState(
@@ -344,29 +353,29 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
             requested_units=int(row["requested_units"]),
             fleet_commitment_id=EntityId(row["fleet_commitment_id"]),
             priority=int(row["priority"]),
-            progress_work=float(row.get("progress_work", 0.0)),
-            phase=FleetRetirementPhase(row.get("phase", "committed")),
-            irreversible_started=bool(row.get("irreversible_started", False)),
-            created_day=int(row.get("created_day", 0)),
+            progress_work=float(row["progress_work"]),
+            phase=FleetRetirementPhase(row["phase"]),
+            irreversible_started=bool(row["irreversible_started"]),
+            created_day=int(row["created_day"]),
             salvage_recovered_fraction=(
                 None
-                if row.get("salvage_recovered_fraction") is None
+                if row["salvage_recovered_fraction"] is None
                 else float(row["salvage_recovered_fraction"])
             ),
         )
-        for row in data.get("fleet_retirements", [])
+        for row in data["fleet_retirements"]
     }
-    production_data = data.get("vehicle_production", {})
-    tr._vehicle_production_counter = int(production_data.get("counter", 0))
+    production_data = data["vehicle_production"]
+    tr._vehicle_production_counter = int(production_data["counter"])
     tr.vehicle_production_projects = {
         EntityId(row["id"]): VehicleProductionState(
             id=EntityId(row["id"]), vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
             operational_node_id=SpatialNodeId(row["operational_node_id"]), priority=int(row["priority"]),
-            progress_days=float(row.get("progress_days", 0.0)),
-            phase=VehicleProductionPhase(row.get("phase", "awaiting_inputs")), paused=bool(row.get("paused", False)),
-            completed_units=int(row.get("completed_units", 0)), created_day=int(row.get("created_day", 0)),
+            progress_days=float(row["progress_days"]),
+            phase=VehicleProductionPhase(row["phase"]), paused=bool(row["paused"]),
+            completed_units=int(row["completed_units"]), created_day=int(row["created_day"]),
         )
-        for row in production_data.get("projects", [])
+        for row in production_data["projects"]
     }
     tr.reconcile_fleet_allocations(sim.day)
 

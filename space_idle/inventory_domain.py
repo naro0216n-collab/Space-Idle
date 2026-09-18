@@ -31,11 +31,11 @@ def restore_inventory(sim: Any, data: dict[str, Any]) -> None:
     }
     sim.inventory.reserved = {
         (EntityId(r["owner_id"]), SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): float(r["amount"])
-        for r in data.get("reserved", [])
+        for r in data["reserved"]
     }
     sim.inventory.external_occupancy = {
         (EntityId(r["owner_id"]), SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): float(r["amount"])
-        for r in data.get("external_occupancy", [])
+        for r in data["external_occupancy"]
     }
 
 

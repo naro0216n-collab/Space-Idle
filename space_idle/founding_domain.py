@@ -78,9 +78,9 @@ def restore_founding(sim: Any, data: dict[str, Any]) -> None:
     service = sim.founding
     if service is None:
         return
-    service._counter = int(data.get("counter", 0))
+    service._counter = int(data["counter"])
     service.projects = {}
-    for row in data.get("projects", []):
+    for row in data["projects"]:
         p = OperationalNodeFoundingProject(
             id=ProjectId(row["id"]),
             staging_node_id=SpatialNodeId(row["staging_node_id"]),
@@ -93,13 +93,13 @@ def restore_founding(sim: Any, data: dict[str, Any]) -> None:
                 for req in row["resource_requirements"]
             ),
             priority=row["priority"],
-            fleet_commitment_id=None if row.get("fleet_commitment_id") is None else EntityId(row["fleet_commitment_id"]),
-            status=FoundingStatus(row.get("status", FoundingStatus.PREPARING.value)),
-            preparation_done=float(row.get("preparation_done", 0.0)),
-            inputs_consumed=bool(row.get("inputs_consumed", False)),
-            paused=bool(row.get("paused", False)),
-            movement_execution_id=None if row.get("movement_execution_id") is None else EntityId(row["movement_execution_id"]),
-            completed_day=None if row.get("completed_day") is None else int(row["completed_day"]),
+            fleet_commitment_id=None if row["fleet_commitment_id"] is None else EntityId(row["fleet_commitment_id"]),
+            status=FoundingStatus(row["status"]),
+            preparation_done=float(row["preparation_done"]),
+            inputs_consumed=bool(row["inputs_consumed"]),
+            paused=bool(row["paused"]),
+            movement_execution_id=None if row["movement_execution_id"] is None else EntityId(row["movement_execution_id"]),
+            completed_day=None if row["completed_day"] is None else int(row["completed_day"]),
         )
         service.projects[p.id] = p
 

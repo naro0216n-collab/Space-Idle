@@ -82,7 +82,16 @@ def capture_projects(sim: Any) -> dict[str, Any]:
 def restore_projects(sim: Any, data: dict[str, Any]) -> None:
     sim.projects._counter = int(data["counter"])
     sim.projects.projects.clear()
+    project_fields = {
+        "id", "target", "operational_node_id", "site_cell_id", "priority",
+        "procurement_policy", "status", "procurement_started_day", "construction_done",
+        "paused", "pause_started_day", "completed_facility_id", "materials_committed",
+        "irreversible_started", "salvage_recovered_fraction", "salvage_recovered",
+        "resources",
+    }
     for row in data["items"]:
+        if set(row) != project_fields:
+            raise ValueError("construction project has invalid fields")
         project_id = ProjectId(row["id"])
         resources = {
             DefinitionId(item["resource_id"]): ProjectResourceState(
@@ -105,15 +114,15 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
             resources=resources,
             materials_committed=bool(row["materials_committed"]),
             completed_facility_id=None if row["completed_facility_id"] is None else EntityId(row["completed_facility_id"]),
-            irreversible_started=bool(row.get("irreversible_started", False)),
+            irreversible_started=bool(row["irreversible_started"]),
             salvage_recovered_fraction=(
                 None
-                if row.get("salvage_recovered_fraction") is None
+                if row["salvage_recovered_fraction"] is None
                 else float(row["salvage_recovered_fraction"])
             ),
             salvage_recovered={
                 DefinitionId(item["resource_id"]): float(item["amount_t"])
-                for item in row.get("salvage_recovered", [])
+                for item in row["salvage_recovered"]
             },
         )
 

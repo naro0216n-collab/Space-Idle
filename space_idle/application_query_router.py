@@ -19,10 +19,7 @@ class ApplicationQueryRouterMixin:
             return {name: self.query(query) for name, query in queries.items()}
         self._query_projection_cache = {}
         try:
-            with (
-                self._simulation.transport.derived_projection_scope(),
-                self._simulation.logistics.derived_projection_scope(),
-            ):
+            with self._simulation.derived_projection_scope():
                 return {name: self.query(query) for name, query in queries.items()}
         finally:
             self._query_projection_cache = None
@@ -33,10 +30,7 @@ class ApplicationQueryRouterMixin:
         if root_query:
             self._query_projection_cache = {}
         try:
-            with (
-                self._simulation.transport.derived_projection_scope(),
-                self._simulation.logistics.derived_projection_scope(),
-            ):
+            with self._simulation.derived_projection_scope():
                 try:
                     return self._query(query)
                 except ApplicationError:

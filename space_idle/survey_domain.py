@@ -76,21 +76,27 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
         return
     sim.survey.knowledge_progress = {
         (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): float(r["progress"])
-        for r in data.get("knowledge_progress", [])
+        for r in data["knowledge_progress"]
     }
     sim.survey.knowledge_precision_fraction = {
         (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): float(r["precision_fraction"])
-        for r in data.get("knowledge_precision_fraction", [])
+        for r in data["knowledge_precision_fraction"]
     }
     sim.survey.estimated_potential = {
         (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): float(r["estimated_potential"])
-        for r in data.get("estimated_potential", [])
+        for r in data["estimated_potential"]
     }
     sim.survey.campaigns.clear()
     sim.survey.provider_assignments.clear()
-    sim.survey._campaign_counter = int(data.get("campaign_counter", 0))
-    sim.survey._provider_assignment_counter = int(data.get("provider_assignment_counter", 0))
-    for r in data.get("provider_assignments", []):
+    sim.survey._campaign_counter = int(data["campaign_counter"])
+    sim.survey._provider_assignment_counter = int(data["provider_assignment_counter"])
+    assignment_fields = {
+        "id", "provider_definition_id", "vehicle_definition_id",
+        "operational_node_id", "fleet_commitment_ref",
+    }
+    for r in data["provider_assignments"]:
+        if set(r) != assignment_fields:
+            raise ValueError("survey provider assignment has invalid fields")
         assignment_id = EntityId(r["id"])
         sim.survey.provider_assignments[assignment_id] = SurveyProviderAssignmentState(
             assignment_id,
@@ -99,9 +105,16 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
             SpatialNodeId(r["operational_node_id"]),
             EntityId(r["fleet_commitment_ref"]),
         )
-    for r in data.get("campaigns", []):
+    campaign_fields = {
+        "id", "target_cell_ids", "resource_ids", "goal_knowledge_level",
+        "provider_constraint", "observation_mode_constraint", "priority",
+        "control_state",
+    }
+    for r in data["campaigns"]:
+        if set(r) != campaign_fields:
+            raise ValueError("survey campaign has invalid fields")
         campaign_id = EntityId(r["id"])
-        constraint_data = r.get("provider_constraint")
+        constraint_data = r["provider_constraint"]
         provider_constraint = None if constraint_data is None else SurveyProviderConstraint(
             DefinitionId(constraint_data["provider_definition_id"]),
             SpatialNodeId(constraint_data["operational_node_id"]),
@@ -112,7 +125,7 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
             tuple(DefinitionId(value) for value in r["resource_ids"]),
             KnowledgeLevel(int(r["goal_knowledge_level"])),
             provider_constraint,
-            r.get("observation_mode_constraint"),
+            r["observation_mode_constraint"],
             priority=int(r["priority"]),
             control_state=SurveyCampaignControlState(r["control_state"]),
         )

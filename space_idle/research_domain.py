@@ -32,7 +32,7 @@ def _restore_execution_site(data: dict[str, Any] | None) -> ResearchExecutionSit
         return None
     return ResearchExecutionSite(
         SpatialNodeId(data["operational_node_id"]),
-        None if data.get("surface_cell_id") is None else SurfaceCellId(data["surface_cell_id"]),
+        None if data["surface_cell_id"] is None else SurfaceCellId(data["surface_cell_id"]),
     )
 
 
@@ -75,28 +75,34 @@ def restore_research(sim: Any, data: dict[str, Any]) -> None:
         return
     sim.research.stored_points = float(data["stored_points"])
     sim.research.knowledge_state.experience_by_category = {
-        str(category): float(value) for category, value in data.get("knowledge", {}).items()
+        str(category): float(value) for category, value in data["knowledge"].items()
     }
     sim.research.active.clear()
     sim.research.provider_assignments.clear()
-    sim.research._provider_assignment_counter = int(data.get("provider_assignment_counter", 0))
+    sim.research._provider_assignment_counter = int(data["provider_assignment_counter"])
     sim.research.last_point_allocations.clear()
     sim.research.last_point_requests.clear()
     sim.research.last_execution_allocations.clear()
     sim.research.last_execution_requests.clear()
-    for row in data.get("active", []):
+    for row in data["active"]:
         rid = DefinitionId(row["definition_id"])
         sim.research.active[rid] = ResearchState(
             definition_id=rid,
             current_stage_id=str(row["current_stage_id"]),
-            stage_progress=None if row.get("stage_progress") is None else float(row["stage_progress"]),
+            stage_progress=None if row["stage_progress"] is None else float(row["stage_progress"]),
             priority=row["priority"],
             paused=bool(row["paused"]),
-            execution_context=_restore_execution_site(row.get("execution_context")),
-            stage_started_day=int(row.get("stage_started_day", 0)),
+            execution_context=_restore_execution_site(row["execution_context"]),
+            stage_started_day=int(row["stage_started_day"]),
         )
     from .research import ResearchProviderAssignmentState
-    for row in data.get("provider_assignments", []):
+    assignment_fields = {
+        "id", "provider_definition_id", "vehicle_definition_id",
+        "operational_node_id", "priority", "paused", "fleet_commitment_ref",
+    }
+    for row in data["provider_assignments"]:
+        if set(row) != assignment_fields:
+            raise ValueError("research provider assignment has invalid fields")
         assignment_id = EntityId(row["id"])
         sim.research.provider_assignments[assignment_id] = ResearchProviderAssignmentState(
             id=assignment_id,

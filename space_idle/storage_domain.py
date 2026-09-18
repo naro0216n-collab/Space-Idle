@@ -19,9 +19,13 @@ def capture_storage(sim: Any) -> dict[str, Any]:
 
 
 def restore_storage(sim: Any, data: dict[str, Any]) -> None:
+    rows = data["infrastructure_capacity"]
+    expected_fields = {"operational_node_id", "storage_pool_key", "amount"}
+    if any(set(row) != expected_fields for row in rows):
+        raise ValueError("storage infrastructure capacity has invalid fields")
     sim.storage.infrastructure_capacity_t = {
         (SpatialNodeId(row["operational_node_id"]), str(row["storage_pool_key"])): float(row["amount"])
-        for row in data.get("infrastructure_capacity", [])
+        for row in rows
     }
 
 

@@ -35,7 +35,7 @@ def capture_contracts(sim: Any) -> dict[str, Any]:
 def restore_contracts(sim: Any, data: dict[str, Any]) -> None:
     if sim.contracts is None:
         return
-    sim.contracts._counter = int(data.get("counter", 0))
+    sim.contracts._counter = int(data["counter"])
     sim.contracts.contracts = {
         ContractId(row["id"]): ContractState(
             ContractId(row["id"]),
@@ -44,7 +44,7 @@ def restore_contracts(sim: Any, data: dict[str, Any]) -> None:
             int(row["deadline_day"]),
             ContractStatus(row["status"]),
         )
-        for row in data.get("items", [])
+        for row in data["items"]
     }
 
 

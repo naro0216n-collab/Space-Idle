@@ -12,7 +12,7 @@ def capture(sim: Any) -> dict[str, Any]:
 
 
 def restore(sim: Any, data: dict[str, Any]) -> None:
-    sim.technology.replace({DefinitionId(value) for value in data.get("completed", [])})
+    sim.technology.replace({DefinitionId(value) for value in data["completed"]})
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:

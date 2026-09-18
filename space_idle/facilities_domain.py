@@ -43,10 +43,10 @@ def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
             activity_priority=row["activity_priority"],
             maintenance_priority=row["maintenance_priority"],
             level=int(row["level"]),
-            lifecycle=FacilityLifecycle(row.get("lifecycle", "NORMAL")),
+            lifecycle=FacilityLifecycle(row["lifecycle"]),
             selected_process_id=(
                 None
-                if row.get("selected_process_id") is None
+                if row["selected_process_id"] is None
                 else DefinitionId(row["selected_process_id"])
             ),
             invested_resources={DefinitionId(key): float(value) for key, value in row["invested_resources"].items()},

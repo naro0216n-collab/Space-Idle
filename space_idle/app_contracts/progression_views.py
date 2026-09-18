@@ -201,12 +201,10 @@ class SurveyProviderFleetRow:
     provider_definition_id: str
     vehicle_definition_id: str
     operational_node_id: str
-    assignment_id: str | None
     committed_units: int
     free_units: int
     max_units: int
     capacity_units_per_day: float
-    fleet_commitment_id: str | None
     blockers: tuple[str, ...]
     can_set_quantity: bool
 

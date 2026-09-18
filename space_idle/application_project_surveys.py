@@ -39,15 +39,11 @@ class SurveyProgressionProjectorMixin:
                 provider_definition_id=str(provider.id),
                 vehicle_definition_id=str(provider.source_definition_id),
                 operational_node_id=str(provider_operational_node_id),
-                assignment_id=None if assignment is None else str(assignment.id),
                 committed_units=committed_units,
                 free_units=free_units,
                 max_units=max_units,
                 capacity_units_per_day=(
                     committed_units * provider.capacity_units_per_source_per_day
-                ),
-                fleet_commitment_id=(
-                    None if assignment is None else str(assignment.fleet_commitment_ref)
                 ),
                 blockers=blockers,
                 can_set_quantity=(committed_units > 0 or max_units > 0),
@@ -57,9 +53,9 @@ class SurveyProgressionProjectorMixin:
     def _survey_campaign_row(self, campaign, execution_plan, service_plan, powers) -> SurveyCampaignRow:
         sim = self._simulation
         assert sim.survey is not None
-        candidate, resolution_blockers = sim.survey.resolve_campaign_candidate(
-            campaign, day=sim.day
-        )
+        projection = sim.survey.campaign_projection(campaign, day=sim.day)
+        candidate = projection.resolved_candidate
+        resolution_blockers = projection.resolution_blockers
         candidates = tuple(
             SurveyCandidateRow(
                 provider_operational_node_id=str(row.provider_operational_node_id),
@@ -81,7 +77,7 @@ class SurveyProgressionProjectorMixin:
                 viable=row.viable,
                 blockers=row.blockers,
             )
-            for row in sim.survey.campaign_candidates(campaign, day=sim.day)
+            for row in projection.candidates
         )
         target_rows: list[SurveyCampaignTargetRow] = []
         remaining_progress = 0.0
@@ -131,7 +127,7 @@ class SurveyProgressionProjectorMixin:
         )
         if not blockers and resolution_blockers:
             blockers = resolution_blockers
-        covered = len(target_rows) - len(sim.survey.unfinished_targets(campaign))
+        covered = len(target_rows) - len(projection.unfinished_targets)
         constraint = campaign.provider_constraint
         return SurveyCampaignRow(
             id=str(campaign.id),

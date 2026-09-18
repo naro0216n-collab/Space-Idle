@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from hashlib import sha256
 from typing import TYPE_CHECKING, Mapping
 
@@ -56,6 +57,14 @@ class SurveyProviderModeCandidate:
         return not self.blockers
 
 
+@dataclass(frozen=True)
+class SurveyCampaignProjection:
+    unfinished_targets: tuple[tuple[SurfaceCellId, DefinitionId], ...]
+    candidates: tuple[SurveyProviderModeCandidate, ...]
+    resolved_candidate: SurveyProviderModeCandidate | None
+    resolution_blockers: tuple[str, ...]
+
+
 @dataclass
 class SurveyService:
     DEFAULT_PRIORITY = DEFAULT_ACTIVITY_PRIORITY
@@ -72,6 +81,24 @@ class SurveyService:
     provider_assignments: dict[EntityId, SurveyProviderAssignmentState] = field(default_factory=dict)
     _campaign_counter: int = 0
     _provider_assignment_counter: int = 0
+    _projection_campaign_cache: dict[tuple[EntityId, int], SurveyCampaignProjection] | None = field(
+        default=None, init=False, repr=False
+    )
+    _projection_cache_depth: int = field(default=0, init=False, repr=False)
+
+    @contextmanager
+    def derived_projection_scope(self):
+        """Reuse pure Campaign derivations within one immutable physical snapshot."""
+        root_scope = self._projection_cache_depth == 0
+        if root_scope:
+            self._projection_campaign_cache = {}
+        self._projection_cache_depth += 1
+        try:
+            yield
+        finally:
+            self._projection_cache_depth -= 1
+            if root_scope:
+                self._projection_campaign_cache = None
 
     @staticmethod
     def service_type_for_provider(provider_id: DefinitionId) -> str:
@@ -400,7 +427,9 @@ class SurveyService:
         assignment = self.provider_assignment_for(provider.id, operational_node_id)
         return 0 if assignment is None else self.provider_assignment_quantity(assignment.id)
 
-    def campaign_candidates(self, campaign: SurveyCampaign, *, day: int = 0) -> tuple[SurveyProviderModeCandidate, ...]:
+    def _derive_campaign_projection(
+        self, campaign: SurveyCampaign, *, day: int
+    ) -> SurveyCampaignProjection:
         unfinished = self.unfinished_targets(campaign)
         rows: list[SurveyProviderModeCandidate] = []
         for provider in sorted(self.providers.values(), key=lambda row: str(row.id)):
@@ -410,7 +439,11 @@ class SurveyService:
                     if campaign.goal_knowledge_level > mode.max_knowledge_level:
                         blockers.append("survey_provider_limit")
                     for cell_id, _resource_id in unfinished:
-                        blockers.extend(self._provider_mode_eligibility_failures(node_id, provider, mode, cell_id, day))
+                        blockers.extend(
+                            self._provider_mode_eligibility_failures(
+                                node_id, provider, mode, cell_id, day
+                            )
+                        )
                     source_units = self._candidate_source_units(provider, node_id, day)
                     capacity_units = self.provider_capacity_at(provider.id, node_id, None, day)
                     rows.append(SurveyProviderModeCandidate(
@@ -419,7 +452,56 @@ class SurveyService:
                         mode.measurement_precision_fraction, mode.minimum_source_units, source_units,
                         capacity_units, tuple(dict.fromkeys(blockers)),
                     ))
-        return tuple(rows)
+        candidates = tuple(rows)
+        if not unfinished:
+            return SurveyCampaignProjection(unfinished, candidates, None, ())
+        matching = tuple(
+            candidate for candidate in candidates
+            if self.candidate_matches_constraints(campaign, candidate)
+        )
+        if not matching:
+            blockers = (
+                "survey_constraint_unavailable",
+            ) if (
+                campaign.provider_constraint is not None
+                or campaign.observation_mode_constraint is not None
+            ) else ("survey_candidate_unavailable",)
+            return SurveyCampaignProjection(unfinished, candidates, None, blockers)
+        viable = tuple(candidate for candidate in matching if candidate.viable)
+        if not viable:
+            blockers = ["survey_candidate_unavailable"]
+            for candidate in matching:
+                blockers.extend(f"survey_eligibility:{item}" for item in candidate.blockers)
+            return SurveyCampaignProjection(
+                unfinished, candidates, None, tuple(dict.fromkeys(blockers))
+            )
+        if len(viable) == 1:
+            return SurveyCampaignProjection(unfinished, candidates, viable[0], ())
+        signatures = {self._candidate_strategic_signature(candidate) for candidate in viable}
+        if len(signatures) == 1:
+            return SurveyCampaignProjection(
+                unfinished, candidates, min(viable, key=self._candidate_stable_key), ()
+            )
+        return SurveyCampaignProjection(
+            unfinished, candidates, None, ("survey_decision_required",)
+        )
+
+    def campaign_projection(
+        self, campaign: SurveyCampaign, *, day: int = 0
+    ) -> SurveyCampaignProjection:
+        cache = self._projection_campaign_cache
+        key = (campaign.id, day)
+        if cache is not None:
+            prior = cache.get(key)
+            if prior is not None:
+                return prior
+        projection = self._derive_campaign_projection(campaign, day=day)
+        if cache is not None:
+            cache[key] = projection
+        return projection
+
+    def campaign_candidates(self, campaign: SurveyCampaign, *, day: int = 0) -> tuple[SurveyProviderModeCandidate, ...]:
+        return self.campaign_projection(campaign, day=day).candidates
 
     @staticmethod
     def _candidate_stable_key(candidate: SurveyProviderModeCandidate) -> tuple[str, str, str]:
@@ -448,25 +530,8 @@ class SurveyService:
         return True
 
     def resolve_campaign_candidate(self, campaign: SurveyCampaign, *, day: int = 0) -> tuple[SurveyProviderModeCandidate | None, tuple[str, ...]]:
-        if not self.unfinished_targets(campaign):
-            return None, ()
-        matching = tuple(candidate for candidate in self.campaign_candidates(campaign, day=day) if self.candidate_matches_constraints(campaign, candidate))
-        if not matching:
-            if campaign.provider_constraint is not None or campaign.observation_mode_constraint is not None:
-                return None, ("survey_constraint_unavailable",)
-            return None, ("survey_candidate_unavailable",)
-        viable = tuple(candidate for candidate in matching if candidate.viable)
-        if not viable:
-            blockers = ["survey_candidate_unavailable"]
-            for candidate in matching:
-                blockers.extend(f"survey_eligibility:{item}" for item in candidate.blockers)
-            return None, tuple(dict.fromkeys(blockers))
-        if len(viable) == 1:
-            return viable[0], ()
-        signatures = {self._candidate_strategic_signature(candidate) for candidate in viable}
-        if len(signatures) == 1:
-            return min(viable, key=self._candidate_stable_key), ()
-        return None, ("survey_decision_required",)
+        projection = self.campaign_projection(campaign, day=day)
+        return projection.resolved_candidate, projection.resolution_blockers
 
     def _campaign_intent_blockers(
         self, target_cell_ids: tuple[SurfaceCellId, ...], resource_ids: tuple[DefinitionId, ...],
@@ -717,7 +782,8 @@ class SurveyService:
     def capacity_for_campaign(
         self, campaign: SurveyCampaign, power: PowerSnapshot | None = None, day: int = 0,
     ) -> float:
-        candidate, blockers = self.resolve_campaign_candidate(campaign, day=day)
+        projection = self.campaign_projection(campaign, day=day)
+        candidate, blockers = projection.resolved_candidate, projection.resolution_blockers
         if candidate is None or blockers:
             return 0.0
         mode = self.observation_mode(candidate.provider_definition_id, candidate.observation_mode_id)
@@ -734,10 +800,11 @@ class SurveyService:
             return ("manual_pause",)
         if campaign.control_state is SurveyCampaignControlState.COMPLETED:
             return ()
-        candidate, blockers = self.resolve_campaign_candidate(campaign, day=day)
+        projection = self.campaign_projection(campaign, day=day)
+        candidate, blockers = projection.resolved_candidate, projection.resolution_blockers
         result = list(blockers)
         if candidate is not None and execution_allocations is not None:
-            unfinished = self.unfinished_targets(campaign)
+            unfinished = projection.unfinished_targets
             allocation_by_id = {row.bundle_id: row.allocated_execution for row in execution_allocations.allocations}
             if unfinished and all(
                 allocation_by_id.get(self.execution_bundle_id(campaign.id, *key), 0.0) <= 1e-12
@@ -751,11 +818,12 @@ class SurveyService:
         for campaign in sorted(self.campaigns.values(), key=lambda row: (-int(row.priority), str(row.id))):
             if campaign.control_state is not SurveyCampaignControlState.ACTIVE:
                 continue
-            candidate, blockers = self.resolve_campaign_candidate(campaign, day=day)
+            projection = self.campaign_projection(campaign, day=day)
+            candidate, blockers = projection.resolved_candidate, projection.resolution_blockers
             if candidate is None or blockers:
                 continue
             mode = self.observation_mode(candidate.provider_definition_id, candidate.observation_mode_id)
-            for key in self.unfinished_targets(campaign):
+            for key in projection.unfinished_targets:
                 threshold = self.targets[key].thresholds[int(campaign.goal_knowledge_level) - 1]
                 remaining_progress = max(0.0, threshold - self.knowledge_progress.get(key, 0.0))
                 requested_capacity = remaining_progress / mode.survey_rate
@@ -834,11 +902,12 @@ class SurveyService:
         for campaign in sorted(self.campaigns.values(), key=lambda row: (-int(row.priority), str(row.id))):
             if campaign.control_state is not SurveyCampaignControlState.ACTIVE:
                 continue
-            candidate, blockers = self.resolve_campaign_candidate(campaign, day=day)
+            projection = self.campaign_projection(campaign, day=day)
+            candidate, blockers = projection.resolved_candidate, projection.resolution_blockers
             if candidate is None or blockers:
                 continue
             mode = self.observation_mode(candidate.provider_definition_id, candidate.observation_mode_id)
-            for key in self.unfinished_targets(campaign):
+            for key in projection.unfinished_targets:
                 try:
                     allocated_capacity = execution_allocations.allocated(self.execution_bundle_id(campaign.id, *key))
                 except KeyError:

@@ -32,8 +32,8 @@ def capture(sim: Any) -> dict[str, Any]:
 
 
 def restore(sim: Any, data: dict[str, Any]) -> None:
-    rows = data.get("locations")
-    operational_rows = data.get("operational_nodes")
+    rows = data["locations"]
+    operational_rows = data["operational_nodes"]
     if not isinstance(rows, list):
         raise ValueError("spatial state is missing locations")
     if not isinstance(operational_rows, list):
@@ -55,7 +55,7 @@ def restore(sim: Any, data: dict[str, Any]) -> None:
         OperationalNodeState(SpatialNodeId(str(value))) for value in operational_rows
     )
     sim.graph.replace_dynamic_state(tuple(locations), operational_nodes)
-    sim.environment.restore_overlay_state(data.get("overlays", []))
+    sim.environment.restore_overlay_state(data["overlays"])
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:

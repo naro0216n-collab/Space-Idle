@@ -38,27 +38,27 @@ def restore_scientific_exploration(sim: Any, data: dict[str, Any]) -> None:
     service.campaigns = {
         DefinitionId(row["definition_id"]): ScientificExplorationState(
             definition_id=DefinitionId(row["definition_id"]),
-            phase=ScientificExplorationPhase(row.get("phase", "awaiting_fleet")),
+            phase=ScientificExplorationPhase(row["phase"]),
             vehicle_definition_id=(
-                None if row.get("vehicle_definition_id") is None
+                None if row["vehicle_definition_id"] is None
                 else DefinitionId(row["vehicle_definition_id"])
             ),
             fleet_commitment_id=(
-                None if row.get("fleet_commitment_id") is None
+                None if row["fleet_commitment_id"] is None
                 else EntityId(row["fleet_commitment_id"])
             ),
-            progress_days=float(row.get("progress_days", 0.0)),
-            research_points_awarded=float(row.get("research_points_awarded", 0.0)),
-            inputs_consumed=bool(row.get("inputs_consumed", False)),
-            paused=bool(row.get("paused", False)),
-            created_day=int(row.get("created_day", 0)),
+            progress_days=float(row["progress_days"]),
+            research_points_awarded=float(row["research_points_awarded"]),
+            inputs_consumed=bool(row["inputs_consumed"]),
+            paused=bool(row["paused"]),
+            created_day=int(row["created_day"]),
             priority=row["priority"],
             movement_execution_id=(
-                None if row.get("movement_execution_id") is None
+                None if row["movement_execution_id"] is None
                 else EntityId(row["movement_execution_id"])
             ),
         )
-        for row in data.get("campaigns", [])
+        for row in data["campaigns"]
     }
 
 

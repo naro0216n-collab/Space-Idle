@@ -109,8 +109,8 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
 
 def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
     lg = sim.logistics
-    lg._cargo_flow_counter = int(data.get("cargo_flow_counter", 0))
-    lg._arrival_waiting_counter = int(data.get("arrival_waiting_counter", 0))
+    lg._cargo_flow_counter = int(data["cargo_flow_counter"])
+    lg._arrival_waiting_counter = int(data["arrival_waiting_counter"])
     lg.cargo_flows = {
         EntityId(row["id"]): CargoFlowSegment(
             id=EntityId(row["id"]),
@@ -118,17 +118,17 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             amount_t=float(row["amount_t"]),
             source_id=SpatialNodeId(row["source_id"]),
             final_destination_id=SpatialNodeId(row["final_destination_id"]),
-            requirement_id=None if row.get("requirement_id") is None else EntityId(row["requirement_id"]),
+            requirement_id=None if row["requirement_id"] is None else EntityId(row["requirement_id"]),
             owner_kind=row["owner_kind"],
             owner_id=EntityId(row["owner_id"]),
             priority=int(row["priority"]),
             leg=_restore_leg(row["leg"]),
-            remaining_legs=tuple(_restore_leg(leg) for leg in row.get("remaining_legs", [])),
+            remaining_legs=tuple(_restore_leg(leg) for leg in row["remaining_legs"]),
             dispatch_start_day=int(row["dispatch_start_day"]),
             dispatch_end_day=int(row["dispatch_end_day"]),
             dispatch_rate_t_per_day=float(row["dispatch_rate_t_per_day"]),
         )
-        for row in data.get("cargo_flows", [])
+        for row in data["cargo_flows"]
     }
     lg.arrival_waiting = {
         EntityId(row["id"]): CargoArrivalWaiting(
@@ -137,15 +137,15 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             amount_t=float(row["amount_t"]),
             node_id=SpatialNodeId(row["node_id"]),
             final_destination_id=SpatialNodeId(row["final_destination_id"]),
-            requirement_id=None if row.get("requirement_id") is None else EntityId(row["requirement_id"]),
+            requirement_id=None if row["requirement_id"] is None else EntityId(row["requirement_id"]),
             owner_kind=row["owner_kind"],
             owner_id=EntityId(row["owner_id"]),
             priority=int(row["priority"]),
             arrival_leg=_restore_leg(row["arrival_leg"]),
-            remaining_legs=tuple(_restore_leg(leg) for leg in row.get("remaining_legs", [])),
+            remaining_legs=tuple(_restore_leg(leg) for leg in row["remaining_legs"]),
             arrived_day=int(row["arrived_day"]),
         )
-        for row in data.get("arrival_waiting", [])
+        for row in data["arrival_waiting"]
     }
     lg.target_stocks = {
         EntityId(row["id"]): TargetStockPolicy(
@@ -155,31 +155,38 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             float(row["target_quantity_t"]),
             int(row["priority"]),
         )
-        for row in data.get("target_stocks", [])
+        for row in data["target_stocks"]
     }
     lg.routing_constraints = {}
-    for row in data.get("routing_constraints", []):
+    routing_fields = {
+        "destination_id", "owner_kind", "owner_id", "resource_id",
+        "source_node_id", "required_via_node_ids",
+        "required_transport_allocation_ids",
+    }
+    for row in data["routing_constraints"]:
+        if set(row) != routing_fields:
+            raise ValueError("routing constraint has invalid fields")
         scope = SupplyRoutingConstraintScope(
             destination_id=SpatialNodeId(row["destination_id"]),
-            owner_kind=row.get("owner_kind"),
-            owner_id=None if row.get("owner_id") is None else EntityId(row["owner_id"]),
+            owner_kind=row["owner_kind"],
+            owner_id=None if row["owner_id"] is None else EntityId(row["owner_id"]),
             resource_id=(
-                None if row.get("resource_id") is None else DefinitionId(row["resource_id"])
+                None if row["resource_id"] is None else DefinitionId(row["resource_id"])
             ),
         )
         lg.routing_constraints[scope] = SupplyRoutingConstraintState(
             scope=scope,
             source_node_id=(
                 None
-                if row.get("source_node_id") is None
+                if row["source_node_id"] is None
                 else SpatialNodeId(row["source_node_id"])
             ),
             required_via_node_ids=tuple(
-                SpatialNodeId(value) for value in row.get("required_via_node_ids", [])
+                SpatialNodeId(value) for value in row["required_via_node_ids"]
             ),
             required_transport_allocation_ids=tuple(
                 EntityId(value)
-                for value in row.get("required_transport_allocation_ids", [])
+                for value in row["required_transport_allocation_ids"]
             ),
         )
 
