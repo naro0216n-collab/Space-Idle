@@ -111,7 +111,7 @@ def test_vehicle_catalog_and_movement_modes_follow_definition_and_capability_con
     assert mode.nominal_capacity.forward_t_per_day > 0
 
 
-def test_movement_plan_derived_index_is_reused_until_physical_invalidation(monkeypatch):
+def test_movement_plan_projection_reuses_derived_state_and_scoped_queries_avoid_global_enumeration(monkeypatch):
     app = build_game_application()
     sim = app._simulation
     original = MovementResolver.all_direct_plans
@@ -141,10 +141,29 @@ def test_movement_plan_derived_index_is_reused_until_physical_invalidation(monke
     sim.transport.movement_plan_options()
     assert calls == 2
 
+    allocation_id = app.execute(CreateTransportAllocation(
+        str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+        str(ids.LEO),
+        str(ids.LUNAR_ORBIT),
+        target_units=1,
+    )).created_id
+    assert allocation_id is not None
+    allocation_entity_id = next(
+        row_id for row_id in sim.transport.transport_allocations
+        if str(row_id) == allocation_id
+    )
+    with sim.transport.derived_projection_scope():
+        service_plan = sim.transport.derive_transport_service_plan(
+            allocation_entity_id, sim.day
+        )
+        assert sim.transport.derive_transport_service_plan(
+            allocation_entity_id, sim.day
+        ) is service_plan
+        supplies = sim.transport.transport_service_supplies(sim.day)
+        assert sim.transport.transport_service_supplies(sim.day) is supplies
+        dependencies = sim.transport.transport_operation_dependencies(sim.day)
+        assert sim.transport.transport_operation_dependencies(sim.day) is dependencies
 
-def test_scoped_movement_query_does_not_expand_to_all_operational_node_pairs(monkeypatch):
-    app = build_game_application()
-    sim = app._simulation
     sim.transport.invalidate_movement_plans()
 
     def reject_global_enumeration(_resolver):
@@ -161,8 +180,7 @@ def test_scoped_movement_query_does_not_expand_to_all_operational_node_pairs(mon
     assert {row.origin_id for row in view.items} == {str(EARTH)}
     assert {row.destination_id for row in view.items} == {str(LEO)}
 
-
-def test_single_application_query_reuses_tick_decision_projection(monkeypatch):
+def test_application_decision_queries_are_observational_and_reuse_projection_within_query(monkeypatch):
     app = build_game_application()
     sim = app._simulation
     original = sim.tick_decision_projection
@@ -174,14 +192,10 @@ def test_single_application_query_reuses_tick_decision_projection(monkeypatch):
         return original()
 
     monkeypatch.setattr(sim, "tick_decision_projection", counted_projection)
+    before = capture_state(sim)
+
     app.query(GetLogistics())
     assert calls == 1
-
-
-def test_application_decision_queries_are_observational():
-    app = build_game_application()
-    sim = app._simulation
-    before = capture_state(sim)
 
     for query in (
         GetWorld(),
@@ -189,7 +203,6 @@ def test_application_decision_queries_are_observational():
         GetFleet(),
         GetTransportAllocations(),
         GetTransportAllocationOptions(str(ids.LEO), str(ids.LUNAR_ORBIT)),
-        GetLogistics(),
         GetScientificExplorations(),
         GetResearch(),
         GetBottlenecks(),
@@ -449,10 +462,9 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
     assert "items" in payload["cargo_flows"]
 
 
-def test_construction_command_rejects_unknown_logistics_policy_before_creating_project():
+def test_construction_queries_expose_authoritative_project_controls():
     app = build_game_application()
     before = tuple(row.id for row in app.query(GetProjects(str(EARTH))).items)
-
     with pytest.raises(ApplicationError):
         app.execute(PlanBuild(
             str(EARTH),
@@ -460,13 +472,8 @@ def test_construction_command_rejects_unknown_logistics_policy_before_creating_p
             logistics_policy_id="logistics.policy.missing",
             site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
         ))
+    assert tuple(row.id for row in app.query(GetProjects(str(EARTH))).items) == before
 
-    after = tuple(row.id for row in app.query(GetProjects(str(EARTH))).items)
-    assert after == before
-
-
-def test_construction_queries_expose_authoritative_project_controls():
-    app = build_game_application()
     build_options = app.query(GetBuildOptions(str(EARTH)))
     assert tuple(build_options.procurement_policy_options) == app._simulation.projects.procurement_policy_options()
     assert str(app._simulation.logistics.global_policy_id) in build_options.logistics_policy_options

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import pytest
 
 from space_idle import GetOperationalNode, GetSurfaceMap, build_game_application
@@ -8,7 +7,6 @@ from space_idle.content import base_ids as ids
 from space_idle.content.base_facilities import build_facility_definitions
 from space_idle.extraction_service import ExtractionService
 from space_idle.facilities import FacilityBook
-from space_idle.persistence import save_game
 from space_idle.power import PowerSnapshot
 from space_idle.execution_requirements import allocate_execution_requirements
 
@@ -180,17 +178,3 @@ def test_application_queries_expose_surface_knowledge_and_extraction_decision_st
     assert 0.0 <= extraction.operational_fulfillment <= 1.0
     assert extraction.marginal_efficiency > 0.0
     assert extraction.output_t_per_day > 0.0
-
-
-def test_save_persists_cell_resource_knowledge_without_extraction_deposit_state(tmp_path):
-    app = build_game_application()
-    path = tmp_path / "resource-potential.json"
-    save_game(app, path)
-    payload = json.loads(path.read_text(encoding="utf-8"))
-
-    state = payload["state"]
-    assert "extraction" not in state
-    assert "survey" in state
-    assert state["survey"]["knowledge_progress"]
-    assert all("cell_id" in row and "resource_id" in row for row in state["survey"]["knowledge_progress"])
-    assert all("location_id" not in row for row in state["survey"]["knowledge_progress"])

@@ -150,31 +150,7 @@ def test_spatial_persistence_saves_authoritative_territory_not_derived_or_static
     assert dormant not in loaded_graph.nodes  # runtime-added static Content is rebuilt, not Save state
 
 
-def test_non_surface_spatial_context_is_not_operational_until_explicitly_promoted():
-    graph = SpatialGraph()
-    body = CelestialBodyId("body.context")
-    node_id = SpatialNodeId("node.context.only")
-    system = _add_system(graph)
-    geometry = CharacteristicTransportGeometry((0.0,), (0.0,))
-    graph.add_body(CelestialBodyDef(body, "Body", 1000.0, system, geometry))
-    graph.add(
-        SpatialNodeDef(
-            node_id,
-            "Context only",
-            system,
-            geometry,
-            body_id=body,
-            kind=SpatialNodeKind.ORBITAL,
-            inherits_parent_environment=False,
-        )
-    )
-
-    assert node_id in graph.nodes
-    assert not graph.has_operational_node(node_id)
-    assert node_id not in graph.operational_node_ids()
-
-
-def test_non_operational_spatial_context_cannot_own_facility_supply_policy_or_inventory_state():
+def test_operational_node_ownership_is_explicit_and_uniform_across_spatial_kinds():
     app = build_game_application()
     sim = app._simulation
     dormant = SpatialNodeId("test.node.dormant")
@@ -189,11 +165,15 @@ def test_non_operational_spatial_context_cannot_own_facility_supply_policy_or_in
             inherits_parent_environment=False,
         )
     )
-    assert not sim.graph.has_operational_node(dormant)
 
-    facility_definition_id = DefinitionId("test.facility.dormant_owner")
+    assert dormant in sim.graph.nodes
+    assert not sim.graph.has_operational_node(dormant)
+    assert dormant not in sim.graph.operational_node_ids()
+
+    facility_definition_id = DefinitionId("test.facility.operational_node_owner")
+    resource_id = DefinitionId("test.resource.operational_node_owner")
     sim.facilities.definitions[facility_definition_id] = FacilityDef(
-        facility_definition_id, "Dormant owner fixture"
+        facility_definition_id, "Operational-node owner fixture"
     )
     with pytest.raises(KeyError):
         sim.facilities.install(facility_definition_id, dormant)
@@ -207,24 +187,17 @@ def test_non_operational_spatial_context_cannot_own_facility_supply_policy_or_in
     sim.inventory.stock[(dormant, ids.WATER)] = 1.0
     with pytest.raises(ValueError, match="inventory references unknown location"):
         validate_runtime_state(sim)
+    del sim.inventory.stock[(dormant, ids.WATER)]
 
-
-def test_surface_and_non_surface_operational_nodes_share_owner_contracts():
-    app = build_game_application()
-    sim = app._simulation
-    generic_facility = DefinitionId("test.facility.operational_node")
-    generic_resource = DefinitionId("test.resource.unbounded")
-    sim.facilities.definitions[generic_facility] = FacilityDef(generic_facility, "Generic")
-
-    earth_facility = sim.facilities.install(generic_facility, ids.EARTH)
-    orbit_facility = sim.facilities.install(generic_facility, ids.LEO)
+    earth_facility = sim.facilities.install(facility_definition_id, ids.EARTH)
+    orbit_facility = sim.facilities.install(facility_definition_id, ids.LEO)
     assert sim.facilities.facilities[earth_facility].operational_node_id == ids.EARTH
     assert sim.facilities.facilities[orbit_facility].operational_node_id == ids.LEO
 
-    sim.inventory.add(ids.EARTH, generic_resource, 1.0)
-    sim.inventory.add(ids.LEO, generic_resource, 1.0)
-    assert sim.inventory.amount(ids.EARTH, generic_resource) == pytest.approx(1.0)
-    assert sim.inventory.amount(ids.LEO, generic_resource) == pytest.approx(1.0)
+    sim.inventory.add(ids.EARTH, resource_id, 1.0)
+    sim.inventory.add(ids.LEO, resource_id, 1.0)
+    assert sim.inventory.amount(ids.EARTH, resource_id) == pytest.approx(1.0)
+    assert sim.inventory.amount(ids.LEO, resource_id) == pytest.approx(1.0)
 
     vehicle_definition = DefinitionId("test.vehicle.operational_node_owner")
     sim.transport.vehicle_defs[vehicle_definition] = VehicleDef(
@@ -232,9 +205,7 @@ def test_surface_and_non_surface_operational_nodes_share_owner_contracts():
         "Operational-node owner fixture",
         TransportPerformanceProfile(dry_mass_t=1.0, payload_t=1.0, endurance_days=1.0),
     )
-    before_earth = sim.transport.fleet_pool(vehicle_definition, ids.EARTH).total_units
-    before_orbit = sim.transport.fleet_pool(vehicle_definition, ids.LEO).total_units
     sim.transport.add_fleet_units(vehicle_definition, 1, ids.EARTH, day=sim.day)
     sim.transport.add_fleet_units(vehicle_definition, 1, ids.LEO, day=sim.day)
-    assert sim.transport.fleet_pool(vehicle_definition, ids.EARTH).total_units == before_earth + 1
-    assert sim.transport.fleet_pool(vehicle_definition, ids.LEO).total_units == before_orbit + 1
+    assert sim.transport.fleet_pool(vehicle_definition, ids.EARTH).total_units == 1
+    assert sim.transport.fleet_pool(vehicle_definition, ids.LEO).total_units == 1

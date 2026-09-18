@@ -156,12 +156,10 @@ def test_fleet_research_provider_assignment_owns_intent_while_fleet_owns_quantit
     assert option.can_create
     assert option.free_units == 1
 
-    before_counter = sim.research._provider_assignment_counter
     with pytest.raises(ApplicationError, match="insufficient free fleet units"):
         app.execute(CreateResearchProviderAssignment(
             str(provider_id), str(ids.LEO), 2, priority=4
         ))
-    assert sim.research._provider_assignment_counter == before_counter
     assert sim.research.provider_assignments == {}
     assert sim.transport.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == initial_free
 

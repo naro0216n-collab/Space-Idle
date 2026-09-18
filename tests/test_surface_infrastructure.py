@@ -222,14 +222,26 @@ def test_surface_infrastructure_limits_remote_service_execution_without_disablin
     assert sim.facilities.active_capability_at(ids.EARTH, "cargo_transfer", sim.day)
     assert station_id in sim.facilities.facilities
 
-def test_surface_cell_development_execution_reports_shared_bundle_fulfillment():
+def test_surface_cell_development_projection_execution_and_completion_share_one_infrastructure_contract():
     app = build_game_application()
     sim = app._simulation
+
+    surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
+    coastal = next(cell for cell in surface.cells if cell.id == str(ids.EARTH_CELL_COASTAL))
+    option = next(row for row in coastal.development_options if row.location_id == str(ids.EARTH))
+    assert option.blockers == ()
+    assert option.can_plan
+    assert option.projected_surface_infrastructure_demand is not None
+    assert option.projected_surface_infrastructure_demand > 0.0
+    assert option.projected_surface_infrastructure_fulfillment == 0.0
+    assert option.limiting_factors == ("surface_infrastructure",)
+
     project_id = app.execute(DevelopSurfaceCell(
         str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), procurement_policy="extended_wait"
     )).created_id
     assert project_id is not None
     _ensure_project_materials_on_hand(sim, project_id)
+    assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
 
     app.execute(AdvanceTime(1))
     project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
@@ -246,25 +258,30 @@ def test_surface_cell_development_execution_reports_shared_bundle_fulfillment():
     bundle_id = sim.projects.construction_execution_bundle_id(project_id)
     projected = decision.allocations.execution.fulfillment(bundle_id)
     assert projected > 0.0
+
     app.execute(AdvanceTime(1))
-    project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
-    assert project.construction_done > 0.0
-    assert project.construction_fulfillment > 0.0
-    assert "surface_infrastructure" not in project.limiting_factors
+    project_view = next(row for row in app.query(GetProjects()).items if row.id == project_id)
+    assert project_view.construction_done > 0.0
+    assert project_view.construction_fulfillment > 0.0
+    assert "surface_infrastructure" not in project_view.limiting_factors
+    assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
 
+    project_state = next(row for row in sim.projects.projects.values() if str(row.id) == project_id)
+    while project_state.status.value != "complete":
+        before = (
+            project_state.status,
+            project_state.construction_done,
+            project_state.materials_committed,
+        )
+        app.execute(AdvanceTime(1))
+        after = (
+            project_state.status,
+            project_state.construction_done,
+            project_state.materials_committed,
+        )
+        assert after != before, "ready surface development made no canonical-tick progress"
 
-def test_surface_map_exposes_projected_infrastructure_limit_for_cell_development():
-    app = build_game_application()
-    surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
-    coastal = next(cell for cell in surface.cells if cell.id == str(ids.EARTH_CELL_COASTAL))
-    option = next(row for row in coastal.development_options if row.location_id == str(ids.EARTH))
-    assert option.blockers == ()
-    assert option.can_plan
-    assert option.projected_surface_infrastructure_demand is not None
-    assert option.projected_surface_infrastructure_demand > 0.0
-    assert option.projected_surface_infrastructure_fulfillment == 0.0
-    assert option.limiting_factors == ("surface_infrastructure",)
-
+    assert ids.EARTH_CELL_COASTAL in sim.graph.locations[ids.EARTH].developed_cell_ids
 
 
 def test_concurrent_surface_development_projects_share_the_common_execution_allocator():

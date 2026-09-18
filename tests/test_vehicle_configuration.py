@@ -119,7 +119,7 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
     assert state.progress_days == pytest.approx(started_progress)
 
 
-def test_operation_asset_disposition_prevents_movement_continuation_after_recovery():
+def test_transport_performance_enforces_operation_continuity_and_endurance():
     from space_idle.content import base_ids as ids
     from space_idle.transport import (
         LandingCapability, MovementEndpoint, MovementPlan, OperationAssetDisposition,
@@ -151,24 +151,14 @@ def test_operation_asset_disposition_prevents_movement_continuation_after_recove
     failures = sim.transport.performance_movement_failures(plan, profile, sim.day)
     assert "operation:powered_ascent:asset_returns_before_movement_complete" in failures
 
-
-def test_transport_endurance_applies_independently_of_operation_kind():
-    from space_idle.transport import PoweredAscentCapability, TransportPerformanceProfile
-    from space_idle.shared import MovementPlanId
-
-    app = build_game_application()
-    sim = app._simulation
-    plan = sim.transport.movement_plan_candidates(
-        EARTH,
-        LEO,
-    )[0]
-    profile = TransportPerformanceProfile(
+    canonical_plan = sim.transport.movement_plan_candidates(EARTH, LEO)[0]
+    endurance_profile = TransportPerformanceProfile(
         dry_mass_t=10.0,
         payload_t=1.0,
         operation_capabilities=(PoweredAscentCapability(10.0, 11.0, 120000.0),),
         endurance_days=1.0,
     )
-
-    failures = sim.transport.performance_movement_failures(plan, profile, sim.day)
-
-    assert "endurance:2/1" in failures
+    endurance_failures = sim.transport.performance_movement_failures(
+        canonical_plan, endurance_profile, sim.day
+    )
+    assert "endurance:2/1" in endurance_failures

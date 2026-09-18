@@ -21,7 +21,7 @@ from space_idle.service_capacity import ServiceCapacityScope
 
 
 
-def test_tick_allocation_graph_orders_cross_domain_and_service_dependencies():
+def test_tick_allocation_graph_orders_dependencies_and_configuration_rejects_cycles():
     sim = build_game_application()._simulation
     service_plan = sim.service_capacity_allocation_projection()
     service_types = {row.service_type for row in service_plan.requests}
@@ -42,8 +42,6 @@ def test_tick_allocation_graph_orders_cross_domain_and_service_dependencies():
         position[edge.upstream_node] < position[edge.node]
         for edge in dependencies
     )
-
-def test_configuration_validation_rejects_allocation_dependency_cycles():
     cross_domain = build_game_application()._simulation
     original = cross_domain.tick_allocation_dependencies
 

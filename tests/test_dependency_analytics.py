@@ -48,6 +48,17 @@ def test_scope_boundary_changes_import_export_without_double_counting_internal_f
     assert _resource(combined, ids.WATER).exports_pipeline == pytest.approx(0.0)
     assert combined.node_ids == tuple(sorted((str(EARTH), str(LEO))))
 
+    body_id = sim.graph.context_body_id(EARTH)
+    assert body_id is not None
+    body = app.query(GetDependencyAnalytics("body", str(body_id)))
+    player = app.query(GetDependencyAnalytics())
+    assert set(body.node_ids) == {
+        str(value) for value in sim.graph.nodes_for_body(body_id)
+    }
+    assert set(player.node_ids) == {
+        str(value) for value in sim.graph.operational_node_ids()
+    }
+
 
 def test_unmet_external_demand_is_projected_for_destination_scope():
     app = build_game_application()
@@ -62,19 +73,6 @@ def test_unmet_external_demand_is_projected_for_destination_scope():
         row.id for row in view.resources if row.external_dependency_per_day > 1e-9
     } <= critical
     assert all("unmet_demand" in row.limiting_factors for row in unmet)
-
-
-def test_body_and_player_scopes_resolve_operational_nodes_in_application():
-    app = build_game_application()
-    graph = app._simulation.graph
-    body_id = graph.context_body_id(EARTH)
-    assert body_id is not None
-
-    body = app.query(GetDependencyAnalytics("body", str(body_id)))
-    player = app.query(GetDependencyAnalytics())
-
-    assert set(body.node_ids) == {str(value) for value in graph.nodes_for_body(body_id)}
-    assert set(player.node_ids) == {str(value) for value in graph.operational_node_ids()}
 
 
 def test_content_defined_resource_group_aggregates_members_without_cross_resource_substitution():

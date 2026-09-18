@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 
 from space_idle import GetMovementPlans, build_game_application
-from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.transport import (
     MovementEndpoint,
@@ -12,7 +11,6 @@ from space_idle.transport import (
     TransportPerformanceProfile,
     VehicleDef,
 )
-from space_idle.persistence import load_game, save_game
 from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId
 from space_idle.spatial import (
     CelestialBodyDef,
@@ -132,15 +130,16 @@ def test_surface_transport_physics_derive_latency_and_range_blockers_from_endpoi
         )
     )
 
-def test_player_founded_location_gets_orbit_movement_only_after_real_gateway_exists():
-    sim = build_game_application()._simulation
+def test_player_founded_location_gets_orbit_movement_only_after_active_gateway_exists():
+    app = build_game_application()
+    sim = app._simulation
     location_id = SpatialNodeId("test.location.farside")
     sim.graph.found_location(location_id, "Farside", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS)
     sim.transport.invalidate_movement_plans()
     assert not sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, location_id)
     assert not sim.transport.movement_plan_candidates(location_id, ids.LUNAR_ORBIT)
 
-    sim.facilities.install(
+    gateway = sim.facilities.install(
         ids.SURFACE_DISTRIBUTION_HUB,
         location_id,
         site_cell_id=ids.MOON_CELL_FARSIDE_HIGHLANDS,
@@ -151,40 +150,15 @@ def test_player_founded_location_gets_orbit_movement_only_after_real_gateway_exi
     assert sim.transport.movement_geometry(down.id).destination.surface_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
     assert sim.transport.movement_geometry(up.id).origin.surface_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
 
-
-def test_surface_interface_projection_and_availability_follow_gateway_facility():
-    app = build_game_application()
-    sim = app._simulation
-    a, gateway = _location_with_gateway(sim, "a", ids.MOON_CELL_SOUTH_POLAR_RIDGE)
-    b, _ = _location_with_gateway(sim, "b", ids.MOON_CELL_NEARSIDE_MARE)
-    plan = _plan_between(sim, a, b)
-
-    row = app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=False)).items[0]
+    row = app.query(GetMovementPlans(movement_plan_id=str(up.id), include_modes=False)).items[0]
     assert row.origin_endpoint.locator_kind == "surface_interface"
     assert row.origin_endpoint.locator_id == str(gateway)
-    assert row.origin_endpoint.surface_cell_id == str(ids.MOON_CELL_SOUTH_POLAR_RIDGE)
+    assert row.origin_endpoint.surface_cell_id == str(ids.MOON_CELL_FARSIDE_HIGHLANDS)
 
     sim.facilities.pause(gateway)
-    blocked = app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=False)).items[0]
+    blocked = app.query(GetMovementPlans(movement_plan_id=str(up.id), include_modes=False)).items[0]
     assert not blocked.available
     assert any(item.startswith("origin:interface:manual_pause:") for item in blocked.blockers)
-
-
-def test_movement_plan_is_rederived_after_save_load(tmp_path):
-    app = build_game_application()
-    sim = app._simulation
-    a, _ = _location_with_gateway(sim, "a", ids.MOON_CELL_SOUTH_POLAR_RIDGE)
-    b, _ = _location_with_gateway(sim, "b", ids.MOON_CELL_NEARSIDE_MARE)
-    plan = _plan_between(sim, a, b)
-
-    path = tmp_path / "movement-plan.json"
-    save_game(app, path)
-    loaded, _ = load_game(path, build_game_application_for_load)
-    loaded_plan = _plan_between(loaded._simulation, a, b)
-    assert loaded_plan.id == plan.id
-    geometry = loaded._simulation.transport.movement_geometry(loaded_plan.id)
-    assert geometry.origin.node_id == a
-    assert geometry.destination.node_id == b
 
 
 def test_physical_target_endpoint_uses_surface_cell_without_operational_node():

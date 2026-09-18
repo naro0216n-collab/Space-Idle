@@ -120,39 +120,23 @@ def test_quantity_buy_tracks_remaining_target_but_rate_buy_does_not_accumulate_b
     assert day1.rows[0].requested_t == pytest.approx(4.0)
 
 
-def test_existing_buy_commitment_uses_current_order_priority_at_boundary():
-    market, _provider, interface, _node, resource = _market(funds=10.0, supply=10.0, lead=0)
+def test_matured_buy_settles_funds_supply_and_inventory_atomically_and_waits_for_admission():
+    market, provider_id, interface_id, node_id, resource = _market(funds=10.0, supply=10.0, lead=0)
     order_id = market.create_order(
-        direction="buy", resource_id=resource, market_interface_id=interface,
+        direction="buy", resource_id=resource, market_interface_id=interface_id,
         priority=1, quantity_target_t=2.0,
     )
     plan = market.plan_buy_allocations()
     market.create_buy_commitments(plan, day=0)
     commitment = next(iter(market.buy_commitments.values()))
-
     market.update_order(order_id, priority=5)
-    bundle = next(
-        row for row in market.buy_boundary_bundles(day=1, inventory=InventoryBook())
-        if row.owner_id == commitment.id
-    )
-
-    assert int(bundle.priority) == 5
-
-
-def test_matured_buy_settles_funds_supply_and_inventory_atomically_and_waits_for_admission():
-    market, provider_id, interface_id, node_id, resource = _market(funds=10.0, supply=10.0, lead=0)
-    order_id = market.create_order(
-        direction="buy", resource_id=resource, market_interface_id=interface_id,
-        quantity_target_t=2.0,
-    )
-    plan = market.plan_buy_allocations()
-    market.create_buy_commitments(plan, day=0)
-    commitment = next(iter(market.buy_commitments.values()))
 
     inventory = InventoryBook()
     inventory.register_storage_class(resource, "dry")
     inventory.add_capacity(node_id, "dry", 1.0)
     bundles = market.buy_boundary_bundles(1, inventory)
+    bundle = next(row for row in bundles if row.owner_id == commitment.id)
+    assert int(bundle.priority) == 5
     capacities = {
         key: float("inf")
         for bundle in bundles

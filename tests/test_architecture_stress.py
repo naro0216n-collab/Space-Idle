@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from space_idle import build_game_application
 from space_idle.content import base_ids
+from space_idle.construction import BuildResourceRequirement, ConstructionRecipe
+from space_idle.facilities import FacilityDef
+from space_idle.validation import validate_simulation_configuration
 from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId, StarSystemId, SurfaceCellId
 from space_idle.spatial import (
     AtmosphereField,
@@ -137,3 +141,21 @@ def test_generic_core_does_not_embed_current_content_ids():
             f"{path.relative_to(package)} embeds concrete Content IDs: "
             f"{sorted(embedded)}"
         )
+
+    app = build_game_application()
+    sim = app._simulation
+    facility_id = DefinitionId("test.facility.four_resource_recipe")
+    sim.facilities.definitions[facility_id] = FacilityDef(
+        facility_id, "Four-resource construction fixture"
+    )
+    sim.projects.recipes[facility_id] = ConstructionRecipe(
+        facility_id,
+        (
+            BuildResourceRequirement(base_ids.STRUCTURAL_COMPONENTS, 1.0),
+            BuildResourceRequirement(base_ids.MACHINERY, 1.0),
+            BuildResourceRequirement(base_ids.PRECISION_ELECTRONICS, 1.0),
+            BuildResourceRequirement(base_ids.BULK_STRUCTURE, 1.0),
+        ),
+        construction_work=1.0,
+    )
+    validate_simulation_configuration(sim)

@@ -91,22 +91,6 @@ def test_explicit_empty_prototype_stage_progresses_automatically_after_site_sele
     assert research_id not in sim.research.active
 
 
-def test_research_definition_validates_stage_composition_and_stable_identity():
-    research_id = DefinitionId("test.research.invalid_stage_contract")
-    with pytest.raises(ValueError, match="explicitly define its stages"):
-        ResearchDefinition(research_id, "Implicit Stage Forbidden", (), prerequisites=frozenset())
-
-    with pytest.raises(ValueError, match="stage ids must be unique"):
-        ResearchDefinition(
-            research_id,
-            "Duplicate Stage ID",
-            (
-                ResearchPrototypeStageSpec("same", {}),
-                ResearchPrototypeStageSpec("same", {}),
-            ),
-        )
-
-
 def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structural_mismatch():
     app = build_game_application()
     sim = app._simulation
@@ -190,17 +174,25 @@ def test_cell_local_research_site_requires_and_persists_explicit_developed_cell(
     assert selected.operational_node_id == str(EARTH)
     assert selected.surface_cell_id == str(ids.EARTH_CELL_INDUSTRIAL)
 
-def test_prototype_resources_stage_durably_and_complete_without_manual_funding():
+def test_prototype_resource_staging_is_site_owned_durable_and_completes_when_runtime_service_recovers():
     app = build_game_application()
     sim = app._simulation
     research_id = DefinitionId("test.research.reserved_prototype")
     resource_id = DefinitionId("test.resource.prototype_material")
-    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Reserved Prototype", (ResearchPrototypeStageSpec("prototype",
-            {resource_id: 1.0},
-            SiteRequirements(),
-            (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
-        ),), prerequisites=frozenset())
-    sim.inventory.add(EARTH, resource_id, 1.0)
+    sim.research.definitions[research_id] = ResearchDefinition(
+        research_id,
+        "Reserved Prototype",
+        (
+            ResearchPrototypeStageSpec(
+                "prototype",
+                {resource_id: 1.0},
+                SiteRequirements(),
+                (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
+            ),
+        ),
+        prerequisites=frozenset(),
+    )
+    sim.inventory.add(EARTH, resource_id, 0.25)
 
     app.execute(StartResearch(str(research_id)))
     app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
@@ -210,8 +202,26 @@ def test_prototype_resources_stage_durably_and_complete_without_manual_funding()
     row = _research_row(app, research_id)
     assert row.status == "prototype"
     resource = row.prototype_resources[0]
-    assert resource.reserved_t == 1.0
-    assert resource.requested_t == 0.0
+    assert resource.reserved_t == pytest.approx(0.25)
+    assert resource.requested_t == pytest.approx(0.75)
+    assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.0)
+
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(LEO)))
+    assert sim.research.prototype_reserved_t(
+        research_id, "prototype", EARTH, resource_id
+    ) == pytest.approx(0.0)
+    assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.25)
+    assert sim.research.prototype_reserved_t(
+        research_id, "prototype", LEO, resource_id
+    ) == pytest.approx(0.0)
+
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
+    sim.inventory.add(EARTH, resource_id, 0.75)
+    app.execute(AdvanceTime(1))
+    row = _research_row(app, research_id)
+    resource = row.prototype_resources[0]
+    assert resource.reserved_t == pytest.approx(1.0)
+    assert resource.requested_t == pytest.approx(0.0)
     assert not any(code == "prototype_resource" for code, _detail in row.current_blockers)
 
     app.execute(PauseResearch(str(research_id)))
@@ -221,7 +231,7 @@ def test_prototype_resources_stage_durably_and_complete_without_manual_funding()
     app.execute(AdvanceTime(1))
     assert sim.research.prototype_reserved_t(
         research_id, "prototype", EARTH, resource_id
-    ) == paused_reserved == 1.0
+    ) == paused_reserved == pytest.approx(1.0)
     app.execute(ResumeResearch(str(research_id)))
 
     sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
@@ -275,32 +285,20 @@ def test_demonstration_site_selection_tolerates_transient_blockers_but_progress_
     app.execute(AdvanceTime(1))
     assert sim.research.active[research_id].stage_progress > 0.0
 
-def test_partial_prototype_staging_returns_to_previous_site_when_site_changes():
-    app = build_game_application()
-    sim = app._simulation
-    research_id = DefinitionId("test.research.partial_prototype")
-    resource_id = DefinitionId("test.resource.partial_prototype_material")
-    missing_id = DefinitionId("test.resource.missing_prototype_material")
-    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Partial Prototype", (ResearchPrototypeStageSpec("prototype", {resource_id: 1.0, missing_id: 1.0}),), prerequisites=frozenset())
-    sim.inventory.add(EARTH, resource_id, 0.25)
+def test_research_stage_identity_is_explicit_unique_and_stable_across_repeated_stage_types():
+    invalid_id = DefinitionId("test.research.invalid_stage_contract")
+    with pytest.raises(ValueError, match="explicitly define its stages"):
+        ResearchDefinition(invalid_id, "Implicit Stage Forbidden", (), prerequisites=frozenset())
+    with pytest.raises(ValueError, match="stage ids must be unique"):
+        ResearchDefinition(
+            invalid_id,
+            "Duplicate Stage ID",
+            (
+                ResearchPrototypeStageSpec("same", {}),
+                ResearchPrototypeStageSpec("same", {}),
+            ),
+        )
 
-    app.execute(StartResearch(str(research_id)))
-    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
-    app.execute(AdvanceTime(1))
-
-    assert sim.research.prototype_reserved_t(research_id, "prototype", EARTH, resource_id) == 0.25
-    assert sim.inventory.amount(EARTH, resource_id) == pytest.approx(0.25)
-    assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.0)
-
-    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(LEO)))
-
-    assert sim.research.prototype_reserved_t(research_id, "prototype", EARTH, resource_id) == 0.0
-    assert sim.inventory.amount(EARTH, resource_id) == pytest.approx(0.25)
-    assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.25)
-    assert sim.research.prototype_reserved_t(research_id, "prototype", LEO, resource_id) == 0.0
-
-
-def test_repeated_stage_type_uses_stage_id_for_identity_and_transition():
     app = build_game_application()
     sim = app._simulation
     research_id = DefinitionId("test.research.repeated_prototype")

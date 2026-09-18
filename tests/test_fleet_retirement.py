@@ -26,7 +26,7 @@ from space_idle.shared import DefinitionId, EntityId
 from space_idle.transport.models import FleetActivityRef, FleetRetirementPhase
 
 
-def test_fleet_retirement_lifecycle_reserves_free_units_then_becomes_irreversible_and_settles_salvage():
+def test_fleet_retirement_lifecycle_preserves_commitment_across_projection_save_load_and_settles_salvage(tmp_path):
     reversible = build_game_application()
     sim = reversible._simulation
     pool = sim.transport.fleet_pool(ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH)
@@ -65,6 +65,28 @@ def test_fleet_retirement_lifecycle_reserves_free_units_then_becomes_irreversibl
     ).created_id
     assert retirement_id is not None
 
+    fleet = app.query(GetFleet())
+    retirement = next(row for row in fleet.retirements if row.id == retirement_id)
+    assert retirement.phase == "committed"
+    assert not retirement.irreversible_started
+    assert retirement.required_work == pytest.approx(5.0)
+    assert retirement.expected_salvage
+    assert next(
+        row for row in fleet.pools
+        if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
+    ).retirement_units == 1
+
+    path = tmp_path / "retirement.json"
+    save_game(app, path, saved_at=datetime(2026, 9, 17, tzinfo=timezone.utc))
+    loaded, offline = load_game(path, build_game_application_for_load)
+    assert offline is None
+    assert capture_state(loaded._simulation) == capture_state(sim)
+    app = loaded
+    sim = loaded._simulation
+    loaded_retirement = sim.transport.fleet_retirements[EntityId(retirement_id)]
+    assert loaded_retirement.phase is FleetRetirementPhase.COMMITTED
+    assert loaded_retirement.requested_units == 1
+
     app.execute(AdvanceTime(1))
     state = sim.transport.fleet_retirements[EntityId(retirement_id)]
     assert state.irreversible_started
@@ -87,31 +109,6 @@ def test_fleet_retirement_lifecycle_reserves_free_units_then_becomes_irreversibl
     )
 
 
-
-
-def test_fleet_retirement_application_projection_and_save_load_preserve_commitment(tmp_path):
-    app = build_game_application()
-    retirement_id = app.execute(
-        RetireFleet(str(ids.REUSABLE_LAUNCH_VEHICLE), 1, str(ids.EARTH), priority=2)
-    ).created_id
-    assert retirement_id is not None
-
-    fleet = app.query(GetFleet())
-    retirement = next(row for row in fleet.retirements if row.id == retirement_id)
-    assert retirement.phase == "committed"
-    assert not retirement.irreversible_started
-    assert retirement.required_work == pytest.approx(5.0)
-    assert retirement.expected_salvage
-    assert next(row for row in fleet.pools if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)).retirement_units == 1
-
-    path = tmp_path / "retirement.json"
-    save_game(app, path, saved_at=datetime(2026, 9, 17, tzinfo=timezone.utc))
-    loaded, offline = load_game(path, build_game_application_for_load)
-    assert offline is None
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
-    loaded_retirement = loaded._simulation.transport.fleet_retirements[EntityId(retirement_id)]
-    assert loaded_retirement.phase is FleetRetirementPhase.COMMITTED
-    assert loaded_retirement.requested_units == 1
 
 
 def test_fleet_retirement_rechecks_site_requirements_during_execution():
@@ -178,14 +175,28 @@ def test_fleet_retirement_priority_competes_for_shared_work_capacity():
     assert not low.irreversible_started
 
 
-def test_fleet_retirement_salvage_blocker_uses_shared_storage_class_headroom():
+def test_fleet_retirement_at_non_earth_node_uses_aggregate_salvage_headroom_and_waits_for_admission():
     app = build_game_application()
     sim = app._simulation
-    sim.transport.fleet_pool(ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH).total_units = 1
+    workshop_definition_id = DefinitionId("test.facility.orbital_vehicle_workshop")
+    sim.facilities.definitions[workshop_definition_id] = FacilityDef(
+        workshop_definition_id,
+        "Orbital vehicle workshop",
+        service_capacity_supplies=(ServiceCapacitySupply("vehicle_assembly", 1.0),),
+    )
+    sim.facilities.install(workshop_definition_id, ids.LUNAR_ORBIT)
+    sim.transport.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT).total_units = 1
 
-    retirement_id = EntityId(app.execute(
-        RetireFleet(str(ids.REUSABLE_LAUNCH_VEHICLE), 1, str(ids.EARTH), priority=5)
-    ).created_id)
+    retirement_id = EntityId(
+        app.execute(
+            RetireFleet(
+                str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+                1,
+                str(ids.LUNAR_ORBIT),
+                priority=5,
+            )
+        ).created_id
+    )
     state = sim.transport.fleet_retirements[retirement_id]
     definition = sim.transport.vehicle_defs[state.vehicle_definition_id]
     required_work = definition.retirement.work_days_per_unit * state.requested_units
@@ -203,75 +214,36 @@ def test_fleet_retirement_salvage_blocker_uses_shared_storage_class_headroom():
         for resource_id, amount_per_unit in definition.retirement.recovery_resources_per_unit
         if amount_per_unit * state.requested_units > 0.0
     )
-    salvage_total = sum(
+    salvage_in_class = tuple(
         amount
         for resource_id, amount in salvage
         if sim.inventory.resource_storage_class.get(resource_id) == storage_class
     )
-    largest_component = max(
-        amount
-        for resource_id, amount in salvage
-        if sim.inventory.resource_storage_class.get(resource_id) == storage_class
-    )
+    salvage_total = sum(salvage_in_class)
+    largest_component = max(salvage_in_class)
     assert salvage_total > largest_component
 
-    admission = sim.inventory.admission_state_for_class(ids.EARTH, storage_class)
+    admission = sim.inventory.admission_state_for_class(ids.LUNAR_ORBIT, storage_class)
     assert admission.admission_capacity_t is not None
     target_headroom = (salvage_total + largest_component) / 2.0
     filler = ids.CONSTRUCTION_EQUIPMENT
-    sim.inventory.stock[(ids.EARTH, filler)] = sim.inventory.amount(ids.EARTH, filler) + (
-        admission.admission_capacity_t - target_headroom
+    current_filler = sim.inventory.amount(ids.LUNAR_ORBIT, filler)
+    occupied = sim.inventory.stored_in_class(ids.LUNAR_ORBIT, storage_class)
+    sim.inventory.stock[(ids.LUNAR_ORBIT, filler)] = current_filler + max(
+        0.0, admission.admission_capacity_t - target_headroom
     )
 
-    admission = sim.inventory.admission_state_for_class(ids.EARTH, storage_class)
+    admission = sim.inventory.admission_state_for_class(ids.LUNAR_ORBIT, storage_class)
     assert admission.admission_capacity_t is not None
     assert largest_component < admission.admission_capacity_t < salvage_total
     assert f"salvage_admission:{storage_class}" in sim.transport.fleet_retirement_blockers(
         retirement_id, day=sim.day
     )
-
-
-def test_fleet_retirement_at_non_earth_node_waits_for_salvage_admission():
-    app = build_game_application()
-    sim = app._simulation
-    workshop_definition_id = DefinitionId("test.facility.orbital_vehicle_workshop")
-    sim.facilities.definitions[workshop_definition_id] = FacilityDef(
-        workshop_definition_id,
-        "Orbital vehicle workshop",
-        service_capacity_supplies=(ServiceCapacitySupply("vehicle_assembly", 1.0),),
-    )
-    sim.facilities.install(workshop_definition_id, ids.LUNAR_ORBIT)
-    sim.transport.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT).total_units = 1
-
-    storage_class = sim.inventory.resource_storage_class[ids.STRUCTURAL_COMPONENTS]
-    capacity = sim.inventory.usable_storage_capacity_t[(ids.LUNAR_ORBIT, storage_class)]
-    occupied_without_structural = sim.inventory.stored_in_class(ids.LUNAR_ORBIT, storage_class) - sim.inventory.amount(
-        ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS
-    )
-    sim.inventory.stock[(ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS)] = max(
-        0.0, capacity - occupied_without_structural - 1.0
-    )
-
-    retirement_id = EntityId(app.execute(
-        RetireFleet(
-            str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1, str(ids.LUNAR_ORBIT), priority=5
-        )
-    ).created_id)
-
-    app.execute(AdvanceTime(3))
-    state = sim.transport.fleet_retirements[retirement_id]
-    assert state.progress_work == pytest.approx(2.0)
-    assert state.phase is FleetRetirementPhase.DISMANTLING
     assert sim.transport.fleet_pool_snapshot(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
     ).total_units == 1
-    assert any(
-        blocker.startswith("salvage_admission:")
-        for blocker in sim.transport.fleet_retirement_blockers(retirement_id, day=sim.day)
-    )
 
-    key = (ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS)
-    sim.inventory.stock[key] = sim.inventory.stock[key] - 10.0
+    sim.inventory.stock[(ids.LUNAR_ORBIT, filler)] = max(0.0, current_filler - 10.0)
     app.execute(AdvanceTime(1))
     assert sim.transport.fleet_retirements[retirement_id].phase is FleetRetirementPhase.COMPLETE
     assert sim.transport.fleet_pool_snapshot(

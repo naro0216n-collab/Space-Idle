@@ -13,7 +13,7 @@ from space_idle.content.base_spatial import BASE_WORLD_DEFINITION_ID, build_worl
 from space_idle.persistence import SaveFormatError, load_game, save_game
 
 
-def test_world_definition_and_standard_scenario_keep_static_and_runtime_state_separate():
+def test_world_scenario_and_load_boundaries_keep_static_definition_runtime_state_and_identity_separate(tmp_path):
     graph, _environment = build_world_definition()
     assert graph.operational_node_states == {}
     assert graph.locations == {}
@@ -59,9 +59,6 @@ def test_world_definition_and_standard_scenario_keep_static_and_runtime_state_se
         build_standard_scenario_definition().apply(sim)
 
 
-
-
-def test_load_preserves_runtime_state_without_reapplying_scenario_and_rejects_identity_mismatch(tmp_path):
     app = build_game_application()
     assert app._simulation.logistics.global_policy_id is not None
     app.execute(SetGlobalLogisticsPolicy(None))

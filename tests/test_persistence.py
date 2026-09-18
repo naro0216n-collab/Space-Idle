@@ -256,8 +256,7 @@ def test_offline_progress_matches_normal_time_and_is_fractionally_composable(tmp
     original = _make_nontrivial_state()
     sim = original._simulation
 
-    # Exercise several active domains at once instead of preserving one offline
-    # regression test per feature that happened to be added over time.
+    # Offline equivalence is one simulation-boundary contract across active domains.
     for facility in sim.facilities.facilities.values():
         if facility.paused:
             original.execute(ResumeFacility(str(facility.id)))
@@ -411,11 +410,21 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
     analytics_before = app.query(
         GetDependencyAnalytics("operational_nodes", node_ids=(str(ids.EARTH),))
     )
+    movement_before = sim.transport.movement_plan_candidates(ids.EARTH, ids.LEO)
+    assert len(movement_before) == 1
+    movement_geometry_before = sim.transport.movement_geometry(movement_before[0].id)
     assert infrastructure_before is not None
     assert capture_state(sim) == before
     assert "surface_infrastructure" not in before
     assert "dependency_analytics" not in before
     assert "allocation_projection" not in before
+    assert "movement_plans" not in before.get("transport", {})
+    assert "extraction" not in before
+    assert before["survey"]["knowledge_progress"]
+    assert all(
+        "cell_id" in row and "resource_id" in row and "location_id" not in row
+        for row in before["survey"]["knowledge_progress"]
+    )
 
     path = tmp_path / "derived-projections.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -427,6 +436,11 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
     assert loaded.query(
         GetDependencyAnalytics("operational_nodes", node_ids=(str(ids.EARTH),))
     ) == analytics_before
+    movement_after = loaded._simulation.transport.movement_plan_candidates(ids.EARTH, ids.LEO)
+    assert tuple(plan.id for plan in movement_after) == tuple(plan.id for plan in movement_before)
+    assert loaded._simulation.transport.movement_geometry(
+        movement_after[0].id
+    ) == movement_geometry_before
 
 
 def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):

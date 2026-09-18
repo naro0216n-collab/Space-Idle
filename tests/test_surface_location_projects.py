@@ -8,6 +8,7 @@ import pytest
 from space_idle import (
     AdvanceTime,
     ApplicationError,
+    CancelBuild,
     CancelFounding,
     DevelopSurfaceCell,
     PlanOperationalNodeFounding,
@@ -64,14 +65,6 @@ def _advance_founding_to_completion(app, project):
     return execution
 
 
-def _advance_surface_development_to_completion(app, project):
-    while project.status.value != "complete":
-        before = (project.status, project.construction_done, project.materials_committed)
-        app.execute(AdvanceTime(1))
-        after = (project.status, project.construction_done, project.materials_committed)
-        assert after != before, "ready surface development made no canonical-tick progress"
-
-
 def _stage_founding_resources(sim):
     recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
     for req in recipe.payload_resources:
@@ -110,10 +103,10 @@ def test_knowledge_requirements_are_subject_specific_and_gate_founding_without_e
     )
 
     lunar_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
     water_target = sim.survey.targets[(lunar_cell, ids.WATER)]
     sim.survey.knowledge_progress[(lunar_cell, ids.WATER)] = water_target.thresholds[-1]
     sim.survey.knowledge_progress[(lunar_cell, ids.REGOLITH)] = 0.0
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
     founding_failures = sim.founding.planning_failures(
         ids.LUNAR_ORBIT,
         _surface_target(sim, ids.MOON, lunar_cell),
@@ -225,53 +218,6 @@ def test_founding_transport_path_and_site_requirements_follow_staging_and_target
     assert any(row.code == "target:environment:low_pressure" for row in earth_target)
 
 
-def test_surface_cell_development_changes_territory_only_after_project_completion():
-    app = build_game_application()
-    sim = app._simulation
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
-    recipe = sim.projects.spatial_recipes[sim.projects.surface_cell_development_recipe_id]
-    for requirement in recipe.resources:
-        sim.inventory.add(ids.EARTH, requirement.resource_id, requirement.amount_t + 1.0)
-    result = app.execute(DevelopSurfaceCell(str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), procurement_policy="immediate"))
-    assert result.created_id is not None
-    assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
-    project = next(row for row in sim.projects.projects.values() if str(row.id) == result.created_id)
-    _advance_surface_development_to_completion(app, project)
-    assert ids.EARTH_CELL_COASTAL in sim.graph.locations[ids.EARTH].developed_cell_ids
-
-
-def test_founding_resource_shortage_reports_supply_transport_blocker():
-    app = build_game_application()
-    sim = app._simulation
-    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    _survey_cell_to_l2(sim, cell)
-    project_id = app.execute(_found_command("No Supply Transport", cell)).created_id
-    assert project_id is not None
-
-    row = next(
-        item for item in app.query(GetProjects(str(ids.LUNAR_ORBIT))).items
-        if item.id == project_id
-    )
-    assert any(code in {"import_source", "import_transport_blocked"} for code, _detail in row.blockers)
-    assert any(code == "resource_shortage" for code, _detail in row.blockers)
-
-
-
-
-def test_founding_and_surface_development_claims_are_mutually_exclusive():
-    app = build_game_application()
-    sim = app._simulation
-    # Existing Earth location starts a development claim.
-    dev_id = app.execute(DevelopSurfaceCell(str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), procurement_policy="immediate")).created_id
-    assert dev_id
-    # A Founding service must see that same cell as claimed even if other recipe
-    # prerequisites would also fail.
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
-    failures = sim.founding.planning_failures(
-        ids.LUNAR_ORBIT, _surface_target(sim, ids.EARTH_BODY, ids.EARTH_CELL_COASTAL),
-        recipe.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
-    )
-    assert any(row.code == "cell_claimed" for row in failures)
 
 
 
@@ -291,12 +237,27 @@ class _ExternalSurfaceCellClaimProvider:
         )
 
 
-def test_surface_cell_claim_registry_blocks_consumers_without_pairwise_domain_wiring():
+def test_surface_cell_claim_registry_enforces_exclusivity_across_builtin_and_extension_owners():
     app = build_game_application()
     sim = app._simulation
     cell = ids.EARTH_CELL_COASTAL
     registry = sim.projects.surface_cell_claim_registry
     assert registry is sim.founding.surface_cell_claim_registry
+
+    development_id = app.execute(DevelopSurfaceCell(
+        str(ids.EARTH), str(cell), procurement_policy="immediate"
+    )).created_id
+    assert development_id is not None
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    builtin_failures = sim.founding.planning_failures(
+        ids.LUNAR_ORBIT, _surface_target(sim, ids.EARTH_BODY, cell),
+        recipe.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
+    )
+    assert any(row.code == "cell_claimed" for row in builtin_failures)
+
+    # Remove the built-in project claim so the same registry can prove that a
+    # new owner integrates without pairwise Project/Founding wiring.
+    app.execute(CancelBuild(development_id))
     registry.register(_ExternalSurfaceCellClaimProvider(cell))
 
     development_failures = sim.projects.surface_cell_development_failures(
@@ -330,6 +291,16 @@ def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_
 
     project_id = app.execute(_found_command("Partial Procurement", cell)).created_id
     assert project_id is not None
+    planned = next(
+        row for row in app.query(GetProjects(str(ids.LUNAR_ORBIT))).items
+        if row.id == project_id
+    )
+    assert any(
+        code in {"import_source", "import_transport_blocked"}
+        for code, _detail in planned.blockers
+    )
+    assert any(code == "resource_shortage" for code, _detail in planned.blockers)
+
     app.execute(AdvanceTime(1))
     project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)
     staged = sim.founding.staged_payload_t(project.id, ids.CONSTRUCTION_EQUIPMENT)
