@@ -113,7 +113,7 @@
       const blocked = (row.blockers || []).length;
       return `<div class="detail-card" data-research-provider-fleet-card>
         <div class="mode-title"><span>${esc(row.vehicle_definition_id)}</span><span class="badge ${row.can_set_quantity?'ok':'warn'}">Tier ${fmt(row.tier,0)} · assigned ${fmt(row.committed_units,0)} · free ${fmt(row.free_units,0)}</span></div>
-        <div class="cell-sub">${esc(row.operational_node_id)} · ${esc(row.provider_definition_id)}${row.assignment_id?` · assignment ${esc(row.assignment_id)}`:''}</div>
+        <div class="cell-sub">${esc(row.operational_node_id)} · ${esc(row.provider_definition_id)}</div>
         ${blocked ? `<div class="issue-stack">${(row.blockers||[]).map((item)=>`<div class="issue warn"><strong>${esc(item[0])}</strong><span>${esc(item[1])}</span></div>`).join('')}</div>` : ''}
         <div class="form-row"><label>Fleet unit<input type="number" min="0" max="${Math.max(0,Number(row.max_units||0))}" step="1" value="${fmt(row.committed_units,0)}" data-research-provider-fleet-quantity ${row.can_set_quantity?'':'disabled'}></label><button type="button" data-research-provider-set-fleet="${esc(row.provider_definition_id)}" data-vehicle-definition-id="${esc(row.vehicle_definition_id)}" data-operational-node-id="${esc(row.operational_node_id)}" ${row.can_set_quantity?'':'disabled'}>Fleet数量を適用</button></div>
       </div>`;
