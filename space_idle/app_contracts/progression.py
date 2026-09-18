@@ -29,15 +29,10 @@ class SetResearchDemonstrationSite:
     surface_cell_id: str | None = None
 
 @dataclass(frozen=True)
-class CreateResearchProviderAssignment:
+class SetResearchProviderFleetQuantity:
     provider_definition_id: str
     operational_node_id: str
-    quantity: int
-    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-
-@dataclass(frozen=True)
-class ResizeResearchProviderAssignment:
-    assignment_id: str
+    vehicle_definition_id: str
     quantity: int
 
 @dataclass(frozen=True)
@@ -54,21 +49,11 @@ class ResumeResearchProviderAssignment:
     assignment_id: str
 
 @dataclass(frozen=True)
-class ReleaseResearchProviderAssignment:
-    assignment_id: str
-
-@dataclass(frozen=True)
-class CreateSurveyProviderAssignment:
+class SetSurveyProviderFleetQuantity:
     provider_definition_id: str
     operational_node_id: str
+    vehicle_definition_id: str
     quantity: int
-@dataclass(frozen=True)
-class ResizeSurveyProviderAssignment:
-    assignment_id: str
-    quantity: int
-@dataclass(frozen=True)
-class ReleaseSurveyProviderAssignment:
-    assignment_id: str
 
 @dataclass(frozen=True)
 class StartSurvey:

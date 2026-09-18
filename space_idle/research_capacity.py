@@ -167,6 +167,60 @@ class ResearchCapacityMixin:
             self.facilities,
         )
 
+    def provider_assignment_for(
+        self,
+        provider_definition_id: DefinitionId,
+        operational_node_id: SpatialNodeId,
+        vehicle_definition_id: DefinitionId,
+    ):
+        rows = [
+            row
+            for row in self.provider_assignments.values()
+            if row.provider_definition_id == provider_definition_id
+            and row.operational_node_id == operational_node_id
+            and row.vehicle_definition_id == vehicle_definition_id
+        ]
+        if len(rows) > 1:
+            raise RuntimeError(
+                f"duplicate Research Provider assignment: "
+                f"{provider_definition_id}@{operational_node_id}/{vehicle_definition_id}"
+            )
+        return rows[0] if rows else None
+
+    def set_provider_fleet_quantity(
+        self,
+        provider_definition_id: DefinitionId,
+        operational_node_id: SpatialNodeId,
+        vehicle_definition_id: DefinitionId,
+        quantity: int,
+        *,
+        day: int = 0,
+    ) -> EntityId | None:
+        provider = self.providers.get(provider_definition_id)
+        if provider is None:
+            raise KeyError(provider_definition_id)
+        if provider.source_kind is not ResearchProviderSourceKind.FLEET:
+            raise ValueError("Research Provider fleet quantity requires a Fleet-backed provider")
+        if provider.source_definition_id != vehicle_definition_id:
+            raise ValueError("Research Provider vehicle does not match provider definition")
+        if not self.facilities.environment.graph.has_operational_node(operational_node_id):
+            raise KeyError(operational_node_id)
+        if quantity < 0:
+            raise ValueError("Research Provider fleet quantity must be non-negative")
+        assignment = self.provider_assignment_for(
+            provider_definition_id, operational_node_id, vehicle_definition_id
+        )
+        if quantity == 0:
+            if assignment is not None:
+                self.release_provider_assignment(assignment.id, day=day)
+            return None
+        if assignment is not None:
+            self.resize_provider_assignment(assignment.id, quantity)
+            return assignment.id
+        return self.create_provider_assignment(
+            provider_definition_id, operational_node_id, quantity, day=day
+        )
+
     def create_provider_assignment(
         self,
         provider_definition_id: DefinitionId,

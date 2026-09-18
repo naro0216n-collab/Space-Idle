@@ -8,7 +8,7 @@ import pytest
 from space_idle import (
     AdvanceTime,
     AssignExplorationFleet,
-    CreateResearchProviderAssignment,
+    SetResearchProviderFleetQuantity,
     CreateTransportAllocation,
     GetFleet,
     GetResearch,
@@ -478,8 +478,8 @@ def test_scientific_exploration_and_research_providers_share_rp_pool_admission()
         ),
     }
     sim.facilities.install(facility_definition_id, ids.EARTH)
-    app.execute(CreateResearchProviderAssignment(
-        str(fleet_provider_id), str(ids.EARTH), 1
+    app.execute(SetResearchProviderFleetQuantity(
+        str(fleet_provider_id), str(ids.EARTH), str(ids.REUSABLE_LAUNCH_VEHICLE), 1
     ))
 
     for resource_id, amount_t in definition.consumable_resources:

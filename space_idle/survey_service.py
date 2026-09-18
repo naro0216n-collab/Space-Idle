@@ -205,15 +205,50 @@ class SurveyService:
         return commitment.quantity
 
     def provider_assignment_for(
-        self, provider_id: DefinitionId, operational_node_id: SpatialNodeId
+        self,
+        provider_id: DefinitionId,
+        operational_node_id: SpatialNodeId,
+        vehicle_definition_id: DefinitionId | None = None,
     ) -> SurveyProviderAssignmentState | None:
         rows = [
             row for row in self.provider_assignments.values()
-            if row.provider_definition_id == provider_id and row.operational_node_id == operational_node_id
+            if row.provider_definition_id == provider_id
+            and row.operational_node_id == operational_node_id
+            and (vehicle_definition_id is None or row.vehicle_definition_id == vehicle_definition_id)
         ]
         if len(rows) > 1:
             raise RuntimeError(f"duplicate Survey Provider assignment: {provider_id}@{operational_node_id}")
         return rows[0] if rows else None
+
+    def set_provider_fleet_quantity(
+        self,
+        provider_id: DefinitionId,
+        operational_node_id: SpatialNodeId,
+        vehicle_definition_id: DefinitionId,
+        quantity: int,
+        *,
+        day: int = 0,
+    ) -> EntityId | None:
+        provider = self.provider(provider_id)
+        if provider.source_kind is not SurveyProviderSourceKind.FLEET:
+            raise ValueError("Survey Provider fleet quantity requires a Fleet-backed provider")
+        if provider.source_definition_id != vehicle_definition_id:
+            raise ValueError("Survey Provider vehicle does not match provider definition")
+        if not self.graph.has_operational_node(operational_node_id):
+            raise KeyError(operational_node_id)
+        if quantity < 0:
+            raise ValueError("Survey Provider fleet quantity must be non-negative")
+        assignment = self.provider_assignment_for(
+            provider_id, operational_node_id, vehicle_definition_id
+        )
+        if quantity == 0:
+            if assignment is not None:
+                self.release_provider_assignment(assignment.id, day=day)
+            return None
+        if assignment is not None:
+            self.resize_provider_assignment(assignment.id, quantity)
+            return assignment.id
+        return self.create_provider_assignment(provider_id, operational_node_id, quantity)
 
     def create_provider_assignment(
         self, provider_id: DefinitionId, operational_node_id: SpatialNodeId, quantity: int

@@ -5,9 +5,9 @@ from math import isclose
 import pytest
 
 from space_idle import (
-    AdvanceTime, ApplicationError, CreateResearchProviderAssignment, GetResearch,
-    PauseFacility, PauseResearchProviderAssignment, ReleaseResearchProviderAssignment,
-    ResizeResearchProviderAssignment, ResumeFacility, ResumeResearchProviderAssignment,
+    AdvanceTime, ApplicationError, GetResearch, PauseFacility,
+    PauseResearchProviderAssignment, ResumeFacility, ResumeResearchProviderAssignment,
+    SetResearchProviderFleetQuantity,
     SetFacilityActivityPriority, SetResearchProviderAssignmentPriority, StartResearch,
     build_game_application,
 )
@@ -149,24 +149,33 @@ def test_fleet_research_provider_assignment_owns_intent_while_fleet_owns_quantit
     assert initial_free == 1
 
     option = next(
-        row for row in app.query(GetResearch()).provider_assignment_options
+        row for row in app.query(GetResearch()).provider_fleet
         if row.provider_definition_id == str(provider_id)
         and row.operational_node_id == str(ids.LEO)
     )
-    assert option.can_create
+    assert option.can_set_quantity
+    assert option.committed_units == 0
     assert option.free_units == 1
+    assert option.max_units == 1
 
     with pytest.raises(ApplicationError, match="insufficient free fleet units"):
-        app.execute(CreateResearchProviderAssignment(
-            str(provider_id), str(ids.LEO), 2, priority=4
+        app.execute(SetResearchProviderFleetQuantity(
+            str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 2
         ))
     assert sim.research.provider_assignments == {}
     assert sim.transport.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == initial_free
 
-    assignment_id = app.execute(CreateResearchProviderAssignment(
-        str(provider_id), str(ids.LEO), 1, priority=4
+    assignment_id = app.execute(SetResearchProviderFleetQuantity(
+        str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1
     )).created_id
     assert assignment_id is not None
+    assert len(sim.research.provider_assignments) == 1
+    repeated_id = app.execute(SetResearchProviderFleetQuantity(
+        str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1
+    )).created_id
+    assert repeated_id == assignment_id
+    assert len(sim.research.provider_assignments) == 1
+    app.execute(SetResearchProviderAssignmentPriority(assignment_id, 4))
     assignment = sim.research.provider_assignments[next(iter(sim.research.provider_assignments))]
     commitment = sim.transport.fleet_commitment_snapshot(assignment.fleet_commitment_ref)
     assert commitment is not None
@@ -192,13 +201,19 @@ def test_fleet_research_provider_assignment_owns_intent_while_fleet_owns_quantit
     app.execute(ResumeResearchProviderAssignment(assignment_id))
     app.execute(SetResearchProviderAssignmentPriority(assignment_id, 5))
     sim.transport.add_fleet_units(ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO, day=sim.day)
-    app.execute(ResizeResearchProviderAssignment(assignment_id, 2))
+    resized_id = app.execute(SetResearchProviderFleetQuantity(
+        str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 2
+    )).created_id
+    assert resized_id == assignment_id
+    assert len(sim.research.provider_assignments) == 1
     resized = next(item for item in app.query(GetResearch()).providers if item.id == assignment_id)
     assert resized.committed_units == 2
     assert resized.priority == 5
     assert sim.transport.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 0
 
-    app.execute(ReleaseResearchProviderAssignment(assignment_id))
+    app.execute(SetResearchProviderFleetQuantity(
+        str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 0
+    ))
     assert sim.research.provider_assignments == {}
     assert sim.transport.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 2
 
@@ -275,8 +290,8 @@ def test_facility_and_fleet_research_providers_share_pool_admission_headroom():
         levels=(ResearchProviderLevelSpec(1, 4.0, 10.0, 0.0),),
     )
     sim.facilities.install(facility_definition_id, ids.EARTH)
-    app.execute(CreateResearchProviderAssignment(
-        str(fleet_provider_id), str(ids.LEO), 1
+    app.execute(SetResearchProviderFleetQuantity(
+        str(fleet_provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1
     ))
     sim.research.stored_points = 18.0
 

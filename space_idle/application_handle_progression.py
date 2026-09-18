@@ -3,10 +3,9 @@ from __future__ import annotations
 from .application_commands import (
     Command, CommandResult, SetResearchPriority, PauseResearch, PauseSurvey,
     ResumeResearch, ResumeSurvey, SetResearchDemonstrationSite,
-    CreateResearchProviderAssignment, ResizeResearchProviderAssignment,
+    SetResearchProviderFleetQuantity,
     SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment,
-    ResumeResearchProviderAssignment, ReleaseResearchProviderAssignment,
-    CreateSurveyProviderAssignment, ResizeSurveyProviderAssignment, ReleaseSurveyProviderAssignment,
+    ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity,
     SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
 )
 from .exploration_models import KnowledgeLevel
@@ -49,32 +48,27 @@ class ProgressionCommandHandlerMixin:
                 )
             return CommandResult()
         if isinstance(command, (
-            CreateResearchProviderAssignment, ResizeResearchProviderAssignment,
-            SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment,
-            ResumeResearchProviderAssignment, ReleaseResearchProviderAssignment,
+            SetResearchProviderFleetQuantity, SetResearchProviderAssignmentPriority,
+            PauseResearchProviderAssignment, ResumeResearchProviderAssignment,
         )):
             if sim.research is None:
                 raise RuntimeError("research is not configured")
-            if isinstance(command, CreateResearchProviderAssignment):
-                assignment_id = sim.research.create_provider_assignment(
+            if isinstance(command, SetResearchProviderFleetQuantity):
+                assignment_id = sim.research.set_provider_fleet_quantity(
                     DefinitionId(command.provider_definition_id),
                     self._require_operational_node(command.operational_node_id),
+                    DefinitionId(command.vehicle_definition_id),
                     int(command.quantity),
-                    priority=command.priority,
                     day=sim.day,
                 )
-                return CommandResult(str(assignment_id))
+                return CommandResult(None if assignment_id is None else str(assignment_id))
             assignment_id = EntityId(command.assignment_id)
-            if isinstance(command, ResizeResearchProviderAssignment):
-                sim.research.resize_provider_assignment(assignment_id, int(command.quantity))
-            elif isinstance(command, SetResearchProviderAssignmentPriority):
+            if isinstance(command, SetResearchProviderAssignmentPriority):
                 sim.research.set_provider_assignment_priority(assignment_id, command.priority)
             elif isinstance(command, PauseResearchProviderAssignment):
                 sim.research.pause_provider_assignment(assignment_id)
-            elif isinstance(command, ResumeResearchProviderAssignment):
-                sim.research.resume_provider_assignment(assignment_id)
             else:
-                sim.research.release_provider_assignment(assignment_id, day=sim.day)
+                sim.research.resume_provider_assignment(assignment_id)
             return CommandResult()
         if isinstance(command, (
             StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration,
@@ -102,24 +96,17 @@ class ProgressionCommandHandlerMixin:
             else:
                 sim.scientific_exploration.unassign_fleet(exploration_id, day=sim.day)
             return CommandResult()
-        if isinstance(command, (
-            CreateSurveyProviderAssignment, ResizeSurveyProviderAssignment, ReleaseSurveyProviderAssignment,
-        )):
+        if isinstance(command, SetSurveyProviderFleetQuantity):
             if sim.survey is None:
                 raise RuntimeError("survey is not configured")
-            if isinstance(command, CreateSurveyProviderAssignment):
-                assignment_id = sim.survey.create_provider_assignment(
-                    DefinitionId(command.provider_definition_id),
-                    self._require_operational_node(command.operational_node_id),
-                    int(command.quantity),
-                )
-                return CommandResult(str(assignment_id))
-            assignment_id = EntityId(command.assignment_id)
-            if isinstance(command, ResizeSurveyProviderAssignment):
-                sim.survey.resize_provider_assignment(assignment_id, int(command.quantity))
-            else:
-                sim.survey.release_provider_assignment(assignment_id, day=sim.day)
-            return CommandResult()
+            assignment_id = sim.survey.set_provider_fleet_quantity(
+                DefinitionId(command.provider_definition_id),
+                self._require_operational_node(command.operational_node_id),
+                DefinitionId(command.vehicle_definition_id),
+                int(command.quantity),
+                day=sim.day,
+            )
+            return CommandResult(None if assignment_id is None else str(assignment_id))
         if isinstance(command, (StartSurvey, PauseSurvey, ResumeSurvey, SetSurveyPriority)):
             if sim.survey is None:
                 raise RuntimeError("survey is not configured")

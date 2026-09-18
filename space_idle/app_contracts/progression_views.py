@@ -40,22 +40,23 @@ class ResearchProviderRow:
     blockers: tuple[tuple[str, str], ...]
     can_pause: bool
     can_resume: bool
-    can_resize: bool
-    can_release: bool
     # Facility identity remains explicit for inspection links; Fleet rows use None.
     facility_id: str | None = None
     facility_definition_id: str | None = None
 
 
 @dataclass(frozen=True)
-class ResearchProviderAssignmentOptionRow:
+class ResearchProviderFleetRow:
     provider_definition_id: str
-    source_definition_id: str
+    vehicle_definition_id: str
     operational_node_id: str
     tier: int
+    assignment_id: str | None
+    committed_units: int
     free_units: int
+    max_units: int
     blockers: tuple[tuple[str, str], ...]
-    can_create: bool
+    can_set_quantity: bool
 
 
 @dataclass(frozen=True)
@@ -128,7 +129,7 @@ class ResearchView:
     admitted_generation_points_per_day: float
     over_capacity: bool
     providers: tuple[ResearchProviderRow, ...]
-    provider_assignment_options: tuple[ResearchProviderAssignmentOptionRow, ...]
+    provider_fleet: tuple[ResearchProviderFleetRow, ...]
     knowledge: tuple[ResearchKnowledgeRow, ...]
     items: tuple[ResearchRow, ...]
 
@@ -196,26 +197,18 @@ class ScientificExplorationsView:
 
 
 @dataclass(frozen=True)
-class SurveyProviderAssignmentRow:
-    id: str
+class SurveyProviderFleetRow:
     provider_definition_id: str
-    source_definition_id: str
+    vehicle_definition_id: str
     operational_node_id: str
+    assignment_id: str | None
     committed_units: int
-    fleet_commitment_id: str
-    capacity_units_per_day: float
-    can_resize: bool
-    can_release: bool
-
-
-@dataclass(frozen=True)
-class SurveyProviderAssignmentOptionRow:
-    provider_definition_id: str
-    source_definition_id: str
-    operational_node_id: str
     free_units: int
-    can_create: bool
+    max_units: int
+    capacity_units_per_day: float
+    fleet_commitment_id: str | None
     blockers: tuple[str, ...]
+    can_set_quantity: bool
 
 
 @dataclass(frozen=True)
@@ -272,8 +265,7 @@ class SurveyRow:
 
 @dataclass(frozen=True)
 class SurveysView:
-    provider_assignments: tuple[SurveyProviderAssignmentRow, ...]
-    provider_assignment_options: tuple[SurveyProviderAssignmentOptionRow, ...]
+    provider_fleet: tuple[SurveyProviderFleetRow, ...]
     items: tuple[SurveyRow, ...]
 
 

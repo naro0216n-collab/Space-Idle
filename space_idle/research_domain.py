@@ -231,8 +231,16 @@ def validate_runtime(sim: Any) -> None:
                 f"Research Provider has no contribution definition for Facility Level: {facility.id}/L{facility.level}",
             )
 
+    provider_use_keys: set[tuple[DefinitionId, SpatialNodeId, DefinitionId]] = set()
     for assignment_id, assignment in sim.research.provider_assignments.items():
         _require(assignment_id == assignment.id, f"research provider assignment key mismatch: {assignment_id}")
+        use_key = (
+            assignment.provider_definition_id,
+            assignment.operational_node_id,
+            assignment.vehicle_definition_id,
+        )
+        _require(use_key not in provider_use_keys, f"duplicate research provider assignment: {use_key}")
+        provider_use_keys.add(use_key)
         provider = sim.research.providers.get(assignment.provider_definition_id)
         _require(provider is not None, f"research assignment references unknown provider: {assignment_id}")
         if provider is None:

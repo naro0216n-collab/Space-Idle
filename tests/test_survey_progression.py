@@ -6,8 +6,8 @@ from space_idle.validation import validate_simulation_configuration
 from space_idle.validation_support import ConfigurationError
 
 from space_idle import (
-    AdvanceTime, ApplicationError, CreateSurveyProviderAssignment, GetSurveys, PauseSurvey,
-    ReleaseSurveyProviderAssignment, ResizeSurveyProviderAssignment, ResumeSurvey, StartSurvey,
+    AdvanceTime, ApplicationError, GetSurveys, PauseSurvey, ResumeSurvey,
+    SetSurveyProviderFleetQuantity, StartSurvey,
     build_game_application,
 )
 from space_idle.content import base_ids as ids
@@ -148,20 +148,37 @@ def test_fleet_backed_survey_provider_assignment_owns_fleet_independently_of_cam
     first_key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
     second_key = (ids.MOON_CELL_NEARSIDE_MARE, ids.REGOLITH)
 
+    unavailable = next(
+        row for row in app.query(GetSurveys(str(ids.LUNAR_ORBIT))).provider_fleet
+        if row.provider_definition_id == str(provider_id)
+        and row.vehicle_definition_id == str(vehicle_id)
+    )
+    assert unavailable.committed_units == 0
+    assert unavailable.free_units == 0
+    assert unavailable.blockers == ("fleet_unavailable",)
+    assert unavailable.can_set_quantity is False
+
     sim.transport.add_fleet_units(vehicle_id, 1, ids.LUNAR_ORBIT, day=sim.day)
     assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 1
 
     with pytest.raises(ApplicationError, match="insufficient free fleet units"):
-        app.execute(CreateSurveyProviderAssignment(
-            str(provider_id), str(ids.LUNAR_ORBIT), 2
+        app.execute(SetSurveyProviderFleetQuantity(
+            str(provider_id), str(ids.LUNAR_ORBIT), str(vehicle_id), 2
         ))
     assert sim.survey.provider_assignments == {}
     assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 1
 
-    result = app.execute(CreateSurveyProviderAssignment(
-        str(provider_id), str(ids.LUNAR_ORBIT), 1
+    result = app.execute(SetSurveyProviderFleetQuantity(
+        str(provider_id), str(ids.LUNAR_ORBIT), str(vehicle_id), 1
     ))
     assignment_id = result.created_id
+    assert assignment_id is not None
+    assert len(sim.survey.provider_assignments) == 1
+    repeated_id = app.execute(SetSurveyProviderFleetQuantity(
+        str(provider_id), str(ids.LUNAR_ORBIT), str(vehicle_id), 1
+    )).created_id
+    assert repeated_id == assignment_id
+    assert len(sim.survey.provider_assignments) == 1
     assignment = sim.survey.provider_assignments[next(
         key for key in sim.survey.provider_assignments if str(key) == assignment_id
     )]
@@ -186,7 +203,9 @@ def test_fleet_backed_survey_provider_assignment_owns_fleet_independently_of_cam
     ) + 1e-12
 
     with pytest.raises(ApplicationError, match="insufficient free fleet units"):
-        app.execute(ResizeSurveyProviderAssignment(assignment_id, 2))
+        app.execute(SetSurveyProviderFleetQuantity(
+            str(provider_id), str(ids.LUNAR_ORBIT), str(vehicle_id), 2
+        ))
     assert sim.survey.provider_assignment_quantity(assignment.id) == 1
 
     progress_before_pause = sim.survey.progress(*first_key)
@@ -201,7 +220,9 @@ def test_fleet_backed_survey_provider_assignment_owns_fleet_independently_of_cam
     app.execute(ResumeSurvey(str(first_key[0]), str(first_key[1])))
     assert sim.survey.campaigns[first_key].paused is False
 
-    app.execute(ReleaseSurveyProviderAssignment(assignment_id))
+    app.execute(SetSurveyProviderFleetQuantity(
+        str(provider_id), str(ids.LUNAR_ORBIT), str(vehicle_id), 0
+    ))
     assert sim.survey.provider_assignments == {}
     assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 1
     assert "survey_capacity" in sim.survey.blockers(*first_key, day=sim.day)

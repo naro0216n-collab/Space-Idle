@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_views import (
     ResearchExperienceRow, ResearchKnowledgeRow, ResearchPrototypeResourceRow,
-    ResearchProviderAssignmentOptionRow, ResearchProviderRow, ResearchStageRow, ResearchRow, ResearchView,
+    ResearchProviderFleetRow, ResearchProviderRow, ResearchStageRow, ResearchRow, ResearchView,
 )
 from .app_contracts.progression_views import ResearchExecutionSiteRow, ResearchSiteOptionRow
 from .research_models import (
@@ -35,34 +35,49 @@ class ResearchProgressionProjectorMixin:
                 ))
         return tuple(rows)
 
-    def _research_provider_assignment_options(self) -> tuple[ResearchProviderAssignmentOptionRow, ...]:
+    def _research_provider_fleet_rows(self) -> tuple[ResearchProviderFleetRow, ...]:
         sim = self._simulation
         if sim.research is None:
             return ()
-        rows: list[ResearchProviderAssignmentOptionRow] = []
+        rows: list[ResearchProviderFleetRow] = []
         fleet_providers = tuple(
             provider for provider in sim.research.providers.values()
             if provider.source_kind is ResearchProviderSourceKind.FLEET
         )
         for provider in sorted(fleet_providers, key=lambda row: str(row.id)):
             for node in sorted(sim.graph.operational_nodes(), key=lambda row: str(row.id)):
-                failures = sim.research.provider_assignment_site_failures(
-                    provider.id, node.id, day=sim.day
+                assignment = sim.research.provider_assignment_for(
+                    provider.id, node.id, provider.source_definition_id
+                )
+                committed_units = (
+                    0 if assignment is None
+                    else sim.research.provider_assignment_quantity(assignment.id)
                 )
                 free_units = sim.transport.fleet_free_units(
                     provider.source_definition_id, node.id
                 )
-                blockers = [(failure.code, failure.detail) for failure in failures]
-                if free_units <= 0:
-                    blockers.append(("fleet:free_units", "No free compatible Fleet units at this node"))
-                rows.append(ResearchProviderAssignmentOptionRow(
+                failures = sim.research.provider_assignment_site_failures(
+                    provider.id, node.id, day=sim.day
+                )
+                blocker_rows = [(failure.code, failure.detail) for failure in failures]
+                if committed_units == 0 and free_units == 0:
+                    blocker_rows.append((
+                        "fleet_unavailable",
+                        "No free compatible Fleet units are available at this operational node",
+                    ))
+                blockers = tuple(blocker_rows)
+                max_units = committed_units if failures else committed_units + free_units
+                rows.append(ResearchProviderFleetRow(
                     provider_definition_id=str(provider.id),
-                    source_definition_id=str(provider.source_definition_id),
+                    vehicle_definition_id=str(provider.source_definition_id),
                     operational_node_id=str(node.id),
                     tier=provider.tier,
+                    assignment_id=None if assignment is None else str(assignment.id),
+                    committed_units=committed_units,
                     free_units=free_units,
-                    blockers=tuple(blockers),
-                    can_create=not blockers,
+                    max_units=max_units,
+                    blockers=blockers,
+                    can_set_quantity=(committed_units > 0 or max_units > 0),
                 ))
         return tuple(rows)
 
@@ -111,8 +126,6 @@ class ResearchProgressionProjectorMixin:
                 blockers=tuple(blockers),
                 can_pause=False,
                 can_resume=False,
-                can_resize=False,
-                can_release=False,
                 facility_id=str(facility.id),
                 facility_definition_id=str(facility.definition_id),
             ))
@@ -152,8 +165,6 @@ class ResearchProgressionProjectorMixin:
                 blockers=blockers,
                 can_pause=not assignment.paused,
                 can_resume=assignment.paused,
-                can_resize=True,
-                can_release=True,
             ))
         return tuple(rows)
 
@@ -176,7 +187,7 @@ class ResearchProgressionProjectorMixin:
         capacity = sim.research.storage_capacity(power_by_location, sim.day)
         execution_allocations = decision.allocations.execution
         providers = self._research_provider_rows(power_by_location, execution_allocations)
-        provider_assignment_options = self._research_provider_assignment_options()
+        provider_fleet = self._research_provider_fleet_rows()
         admitted_generation = sum(row.admitted_generation_points_per_day for row in providers)
         point_requests, point_allocations = sim.research.point_allocation_projection(execution_allocations)
         knowledge = tuple(
@@ -275,5 +286,5 @@ class ResearchProgressionProjectorMixin:
         return ResearchView(
             sim.research.stored_points, capacity, generation, admitted_generation,
             sim.research.stored_points > capacity + 1e-9, providers,
-            provider_assignment_options, knowledge, tuple(rows),
+            provider_fleet, knowledge, tuple(rows),
         )

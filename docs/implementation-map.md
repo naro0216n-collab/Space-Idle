@@ -18,9 +18,9 @@
 | maintenance domain | Facility maintenance demand / fulfillment |
 | `transport/` / movement domain | Movement Operation / Plan / Execution、Vehicle Definition、Fleet State、Vehicle production、Directional Capacityをauthoritative targetとするTransport Allocation、optional Movement hard constraint、派生Service Plan / Required Fleet Units / Capacity、Fleet relocation |
 | `logistics.py` / logistics domain | Supply Requirement、Target Stock、sparse hard Supply Routing Constraint、existing network上のcanonical source/path selection、共有Transport Capacity配分、Cargo Flow Segment、handoff / arrival waiting |
-| `research.py` | Research Point、Technology State、Research Project / stage、Operational Experience |
+| `research.py` / `research_capacity.py` | Research Point、Technology State、Research Project / stage、Operational Experience、Fleet-backed Research Provider AssignmentとFleet Commitment参照、provider用途Fleet quantity intentのsettlement |
 | exploration domain | Scientific Exploration Campaign / Fleet reservation / RP reward |
-| `survey.py` | Surface Cell Resource Knowledge、Survey Campaign |
+| `survey.py` / `survey_service.py` | Surface Cell Resource Knowledge、Survey Campaign、Fleet-backed Survey Provider AssignmentとFleet Commitment参照、provider用途Fleet quantity intentのsettlement |
 | `simulation.py` | canonical daily tick / phase orchestration / snapshot / allocation sequencing / equivalent fast-forward |
 | `application*.py` | Command / Query / DTO |
 | `persistence.py` | Snapshot / Load / Offline resume |

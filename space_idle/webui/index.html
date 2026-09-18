@@ -136,7 +136,7 @@
         <label>Anchor / 出発地<select id="allocationSource" required></select></label>
         <label>Transport relation / 到着地<select id="allocationDestination" required></select></label>
         <label>配備優先度<select id="allocationPriority" required><option value="1">1 最低</option><option value="2">2 低</option><option value="3" selected>3 標準</option><option value="4">4 高</option><option value="5">5 最高</option></select></label>
-        <div class="field-pair"><label>Forward target (t/日)<input id="allocationForward" type="number" min="0" step="0.01" value="1" required></label><label>Reverse target (t/日)<input id="allocationReverse" type="number" min="0" step="0.01" value="0" required></label></div>
+        <div class="field-pair"><label>Forward target (t/日)<input id="allocationForward" type="number" min="0" step="any" value="1" required></label><label>Reverse target (t/日)<input id="allocationReverse" type="number" min="0" step="any" value="0" required></label></div>
         <label>Movement hard constraint（任意）<input id="allocationMovementConstraint" type="text" placeholder="Movement Plan IDをカンマ区切り。空欄なら自動選択"></label>
         <div id="allocationServiceOptions" class="inspector-section"><div class="cell-sub">出発地と到着地からTransport Service候補を取得します。</div></div>
         <div class="cell-sub">方向別Target Capacityが正本です。Required Fleet UnitsはVehicleと選択済みServiceから導出され、Fleet不足でもtargetは保持されます。</div>

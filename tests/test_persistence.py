@@ -7,8 +7,8 @@ import pytest
 
 from space_idle import (
     AdvanceTime,
-    CreateResearchProviderAssignment,
-    CreateSurveyProviderAssignment,
+    SetResearchProviderFleetQuantity,
+    SetSurveyProviderFleetQuantity,
     CreateTransportAllocation,
     DevelopSurfaceCell,
     GetDependencyAnalytics,
@@ -27,6 +27,7 @@ from space_idle import (
     PlanBuild,
     ProduceVehicle,
     SetResearchPrototypeSite,
+    SetResearchProviderAssignmentPriority,
     SetFacilityProcess,
     StartResearch,
     StartSurvey,
@@ -558,11 +559,12 @@ def test_research_authoritative_state_roundtrips_without_quantity_duplication(tm
     execution_context = sim.research.active[research_id].execution_context
     assert execution_context is not None
 
-    result = app.execute(CreateResearchProviderAssignment(
-        str(provider_id), str(ids.LEO), 1, priority=4
+    result = app.execute(SetResearchProviderFleetQuantity(
+        str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1
     ))
     assignment_id = result.created_id
     assert assignment_id is not None
+    app.execute(SetResearchProviderAssignmentPriority(assignment_id, 4))
     assignment = next(iter(sim.research.provider_assignments.values()))
     before_commitment = sim.transport.fleet_commitment_snapshot(
         assignment.fleet_commitment_ref
@@ -606,8 +608,9 @@ def test_survey_provider_assignment_roundtrips_as_fleet_owned_capacity(tmp_path)
     sim.transport.add_fleet_units(
         ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=sim.day
     )
-    assignment_id = app.execute(CreateSurveyProviderAssignment(
-        str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT), 1
+    assignment_id = app.execute(SetSurveyProviderFleetQuantity(
+        str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT),
+        str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1
     )).created_id
     assert assignment_id is not None
     key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
