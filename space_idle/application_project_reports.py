@@ -3,12 +3,12 @@ from __future__ import annotations
 from collections import defaultdict
 
 from .application_views import (
-    BottlenecksView, DependencyAnalyticsView, DependencyMetricRow,
-    FlowReportView, IssueRow, ResourceFlowRow,
+    BottlenecksView, CurrentDependencyMetricRow, DependencyAnalyticsView,
+    ForecastDependencyMetricRow, FlowReportView, IssueRow, ResourceFlowRow,
 )
 from .application_commands import GetDependencyAnalytics
 from .shared import CelestialBodyId, SpatialNodeId
-from .supply import SourceSelectionMode
+from .supply import SourceSelectionMode, SupplyRequirement, resolve_local_supply
 
 
 class ApplicationReportProjectorMixin:
@@ -40,8 +40,26 @@ class ApplicationReportProjectorMixin:
     def _dependency_analytics_view(
         self, query: GetDependencyAnalytics
     ) -> DependencyAnalyticsView:
-        sim = self._simulation
+        basis = query.time_basis.upper()
+        if basis not in {"CURRENT", "FORECAST"}:
+            raise ValueError(f"unsupported dependency analytics time basis: {query.time_basis}")
         nodes = self._dependency_scope_nodes(query)
+        if basis == "CURRENT":
+            rows, group_rows, critical = self._current_dependency_rows(nodes)
+            return DependencyAnalyticsView(
+                query.scope_kind, query.scope_id, tuple(str(value) for value in nodes),
+                self._simulation.day, "CURRENT", tuple(rows), tuple(group_rows), (), (), tuple(critical),
+            )
+        rows, group_rows, critical = self._forecast_dependency_rows(nodes)
+        return DependencyAnalyticsView(
+            query.scope_kind, query.scope_id, tuple(str(value) for value in nodes),
+            self._simulation.day, "FORECAST", (), (), tuple(rows), tuple(group_rows), tuple(critical),
+        )
+
+    def _current_dependency_rows(
+        self, nodes: tuple[SpatialNodeId, ...]
+    ) -> tuple[list[CurrentDependencyMetricRow], list[CurrentDependencyMetricRow], list[str]]:
+        sim = self._simulation
         scope = set(nodes)
         decision = self._tick_decision_projection()
         powers = decision.allocations.power_by_location
@@ -52,7 +70,7 @@ class ApplicationReportProjectorMixin:
 
         production: dict[object, float] = defaultdict(float)
         consumption: dict[object, float] = defaultdict(float)
-        recurring_demand: dict[object, float] = defaultdict(float)
+        current_demand: dict[object, float] = defaultdict(float)
         external_inflow: dict[object, float] = defaultdict(float)
         external_outflow: dict[object, float] = defaultdict(float)
         imports_pipeline: dict[object, float] = defaultdict(float)
@@ -60,14 +78,10 @@ class ApplicationReportProjectorMixin:
         unmet: dict[object, float] = defaultdict(float)
         dependency_sources: dict[object, set[SpatialNodeId]] = defaultdict(set)
 
-        # Production and actual recurring consumption are projected from the same
-        # allocation result the next normal tick would execute. Same-tick output is
-        # intentionally not fed back into that allocation.
         for node_id in nodes:
             power = powers[node_id]
             for snap in sim.industry.snapshots(
-                node_id, sim.facilities, sim.inventory, sim.day,
-                execution_allocations,
+                node_id, sim.facilities, sim.inventory, sim.day, execution_allocations,
             ):
                 for resource_id, amount in snap.output_rates_per_day.items():
                     production[resource_id] += amount
@@ -75,8 +89,7 @@ class ApplicationReportProjectorMixin:
                     consumption[resource_id] += amount
             if sim.extraction is not None:
                 for snap in sim.extraction.snapshots(
-                    node_id, sim.facilities, sim.inventory, power, sim.day,
-                    execution_allocations,
+                    node_id, sim.facilities, sim.inventory, power, sim.day, execution_allocations,
                 ):
                     production[snap.output_resource_id] += snap.output_t_per_day
 
@@ -86,28 +99,34 @@ class ApplicationReportProjectorMixin:
             ):
                 if node_id in scope:
                     consumption[resource_id] += amount
-
         for node_id, resource_id, amount in logistics_execution.operational_resource_use:
             if node_id in scope:
                 consumption[resource_id] += amount
 
-        # Recurring SupplyRequirement is the structural daily requirement before
-        # current stock/pipeline masks a dependency. Transport operation demand is
-        # read from the same derived Resource allocation projection used by queries.
+        # CURRENT demand is limited to requirements that are due in the snapshot.
+        # Target Stock is a future planning intent and therefore belongs to FORECAST.
+        current_requirement_ids: set[object] = set()
         for requirement in decision.intents.supplys:
-            if requirement.destination_id not in scope or requirement.recurring_rate_t_per_day is None:
+            if requirement.destination_id not in scope or requirement.owner_kind == "target_stock":
                 continue
-            recurring_demand[requirement.resource_id] += requirement.recurring_rate_t_per_day
-        for allocation in decision.allocations.resources.rows:
             if (
-                allocation.owner_kind != "transport_operation"
-                or allocation.operational_node_id not in scope
+                requirement.forecast_requirement_day is not None
+                and requirement.forecast_requirement_day > sim.day
             ):
                 continue
-            recurring_demand[allocation.resource_id] += allocation.requested_amount
+            current_requirement_ids.add(requirement.id)
+            current_demand[requirement.resource_id] += (
+                requirement.recurring_rate_t_per_day
+                if requirement.recurring_rate_t_per_day is not None
+                else requirement.amount_t
+            )
+        for allocation in decision.allocations.resources.rows:
+            if (
+                allocation.owner_kind == "transport_operation"
+                and allocation.operational_node_id in scope
+            ):
+                current_demand[allocation.resource_id] += allocation.requested_amount
 
-        # Current authorized dispatch is a one-day flow. Existing CargoFlow state is
-        # a stock in the pipeline and therefore remains a separate quantity.
         projected_dispatch_by_requirement: dict[object, float] = defaultdict(float)
         for dispatch in logistics_execution.dispatches:
             projected_dispatch_by_requirement[dispatch.requirement_id] += dispatch.amount_t
@@ -121,16 +140,9 @@ class ApplicationReportProjectorMixin:
             else:
                 external_outflow[dispatch.resource_id] += dispatch.amount_t
 
-        # External Resource Market ownership remains visible through the same
-        # Resource-flow analytics. Unsettled Buy commitments are provider-owned
-        # inbound pipeline; executable Sell settlement is the external outflow.
         for commitment in sim.market.buy_commitments.values():
             order = sim.market.orders.get(commitment.order_id)
-            interface = (
-                None
-                if order is None
-                else sim.market.interfaces.get(order.market_interface_id)
-            )
+            interface = None if order is None else sim.market.interfaces.get(order.market_interface_id)
             if interface is not None and interface.operational_node_id in scope:
                 imports_pipeline[commitment.resource_id] += commitment.remaining_quantity_t
 
@@ -168,12 +180,8 @@ class ApplicationReportProjectorMixin:
             else:
                 exports_pipeline[waiting.resource_id] += waiting.amount_t
 
-        # Unmet Demand is the residual off-site need after local stock, existing
-        # pipeline, and the current tick's actually executable dispatch are credited.
-        # Internal sourcing remains internal to the selected scope and is never
-        # labeled as an external source.
         for requirement in decision.plan.external_requirements:
-            if requirement.destination_id not in scope:
+            if requirement.id not in current_requirement_ids or requirement.destination_id not in scope:
                 continue
             remaining = max(
                 0.0,
@@ -184,119 +192,167 @@ class ApplicationReportProjectorMixin:
                 continue
             unmet[requirement.resource_id] += remaining
             policy = sim.logistics.logistics_policy_for(requirement)
-            preferred_source = (
-                None if policy is None
-                else (
-                    policy.allowed_source_ids[0]
-                    if policy.source_mode is SourceSelectionMode.PINNED and policy.allowed_source_ids
-                    else policy.preferred_source_id
-                )
+            preferred_source = None if policy is None else (
+                policy.allowed_source_ids[0]
+                if policy.source_mode is SourceSelectionMode.PINNED and policy.allowed_source_ids
+                else policy.preferred_source_id
             )
             if preferred_source is not None and preferred_source not in scope:
                 dependency_sources[requirement.resource_id].add(preferred_source)
-            if preferred_source is None:
-                options = sim.logistics.supply_planning_options(
-                    requirement,
-                    sim.day,
-                    execution_allocation=decision.allocations.transport,
-                )
-                for source_id in options.stocked_source_ids:
-                    if source_id not in scope:
-                        dependency_sources[requirement.resource_id].add(source_id)
 
         resource_ids = (
-            set(production) | set(consumption) | set(recurring_demand) |
+            set(production) | set(consumption) | set(current_demand) |
             set(external_inflow) | set(external_outflow) |
             set(imports_pipeline) | set(exports_pipeline) | set(unmet)
         )
-        rows: list[DependencyMetricRow] = []
+        rows: list[CurrentDependencyMetricRow] = []
         for resource_id in sorted(resource_ids, key=str):
             definition = self._catalog.resources.get(resource_id)
             produced = production[resource_id]
-            consumed = consumption[resource_id]
-            demand_rate = recurring_demand[resource_id]
+            demand_rate = current_demand[resource_id]
             dependency_rate = max(0.0, demand_rate - produced)
-            covered_rate = max(0.0, demand_rate - dependency_rate)
-            coverage = (
-                None if demand_rate <= 1e-12
-                else min(1.0, covered_rate / demand_rate)
-            )
+            coverage = None if demand_rate <= 1e-12 else min(1.0, produced / demand_rate)
             limiting: list[str] = []
             if unmet[resource_id] > 1e-9:
                 limiting.append("unmet_demand")
             if dependency_rate > 1e-9:
                 limiting.append("external_dependency")
-            rows.append(DependencyMetricRow(
-                str(resource_id),
-                str(resource_id) if definition is None else definition.display_name,
-                "t" if definition is None else definition.unit,
-                (str(resource_id),),
-                produced,
-                consumed,
-                demand_rate,
-                dependency_rate,
-                coverage,
-                external_inflow[resource_id],
-                external_outflow[resource_id],
-                imports_pipeline[resource_id],
-                exports_pipeline[resource_id],
-                unmet[resource_id],
+            rows.append(CurrentDependencyMetricRow(
+                str(resource_id), str(resource_id) if definition is None else definition.display_name,
+                "t" if definition is None else definition.unit, (str(resource_id),),
+                produced, consumption[resource_id], demand_rate, dependency_rate, coverage,
+                external_inflow[resource_id], external_outflow[resource_id],
+                imports_pipeline[resource_id], exports_pipeline[resource_id], unmet[resource_id],
                 tuple(str(value) for value in sorted(dependency_sources[resource_id], key=str)),
                 tuple(limiting),
             ))
 
         by_id = {row.id: row for row in rows}
-        group_rows: list[DependencyMetricRow] = []
-        for group_id, group in sorted(
-            self._catalog.resource_groups.items(), key=lambda item: str(item[0])
-        ):
-            members = tuple(
-                by_id[str(resource_id)]
-                for resource_id in group.resource_ids
-                if str(resource_id) in by_id
-            )
+        group_rows: list[CurrentDependencyMetricRow] = []
+        for group_id, group in sorted(self._catalog.resource_groups.items(), key=lambda item: str(item[0])):
+            members = tuple(by_id[str(resource_id)] for resource_id in group.resource_ids if str(resource_id) in by_id)
             if not members:
                 continue
             units = {member.unit for member in members}
             if len(units) != 1:
                 raise ValueError(f"resource group {group_id} mixes incompatible units")
-            produced = sum(row.local_production_per_day for row in members)
-            consumed = sum(row.local_consumption_per_day for row in members)
-            demand_rate = sum(row.local_demand_per_day for row in members)
-            dependency_rate = sum(row.external_dependency_per_day for row in members)
-            covered_rate = max(0.0, demand_rate - dependency_rate)
-            group_rows.append(DependencyMetricRow(
-                str(group_id), group.display_name, next(iter(units)),
-                tuple(row.id for row in members),
-                produced, consumed, demand_rate, dependency_rate,
-                None if demand_rate <= 1e-12 else min(1.0, covered_rate / demand_rate),
-                sum(row.external_inflow_per_day for row in members),
-                sum(row.external_outflow_per_day for row in members),
-                sum(row.imports_pipeline for row in members),
-                sum(row.exports_pipeline for row in members),
-                sum(row.unmet_demand for row in members),
-                tuple(sorted({
-                    source
-                    for row in members
-                    for source in row.dependency_source_node_ids
-                })),
-                tuple(dict.fromkeys(
-                    factor for row in members for factor in row.limiting_factors
-                )),
+            demand = sum(row.demand_per_day for row in members)
+            dependency = sum(row.external_dependency_per_day for row in members)
+            produced = sum(row.production_per_day for row in members)
+            group_rows.append(CurrentDependencyMetricRow(
+                str(group_id), group.display_name, next(iter(units)), tuple(row.id for row in members),
+                produced, sum(row.consumption_per_day for row in members), demand, dependency,
+                None if demand <= 1e-12 else min(1.0, sum(max(0.0, row.demand_per_day - row.external_dependency_per_day) for row in members) / demand),
+                sum(row.imports_per_day for row in members), sum(row.exports_per_day for row in members),
+                sum(row.imports_pipeline_t for row in members), sum(row.exports_pipeline_t for row in members),
+                sum(row.unmet_demand_t for row in members),
+                tuple(sorted({source for row in members for source in row.dependency_source_node_ids})),
+                tuple(dict.fromkeys(factor for row in members for factor in row.limiting_factors)),
+            ))
+        critical = [row.id for row in rows if row.external_dependency_per_day > 1e-9 or row.unmet_demand_t > 1e-9]
+        return rows, group_rows, critical
+
+    def _forecast_dependency_rows(
+        self, nodes: tuple[SpatialNodeId, ...]
+    ) -> tuple[list[ForecastDependencyMetricRow], list[ForecastDependencyMetricRow], list[str]]:
+        sim = self._simulation
+        scope = set(nodes)
+        decision = self._tick_decision_projection()
+
+        requirements: dict[object, SupplyRequirement] = {
+            row.id: row for row in decision.intents.supplys if row.destination_id in scope
+        }
+
+        # Construction exposes planned requirements through its public forecast
+        # contract, including requirements not yet due for current procurement.
+        for requirement in sim.projects.forecast_supplys():
+            if requirement.destination_id in scope:
+                requirements[requirement.id] = requirement
+
+        ordered = tuple(sorted(requirements.values(), key=lambda row: (-row.priority, str(row.id))))
+        resolutions = resolve_local_supply(ordered, sim.inventory)
+        external_by_id = {row.requirement.id: row.external_required_t for row in resolutions}
+
+        planned: dict[object, float] = defaultdict(float)
+        recurring: dict[object, float] = defaultdict(float)
+        external: dict[object, float] = defaultdict(float)
+        target_stock: dict[object, float] = defaultdict(float)
+        earliest_day: dict[object, int | None] = {}
+        dependency_sources: dict[object, set[SpatialNodeId]] = defaultdict(set)
+
+        for requirement in ordered:
+            resource_id = requirement.resource_id
+            planned[resource_id] += requirement.amount_t
+            external[resource_id] += external_by_id.get(requirement.id, requirement.amount_t)
+            if requirement.recurring_rate_t_per_day is not None:
+                recurring[resource_id] += requirement.recurring_rate_t_per_day
+            if requirement.owner_kind == "target_stock":
+                target_stock[resource_id] += requirement.amount_t
+            if requirement.forecast_requirement_day is not None:
+                previous = earliest_day.get(resource_id)
+                earliest_day[resource_id] = requirement.forecast_requirement_day if previous is None else min(previous, requirement.forecast_requirement_day)
+            policy = sim.logistics.logistics_policy_for(requirement)
+            preferred_source = None if policy is None else (
+                policy.allowed_source_ids[0]
+                if policy.source_mode is SourceSelectionMode.PINNED and policy.allowed_source_ids
+                else policy.preferred_source_id
+            )
+            if preferred_source is not None and preferred_source not in scope:
+                dependency_sources[resource_id].add(preferred_source)
+
+        # Use snapshot production only to identify recurring future dependence;
+        # unbuilt future facilities are never predicted.
+        production: dict[object, float] = defaultdict(float)
+        execution_allocations = decision.allocations.execution
+        for node_id in nodes:
+            power = decision.allocations.power_by_location[node_id]
+            for snap in sim.industry.snapshots(node_id, sim.facilities, sim.inventory, sim.day, execution_allocations):
+                for resource_id, amount in snap.output_rates_per_day.items():
+                    production[resource_id] += amount
+            if sim.extraction is not None:
+                for snap in sim.extraction.snapshots(node_id, sim.facilities, sim.inventory, power, sim.day, execution_allocations):
+                    production[snap.output_resource_id] += snap.output_t_per_day
+
+        resource_ids = set(planned) | set(recurring) | set(external) | set(target_stock)
+        rows: list[ForecastDependencyMetricRow] = []
+        for resource_id in sorted(resource_ids, key=str):
+            definition = self._catalog.resources.get(resource_id)
+            recurring_dependency = max(0.0, recurring[resource_id] - production[resource_id])
+            limiting: list[str] = []
+            if external[resource_id] > 1e-9:
+                limiting.append("external_requirement")
+            if recurring_dependency > 1e-9:
+                limiting.append("external_recurring_dependency")
+            rows.append(ForecastDependencyMetricRow(
+                str(resource_id), str(resource_id) if definition is None else definition.display_name,
+                "t" if definition is None else definition.unit, (str(resource_id),),
+                planned[resource_id], recurring[resource_id], external[resource_id], recurring_dependency,
+                target_stock[resource_id], earliest_day.get(resource_id),
+                tuple(str(value) for value in sorted(dependency_sources[resource_id], key=str)), tuple(limiting),
             ))
 
-        return DependencyAnalyticsView(
-            query.scope_kind,
-            query.scope_id,
-            tuple(str(value) for value in nodes),
-            sim.day,
-            tuple(rows),
-            tuple(group_rows),
-            tuple(
-                row.id for row in rows
-                if row.external_dependency_per_day > 1e-9 or row.unmet_demand > 1e-9
-            ),
-        )
+        by_id = {row.id: row for row in rows}
+        group_rows: list[ForecastDependencyMetricRow] = []
+        for group_id, group in sorted(self._catalog.resource_groups.items(), key=lambda item: str(item[0])):
+            members = tuple(by_id[str(resource_id)] for resource_id in group.resource_ids if str(resource_id) in by_id)
+            if not members:
+                continue
+            units = {member.unit for member in members}
+            if len(units) != 1:
+                raise ValueError(f"resource group {group_id} mixes incompatible units")
+            days = [row.earliest_requirement_day for row in members if row.earliest_requirement_day is not None]
+            group_rows.append(ForecastDependencyMetricRow(
+                str(group_id), group.display_name, next(iter(units)), tuple(row.id for row in members),
+                sum(row.planned_requirement_t for row in members),
+                sum(row.recurring_consumption_per_day for row in members),
+                sum(row.external_requirement_t for row in members),
+                sum(row.external_recurring_dependency_per_day for row in members),
+                sum(row.target_stock_t for row in members), min(days) if days else None,
+                tuple(sorted({source for row in members for source in row.dependency_source_node_ids})),
+                tuple(dict.fromkeys(factor for row in members for factor in row.limiting_factors)),
+            ))
+        critical = [row.id for row in rows if row.external_requirement_t > 1e-9 or row.external_recurring_dependency_per_day > 1e-9]
+        return rows, group_rows, critical
 
     @staticmethod
     def _issue(

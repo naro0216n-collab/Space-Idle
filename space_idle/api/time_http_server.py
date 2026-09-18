@@ -67,7 +67,8 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             queries.update({
                 "operational_node": GetOperationalNode(operational_node_id),
                 "flow": GetFlowReport(operational_node_id),
-                "dependency_analytics": GetDependencyAnalytics("operational_nodes", node_ids=(operational_node_id,)),
+                "dependency_analytics_current": GetDependencyAnalytics("operational_nodes", node_ids=(operational_node_id,), time_basis="CURRENT"),
+                "dependency_analytics_forecast": GetDependencyAnalytics("operational_nodes", node_ids=(operational_node_id,), time_basis="FORECAST"),
                 "projects": GetProjects(operational_node_id),
                 "build_options": GetBuildOptions(operational_node_id),
                 "bottlenecks": GetBottlenecks(operational_node_id),

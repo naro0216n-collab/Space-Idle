@@ -46,23 +46,24 @@ class ConstructionProcurementMixin:
         waited = day - project.procurement_started_day
         return waited >= self.procurement_wait_days[project.procurement_policy]
 
-    def supplys(self, day: int) -> tuple[SupplyRequirement, ...]:
+    def forecast_supplys(self) -> tuple[SupplyRequirement, ...]:
+        """Project-owned future material requirements, independent of due timing."""
         requirements: list[SupplyRequirement] = []
         for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
-            if (
-                project.paused
-                or project.status not in {ProjectStatus.PROCURING, ProjectStatus.READY}
-                or project.materials_committed
-            ):
+            if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED} or project.materials_committed:
                 continue
             recipe = self._recipe_for_project(project)
+            requirement_day = None
+            if project.procurement_started_day is not None:
+                requirement_day = (
+                    project.procurement_started_day
+                    + self.procurement_wait_days[project.procurement_policy]
+                )
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
                 reserved = self._reserved_resource_t(project, requirement.resource_id)
                 missing = max(0.0, requirement.amount_t - state.committed_t - reserved)
                 if missing <= 1e-9:
-                    continue
-                if not self._procurement_policy_due(project, day):
                     continue
                 requirements.append(SupplyRequirement(
                     self._supply_id(project.id, requirement.resource_id),
@@ -72,8 +73,23 @@ class ConstructionProcurementMixin:
                     requirement.resource_id,
                     missing,
                     project.priority,
+                    forecast_requirement_day=requirement_day,
+                    purpose="construction",
                 ))
         return tuple(requirements)
+
+    def supplys(self, day: int) -> tuple[SupplyRequirement, ...]:
+        active_projects = {
+            EntityId(str(project.id)): project
+            for project in self.projects.values()
+            if not project.paused and project.status in {ProjectStatus.PROCURING, ProjectStatus.READY}
+        }
+        return tuple(
+            requirement
+            for requirement in self.forecast_supplys()
+            if requirement.owner_id in active_projects
+            and self._procurement_policy_due(active_projects[requirement.owner_id], day)
+        )
 
     def reservation_acquisition_requirements(
         self, day: int

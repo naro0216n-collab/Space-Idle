@@ -272,7 +272,7 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             scope_kind = _one(params, "scope_kind") or "player"
             scope_id = _one(params, "scope_id")
             node_ids = tuple(params.get("node_id", ()))
-            self._query_result(GetDependencyAnalytics(scope_kind, scope_id, node_ids))
+            self._query_result(GetDependencyAnalytics(scope_kind, scope_id, node_ids, (_one(params, "time_basis") or "CURRENT")))
             return
         if path == "/api/v1/bottlenecks":
             self._query_result(GetBottlenecks(_one(params, "operational_node_id")))

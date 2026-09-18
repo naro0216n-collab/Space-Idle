@@ -64,11 +64,22 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         data = payload["data"]
         required = {
             "world", "operational_node", "surface_map", "logistics",
-            "scientific_explorations", "market", "dependency_analytics",
+            "scientific_explorations", "market", "dependency_analytics_current", "dependency_analytics_forecast",
         }
         assert required <= data.keys()
         assert data["operational_node"]["id"] == str(ids.EARTH)
         assert data["surface_map"]["body_id"] == str(ids.EARTH_BODY)
+        assert data["dependency_analytics_current"]["time_basis"] == "CURRENT"
+        assert data["dependency_analytics_forecast"]["time_basis"] == "FORECAST"
+
+        status, _, payload = _request(
+            port, "GET",
+            f"/api/v1/dependency-analytics?scope_kind=operational_nodes&node_id={ids.EARTH}&time_basis=FORECAST",
+        )
+        assert status == 200
+        assert payload["data"]["time_basis"] == "FORECAST"
+        assert payload["data"]["forecast_resources"]
+        assert not payload["data"]["current_resources"]
 
         # Exercise nested command decoding through the real HTTP boundary.
         # Domain validation should reject this not-yet-surveyed founding target,

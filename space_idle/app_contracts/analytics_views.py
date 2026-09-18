@@ -4,21 +4,37 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class DependencyMetricRow:
+class CurrentDependencyMetricRow:
     id: str
     display_name: str
     unit: str
     member_resource_ids: tuple[str, ...]
-    local_production_per_day: float
-    local_consumption_per_day: float
-    local_demand_per_day: float
+    production_per_day: float
+    consumption_per_day: float
+    demand_per_day: float
     external_dependency_per_day: float
     local_coverage_ratio: float | None
-    external_inflow_per_day: float
-    external_outflow_per_day: float
-    imports_pipeline: float
-    exports_pipeline: float
-    unmet_demand: float
+    imports_per_day: float
+    exports_per_day: float
+    imports_pipeline_t: float
+    exports_pipeline_t: float
+    unmet_demand_t: float
+    dependency_source_node_ids: tuple[str, ...]
+    limiting_factors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ForecastDependencyMetricRow:
+    id: str
+    display_name: str
+    unit: str
+    member_resource_ids: tuple[str, ...]
+    planned_requirement_t: float
+    recurring_consumption_per_day: float
+    external_requirement_t: float
+    external_recurring_dependency_per_day: float
+    target_stock_t: float
+    earliest_requirement_day: int | None
     dependency_source_node_ids: tuple[str, ...]
     limiting_factors: tuple[str, ...]
 
@@ -29,6 +45,9 @@ class DependencyAnalyticsView:
     scope_id: str | None
     node_ids: tuple[str, ...]
     day: int
-    resources: tuple[DependencyMetricRow, ...]
-    resource_groups: tuple[DependencyMetricRow, ...]
-    critical_dependency_resource_ids: tuple[str, ...]
+    time_basis: str
+    current_resources: tuple[CurrentDependencyMetricRow, ...] = ()
+    current_resource_groups: tuple[CurrentDependencyMetricRow, ...] = ()
+    forecast_resources: tuple[ForecastDependencyMetricRow, ...] = ()
+    forecast_resource_groups: tuple[ForecastDependencyMetricRow, ...] = ()
+    critical_dependency_resource_ids: tuple[str, ...] = ()

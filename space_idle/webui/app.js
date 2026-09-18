@@ -3,7 +3,7 @@
 
   const state = {
     revision:null, session:null, world:null, catalog:null, operationalNodeId:null, operationalNode:null,
-    flow:null, dependencyAnalytics:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
+    flow:null, dependencyAnalyticsCurrent:null, dependencyAnalyticsForecast:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
     fleet:null, transportAllocations:null, cargoFlows:null, market:null,
     selectedMovementPlanId:null, activeView:'operations', activeTab:'overview', inspector:null,
@@ -184,7 +184,8 @@
     state.market=data.market??state.market;
     if(data.operational_node!==undefined)state.operationalNode=data.operational_node;
     if(data.flow!==undefined)state.flow=data.flow;
-    if(data.dependency_analytics!==undefined)state.dependencyAnalytics=data.dependency_analytics;
+    if(data.dependency_analytics_current!==undefined)state.dependencyAnalyticsCurrent=data.dependency_analytics_current;
+    if(data.dependency_analytics_forecast!==undefined)state.dependencyAnalyticsForecast=data.dependency_analytics_forecast;
     if(data.projects!==undefined)state.projects=data.projects;
     if(data.build_options!==undefined)state.buildOptions=data.build_options;
     if(data.bottlenecks!==undefined)state.bottlenecks=data.bottlenecks;
@@ -257,7 +258,7 @@
   }
 
   function clearLocationSnapshot(){
-    state.operationalNode=null; state.flow=null; state.dependencyAnalytics=null; state.bottlenecks=null; state.projects=null;
+    state.operationalNode=null; state.flow=null; state.dependencyAnalyticsCurrent=null; state.dependencyAnalyticsForecast=null; state.bottlenecks=null; state.projects=null;
     state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.inspector=null;
   }
   async function loadUiSnapshot({preserveInteraction=true}={}){
