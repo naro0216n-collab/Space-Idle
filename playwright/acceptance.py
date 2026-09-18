@@ -30,6 +30,21 @@ def _visible_button_min_height(page) -> float:
     )
 
 
+def _select_location(page, location_id: object) -> None:
+    button = page.locator(f'[data-location-id="{location_id}"]')
+    target_name = button.locator('.location-name').inner_text().strip()
+    button.click()
+    page.wait_for_function(
+        """name => {
+          const title = document.querySelector('#locationTitle')?.textContent?.trim();
+          const kind = document.querySelector('#locationKind')?.textContent?.trim();
+          return title === name && Boolean(kind) && kind !== '地点状態を取得中';
+        }""",
+        arg=target_name,
+        timeout=10000,
+    )
+
+
 def run() -> dict[str, object]:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in SUPPORTED_BROWSERS:
@@ -310,7 +325,7 @@ def run() -> dict[str, object]:
             )
             page.locator('[data-tab="overview"]').click()
 
-            page.locator(f'[data-location-id="{ids.EARTH}"]').click()
+            _select_location(page, ids.EARTH)
             page.locator('[data-tab="survey"]').click()
             known_survey = page.locator('tr[data-inspect="survey"]').first
             known_survey.wait_for(timeout=10000)
@@ -348,9 +363,10 @@ def run() -> dict[str, object]:
             _assert("Resource Opportunity / Extraction" in overview_text, "location overview must expose aggregate extraction decision state")
             _assert("Current Environment" in overview_text, "location overview must expose current environment state")
 
-            page.locator(f'[data-location-id="{ids.LUNAR_ORBIT}"]').click()
+            _select_location(page, ids.LUNAR_ORBIT)
             page.locator('[data-tab="survey"]').click()
             survey_rows = page.locator('tr[data-inspect="survey"]')
+            survey_rows.first.wait_for(timeout=10000)
             _assert(survey_rows.count() > 0, "Survey UI must expose at least one Application-projected target")
             campaign_cell_id = campaign_resource_id = None
             for row_index in range(survey_rows.count()):
