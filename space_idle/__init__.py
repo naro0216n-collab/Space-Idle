@@ -20,7 +20,7 @@ from .application import (
     SetMaintenancePriority, SetFacilityActivityPriority, SetProjectPriority,
     SetProjectProcurementPolicy, SetResearchDemonstrationSite, SetResearchPrototypeSite,
     SetSurveyPriority, SetTimeControl, SetVehicleProductionSettings, StartResearch,
-    StartScientificExploration, SetScientificExplorationPriority, StartSurvey, UnassignExplorationFleet,
+    StartScientificExploration, SetScientificExplorationPriority, SurveyProviderConstraintInput, StartSurvey, UpdateSurvey, UnassignExplorationFleet,
     UpdateTransportAllocation, SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
 )
 

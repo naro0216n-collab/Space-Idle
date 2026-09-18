@@ -25,12 +25,35 @@ from .exploration_models import (
     SurveyProviderSpec,
     SurveyObservationModeSpec,
     SurveyCampaign,
+    SurveyCampaignControlState,
+    SurveyProviderConstraint,
     SurveyProviderAssignmentState,
 )
 from .transport.models import FleetActivityRef
 
 if TYPE_CHECKING:
     from .transport.service import TransportService
+
+
+@dataclass(frozen=True)
+class SurveyProviderModeCandidate:
+    provider_definition_id: DefinitionId
+    provider_operational_node_id: SpatialNodeId
+    observation_mode_id: str
+    source_kind: SurveyProviderSourceKind
+    source_definition_id: DefinitionId
+    survey_rate: float
+    max_knowledge_level: KnowledgeLevel
+    estimate_uncertainty_fraction: float
+    measurement_precision_fraction: float
+    minimum_source_units: int
+    assigned_source_units: int
+    capacity_units_per_day: float
+    blockers: tuple[str, ...]
+
+    @property
+    def viable(self) -> bool:
+        return not self.blockers
 
 
 @dataclass
@@ -45,8 +68,9 @@ class SurveyService:
     knowledge_progress: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
     knowledge_precision_fraction: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
     estimated_potential: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
-    campaigns: dict[tuple[SurfaceCellId, DefinitionId], SurveyCampaign] = field(default_factory=dict)
+    campaigns: dict[EntityId, SurveyCampaign] = field(default_factory=dict)
     provider_assignments: dict[EntityId, SurveyProviderAssignmentState] = field(default_factory=dict)
+    _campaign_counter: int = 0
     _provider_assignment_counter: int = 0
 
     @staticmethod
@@ -54,16 +78,18 @@ class SurveyService:
         return f"survey_observation:{provider_id}"
 
     @staticmethod
-    def campaign_owner_id(cell_id: SurfaceCellId, resource_id: DefinitionId) -> EntityId:
-        return EntityId(f"survey:{cell_id}:{resource_id}")
+    def campaign_owner_id(campaign_id: EntityId) -> EntityId:
+        return campaign_id
 
     @staticmethod
     def provider_assignment_commitment_id(assignment_id: EntityId) -> EntityId:
         return EntityId(f"fleet.commitment.survey_provider:{assignment_id}")
 
     @staticmethod
-    def execution_bundle_id(cell_id: SurfaceCellId, resource_id: DefinitionId) -> EntityId:
-        return EntityId(f"execution.survey:{cell_id}:{resource_id}")
+    def execution_bundle_id(
+        campaign_id: EntityId, cell_id: SurfaceCellId, resource_id: DefinitionId
+    ) -> EntityId:
+        return EntityId(f"execution.survey:{campaign_id}:{cell_id}:{resource_id}")
 
     def provider(self, provider_id: DefinitionId) -> SurveyProviderSpec:
         try:
@@ -351,128 +377,246 @@ class SurveyService:
             return KnowledgeLevel.UNKNOWN
         return mode.max_knowledge_level
 
-    def start_blockers(
-        self,
-        provider_operational_node_id: SpatialNodeId,
-        provider_id: DefinitionId,
-        observation_mode_id: str,
-        cell_id: SurfaceCellId,
-        resource_id: DefinitionId,
-        target_knowledge_level: KnowledgeLevel,
-        day: int = 0,
+    def _provider_context_ids(self, provider: SurveyProviderSpec) -> tuple[SpatialNodeId, ...]:
+        if provider.source_kind is SurveyProviderSourceKind.FACILITY:
+            return tuple(sorted((
+                node_id for node_id in self.graph.operational_node_states
+                if any(row.definition_id == provider.source_definition_id for row in self.facilities.all_at(node_id))
+            ), key=str))
+        return tuple(sorted({
+            row.operational_node_id for row in self.provider_assignments.values()
+            if row.provider_definition_id == provider.id
+        }, key=str))
+
+    def unfinished_targets(self, campaign: SurveyCampaign) -> tuple[tuple[SurfaceCellId, DefinitionId], ...]:
+        return tuple(
+            key for key in campaign.target_pairs()
+            if key in self.targets and self.knowledge_level(*key) < campaign.goal_knowledge_level
+        )
+
+    def _candidate_source_units(self, provider: SurveyProviderSpec, operational_node_id: SpatialNodeId, day: int) -> int:
+        if provider.source_kind is SurveyProviderSourceKind.FACILITY:
+            return len(self._facility_source_rows(provider, operational_node_id, active_only=True, day=day))
+        assignment = self.provider_assignment_for(provider.id, operational_node_id)
+        return 0 if assignment is None else self.provider_assignment_quantity(assignment.id)
+
+    def campaign_candidates(self, campaign: SurveyCampaign, *, day: int = 0) -> tuple[SurveyProviderModeCandidate, ...]:
+        unfinished = self.unfinished_targets(campaign)
+        rows: list[SurveyProviderModeCandidate] = []
+        for provider in sorted(self.providers.values(), key=lambda row: str(row.id)):
+            for node_id in self._provider_context_ids(provider):
+                for mode in sorted(provider.observation_modes, key=lambda row: row.id):
+                    blockers: list[str] = []
+                    if campaign.goal_knowledge_level > mode.max_knowledge_level:
+                        blockers.append("survey_provider_limit")
+                    for cell_id, _resource_id in unfinished:
+                        blockers.extend(self._provider_mode_eligibility_failures(node_id, provider, mode, cell_id, day))
+                    source_units = self._candidate_source_units(provider, node_id, day)
+                    capacity_units = self.provider_capacity_at(provider.id, node_id, None, day)
+                    rows.append(SurveyProviderModeCandidate(
+                        provider.id, node_id, mode.id, provider.source_kind, provider.source_definition_id,
+                        mode.survey_rate, mode.max_knowledge_level, mode.estimate_uncertainty_fraction,
+                        mode.measurement_precision_fraction, mode.minimum_source_units, source_units,
+                        capacity_units, tuple(dict.fromkeys(blockers)),
+                    ))
+        return tuple(rows)
+
+    @staticmethod
+    def _candidate_stable_key(candidate: SurveyProviderModeCandidate) -> tuple[str, str, str]:
+        return (str(candidate.provider_definition_id), str(candidate.provider_operational_node_id), candidate.observation_mode_id)
+
+    def _candidate_strategic_signature(self, candidate: SurveyProviderModeCandidate) -> tuple[object, ...]:
+        provider = self.provider(candidate.provider_definition_id)
+        mode = provider.observation_mode(candidate.observation_mode_id)
+        return (
+            candidate.source_kind.value, str(candidate.source_definition_id),
+            str(candidate.provider_operational_node_id), candidate.survey_rate,
+            int(candidate.max_knowledge_level), candidate.estimate_uncertainty_fraction,
+            candidate.measurement_precision_fraction, candidate.minimum_source_units,
+            candidate.assigned_source_units, candidate.capacity_units_per_day,
+            mode.reach, mode.site_requirements, tuple(sorted(mode.required_source_capabilities)),
+        )
+
+    def candidate_matches_constraints(self, campaign: SurveyCampaign, candidate: SurveyProviderModeCandidate) -> bool:
+        if campaign.provider_constraint is not None:
+            constraint = campaign.provider_constraint
+            if (candidate.provider_definition_id != constraint.provider_definition_id
+                    or candidate.provider_operational_node_id != constraint.operational_node_id):
+                return False
+        if campaign.observation_mode_constraint is not None and candidate.observation_mode_id != campaign.observation_mode_constraint:
+            return False
+        return True
+
+    def resolve_campaign_candidate(self, campaign: SurveyCampaign, *, day: int = 0) -> tuple[SurveyProviderModeCandidate | None, tuple[str, ...]]:
+        if not self.unfinished_targets(campaign):
+            return None, ()
+        matching = tuple(candidate for candidate in self.campaign_candidates(campaign, day=day) if self.candidate_matches_constraints(campaign, candidate))
+        if not matching:
+            if campaign.provider_constraint is not None or campaign.observation_mode_constraint is not None:
+                return None, ("survey_constraint_unavailable",)
+            return None, ("survey_candidate_unavailable",)
+        viable = tuple(candidate for candidate in matching if candidate.viable)
+        if not viable:
+            blockers = ["survey_candidate_unavailable"]
+            for candidate in matching:
+                blockers.extend(f"survey_eligibility:{item}" for item in candidate.blockers)
+            return None, tuple(dict.fromkeys(blockers))
+        if len(viable) == 1:
+            return viable[0], ()
+        signatures = {self._candidate_strategic_signature(candidate) for candidate in viable}
+        if len(signatures) == 1:
+            return min(viable, key=self._candidate_stable_key), ()
+        return None, ("survey_decision_required",)
+
+    def _campaign_intent_blockers(
+        self, target_cell_ids: tuple[SurfaceCellId, ...], resource_ids: tuple[DefinitionId, ...],
+        goal_knowledge_level: KnowledgeLevel, provider_constraint: SurveyProviderConstraint | None,
+        observation_mode_constraint: str | None, *, exclude_campaign_id: EntityId | None = None,
     ) -> tuple[str, ...]:
-        key = (cell_id, resource_id)
-        if key not in self.targets:
-            return ("unknown_target",)
-        if key in self.campaigns:
-            return ("already_active",)
-        if not self.graph.has_operational_node(provider_operational_node_id):
-            return ("unknown_provider_location",)
+        blockers: list[str] = []
         try:
-            provider = self.provider(provider_id)
-            mode = provider.observation_mode(observation_mode_id)
-        except KeyError:
-            return ("unknown_provider_or_mode",)
-        try:
-            target_level = KnowledgeLevel(target_knowledge_level)
+            goal = KnowledgeLevel(goal_knowledge_level)
         except ValueError:
             return ("invalid_target_knowledge_level",)
-        if target_level is KnowledgeLevel.UNKNOWN:
-            return ("invalid_target_knowledge_level",)
-        failures: list[str] = list(self._provider_mode_eligibility_failures(
-            provider_operational_node_id, provider, mode, cell_id, day
-        ))
-        current = self.knowledge_level(cell_id, resource_id)
-        if current >= target_level:
-            failures.append("knowledge_goal_reached")
-        if target_level > mode.max_knowledge_level:
-            failures.append("survey_provider_limit")
-        return tuple(dict.fromkeys(failures))
+        if goal is KnowledgeLevel.UNKNOWN:
+            blockers.append("invalid_target_knowledge_level")
+        cells = tuple(sorted(set(target_cell_ids), key=str))
+        resources = tuple(sorted(set(resource_ids), key=str))
+        if not cells:
+            blockers.append("survey_scope_empty")
+        if not resources:
+            blockers.append("survey_resource_scope_empty")
+        for cell_id in cells:
+            if cell_id not in self.graph.surface_cells:
+                blockers.append(f"unknown_target:{cell_id}")
+        pairs = tuple((cell_id, resource_id) for cell_id in cells for resource_id in resources)
+        for key in pairs:
+            if key not in self.targets:
+                blockers.append(f"unknown_target:{key[0]}:{key[1]}")
+        if pairs and all(key in self.targets and self.knowledge_level(*key) >= goal for key in pairs):
+            blockers.append("knowledge_goal_reached")
+        for campaign_id, campaign in self.campaigns.items():
+            if campaign_id == exclude_campaign_id or campaign.control_state is SurveyCampaignControlState.COMPLETED:
+                continue
+            if set(pairs) & set(campaign.target_pairs()):
+                blockers.append(f"campaign_scope_conflict:{campaign_id}")
+        if provider_constraint is not None:
+            try:
+                self.provider(provider_constraint.provider_definition_id)
+            except KeyError:
+                blockers.append("unknown_provider")
+            if not self.graph.has_operational_node(provider_constraint.operational_node_id):
+                blockers.append("unknown_provider_location")
+        if observation_mode_constraint is not None:
+            if not observation_mode_constraint or not any(
+                any(mode.id == observation_mode_constraint for mode in provider.observation_modes)
+                for provider in self.providers.values()
+            ):
+                blockers.append("unknown_provider_or_mode")
+        return tuple(dict.fromkeys(blockers))
 
-    def can_start(self, *args, **kwargs) -> bool:
-        return not self.start_blockers(*args, **kwargs)
+    def start_blockers(
+        self, target_cell_ids: tuple[SurfaceCellId, ...], resource_ids: tuple[DefinitionId, ...],
+        goal_knowledge_level: KnowledgeLevel, provider_constraint: SurveyProviderConstraint | None = None,
+        observation_mode_constraint: str | None = None,
+    ) -> tuple[str, ...]:
+        return self._campaign_intent_blockers(
+            target_cell_ids, resource_ids, goal_knowledge_level, provider_constraint, observation_mode_constraint
+        )
 
     def start(
-        self,
-        provider_operational_node_id: SpatialNodeId,
-        provider_id: DefinitionId,
-        observation_mode_id: str,
-        cell_id: SurfaceCellId,
-        resource_id: DefinitionId,
-        target_knowledge_level: KnowledgeLevel,
-        *,
-        priority: ActivityPriority = DEFAULT_PRIORITY,
-        day: int = 0,
+        self, target_cell_ids: tuple[SurfaceCellId, ...], resource_ids: tuple[DefinitionId, ...],
+        goal_knowledge_level: KnowledgeLevel, *, provider_constraint: SurveyProviderConstraint | None = None,
+        observation_mode_constraint: str | None = None, priority: ActivityPriority = DEFAULT_PRIORITY, day: int = 0,
+    ) -> EntityId:
+        del day
+        blockers = self.start_blockers(target_cell_ids, resource_ids, goal_knowledge_level, provider_constraint, observation_mode_constraint)
+        if blockers:
+            raise ValueError("; ".join(blockers))
+        self._campaign_counter += 1
+        campaign_id = EntityId(f"survey.campaign.{self._campaign_counter}")
+        self.campaigns[campaign_id] = SurveyCampaign(
+            campaign_id, target_cell_ids, resource_ids, goal_knowledge_level, provider_constraint,
+            observation_mode_constraint, priority, SurveyCampaignControlState.ACTIVE,
+        )
+        return campaign_id
+
+    def update(
+        self, campaign_id: EntityId, target_cell_ids: tuple[SurfaceCellId, ...],
+        resource_ids: tuple[DefinitionId, ...], goal_knowledge_level: KnowledgeLevel, *,
+        provider_constraint: SurveyProviderConstraint | None = None, observation_mode_constraint: str | None = None,
     ) -> None:
-        blockers = self.start_blockers(
-            provider_operational_node_id,
-            provider_id,
-            observation_mode_id,
-            cell_id,
-            resource_id,
-            target_knowledge_level,
-            day,
+        campaign = self.campaigns.get(campaign_id)
+        if campaign is None:
+            raise KeyError(campaign_id)
+        blockers = self._campaign_intent_blockers(
+            target_cell_ids, resource_ids, goal_knowledge_level, provider_constraint, observation_mode_constraint,
+            exclude_campaign_id=campaign_id,
         )
         if blockers:
             raise ValueError("; ".join(blockers))
-        self.campaigns[(cell_id, resource_id)] = SurveyCampaign(
-            provider_id,
-            observation_mode_id,
-            provider_operational_node_id,
-            cell_id,
-            resource_id,
-            target_knowledge_level,
-            priority,
-            False,
-        )
+        campaign.target_cell_ids = tuple(sorted(set(target_cell_ids), key=str))
+        campaign.resource_ids = tuple(sorted(set(resource_ids), key=str))
+        campaign.goal_knowledge_level = KnowledgeLevel(goal_knowledge_level)
+        campaign.provider_constraint = provider_constraint
+        campaign.observation_mode_constraint = observation_mode_constraint
+        if campaign.control_state is SurveyCampaignControlState.COMPLETED:
+            campaign.control_state = SurveyCampaignControlState.ACTIVE
+        self._settle_campaign_completion(campaign)
 
-    def pause_blockers(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> tuple[str, ...]:
-        campaign = self.campaigns.get((cell_id, resource_id))
+    def pause_blockers(self, campaign_id: EntityId) -> tuple[str, ...]:
+        campaign = self.campaigns.get(campaign_id)
         if campaign is None:
             return ("not_active",)
-        if campaign.paused:
+        if campaign.control_state is SurveyCampaignControlState.PAUSED:
             return ("already_paused",)
+        if campaign.control_state is SurveyCampaignControlState.COMPLETED:
+            return ("already_complete",)
         return ()
 
-    def can_pause(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
-        return not self.pause_blockers(cell_id, resource_id)
+    def can_pause(self, campaign_id: EntityId) -> bool:
+        return not self.pause_blockers(campaign_id)
 
-    def pause(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> None:
-        blockers = self.pause_blockers(cell_id, resource_id)
+    def pause(self, campaign_id: EntityId) -> None:
+        blockers = self.pause_blockers(campaign_id)
         if blockers:
             raise ValueError("; ".join(blockers))
-        self.campaigns[(cell_id, resource_id)].paused = True
+        self.campaigns[campaign_id].control_state = SurveyCampaignControlState.PAUSED
 
-    def resume_blockers(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> tuple[str, ...]:
-        campaign = self.campaigns.get((cell_id, resource_id))
+    def resume_blockers(self, campaign_id: EntityId) -> tuple[str, ...]:
+        campaign = self.campaigns.get(campaign_id)
         if campaign is None:
             return ("not_active",)
-        if not campaign.paused:
+        if campaign.control_state is SurveyCampaignControlState.COMPLETED:
+            return ("already_complete",)
+        if campaign.control_state is not SurveyCampaignControlState.PAUSED:
             return ("not_paused",)
         return ()
 
-    def can_resume(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
-        return not self.resume_blockers(cell_id, resource_id)
+    def can_resume(self, campaign_id: EntityId) -> bool:
+        return not self.resume_blockers(campaign_id)
 
-    def resume(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> None:
-        blockers = self.resume_blockers(cell_id, resource_id)
+    def resume(self, campaign_id: EntityId) -> None:
+        blockers = self.resume_blockers(campaign_id)
         if blockers:
             raise ValueError("; ".join(blockers))
-        self.campaigns[(cell_id, resource_id)].paused = False
+        self.campaigns[campaign_id].control_state = SurveyCampaignControlState.ACTIVE
 
-    def priority_blockers(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> tuple[str, ...]:
-        return () if (cell_id, resource_id) in self.campaigns else ("not_active",)
+    def priority_blockers(self, campaign_id: EntityId) -> tuple[str, ...]:
+        return () if campaign_id in self.campaigns else ("not_active",)
 
-    def can_set_priority(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
-        return not self.priority_blockers(cell_id, resource_id)
+    def can_set_priority(self, campaign_id: EntityId) -> bool:
+        return not self.priority_blockers(campaign_id)
 
-    def set_priority(
-        self, cell_id: SurfaceCellId, resource_id: DefinitionId, priority: ActivityPriority
-    ) -> None:
-        blockers = self.priority_blockers(cell_id, resource_id)
+    def set_priority(self, campaign_id: EntityId, priority: ActivityPriority) -> None:
+        blockers = self.priority_blockers(campaign_id)
         if blockers:
             raise ValueError("; ".join(blockers))
-        self.campaigns[(cell_id, resource_id)].priority = ActivityPriority(priority)
+        self.campaigns[campaign_id].priority = ActivityPriority(priority)
+
+    def _settle_campaign_completion(self, campaign: SurveyCampaign) -> None:
+        if not self.unfinished_targets(campaign):
+            campaign.control_state = SurveyCampaignControlState.COMPLETED
 
     def progress(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> float:
         key = (cell_id, resource_id)
@@ -511,7 +655,9 @@ class SurveyService:
         )
         self.knowledge_precision_fraction[key] = 0.0
         self.estimated_potential.pop(key, None)
-        self.campaigns.pop(key, None)
+        for campaign in self.campaigns.values():
+            if key in campaign.target_pairs():
+                self._settle_campaign_completion(campaign)
 
     def is_complete(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
         return self.knowledge_level(cell_id, resource_id) >= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL
@@ -569,91 +715,58 @@ class SurveyService:
         return self.knowledge_precision_fraction.get((cell_id, resource_id))
 
     def capacity_for_campaign(
-        self,
-        campaign: SurveyCampaign,
-        power: PowerSnapshot | None = None,
-        day: int = 0,
+        self, campaign: SurveyCampaign, power: PowerSnapshot | None = None, day: int = 0,
     ) -> float:
-        mode = self.observation_mode(campaign.provider_definition_id, campaign.observation_mode_id)
-        provider = self.provider(campaign.provider_definition_id)
-        if self._provider_mode_eligibility_failures(
-            campaign.provider_operational_node_id, provider, mode, campaign.cell_id, day
-        ):
+        candidate, blockers = self.resolve_campaign_candidate(campaign, day=day)
+        if candidate is None or blockers:
             return 0.0
+        mode = self.observation_mode(candidate.provider_definition_id, candidate.observation_mode_id)
         return self.provider_capacity_at(
-            campaign.provider_definition_id,
-            campaign.provider_operational_node_id,
-            power,
-            day,
+            candidate.provider_definition_id, candidate.provider_operational_node_id, power, day
         ) * mode.survey_rate
 
-    def blockers(
-        self,
-        cell_id: SurfaceCellId,
-        resource_id: DefinitionId,
-        power: PowerSnapshot | None = None,
-        day: int = 0,
+    def campaign_blockers(
+        self, campaign_id: EntityId, *, day: int = 0,
         execution_allocations: ExecutionAllocationPlan | None = None,
     ) -> tuple[str, ...]:
-        campaign = self.campaigns.get((cell_id, resource_id))
-        if campaign is None:
+        campaign = self.campaigns[campaign_id]
+        if campaign.control_state is SurveyCampaignControlState.PAUSED:
+            return ("manual_pause",)
+        if campaign.control_state is SurveyCampaignControlState.COMPLETED:
             return ()
-        blockers: list[str] = []
-        if campaign.paused:
-            blockers.append("manual_pause")
-        provider = self.provider(campaign.provider_definition_id)
-        mode = provider.observation_mode(campaign.observation_mode_id)
-        for failure in self._provider_mode_eligibility_failures(
-            campaign.provider_operational_node_id, provider, mode, campaign.cell_id, day
-        ):
-            blockers.append(f"survey_eligibility:{failure}")
-        if self.capacity_for_campaign(campaign, power, day) <= 1e-12 and not campaign.paused:
-            blockers.append("survey_capacity")
-        if execution_allocations is not None and not campaign.paused:
-            try:
-                allocated = execution_allocations.allocated(self.execution_bundle_id(cell_id, resource_id))
-            except KeyError:
-                allocated = 0.0
-            if allocated <= 1e-12:
-                blockers.append("service_capacity")
-        return tuple(dict.fromkeys(blockers))
+        candidate, blockers = self.resolve_campaign_candidate(campaign, day=day)
+        result = list(blockers)
+        if candidate is not None and execution_allocations is not None:
+            unfinished = self.unfinished_targets(campaign)
+            allocation_by_id = {row.bundle_id: row.allocated_execution for row in execution_allocations.allocations}
+            if unfinished and all(
+                allocation_by_id.get(self.execution_bundle_id(campaign.id, *key), 0.0) <= 1e-12
+                for key in unfinished
+            ):
+                result.append("service_capacity")
+        return tuple(dict.fromkeys(result))
 
     def execution_requirement_bundles(self, day: int = 0) -> tuple[ExecutionRequirementBundle, ...]:
         bundles: list[ExecutionRequirementBundle] = []
-        for key, campaign in sorted(
-            self.campaigns.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
-        ):
-            if campaign.paused:
+        for campaign in sorted(self.campaigns.values(), key=lambda row: (-int(row.priority), str(row.id))):
+            if campaign.control_state is not SurveyCampaignControlState.ACTIVE:
                 continue
-            provider = self.provider(campaign.provider_definition_id)
-            mode = provider.observation_mode(campaign.observation_mode_id)
-            if self._provider_mode_eligibility_failures(
-                campaign.provider_operational_node_id, provider, mode, campaign.cell_id, day
-            ):
+            candidate, blockers = self.resolve_campaign_candidate(campaign, day=day)
+            if candidate is None or blockers:
                 continue
-            if self.knowledge_level(*key) >= campaign.target_knowledge_level:
-                continue
-            threshold = self.targets[key].thresholds[int(campaign.target_knowledge_level) - 1]
-            remaining_progress = max(0.0, threshold - self.knowledge_progress.get(key, 0.0))
-            requested_capacity = remaining_progress / mode.survey_rate
-            if requested_capacity <= 1e-12:
-                continue
-            bundles.append(
-                ExecutionRequirementBundle(
-                    self.execution_bundle_id(*key),
-                    "survey",
-                    self.campaign_owner_id(*key),
-                    "survey_observation",
-                    campaign.provider_operational_node_id,
-                    requested_capacity,
-                    campaign.priority,
-                    (
-                        ServiceCapacityRequirement(
-                            self.service_type_for_provider(campaign.provider_definition_id), 1.0
-                        ),
-                    ),
-                )
-            )
+            mode = self.observation_mode(candidate.provider_definition_id, candidate.observation_mode_id)
+            for key in self.unfinished_targets(campaign):
+                threshold = self.targets[key].thresholds[int(campaign.goal_knowledge_level) - 1]
+                remaining_progress = max(0.0, threshold - self.knowledge_progress.get(key, 0.0))
+                requested_capacity = remaining_progress / mode.survey_rate
+                if requested_capacity <= 1e-12:
+                    continue
+                bundles.append(ExecutionRequirementBundle(
+                    self.execution_bundle_id(campaign.id, *key), "survey",
+                    self.campaign_owner_id(campaign.id), "survey_observation",
+                    candidate.provider_operational_node_id, requested_capacity, campaign.priority,
+                    (ServiceCapacityRequirement(self.service_type_for_provider(candidate.provider_definition_id), 1.0),),
+                ))
         return tuple(bundles)
 
     def service_capacity_types(self) -> tuple[str, ...]:
@@ -714,48 +827,39 @@ class SurveyService:
         return (enabled, enabled)
 
     def advance_day(
-        self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot],
-        execution_allocations: ExecutionAllocationPlan,
-        day: int = 0,
+        self, power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        execution_allocations: ExecutionAllocationPlan, day: int = 0,
     ) -> None:
-        completed: list[tuple[SurfaceCellId, DefinitionId]] = []
-        for key, campaign in sorted(
-            self.campaigns.items(), key=lambda row: (-int(row[1].priority), str(row[0][0]), str(row[0][1]))
-        ):
-            if campaign.paused:
+        del power_by_location
+        for campaign in sorted(self.campaigns.values(), key=lambda row: (-int(row.priority), str(row.id))):
+            if campaign.control_state is not SurveyCampaignControlState.ACTIVE:
                 continue
-            if self.knowledge_level(*key) >= campaign.target_knowledge_level:
-                completed.append(key)
+            candidate, blockers = self.resolve_campaign_candidate(campaign, day=day)
+            if candidate is None or blockers:
                 continue
-            try:
-                allocated_capacity = execution_allocations.allocated(self.execution_bundle_id(*key))
-            except KeyError:
-                allocated_capacity = 0.0
-            if allocated_capacity <= 1e-12:
-                continue
-            mode = self.observation_mode(campaign.provider_definition_id, campaign.observation_mode_id)
-            threshold = self.targets[key].thresholds[int(campaign.target_knowledge_level) - 1]
-            before_level = self.knowledge_level(*key)
-            current = self.knowledge_progress.get(key, 0.0)
-            gain = min(allocated_capacity * mode.survey_rate, max(0.0, threshold - current))
-            if gain <= 1e-12:
-                continue
-            self.knowledge_progress[key] = min(threshold, current + gain)
-            after_level = self.knowledge_level(*key)
-            if after_level >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL and after_level > before_level:
-                if key not in self.estimated_potential:
-                    self.estimated_potential[key] = self._estimated_potential_for_mode(
-                        key[0], key[1], campaign.provider_definition_id, mode
-                    )
-                precision = mode.precision_for_level(after_level)
-                if precision is not None:
-                    prior = self.knowledge_precision_fraction.get(key)
-                    self.knowledge_precision_fraction[key] = precision if prior is None else min(prior, precision)
-            if after_level >= campaign.target_knowledge_level:
-                completed.append(key)
-        for key in completed:
-            campaign = self.campaigns.get(key)
-            if campaign is None:
-                continue
-            self.campaigns.pop(key, None)
+            mode = self.observation_mode(candidate.provider_definition_id, candidate.observation_mode_id)
+            for key in self.unfinished_targets(campaign):
+                try:
+                    allocated_capacity = execution_allocations.allocated(self.execution_bundle_id(campaign.id, *key))
+                except KeyError:
+                    allocated_capacity = 0.0
+                if allocated_capacity <= 1e-12:
+                    continue
+                threshold = self.targets[key].thresholds[int(campaign.goal_knowledge_level) - 1]
+                before_level = self.knowledge_level(*key)
+                current = self.knowledge_progress.get(key, 0.0)
+                gain = min(allocated_capacity * mode.survey_rate, max(0.0, threshold - current))
+                if gain <= 1e-12:
+                    continue
+                self.knowledge_progress[key] = min(threshold, current + gain)
+                after_level = self.knowledge_level(*key)
+                if after_level >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL and after_level > before_level:
+                    if key not in self.estimated_potential:
+                        self.estimated_potential[key] = self._estimated_potential_for_mode(
+                            key[0], key[1], candidate.provider_definition_id, mode
+                        )
+                    precision = mode.precision_for_level(after_level)
+                    if precision is not None:
+                        prior = self.knowledge_precision_fraction.get(key)
+                        self.knowledge_precision_fraction[key] = precision if prior is None else min(prior, precision)
+            self._settle_campaign_completion(campaign)

@@ -7,14 +7,15 @@ from .validation_support import (
     ValidationContext, require as _require, validate_site_requirements,
 )
 from .exploration_models import (
-    KnowledgeLevel, SurveyCampaign, SurveyProviderAssignmentState, SurveyProviderSourceKind,
+    KnowledgeLevel, SurveyCampaign, SurveyCampaignControlState, SurveyProviderConstraint,
+    SurveyProviderAssignmentState, SurveyProviderSourceKind,
 )
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 
 
 def capture_survey(sim: Any) -> dict[str, Any]:
     if sim.survey is None:
-        return {"knowledge_progress": [], "knowledge_precision_fraction": [], "estimated_potential": [], "campaigns": [], "provider_assignment_counter": 0, "provider_assignments": []}
+        return {"knowledge_progress": [], "knowledge_precision_fraction": [], "estimated_potential": [], "campaigns": [], "campaign_counter": 0, "provider_assignment_counter": 0, "provider_assignments": []}
     return {
         "knowledge_progress": [
             {"cell_id": str(cell), "resource_id": str(res), "progress": progress}
@@ -39,20 +40,23 @@ def capture_survey(sim: Any) -> dict[str, Any]:
         ],
         "campaigns": [
             {
-                "provider_definition_id": str(c.provider_definition_id),
-                "observation_mode_id": c.observation_mode_id,
-                "provider_operational_node_id": str(c.provider_operational_node_id),
-                "cell_id": str(c.cell_id),
-                "resource_id": str(c.resource_id),
-                "target_knowledge_level": int(c.target_knowledge_level),
+                "id": str(c.id),
+                "target_cell_ids": [str(value) for value in c.target_cell_ids],
+                "resource_ids": [str(value) for value in c.resource_ids],
+                "goal_knowledge_level": int(c.goal_knowledge_level),
+                "provider_constraint": (
+                    None if c.provider_constraint is None else {
+                        "provider_definition_id": str(c.provider_constraint.provider_definition_id),
+                        "operational_node_id": str(c.provider_constraint.operational_node_id),
+                    }
+                ),
+                "observation_mode_constraint": c.observation_mode_constraint,
                 "priority": int(c.priority),
-                "paused": c.paused,
+                "control_state": c.control_state.value,
             }
-            for _, c in sorted(
-                sim.survey.campaigns.items(),
-                key=lambda x: (str(x[0][0]), str(x[0][1])),
-            )
+            for c in sorted(sim.survey.campaigns.values(), key=lambda row: str(row.id))
         ],
+        "campaign_counter": sim.survey._campaign_counter,
         "provider_assignment_counter": sim.survey._provider_assignment_counter,
         "provider_assignments": [
             {
@@ -84,6 +88,7 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
     }
     sim.survey.campaigns.clear()
     sim.survey.provider_assignments.clear()
+    sim.survey._campaign_counter = int(data.get("campaign_counter", 0))
     sim.survey._provider_assignment_counter = int(data.get("provider_assignment_counter", 0))
     for r in data.get("provider_assignments", []):
         assignment_id = EntityId(r["id"])
@@ -95,17 +100,21 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
             EntityId(r["fleet_commitment_ref"]),
         )
     for r in data.get("campaigns", []):
-        cell_id = SurfaceCellId(r["cell_id"])
-        resource_id = DefinitionId(r["resource_id"])
-        sim.survey.campaigns[(cell_id, resource_id)] = SurveyCampaign(
-            DefinitionId(r["provider_definition_id"]),
-            str(r["observation_mode_id"]),
-            SpatialNodeId(r["provider_operational_node_id"]),
-            cell_id,
-            resource_id,
-            KnowledgeLevel(int(r["target_knowledge_level"])),
+        campaign_id = EntityId(r["id"])
+        constraint_data = r.get("provider_constraint")
+        provider_constraint = None if constraint_data is None else SurveyProviderConstraint(
+            DefinitionId(constraint_data["provider_definition_id"]),
+            SpatialNodeId(constraint_data["operational_node_id"]),
+        )
+        sim.survey.campaigns[campaign_id] = SurveyCampaign(
+            campaign_id,
+            tuple(SurfaceCellId(value) for value in r["target_cell_ids"]),
+            tuple(DefinitionId(value) for value in r["resource_ids"]),
+            KnowledgeLevel(int(r["goal_knowledge_level"])),
+            provider_constraint,
+            r.get("observation_mode_constraint"),
             priority=int(r["priority"]),
-            paused=bool(r["paused"]),
+            control_state=SurveyCampaignControlState(r["control_state"]),
         )
 
 
@@ -258,22 +267,41 @@ def validate_survey_runtime(sim: Any) -> None:
             _require(commitment.operational_node_id == assignment.operational_node_id, f"Survey Provider Fleet commitment node mismatch: {assignment_id}")
             _require(commitment.quantity > 0, f"Survey Provider Fleet commitment quantity must be positive: {assignment_id}")
 
-    for key, campaign in sim.survey.campaigns.items():
-        _require(key == (campaign.cell_id, campaign.resource_id), f"survey campaign key mismatch: {key}")
-        _require(key in sim.survey.targets, f"campaign references unknown survey target: {key}")
-        _require(campaign.provider_definition_id in sim.survey.providers, f"campaign references unknown survey provider: {key}")
-        _require(sim.graph.has_operational_node(campaign.provider_operational_node_id), f"campaign provider operational node is unknown: {key}")
-        if campaign.provider_definition_id in sim.survey.providers:
-            provider = sim.survey.providers[campaign.provider_definition_id]
-            try:
-                mode = provider.observation_mode(campaign.observation_mode_id)
-            except KeyError:
-                _require(False, f"campaign references unknown observation mode: {key}")
-                continue
-            _require(campaign.target_knowledge_level <= mode.max_knowledge_level, f"campaign exceeds observation mode Knowledge cap: {key}")
-        _require(KnowledgeLevel.PRESENCE_PROBABILITY <= campaign.target_knowledge_level <= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, f"invalid survey campaign Knowledge target: {key}")
-        _require(sim.survey.knowledge_level(*key) < campaign.target_knowledge_level, f"survey campaign already reached target: {key}")
-        _require(1 <= int(campaign.priority) <= 5, f"survey priority must be 1..5: {key}")
+    for campaign_id, campaign in sim.survey.campaigns.items():
+        _require(campaign_id == campaign.id, f"survey campaign key mismatch: {campaign_id}")
+        _require(bool(campaign.target_cell_ids), f"survey campaign has empty Cell scope: {campaign_id}")
+        _require(bool(campaign.resource_ids), f"survey campaign has empty Resource scope: {campaign_id}")
+        _require(
+            KnowledgeLevel.PRESENCE_PROBABILITY <= campaign.goal_knowledge_level <= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL,
+            f"invalid survey campaign Knowledge goal: {campaign_id}",
+        )
+        for key in campaign.target_pairs():
+            _require(key in sim.survey.targets, f"campaign references unknown survey target: {campaign_id}:{key}")
+        if campaign.provider_constraint is not None:
+            constraint = campaign.provider_constraint
+            _require(
+                constraint.provider_definition_id in sim.survey.providers,
+                f"campaign references unknown survey provider: {campaign_id}",
+            )
+            _require(
+                sim.graph.has_operational_node(constraint.operational_node_id),
+                f"campaign provider operational node is unknown: {campaign_id}",
+            )
+        if campaign.observation_mode_constraint is not None:
+            _require(
+                any(
+                    any(mode.id == campaign.observation_mode_constraint for mode in provider.observation_modes)
+                    for provider in sim.survey.providers.values()
+                ),
+                f"campaign references unknown observation mode: {campaign_id}",
+            )
+        _require(1 <= int(campaign.priority) <= 5, f"survey priority must be 1..5: {campaign_id}")
+        unfinished = sim.survey.unfinished_targets(campaign)
+        if campaign.control_state is SurveyCampaignControlState.COMPLETED:
+            _require(not unfinished, f"completed survey campaign still has unfinished targets: {campaign_id}")
+        else:
+            _require(bool(unfinished), f"active survey campaign already reached goal: {campaign_id}")
+
 
 
 def validate_extraction_runtime(sim: Any) -> None:

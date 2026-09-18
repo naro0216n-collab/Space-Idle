@@ -146,24 +146,50 @@ class SurveyProviderSpec:
         raise KeyError(mode_id)
 
 
+class SurveyCampaignControlState(str, Enum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+
+
+@dataclass(frozen=True)
+class SurveyProviderConstraint:
+    provider_definition_id: DefinitionId
+    operational_node_id: SpatialNodeId
+
+
 @dataclass
 class SurveyCampaign:
-    provider_definition_id: DefinitionId
-    observation_mode_id: str
-    provider_operational_node_id: SpatialNodeId
-    cell_id: SurfaceCellId
-    resource_id: DefinitionId
-    target_knowledge_level: KnowledgeLevel
+    id: EntityId
+    target_cell_ids: tuple[SurfaceCellId, ...]
+    resource_ids: tuple[DefinitionId, ...]
+    goal_knowledge_level: KnowledgeLevel
+    provider_constraint: SurveyProviderConstraint | None = None
+    observation_mode_constraint: str | None = None
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
-    paused: bool = False
+    control_state: SurveyCampaignControlState = SurveyCampaignControlState.ACTIVE
 
     def __post_init__(self) -> None:
+        self.target_cell_ids = tuple(sorted(set(self.target_cell_ids), key=str))
+        self.resource_ids = tuple(sorted(set(self.resource_ids), key=str))
         self.priority = ActivityPriority(self.priority)
-        self.target_knowledge_level = KnowledgeLevel(self.target_knowledge_level)
-        if self.target_knowledge_level is KnowledgeLevel.UNKNOWN:
-            raise ValueError("survey target knowledge level must be positive")
-        if not self.observation_mode_id:
-            raise ValueError("survey campaign observation mode id must not be empty")
+        self.goal_knowledge_level = KnowledgeLevel(self.goal_knowledge_level)
+        self.control_state = SurveyCampaignControlState(self.control_state)
+        if not self.target_cell_ids:
+            raise ValueError("survey campaign requires at least one target cell")
+        if not self.resource_ids:
+            raise ValueError("survey campaign requires at least one resource")
+        if self.goal_knowledge_level is KnowledgeLevel.UNKNOWN:
+            raise ValueError("survey goal knowledge level must be positive")
+        if self.observation_mode_constraint is not None and not self.observation_mode_constraint:
+            raise ValueError("survey observation mode constraint must not be empty")
+
+    def target_pairs(self) -> tuple[tuple[SurfaceCellId, DefinitionId], ...]:
+        return tuple(
+            (cell_id, resource_id)
+            for cell_id in self.target_cell_ids
+            for resource_id in self.resource_ids
+        )
 
 
 @dataclass

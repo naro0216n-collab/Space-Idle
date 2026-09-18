@@ -16,7 +16,7 @@ from .application_commands import (
     SetFacilityActivityPriority, SetProjectPriority, SetProjectProcurementPolicy,
     SetResearchDemonstrationSite, SetResearchPrototypeSite, SetSurveyPriority,
     SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration, SetScientificExplorationPriority,
-    StartSurvey, UnassignExplorationFleet, UpdateTransportAllocation, AssignExplorationFleet, SetResearchProviderFleetQuantity, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity, CreateTradeOrder,
+    SurveyProviderConstraintInput, StartSurvey, UpdateSurvey, UnassignExplorationFleet, UpdateTransportAllocation, AssignExplorationFleet, SetResearchProviderFleetQuantity, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity, CreateTradeOrder,
     UpdateTradeOrder, CancelTradeOrder, GetMarket,
     SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
 )

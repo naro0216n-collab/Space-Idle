@@ -105,6 +105,41 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert payload["error"]["code"] == "invalid_command"
         assert "knowledge_requirement" in payload["error"]["message"]
 
+        # Survey Campaign crosses the HTTP codec as a multi-target intent with a nested
+        # optional provider constraint; the query must expose the same authoritative scope.
+        survey_cells = [str(ids.MOON_CELL_SOUTH_POLAR_RIDGE), str(ids.MOON_CELL_FARSIDE_HIGHLANDS)]
+        status, _, payload = _request(
+            port, "POST", "/api/v1/commands",
+            {
+                "type": "StartSurvey",
+                "payload": {
+                    "target_cell_ids": survey_cells,
+                    "resource_ids": [str(ids.WATER)],
+                    "goal_knowledge_level": 1,
+                    "provider_constraint": {
+                        "provider_definition_id": str(ids.LUNAR_RESOURCE_SURVEY_ORBITER),
+                        "operational_node_id": str(ids.LUNAR_ORBIT),
+                    },
+                    "observation_mode_constraint": "remote_orbital_spectrometry",
+                    "priority": 4,
+                },
+            },
+        )
+        assert status == 200
+        campaign_id = payload["data"]["created_id"]
+        assert campaign_id
+        status, _, payload = _request(
+            port, "GET",
+            f"/api/v1/ui-state?operational_node_id={ids.LUNAR_ORBIT}&surface_body_id={ids.MOON}",
+        )
+        assert status == 200
+        campaign = next(row for row in payload["data"]["surveys"]["campaigns"] if row["id"] == campaign_id)
+        assert set(campaign["target_cell_ids"]) == set(survey_cells)
+        assert campaign["resource_ids"] == [str(ids.WATER)]
+        assert campaign["goal_knowledge_level"] == 1
+        assert campaign["priority"] == 4
+        assert campaign["projected_provider_definition_id"] == str(ids.LUNAR_RESOURCE_SURVEY_ORBITER)
+
         status, _, payload = _request(port, "POST", "/api/v1/session/save", {"slot": "boundary"})
         assert status == 200 and payload["data"]["saved"] is True
 

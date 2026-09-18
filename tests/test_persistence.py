@@ -31,6 +31,7 @@ from space_idle import (
     SetFacilityProcess,
     StartResearch,
     StartSurvey,
+    SurveyProviderConstraintInput,
     SetSupplyRoutingConstraint,
     SetTargetStock,
     build_game_application,
@@ -96,18 +97,19 @@ def _make_nontrivial_state():
     survey_provider_id = ids.LUNAR_RESOURCE_SURVEY_ORBITER
     survey_mode_id = "remote_orbital_spectrometry"
     survey_goal = 2
-    survey_key = next(
-        key
-        for key in sim.survey.targets
-        if sim.survey.can_start(
-            ids.LUNAR_ORBIT, survey_provider_id, survey_mode_id,
-            key[0], key[1], survey_goal, sim.day
-        )
-    )
+    survey_cells = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE)
+    survey_resources = (ids.REGOLITH, ids.WATER)
+    survey_key = (survey_cells[0], survey_resources[0])
     app.execute(
         StartSurvey(
-            str(ids.LUNAR_ORBIT), str(survey_provider_id), survey_mode_id,
-            str(survey_key[0]), str(survey_key[1]), survey_goal, priority=4,
+            target_cell_ids=tuple(map(str, survey_cells)),
+            resource_ids=tuple(map(str, survey_resources)),
+            goal_knowledge_level=survey_goal,
+            provider_constraint=SurveyProviderConstraintInput(
+                str(survey_provider_id), str(ids.LUNAR_ORBIT)
+            ),
+            observation_mode_constraint=survey_mode_id,
+            priority=4,
         )
     )
     target = sim.survey.targets[survey_key]
@@ -613,11 +615,18 @@ def test_survey_provider_assignment_roundtrips_as_fleet_owned_capacity(tmp_path)
         str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1
     )).created_id
     assert assignment_id is not None
-    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
-    app.execute(StartSurvey(
-        str(ids.LUNAR_ORBIT), str(ids.LUNAR_FLEET_SURVEY_PROVIDER),
-        "fleet_remote_mapping", str(key[0]), str(key[1]), 1,
-    ))
+    cells = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE)
+    resources = (ids.REGOLITH, ids.WATER)
+    campaign_id = app.execute(StartSurvey(
+        target_cell_ids=tuple(map(str, cells)),
+        resource_ids=tuple(map(str, resources)),
+        goal_knowledge_level=1,
+        provider_constraint=SurveyProviderConstraintInput(
+            str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT)
+        ),
+        observation_mode_constraint="fleet_remote_mapping",
+    )).created_id
+    assert campaign_id is not None
 
     assignment = next(iter(sim.survey.provider_assignments.values()))
     commitment = sim.transport.fleet_commitment_snapshot(assignment.fleet_commitment_ref)
@@ -629,7 +638,19 @@ def test_survey_provider_assignment_roundtrips_as_fleet_owned_capacity(tmp_path)
     assert saved_assignment["fleet_commitment_ref"] == str(assignment.fleet_commitment_ref)
     assert "quantity" not in saved_assignment
     saved_campaign = raw["state"]["survey"]["campaigns"][0]
+    assert saved_campaign["id"] == campaign_id
+    assert saved_campaign["target_cell_ids"] == sorted(map(str, cells))
+    assert saved_campaign["resource_ids"] == sorted(map(str, resources))
+    assert saved_campaign["goal_knowledge_level"] == 1
+    assert saved_campaign["provider_constraint"] == {
+        "provider_definition_id": str(ids.LUNAR_FLEET_SURVEY_PROVIDER),
+        "operational_node_id": str(ids.LUNAR_ORBIT),
+    }
+    assert saved_campaign["observation_mode_constraint"] == "fleet_remote_mapping"
     assert "fleet_commitment_ref" not in saved_campaign
+    assert "resolved_provider_definition_id" not in saved_campaign
+    assert "resolved_observation_mode_id" not in saved_campaign
+    assert "unfinished_targets" not in saved_campaign
 
     loaded, offline = load_game(path, build_game_application_for_load)
     assert offline is None

@@ -11,7 +11,7 @@ from .app_contracts.operations import (
 )
 from .app_contracts.progression import (
     StartResearch, PauseResearch, ResumeResearch, SetResearchPrototypeSite,
-    SetResearchPriority, SetResearchDemonstrationSite, StartSurvey,
+    SetResearchPriority, SetResearchDemonstrationSite, SurveyProviderConstraintInput, StartSurvey, UpdateSurvey,
     PauseSurvey, ResumeSurvey, SetSurveyPriority, StartScientificExploration, SetScientificExplorationPriority,
     PauseScientificExploration, ResumeScientificExploration,
     AssignExplorationFleet, UnassignExplorationFleet,
@@ -45,7 +45,7 @@ Command: TypeAlias = (
     SetProjectProcurementPolicy |
     PauseFacility | ResumeFacility | SetFacilityProcess | SetFacilityActivityPriority | SetMaintenancePriority |
     SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
-    SetResearchPriority | SetResearchDemonstrationSite | StartSurvey | PauseSurvey |
+    SetResearchPriority | SetResearchDemonstrationSite | StartSurvey | UpdateSurvey | PauseSurvey |
     ResumeSurvey | SetSurveyPriority | StartScientificExploration | SetScientificExplorationPriority | PauseScientificExploration |
     ResumeScientificExploration | AssignExplorationFleet | UnassignExplorationFleet |
     SetResearchProviderFleetQuantity |

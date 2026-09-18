@@ -580,13 +580,14 @@ class ApplicationReportProjectorMixin:
                 ))
 
         surveys = self._surveys_view(None)
-        for row in surveys.items:
-            if location_filter is not None and row.location_id != location_filter:
+        for row in surveys.campaigns:
+            issue_location = row.projected_provider_operational_node_id or row.provider_constraint_operational_node_id
+            if location_filter is not None and issue_location != location_filter:
                 continue
             for blocker in row.blockers:
                 issues.append(self._issue(
                     blocker, blocker, category="survey", source="survey",
-                    operational_node_id=row.location_id, resource_id=row.resource_id,
+                    operational_node_id=issue_location, entity_id=row.id,
                 ))
 
         if location_filter is None:

@@ -6,9 +6,9 @@ from .application_commands import (
     SetResearchProviderFleetQuantity,
     SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment,
     ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity,
-    SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
+    SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, UpdateSurvey, StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
 )
-from .exploration_models import KnowledgeLevel
+from .exploration_models import KnowledgeLevel, SurveyProviderConstraint
 from .shared import DefinitionId, EntityId, SurfaceCellId
 
 
@@ -107,30 +107,43 @@ class ProgressionCommandHandlerMixin:
                 day=sim.day,
             )
             return CommandResult(None if assignment_id is None else str(assignment_id))
-        if isinstance(command, (StartSurvey, PauseSurvey, ResumeSurvey, SetSurveyPriority)):
+        if isinstance(command, (StartSurvey, UpdateSurvey, PauseSurvey, ResumeSurvey, SetSurveyPriority)):
             if sim.survey is None:
                 raise RuntimeError("survey is not configured")
-            cell_id = SurfaceCellId(command.cell_id)
-            if cell_id not in sim.graph.surface_cells:
-                raise KeyError(command.cell_id)
-            resource_id = self._require_resource(command.resource_id)
-            if isinstance(command, StartSurvey):
-                provider_operational_node_id = self._require_operational_node(command.provider_operational_node_id)
-                sim.survey.start(
-                    provider_operational_node_id,
-                    DefinitionId(command.provider_definition_id),
-                    command.observation_mode_id,
-                    cell_id,
-                    resource_id,
-                    KnowledgeLevel(command.target_knowledge_level),
-                    priority=command.priority,
-                    day=sim.day,
+            if isinstance(command, (StartSurvey, UpdateSurvey)):
+                target_cell_ids = tuple(SurfaceCellId(value) for value in command.target_cell_ids)
+                for cell_id in target_cell_ids:
+                    if cell_id not in sim.graph.surface_cells:
+                        raise KeyError(str(cell_id))
+                resource_ids = tuple(self._require_resource(value) for value in command.resource_ids)
+                provider_constraint = None
+                if command.provider_constraint is not None:
+                    provider_constraint = SurveyProviderConstraint(
+                        DefinitionId(command.provider_constraint.provider_definition_id),
+                        self._require_operational_node(command.provider_constraint.operational_node_id),
+                    )
+                if isinstance(command, StartSurvey):
+                    campaign_id = sim.survey.start(
+                        target_cell_ids, resource_ids, KnowledgeLevel(command.goal_knowledge_level),
+                        provider_constraint=provider_constraint,
+                        observation_mode_constraint=command.observation_mode_constraint,
+                        priority=command.priority, day=sim.day,
+                    )
+                    return CommandResult(str(campaign_id))
+                campaign_id = EntityId(command.campaign_id)
+                sim.survey.update(
+                    campaign_id, target_cell_ids, resource_ids,
+                    KnowledgeLevel(command.goal_knowledge_level),
+                    provider_constraint=provider_constraint,
+                    observation_mode_constraint=command.observation_mode_constraint,
                 )
-            elif isinstance(command, PauseSurvey):
-                sim.survey.pause(cell_id, resource_id)
+                return CommandResult()
+            campaign_id = EntityId(command.campaign_id)
+            if isinstance(command, PauseSurvey):
+                sim.survey.pause(campaign_id)
             elif isinstance(command, ResumeSurvey):
-                sim.survey.resume(cell_id, resource_id)
+                sim.survey.resume(campaign_id)
             else:
-                sim.survey.set_priority(cell_id, resource_id, command.priority)
+                sim.survey.set_priority(campaign_id, command.priority)
             return CommandResult()
         return NotImplemented

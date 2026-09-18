@@ -56,26 +56,39 @@ class SetSurveyProviderFleetQuantity:
     quantity: int
 
 @dataclass(frozen=True)
-class StartSurvey:
-    provider_operational_node_id: str
+class SurveyProviderConstraintInput:
     provider_definition_id: str
-    observation_mode_id: str
-    cell_id: str
-    resource_id: str
-    target_knowledge_level: int
+    operational_node_id: str
+
+@dataclass(frozen=True)
+class StartSurvey:
+    target_cell_ids: tuple[str, ...]
+    resource_ids: tuple[str, ...]
+    goal_knowledge_level: int
+    provider_constraint: SurveyProviderConstraintInput | None = None
+    observation_mode_constraint: str | None = None
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+
+@dataclass(frozen=True)
+class UpdateSurvey:
+    campaign_id: str
+    target_cell_ids: tuple[str, ...]
+    resource_ids: tuple[str, ...]
+    goal_knowledge_level: int
+    provider_constraint: SurveyProviderConstraintInput | None = None
+    observation_mode_constraint: str | None = None
+
 @dataclass(frozen=True)
 class PauseSurvey:
-    cell_id: str
-    resource_id: str
+    campaign_id: str
+
 @dataclass(frozen=True)
 class ResumeSurvey:
-    cell_id: str
-    resource_id: str
+    campaign_id: str
+
 @dataclass(frozen=True)
 class SetSurveyPriority:
-    cell_id: str
-    resource_id: str
+    campaign_id: str
     priority: ActivityPriority
 
 @dataclass(frozen=True)

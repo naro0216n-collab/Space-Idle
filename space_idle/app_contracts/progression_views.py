@@ -212,20 +212,64 @@ class SurveyProviderFleetRow:
 
 
 @dataclass(frozen=True)
-class SurveyStartOption:
+class SurveyCandidateRow:
     provider_operational_node_id: str
     provider_definition_id: str
     provider_source_kind: str
+    source_definition_id: str
     observation_mode_id: str
-    target_knowledge_level: int
-    max_knowledge_level: int
     survey_rate: float
-    capacity_points_per_day: float
+    max_knowledge_level: int
     estimate_uncertainty_fraction: float
     measurement_precision_fraction: float
     minimum_source_units: int
+    assigned_source_units: int
+    capacity_units_per_day: float
+    matches_constraints: bool
+    viable: bool
     blockers: tuple[str, ...]
-    can_start: bool
+
+
+@dataclass(frozen=True)
+class SurveyCampaignTargetRow:
+    cell_id: str
+    resource_id: str
+    current_knowledge_level: int
+    goal_knowledge_level: int
+    progress: float
+    target_threshold: float
+    complete: bool
+
+
+@dataclass(frozen=True)
+class SurveyCampaignRow:
+    id: str
+    status: str
+    paused: bool
+    priority: ActivityPriority
+    target_cell_ids: tuple[str, ...]
+    resource_ids: tuple[str, ...]
+    goal_knowledge_level: int
+    provider_constraint_definition_id: str | None
+    provider_constraint_operational_node_id: str | None
+    observation_mode_constraint: str | None
+    projected_provider_definition_id: str | None
+    projected_provider_operational_node_id: str | None
+    projected_observation_mode_id: str | None
+    covered_targets: int
+    remaining_targets: int
+    requested_service_units_per_day: float
+    allocated_service_units_per_day: float
+    capacity_points_per_day: float
+    projected_remaining_days: float | None
+    required_fleet_units: int | None
+    assigned_fleet_units: int | None
+    blockers: tuple[str, ...]
+    can_pause: bool
+    can_resume: bool
+    can_set_priority: bool
+    targets: tuple[SurveyCampaignTargetRow, ...]
+    candidates: tuple[SurveyCandidateRow, ...]
 
 
 @dataclass(frozen=True)
@@ -236,37 +280,18 @@ class SurveyRow:
     location_id: str | None
     resource_id: str
     resource_name: str
-    active: bool
-    provider_operational_node_id: str | None
-    provider_definition_id: str | None
-    provider_source_kind: str | None
-    observation_mode_id: str | None
-    complete: bool
-    paused: bool
-    can_start: bool
-    can_pause: bool
-    can_resume: bool
-    can_set_priority: bool
     progress: float
-    progress_fraction: float
-    target_knowledge_level: int
-    target_threshold: float
-    priority: ActivityPriority
-    requested_service_points_per_day: float
-    allocated_service_points_per_day: float
     knowledge_level: int
     presence_probability: float | None
     visible_potential: float | None
     visible_potential_precision_fraction: float | None
-    capacity_points_per_day: float
-    blockers: tuple[str, ...]
-    start_options: tuple[SurveyStartOption, ...] = ()
 
 
 @dataclass(frozen=True)
 class SurveysView:
     provider_fleet: tuple[SurveyProviderFleetRow, ...]
     items: tuple[SurveyRow, ...]
+    campaigns: tuple[SurveyCampaignRow, ...]
 
 
 @dataclass(frozen=True)

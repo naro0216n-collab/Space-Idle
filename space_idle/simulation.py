@@ -241,7 +241,15 @@ class Simulation:
                 if project.status.value in {"preparing", "deploying"}
             )
         if self.survey is not None:
-            locations.update(campaign.provider_operational_node_id for campaign in self.survey.campaigns.values())
+            locations.update(
+                assignment.operational_node_id
+                for assignment in self.survey.provider_assignments.values()
+            )
+            locations.update(
+                campaign.provider_constraint.operational_node_id
+                for campaign in self.survey.campaigns.values()
+                if campaign.provider_constraint is not None
+            )
         locations.update(
             project.operational_node_id
             for project in self.transport.vehicle_production_snapshots()

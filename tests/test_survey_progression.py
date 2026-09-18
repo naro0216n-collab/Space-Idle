@@ -2,304 +2,275 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle.validation import validate_simulation_configuration
-from space_idle.validation_support import ConfigurationError
-
 from space_idle import (
-    AdvanceTime, ApplicationError, GetSurveys, PauseSurvey, ResumeSurvey,
-    SetSurveyProviderFleetQuantity, StartSurvey,
+    AdvanceTime,
+    GetSurveys,
+    PauseSurvey,
+    ResumeSurvey,
+    SetSurveyProviderFleetQuantity,
+    StartSurvey,
+    SurveyProviderConstraintInput,
+    UpdateSurvey,
     build_game_application,
 )
 from space_idle.content import base_ids as ids
 from space_idle.facilities import FacilityDef
-from space_idle.content import base_requirements as req
+from space_idle.exploration_models import SurveyCampaignControlState, SurveyProviderConstraint
 from space_idle.shared import DefinitionId
 from space_idle.survey import (
     KnowledgeLevel,
+    KnowledgeRequirement,
     SurveyObservationModeSpec,
-    SurveyReachScope,
-    SurveyReachSpec,
     SurveyProviderSourceKind,
     SurveyProviderSpec,
-    SurveyTarget,
+    SurveyReachScope,
+    SurveyReachSpec,
 )
 
 
-def test_survey_stops_at_selected_provider_mode_knowledge_limit_and_reveals_precision():
+def _orbiter_constraint() -> SurveyProviderConstraintInput:
+    return SurveyProviderConstraintInput(
+        str(ids.LUNAR_RESOURCE_SURVEY_ORBITER), str(ids.LUNAR_ORBIT)
+    )
+
+
+def _start_campaign(app, cells, resources, goal=1, *, constrained=True, priority=3):
+    return app.execute(StartSurvey(
+        target_cell_ids=tuple(map(str, cells)),
+        resource_ids=tuple(map(str, resources)),
+        goal_knowledge_level=goal,
+        provider_constraint=_orbiter_constraint() if constrained else None,
+        observation_mode_constraint="remote_orbital_spectrometry" if constrained else None,
+        priority=priority,
+    )).created_id
+
+
+def test_campaign_scope_is_multi_cell_multi_resource_and_never_changes_outside_scope():
     app = build_game_application()
     sim = app._simulation
+    cells = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE)
+    resources = (ids.REGOLITH, ids.WATER)
+    outside = (ids.MOON_CELL_EQUATORIAL_HIGHLANDS, ids.REGOLITH)
+    outside_before = sim.survey.progress(*outside)
 
-    provider_source_id = DefinitionId("test.facility.provider_limited_survey")
-    provider_id = DefinitionId("test.survey_provider.provider_limited_survey")
-    mode_id = "test_estimation_mode"
-    sim.facilities.definitions[provider_source_id] = FacilityDef(
-        provider_source_id, "Provider-limited survey fixture"
+    campaign_id = _start_campaign(app, cells, resources)
+    campaign = sim.survey.campaigns[campaign_id]
+    assert campaign.target_pairs() == tuple(
+        (cell, resource) for cell in sorted(cells, key=str) for resource in sorted(resources, key=str)
     )
-    sim.facilities.install(provider_source_id, ids.LUNAR_ORBIT)
-    cell = sim.graph.surface_cells[ids.MOON_CELL_FARSIDE_HIGHLANDS]
-    resource_id = ids.REGOLITH
-    key = (cell.id, resource_id)
-    target = SurveyTarget(cell.id, resource_id, (1.0, 2.0, 3.0), 0.5)
-    limit = KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
-    mode = SurveyObservationModeSpec(
-        mode_id,
-        100.0,
-        SurveyReachSpec(SurveyReachScope.SAME_BODY),
-        limit,
-        estimate_uncertainty_fraction=0.31,
-        measurement_precision_fraction=0.07,
+    bundles = sim.survey.execution_requirement_bundles(sim.day)
+    assert {bundle.owner_id for bundle in bundles} == {campaign.id}
+    assert len(bundles) == 4
+
+    app.execute(AdvanceTime(1))
+    assert sim.survey.progress(*outside) == pytest.approx(outside_before)
+    assert all(sim.survey.progress(cell, resource) > 0 for cell in cells for resource in resources)
+
+
+def test_completed_targets_leave_demand_and_capacity_reallocates_without_overshoot():
+    app = build_game_application()
+    sim = app._simulation
+    first = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
+    second = (ids.MOON_CELL_NEARSIDE_MARE, ids.REGOLITH)
+    campaign_id = _start_campaign(app, (first[0], second[0]), (ids.REGOLITH,))
+    campaign = sim.survey.campaigns[campaign_id]
+    threshold = sim.survey.targets[first].thresholds[0]
+    first_bundle = sim.survey.execution_bundle_id(campaign.id, *first)
+    second_bundle = sim.survey.execution_bundle_id(campaign.id, *second)
+
+    # A target that has already reached the campaign goal contributes no demand,
+    # so the shared Survey capacity is immediately available to the remainder.
+    sim.survey.knowledge_progress[first] = threshold
+    bundles = {bundle.id for bundle in sim.survey.execution_requirement_bundles(sim.day)}
+    assert first_bundle not in bundles
+    assert second_bundle in bundles
+    allocation = sim.tick_decision_projection().allocations.execution
+    assert allocation.allocated(second_bundle) == pytest.approx(1.0)
+
+    # The final partial day is capped at the goal threshold rather than overshooting.
+    sim.survey.knowledge_progress[second] = threshold - 0.5
+    allocation = sim.tick_decision_projection().allocations.execution
+    assert allocation.allocated(second_bundle) == pytest.approx(0.5 / 8.0)
+    app.execute(AdvanceTime(1))
+    assert sim.survey.progress(*second) == pytest.approx(threshold)
+    assert sim.survey.knowledge_level(*second) == KnowledgeLevel.PRESENCE_PROBABILITY
+
+
+def test_campaign_completes_only_when_all_targets_reach_goal_and_retains_identity():
+    app = build_game_application()
+    sim = app._simulation
+    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
+    campaign_id = _start_campaign(app, (key[0],), (key[1],))
+    app.execute(AdvanceTime(3))
+    campaign = sim.survey.campaigns[campaign_id]
+    assert campaign.control_state is SurveyCampaignControlState.COMPLETED
+    assert sim.survey.unfinished_targets(campaign) == ()
+    assert sim.survey.execution_requirement_bundles(sim.day) == ()
+
+
+def test_goal_cap_and_precision_are_provider_mode_authoritative():
+    app = build_game_application()
+    sim = app._simulation
+    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
+    campaign_id = _start_campaign(app, (key[0],), (key[1],), goal=2)
+    app.execute(AdvanceTime(8))
+    assert sim.survey.knowledge_level(*key) == KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+    assert sim.survey.visible_potential_precision_fraction(*key) == pytest.approx(0.35)
+    assert sim.survey.campaigns[campaign_id].control_state is SurveyCampaignControlState.COMPLETED
+
+    blocked_id = _start_campaign(app, (ids.MOON_CELL_NEARSIDE_MARE,), (ids.REGOLITH,), goal=3)
+    blocked = sim.survey.campaigns[blocked_id]
+    candidate, blockers = sim.survey.resolve_campaign_candidate(blocked, day=sim.day)
+    assert candidate is None
+    assert "survey_candidate_unavailable" in blockers
+    assert any("survey_provider_limit" in blocker for blocker in blockers)
+
+
+def test_equivalent_candidates_auto_resolve_by_stable_key_independent_of_registration_order():
+    def selected(reverse: bool):
+        app = build_game_application()
+        sim = app._simulation
+        source = ids.LUNAR_RESOURCE_SURVEY_ORBITER
+        mode = sim.survey.provider(source).observation_modes[0]
+        rows = [
+            (DefinitionId("test.provider.a"), SurveyProviderSpec(DefinitionId("test.provider.a"), SurveyProviderSourceKind.FACILITY, source, (mode,))),
+            (DefinitionId("test.provider.b"), SurveyProviderSpec(DefinitionId("test.provider.b"), SurveyProviderSourceKind.FACILITY, source, (mode,))),
+        ]
+        if reverse:
+            rows.reverse()
+        sim.survey.providers = dict(rows)
+        cid = _start_campaign(app, (ids.MOON_CELL_FARSIDE_HIGHLANDS,), (ids.REGOLITH,), constrained=False)
+        candidate, blockers = sim.survey.resolve_campaign_candidate(sim.survey.campaigns[cid], day=sim.day)
+        assert blockers == ()
+        assert candidate is not None
+        return candidate.provider_definition_id
+
+    assert selected(False) == selected(True) == DefinitionId("test.provider.a")
+
+
+def test_strategically_distinct_candidates_require_decision_and_do_not_arbitrarily_execute():
+    app = build_game_application()
+    sim = app._simulation
+    sim.transport.add_fleet_units(
+        ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=sim.day
     )
-    sim.survey.targets[key] = target
-    sim.survey.providers = {
-        provider_id: SurveyProviderSpec(
-            provider_id,
-            SurveyProviderSourceKind.FACILITY,
-            provider_source_id,
-            (mode,),
-        )
-    }
-
-    assert sim.survey.start_blockers(
-        ids.LUNAR_ORBIT, provider_id, mode_id, *key, limit, sim.day
-    ) == ()
-    assert sim.survey.reachable_knowledge_level(
-        ids.LUNAR_ORBIT, provider_id, mode_id, key[0], day=sim.day
-    ) == limit
-
-    app.execute(StartSurvey(
-        str(ids.LUNAR_ORBIT), str(provider_id), mode_id, str(key[0]), str(key[1]), int(limit), priority=4
+    app.execute(SetSurveyProviderFleetQuantity(
+        str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT),
+        str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1,
     ))
-    assert key in sim.survey.campaigns
-    assert sim.survey.campaigns[key].target_knowledge_level == limit
-
-    sim.advance_days(1)
-    assert key not in sim.survey.campaigns
-
-    target_threshold = target.thresholds[int(limit) - 1]
-    assert sim.survey.progress(*key) == target_threshold
-    assert sim.survey.knowledge_level(*key) == limit
-    assert not sim.survey.is_complete(*key)
-    estimated = sim.survey.visible_potential(*key)
-    actual = sim.survey.actual_potential(*key)
-    assert estimated is not None
-    assert estimated != pytest.approx(actual)
-    assert abs(estimated - actual) <= actual * 0.31 + 1e-12
-    assert sim.survey.visible_potential_precision_fraction(*key) == 0.31
-    assert sim.survey.start_blockers(
-        ids.LUNAR_ORBIT,
-        provider_id,
-        mode_id,
-        *key,
-        KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL,
-        sim.day,
-    ) == ("survey_provider_limit",)
-
-    row = next(
-        item for item in app.query(GetSurveys(str(ids.LUNAR_ORBIT))).items
-        if item.cell_id == str(key[0]) and item.resource_id == str(key[1])
+    campaign_id = _start_campaign(
+        app, (ids.MOON_CELL_FARSIDE_HIGHLANDS,), (ids.REGOLITH,), constrained=False
     )
-    assert row.complete is False
-    assert row.active is False
-    assert row.can_start is False
-    assert row.target_knowledge_level == int(limit)
-    assert row.target_threshold == target_threshold
-    assert row.progress_fraction == 1.0
-    assert row.start_options == ()
+    campaign = sim.survey.campaigns[campaign_id]
+    candidate, blockers = sim.survey.resolve_campaign_candidate(campaign, day=sim.day)
+    assert candidate is None
+    assert blockers == ("survey_decision_required",)
+    assert sim.survey.execution_requirement_bundles(sim.day) == ()
+
+    row = next(c for c in app.query(GetSurveys(str(ids.LUNAR_ORBIT))).campaigns if c.id == campaign_id)
+    assert "survey_decision_required" in row.blockers
+    assert len([candidate for candidate in row.candidates if candidate.viable]) >= 2
+    assert {candidate.provider_source_kind for candidate in row.candidates if candidate.viable} >= {"facility", "fleet"}
 
 
-def test_survey_configuration_rejects_mode_capability_missing_from_provider_source():
+def test_explicit_constraint_failure_never_falls_back_to_other_provider():
     app = build_game_application()
     sim = app._simulation
-    provider_id = ids.LUNAR_RESOURCE_SURVEY_ORBITER
-    provider = sim.survey.provider(provider_id)
-    mode = provider.observation_modes[0]
-    invalid_mode = SurveyObservationModeSpec(
-        mode.id,
-        mode.survey_rate,
-        mode.reach,
-        mode.max_knowledge_level,
-        mode.estimate_uncertainty_fraction,
-        mode.measurement_precision_fraction,
-        site_requirements=mode.site_requirements,
-        required_source_capabilities=frozenset(("capability.not_supplied",)),
-        minimum_source_units=mode.minimum_source_units,
+    source_id = DefinitionId("test.facility.earth_only_survey")
+    provider_id = DefinitionId("test.provider.earth_only_survey")
+    sim.facilities.definitions[source_id] = FacilityDef(source_id, "Earth survey")
+    sim.facilities.install(source_id, ids.LEO)
+    mode = SurveyObservationModeSpec(
+        "same_body_only", 5.0, SurveyReachSpec(SurveyReachScope.SAME_BODY),
+        KnowledgeLevel.PRESENCE_PROBABILITY, 0.2, 0.1,
     )
     sim.survey.providers[provider_id] = SurveyProviderSpec(
-        provider.id,
-        provider.source_kind,
-        provider.source_definition_id,
-        (invalid_mode,),
-        capacity_units_per_source_per_day=provider.capacity_units_per_source_per_day,
+        provider_id, SurveyProviderSourceKind.FACILITY, source_id, (mode,)
     )
+    campaign_id = app.execute(StartSurvey(
+        (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),), (str(ids.REGOLITH),), 1,
+        SurveyProviderConstraintInput(str(provider_id), str(ids.LEO)), "same_body_only",
+    )).created_id
+    campaign = sim.survey.campaigns[campaign_id]
+    candidate, blockers = sim.survey.resolve_campaign_candidate(campaign, day=sim.day)
+    assert candidate is None
+    assert any("reach:body" in blocker for blocker in blockers)
+    assert sim.survey.execution_requirement_bundles(sim.day) == ()
 
-    with pytest.raises(
-        ConfigurationError,
-        match="requires capabilities not supplied by its provider source",
-    ):
-        validate_simulation_configuration(sim)
 
-
-def test_fleet_backed_survey_provider_assignment_owns_fleet_independently_of_campaign_pause():
+def test_pause_suspends_campaign_demand_without_releasing_provider_fleet_commitment():
     app = build_game_application()
     sim = app._simulation
-    vehicle_id = ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT
-    provider_id = ids.LUNAR_FLEET_SURVEY_PROVIDER
-    mode_id = "fleet_remote_mapping"
-    first_key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
-    second_key = (ids.MOON_CELL_NEARSIDE_MARE, ids.REGOLITH)
-
-    unavailable = next(
-        row for row in app.query(GetSurveys(str(ids.LUNAR_ORBIT))).provider_fleet
-        if row.provider_definition_id == str(provider_id)
-        and row.vehicle_definition_id == str(vehicle_id)
+    sim.transport.add_fleet_units(
+        ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=sim.day
     )
-    assert unavailable.committed_units == 0
-    assert unavailable.free_units == 0
-    assert unavailable.blockers == ("fleet_unavailable",)
-    assert unavailable.can_set_quantity is False
-
-    sim.transport.add_fleet_units(vehicle_id, 1, ids.LUNAR_ORBIT, day=sim.day)
-    assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 1
-
-    with pytest.raises(ApplicationError, match="insufficient free fleet units"):
-        app.execute(SetSurveyProviderFleetQuantity(
-            str(provider_id), str(ids.LUNAR_ORBIT), str(vehicle_id), 2
-        ))
-    assert sim.survey.provider_assignments == {}
-    assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 1
-
-    result = app.execute(SetSurveyProviderFleetQuantity(
-        str(provider_id), str(ids.LUNAR_ORBIT), str(vehicle_id), 1
-    ))
-    assignment_id = result.created_id
-    assert assignment_id is not None
-    assert len(sim.survey.provider_assignments) == 1
-    repeated_id = app.execute(SetSurveyProviderFleetQuantity(
-        str(provider_id), str(ids.LUNAR_ORBIT), str(vehicle_id), 1
+    assignment_id = app.execute(SetSurveyProviderFleetQuantity(
+        str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT),
+        str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1,
     )).created_id
-    assert repeated_id == assignment_id
-    assert len(sim.survey.provider_assignments) == 1
-    assignment = sim.survey.provider_assignments[next(
-        key for key in sim.survey.provider_assignments if str(key) == assignment_id
-    )]
-    commitment = sim.transport.fleet_commitment(assignment.fleet_commitment_ref)
-    assert commitment is not None
-    assert commitment.quantity == 1
-    assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 0
+    assert assignment_id is not None
+    campaign_id = app.execute(StartSurvey(
+        (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),), (str(ids.REGOLITH),), 1,
+        SurveyProviderConstraintInput(str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT)),
+        "fleet_remote_mapping",
+    )).created_id
+    assignment = next(iter(sim.survey.provider_assignments.values()))
+    commitment_id = assignment.fleet_commitment_ref
+    before = sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
 
-    for key in (first_key, second_key):
-        app.execute(StartSurvey(
-            str(ids.LUNAR_ORBIT), str(provider_id), mode_id,
-            str(key[0]), str(key[1]), int(KnowledgeLevel.PRESENCE_PROBABILITY),
-        ))
-    assert set(sim.survey.campaigns) >= {first_key, second_key}
-    decision = sim.tick_decision_projection()
-    allocated = sum(
-        decision.allocations.execution.allocated(sim.survey.execution_bundle_id(*key))
-        for key in (first_key, second_key)
-    )
-    assert allocated <= sim.survey.provider_capacity_at(
-        provider_id, ids.LUNAR_ORBIT, day=sim.day
-    ) + 1e-12
-
-    with pytest.raises(ApplicationError, match="insufficient free fleet units"):
-        app.execute(SetSurveyProviderFleetQuantity(
-            str(provider_id), str(ids.LUNAR_ORBIT), str(vehicle_id), 2
-        ))
+    app.execute(PauseSurvey(campaign_id))
+    app.execute(AdvanceTime(1))
+    assert sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH) == pytest.approx(before)
+    assert sim.transport.fleet_commitment_snapshot(commitment_id) is not None
     assert sim.survey.provider_assignment_quantity(assignment.id) == 1
 
-    progress_before_pause = sim.survey.progress(*first_key)
-    app.execute(PauseSurvey(str(first_key[0]), str(first_key[1])))
+    app.execute(ResumeSurvey(campaign_id))
     app.execute(AdvanceTime(1))
-    assert sim.survey.campaigns[first_key].paused is True
-    assert sim.transport.fleet_commitment(assignment.fleet_commitment_ref) is not None
-    assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 0
-    assert sim.survey.progress(*first_key) == pytest.approx(progress_before_pause)
-    assert sim.survey.progress(*second_key) > 0.0
+    assert sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH) > before
 
-    app.execute(ResumeSurvey(str(first_key[0]), str(first_key[1])))
-    assert sim.survey.campaigns[first_key].paused is False
 
-    app.execute(SetSurveyProviderFleetQuantity(
-        str(provider_id), str(ids.LUNAR_ORBIT), str(vehicle_id), 0
+def test_remote_survey_does_not_require_surface_location():
+    app = build_game_application()
+    sim = app._simulation
+    cell_id = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    assert sim.graph.owner_of_cell(cell_id) is None
+    campaign_id = _start_campaign(app, (cell_id,), (ids.REGOLITH,))
+    candidate, blockers = sim.survey.resolve_campaign_candidate(sim.survey.campaigns[campaign_id], day=sim.day)
+    assert blockers == ()
+    assert candidate is not None
+    app.execute(AdvanceTime(1))
+    assert sim.survey.progress(cell_id, ids.REGOLITH) > 0
+
+
+def test_campaign_update_replaces_scope_goal_and_constraints_without_storing_resolution():
+    app = build_game_application()
+    sim = app._simulation
+    campaign_id = _start_campaign(app, (ids.MOON_CELL_FARSIDE_HIGHLANDS,), (ids.REGOLITH,))
+    app.execute(UpdateSurvey(
+        campaign_id,
+        (str(ids.MOON_CELL_FARSIDE_HIGHLANDS), str(ids.MOON_CELL_NEARSIDE_MARE)),
+        (str(ids.REGOLITH), str(ids.WATER)),
+        2,
+        None,
+        None,
     ))
-    assert sim.survey.provider_assignments == {}
-    assert sim.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == 1
-    assert "survey_capacity" in sim.survey.blockers(*first_key, day=sim.day)
+    campaign = sim.survey.campaigns[campaign_id]
+    assert set(campaign.target_cell_ids) == {ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE}
+    assert set(campaign.resource_ids) == {ids.REGOLITH, ids.WATER}
+    assert campaign.goal_knowledge_level == KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+    assert campaign.provider_constraint is None
+    assert campaign.observation_mode_constraint is None
+    assert not hasattr(campaign, "resolved_provider_definition_id")
 
 
-def test_survey_shared_provider_capacity_only_reallocates_among_requested_campaigns():
+def test_knowledge_consumers_depend_on_typed_requirement_not_campaign_internal_state():
     app = build_game_application()
     sim = app._simulation
-    provider_id = ids.LUNAR_RESOURCE_SURVEY_ORBITER
-    mode_id = "remote_orbital_spectrometry"
-    requested = (
-        (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH),
-        (ids.MOON_CELL_NEARSIDE_MARE, ids.REGOLITH),
-    )
-    for cell_id, resource_id in requested:
-        app.execute(StartSurvey(
-            str(ids.LUNAR_ORBIT), str(provider_id), mode_id,
-            str(cell_id), str(resource_id), int(KnowledgeLevel.PRESENCE_PROBABILITY),
-        ))
-
-    assert set(sim.survey.campaigns) == set(requested)
-    decision = sim.tick_decision_projection()
-    allocations = decision.allocations.execution
-    allocated = sum(
-        allocations.allocated(sim.survey.execution_bundle_id(*key))
-        for key in requested
-    )
-    capacity = sim.survey.provider_capacity_at(provider_id, ids.LUNAR_ORBIT, day=sim.day)
-    assert allocated <= capacity + 1e-12
-    assert capacity == pytest.approx(1.0)
-
-    app.execute(AdvanceTime(1))
-    assert set(sim.survey.campaigns) == set(requested)
-    assert len(sim.survey.campaigns) == 2
-
-
-def test_survey_reach_and_dynamic_site_eligibility_are_domain_authoritative_during_execution():
-    app = build_game_application()
-    sim = app._simulation
-    provider_source_id = DefinitionId("test.facility.cross_body_survey")
-    provider_id = DefinitionId("test.survey_provider.cross_body")
-    mode_id = "same_system_supported_observation"
-    sim.facilities.definitions[provider_source_id] = FacilityDef(
-        provider_source_id, "Cross-body survey fixture", installation_requirements=req.ORBIT_SITE,
-        operating_requirements=req.ORBIT_SITE,
-    )
-    sim.facilities.install(provider_source_id, ids.LEO)
-    support_id = sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
-    mode = SurveyObservationModeSpec(
-        mode_id,
-        2.0,
-        SurveyReachSpec(SurveyReachScope.SAME_SYSTEM),
-        KnowledgeLevel.PRESENCE_PROBABILITY,
-        estimate_uncertainty_fraction=0.2,
-        measurement_precision_fraction=0.1,
-        site_requirements=req.with_capabilities(req.ORBIT_SITE, "spacecraft_servicing"),
-    )
-    sim.survey.providers[provider_id] = SurveyProviderSpec(
-        provider_id, SurveyProviderSourceKind.FACILITY, provider_source_id, (mode,)
-    )
     key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
-    sim.survey.knowledge_progress[key] = 0.0
-
-    # SAME_SYSTEM is a Content reach rule, so cross-body observation is not
-    # rejected by a hard-coded same-body shortcut.
-    assert sim.survey.start_blockers(
-        ids.LEO, provider_id, mode_id, *key, KnowledgeLevel.PRESENCE_PROBABILITY, sim.day
-    ) == ()
-    app.execute(StartSurvey(
-        str(ids.LEO), str(provider_id), mode_id, str(key[0]), str(key[1]),
-        int(KnowledgeLevel.PRESENCE_PROBABILITY),
-    ))
-    before = sim.survey.progress(*key)
-
-    # Eligibility is re-evaluated by execution, not just by start/query.
-    sim.facilities.pause(support_id)
-    blockers = sim.survey.blockers(*key, day=sim.day)
-    assert any(row.startswith("survey_eligibility:site:") for row in blockers)
-    app.execute(AdvanceTime(1))
-    assert sim.survey.progress(*key) == pytest.approx(before)
+    requirement = KnowledgeRequirement(key[0], key[1], KnowledgeLevel.PRESENCE_PROBABILITY)
+    assert sim.survey.knowledge_requirement_failures(requirement)
+    campaign_id = _start_campaign(app, (key[0],), (key[1],))
+    assert campaign_id in sim.survey.campaigns
+    assert sim.survey.knowledge_requirement_failures(requirement)
+    sim.survey.knowledge_progress[key] = sim.survey.targets[key].thresholds[0]
+    assert sim.survey.knowledge_requirement_failures(requirement) == ()
