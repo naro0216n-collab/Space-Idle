@@ -37,7 +37,7 @@ from .app_contracts.queries import (
     GetCatalog, GetWorld, GetSurfaceMap, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetBottlenecks, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetMovementPlans, GetFleet,
     GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions,
-    GetResearch, GetScientificExplorations, GetSurveys, GetContracts, GetMarket,
+    GetResearch, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetContracts, GetMarket,
 )
 
 Command: TypeAlias = (
@@ -63,7 +63,7 @@ Query: TypeAlias = (
     GetCatalog | GetWorld | GetSurfaceMap | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetBottlenecks | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetMovementPlans | GetFleet |
     GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions |
-    GetResearch | GetScientificExplorations | GetSurveys | GetContracts | GetMarket
+    GetResearch | GetScientificExplorations | GetSurveys | GetSurveyCampaignIntentPreview | GetContracts | GetMarket
 )
 
 __all__ = [name for name in globals() if not name.startswith('_') and name not in {'TypeAlias'}]

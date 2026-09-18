@@ -108,6 +108,17 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         # Survey Campaign crosses the HTTP codec as a multi-target intent with a nested
         # optional provider constraint; the query must expose the same authoritative scope.
         survey_cells = [str(ids.MOON_CELL_SOUTH_POLAR_RIDGE), str(ids.MOON_CELL_FARSIDE_HIGHLANDS)]
+        preview_path = (
+            "/api/v1/survey-campaign-intent-preview"
+            f"?target_cell_id={survey_cells[0]}"
+            f"&target_cell_id={survey_cells[1]}"
+            f"&resource_id={ids.WATER}"
+            "&goal_knowledge_level=1"
+        )
+        status, _, payload = _request(port, "GET", preview_path)
+        assert status == 200
+        assert payload["data"]["can_apply"] is True
+        assert payload["data"]["blockers"] == []
         status, _, payload = _request(
             port, "POST", "/api/v1/commands",
             {
@@ -139,6 +150,14 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert campaign["goal_knowledge_level"] == 1
         assert campaign["priority"] == 4
         assert campaign["projected_provider_definition_id"] == str(ids.LUNAR_RESOURCE_SURVEY_ORBITER)
+
+        status, _, payload = _request(port, "GET", preview_path)
+        assert status == 200
+        assert payload["data"]["can_apply"] is False
+        assert any(
+            blocker.startswith("campaign_scope_conflict:")
+            for blocker in payload["data"]["blockers"]
+        )
 
         status, _, payload = _request(port, "POST", "/api/v1/session/save", {"slot": "boundary"})
         assert status == 200 and payload["data"]["saved"] is True

@@ -350,22 +350,46 @@ def run() -> dict[str, object]:
 
             page.locator(f'[data-location-id="{ids.LUNAR_ORBIT}"]').click()
             page.locator('[data-tab="survey"]').click()
-            survey_pair_id = page.locator('tr[data-inspect="survey"]').first.get_attribute("data-id")
+            survey_rows = page.locator('tr[data-inspect="survey"]')
+            _assert(survey_rows.count() > 0, "Survey UI must expose at least one Application-projected target")
+            campaign_cell_id = campaign_resource_id = None
+            for row_index in range(survey_rows.count()):
+                survey_pair_id = survey_rows.nth(row_index).get_attribute("data-id")
+                if survey_pair_id is None or "::" not in survey_pair_id:
+                    continue
+                candidate_cell_id, candidate_resource_id = survey_pair_id.split("::", 1)
+                cell_checkbox = page.locator(
+                    f'[data-survey-draft-cell][value="{candidate_cell_id}"]'
+                )
+                resource_checkbox = page.locator(
+                    f'[data-survey-draft-resource][value="{candidate_resource_id}"]'
+                )
+                if cell_checkbox.count() == 0 or resource_checkbox.count() == 0:
+                    continue
+                cell_checkbox.check()
+                resource_checkbox.check()
+                for goal in ("1", "2", "3"):
+                    page.locator('#surveyDraftGoal').select_option(goal)
+                    page.wait_for_function(
+                        "() => !document.querySelector('[data-survey-start-intent-status]')?.textContent?.includes('可否確認中')",
+                        timeout=10000,
+                    )
+                    if page.locator('[data-start-survey-campaign]').is_enabled():
+                        campaign_cell_id = candidate_cell_id
+                        campaign_resource_id = candidate_resource_id
+                        break
+                if campaign_cell_id is not None:
+                    break
+                cell_checkbox.uncheck()
+                resource_checkbox.uncheck()
             _assert(
-                survey_pair_id is not None and "::" in survey_pair_id,
-                "Survey Campaign UI fixture must expose at least one surveyable Cell/Resource pair",
+                campaign_cell_id is not None and campaign_resource_id is not None,
+                "Survey Campaign UI must expose at least one Application-approved scope / goal intent",
             )
-            campaign_cell_id, campaign_resource_id = survey_pair_id.split("::", 1)
-            cell_checkbox = page.locator(
-                f'[data-survey-draft-cell][value="{campaign_cell_id}"]'
+            _assert(
+                page.locator('[data-survey-start-intent-status]').inner_text().strip() == "適用可能",
+                "Survey Campaign creation availability must come from Application preview",
             )
-            cell_checkbox.wait_for(timeout=10000)
-            cell_checkbox.check()
-            resource_checkbox = page.locator(
-                f'[data-survey-draft-resource][value="{campaign_resource_id}"]'
-            )
-            resource_checkbox.wait_for(timeout=10000)
-            resource_checkbox.check()
             page.locator('#surveyDraftPriority').select_option("4")
             page.locator('[data-start-survey-campaign]').click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
@@ -379,6 +403,14 @@ def run() -> dict[str, object]:
             _assert("Provider / Mode候補差" in campaign_text, "Survey Campaign inspector must expose candidate differences at the decision point")
             _assert("Projected Provider / Mode" in campaign_text, "Survey Campaign inspector must expose the auto-resolved operational choice")
             _assert(page.locator('#inspectorContent [data-set-survey-priority]').is_enabled(), "active Survey Campaign must expose priority control")
+            page.wait_for_function(
+                "() => !document.querySelector('[data-survey-update-intent-status]')?.textContent?.includes('可否確認中')",
+                timeout=10000,
+            )
+            _assert(
+                page.locator('[data-update-survey-campaign]').is_enabled(),
+                "Survey Campaign edit availability must come from Application preview",
+            )
             _assert(int(page.locator('#surveyPriorityInput').input_value()) == 4, "Survey Campaign start priority must round-trip through the UI")
             survey_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey-campaign"]')
             _assert(survey_lifecycle.get_attribute('data-survey-campaign-action') == 'pause' and survey_lifecycle.is_enabled(), "active Survey Campaign must expose pause on the stable lifecycle control")

@@ -59,6 +59,12 @@ class GetScientificExplorations: pass
 @dataclass(frozen=True)
 class GetSurveys: provider_operational_node_id: str | None = None
 @dataclass(frozen=True)
+class GetSurveyCampaignIntentPreview:
+    target_cell_ids: tuple[str, ...]
+    resource_ids: tuple[str, ...]
+    goal_knowledge_level: int
+    campaign_id: str | None = None
+@dataclass(frozen=True)
 class GetContracts: pass
 @dataclass(frozen=True)
 class GetMarket: pass

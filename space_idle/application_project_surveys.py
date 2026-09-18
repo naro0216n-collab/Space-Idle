@@ -6,13 +6,54 @@ from .application_views import (
     SurveyCampaignTargetRow,
     SurveyProviderFleetRow,
     SurveyRow,
+    SurveyCampaignIntentPreviewView,
     SurveysView,
 )
 from .exploration_models import SurveyCampaignControlState, SurveyProviderSourceKind
-from .shared import SpatialNodeId
+from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 
 
 class SurveyProgressionProjectorMixin:
+    def _survey_campaign_intent_preview_view(self, query) -> SurveyCampaignIntentPreviewView:
+        sim = self._simulation
+        if sim.survey is None:
+            return SurveyCampaignIntentPreviewView(
+                target_cell_ids=tuple(query.target_cell_ids),
+                resource_ids=tuple(query.resource_ids),
+                goal_knowledge_level=query.goal_knowledge_level,
+                campaign_id=query.campaign_id,
+                blockers=("survey_unavailable",),
+                can_apply=False,
+            )
+        target_cell_ids = tuple(SurfaceCellId(value) for value in query.target_cell_ids)
+        resource_ids = tuple(DefinitionId(value) for value in query.resource_ids)
+        if query.campaign_id is None:
+            blockers = sim.survey.start_blockers(
+                target_cell_ids, resource_ids, query.goal_knowledge_level
+            )
+        else:
+            campaign_id = EntityId(query.campaign_id)
+            campaign = sim.survey.campaigns.get(campaign_id)
+            if campaign is None:
+                blockers = ("not_active",)
+            else:
+                blockers = sim.survey.update_blockers(
+                    campaign_id,
+                    target_cell_ids,
+                    resource_ids,
+                    query.goal_knowledge_level,
+                    campaign.provider_constraint,
+                    campaign.observation_mode_constraint,
+                )
+        return SurveyCampaignIntentPreviewView(
+            target_cell_ids=tuple(map(str, target_cell_ids)),
+            resource_ids=tuple(map(str, resource_ids)),
+            goal_knowledge_level=query.goal_knowledge_level,
+            campaign_id=query.campaign_id,
+            blockers=blockers,
+            can_apply=not blockers,
+        )
+
     def _survey_provider_fleet_rows(
         self, provider_operational_node_id: SpatialNodeId | None
     ) -> tuple[SurveyProviderFleetRow, ...]:

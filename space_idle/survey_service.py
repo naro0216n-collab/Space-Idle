@@ -589,6 +589,24 @@ class SurveyService:
             target_cell_ids, resource_ids, goal_knowledge_level, provider_constraint, observation_mode_constraint
         )
 
+    def update_blockers(
+        self, campaign_id: EntityId, target_cell_ids: tuple[SurfaceCellId, ...],
+        resource_ids: tuple[DefinitionId, ...], goal_knowledge_level: KnowledgeLevel,
+        provider_constraint: SurveyProviderConstraint | None,
+        observation_mode_constraint: str | None,
+    ) -> tuple[str, ...]:
+        campaign = self.campaigns.get(campaign_id)
+        if campaign is None:
+            return ("not_active",)
+        return self._campaign_intent_blockers(
+            target_cell_ids,
+            resource_ids,
+            goal_knowledge_level,
+            provider_constraint,
+            observation_mode_constraint,
+            exclude_campaign_id=campaign_id,
+        )
+
     def start(
         self, target_cell_ids: tuple[SurfaceCellId, ...], resource_ids: tuple[DefinitionId, ...],
         goal_knowledge_level: KnowledgeLevel, *, provider_constraint: SurveyProviderConstraint | None = None,
@@ -614,9 +632,13 @@ class SurveyService:
         campaign = self.campaigns.get(campaign_id)
         if campaign is None:
             raise KeyError(campaign_id)
-        blockers = self._campaign_intent_blockers(
-            target_cell_ids, resource_ids, goal_knowledge_level, provider_constraint, observation_mode_constraint,
-            exclude_campaign_id=campaign_id,
+        blockers = self.update_blockers(
+            campaign_id,
+            target_cell_ids,
+            resource_ids,
+            goal_knowledge_level,
+            provider_constraint,
+            observation_mode_constraint,
         )
         if blockers:
             raise ValueError("; ".join(blockers))

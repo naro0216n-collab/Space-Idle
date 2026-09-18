@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
     GetContracts, GetDependencyAnalytics, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
-    GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys,
+    GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys, GetSurveyCampaignIntentPreview,
     GetTransportAllocationOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
 )
 from ..persistence import SaveFormatError
@@ -333,6 +333,14 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/v1/surveys":
             self._query_result(GetSurveys(_one(params, "provider_operational_node_id")))
+            return
+        if path == "/api/v1/survey-campaign-intent-preview":
+            self._query_result(GetSurveyCampaignIntentPreview(
+                target_cell_ids=tuple(params.get("target_cell_id", ())),
+                resource_ids=tuple(params.get("resource_id", ())),
+                goal_knowledge_level=int(_required(params, "goal_knowledge_level")),
+                campaign_id=_one(params, "campaign_id"),
+            ))
             return
         if path == "/api/v1/contracts":
             self._query_result(GetContracts())

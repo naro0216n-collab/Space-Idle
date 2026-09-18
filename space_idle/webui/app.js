@@ -72,6 +72,13 @@
     text=text.replace(/provider_supply/g,'Market Provider供給不足');
     text=text.replace(/provider_demand/g,'Market Provider需要不足');
     text=text.replace(/resource_not_at_market_interface/g,'Market Interfaceに売却対象Resourceなし');
+    text=text.replace(/survey_scope_empty/g,'Survey対象Cellを1つ以上選択してください');
+    text=text.replace(/survey_resource_scope_empty/g,'Survey対象Resourceを1つ以上選択してください');
+    text=text.replace(/knowledge_goal_reached/g,'選択範囲は指定したKnowledge Goalへ到達済みです');
+    text=text.replace(/invalid_target_knowledge_level/g,'Knowledge Goalが不正です');
+    text=text.replace(/campaign_scope_conflict:([^;]+)/g,(_,id)=>`既存Survey Campaignと対象が重複しています: ${id}`);
+    text=text.replace(/unknown_target:([^:;]+):([^;]+)/g,(_,cellId,resourceId)=>`Survey対象外の組み合わせです: ${cellId} / ${resourceName(resourceId)}`);
+    text=text.replace(/unknown_target:([^;]+)/g,(_,cellId)=>`Survey対象外のCellです: ${cellId}`);
     text=text.replace(/unmet_demand/g,'未充足需要');
     text=text.replace(/external_dependency/g,'外部依存');
     text=text.replace(/storage_over_capacity/g,'Usable Storage Capacity超過');

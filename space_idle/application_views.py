@@ -31,7 +31,7 @@ from .app_contracts.logistics_reports import (
 from .app_contracts.progression_views import (
     ResearchProviderRow, ResearchProviderFleetRow, ResearchPrototypeResourceRow, ResearchExperienceRow, ResearchKnowledgeRow,
     ResearchStageRow, ResearchRow, ResearchView, ScientificExplorationFleetOptionRow,
-    ScientificExplorationRow, ScientificExplorationsView, SurveyProviderFleetRow, SurveyCandidateRow, SurveyCampaignTargetRow, SurveyCampaignRow, SurveyRow, SurveysView,
+    ScientificExplorationRow, ScientificExplorationsView, SurveyProviderFleetRow, SurveyCandidateRow, SurveyCampaignTargetRow, SurveyCampaignRow, SurveyRow, SurveyCampaignIntentPreviewView, SurveysView,
     ContractRow, ContractsView,
 )
 from .app_contracts.ui_reports import IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView
@@ -50,7 +50,7 @@ QueryResult: TypeAlias = (
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     MovementPlansView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |
     TransportAllocationOptionsView | ResearchView |
-    ScientificExplorationsView | SurveysView | ContractsView | MarketView
+    ScientificExplorationsView | SurveysView | SurveyCampaignIntentPreviewView | ContractsView | MarketView
 )
 
 __all__ = [name for name in globals() if not name.startswith('_') and name not in {'TypeAlias'}]

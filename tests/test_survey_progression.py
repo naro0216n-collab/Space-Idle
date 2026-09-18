@@ -5,6 +5,7 @@ import pytest
 from space_idle import (
     AdvanceTime,
     GetSurveys,
+    GetSurveyCampaignIntentPreview,
     PauseSurvey,
     ResumeSurvey,
     SetSurveyProviderFleetQuantity,
@@ -43,6 +44,47 @@ def _start_campaign(app, cells, resources, goal=1, *, constrained=True, priority
         observation_mode_constraint="remote_orbital_spectrometry" if constrained else None,
         priority=priority,
     )).created_id
+
+
+def test_campaign_intent_preview_uses_domain_blockers_and_update_excludes_self():
+    app = build_game_application()
+    completed = app.query(GetSurveyCampaignIntentPreview(
+        target_cell_ids=(str(ids.EARTH_CELL_INDUSTRIAL),),
+        resource_ids=(str(ids.WATER),),
+        goal_knowledge_level=1,
+    ))
+    assert completed.can_apply is False
+    assert "knowledge_goal_reached" in completed.blockers
+
+    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    resource = ids.WATER
+
+    available = app.query(GetSurveyCampaignIntentPreview(
+        target_cell_ids=(str(cell),),
+        resource_ids=(str(resource),),
+        goal_knowledge_level=1,
+    ))
+    assert available.can_apply is True
+    assert available.blockers == ()
+
+    campaign_id = _start_campaign(app, (cell,), (resource,), constrained=False)
+
+    conflicting_start = app.query(GetSurveyCampaignIntentPreview(
+        target_cell_ids=(str(cell),),
+        resource_ids=(str(resource),),
+        goal_knowledge_level=1,
+    ))
+    assert conflicting_start.can_apply is False
+    assert any(blocker.startswith("campaign_scope_conflict:") for blocker in conflicting_start.blockers)
+
+    same_campaign_update = app.query(GetSurveyCampaignIntentPreview(
+        target_cell_ids=(str(cell),),
+        resource_ids=(str(resource),),
+        goal_knowledge_level=1,
+        campaign_id=campaign_id,
+    ))
+    assert same_campaign_update.can_apply is True
+    assert same_campaign_update.blockers == ()
 
 
 def test_campaign_scope_is_multi_cell_multi_resource_and_never_changes_outside_scope():

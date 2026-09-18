@@ -4,7 +4,7 @@ from .application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
     GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
-    GetScientificExplorations, GetSurveys, GetTransportAllocations,
+    GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
     GetTransportAllocationOptions, GetWorld, GetSurfaceMap, Query,
     GetMarket,
 )
@@ -110,6 +110,8 @@ class ApplicationQueryRouterMixin:
             return self._surveys_view(
                 None if query.provider_operational_node_id is None else self._require_operational_node(query.provider_operational_node_id)
             )
+        if isinstance(query, GetSurveyCampaignIntentPreview):
+            return self._survey_campaign_intent_preview_view(query)
         if isinstance(query, GetContracts):
             return self._contracts_view()
         if isinstance(query, GetMarket):

@@ -286,6 +286,16 @@ class SurveyRow:
 
 
 @dataclass(frozen=True)
+class SurveyCampaignIntentPreviewView:
+    target_cell_ids: tuple[str, ...]
+    resource_ids: tuple[str, ...]
+    goal_knowledge_level: int
+    campaign_id: str | None
+    blockers: tuple[str, ...]
+    can_apply: bool
+
+
+@dataclass(frozen=True)
 class SurveysView:
     provider_fleet: tuple[SurveyProviderFleetRow, ...]
     items: tuple[SurveyRow, ...]

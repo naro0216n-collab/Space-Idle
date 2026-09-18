@@ -3,7 +3,7 @@
 
   const A=window.SpaceIdleApp;
   if(!A)throw new Error('SpaceIdleApp must load before operations_ui.js');
-  const {state,$,$$,esc,fmt,pct,resourceName,locationName,definitionName,capabilityName,stateLabels,issueHtml,statHtml,signed,command,banner}=A;
+  const {state,$,$$,esc,fmt,pct,resourceName,locationName,definitionName,capabilityName,stateLabels,issueHtml,statHtml,signed,api,command,banner}=A;
 
   const section=(title,body)=>`<section class="inspector-section"><h3>${esc(title)}</h3>${body}</section>`;
   const kv=(rows)=>`<dl class="kv-grid">${rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
@@ -15,6 +15,74 @@
   const priorityName=(value)=>priorityLabels[Number(value)]?`${value} ${priorityLabels[Number(value)]}`:String(value??'—');
   const procurementPolicyName=(value)=>procurementPolicyLabels[value]||value||'—';
   const limitingHtml=(rows)=>(rows||[]).length?`<div class="issue-stack">${rows.map((factor)=>`<div class="issue"><div class="issue-title">${esc(A.userFacingText(factor))}</div></div>`).join('')}</div>`:'<span class="badge ok">なし</span>';
+  const surveyIntentPreviewSerial=new Map();
+  const surveyIntentPreviewCache=new Map();
+  function surveyIntentDraft(campaignId=null){
+    const editing=campaignId!=null;
+    return {
+      campaign_id:campaignId,
+      target_cell_ids:$$(editing?'[data-survey-campaign-cell]:checked':'[data-survey-draft-cell]:checked').map((x)=>x.value),
+      resource_ids:$$(editing?'[data-survey-campaign-resource]:checked':'[data-survey-draft-resource]:checked').map((x)=>x.value),
+      goal_knowledge_level:Number($(editing?'#surveyCampaignGoal':'#surveyDraftGoal')?.value??1),
+    };
+  }
+  function surveyIntentSignature(intent){
+    return JSON.stringify([
+      state.revision??0,
+      intent.campaign_id,
+      [...intent.target_cell_ids].sort(),
+      [...intent.resource_ids].sort(),
+      intent.goal_knowledge_level,
+    ]);
+  }
+  function applySurveyIntentPreview(intent,result){
+    const editing=intent.campaign_id!=null;
+    const button=editing
+      ? $(`[data-update-survey-campaign="${CSS.escape(intent.campaign_id)}"]`)
+      : $('[data-start-survey-campaign]');
+    const status=$(editing?'[data-survey-update-intent-status]':'[data-survey-start-intent-status]');
+    if(!button||!status)return;
+    button.disabled=!result.can_apply;
+    status.innerHTML=result.can_apply
+      ? '<span class="badge ok">適用可能</span>'
+      : `<div class="issue-stack">${(result.blockers||[]).map((blocker)=>issueHtml(['survey',blocker])).join('')}</div>`;
+  }
+  async function refreshSurveyIntentPreview(campaignId=null){
+    const editing=campaignId!=null;
+    const previewKey=campaignId??'new';
+    const button=editing
+      ? $(`[data-update-survey-campaign="${CSS.escape(campaignId)}"]`)
+      : $('[data-start-survey-campaign]');
+    const status=$(editing?'[data-survey-update-intent-status]':'[data-survey-start-intent-status]');
+    if(!button||!status)return;
+    const intent=surveyIntentDraft(campaignId);
+    const signature=surveyIntentSignature(intent);
+    const cached=surveyIntentPreviewCache.get(signature);
+    if(cached){applySurveyIntentPreview(intent,cached);return;}
+    button.disabled=true;
+    status.innerHTML='<span class="badge">可否確認中</span>';
+    const serial=(surveyIntentPreviewSerial.get(previewKey)||0)+1;
+    surveyIntentPreviewSerial.set(previewKey,serial);
+    const params=new URLSearchParams();
+    intent.target_cell_ids.forEach((value)=>params.append('target_cell_id',value));
+    intent.resource_ids.forEach((value)=>params.append('resource_id',value));
+    params.set('goal_knowledge_level',String(intent.goal_knowledge_level));
+    if(campaignId!=null)params.set('campaign_id',campaignId);
+    try{
+      const result=await api(`/api/v1/survey-campaign-intent-preview?${params.toString()}`);
+      surveyIntentPreviewCache.set(signature,result);
+      if(serial!==surveyIntentPreviewSerial.get(previewKey)||surveyIntentSignature(surveyIntentDraft(campaignId))!==signature)return;
+      applySurveyIntentPreview(intent,result);
+    }catch(err){
+      if(serial!==surveyIntentPreviewSerial.get(previewKey))return;
+      status.innerHTML=`<div class="issue"><div class="issue-title">${esc(err.message||'可否を取得できません')}</div></div>`;
+    }
+  }
+  function refreshVisibleSurveyIntentPreview(){
+    if($('[data-start-survey-campaign]'))void refreshSurveyIntentPreview();
+    const update=$('[data-update-survey-campaign]');
+    if(update)void refreshSurveyIntentPreview(update.dataset.updateSurveyCampaign);
+  }
   const siteRequirementsHtml=(requirements)=>{
     const spatial=(requirements?.spatial_classifications||[]).map((row)=>`<div class="cell-sub">空間条件: ${esc(row.description||row.code)}</div>`).join('');
     const env=(requirements?.environment||[]).map((row)=>`<div class="cell-sub">物理環境: ${esc(row.description||row.code)}</div>`).join('');
@@ -166,7 +234,7 @@
     const resourceMap=new Map();visibleKnowledge.forEach((row)=>resourceMap.set(row.resource_id,row.resource_name));
     const cellChecks=[...cellMap].map(([id,label])=>`<label class="check-row"><input type="checkbox" data-survey-draft-cell data-draft-key="survey:new:cell:${esc(id)}" value="${esc(id)}">${esc(label)}</label>`).join('');
     const resourceChecks=[...resourceMap].map(([id,label])=>`<label class="check-row"><input type="checkbox" data-survey-draft-resource data-draft-key="survey:new:resource:${esc(id)}" value="${esc(id)}">${esc(label)}</label>`).join('');
-    const createSection=`<section class="card"><div class="card-heading"><h3>Survey Campaign作成</h3></div><div class="card-body"><div class="cell-sub">Surface Cell集合 × Resource集合を一つのCampaignとして指定します。Provider / Modeは候補が一意または同等なら自動解決し、戦略差がある場合はCampaign作成後に候補差を表示します。</div><div class="detail-grid"><div class="detail-card"><div class="mode-title"><span>対象Cell</span></div>${cellChecks||'<div class="empty-state">対象Cellなし</div>'}</div><div class="detail-card"><div class="mode-title"><span>Resource scope</span></div>${resourceChecks||'<div class="empty-state">対象Resourceなし</div>'}</div></div><div class="form-row"><label>Goal Knowledge<select id="surveyDraftGoal" data-draft-key="survey:new:goal"><option value="1">1 Presence</option><option value="2">2 Estimated</option><option value="3">3 Measured</option></select></label><label>活動優先度<select id="surveyDraftPriority" data-draft-key="survey:new:priority">${priorityOptions(3)}</select></label><button type="button" data-start-survey-campaign>Campaign作成</button></div></div></section>`;
+    const createSection=`<section class="card"><div class="card-heading"><h3>Survey Campaign作成</h3></div><div class="card-body"><div class="cell-sub">Surface Cell集合 × Resource集合を一つのCampaignとして指定します。Provider / Modeは候補が一意または同等なら自動解決し、戦略差がある場合はCampaign作成後に候補差を表示します。</div><div class="detail-grid"><div class="detail-card"><div class="mode-title"><span>対象Cell</span></div>${cellChecks||'<div class="empty-state">対象Cellなし</div>'}</div><div class="detail-card"><div class="mode-title"><span>Resource scope</span></div>${resourceChecks||'<div class="empty-state">対象Resourceなし</div>'}</div></div><div class="form-row"><label>Goal Knowledge<select id="surveyDraftGoal" data-draft-key="survey:new:goal"><option value="1">1 Presence</option><option value="2">2 Estimated</option><option value="3">3 Measured</option></select></label><label>活動優先度<select id="surveyDraftPriority" data-draft-key="survey:new:priority">${priorityOptions(3)}</select></label><button type="button" data-start-survey-campaign disabled>Campaign作成</button></div><div data-survey-start-intent-status><span class="badge">可否確認中</span></div></div></section>`;
 
     const campaigns=(state.surveys?.campaigns||[]).map((c)=>{
       const provider=c.projected_provider_definition_id?`${definitionName(c.projected_provider_definition_id)} / ${c.projected_observation_mode_id||'—'}`:'未解決';
@@ -400,7 +468,7 @@
     const actions=lifecycleButton({domain:'survey-campaign',id:c.id,canStart:false,canPause:c.can_pause,canResume:c.can_resume,complete:c.status==='completed',pauseLabel:'Campaign停止',resumeLabel:'Campaign再開',completeLabel:'Campaign完了'});
     setInspector(`Survey Campaign ${c.id}`,
       section('Campaign状態',kv([['状態',esc(stateLabels[c.status]||c.status)],['Goal',`Knowledge ${fmt(c.goal_knowledge_level,0)}`],['Covered / Remaining',`${fmt(c.covered_targets,0)} / ${fmt(c.remaining_targets,0)}`],['Projected Provider / Mode',esc(provider)],['Service requested / allocated',`${fmt(c.requested_service_units_per_day,2)} / ${fmt(c.allocated_service_units_per_day,2)}`],['Progress capacity/日',fmt(c.capacity_points_per_day,2)],['Required / Assigned Fleet',c.required_fleet_units==null?'—':`${fmt(c.required_fleet_units,0)} / ${fmt(c.assigned_fleet_units,0)}`],['Projected remaining',c.projected_remaining_days==null?'—':`${fmt(c.projected_remaining_days,1)}日`],['優先度',esc(priorityName(c.priority??3))]]))+
-      section('Scope / Goal編集',`<div class="detail-grid"><div class="detail-card"><div class="mode-title"><span>Target Cells</span></div>${cellChecks}</div><div class="detail-card"><div class="mode-title"><span>Resources</span></div>${resourceChecks}</div></div><div class="form-row"><label>Goal<select id="surveyCampaignGoal" data-draft-key="survey:${esc(c.id)}:goal"><option value="1" ${Number(c.goal_knowledge_level)===1?'selected':''}>1 Presence</option><option value="2" ${Number(c.goal_knowledge_level)===2?'selected':''}>2 Estimated</option><option value="3" ${Number(c.goal_knowledge_level)===3?'selected':''}>3 Measured</option></select></label><button type="button" data-update-survey-campaign="${esc(c.id)}">Scope / Goalを適用</button></div>`)+
+      section('Scope / Goal編集',`<div class="detail-grid"><div class="detail-card"><div class="mode-title"><span>Target Cells</span></div>${cellChecks}</div><div class="detail-card"><div class="mode-title"><span>Resources</span></div>${resourceChecks}</div></div><div class="form-row"><label>Goal<select id="surveyCampaignGoal" data-draft-key="survey:${esc(c.id)}:goal"><option value="1" ${Number(c.goal_knowledge_level)===1?'selected':''}>1 Presence</option><option value="2" ${Number(c.goal_knowledge_level)===2?'selected':''}>2 Estimated</option><option value="3" ${Number(c.goal_knowledge_level)===3?'selected':''}>3 Measured</option></select></label><button type="button" data-update-survey-campaign="${esc(c.id)}" disabled>Scope / Goalを適用</button></div><div data-survey-update-intent-status><span class="badge">可否確認中</span></div>`)+
       section('Target状態',`<div class="table-wrap"><table><thead><tr><th>Cell</th><th>Resource</th><th>Knowledge</th><th>Progress</th><th>Goal到達</th></tr></thead><tbody>${targetRows}</tbody></table></div>`)+
       section('Provider / Mode候補差',candidates)+
       section('Hard constraint',`<div class="cell-sub">Provider: ${esc(c.provider_constraint_definition_id?`${definitionName(c.provider_constraint_definition_id)} @ ${locationName(c.provider_constraint_operational_node_id)}`:'auto')} · Mode: ${esc(c.observation_mode_constraint||'auto')}</div><button type="button" data-clear-survey-constraint="${esc(c.id)}">Hard constraintを解除</button>`)+
@@ -485,8 +553,20 @@
     $('#locationKind').textContent=`${A.locationKindLabels[kind]||kind||'拠点'}拠点`;
     $('#headlineMetrics').innerHTML=[['発電',`${fmt(loc.power_generation_mw)} MW`],['需要',`${fmt(loc.power_demand_mw)} MW`],['建設能力',`${fmt(loc.construction_capacity_per_day)} /日`],['設備',`${loc.facilities.length}`]].map(A.metricHtml).join('');
     $$('.tab-button').forEach((b)=>b.classList.toggle('is-active',b.dataset.tab===state.activeTab));
-    renderActiveTab();renderInspector();
+    renderActiveTab();renderInspector();queueMicrotask(refreshVisibleSurveyIntentPreview);
   }
+
+  document.addEventListener('change',(event)=>{
+    if(state.activeView!=='operations')return;
+    if(event.target.matches('[data-survey-draft-cell],[data-survey-draft-resource],#surveyDraftGoal')){
+      void refreshSurveyIntentPreview();
+      return;
+    }
+    if(event.target.matches('[data-survey-campaign-cell],[data-survey-campaign-resource],#surveyCampaignGoal')){
+      const update=$('[data-update-survey-campaign]');
+      if(update)void refreshSurveyIntentPreview(update.dataset.updateSurveyCampaign);
+    }
+  });
 
   document.addEventListener('click',async(event)=>{
     if(state.activeView!=='operations')return;

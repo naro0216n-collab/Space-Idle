@@ -10,7 +10,7 @@ from .application import (
     SetResearchPriority, GameApplication, GetBottlenecks, GetBuildOptions, GetCatalog,
     GetCargoFlows, GetContracts, GetDependencyAnalytics, GetMarket, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
-    GetScientificExplorations, GetSurveys, GetTransportAllocations, GetTransportAllocationOptions,
+    GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations, GetTransportAllocationOptions,
     GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseResearch,
     PauseScientificExploration, PauseSurvey, PauseTransportAllocation,
     PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
