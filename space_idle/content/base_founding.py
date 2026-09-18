@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from ..founding import FoundingFacilityDeployment, FoundingPackageDefinition, FoundingResourceRequirement
+from ..founding import DeploymentRecipe, FoundingFacilityDeployment, FoundingResourceRequirement
+from ..survey import KnowledgeLevel, KnowledgeRequirementSpec
 from . import base_requirements as req
 from . import base_ids as ids
 
@@ -9,8 +10,8 @@ def _r(resource_id, amount):
     return FoundingResourceRequirement(resource_id, amount)
 
 
-def build_founding_packages() -> dict:
-    package = FoundingPackageDefinition(
+def build_deployment_recipes() -> dict:
+    recipe = DeploymentRecipe(
         id=ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE,
         display_name="Robotic Lunar Outpost Founding Package",
         deployed_facilities=(
@@ -36,7 +37,7 @@ def build_founding_packages() -> dict:
         preparation_service_type="cargo_transfer",
         staging_requirements=req.ORBIT_SITE,
         target_requirements=req.VACUUM_SURFACE_SITE,
-        minimum_survey_knowledge_level=2,
+        knowledge_requirements=(KnowledgeRequirementSpec(ids.REGOLITH, KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL),),
         required_units=1,
     )
-    return {package.id: package}
+    return {recipe.id: recipe}

@@ -8,7 +8,7 @@ from .contracts import ContractService
 from .domain import DomainExtension
 from .market import MarketBuyAllocationPlan, MarketService
 from .facilities import FacilityBook
-from .founding import LocationFoundingService
+from .founding import OperationalNodeFoundingService
 from .industry import IndustryService
 from .inventory import InventoryBook
 from .knowledge import DomainActivity
@@ -144,7 +144,7 @@ class Simulation:
     projects: ProjectService
     technology: TechnologyState
     service_capacity_registry: ServiceCapacityRegistry
-    founding: LocationFoundingService | None = None
+    founding: OperationalNodeFoundingService | None = None
     contracts: ContractService | None = None
     research: ResearchService | None = None
     survey: SurveyService | None = None
@@ -571,6 +571,8 @@ class Simulation:
         self._boundary_used_by_constraint = {}
         self.market.replenish_to_day(self.day)
         self.transport.advance_fleet_state(self.day)
+        if self.survey is not None:
+            self.survey.settle_boundary(self.day)
         if self.scientific_exploration is not None:
             self.scientific_exploration.settle_movement_arrivals(self.day)
         if self.founding is not None and self.founding.settle_arrivals(self.day):

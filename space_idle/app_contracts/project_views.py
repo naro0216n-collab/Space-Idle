@@ -51,6 +51,15 @@ class BuildOptionsView:
 
 
 @dataclass(frozen=True)
+class ProjectKnowledgeRequirementRow:
+    target_cell_id: str
+    subject_resource_id: str
+    minimum_level: int
+    current_level: int
+    met: bool
+
+
+@dataclass(frozen=True)
 class ProjectRow:
     id: str
     target_kind: str
@@ -84,6 +93,13 @@ class ProjectRow:
     projected_material_readiness_day: int | None = None
     irreversible_started: bool = False
     expected_salvage: tuple[tuple[str, float], ...] = ()
+    founding_target_type: str | None = None
+    founding_knowledge_requirements: tuple[ProjectKnowledgeRequirementRow, ...] = ()
+    fleet_commitment_id: str | None = None
+    manifest_ready: bool | None = None
+    deployment_phase: str | None = None
+    site_blockers: tuple[tuple[str, str], ...] = ()
+    movement_blockers: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

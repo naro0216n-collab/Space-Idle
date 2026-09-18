@@ -38,6 +38,18 @@ def resolve_movement_endpoint(endpoint: MovementEndpoint, facilities: FacilityBo
             endpoint.physical_target_cell_id,
         )
 
+    if endpoint.physical_target_node_id is not None:
+        node = graph.nodes.get(endpoint.physical_target_node_id)
+        if node is None:
+            raise ValueError(f"unknown non-surface movement physical target: {endpoint.physical_target_node_id}")
+        return ResolvedMovementEndpoint(
+            None,
+            endpoint.locator_kind,
+            endpoint.locator_id,
+            endpoint.physical_target_node_id,
+            None,
+        )
+
     node_id = endpoint.node_id
     if not graph.has_operational_node(node_id):
         raise ValueError(f"unknown movement endpoint location: {node_id}")

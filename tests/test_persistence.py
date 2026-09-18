@@ -81,17 +81,21 @@ def _make_nontrivial_state():
         site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
     )
 
+    survey_provider_id = ids.LUNAR_RESOURCE_SURVEY_ORBITER
+    survey_mode_id = "remote_orbital_spectrometry"
+    survey_goal = 2
     survey_key = next(
         key
         for key in sim.survey.targets
-        if sim.survey.can_start(ids.LUNAR_ORBIT, key[0], key[1], sim.day)
+        if sim.survey.can_start(
+            ids.LUNAR_ORBIT, survey_provider_id, survey_mode_id,
+            key[0], key[1], survey_goal, sim.day
+        )
     )
     app.execute(
         StartSurvey(
-            str(ids.LUNAR_ORBIT),
-            str(survey_key[0]),
-            str(survey_key[1]),
-            priority=4,
+            str(ids.LUNAR_ORBIT), str(survey_provider_id), survey_mode_id,
+            str(survey_key[0]), str(survey_key[1]), survey_goal, priority=4,
         )
     )
     target = sim.survey.targets[survey_key]

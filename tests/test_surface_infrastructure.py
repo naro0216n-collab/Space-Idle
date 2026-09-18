@@ -181,7 +181,9 @@ def test_surface_infrastructure_limits_remote_service_execution_without_disablin
         site_cell_id=ids.EARTH_CELL_COASTAL,
     )
 
-    expected_rate = sim.survey.providers[ids.ROBOTIC_GEOLOGY_STATION].points_per_day
+    provider = sim.survey.providers[ids.ROBOTIC_GEOLOGY_STATION]
+    service_type = sim.survey.service_type_for_provider(provider.id)
+    expected_rate = provider.capacity_units_per_source_per_day
     assert sim.facilities.installed_capability_at(ids.EARTH, "surface_survey")
     assert sim.facilities.active_capability_at(ids.EARTH, "surface_survey", sim.day)
     decision = sim.tick_decision_projection()
@@ -190,7 +192,7 @@ def test_surface_infrastructure_limits_remote_service_execution_without_disablin
         ids.EARTH, sim.facilities, power, sim.day,
         allocation_plan=decision.allocations.services,
     ).fulfillment == 0.0
-    constrained = decision.allocations.services.summary(ids.EARTH, "survey_observation")
+    constrained = decision.allocations.services.summary(ids.EARTH, service_type)
     cargo_constrained = decision.allocations.services.summary(ids.EARTH, "cargo_transfer")
     assert constrained.nominal_rate == pytest.approx(expected_rate)
     assert constrained.enabled_rate == 0.0
@@ -210,7 +212,7 @@ def test_surface_infrastructure_limits_remote_service_execution_without_disablin
         ids.EARTH, sim.facilities, power, sim.day,
         allocation_plan=decision.allocations.services,
     ).fulfillment > 0.0
-    supplied = decision.allocations.services.summary(ids.EARTH, "survey_observation")
+    supplied = decision.allocations.services.summary(ids.EARTH, service_type)
     cargo_supplied = decision.allocations.services.summary(ids.EARTH, "cargo_transfer")
     assert supplied.nominal_rate == pytest.approx(expected_rate)
     assert supplied.enabled_rate == pytest.approx(expected_rate)

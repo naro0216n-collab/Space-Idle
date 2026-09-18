@@ -10,7 +10,7 @@ from .app_contracts.catalog_views import (
 )
 from .app_contracts.project_views import (
     ProjectResourceRow, BuildResourceOption, BuildOptionRow, FacilityUpgradeOption,
-    BuildOptionsView, ProjectRow, ProjectsView,
+    BuildOptionsView, ProjectKnowledgeRequirementRow, ProjectRow, ProjectsView,
 )
 from .app_contracts.location_views import (
     InventoryRow, ResourceAllocationRow, StorageRow, FacilityRow, CapabilityRow, ServiceCapacityRow, IndustryRow,
@@ -31,7 +31,7 @@ from .app_contracts.logistics_reports import (
 from .app_contracts.progression_views import (
     ResearchProviderRow, ResearchProviderAssignmentOptionRow, ResearchPrototypeResourceRow, ResearchExperienceRow, ResearchKnowledgeRow,
     ResearchRow, ResearchView, ScientificExplorationFleetOptionRow,
-    ScientificExplorationRow, ScientificExplorationsView, SurveyRow, SurveysView,
+    ScientificExplorationRow, ScientificExplorationsView, SurveyStartOption, SurveyRow, SurveysView,
     ContractRow, ContractsView,
 )
 from .app_contracts.ui_reports import IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView

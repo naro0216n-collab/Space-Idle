@@ -194,6 +194,23 @@ class ScientificExplorationsView:
 
 
 @dataclass(frozen=True)
+class SurveyStartOption:
+    provider_operational_node_id: str
+    provider_definition_id: str
+    provider_source_kind: str
+    observation_mode_id: str
+    target_knowledge_level: int
+    max_knowledge_level: int
+    survey_rate: float
+    capacity_points_per_day: float
+    estimate_uncertainty_fraction: float
+    measurement_precision_fraction: float
+    required_fleet_units: int
+    blockers: tuple[str, ...]
+    can_start: bool
+
+
+@dataclass(frozen=True)
 class SurveyRow:
     cell_id: str
     body_id: str
@@ -203,6 +220,10 @@ class SurveyRow:
     resource_name: str
     active: bool
     provider_operational_node_id: str | None
+    provider_definition_id: str | None
+    provider_source_kind: str | None
+    observation_mode_id: str | None
+    fleet_commitment_id: str | None
     complete: bool
     paused: bool
     can_start: bool
@@ -222,6 +243,7 @@ class SurveyRow:
     visible_potential_precision_fraction: float | None
     capacity_points_per_day: float
     blockers: tuple[str, ...]
+    start_options: tuple[SurveyStartOption, ...] = ()
 
 
 @dataclass(frozen=True)

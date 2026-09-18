@@ -149,6 +149,10 @@ class TransportService(
         """Return immutable Vehicle definitions in deterministic order."""
         return tuple(sorted(self.vehicle_defs.values(), key=lambda row: str(row.id)))
 
+    def fleet_commitment(self, commitment_id: EntityId):
+        """Return a Fleet commitment through the Transport-owned query boundary."""
+        return self.fleet_commitments.get(commitment_id)
+
     def facility_decommission_blockers(
         self, facility_id: EntityId
     ) -> tuple[FacilityLifecycleBlocker, ...]:
@@ -214,6 +218,13 @@ class TransportService(
         # retain only these ephemeral candidates long enough for one-shot owners
         # to validate/start them. Established-node plans are always re-derived.
         plans = self.movement_resolver().plans_to_physical_target(origin_id, target_cell_id)
+        self._movement_plan_cache.update((plan.id, plan) for plan in plans)
+        return plans
+
+    def movement_plans_to_non_surface_physical_target(
+        self, origin_id: SpatialNodeId, target_node_id: SpatialNodeId
+    ) -> tuple[MovementPlan, ...]:
+        plans = self.movement_resolver().plans_to_non_surface_physical_target(origin_id, target_node_id)
         self._movement_plan_cache.update((plan.id, plan) for plan in plans)
         return plans
 
@@ -287,6 +298,33 @@ class TransportService(
             stable_key=lambda plan: str(plan.id),
             preference=PathPolicy.BALANCED,
         )
+
+    def movement_plan_to_non_surface_physical_target_for_vehicle(
+        self,
+        origin_id: SpatialNodeId,
+        target_node_id: SpatialNodeId,
+        vehicle_definition_id: DefinitionId,
+        *,
+        payload_t_per_unit: float = 0.0,
+        day: int = 0,
+        require_destination_disposition: bool = True,
+    ) -> MovementPlan:
+        if vehicle_definition_id not in self.vehicle_defs:
+            raise KeyError(vehicle_definition_id)
+        vehicle = self.vehicle_defs[vehicle_definition_id]
+        candidates = []
+        for plan in self.movement_plans_to_non_surface_physical_target(origin_id, target_node_id):
+            failures = self.vehicle_movement_physical_failures(plan.id, vehicle_definition_id, day)
+            if failures:
+                continue
+            if vehicle.max_cargo_for_movement(plan) + 1e-9 < payload_t_per_unit:
+                continue
+            if require_destination_disposition and vehicle.movement_asset_disposition(plan).value != "destination":
+                continue
+            candidates.append(plan)
+        if not candidates:
+            raise ValueError(f"no executable movement plan {origin_id} -> non-surface physical target {target_node_id}")
+        return min(candidates, key=lambda row: (self.performance_movement_transit_days(row, vehicle.performance), row.delta_v_km_s, str(row.id)))
 
     def outbound_movement_plans(self, origin_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
         cached = self._movement_plan_outbound_index.get(origin_id)

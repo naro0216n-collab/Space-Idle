@@ -153,42 +153,38 @@ class SurfaceProjectorMixin:
                 foundation_rows = []
                 active_founding = sim.founding.active_project_for_cell(cell.id)
                 for staging_id in sorted(sim.graph.operational_node_ids(), key=str):
-                    for package in sorted(sim.founding.packages.values(), key=lambda row: str(row.id)):
+                    target_spec = sim.founding.surface_target_spec(body_id, cell.id)
+                    for recipe in sorted(sim.founding.deployment_recipes.values(), key=lambda row: str(row.id)):
                         for vehicle in sim.transport.vehicle_definitions():
                             failures = sim.founding.planning_failures(
-                                staging_id, body_id, cell.id, package.id, vehicle.id, sim.day
+                                staging_id, target_spec, recipe.id, vehicle.id, sim.day
                             )
                             try:
-                                movement_plan = sim.transport.movement_plan_to_physical_target_for_vehicle(
-                                    staging_id,
-                                    cell.id,
-                                    vehicle.id,
-                                    payload_t_per_unit=package.payload_t_per_unit,
-                                    day=sim.day,
+                                movement_plan = sim.founding.movement_plan_for_target(
+                                    staging_id, target_spec, vehicle.id, recipe.payload_t_per_unit, sim.day
                                 )
                                 transit_days = sim.transport.performance_movement_transit_days(
                                     movement_plan, vehicle.performance
                                 )
                                 founding_resources = sim.founding.resource_requirements_for(
-                                    package.id, vehicle.id, staging_id, cell.id, day=sim.day
+                                    recipe.id, vehicle.id, staging_id, target_spec, day=sim.day
                                 )
                             except (KeyError, ValueError):
                                 transit_days = 0
-                                founding_resources = package.payload_resources
+                                founding_resources = recipe.payload_resources
                             foundation_rows.append(SurfaceCellFoundationOption(
                                 staging_node_id=str(staging_id),
-                                founding_package_id=str(package.id),
-                                package_display_name=package.display_name,
+                                deployment_recipe_id=str(recipe.id),
+                                recipe_display_name=recipe.display_name,
                                 vehicle_definition_id=str(vehicle.id),
                                 vehicle_display_name=vehicle.display_name,
-                                preparation_work=package.preparation_work,
+                                preparation_work=recipe.preparation_work,
                                 transit_days=transit_days,
-                                payload_t=package.payload_t,
-                                payload_t_per_unit=package.payload_t_per_unit,
-                                required_units=package.required_units,
+                                payload_t=recipe.payload_t,
+                                payload_t_per_unit=recipe.payload_t_per_unit,
+                                required_units=recipe.required_units,
                                 resources=tuple(
-                                    (str(req.resource_id), req.amount_t)
-                                    for req in founding_resources
+                                    (str(req.resource_id), req.amount_t) for req in founding_resources
                                 ),
                                 blockers=tuple((failure.code, failure.detail) for failure in failures),
                                 can_plan=not failures,

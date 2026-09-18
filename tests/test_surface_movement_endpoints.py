@@ -197,7 +197,7 @@ def test_physical_target_endpoint_uses_surface_cell_without_operational_node():
     )
 
     assert resolved.node_id is None
-    assert resolved.locator_kind == "physical_target"
+    assert resolved.locator_kind == "physical_surface_target"
     assert resolved.surface_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
     assert resolved.environment_context_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
     assert ids.MOON_CELL_FARSIDE_HIGHLANDS not in sim.graph.operational_node_states

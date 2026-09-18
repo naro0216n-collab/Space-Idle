@@ -60,8 +60,11 @@ class ReleaseResearchProviderAssignment:
 @dataclass(frozen=True)
 class StartSurvey:
     provider_operational_node_id: str
+    provider_definition_id: str
+    observation_mode_id: str
     cell_id: str
     resource_id: str
+    target_knowledge_level: int
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
 @dataclass(frozen=True)
 class PauseSurvey:

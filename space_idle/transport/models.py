@@ -416,6 +416,7 @@ class MovementEndpoint:
     access_cell_id: SurfaceCellId | None = None
     non_surface_interface: str | None = None
     physical_target_cell_id: SurfaceCellId | None = None
+    physical_target_node_id: SpatialNodeId | None = None
 
     def __post_init__(self) -> None:
         locators = (
@@ -423,10 +424,11 @@ class MovementEndpoint:
             self.access_cell_id is not None,
             self.non_surface_interface is not None,
             self.physical_target_cell_id is not None,
+            self.physical_target_node_id is not None,
         )
         if sum(locators) != 1:
             raise ValueError("movement endpoint requires exactly one physical locator")
-        if self.physical_target_cell_id is not None:
+        if self.physical_target_cell_id is not None or self.physical_target_node_id is not None:
             if self.operational_node_id is not None:
                 raise ValueError("physical target must not claim an Operational Node")
         elif self.operational_node_id is None:
@@ -447,7 +449,9 @@ class MovementEndpoint:
         if self.access_cell_id is not None:
             return "access_cell"
         if self.physical_target_cell_id is not None:
-            return "physical_target"
+            return "physical_surface_target"
+        if self.physical_target_node_id is not None:
+            return "physical_non_surface_target"
         return "non_surface_interface"
 
     @property
@@ -458,6 +462,8 @@ class MovementEndpoint:
             return str(self.access_cell_id)
         if self.physical_target_cell_id is not None:
             return str(self.physical_target_cell_id)
+        if self.physical_target_node_id is not None:
+            return str(self.physical_target_node_id)
         assert self.non_surface_interface is not None
         return self.non_surface_interface
 

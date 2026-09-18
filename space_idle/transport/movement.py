@@ -181,6 +181,25 @@ class MovementResolver:
                     ))
         return tuple(sorted(rows, key=lambda row: str(row.id)))
 
+    def plans_to_non_surface_physical_target(
+        self, origin_id: SpatialNodeId, target_node_id: SpatialNodeId
+    ) -> tuple[MovementPlan, ...]:
+        """Derive one-shot Movement to a non-surface Spatial context before it is operational."""
+        if not self.graph.has_operational_node(origin_id):
+            return ()
+        if target_node_id not in self.graph.nodes or self.graph.has_operational_node(target_node_id):
+            return ()
+        destination = MovementEndpoint(physical_target_node_id=target_node_id)
+        rows: list[MovementPlan] = []
+        for origin_endpoint, origin_rule in self._space_origin_endpoints(origin_id):
+            for space_rule in self._spaceflight_rules_for(
+                origin_endpoint, destination, require_spaceflight=self._requires_spaceflight(origin_endpoint, destination)
+            ):
+                rows.append(self._build_space_connected_plan(
+                    origin_endpoint, destination, origin_rule=origin_rule, destination_rule=None, space_rule=space_rule
+                ))
+        return tuple(sorted(rows, key=lambda row: str(row.id)))
+
     def outbound_plans(self, origin_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
         if not self.graph.has_operational_node(origin_id):
             return ()
@@ -454,5 +473,7 @@ class MovementResolver:
     def _endpoint_display_name(self, endpoint: MovementEndpoint) -> str:
         if endpoint.operational_node_id is not None:
             return self.graph.operational_node(endpoint.operational_node_id).display_name
-        assert endpoint.physical_target_cell_id is not None
-        return self.graph.surface_cells[endpoint.physical_target_cell_id].display_name
+        if endpoint.physical_target_cell_id is not None:
+            return self.graph.surface_cells[endpoint.physical_target_cell_id].display_name
+        assert endpoint.physical_target_node_id is not None
+        return self.graph.nodes[endpoint.physical_target_node_id].display_name

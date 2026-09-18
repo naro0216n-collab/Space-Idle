@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from ..survey import ExtractionSpec, SurveyCoverage, SurveyProviderSpec, SurveyTarget
+from ..survey import (
+    ExtractionSpec, KnowledgeLevel, SurveyCoverage, SurveyObservationModeSpec,
+    SurveyProviderSourceKind, SurveyProviderSpec, SurveyTarget,
+)
 from . import base_requirements as req
 from . import base_ids as ids
 
 
-_EARTH_SURVEY_THRESHOLDS = (1.0, 2.0, 3.0, 4.0)
-_LUNAR_SURVEY_THRESHOLDS = (20.0, 60.0, 120.0, 220.0)
+_EARTH_SURVEY_THRESHOLDS = (1.0, 2.0, 3.0)
+_LUNAR_SURVEY_THRESHOLDS = (20.0, 60.0, 120.0)
 
 
 def build_survey_targets() -> dict:
@@ -35,15 +38,43 @@ def build_survey_targets() -> dict:
 
 
 def build_survey_providers() -> dict:
+    remote_orbital = SurveyObservationModeSpec(
+        "remote_orbital_spectrometry", 8.0, SurveyCoverage.BODY_REMOTE,
+        KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL, 0.35, 0.12,
+        required_source_capabilities=frozenset(("survey_sensor",)),
+    )
+    local_robotic = SurveyObservationModeSpec(
+        "local_robotic_prospecting", 5.0, SurveyCoverage.LOCATION_TERRITORY,
+        KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, 0.25, 0.10,
+        required_source_capabilities=frozenset(("surface_survey",)),
+    )
+    local_geology = SurveyObservationModeSpec(
+        "local_geology_measurement", 9.0, SurveyCoverage.LOCATION_TERRITORY,
+        KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, 0.15, 0.04,
+        required_source_capabilities=frozenset(("surface_survey",)),
+    )
+    fleet_remote = SurveyObservationModeSpec(
+        "fleet_remote_mapping", 6.0, SurveyCoverage.BODY_REMOTE,
+        KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, 0.22, 0.08,
+        required_source_capabilities=frozenset(("survey_sensor",)),
+        required_fleet_units=1,
+    )
     return {
         ids.LUNAR_RESOURCE_SURVEY_ORBITER: SurveyProviderSpec(
-            ids.LUNAR_RESOURCE_SURVEY_ORBITER, 8.0, SurveyCoverage.BODY_REMOTE, 2
+            ids.LUNAR_RESOURCE_SURVEY_ORBITER, SurveyProviderSourceKind.FACILITY,
+            ids.LUNAR_RESOURCE_SURVEY_ORBITER, (remote_orbital,),
         ),
         ids.ROBOTIC_SURVEY_PACKAGE: SurveyProviderSpec(
-            ids.ROBOTIC_SURVEY_PACKAGE, 5.0, SurveyCoverage.LOCATION_TERRITORY, 3
+            ids.ROBOTIC_SURVEY_PACKAGE, SurveyProviderSourceKind.FACILITY,
+            ids.ROBOTIC_SURVEY_PACKAGE, (local_robotic,),
         ),
         ids.ROBOTIC_GEOLOGY_STATION: SurveyProviderSpec(
-            ids.ROBOTIC_GEOLOGY_STATION, 9.0, SurveyCoverage.LOCATION_TERRITORY, 4
+            ids.ROBOTIC_GEOLOGY_STATION, SurveyProviderSourceKind.FACILITY,
+            ids.ROBOTIC_GEOLOGY_STATION, (local_geology,),
+        ),
+        ids.LUNAR_FLEET_SURVEY_PROVIDER: SurveyProviderSpec(
+            ids.LUNAR_FLEET_SURVEY_PROVIDER, SurveyProviderSourceKind.FLEET,
+            ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, (fleet_remote,),
         ),
     }
 

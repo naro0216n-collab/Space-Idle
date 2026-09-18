@@ -5,7 +5,7 @@ from ..contracts import ContractService
 from ..market import FundsState, MarketService
 from ..facilities import FacilityBook
 from ..facility_lifecycle import FacilityLifecycleRegistry
-from ..founding import LocationFoundingService
+from ..founding import OperationalNodeFoundingService
 from ..industry import IndustryService
 from ..inventory import InventoryBook
 from ..logistics import LogisticsService
@@ -36,7 +36,7 @@ from ..content.base_construction import (
 )
 from ..content.base_contracts import build_contract_templates
 from ..content.base_facilities import build_facility_definitions
-from ..content.base_founding import build_founding_packages
+from ..content.base_founding import build_deployment_recipes
 from ..content.base_industry import build_process_specs
 from ..content.base_inventory import configure_inventory_definitions
 from ..content.base_power import build_power_specs
@@ -102,7 +102,7 @@ def build_base_simulation() -> Simulation:
     surface_infrastructure = SurfaceInfrastructureService(
         graph, facilities, service_capacity_registry
     )
-    survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph)
+    survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph, transport)
 
     storage = StorageService(build_storage_provider_specs(), inventory, facilities)
 
@@ -123,7 +123,7 @@ def build_base_simulation() -> Simulation:
         service_capacity_registry=service_capacity_registry,
         procurement_wait_days=procurement_wait_days(),
         surface_infrastructure=surface_infrastructure,
-        surface_knowledge_level_provider=survey.cell_knowledge_level,
+        knowledge_requirement_failures=survey.knowledge_requirement_failures,
         technology_state=technology,
         construction_resource_providers=build_construction_resource_providers(),
         spatial_recipes=build_spatial_development_recipes(),
@@ -132,10 +132,10 @@ def build_base_simulation() -> Simulation:
         facility_lifecycle_registry=facility_lifecycle_registry,
     )
 
-    founding = LocationFoundingService(
-        build_founding_packages(), facilities, inventory, power, transport, storage,
+    founding = OperationalNodeFoundingService(
+        build_deployment_recipes(), facilities, inventory, power, transport, storage,
         service_capacity_registry,
-        surface_knowledge_level_provider=survey.cell_knowledge_level,
+        knowledge_requirement_failures=survey.knowledge_requirement_failures,
         surface_cell_claim_registry=surface_cell_claim_registry,
     )
     maintenance = FacilityMaintenanceService(facilities, inventory)
@@ -151,6 +151,11 @@ def build_base_simulation() -> Simulation:
     )
     transport.register_fleet_commitment_owner_resolver(
         "founding", lambda owner_id: owner_id in founding.projects
+    )
+    transport.register_fleet_commitment_owner_resolver(
+        "survey", lambda owner_id: any(
+            survey.campaign_owner_id(*key) == owner_id for key in survey.campaigns
+        )
     )
     transport.register_fleet_commitment_owner_resolver(
         "scientific_exploration", lambda owner_id: owner_id in scientific_exploration.campaigns

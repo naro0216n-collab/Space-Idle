@@ -169,10 +169,10 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(recipe_id == recipe.id, f"spatial development recipe key mismatch: {recipe_id}")
         _require(not recipe.self_deploying, f"spatial development must use construction capacity: {recipe_id}")
         _validate_physical_recipe(recipe, f"spatial_development:{recipe_id}", ctx)
-        if recipe.minimum_survey_knowledge_level > 0:
+        if recipe.knowledge_requirements:
             _require(
-                sim.projects.surface_knowledge_level_provider is not None,
-                f"spatial development survey requirement has no knowledge provider: {recipe_id}",
+                sim.projects.knowledge_requirement_failures is not None,
+                f"spatial development Knowledge Requirement has no eligibility provider: {recipe_id}",
             )
     if sim.projects.surface_cell_development_recipe_id is not None:
         _require(sim.projects.surface_cell_development_recipe_id in sim.projects.spatial_recipes, "unknown surface cell development recipe")

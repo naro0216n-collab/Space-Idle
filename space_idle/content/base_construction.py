@@ -10,6 +10,7 @@ from ..projects import (
     BuildResourceRequirement,
 )
 from ..site import SiteRequirements
+from ..survey import KnowledgeLevel, KnowledgeRequirementSpec
 from . import base_ids as ids
 from . import base_requirements as req
 
@@ -214,7 +215,7 @@ def build_spatial_development_recipes() -> dict:
             ),
             36.0,
             surface_site,
-            minimum_survey_knowledge_level=1,
+            knowledge_requirements=(KnowledgeRequirementSpec(ids.WATER, KnowledgeLevel.PRESENCE_PROBABILITY),),
         ),
     )
     return {recipe.id: recipe for recipe in recipes}

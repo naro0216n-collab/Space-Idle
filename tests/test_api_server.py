@@ -4,9 +4,13 @@ import http.client
 import json
 from threading import Thread
 
-from space_idle import build_game_application
+from space_idle import (
+    NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding,
+    build_game_application,
+)
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
+from space_idle.api.codec import decode_command
 from space_idle.content import base_ids as ids
 
 
@@ -133,3 +137,22 @@ def test_static_webui_is_served_and_path_traversal_is_rejected(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_api_codec_decodes_typed_nested_founding_target():
+    command = decode_command({
+        "type": "PlanOperationalNodeFounding",
+        "payload": {
+            "staging_node_id": str(ids.LEO),
+            "display_name": "Typed orbital target",
+            "target_spec": {
+                "target_type": "non_surface_operational_node",
+                "spatial_node_id": "test.node.orbital_target",
+            },
+            "deployment_recipe_id": "test.deployment_recipe.orbital",
+            "vehicle_definition_id": str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+        },
+    })
+    assert isinstance(command, PlanOperationalNodeFounding)
+    assert isinstance(command.target_spec, NonSurfaceOperationalNodeFoundingTarget)
+    assert command.target_spec.spatial_node_id == "test.node.orbital_target"

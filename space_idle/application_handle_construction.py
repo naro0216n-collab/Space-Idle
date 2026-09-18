@@ -8,7 +8,7 @@ from .application_commands import (
     PlanBuild,
     PlanFacilityUpgrade,
     PlanFacilityDecommission,
-    FoundLocation,
+    PlanOperationalNodeFounding,
     CancelFounding,
     PauseFounding,
     ResumeFounding,
@@ -18,7 +18,9 @@ from .application_commands import (
     SetProjectPriority,
     SetProjectProcurementPolicy,
 )
-from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SurfaceCellId
+from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
+from .app_contracts.construction import SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget
+from .founding import NonSurfaceOperationalNodeTargetSpec
 
 
 class ConstructionCommandHandlerMixin:
@@ -66,16 +68,26 @@ class ConstructionCommandHandlerMixin:
             if logistics_policy_id is not None:
                 sim.logistics.assign_logistics_policy("project", EntityId(str(pid)), logistics_policy_id)
             return CommandResult(str(pid))
-        if isinstance(command, FoundLocation):
+        if isinstance(command, PlanOperationalNodeFounding):
             logistics_policy_id = self._validated_logistics_policy_id(command.logistics_policy_id)
             if sim.founding is None:
                 raise ValueError("founding domain is not configured")
+            if isinstance(command.target_spec, SurfaceLocationFoundingTarget):
+                target_spec = sim.founding.surface_target_spec(
+                    CelestialBodyId(command.target_spec.body_id),
+                    SurfaceCellId(command.target_spec.core_cell_id),
+                )
+            elif isinstance(command.target_spec, NonSurfaceOperationalNodeFoundingTarget):
+                target_spec = NonSurfaceOperationalNodeTargetSpec(
+                    SpatialNodeId(command.target_spec.spatial_node_id)
+                )
+            else:
+                raise TypeError(f"unsupported founding target: {type(command.target_spec).__name__}")
             pid = sim.founding.plan(
                 self._require_operational_node(command.staging_node_id),
                 command.display_name,
-                CelestialBodyId(command.body_id),
-                SurfaceCellId(command.core_cell_id),
-                DefinitionId(command.founding_package_id),
+                target_spec,
+                DefinitionId(command.deployment_recipe_id),
                 DefinitionId(command.vehicle_definition_id),
                 priority=command.priority,
                 day=sim.day,

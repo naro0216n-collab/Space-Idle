@@ -6,6 +6,7 @@ from .application_views import (
     BuildOptionsView,
     FacilityUpgradeOption,
     ProjectResourceRow,
+    ProjectKnowledgeRequirementRow,
     ProjectRow,
 )
 from .construction.models import (
@@ -282,77 +283,74 @@ class ProjectProjectorMixin:
             for project in sorted(sim.founding.projects.values(), key=lambda row: str(row.id)):
                 if location_id is not None and project.staging_node_id != location_id:
                     continue
-                package = sim.founding.packages[project.founding_package_id]
+                recipe = sim.founding.deployment_recipes[project.deployment_recipe_id]
+                resource_status = sim.founding.project_resource_status(project.id)
                 resources = [
                     ProjectResourceRow(
-                        str(status.resource_id),
-                        status.required_t,
-                        0.0,
-                        status.staged_t,
-                        status.committed_t,
-                        status.shortage_t,
-                        None,
+                        str(status.resource_id), status.required_t, 0.0, status.staged_t,
+                        status.committed_t, status.shortage_t, None,
                     )
-                    for status in sim.founding.project_resource_status(project.id)
+                    for status in resource_status
                 ]
                 blockers = self._resource_blockers(
-                    sim.founding.blockers(
-                        project.id,
-                        sim.day,
-                        powers[project.staging_node_id],
-                    ),
-                    owner_kind="founding",
-                    owner_id=str(project.id),
+                    sim.founding.blockers(project.id, sim.day, powers[project.staging_node_id]),
+                    owner_kind="founding", owner_id=str(project.id),
                     requirements=founding_requirements,
                     execution_allocation=decision.allocations.transport,
                 )
+                target_spec = project.target_spec
+                target_cell = sim.founding.target_surface_cell_id(target_spec)
+                target_body = sim.founding.target_body_id(target_spec)
+                target_node = sim.founding.target_operational_node_id(target_spec)
+                knowledge_rows = []
+                if sim.survey is not None:
+                    for requirement in sim.founding.knowledge_requirements_for_target(target_spec, recipe):
+                        current = sim.survey.knowledge_level(
+                            requirement.target_cell_id, requirement.subject_resource_id
+                        )
+                        knowledge_rows.append(ProjectKnowledgeRequirementRow(
+                            target_cell_id=str(requirement.target_cell_id),
+                            subject_resource_id=str(requirement.subject_resource_id),
+                            minimum_level=int(requirement.minimum_level),
+                            current_level=int(current),
+                            met=current >= requirement.minimum_level,
+                        ))
+                site_blockers = tuple(
+                    row for row in blockers
+                    if row[0].startswith("staging:") or row[0].startswith("target:")
+                    or row[0] in {"knowledge_requirement", "knowledge_target_type", "surface_facility_target"}
+                )
+                movement_blockers = tuple(
+                    row for row in blockers if row[0] in {"deployment_vehicle", "fleet_units"}
+                )
                 rows.append(ProjectRow(
-                    id=str(project.id),
-                    target_kind="location_founding_deployment",
-                    operational_node_id=str(project.staging_node_id),
-                    facility_definition_id=None,
-                    target_facility_id=None,
-                    target_level=None,
-                    display_name=project.display_name,
-                    status=project.status.value,
-                    paused=project.paused,
-                    priority=project.priority,
+                    id=str(project.id), target_kind="operational_node_founding",
+                    operational_node_id=str(project.staging_node_id), facility_definition_id=None,
+                    target_facility_id=None, target_level=None, display_name=project.display_name,
+                    status=project.status.value, paused=project.paused, priority=project.priority,
                     procurement_policy="founding",
-                    logistics_policy_id=(
-                        None if (assigned_policy_id := sim.logistics.assigned_policy_id_for("founding", EntityId(str(project.id)))) is None
-                        else str(assigned_policy_id)
-                    ),
-                    resolved_logistics_policy_id=(
-                        None if (resolved_policy := sim.logistics.resolved_policy_for("founding", EntityId(str(project.id)))) is None
-                        else str(resolved_policy.id)
-                    ),
-                    settings_editable=project.status.value == "preparing",
-                    procurement_editable=False,
-                    procurement_policy_options=(),
-                    logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
-                    construction_done=project.preparation_done,
-                    construction_required=package.preparation_work,
-                    materials_committed=project.inputs_consumed,
-                    completed_facility_id=None,
-                    resources=tuple(resources),
-                    blockers=blockers,
-                    site_cell_id=None,
-                    target_cell_id=str(project.target_core_cell_id),
-                    target_body_id=str(project.target_body_id),
-                    target_location_id=str(project.new_location_id),
-                    construction_fulfillment=sim.founding.preparation_fulfillment(
-                        project.id, decision.allocations.execution
-                    ),
-                    limiting_factors=sim.founding.preparation_limiting_factors(
-                        project.id, decision.allocations.execution
-                    ),
+                    logistics_policy_id=(None if (assigned_policy_id := sim.logistics.assigned_policy_id_for("founding", EntityId(str(project.id)))) is None else str(assigned_policy_id)),
+                    resolved_logistics_policy_id=(None if (resolved_policy := sim.logistics.resolved_policy_for("founding", EntityId(str(project.id)))) is None else str(resolved_policy.id)),
+                    settings_editable=project.status.value == "preparing", procurement_editable=False,
+                    procurement_policy_options=(), logistics_policy_options=tuple(str(row.id) for row in sim.logistics.logistics_policy_rows()),
+                    construction_done=project.preparation_done, construction_required=recipe.preparation_work,
+                    materials_committed=project.inputs_consumed, completed_facility_id=None,
+                    resources=tuple(resources), blockers=blockers, site_cell_id=None,
+                    target_cell_id=None if target_cell is None else str(target_cell),
+                    target_body_id=None if target_body is None else str(target_body),
+                    target_location_id=str(target_node),
+                    construction_fulfillment=sim.founding.preparation_fulfillment(project.id, decision.allocations.execution),
+                    limiting_factors=sim.founding.preparation_limiting_factors(project.id, decision.allocations.execution),
                     projected_material_readiness_day=self._projected_material_readiness_day(
-                        day=sim.day,
-                        owner_kind="founding",
-                        owner_id=str(project.id),
-                        resources=resources,
-                        requirement_rows=requirement_rows,
+                        day=sim.day, owner_kind="founding", owner_id=str(project.id),
+                        resources=resources, requirement_rows=requirement_rows,
                     ),
+                    founding_target_type=sim.founding.target_type(target_spec),
+                    founding_knowledge_requirements=tuple(knowledge_rows),
+                    fleet_commitment_id=None if project.fleet_commitment_id is None else str(project.fleet_commitment_id),
+                    manifest_ready=all(row.shortage_t <= 1e-9 for row in resource_status),
+                    deployment_phase=project.status.value,
+                    site_blockers=site_blockers, movement_blockers=movement_blockers,
                 ))
         return tuple(rows)
 

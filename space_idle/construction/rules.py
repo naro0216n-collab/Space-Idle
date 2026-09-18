@@ -131,14 +131,14 @@ class ConstructionRulesMixin:
             recipe.site_requirements, location_id, day, self.facilities.environment, self.facilities,
             environment_context_id=cell_id,
         ))
-        required_level = recipe.minimum_survey_knowledge_level
-        if required_level > 0:
-            provider = self.surface_knowledge_level_provider
-            actual_level = 0 if provider is None else provider(cell_id)
-            if actual_level < required_level:
-                failures.append(SiteRequirementFailure(
-                    "survey_knowledge", f"level={actual_level}/{required_level}"
-                ))
+        if recipe.knowledge_requirements:
+            evaluator = self.knowledge_requirement_failures
+            if evaluator is None:
+                failures.append(SiteRequirementFailure("knowledge", "knowledge eligibility provider unavailable"))
+            else:
+                for requirement_spec in recipe.knowledge_requirements:
+                    for detail in evaluator(requirement_spec.bind(cell_id)):
+                        failures.append(SiteRequirementFailure("knowledge", detail))
         return tuple(failures)
 
     def surface_cell_development_failures(

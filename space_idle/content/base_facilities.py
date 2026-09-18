@@ -13,7 +13,7 @@ def build_facility_definitions() -> dict:
     definitions = {
         ids.EARTH_RESEARCH_LAB: FacilityDef(ids.EARTH_RESEARCH_LAB, "総合研究所", req._capabilities("research_lab"), surface, surface),
         ids.EARTH_OBSERVATION_SATELLITE: FacilityDef(ids.EARTH_OBSERVATION_SATELLITE, "地球観測衛星", (), orbit, orbit),
-        ids.LUNAR_RESOURCE_SURVEY_ORBITER: FacilityDef(ids.LUNAR_RESOURCE_SURVEY_ORBITER, "月資源広域探査衛星", (), orbit, orbit),
+        ids.LUNAR_RESOURCE_SURVEY_ORBITER: FacilityDef(ids.LUNAR_RESOURCE_SURVEY_ORBITER, "月資源広域探査衛星", req._capabilities("survey_sensor"), orbit, orbit),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: FacilityDef(ids.MICROGRAVITY_EXPERIMENT_PLATFORM, "微小重力実験プラットフォーム", req._capabilities("research_lab"), orbit, orbit),
         ids.CREWED_ORBITAL_LABORATORY: FacilityDef(ids.CREWED_ORBITAL_LABORATORY, "有人軌道研究所", req._capabilities("research_lab"), orbit, orbit),
         ids.ROBOTIC_GEOLOGY_STATION: FacilityDef(ids.ROBOTIC_GEOLOGY_STATION, "ロボット地質調査ステーション", req._capabilities("research_lab", "surface_survey", "robotic_operations"), surface, surface, placement_scope=FacilityPlacementScope.SURFACE_CELL),

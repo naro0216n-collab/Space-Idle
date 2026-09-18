@@ -41,6 +41,7 @@ def _capture_movement_endpoint(endpoint: MovementEndpoint) -> dict[str, Any]:
         "access_cell_id": None if endpoint.access_cell_id is None else str(endpoint.access_cell_id),
         "non_surface_interface": endpoint.non_surface_interface,
         "physical_target_cell_id": None if endpoint.physical_target_cell_id is None else str(endpoint.physical_target_cell_id),
+        "physical_target_node_id": None if endpoint.physical_target_node_id is None else str(endpoint.physical_target_node_id),
     }
 
 
@@ -51,6 +52,7 @@ def _restore_movement_endpoint(data: dict[str, Any]) -> MovementEndpoint:
         access_cell_id=None if data.get("access_cell_id") is None else SurfaceCellId(data["access_cell_id"]),
         non_surface_interface=data.get("non_surface_interface"),
         physical_target_cell_id=None if data.get("physical_target_cell_id") is None else SurfaceCellId(data["physical_target_cell_id"]),
+        physical_target_node_id=None if data.get("physical_target_node_id") is None else SpatialNodeId(data["physical_target_node_id"]),
     )
 
 

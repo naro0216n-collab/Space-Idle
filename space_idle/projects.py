@@ -8,7 +8,8 @@ from .facility_lifecycle import FacilityLifecycleRegistry
 from .inventory import InventoryBook
 from .power import PowerService
 from .service_capacity import ServiceCapacityRegistry
-from .shared import DefinitionId, ProjectId, SurfaceCellId
+from .shared import DefinitionId, ProjectId
+from .exploration_models import KnowledgeRequirement
 from .spatial_claims import SurfaceCellClaimRegistry
 from .technology import TechnologyState
 from .surface_infrastructure import SurfaceInfrastructureService
@@ -48,7 +49,7 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     service_capacity_registry: ServiceCapacityRegistry
     procurement_wait_days: dict[ProcurementTimingPolicy, int]
     surface_infrastructure: SurfaceInfrastructureService | None = None
-    surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
+    knowledge_requirement_failures: Callable[[KnowledgeRequirement], tuple[str, ...]] | None = None
     surface_cell_claim_registry: SurfaceCellClaimRegistry = field(default_factory=SurfaceCellClaimRegistry)
     facility_lifecycle_registry: FacilityLifecycleRegistry = field(default_factory=FacilityLifecycleRegistry)
     technology_state: TechnologyState = field(default_factory=TechnologyState)

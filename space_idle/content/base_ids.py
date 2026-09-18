@@ -134,6 +134,8 @@ EXPERIENCE_MANUFACTURING_OPERATIONS = "base.experience.manufacturing_operations"
 # from performance and endpoint environment, not purpose/category labels.
 REUSABLE_LAUNCH_VEHICLE = DefinitionId("base.vehicle.reusable_launch_vehicle")
 REUSABLE_ORBITAL_CARGO_TUG = DefinitionId("base.vehicle.reusable_orbital_cargo_tug")
+LUNAR_ORBITAL_SURVEY_SPACECRAFT = DefinitionId("base.vehicle.lunar_orbital_survey_spacecraft")
+LUNAR_FLEET_SURVEY_PROVIDER = DefinitionId("base.survey_provider.lunar_orbital_spacecraft")
 REUSABLE_SURFACE_CARGO_LANDER = DefinitionId("base.vehicle.reusable_surface_cargo_lander")
 SURFACE_CARGO_HAULER = DefinitionId("base.vehicle.surface_cargo_hauler")
 

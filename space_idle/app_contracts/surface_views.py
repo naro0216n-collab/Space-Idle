@@ -34,8 +34,8 @@ class SurfaceFacilityPlacementOption:
 @dataclass(frozen=True)
 class SurfaceCellFoundationOption:
     staging_node_id: str
-    founding_package_id: str
-    package_display_name: str
+    deployment_recipe_id: str
+    recipe_display_name: str
     vehicle_definition_id: str
     vehicle_display_name: str
     preparation_work: float

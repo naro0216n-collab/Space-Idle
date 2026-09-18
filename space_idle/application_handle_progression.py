@@ -8,6 +8,7 @@ from .application_commands import (
     ResumeResearchProviderAssignment, ReleaseResearchProviderAssignment,
     SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
 )
+from .exploration_models import KnowledgeLevel
 from .shared import DefinitionId, EntityId, SurfaceCellId
 
 
@@ -110,7 +111,12 @@ class ProgressionCommandHandlerMixin:
             if isinstance(command, StartSurvey):
                 provider_operational_node_id = self._require_operational_node(command.provider_operational_node_id)
                 sim.survey.start(
-                    provider_operational_node_id, cell_id, resource_id,
+                    provider_operational_node_id,
+                    DefinitionId(command.provider_definition_id),
+                    command.observation_mode_id,
+                    cell_id,
+                    resource_id,
+                    KnowledgeLevel(command.target_knowledge_level),
                     priority=command.priority,
                     day=sim.day,
                 )

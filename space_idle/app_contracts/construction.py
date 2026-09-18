@@ -34,12 +34,27 @@ class PlanFacilityDecommission:
 
 
 @dataclass(frozen=True)
-class FoundLocation:
-    staging_node_id: str
-    display_name: str
+class SurfaceLocationFoundingTarget:
+    target_type: Literal["surface_location"]
     body_id: str
     core_cell_id: str
-    founding_package_id: str
+
+
+@dataclass(frozen=True)
+class NonSurfaceOperationalNodeFoundingTarget:
+    target_type: Literal["non_surface_operational_node"]
+    spatial_node_id: str
+
+
+FoundingTargetInput = SurfaceLocationFoundingTarget | NonSurfaceOperationalNodeFoundingTarget
+
+
+@dataclass(frozen=True)
+class PlanOperationalNodeFounding:
+    staging_node_id: str
+    display_name: str
+    target_spec: FoundingTargetInput
+    deployment_recipe_id: str
     vehicle_definition_id: str
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     logistics_policy_id: str | None = None

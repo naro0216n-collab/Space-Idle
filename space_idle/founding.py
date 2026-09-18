@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from hashlib import sha256
 import math
-from typing import Callable
+from typing import Callable, TypeAlias
 
 from .facilities import FacilityBook, FacilityPlacementScope
 from .inventory import InventoryBook
@@ -21,6 +21,8 @@ from .execution_requirements import (
 from .supply import SupplyRequirement
 from .spatial_claims import SurfaceCellClaim, SurfaceCellClaimRegistry
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
+from .exploration_models import KnowledgeRequirement, KnowledgeRequirementSpec
+from .spatial import OperationalNodeState
 from .site import SiteRequirements, evaluate_physical_site_requirements, evaluate_site_requirements
 from .storage import StorageService
 from .transport.models import (
@@ -47,7 +49,7 @@ class FoundingFacilityDeployment:
 
 
 @dataclass(frozen=True)
-class FoundingPackageDefinition:
+class DeploymentRecipe:
     id: DefinitionId
     display_name: str
     deployed_facilities: tuple[FoundingFacilityDeployment, ...]
@@ -56,18 +58,16 @@ class FoundingPackageDefinition:
     initial_inventory: tuple[FoundingResourceRequirement, ...] = ()
     staging_requirements: SiteRequirements = SiteRequirements()
     target_requirements: SiteRequirements = SiteRequirements()
-    minimum_survey_knowledge_level: int = 0
+    knowledge_requirements: tuple[KnowledgeRequirementSpec, ...] = ()
     required_units: int = 1
 
     def __post_init__(self) -> None:
         if not self.display_name:
-            raise ValueError("founding package display name must not be empty")
+            raise ValueError("deployment recipe display name must not be empty")
         if self.preparation_work < 0:
             raise ValueError("founding preparation work must be non-negative")
         if not self.preparation_service_type:
             raise ValueError("founding preparation capability must not be empty")
-        if not 0 <= self.minimum_survey_knowledge_level <= 4:
-            raise ValueError("founding survey knowledge must be within 0..4")
         if self.required_units <= 0:
             raise ValueError("founding required units must be positive")
 
@@ -113,16 +113,30 @@ class FoundingStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+@dataclass(frozen=True)
+class SurfaceLocationTargetSpec:
+    body_id: CelestialBodyId
+    core_cell_id: SurfaceCellId
+    operational_node_id: SpatialNodeId
+
+
+@dataclass(frozen=True)
+class NonSurfaceOperationalNodeTargetSpec:
+    spatial_node_id: SpatialNodeId
+
+
+FoundingTargetSpec: TypeAlias = SurfaceLocationTargetSpec | NonSurfaceOperationalNodeTargetSpec
+
+
 @dataclass
-class LocationFoundingProject:
+class OperationalNodeFoundingProject:
     id: ProjectId
     staging_node_id: SpatialNodeId
     display_name: str
-    target_body_id: CelestialBodyId
-    target_core_cell_id: SurfaceCellId
-    new_location_id: SpatialNodeId
-    founding_package_id: DefinitionId
+    target_spec: FoundingTargetSpec
+    deployment_recipe_id: DefinitionId
     vehicle_definition_id: DefinitionId
+    resource_requirements: tuple[FoundingResourceRequirement, ...]
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     fleet_commitment_id: EntityId | None = None
     status: FoundingStatus = FoundingStatus.PREPARING
@@ -152,33 +166,35 @@ class FoundingResourceStatus:
 
 
 @dataclass
-class LocationFoundingService:
-    packages: dict[DefinitionId, FoundingPackageDefinition]
+class OperationalNodeFoundingService:
+    deployment_recipes: dict[DefinitionId, DeploymentRecipe]
     facilities: FacilityBook
     inventory: InventoryBook
     power: PowerService
     transport: TransportService
     storage: StorageService
     service_capacity_registry: ServiceCapacityRegistry
-    surface_knowledge_level_provider: Callable[[SurfaceCellId], int] | None = None
+    knowledge_requirement_failures: Callable[[KnowledgeRequirement], tuple[str, ...]] | None = None
     surface_cell_claim_registry: SurfaceCellClaimRegistry = field(default_factory=SurfaceCellClaimRegistry)
-    projects: dict[ProjectId, LocationFoundingProject] = field(default_factory=dict)
+    projects: dict[ProjectId, OperationalNodeFoundingProject] = field(default_factory=dict)
     _counter: int = 0
 
     def __post_init__(self) -> None:
         self.surface_cell_claim_registry.register(self)
 
     def surface_cell_claims(self) -> tuple[SurfaceCellClaim, ...]:
-        return tuple(
-            SurfaceCellClaim(
-                project.target_core_cell_id,
-                "founding_project",
-                EntityId(project.id),
-                "location_founding",
-            )
-            for project in sorted(self.projects.values(), key=lambda row: str(row.id))
-            if project.status in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}
-        )
+        rows: list[SurfaceCellClaim] = []
+        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
+            if project.status not in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}:
+                continue
+            if isinstance(project.target_spec, SurfaceLocationTargetSpec):
+                rows.append(SurfaceCellClaim(
+                    project.target_spec.core_cell_id,
+                    "founding_project",
+                    EntityId(project.id),
+                    "operational_node_founding",
+                ))
+        return tuple(rows)
 
     def _generated_location_id(self, body_id: CelestialBodyId, cell_id: SurfaceCellId) -> SpatialNodeId:
         digest = sha256(f"{body_id}\0{cell_id}".encode("utf-8")).hexdigest()[:24]
@@ -186,9 +202,10 @@ class LocationFoundingService:
         graph = self.facilities.environment.graph
         occupied = set(graph.nodes) | set(graph.locations) | set(graph.operational_node_ids())
         occupied.update(
-            p.new_location_id
+            p.target_spec.operational_node_id
             for p in self.projects.values()
-            if p.status in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}
+            if isinstance(p.target_spec, SurfaceLocationTargetSpec)
+            and p.status in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}
         )
         candidate = SpatialNodeId(base)
         suffix = 2
@@ -196,6 +213,61 @@ class LocationFoundingService:
             candidate = SpatialNodeId(f"{base}.{suffix}")
             suffix += 1
         return candidate
+
+    def surface_target_spec(
+        self, body_id: CelestialBodyId, cell_id: SurfaceCellId
+    ) -> SurfaceLocationTargetSpec:
+        return SurfaceLocationTargetSpec(
+            body_id, cell_id, self._generated_location_id(body_id, cell_id)
+        )
+
+    @staticmethod
+    def target_type(target_spec: FoundingTargetSpec) -> str:
+        return "surface_location" if isinstance(target_spec, SurfaceLocationTargetSpec) else "non_surface_operational_node"
+
+    @staticmethod
+    def target_operational_node_id(target_spec: FoundingTargetSpec) -> SpatialNodeId:
+        if isinstance(target_spec, SurfaceLocationTargetSpec):
+            return target_spec.operational_node_id
+        return target_spec.spatial_node_id
+
+    @staticmethod
+    def target_surface_cell_id(target_spec: FoundingTargetSpec) -> SurfaceCellId | None:
+        return target_spec.core_cell_id if isinstance(target_spec, SurfaceLocationTargetSpec) else None
+
+    @staticmethod
+    def target_body_id(target_spec: FoundingTargetSpec) -> CelestialBodyId | None:
+        return target_spec.body_id if isinstance(target_spec, SurfaceLocationTargetSpec) else None
+
+    def target_context_id(self, target_spec: FoundingTargetSpec) -> SpatialNodeId | SurfaceCellId:
+        if isinstance(target_spec, SurfaceLocationTargetSpec):
+            return target_spec.core_cell_id
+        return target_spec.spatial_node_id
+
+    def movement_plan_for_target(
+        self,
+        staging_node_id: SpatialNodeId,
+        target_spec: FoundingTargetSpec,
+        vehicle_definition_id: DefinitionId,
+        payload_t_per_unit: float,
+        day: int,
+    ):
+        if isinstance(target_spec, SurfaceLocationTargetSpec):
+            return self.transport.movement_plan_to_physical_target_for_vehicle(
+                staging_node_id, target_spec.core_cell_id, vehicle_definition_id,
+                payload_t_per_unit=payload_t_per_unit, day=day,
+            )
+        return self.transport.movement_plan_to_non_surface_physical_target_for_vehicle(
+            staging_node_id, target_spec.spatial_node_id, vehicle_definition_id,
+            payload_t_per_unit=payload_t_per_unit, day=day,
+        )
+
+    def knowledge_requirements_for_target(
+        self, target_spec: FoundingTargetSpec, recipe: DeploymentRecipe
+    ) -> tuple[KnowledgeRequirement, ...]:
+        if not isinstance(target_spec, SurfaceLocationTargetSpec):
+            return ()
+        return tuple(req.bind(target_spec.core_cell_id) for req in recipe.knowledge_requirements)
 
     @staticmethod
     def fleet_commitment_id(project_id: ProjectId) -> EntityId:
@@ -209,66 +281,94 @@ class LocationFoundingService:
     def payload_owner_id(project_id: ProjectId) -> EntityId:
         return EntityId(f"founding.payload:{project_id}")
 
-    def active_project_for_cell(self, cell_id: SurfaceCellId) -> LocationFoundingProject | None:
+    def active_project_for_cell(self, cell_id: SurfaceCellId) -> OperationalNodeFoundingProject | None:
         for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
-            if project.target_core_cell_id == cell_id and project.status in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}:
+            if (
+                isinstance(project.target_spec, SurfaceLocationTargetSpec)
+                and project.target_spec.core_cell_id == cell_id
+                and project.status in {FoundingStatus.PREPARING, FoundingStatus.DEPLOYING}
+            ):
                 return project
         return None
 
     def planning_failures(
         self,
         staging_node_id: SpatialNodeId,
-        body_id: CelestialBodyId,
-        cell_id: SurfaceCellId,
-        package_id: DefinitionId,
+        target_spec: FoundingTargetSpec,
+        recipe_id: DefinitionId,
         vehicle_definition_id: DefinitionId,
         day: int = 0,
         power: PowerSnapshot | None = None,
     ) -> tuple[FoundingBlocker, ...]:
+        del power
         graph = self.facilities.environment.graph
         failures: list[FoundingBlocker] = []
-        for code, detail in graph.location_foundation_failures(body_id, cell_id):
-            failures.append(FoundingBlocker(code, detail))
-        for claim in self.surface_cell_claim_registry.claims_for(cell_id):
-            failures.append(FoundingBlocker("cell_claimed", str(claim.claimant_id)))
-        package = self.packages.get(package_id)
-        if package is None:
-            failures.append(FoundingBlocker("founding_package", str(package_id)))
-            return tuple(failures)
+        recipe = self.deployment_recipes.get(recipe_id)
+        if recipe is None:
+            return (FoundingBlocker("deployment_recipe", str(recipe_id)),)
         if not graph.has_operational_node(staging_node_id):
-            failures.append(FoundingBlocker("staging_node", str(staging_node_id)))
-            return tuple(failures)
-        if self.surface_knowledge_level_provider is not None:
-            actual = self.surface_knowledge_level_provider(cell_id)
-            if actual < package.minimum_survey_knowledge_level:
-                failures.append(FoundingBlocker("survey_knowledge", f"{actual}/{package.minimum_survey_knowledge_level}"))
+            return (FoundingBlocker("staging_node", str(staging_node_id)),)
+
+        if isinstance(target_spec, SurfaceLocationTargetSpec):
+            for code, detail in graph.location_foundation_failures(
+                target_spec.body_id, target_spec.core_cell_id
+            ):
+                failures.append(FoundingBlocker(code, detail))
+            if (
+                target_spec.operational_node_id in graph.nodes
+                or target_spec.operational_node_id in graph.locations
+                or graph.has_operational_node(target_spec.operational_node_id)
+            ):
+                failures.append(FoundingBlocker("target_operational_node", str(target_spec.operational_node_id)))
+            for claim in self.surface_cell_claim_registry.claims_for(target_spec.core_cell_id):
+                failures.append(FoundingBlocker("cell_claimed", str(claim.claimant_id)))
+            if self.knowledge_requirement_failures is not None:
+                for requirement in self.knowledge_requirements_for_target(target_spec, recipe):
+                    for detail in self.knowledge_requirement_failures(requirement):
+                        failures.append(FoundingBlocker("knowledge_requirement", detail))
+        else:
+            if target_spec.spatial_node_id not in graph.nodes:
+                failures.append(FoundingBlocker("target_spatial_node", str(target_spec.spatial_node_id)))
+            elif graph.has_operational_node(target_spec.spatial_node_id):
+                failures.append(FoundingBlocker("target_already_operational", str(target_spec.spatial_node_id)))
+            if recipe.knowledge_requirements:
+                failures.append(FoundingBlocker(
+                    "knowledge_target_type",
+                    "surface Resource Knowledge requirements require a Surface Location target",
+                ))
+            for deployment in recipe.deployed_facilities:
+                definition = self.facilities.definitions.get(deployment.facility_def_id)
+                if definition is not None and (
+                    deployment.place_at_core_cell
+                    or definition.placement_scope is FacilityPlacementScope.SURFACE_CELL
+                ):
+                    failures.append(FoundingBlocker(
+                        "surface_facility_target", str(deployment.facility_def_id)
+                    ))
+
         for failure in evaluate_site_requirements(
-            package.staging_requirements,
-            staging_node_id,
-            day,
-            self.facilities.environment,
-            self.facilities,
+            recipe.staging_requirements, staging_node_id, day,
+            self.facilities.environment, self.facilities,
         ):
             failures.append(FoundingBlocker(f"staging:{failure.code}", failure.detail))
-        for failure in evaluate_physical_site_requirements(
-            package.target_requirements,
-            cell_id,
-            day,
-            self.facilities.environment,
-        ):
-            failures.append(FoundingBlocker(f"target:{failure.code}", failure.detail))
+        try:
+            target_context_id = self.target_context_id(target_spec)
+            for failure in evaluate_physical_site_requirements(
+                recipe.target_requirements, target_context_id, day, self.facilities.environment
+            ):
+                failures.append(FoundingBlocker(f"target:{failure.code}", failure.detail))
+        except KeyError as exc:
+            failures.append(FoundingBlocker("target_context", str(exc)))
+
         if self.transport.vehicle_definition(vehicle_definition_id) is None:
             failures.append(FoundingBlocker("vehicle_definition", str(vehicle_definition_id)))
             return tuple(failures)
         try:
-            movement_plan = self.transport.movement_plan_to_physical_target_for_vehicle(
-                staging_node_id,
-                cell_id,
-                vehicle_definition_id,
-                payload_t_per_unit=package.payload_t_per_unit,
-                day=day,
+            movement_plan = self.movement_plan_for_target(
+                staging_node_id, target_spec, vehicle_definition_id,
+                recipe.payload_t_per_unit, day,
             )
-        except ValueError as exc:
+        except (KeyError, ValueError) as exc:
             failures.append(FoundingBlocker("deployment_vehicle", str(exc)))
         else:
             failures.extend(
@@ -281,85 +381,72 @@ class LocationFoundingService:
                 )
             )
         free = self.transport.fleet_free_units(vehicle_definition_id, staging_node_id)
-        if free < package.required_units:
-            failures.append(FoundingBlocker("fleet_units", f"{free}/{package.required_units}"))
+        if free < recipe.required_units:
+            failures.append(FoundingBlocker("fleet_units", f"{free}/{recipe.required_units}"))
         return tuple(failures)
 
     def plan(
         self,
         staging_node_id: SpatialNodeId,
         display_name: str,
-        body_id: CelestialBodyId,
-        cell_id: SurfaceCellId,
-        package_id: DefinitionId,
+        target_spec: FoundingTargetSpec,
+        recipe_id: DefinitionId,
         vehicle_definition_id: DefinitionId,
         *,
         priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
         day: int = 0,
     ) -> ProjectId:
         if not display_name:
-            raise ValueError("location display name must not be empty")
-        failures = self.planning_failures(staging_node_id, body_id, cell_id, package_id, vehicle_definition_id, day)
+            raise ValueError("operational node display name must not be empty")
+        failures = self.planning_failures(
+            staging_node_id, target_spec, recipe_id, vehicle_definition_id, day
+        )
         if failures:
             raise ValueError("; ".join(f"{row.code}: {row.detail}" for row in failures))
-        self._counter += 1
-        project_id = ProjectId(f"founding.{self._counter}")
-        project = LocationFoundingProject(
-            project_id,
-            staging_node_id,
-            display_name,
-            body_id,
-            cell_id,
-            self._generated_location_id(body_id, cell_id),
-            package_id,
-            vehicle_definition_id,
-            priority,
+        next_counter = self._counter + 1
+        project_id = ProjectId(f"founding.{next_counter}")
+        recipe = self.deployment_recipes[recipe_id]
+        resource_requirements = self.resource_requirements_for(
+            recipe_id, vehicle_definition_id, staging_node_id, target_spec, day=day
         )
-        self.projects[project_id] = project
-        package = self.packages[package_id]
         commitment_id = self.fleet_commitment_id(project_id)
         self.transport.commit_fleet_units(
             commitment_id,
             FleetActivityRef("founding", EntityId(str(project_id))),
-            vehicle_definition_id,
-            staging_node_id,
-            package.required_units,
+            vehicle_definition_id, staging_node_id, recipe.required_units,
         )
-        project.fleet_commitment_id = commitment_id
+        project = OperationalNodeFoundingProject(
+            project_id, staging_node_id, display_name, target_spec, recipe_id,
+            vehicle_definition_id, resource_requirements, priority,
+            fleet_commitment_id=commitment_id,
+        )
+        self.projects[project_id] = project
+        self._counter = next_counter
         return project_id
 
     def resource_requirements_for(
         self,
-        package_id: DefinitionId,
+        recipe_id: DefinitionId,
         vehicle_definition_id: DefinitionId,
         staging_node_id: SpatialNodeId,
-        target_cell_id: SurfaceCellId,
+        target_spec: FoundingTargetSpec,
         *,
         day: int = 0,
     ) -> tuple[FoundingResourceRequirement, ...]:
-        """Return the complete staging-side resource requirement for a deployment.
-
-        The package owns payload composition while Transport owns propellant
-        requirements.  Application projections consume this aggregate contract
-        instead of reconstructing either rule.
-        """
-        package = self.packages[package_id]
+        recipe = self.deployment_recipes[recipe_id]
         totals: dict[DefinitionId, float] = {
-            req.resource_id: req.amount_t for req in package.payload_resources
+            req.resource_id: req.amount_t for req in recipe.payload_resources
         }
-        movement_plan = self.transport.movement_plan_to_physical_target_for_vehicle(
-            staging_node_id,
-            target_cell_id,
-            vehicle_definition_id,
-            payload_t_per_unit=package.payload_t_per_unit,
-            day=day,
+        movement_plan = self.movement_plan_for_target(
+            staging_node_id, target_spec, vehicle_definition_id,
+            recipe.payload_t_per_unit, day,
         )
         vehicle = self.transport.vehicle_definition(vehicle_definition_id)
         if vehicle is None:
             raise KeyError(vehicle_definition_id)
         propellant = vehicle.propellant_t(
-            movement_plan, package.payload_t_per_unit
-        ) * package.required_units
+            movement_plan, recipe.payload_t_per_unit
+        ) * recipe.required_units
         if vehicle.propellant_resource_id is not None and propellant > 1e-12:
             totals[vehicle.propellant_resource_id] = (
                 totals.get(vehicle.propellant_resource_id, 0.0) + propellant
@@ -373,13 +460,7 @@ class LocationFoundingService:
     def project_resource_requirements(
         self, project_id: ProjectId
     ) -> tuple[FoundingResourceRequirement, ...]:
-        project = self.projects[project_id]
-        return self.resource_requirements_for(
-            project.founding_package_id,
-            project.vehicle_definition_id,
-            project.staging_node_id,
-            project.target_core_cell_id,
-        )
+        return self.projects[project_id].resource_requirements
 
     def staged_payload_t(self, project_id: ProjectId, resource_id: DefinitionId) -> float:
         project = self.projects[project_id]
@@ -393,7 +474,6 @@ class LocationFoundingService:
         project = self.projects[project_id]
         rows: list[FoundingResourceStatus] = []
         for requirement in self.project_resource_requirements(project_id):
-            reserved = 0.0
             staged = self.staged_payload_t(project.id, requirement.resource_id)
             if project.status is FoundingStatus.PREPARING:
                 committed = staged
@@ -407,7 +487,7 @@ class LocationFoundingService:
             rows.append(FoundingResourceStatus(
                 requirement.resource_id,
                 requirement.amount_t,
-                reserved,
+                staged,
                 committed,
                 shortage,
             ))
@@ -468,8 +548,8 @@ class LocationFoundingService:
                         requirements=(ResourceRequirement(requirement.resource_id, 1.0),),
                     ))
 
-            package = self.packages[project.founding_package_id]
-            remaining = max(0.0, package.preparation_work - project.preparation_done)
+            recipe = self.deployment_recipes[project.deployment_recipe_id]
+            remaining = max(0.0, recipe.preparation_work - project.preparation_done)
             if remaining > 1e-12:
                 rows.append(ExecutionRequirementBundle(
                     id=self.preparation_execution_id(project.id),
@@ -480,13 +560,13 @@ class LocationFoundingService:
                     requested_execution=remaining,
                     priority=project.priority,
                     requirements=(
-                        ServiceCapacityRequirement(package.preparation_service_type, 1.0),
+                        ServiceCapacityRequirement(recipe.preparation_service_type, 1.0),
                     ),
                 ))
         return tuple(rows)
 
     def _commit_allocated_payload(
-        self, project: LocationFoundingProject, allocations: ExecutionAllocationPlan
+        self, project: OperationalNodeFoundingProject, allocations: ExecutionAllocationPlan
     ) -> bool:
         """Move this tick's founding allocation into durable payload staging."""
         payload_owner = self.payload_owner_id(project.id)
@@ -515,7 +595,7 @@ class LocationFoundingService:
         project.inputs_consumed = all_committed
         return all_committed
 
-    def _release_prepared_payload(self, project: LocationFoundingProject) -> None:
+    def _release_prepared_payload(self, project: OperationalNodeFoundingProject) -> None:
         payload_owner = self.payload_owner_id(project.id)
         for requirement in self.project_resource_requirements(project.id):
             resource_id = requirement.resource_id
@@ -525,7 +605,7 @@ class LocationFoundingService:
                     payload_owner, project.staging_node_id, resource_id, staged
                 )
 
-    def _restore_prepared_payload(self, project: LocationFoundingProject) -> None:
+    def _restore_prepared_payload(self, project: OperationalNodeFoundingProject) -> None:
         payload_owner = self.payload_owner_id(project.id)
         for requirement in self.project_resource_requirements(project.id):
             resource_id = requirement.resource_id
@@ -535,29 +615,29 @@ class LocationFoundingService:
                     payload_owner, project.staging_node_id, resource_id, staged
                 )
 
-    def blockers(self, project_id: ProjectId, day: int = 0, power: PowerSnapshot | None = None) -> tuple[FoundingBlocker, ...]:
+    def blockers(
+        self, project_id: ProjectId, day: int = 0, power: PowerSnapshot | None = None
+    ) -> tuple[FoundingBlocker, ...]:
         project = self.projects[project_id]
         if project.status in {FoundingStatus.COMPLETE, FoundingStatus.CANCELLED}:
             return ()
-        graph = self.facilities.environment.graph
-        failures: list[FoundingBlocker] = []
-        owner = graph.owner_of_cell(project.target_core_cell_id)
-        if owner is not None:
-            failures.append(FoundingBlocker("cell_owned", str(owner)))
-        for claim in self.surface_cell_claim_registry.claims_for(
-            project.target_core_cell_id,
-            exclude=("founding_project", EntityId(project.id)),
-        ):
-            failures.append(FoundingBlocker("cell_claimed", str(claim.claimant_id)))
-        if project.status is FoundingStatus.PREPARING:
-            package = self.packages[project.founding_package_id]
-            if not project.inputs_consumed:
-                for requirement in self.project_resource_requirements(project.id):
-                    resource_id = requirement.resource_id
-                    amount = requirement.amount_t
-                    staged = self.staged_payload_t(project.id, resource_id)
-                    if staged + 1e-9 < amount:
-                        failures.append(FoundingBlocker("resource_shortage", str(resource_id)))
+        failures = list(self.planning_failures(
+            project.staging_node_id, project.target_spec, project.deployment_recipe_id,
+            project.vehicle_definition_id, day, power,
+        ))
+        # The project's own Surface Cell and Fleet commitments are already valid
+        # claims; exclude the self-conflicts that planning a new project must reject.
+        if isinstance(project.target_spec, SurfaceLocationTargetSpec):
+            failures = [
+                row for row in failures
+                if not (row.code == "cell_claimed" and row.detail == str(EntityId(project.id)))
+            ]
+        failures = [row for row in failures if row.code != "fleet_units"]
+        if project.status is FoundingStatus.PREPARING and not project.inputs_consumed:
+            for requirement in self.project_resource_requirements(project.id):
+                staged = self.staged_payload_t(project.id, requirement.resource_id)
+                if staged + 1e-9 < requirement.amount_t:
+                    failures.append(FoundingBlocker("resource_shortage", str(requirement.resource_id)))
         return tuple(failures)
 
 
@@ -567,8 +647,8 @@ class LocationFoundingService:
         project = self.projects[project_id]
         if project.status is not FoundingStatus.PREPARING:
             return 1.0
-        package = self.packages[project.founding_package_id]
-        if project.preparation_done + 1e-12 >= package.preparation_work:
+        recipe = self.deployment_recipes[project.deployment_recipe_id]
+        if project.preparation_done + 1e-12 >= recipe.preparation_work:
             return 1.0
         try:
             return allocations.fulfillment(self.preparation_execution_id(project.id))
@@ -644,25 +724,22 @@ class LocationFoundingService:
                     continue
                 if not project.inputs_consumed and not self._commit_allocated_payload(project, allocations):
                     continue
-                package = self.packages[project.founding_package_id]
+                recipe = self.deployment_recipes[project.deployment_recipe_id]
                 try:
                     allocated_service = allocations.allocated(
                         self.preparation_execution_id(project.id)
                     )
                 except KeyError:
                     allocated_service = 0.0
-                remaining = max(0.0, package.preparation_work - project.preparation_done)
+                remaining = max(0.0, recipe.preparation_work - project.preparation_done)
                 project.preparation_done += min(
                     remaining, max(0.0, allocated_service)
                 )
-                if project.preparation_done + 1e-9 >= package.preparation_work:
-                    project.preparation_done = package.preparation_work
-                    movement_plan = self.transport.movement_plan_to_physical_target_for_vehicle(
-                        project.staging_node_id,
-                        project.target_core_cell_id,
-                        project.vehicle_definition_id,
-                        payload_t_per_unit=package.payload_t_per_unit,
-                        day=day,
+                if project.preparation_done + 1e-9 >= recipe.preparation_work:
+                    project.preparation_done = recipe.preparation_work
+                    movement_plan = self.movement_plan_for_target(
+                        project.staging_node_id, project.target_spec,
+                        project.vehicle_definition_id, recipe.payload_t_per_unit, day,
                     )
                     execution_id = EntityId(f"movement.founding:{project.id}")
                     if project.fleet_commitment_id is None:
@@ -673,10 +750,10 @@ class LocationFoundingService:
                         MovementExecutionKind.FOUNDING_DEPLOYMENT,
                         project.fleet_commitment_id,
                         movement_plan,
-                        payload_t_per_unit=package.payload_t_per_unit,
+                        payload_t_per_unit=recipe.payload_t_per_unit,
                         payload_resources=tuple(
                             MovementExecutionPayloadResource(req.resource_id, req.amount_t)
-                            for req in package.payload_resources
+                            for req in recipe.payload_resources
                         ),
                         day=day,
                     )
@@ -707,61 +784,71 @@ class LocationFoundingService:
                 physical_state_changed = True
         return physical_state_changed
 
-    def _complete(self, project: LocationFoundingProject, day: int) -> None:
+    def _complete(self, project: OperationalNodeFoundingProject, day: int) -> None:
         graph = self.facilities.environment.graph
-        if graph.owner_of_cell(project.target_core_cell_id) is not None:
-            raise RuntimeError(f"founding target cell became occupied: {project.target_core_cell_id}")
+        target_spec = project.target_spec
+        if isinstance(target_spec, SurfaceLocationTargetSpec):
+            if graph.owner_of_cell(target_spec.core_cell_id) is not None:
+                raise RuntimeError(f"founding target cell became occupied: {target_spec.core_cell_id}")
+        elif graph.has_operational_node(target_spec.spatial_node_id):
+            raise RuntimeError(f"founding target became operational before arrival: {target_spec.spatial_node_id}")
+
         execution_id = project.movement_execution_id
         if execution_id is None:
             raise RuntimeError(f"founding completion lacks MovementExecution: {project.id}")
         execution = self.transport.movement_execution_snapshot(execution_id)
         if execution is None:
             raise RuntimeError(f"founding completion MovementExecution missing: {project.id}")
-        package = self.packages[project.founding_package_id]
-        expected_payload = {
-            req.resource_id: req.amount_t for req in package.payload_resources
-        }
-        actual_payload = {
-            req.resource_id: req.amount_t for req in execution.payload_resources
-        }
+        recipe = self.deployment_recipes[project.deployment_recipe_id]
+        expected_payload = {req.resource_id: req.amount_t for req in recipe.payload_resources}
+        actual_payload = {req.resource_id: req.amount_t for req in execution.payload_resources}
         if actual_payload.keys() != expected_payload.keys() or any(
             abs(actual_payload[resource_id] - amount_t) > 1e-9
             for resource_id, amount_t in expected_payload.items()
         ):
             raise RuntimeError(f"founding MovementExecution payload manifest mismatch: {project.id}")
-        graph.found_location(
-            project.new_location_id,
-            project.display_name,
-            project.target_body_id,
-            project.target_core_cell_id,
-        )
-        for deployment in package.deployed_facilities:
+
+        target_node_id = self.target_operational_node_id(target_spec)
+        if isinstance(target_spec, SurfaceLocationTargetSpec):
+            graph.found_location(
+                target_spec.operational_node_id, project.display_name,
+                target_spec.body_id, target_spec.core_cell_id,
+            )
+            core_cell_id: SurfaceCellId | None = target_spec.core_cell_id
+        else:
+            graph.add_operational_node(OperationalNodeState(target_spec.spatial_node_id))
+            core_cell_id = None
+
+        for deployment in recipe.deployed_facilities:
             definition = self.facilities.definitions[deployment.facility_def_id]
-            site_cell_id = project.target_core_cell_id if (
-                deployment.place_at_core_cell or definition.placement_scope is FacilityPlacementScope.SURFACE_CELL
+            if core_cell_id is None and (
+                deployment.place_at_core_cell
+                or definition.placement_scope is FacilityPlacementScope.SURFACE_CELL
+            ):
+                raise RuntimeError(
+                    f"surface Facility cannot settle on non-surface founding target: {deployment.facility_def_id}"
+                )
+            site_cell_id = core_cell_id if (
+                core_cell_id is not None
+                and (deployment.place_at_core_cell or definition.placement_scope is FacilityPlacementScope.SURFACE_CELL)
             ) else None
             self.facilities.install(
-                deployment.facility_def_id,
-                project.new_location_id,
-                site_cell_id=site_cell_id,
-                invested_resources={req.resource_id: req.amount_t for req in deployment.invested_resources},
+                deployment.facility_def_id, target_node_id, site_cell_id=site_cell_id,
+                invested_resources={
+                    req.resource_id: req.amount_t for req in deployment.invested_resources
+                },
             )
-        # Founding completion is a Boundary transition. Rebuild the newly
-        # installed physical storage envelope before the next Physical snapshot,
-        # even when the package carries no initial Inventory. Power-sensitive
-        # usable capacity is refined by the canonical allocation/execution path.
+
         self.storage.refresh(day, {})
-        if package.initial_inventory:
-            for req in package.initial_inventory:
-                admission = self.inventory.admit(
-                    project.new_location_id, req.resource_id, req.amount_t
+        for req in recipe.initial_inventory:
+            admission = self.inventory.admit(target_node_id, req.resource_id, req.amount_t)
+            if not admission.fully_admitted:
+                raise RuntimeError(
+                    f"founding manifest exceeds Inventory Admission: {req.resource_id}"
                 )
-                if not admission.fully_admitted:
-                    raise RuntimeError(
-                        f"founding manifest exceeds Inventory Admission: {req.resource_id}"
-                    )
+
         final_location = (
-            project.new_location_id
+            target_node_id
             if execution.final_asset_disposition is OperationAssetDisposition.DESTINATION
             else project.staging_node_id
         )
