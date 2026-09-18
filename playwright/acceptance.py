@@ -350,12 +350,33 @@ def run() -> dict[str, object]:
 
             page.locator(f'[data-location-id="{ids.LUNAR_ORBIT}"]').click()
             page.locator('[data-tab="survey"]').click()
-            cell_checkboxes = page.locator('[data-survey-draft-cell]')
-            cell_checkboxes.first.wait_for(timeout=10000)
-            _assert(cell_checkboxes.count() >= 2, "Survey Campaign UI must allow a multi-cell scope")
-            cell_checkboxes.nth(0).check()
-            cell_checkboxes.nth(1).check()
-            resource_checkbox = page.locator(f'[data-survey-draft-resource][value="{ids.WATER}"]')
+            survey_pair_ids = page.locator('tr[data-inspect="survey"]').evaluate_all(
+                "rows => rows.map((row) => row.dataset.id)"
+            )
+            cells_by_resource: dict[str, list[str]] = {}
+            for pair_id in survey_pair_ids:
+                if not pair_id or "::" not in pair_id:
+                    continue
+                cell_id, resource_id = pair_id.split("::", 1)
+                cells = cells_by_resource.setdefault(resource_id, [])
+                if cell_id not in cells:
+                    cells.append(cell_id)
+            campaign_resource_id = next(
+                (resource_id for resource_id, cell_ids in cells_by_resource.items() if len(cell_ids) >= 2),
+                None,
+            )
+            _assert(
+                campaign_resource_id is not None,
+                "Survey Campaign UI fixture must expose one surveyed Resource shared by at least two Cells",
+            )
+            campaign_cell_ids = cells_by_resource[campaign_resource_id][:2]
+            for cell_id in campaign_cell_ids:
+                cell_checkbox = page.locator(f'[data-survey-draft-cell][value="{cell_id}"]')
+                cell_checkbox.wait_for(timeout=10000)
+                cell_checkbox.check()
+            resource_checkbox = page.locator(
+                f'[data-survey-draft-resource][value="{campaign_resource_id}"]'
+            )
             resource_checkbox.wait_for(timeout=10000)
             resource_checkbox.check()
             page.locator('#surveyDraftPriority').select_option("4")
