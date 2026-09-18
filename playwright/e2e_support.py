@@ -1,22 +1,12 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-import json
 import os
-from pathlib import Path
-import re
 import shutil
+import time
 from collections.abc import Iterator
-from typing import Any, Callable
-
-
-# Process coalescing is a runner-specific optimization policy, not a list of tests.
-# The scenario set itself is derived from the current workflow job so additions or
-# reordering cannot silently diverge from what CI declares it will execute.
-COALESCED_CI_WORKFLOW_FILES = frozenset({"full-validation.yml"})
-_WORKFLOW_SCENARIO_RE = re.compile(
-    r"^\s*python(?:3)?\s+playwright/([A-Za-z_][A-Za-z0-9_]*)\.py(?:\s.*)?$"
-)
+from typing import Any
+import urllib.request
 
 
 def browser_launch_kwargs(browser_name: str) -> dict[str, object]:
@@ -34,171 +24,24 @@ def browser_launch_kwargs(browser_name: str) -> dict[str, object]:
     return launch_kwargs
 
 
-def _workflow_path() -> Path | None:
-    explicit = os.environ.get("SPACE_IDLE_CI_WORKFLOW_FILE")
-    if explicit:
-        return Path(explicit)
-
-    workflow_ref = os.environ.get("GITHUB_WORKFLOW_REF", "")
-    marker = "/.github/workflows/"
-    if marker in workflow_ref:
-        relative = ".github/workflows/" + workflow_ref.split(marker, 1)[1].split("@", 1)[0]
-        return Path(__file__).resolve().parents[1] / relative
-
-    workflow_name = os.environ.get("GITHUB_WORKFLOW", "")
-    workflow_root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
-    if workflow_root.is_dir():
-        for path in sorted((*workflow_root.glob("*.yml"), *workflow_root.glob("*.yaml"))):
-            try:
-                first_lines = path.read_text(encoding="utf-8").splitlines()[:20]
-            except OSError:
-                continue
-            if any(line.strip() == f"name: {workflow_name}" for line in first_lines):
-                return path
-    return None
-
-
-def _job_block(workflow_text: str, job_name: str) -> tuple[str, ...]:
-    """Return the raw YAML lines belonging to one top-level workflow job.
-
-    This intentionally reads only the stable `jobs.<job>` indentation contract and
-    does not attempt to implement YAML. Browser scenario commands are then extracted
-    from `python playwright/<scenario>.py` lines in that job.
-    """
-    lines = workflow_text.splitlines()
-    jobs_index = next((i for i, line in enumerate(lines) if line == "jobs:"), None)
-    if jobs_index is None:
-        return ()
-
-    job_header = f"  {job_name}:"
-    start = next((i for i in range(jobs_index + 1, len(lines)) if lines[i] == job_header), None)
-    if start is None:
-        return ()
-
-    block: list[str] = []
-    for line in lines[start + 1 :]:
-        if line and not line.startswith(" "):
-            break
-        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", line):
-            break
-        block.append(line)
-    return tuple(block)
-
-
-def _declared_job_scenarios(path: Path, job_name: str) -> tuple[str, ...]:
-    try:
-        block = _job_block(path.read_text(encoding="utf-8"), job_name)
-    except OSError as exc:
-        raise RuntimeError(f"cannot read CI workflow {path}: {exc}") from exc
-
-    scenarios = tuple(
-        match.group(1)
-        for line in block
-        if (match := _WORKFLOW_SCENARIO_RE.match(line)) is not None
-    )
-    if len(scenarios) != len(set(scenarios)):
-        raise RuntimeError(
-            f"CI E2E job {job_name!r} declares duplicate browser scenario commands: {scenarios}"
-        )
-    return scenarios
-
-
-def ci_suite() -> tuple[str, ...] | None:
-    if os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
-        return None
-    workflow = _workflow_path()
-    if workflow is None:
-        return None
-    if workflow.name not in COALESCED_CI_WORKFLOW_FILES:
-        return None
-
-    job_name = os.environ.get("GITHUB_JOB", "")
-    if not job_name:
-        raise RuntimeError(
-            "coalesced CI E2E could not resolve its workflow job; GITHUB_JOB is required"
-        )
-    scenarios = _declared_job_scenarios(workflow, job_name)
-    if not scenarios:
-        raise RuntimeError(
-            f"coalesced CI E2E found no browser scenario commands in {workflow}:{job_name}"
-        )
-    return scenarios
-
-
-def scenario_name(entrypoint: str | os.PathLike[str]) -> str:
-    return Path(entrypoint).stem
-
-
-def _ci_marker_path() -> Path:
-    root = Path(os.environ.get("RUNNER_TEMP") or os.environ.get("TMPDIR") or "/tmp")
-    run_id = os.environ.get("GITHUB_RUN_ID", "run")
-    job = os.environ.get("GITHUB_JOB", "job")
-    return root / f"space-idle-e2e-{run_id}-{job}.json"
-
-
-def _read_completed_ci_suite() -> tuple[str, ...] | None:
-    path = _ci_marker_path()
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
-    if payload.get("completed") is not True:
-        return None
-    suite = payload.get("suite")
-    if not isinstance(suite, list) or not all(isinstance(name, str) for name in suite):
-        return None
-    return tuple(suite)
-
-
-def guard_ci_secondary_entrypoint(entrypoint: str | os.PathLike[str]) -> bool:
-    """Skip a later CI command only after the declared job suite completed.
-
-    The current workflow job is the source of truth for scenario membership and
-    ordering. If a new scenario is inserted before the coalescing entrypoint but does
-    not participate in this harness, the marker is absent and CI fails closed rather
-    than silently omitting or duplicating coverage.
-    """
-    name = scenario_name(entrypoint)
-    suite = ci_suite()
-    if suite is None or name not in suite or name == suite[0]:
-        return False
-    completed = _read_completed_ci_suite()
-    if completed != suite:
-        raise RuntimeError(
-            f"CI E2E suite marker missing or inconsistent before {name}: "
-            f"expected {suite}, got {completed}"
-        )
-    print(f"E2E scenario already completed by shared CI suite: {name}", flush=True)
-    return True
-
-
-def run_ci_suite_or_standalone(
-    entrypoint: str | os.PathLike[str], standalone: Callable[[], Any]
-) -> Any:
-    name = scenario_name(entrypoint)
-    suite = ci_suite()
-    if suite is None or name not in suite:
-        return standalone()
-    if name != suite[0]:
-        raise RuntimeError(f"secondary CI E2E entrypoint {name} reached execution without guard")
-
-    from run_suite import run_scenarios
-
-    result = run_scenarios(suite)
-    marker = _ci_marker_path()
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    temporary = marker.with_suffix(marker.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps({"completed": True, "suite": list(suite)}, sort_keys=True),
-        encoding="utf-8",
-    )
-    temporary.replace(marker)
-    return result
+def wait_for_server(origin: str, timeout: float = 10.0) -> None:
+    """Wait for the real HTTP adapter used by browser scenarios."""
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(f"{origin}/api/v1/health", timeout=1.0) as response:
+                if response.status == 200:
+                    return
+        except Exception as exc:  # noqa: BLE001 - startup probe
+            last_error = exc
+        time.sleep(0.1)
+    raise RuntimeError(f"server did not become ready: {last_error}")
 
 
 @contextmanager
 def managed_browser(browser_name: str) -> Iterator[Any]:
-    """Launch one browser process and own its Playwright lifecycle."""
+    """Launch one real browser process and own its Playwright lifecycle."""
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:  # pragma: no cover - developer environment guard
@@ -223,3 +66,29 @@ def isolated_browser_context(browser_name: str, **context_options: Any) -> Itera
             yield context
         finally:
             context.close()
+
+
+@contextmanager
+def monitored_page(context: Any) -> Iterator[Any]:
+    """Create a page and fail a successful scenario on browser/runtime errors.
+
+    Domain assertions remain in their owning test layers. This guard is intentionally
+    browser-specific: uncaught JavaScript errors, failed requests, and console errors
+    are failures even when the scenario's final DOM assertion still happens to pass.
+    """
+    console_errors: list[str] = []
+    page_errors: list[str] = []
+    request_failures: list[str] = []
+    page = context.new_page()
+    page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+    page.on("pageerror", lambda exc: page_errors.append(str(exc)))
+    page.on(
+        "requestfailed",
+        lambda req: request_failures.append(f"{req.method} {req.url}: {req.failure}"),
+    )
+    yield page
+    if console_errors or page_errors or request_failures:
+        raise AssertionError(
+            "browser runtime errors: "
+            f"console={console_errors}, page={page_errors}, requests={request_failures}"
+        )

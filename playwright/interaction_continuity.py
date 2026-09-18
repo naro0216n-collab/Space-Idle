@@ -1,19 +1,11 @@
 from __future__ import annotations
 
-from e2e_support import (
-    guard_ci_secondary_entrypoint,
-    isolated_browser_context,
-    run_ci_suite_or_standalone,
-)
-
-if __name__ == "__main__" and guard_ci_secondary_entrypoint(__file__):
-    raise SystemExit(0)
+from e2e_support import isolated_browser_context, monitored_page, wait_for_server
 
 import os
 from pathlib import Path
 from threading import Thread
 import tempfile
-import time
 
 from space_idle import build_game_application
 from space_idle.bootstrap import build_game_application_for_load
@@ -21,22 +13,6 @@ from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.version import VERSION
 
-
-
-def _wait_for_server(origin: str, timeout: float = 10.0) -> None:
-    import urllib.request
-
-    deadline = time.monotonic() + timeout
-    last_error: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen(f"{origin}/api/v1/health", timeout=1.0) as response:
-                if response.status == 200:
-                    return
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-        time.sleep(0.1)
-    raise RuntimeError(f"server did not become ready: {last_error}")
 
 
 def run() -> None:
@@ -57,12 +33,11 @@ def run() -> None:
     thread.start()
 
     try:
-        _wait_for_server(origin)
+        wait_for_server(origin)
         with isolated_browser_context(
             browser_name,
             viewport={"width": 1194, "height": 834},
-        ) as context:
-            page = context.new_page()
+        ) as context, monitored_page(context) as page:
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
             assert page.locator("#appVersion").inner_text() == f"v{VERSION}"
@@ -72,12 +47,15 @@ def run() -> None:
             page.locator('[data-tab="research"]').click()
             tree = page.locator("#researchTree")
             tree.wait_for(timeout=10000)
-            assert page.locator("#researchTree .research-node").count() >= 13
-            assert page.locator("#researchTree .research-tree-link").count() > 0
+            assert page.locator("#researchTree .research-node").count() > 0
             first_research = page.locator('#researchTree [data-inspect="research"]').first
             first_research.click()
             research_title = page.locator("#inspectorTitle").inner_text()
             scroller = page.locator("#researchTreeScroll")
+            scroll_metrics = page.evaluate(
+                "el => ({width: el.clientWidth, scrollWidth: el.scrollWidth})", scroller.element_handle()
+            )
+            assert scroll_metrics["scrollWidth"] > scroll_metrics["width"]
             page.evaluate("el => { el.scrollLeft = 180; el.dispatchEvent(new Event('scroll')); }", scroller.element_handle())
             initial_tree_scroll = page.evaluate("el => el.scrollLeft", scroller.element_handle())
             assert initial_tree_scroll > 0
@@ -102,7 +80,9 @@ def run() -> None:
             inspector_title = page.locator("#inspectorTitle").inner_text()
             priority = page.locator("#facilityPriorityInput")
             priority.wait_for(timeout=10000)
-            priority.select_option("4")
+            saved_priority = priority.input_value()
+            draft_priority = "4" if saved_priority != "4" else "5"
+            priority.select_option(draft_priority)
             priority.focus()
             start_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
             page.wait_for_function(
@@ -113,8 +93,21 @@ def run() -> None:
             assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "facilities"
             assert page.locator("#inspectorTitle").inner_text() == inspector_title
             assert priority.is_visible()
-            assert priority.input_value() == "4"
+            assert priority.input_value() == draft_priority
             assert page.evaluate("() => document.activeElement?.id || ''") == "facilityPriorityInput"
+
+            # Save/Load is a browser wiring contract: the UI action must persist the
+            # authoritative state and a later load must replace local/updated state.
+            page.locator("#saveButton").click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            page.locator('[data-set-facility-activity-priority]').click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            assert priority.input_value() == draft_priority
+            page.locator("#loadButton").click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            priority = page.locator("#facilityPriorityInput")
+            priority.wait_for(timeout=10000)
+            assert priority.input_value() == saved_priority
     finally:
         server.shutdown()
         server.server_close()
@@ -123,4 +116,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run_ci_suite_or_standalone(__file__, run)
+    run()

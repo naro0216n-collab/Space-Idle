@@ -1,20 +1,11 @@
 from __future__ import annotations
 
-from e2e_support import (
-    guard_ci_secondary_entrypoint,
-    isolated_browser_context,
-    run_ci_suite_or_standalone,
-)
-
-if __name__ == "__main__" and guard_ci_secondary_entrypoint(__file__):
-    raise SystemExit(0)
+from e2e_support import isolated_browser_context, monitored_page, wait_for_server
 
 import os
 from pathlib import Path
 from threading import Thread
 import tempfile
-import time
-import urllib.request
 
 from space_idle import AdvanceTime, PlanBuild, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
@@ -25,23 +16,8 @@ from space_idle.simulation import OfflineProgressPolicy
 
 EARTH = str(ids.EARTH)
 LEO = str(ids.LEO)
-MACHINERY = str(ids.MACHINERY)
 PROPELLANT = str(ids.PROPELLANT)
 OWNED_LAUNCH_VEHICLE = str(ids.REUSABLE_LAUNCH_VEHICLE)
-
-
-def _wait_for_server(origin: str, timeout: float = 10.0) -> None:
-    deadline = time.monotonic() + timeout
-    last_error: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen(f"{origin}/api/v1/health", timeout=1.0) as response:
-                if response.status == 200:
-                    return
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-        time.sleep(0.1)
-    raise RuntimeError(f"server did not become ready: {last_error}")
 
 
 def _build_logistics_test_application():
@@ -74,9 +50,8 @@ def run() -> None:
         )
     ).data.created_id
     assert project_id is not None
-    # Establish Supply Requirements before Fleet capacity exists. Auto-routing stays
-    # within the player-built network; the browser flow below adds a sparse project
-    # hard source constraint without mutating Fleet provisioning.
+    # Establish a real project-owned Supply Requirement so browser controls can
+    # exercise sparse routing intent against an Application-projected decision row.
     runtime.execute(AdvanceTime(1))
     allocation_capacity = runtime._app._simulation.transport.transport_capacity_for_units(  # noqa: SLF001 - deterministic E2E fixture setup
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1,
@@ -89,15 +64,14 @@ def run() -> None:
     thread.start()
 
     try:
-        _wait_for_server(origin)
+        wait_for_server(origin)
         with isolated_browser_context(
             browser_name,
             viewport={"width": 1194, "height": 834},
             has_touch=True,
             locale="ja-JP",
             timezone_id="Asia/Tokyo",
-        ) as context:
-            page = context.new_page()
+        ) as context, monitored_page(context) as page:
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
             page.get_by_role("button", name="物流ネットワーク").click()
@@ -107,8 +81,7 @@ def run() -> None:
             assert "輸送能力阻害" in requirement_row.inner_text(), (
                 "Supply Requirement must remain visible while Transport Capacity is unavailable"
             )
-            # A project-scoped Supply Routing Constraint is sparse hard intent.
-            # Setting it must not create strategic transport capacity or Fleet.
+            # Create and later clear a project-scoped Routing Constraint through the UI.
             requirement_row.locator("[data-requirement-constraint]").click()
             page.locator("#routingConstraintDialog").wait_for(state="visible", timeout=10000)
             assert page.locator("#routingConstraintOwnerId").input_value() == project_id
@@ -123,12 +96,11 @@ def run() -> None:
                 timeout=10000,
             )
             requirement_row = page.locator("#requirementTable tbody tr", has_text=project_id).first
-            assert "地球" in requirement_row.inner_text(), "hard source constraint must be projected on the requirement"
-            assert page.locator("#allocationTable [data-allocation-row]").count() == 0, (
-                "Supply Routing Constraint must not create or resize Transport Allocation"
-            )
+            constraint_clear = page.locator('[data-routing-constraint-clear]').first
+            constraint_clear.wait_for(timeout=10000)
 
-            # Player Fleet provisioning is explicit and remains a separate decision.
+            # Create, edit, pause, resume, and delete Transport Allocation using only
+            # browser controls. Domain allocation invariants are covered below E2E.
             page.get_by_role("button", name="Transport Allocationを作成").click()
             page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
             page.locator("#allocationVehicle").select_option(OWNED_LAUNCH_VEHICLE)
@@ -142,28 +114,39 @@ def run() -> None:
 
             allocation_row = page.locator("#allocationTable [data-allocation-row]").first
             allocation_row.wait_for(timeout=10000)
-            allocation_text = allocation_row.inner_text()
-            assert "方向別Capacity target" in allocation_text
-            assert "1 / 1" in allocation_text and "unfilled 0" in allocation_text
-            nominal_text = allocation_row.locator("td").nth(3).inner_text()
-            available_text = allocation_row.locator("td").nth(4).inner_text()
-            assert "t/日" in nominal_text and not nominal_text.startswith("0 / 0")
-            assert "t/日" in available_text and not available_text.startswith("0 / 0")
-            assert "1 / 1" in allocation_row.inner_text(), (
-                "Supply Routing Constraint must not resize derived Fleet provisioning"
-            )
+            allocation_id = allocation_row.get_attribute("data-allocation-row")
+            assert allocation_id
+            assert "方向別Capacity target" in allocation_row.inner_text()
 
-            # A canonical day lets Supply Planning consume the now-available capacity.
-            runtime.execute(AdvanceTime(1))
+            allocation_row.locator('[data-allocation-edit]').click()
+            page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
+            page.locator("#allocationPriority").select_option("4")
+            page.get_by_role("button", name="設定を更新").click()
+            page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
+            allocation_row = page.locator(f'[data-allocation-row="{allocation_id}"]')
+            allocation_row.wait_for(timeout=10000)
+            allocation_row.locator('[data-allocation-edit]').click()
+            page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
+            assert page.locator("#allocationPriority").input_value() == "4"
+            page.locator("#allocationCancelButton").click()
+            page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
+
+            allocation_toggle = allocation_row.locator('[data-allocation-toggle]')
+            assert allocation_toggle.inner_text() == "停止"
+            allocation_toggle.click()
             page.wait_for_function(
-                """projectId => [...document.querySelectorAll('#cargoTable tbody tr')]
-                  .some(row => row.innerText.includes(projectId))""",
-                arg=project_id,
+                "id => document.querySelector(`[data-allocation-row=\"${id}\"] [data-allocation-toggle]`)?.dataset.paused === '1'",
+                arg=allocation_id,
                 timeout=10000,
             )
-            cargo_text = page.locator("#cargoTable").inner_text()
-            assert "in_transit" in cargo_text
-            assert "1 / 1" in allocation_row.inner_text()
+            allocation_toggle = page.locator(f'[data-allocation-row="{allocation_id}"] [data-allocation-toggle]')
+            assert allocation_toggle.inner_text() == "再開"
+            allocation_toggle.click()
+            page.wait_for_function(
+                "id => document.querySelector(`[data-allocation-row=\"${id}\"] [data-allocation-toggle]`)?.dataset.paused === '0'",
+                arg=allocation_id,
+                timeout=10000,
+            )
 
             # Target Stock is a persistent Supply Planning intent with Activity Priority.
             page.get_by_role("button", name="Target Stockを設定").click()
@@ -181,8 +164,50 @@ def run() -> None:
             target_row = target_delete.locator("xpath=ancestor::tr")
             target_text = target_row.inner_text()
             assert "2" in target_text and "高" in target_text
-            assert "1 / 1" in allocation_row.inner_text(), (
-                "Target Stock must not mutate Transport Allocation target"
+            target_delete.click()
+            target_delete.wait_for(state="detached", timeout=10000)
+
+            constraint_clear = page.locator('[data-routing-constraint-clear]').first
+            constraint_clear.click()
+            constraint_clear.wait_for(state="detached", timeout=10000)
+
+            allocation_delete = page.locator(
+                f'[data-allocation-row="{allocation_id}"] [data-allocation-delete]'
+            )
+            allocation_delete.click()
+            page.wait_for_function(
+                "id => !document.querySelector(`[data-allocation-row=\"${id}\"]`)",
+                arg=allocation_id,
+                timeout=10000,
+            )
+
+            # Trade Order lifecycle exercises a separate JS payload family and the
+            # Market panel's editable draft controls without re-testing settlement.
+            market_new = page.locator('[data-new-market-order]')
+            market_new.wait_for(timeout=10000)
+            market_create = market_new.locator('[data-market-create]')
+            assert market_create.is_enabled()
+            market_new.locator('[data-market-target]').fill('1')
+            market_create.click()
+            market_order = page.locator('[data-market-order-row]').first
+            market_order.wait_for(timeout=10000)
+            market_order_id = market_order.get_attribute('data-market-order-row')
+            assert market_order_id
+            market_order.locator('[data-market-target]').fill('2')
+            market_order.locator('[data-market-priority]').select_option('4')
+            market_order.locator('[data-market-save]').click()
+            page.wait_for_function(
+                "id => document.querySelector(`[data-market-order-row=\"${id}\"] [data-market-target]`)?.value === '2'",
+                arg=market_order_id,
+                timeout=10000,
+            )
+            page.locator(
+                f'[data-market-order-row="{market_order_id}"] [data-market-cancel]'
+            ).click()
+            page.wait_for_function(
+                "id => !document.querySelector(`[data-market-order-row=\"${id}\"]`)",
+                arg=market_order_id,
+                timeout=10000,
             )
 
     finally:
@@ -193,4 +218,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run_ci_suite_or_standalone(__file__, run)
+    run()

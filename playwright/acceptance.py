@@ -1,22 +1,12 @@
 from __future__ import annotations
 
-from e2e_support import (
-    guard_ci_secondary_entrypoint,
-    isolated_browser_context,
-    run_ci_suite_or_standalone,
-)
+from e2e_support import isolated_browser_context, monitored_page, wait_for_server
 
-if __name__ == "__main__" and guard_ci_secondary_entrypoint(__file__):
-    raise SystemExit(0)
-
-import http.client
 import json
 import os
 from pathlib import Path
 from threading import Thread
 import tempfile
-import time
-from urllib.parse import urlsplit
 
 from space_idle import GetSurfaceMap, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
@@ -25,99 +15,7 @@ from space_idle.content import base_ids as ids
 from space_idle.simulation import OfflineProgressPolicy
 
 
-ROOT = Path(__file__).resolve().parents[1]
-ARTIFACTS = Path(os.environ.get("SPACE_IDLE_ARTIFACTS", ROOT / "playwright" / "artifacts")).resolve()
-FAKE_ORIGIN = "https://space-idle.test"
 SUPPORTED_BROWSERS = {"chromium", "webkit"}
-SUPPORTED_TRANSPORTS = {"direct", "bridge"}
-
-
-def _connection(origin: str, timeout: float) -> http.client.HTTPConnection:
-    parsed = urlsplit(origin)
-    if parsed.scheme != "http" or not parsed.hostname:
-        raise ValueError(f"E2E local server must use http origin, got {origin!r}")
-    return http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=timeout)
-
-
-def _wait_for_server(url: str, timeout: float = 12.0) -> None:
-    parsed = urlsplit(url)
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    path = parsed.path or "/"
-    deadline = time.monotonic() + timeout
-    last_error: Exception | None = None
-    while time.monotonic() < deadline:
-        conn = _connection(origin, 1.0)
-        try:
-            conn.request("GET", path, headers={"Connection": "close"})
-            response = conn.getresponse()
-            response.read()
-            if response.status == 200:
-                return
-        except Exception as exc:  # noqa: BLE001 - startup probe
-            last_error = exc
-        finally:
-            conn.close()
-        time.sleep(0.1)
-    raise RuntimeError(f"development server did not become ready: {last_error}")
-
-
-def _http_request(
-    server_origin: str,
-    path: str,
-    method: str = "GET",
-    headers: dict[str, str] | None = None,
-    body: str | None = None,
-) -> dict[str, object]:
-    forwarded = {}
-    for key, value in (headers or {}).items():
-        if key.lower() not in {"host", "content-length", "connection", "accept-encoding"}:
-            forwarded[key] = value
-    forwarded["Accept-Encoding"] = "identity"
-    data = body.encode("utf-8") if body is not None else None
-    conn = _connection(server_origin, 15.0)
-    try:
-        conn.request(method, path, body=data, headers=forwarded)
-        response = conn.getresponse()
-        raw = response.read()
-        status = response.status
-        response_headers = response.getheaders()
-    finally:
-        conn.close()
-    allowed = {
-        "content-type",
-        "cache-control",
-        "etag",
-        "x-space-idle-revision",
-        "access-control-allow-origin",
-        "vary",
-    }
-    return {
-        "status": status,
-        "headers": {key: value for key, value in response_headers if key.lower() in allowed},
-        "body": raw.decode("utf-8"),
-    }
-
-
-def _browser_document(server_origin: str) -> str:
-    index = _http_request(server_origin, "/")["body"]
-    css = _http_request(server_origin, "/app.css")["body"]
-    js = _http_request(server_origin, "/app.js")["body"]
-    time_js = _http_request(server_origin, "/time_control.js")["body"]
-    bridge = r"""
-<script>
-window.fetch = async function(input, init = {}) {
-  const path = typeof input === 'string' ? input : input.url;
-  const headers = Object.fromEntries(new Headers(init.headers || (typeof input === 'object' ? input.headers : undefined)).entries());
-  const result = await window.__spaceIdleHttp({path, method: init.method || 'GET', headers, body: init.body == null ? null : String(init.body)});
-  return new Response(result.body, {status: result.status, headers: result.headers});
-};
-</script>
-"""
-    index = index.replace('<link rel="stylesheet" href="/app.css">', f'<style>{css}</style>')
-    index = index.replace('<script src="/app.js" defer></script>', bridge + f'<script>{js}</script>')
-    index = index.replace('<script src="/time_control.js" defer></script>', f'<script>{time_js}</script>')
-    return index
-
 
 def _assert(condition: bool, message: str) -> None:
     if not condition:
@@ -134,11 +32,8 @@ def _visible_button_min_height(page) -> float:
 
 def run() -> dict[str, object]:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
-    transport = os.environ.get("SPACE_IDLE_E2E_TRANSPORT", "direct").strip().lower()
     if browser_name not in SUPPORTED_BROWSERS:
         raise ValueError(f"unsupported browser {browser_name!r}; expected one of {sorted(SUPPORTED_BROWSERS)}")
-    if transport not in SUPPORTED_TRANSPORTS:
-        raise ValueError(f"unsupported transport {transport!r}; expected one of {sorted(SUPPORTED_TRANSPORTS)}")
 
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-e2e-")
     runtime = GameRuntime(
@@ -206,13 +101,9 @@ def run() -> dict[str, object]:
     server_thread = Thread(target=server.serve_forever, name="space-idle-e2e-http", daemon=True)
     server_thread.start()
 
-    console_errors: list[str] = []
-    page_errors: list[str] = []
-    request_failures: list[str] = []
     results: dict[str, object] = {}
     try:
-        _wait_for_server(f"{server_origin}/api/v1/health")
-        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        wait_for_server(server_origin)
         with isolated_browser_context(
             browser_name,
                 viewport={"width": 1194, "height": 834},
@@ -226,25 +117,8 @@ def run() -> dict[str, object]:
                     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 "
                     "Mobile/15E148 Safari/604.1"
                 ),
-            ) as context:
-            page = context.new_page()
-            page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
-            page.on("pageerror", lambda exc: page_errors.append(str(exc)))
-            page.on("requestfailed", lambda req: request_failures.append(f"{req.method} {req.url}: {req.failure}"))
-            if transport == "bridge":
-                page.expose_function(
-                    "__spaceIdleHttp",
-                    lambda request: _http_request(
-                        server_origin,
-                        request.get("path", "/"),
-                        request.get("method", "GET"),
-                        request.get("headers") or {},
-                        request.get("body"),
-                    ),
-                )
-                page.set_content(_browser_document(server_origin), wait_until="load", timeout=30000)
-            else:
-                page.goto(server_origin + "/", wait_until="load", timeout=30000)
+            ) as context, monitored_page(context) as page:
+            page.goto(server_origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
 
             _assert(page.locator("#operationsView").is_visible(), "operations view should be visible by default")
@@ -268,7 +142,7 @@ def run() -> dict[str, object]:
             )
             running_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
 
-            page.locator("#timePauseButton").click()
+            page.locator("#timePauseButton").tap()
             page.wait_for_function(
                 "() => document.querySelector('#timeState').textContent.includes('停止中')",
                 timeout=10000,
@@ -288,22 +162,13 @@ def run() -> dict[str, object]:
             # decision surface and command path while the clock is paused so the
             # project cannot consume materials before we inspect it.
             page.locator('[data-tab="facilities"]').click()
-            production_row = page.locator('tr[data-inspect="facility"]', has_text="基礎構造材工場")
-            _assert(production_row.count() == 1, "opening production facility must be visible")
-            production_row.click()
-            production_text = page.locator("#inspectorContent").inner_text()
-            _assert("生産物/日" in production_text, "facility inspector must expose configured production outputs")
-            _assert("高性能構造部材" in production_text, "facility inspector must name the produced resource")
-            _assert("投入/日" in production_text, "facility inspector must expose configured production inputs")
-            facility_rows = page.locator('tr[data-inspect="facility"]')
-            upgrade_button = None
-            for index in range(facility_rows.count()):
-                facility_rows.nth(index).click()
-                candidate = page.locator('#inspectorContent [data-upgrade]')
-                if candidate.count():
-                    upgrade_button = candidate.first
-                    break
-            _assert(upgrade_button is not None, "at least one initial facility must expose a defined next upgrade")
+            upgrade_row = page.locator(
+                f'tr[data-inspect="facility"][data-id="{_fixture_facility.id}"]'
+            )
+            upgrade_row.wait_for(timeout=10000)
+            upgrade_row.click()
+            upgrade_button = page.locator('#inspectorContent [data-upgrade]').first
+            _assert(upgrade_button.count() == 1, "fixture facility must expose its Application-projected upgrade action")
             _assert(upgrade_button.is_visible(), "facility inspector must show the upgrade action")
             _assert(upgrade_button.is_enabled(), "unblocked facility upgrade action must be enabled")
             _assert("必要工数" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose construction work")
@@ -322,7 +187,8 @@ def run() -> dict[str, object]:
             page.locator("#upgradePlanProcurementTimingPolicy").select_option("immediate")
             # Unsaved planning values are client-owned drafts. A refresh with no
             # authoritative change must not silently reset them before submission.
-            page.evaluate("async () => { await window.SpaceIdleApp.loadUiSnapshot(); }")
+            page.locator("#refreshButton").click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             _assert(page.locator("#upgradePlanPriorityInput").input_value() == "4", "upgrade planning priority must survive refresh")
             _assert(page.locator("#upgradePlanProcurementTimingPolicy").input_value() == "immediate", "upgrade procurement timing policy must survive refresh")
             upgrade_button = page.locator('#inspectorContent [data-upgrade]').first
@@ -361,8 +227,40 @@ def run() -> dict[str, object]:
             page.locator('[data-tab="research"]').click()
             research_rows = page.locator('#researchTree [data-inspect="research"]')
             _assert(research_rows.count() > 0, "research tree must expose research decisions")
-            research_rows.first.click()
-            _assert(page.locator('#inspectorContent [data-lifecycle-control="research"]').count() == 1, "research must expose one stable lifecycle control")
+            startable_research = None
+            for index in range(research_rows.count()):
+                research_rows.nth(index).click()
+                control = page.locator('#inspectorContent [data-lifecycle-control="research"]')
+                if (
+                    control.count() == 1
+                    and control.get_attribute('data-research-action') == 'start'
+                    and control.is_enabled()
+                ):
+                    startable_research = control
+                    break
+            _assert(startable_research is not None, "at least one projected Research decision must be startable")
+            page.locator('#researchPriorityInput').select_option('4')
+            startable_research.click()
+            research_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="research"]')
+            page.wait_for_function(
+                "() => document.querySelector('[data-lifecycle-control=research]')?.dataset.researchAction === 'pause'",
+                timeout=10000,
+            )
+            research_lifecycle.click()
+            page.wait_for_function(
+                "() => document.querySelector('[data-lifecycle-control=research]')?.dataset.researchAction === 'resume'",
+                timeout=10000,
+            )
+            research_lifecycle.click()
+            page.wait_for_function(
+                "() => document.querySelector('[data-lifecycle-control=research]')?.dataset.researchAction === 'pause'",
+                timeout=10000,
+            )
+            research_lifecycle.click()
+            page.wait_for_function(
+                "() => document.querySelector('[data-lifecycle-control=research]')?.dataset.researchAction === 'resume'",
+                timeout=10000,
+            )
             page.locator('[data-tab="overview"]').click()
 
             page.locator('[data-tab="scientific-exploration"]').click()
@@ -383,11 +281,37 @@ def run() -> dict[str, object]:
             exploration_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="exploration"]')
             _assert(exploration_lifecycle.count() == 1, "exploration must expose one lifecycle control")
             _assert(exploration_lifecycle.get_attribute('data-exploration-action') == 'start' and exploration_lifecycle.is_enabled(), "campaign lifecycle control must expose start when startable")
+            page.locator('#explorationPriorityInput').select_option('4')
+            exploration_lifecycle.click()
+            page.wait_for_function(
+                "() => document.querySelector('[data-lifecycle-control=exploration]')?.dataset.explorationAction === 'pause'",
+                timeout=10000,
+            )
+            assignable_fleet = page.locator('#inspectorContent [data-exploration-assign]:not([disabled])').first
+            _assert(assignable_fleet.count() == 1, "started exploration must expose an assignable Fleet option when projected")
+            assignable_fleet.click()
+            page.locator('#inspectorContent [data-exploration-unassign]').wait_for(timeout=10000)
+            exploration_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="exploration"]')
+            exploration_lifecycle.click()
+            page.wait_for_function(
+                "() => document.querySelector('[data-lifecycle-control=exploration]')?.dataset.explorationAction === 'resume'",
+                timeout=10000,
+            )
+            exploration_lifecycle.click()
+            page.wait_for_function(
+                "() => document.querySelector('[data-lifecycle-control=exploration]')?.dataset.explorationAction === 'pause'",
+                timeout=10000,
+            )
+            exploration_lifecycle.click()
+            page.wait_for_function(
+                "() => document.querySelector('[data-lifecycle-control=exploration]')?.dataset.explorationAction === 'resume'",
+                timeout=10000,
+            )
             page.locator('[data-tab="overview"]').click()
 
             page.locator(f'[data-location-id="{ids.EARTH}"]').click()
             page.locator('[data-tab="survey"]').click()
-            known_survey = page.locator(f'tr[data-inspect="survey"][data-id="{ids.EARTH_CELL_INDUSTRIAL}::{ids.WATER}"]')
+            known_survey = page.locator('tr[data-inspect="survey"]').first
             known_survey.wait_for(timeout=10000)
             _assert("Knowledge" in known_survey.inner_text(), "raw Survey Knowledge must be presented independently from Campaign lifecycle")
             known_survey.click()
@@ -397,11 +321,18 @@ def run() -> dict[str, object]:
             page.locator('[data-tab="surface"]').click()
             surface_cells = page.locator('.surface-cell-button')
             surface_cells.first.wait_for(timeout=10000)
-            _assert(surface_cells.count() >= 3, "surface map must render body cells as spatial decisions")
-            _assert("base.cell." not in surface_cells.first.inner_text(), "surface map must present regional names rather than internal cell ids")
-            coastal_cell = page.locator(f'.surface-cell-button[data-id="{ids.EARTH_CELL_COASTAL}"]')
-            _assert("沿岸地域" in coastal_cell.inner_text(), "surface map must present content-defined regional meaning")
-            coastal_cell.click()
+            _assert(surface_cells.count() > 0, "surface map must render Application-projected body cells")
+            _assert("base.cell." not in surface_cells.first.inner_text(), "surface map must present labels rather than internal cell ids")
+            surface_decision_found = False
+            for index in range(surface_cells.count()):
+                surface_cells.nth(index).click()
+                if (
+                    page.locator('#inspectorContent [data-surface-develop]').count() > 0
+                    and "Location設立" in page.locator("#inspectorContent").inner_text()
+                ):
+                    surface_decision_found = True
+                    break
+            _assert(surface_decision_found, "surface map must expose a projected development/founding decision")
             surface_inspector = page.locator("#inspectorContent").inner_text()
             _assert("Cell状態" in surface_inspector, "surface cell inspector must expose physical cell state")
             _assert("Current Environment" in surface_inspector, "surface cell inspector must expose application-projected current environment")
@@ -418,12 +349,13 @@ def run() -> dict[str, object]:
 
             page.locator(f'[data-location-id="{ids.LUNAR_ORBIT}"]').click()
             page.locator('[data-tab="survey"]').click()
-            target_cells = (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.MOON_CELL_FARSIDE_HIGHLANDS)
-            for cell_id in target_cells:
-                checkbox = page.locator(f'[data-survey-draft-cell][value="{cell_id}"]')
-                checkbox.wait_for(timeout=10000)
-                checkbox.check()
+            cell_checkboxes = page.locator('[data-survey-draft-cell]')
+            cell_checkboxes.first.wait_for(timeout=10000)
+            _assert(cell_checkboxes.count() >= 2, "Survey Campaign UI must allow a multi-cell scope")
+            cell_checkboxes.nth(0).check()
+            cell_checkboxes.nth(1).check()
             resource_checkbox = page.locator(f'[data-survey-draft-resource][value="{ids.WATER}"]')
+            resource_checkbox.wait_for(timeout=10000)
             resource_checkbox.check()
             page.locator('#surveyDraftPriority').select_option("4")
             page.locator('[data-start-survey-campaign]').click()
@@ -431,7 +363,7 @@ def run() -> dict[str, object]:
             campaign_row = page.locator('tr[data-inspect="survey-campaign"]').first
             campaign_row.wait_for(timeout=10000)
             _assert("2 Cell × 1 Resource" in campaign_row.inner_text(), "Survey UI must create one multi-target Campaign instead of per-target jobs")
-            _assert("lunar_resource_survey_orbiter" not in campaign_row.inner_text(), "Survey Campaign row must use presentation labels rather than exposing raw provider ids")
+            _assert("base." not in campaign_row.inner_text(), "Survey Campaign row must use presentation labels rather than raw definition ids")
             campaign_row.click()
             campaign_text = page.locator('#inspectorContent').inner_text()
             _assert("Scope / Goal編集" in campaign_text, "Survey Campaign inspector must expose the selected scope and goal")
@@ -441,6 +373,26 @@ def run() -> dict[str, object]:
             _assert(int(page.locator('#surveyPriorityInput').input_value()) == 4, "Survey Campaign start priority must round-trip through the UI")
             survey_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey-campaign"]')
             _assert(survey_lifecycle.get_attribute('data-survey-campaign-action') == 'pause' and survey_lifecycle.is_enabled(), "active Survey Campaign must expose pause on the stable lifecycle control")
+            page.locator('#surveyPriorityInput').select_option('5')
+            page.locator('#inspectorContent [data-set-survey-priority]').click()
+            page.wait_for_function(
+                "() => document.querySelector('#surveyPriorityInput')?.value === '5'", timeout=10000
+            )
+            survey_lifecycle.click()
+            page.wait_for_function(
+                "() => document.querySelector('[data-lifecycle-control=survey-campaign]')?.dataset.surveyCampaignAction === 'resume'",
+                timeout=10000,
+            )
+            survey_lifecycle.click()
+            page.wait_for_function(
+                "() => document.querySelector('[data-lifecycle-control=survey-campaign]')?.dataset.surveyCampaignAction === 'pause'",
+                timeout=10000,
+            )
+            survey_lifecycle.click()
+            page.wait_for_function(
+                "() => document.querySelector('[data-lifecycle-control=survey-campaign]')?.dataset.surveyCampaignAction === 'resume'",
+                timeout=10000,
+            )
 
             # A surveyed Cell must become a player-selectable founding site; the
             # UI must use the Application-projected option rather than inventing
@@ -459,7 +411,10 @@ def run() -> dict[str, object]:
             _assert(founding_button.is_enabled(), "surveyed lunar cell must allow player-selected Founding when planning requirements are met")
             founding_card = founding_button.locator('xpath=ancestor::*[contains(@class,"surface-action-card")][1]')
             _assert("Staging必要Resource" in founding_card.inner_text(), "Founding decision surface must expose staging resources before commitment")
-            _assert("推進剤" in founding_card.inner_text(), "Founding decision surface must include deployment propellant before commitment")
+            _assert(
+                founding_card.locator('.surface-resource-list .cell-sub').count() > 0,
+                "Founding decision surface must present its Application-projected staging resources",
+            )
             founding_card.locator('[data-new-location-name]').fill("Browser Lunar Outpost")
             founding_button.click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
@@ -480,7 +435,6 @@ def run() -> dict[str, object]:
                 timeout=10000,
             )
             rev_after = int(page.locator("#revisionValue").inner_text())
-            page.screenshot(path=ARTIFACTS / "operations_landscape_1194x834.png", full_page=True)
 
             page.set_viewport_size({"width": 1180, "height": 820})
             page.wait_for_timeout(100)
@@ -516,7 +470,6 @@ def run() -> dict[str, object]:
             issue_titles = page.locator("#movementPlanInspectorContent .issue-title").all_inner_texts()
             _assert(all("base.tech." not in text for text in issue_titles), "technology IDs must not leak into blocker titles")
             _assert(all("technology:" not in text for text in issue_titles), "raw blocker prefixes must not leak into blocker titles")
-            page.screenshot(path=ARTIFACTS / "logistics_landscape_1194x834.png", full_page=True)
 
             page.get_by_role("button", name="拠点運用").click()
             page.set_viewport_size({"width": 834, "height": 1194})
@@ -543,7 +496,6 @@ def run() -> dict[str, object]:
                 "portrait must preserve left/workspace/inspector order",
             )
             _assert("非対応" not in portrait["bodyText"], "portrait must not replace the UI with an unsupported notice")
-            page.screenshot(path=ARTIFACTS / "operations_portrait_landscape_layout_834x1194.png", full_page=True)
 
             page.get_by_role("button", name="物流ネットワーク").click()
             portrait_logistics = page.evaluate(
@@ -585,7 +537,6 @@ def run() -> dict[str, object]:
 
             results = {
                 "browser": browser_name,
-                "transport": transport,
                 "server": "in_process_http",
                 "device_scale_factor": 2,
                 "facility_upgrade_ui": True,
@@ -600,18 +551,8 @@ def run() -> dict[str, object]:
                 "day_running": running_day,
                 "day_after": int(page.locator("#dayValue").inner_text().replace(",", "")),
                 "revision_after": rev_after,
-                "console_errors": list(console_errors),
-                "page_errors": list(page_errors),
-                "request_failures": list(request_failures),
             }
 
-        _assert(not console_errors, f"browser console errors: {console_errors}")
-        _assert(not page_errors, f"page errors: {page_errors}")
-        _assert(not request_failures, f"request failures: {request_failures}")
-        (ARTIFACTS / "acceptance.json").write_text(
-            json.dumps(results, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
         return results
     finally:
         server.shutdown()
@@ -621,6 +562,4 @@ def run() -> dict[str, object]:
 
 
 if __name__ == "__main__":
-    result = run_ci_suite_or_standalone(__file__, run)
-    if result is not None:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(run(), ensure_ascii=False, indent=2))

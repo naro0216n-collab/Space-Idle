@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import importlib.util
 from pathlib import Path
 import sys
@@ -21,60 +22,7 @@ def _load_module(name: str, path: Path):
     return module
 
 
-def _write_workflow(path: Path, *, workflow_name: str, job: str, scenarios: list[str]) -> None:
-    commands = "\n".join(f"          python playwright/{name}.py" for name in scenarios)
-    path.write_text(
-        f"""name: {workflow_name}
-
-jobs:
-  {job}:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Browser scenarios
-        run: |
-{commands}
-""",
-        encoding="utf-8",
-    )
-
-
-
-
-def _browser_scenario_jobs(path: Path) -> tuple[str, ...]:
-    jobs: list[str] = []
-    current_job: str | None = None
-    has_scenario = False
-    in_jobs = False
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line == "jobs:":
-            in_jobs = True
-            continue
-        if not in_jobs:
-            continue
-        if line and not line.startswith(" "):
-            break
-        if line.startswith("  ") and not line.startswith("    ") and line.endswith(":"):
-            if current_job is not None and has_scenario:
-                jobs.append(current_job)
-            current_job = line.strip()[:-1]
-            has_scenario = False
-            continue
-        if current_job is not None and "python playwright/" in line:
-            has_scenario = True
-    if current_job is not None and has_scenario:
-        jobs.append(current_job)
-    return tuple(jobs)
-
-def _configure_ci(monkeypatch, tmp_path: Path, workflow: Path, *, name: str, job: str) -> None:
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GITHUB_WORKFLOW", name)
-    monkeypatch.setenv("GITHUB_JOB", job)
-    monkeypatch.setenv("GITHUB_RUN_ID", "123")
-    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
-    monkeypatch.setenv("SPACE_IDLE_CI_WORKFLOW_FILE", str(workflow))
-
-
-def test_suite_runner_accepts_new_scenario_modules_without_registry_changes(
+def test_suite_runner_accepts_scenario_modules_without_registry_changes(
     monkeypatch, tmp_path, capsys
 ) -> None:
     runner = _load_module("space_idle_e2e_suite_test", PLAYWRIGHT_DIR / "run_suite.py")
@@ -153,8 +101,6 @@ def test_isolated_browser_context_always_owns_a_fresh_browser(monkeypatch) -> No
         def new_context(self, **_options):
             return self.context
 
-    from contextlib import contextmanager
-
     @contextmanager
     def fake_managed_browser(_browser_name):
         browser = FakeBrowser()
@@ -173,94 +119,35 @@ def test_isolated_browser_context_always_owns_a_fresh_browser(monkeypatch) -> No
     assert first.closed and second.closed
 
 
-def test_ci_suite_is_derived_from_current_job_commands_including_future_additions(
-    monkeypatch, tmp_path
-) -> None:
-    support = _load_module("space_idle_e2e_support_ci_test", PLAYWRIGHT_DIR / "e2e_support.py")
-    workflow = tmp_path / "full-validation.yml"
-    declared = ["acceptance", "interaction_continuity", "future_browser_contract"]
-    _write_workflow(workflow, workflow_name="Full Validation", job="webkit-e2e", scenarios=declared)
-    _configure_ci(
-        monkeypatch,
-        tmp_path,
-        workflow,
-        name="Full Validation",
-        job="webkit-e2e",
-    )
+def test_monitored_page_fails_on_browser_specific_runtime_errors() -> None:
+    support = _load_module("space_idle_e2e_support_monitor_test", PLAYWRIGHT_DIR / "e2e_support.py")
 
-    executed: list[tuple[str, ...]] = []
-    fake_runner = SimpleNamespace(run_scenarios=lambda names: executed.append(tuple(names)))
-    monkeypatch.setitem(sys.modules, "run_suite", fake_runner)
+    class FakePage:
+        def __init__(self):
+            self.handlers = {}
 
-    support.run_ci_suite_or_standalone("/repo/playwright/acceptance.py", lambda: None)
+        def on(self, event, handler):
+            self.handlers[event] = handler
 
-    assert executed == [tuple(declared)]
-    assert support.guard_ci_secondary_entrypoint("interaction_continuity.py") is True
-    assert support.guard_ci_secondary_entrypoint("future_browser_contract.py") is True
-
-
-def test_ci_fails_closed_when_new_first_scenario_does_not_create_suite_marker(
-    monkeypatch, tmp_path
-) -> None:
-    support = _load_module("space_idle_e2e_support_ci_guard_test", PLAYWRIGHT_DIR / "e2e_support.py")
-    workflow = tmp_path / "full-validation.yml"
-    _write_workflow(
-        workflow,
-        workflow_name="Full Validation",
-        job="webkit-e2e",
-        scenarios=["future_first", "acceptance", "logistics_ui"],
-    )
-    _configure_ci(
-        monkeypatch,
-        tmp_path,
-        workflow,
-        name="Full Validation",
-        job="webkit-e2e",
-    )
+    page = FakePage()
+    context = SimpleNamespace(new_page=lambda: page)
 
     try:
-        support.guard_ci_secondary_entrypoint("acceptance.py")
-    except RuntimeError as exc:
-        assert "marker missing or inconsistent" in str(exc)
+        with support.monitored_page(context):
+            page.handlers["pageerror"](RuntimeError("broken browser handler"))
+    except AssertionError as exc:
+        assert "broken browser handler" in str(exc)
     else:
-        raise AssertionError("a new unintegrated first scenario must fail instead of hiding coverage")
+        raise AssertionError("browser runtime errors must fail the scenario")
 
 
-def test_fast_ci_remains_independent_even_as_its_scenario_list_changes(monkeypatch, tmp_path) -> None:
-    support = _load_module("space_idle_e2e_support_fast_test", PLAYWRIGHT_DIR / "e2e_support.py")
-    workflow = tmp_path / "ci.yml"
-    _write_workflow(
-        workflow,
-        workflow_name="Fast CI",
-        job="chromium-smoke",
-        scenarios=["acceptance", "future_fast_smoke"],
+def test_ci_browser_jobs_invoke_explicit_suite_runner() -> None:
+    fast = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    full = (ROOT / ".github" / "workflows" / "full-validation.yml").read_text(encoding="utf-8")
+
+    assert "python playwright/run_suite.py acceptance interaction_continuity logistics_ui" in fast
+    full_command = (
+        "python playwright/run_suite.py acceptance interaction_continuity logistics_ui"
     )
-    _configure_ci(monkeypatch, tmp_path, workflow, name="Fast CI", job="chromium-smoke")
-
-    assert support.ci_suite() is None
-    assert support.guard_ci_secondary_entrypoint("future_fast_smoke.py") is False
-
-
-def test_full_browser_jobs_derive_each_declared_suite_and_harness_contract(monkeypatch) -> None:
-    support = _load_module("space_idle_e2e_support_workflow_test", PLAYWRIGHT_DIR / "e2e_support.py")
-    workflow = ROOT / ".github" / "workflows" / "full-validation.yml"
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GITHUB_WORKFLOW", "Full Validation")
-    monkeypatch.setenv("SPACE_IDLE_CI_WORKFLOW_FILE", str(workflow))
-
-    jobs = _browser_scenario_jobs(workflow)
-    assert jobs
-    suites = []
-    for job in jobs:
-        monkeypatch.setenv("GITHUB_JOB", job)
-        suite = support.ci_suite()
-        assert suite is not None
-        suites.append(suite)
-
-    # Every scenario declared in any coalesced browser job must adopt the generic
-    # entrypoint contract. Browser-specific additions are allowed; an unintegrated
-    # addition fails locally instead of silently restoring duplicate cold starts.
-    for name in {name for suite in suites for name in suite}:
-        scenario = (PLAYWRIGHT_DIR / f"{name}.py").read_text(encoding="utf-8")
-        assert "guard_ci_secondary_entrypoint(__file__)" in scenario
-        assert "run_ci_suite_or_standalone(__file__, run)" in scenario
+    assert full.count(full_command) == 2
+    assert "python playwright/lane_ui.py" not in fast + full
