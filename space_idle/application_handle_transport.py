@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from .application_commands import (
-    ChangeTransportAllocationMode, Command, CommandResult,
+    ClearTransportMovementConstraint, Command, CommandResult,
     CreateTransportAllocation, DeleteTransportAllocation,
     PauseTransportAllocation, ProduceVehicle, PauseVehicleProduction, RelocateFleet,
     RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority, ResumeVehicleProduction, ResumeTransportAllocation, SetVehicleProductionSettings,
-    UpdateTransportAllocation,
+    SetTransportMovementConstraint, UpdateTransportAllocation,
 )
-from .transport.models import PathPolicy
 from .shared import DefinitionId, EntityId, MovementPlanId
-from .transport.models import DirectionalCapacity, TransportControlMode
+from .transport.models import DirectionalCapacity
 
 
 class TransportCommandHandlerMixin:
@@ -41,28 +40,23 @@ class TransportCommandHandlerMixin:
             )
             return CommandResult()
         if isinstance(command, CreateTransportAllocation):
-            mode = TransportControlMode(command.control_mode)
             target_capacity = self._capacity_target(
                 command.target_forward_t_per_day, command.target_reverse_t_per_day
             )
-            if mode is TransportControlMode.UNITS:
-                if target_capacity is not None:
-                    raise ValueError("UNITS allocation cannot accept a capacity target")
-                target_units = 0 if command.target_units is None else command.target_units
-            else:
-                if command.target_units is not None:
-                    raise ValueError("CAPACITY allocation cannot accept target_units")
-                if target_capacity is None:
-                    raise ValueError("CAPACITY allocation requires directional targets")
-                target_units = None
+            if target_capacity is None:
+                raise ValueError("transport allocation requires directional capacity targets")
             allocation_id = sim.transport.create_transport_allocation(
                 DefinitionId(command.vehicle_definition_id),
                 self._require_operational_node(command.anchor_node_id),
                 self._require_operational_node(command.destination_id),
-                provisioning_priority=command.provisioning_priority, control_mode=mode,
-                target_units=target_units, target_capacity=target_capacity,
-                path=None if command.path is None else tuple(MovementPlanId(value) for value in command.path),
-                path_policy=PathPolicy(command.path_policy), paused=command.paused, day=sim.day,
+                target_capacity=target_capacity,
+                provisioning_priority=command.provisioning_priority,
+                movement_hard_constraint=(
+                    None
+                    if command.movement_hard_constraint is None
+                    else tuple(MovementPlanId(value) for value in command.movement_hard_constraint)
+                ),
+                paused=command.paused, day=sim.day,
             )
             return CommandResult(str(allocation_id))
         if isinstance(command, UpdateTransportAllocation):
@@ -71,14 +65,19 @@ class TransportCommandHandlerMixin:
             )
             sim.transport.update_transport_allocation(
                 EntityId(command.allocation_id), provisioning_priority=command.provisioning_priority,
-                target_units=command.target_units, target_capacity=target_capacity,
-                path_policy=None if command.path_policy is None else PathPolicy(command.path_policy),
+                target_capacity=target_capacity, day=sim.day,
+            )
+            return CommandResult()
+        if isinstance(command, SetTransportMovementConstraint):
+            sim.transport.set_transport_movement_constraint(
+                EntityId(command.allocation_id),
+                tuple(MovementPlanId(value) for value in command.movement_plan_ids),
                 day=sim.day,
             )
             return CommandResult()
-        if isinstance(command, ChangeTransportAllocationMode):
-            sim.transport.change_transport_allocation_mode(
-                EntityId(command.allocation_id), TransportControlMode(command.control_mode), day=sim.day
+        if isinstance(command, ClearTransportMovementConstraint):
+            sim.transport.clear_transport_movement_constraint(
+                EntityId(command.allocation_id), day=sim.day
             )
             return CommandResult()
         if isinstance(command, PauseTransportAllocation):
@@ -104,8 +103,12 @@ class TransportCommandHandlerMixin:
             relocation_id = sim.transport.relocate_fleet(
                 DefinitionId(command.vehicle_definition_id), command.units,
                 self._require_operational_node(command.source_id), self._require_operational_node(command.destination_id),
-                path=None if command.path is None else tuple(MovementPlanId(value) for value in command.path),
-                path_policy=PathPolicy(command.path_policy), day=sim.day,
+                movement_hard_constraint=(
+                    None
+                    if command.movement_hard_constraint is None
+                    else tuple(MovementPlanId(value) for value in command.movement_hard_constraint)
+                ),
+                day=sim.day,
             )
             return CommandResult(str(relocation_id))
         return NotImplemented

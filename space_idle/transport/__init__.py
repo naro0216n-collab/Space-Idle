@@ -1,7 +1,7 @@
 from .models import (
     POWERED_ASCENT, SPACEFLIGHT, LANDING, ATMOSPHERIC_ENTRY, SURFACE_TRANSPORT,
-    TransportOperationKind, OperationAssetDisposition, PathPolicy,
-    FleetActivityRef, FleetCommitmentState, FleetCommitmentSnapshot, TransportControlMode,
+    TransportOperationKind, OperationAssetDisposition,
+    FleetActivityRef, FleetCommitmentState, FleetCommitmentSnapshot,
     OperationSupportLocation, OperationCapability, OperationSupportRequirement,
     ResourceSupportRequirement,
     TransportOperationRequirement, MovementEndpoint, SpatialRelation, MovementPlan,
@@ -24,8 +24,8 @@ from .operations import (
 
 __all__ = [
     'POWERED_ASCENT', 'SPACEFLIGHT', 'LANDING', 'ATMOSPHERIC_ENTRY', 'SURFACE_TRANSPORT',
-    'TransportOperationKind', 'OperationAssetDisposition', 'PathPolicy',
-    'FleetActivityRef', 'FleetCommitmentState', 'FleetCommitmentSnapshot', 'TransportControlMode',
+    'TransportOperationKind', 'OperationAssetDisposition',
+    'FleetActivityRef', 'FleetCommitmentState', 'FleetCommitmentSnapshot',
     'OperationSupportLocation', 'OperationCapability', 'OperationSupportRequirement',
     'ResourceSupportRequirement',
     'TransportOperationRequirement', 'MovementEndpoint', 'SpatialRelation', 'MovementPlan',

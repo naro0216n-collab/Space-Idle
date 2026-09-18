@@ -100,9 +100,7 @@ class TransportAllocationRow:
     anchor_node_id: str
     destination_id: str
     provisioning_priority: ProvisioningPriority
-    control_mode: str
-    target_units: int | None
-    target_capacity: DirectionalCapacityRow | None
+    target_capacity: DirectionalCapacityRow
     active_units: int
     required_units: int
     unfilled_units: int
@@ -111,8 +109,9 @@ class TransportAllocationRow:
     used: DirectionalCapacityRow
     spare: DirectionalCapacityRow
     utilization: float
-    path: tuple[str, ...] | None
-    path_policy: str
+    movement_hard_constraint: tuple[str, ...] | None
+    selected_forward_path: tuple[str, ...]
+    selected_reverse_path: tuple[str, ...]
     paused: bool
     cycle_days: float
     forward_latency_days: int
@@ -308,7 +307,6 @@ class TransportAllocationOptionRow:
     display_name: str
     source_id: str
     destination_id: str
-    policy: str
     forward_path: tuple[str, ...]
     reverse_path: tuple[str, ...]
     cycle_days: float

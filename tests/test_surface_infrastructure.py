@@ -335,7 +335,11 @@ def test_remote_surface_movement_capacity_uses_location_surface_infrastructure()
     sim.transport.add_fleet_units(ids.SURFACE_CARGO_HAULER, 1, a)
     sim.transport.invalidate_movement_plans()
     allocation_id = sim.transport.create_transport_allocation(
-        ids.SURFACE_CARGO_HAULER, a, b, target_units=1, day=sim.day
+        ids.SURFACE_CARGO_HAULER, a, b,
+        target_capacity=sim.transport.transport_capacity_for_units(
+            ids.SURFACE_CARGO_HAULER, a, b, 1, day=sim.day
+        ),
+        day=sim.day,
     )
     initial = sim.transport.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert initial.nominal.forward_t_per_day > 0.0

@@ -26,10 +26,8 @@ from .models import (
     MovementExecutionPayloadResource,
     MovementExecutionResourceRequirement,
     OperationAssetDisposition,
-    PathPolicy,
     TransportOperationRequirement,
     TransportAllocation,
-    TransportControlMode,
 )
 from .production import VehicleProductionPhase, VehicleProductionState
 
@@ -176,14 +174,15 @@ def capture_transport(sim: Any) -> dict[str, Any]:
                 "anchor_node_id": str(row.anchor_node_id),
                 "destination_id": str(row.destination_id),
                 "provisioning_priority": int(row.provisioning_priority),
-                "control_mode": row.control_mode.value,
-                "target_units": row.target_units,
-                "target_capacity": None if row.target_capacity is None else {
+                "target_capacity": {
                     "forward_t_per_day": row.target_capacity.forward_t_per_day,
                     "reverse_t_per_day": row.target_capacity.reverse_t_per_day,
                 },
-                "path": None if row.path is None else [str(movement_plan_id) for movement_plan_id in row.path],
-                "path_policy": row.path_policy.value,
+                "movement_hard_constraint": (
+                    None
+                    if row.movement_hard_constraint is None
+                    else [str(value) for value in row.movement_hard_constraint]
+                ),
                 "paused": row.paused,
                 "last_operated_day": row.last_operated_day,
             }
@@ -290,15 +289,18 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
     }
     tr.transport_allocations = {}
     for row in data.get("transport_allocations", []):
-        target = row.get("target_capacity")
+        target = row["target_capacity"]
         allocation = TransportAllocation(
             id=EntityId(row["id"]), vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
             anchor_node_id=SpatialNodeId(row["anchor_node_id"]), destination_id=SpatialNodeId(row["destination_id"]),
-            provisioning_priority=int(row["provisioning_priority"]), control_mode=TransportControlMode(row["control_mode"]),
-            target_units=None if row.get("target_units") is None else int(row["target_units"]),
-            target_capacity=None if target is None else DirectionalCapacity(float(target["forward_t_per_day"]), float(target["reverse_t_per_day"])),
-            path=None if row.get("path") is None else tuple(MovementPlanId(value) for value in row["path"]),
-            path_policy=PathPolicy(row.get("path_policy", "balanced")), paused=bool(row.get("paused", False)),
+            provisioning_priority=int(row["provisioning_priority"]),
+            target_capacity=DirectionalCapacity(float(target["forward_t_per_day"]), float(target["reverse_t_per_day"])),
+            movement_hard_constraint=(
+                None
+                if row.get("movement_hard_constraint") is None
+                else tuple(MovementPlanId(value) for value in row["movement_hard_constraint"])
+            ),
+            paused=bool(row.get("paused", False)),
             last_operated_day=None if row.get("last_operated_day") is None else int(row["last_operated_day"]),
         )
         tr.transport_allocations[allocation.id] = allocation
@@ -596,8 +598,12 @@ def validate_transport_runtime(sim: Any) -> None:
         _require(allocation_id == allocation.id, f"transport allocation key mismatch: {allocation_id}")
         _require(allocation.vehicle_definition_id in tr.vehicle_defs, f"transport allocation references unknown vehicle definition: {allocation_id}")
         _require(sim.graph.has_operational_node(allocation.anchor_node_id) and sim.graph.has_operational_node(allocation.destination_id), f"transport allocation references unknown endpoint: {allocation_id}")
-        if allocation.path is not None:
-            tr.validate_movement_path_structure(allocation.anchor_node_id, allocation.destination_id, allocation.path)
+        if allocation.movement_hard_constraint is not None:
+            tr.validate_movement_path_structure(
+                allocation.anchor_node_id,
+                allocation.destination_id,
+                allocation.movement_hard_constraint,
+            )
         required = tr.allocation_required_units(allocation_id, sim.day)
         active_units = tr.transport_active_units(allocation_id)
         _require(active_units <= required, f"transport allocation exceeds target: {allocation_id}")

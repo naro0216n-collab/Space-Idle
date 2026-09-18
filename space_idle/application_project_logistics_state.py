@@ -7,7 +7,6 @@ from .application_views import (
     FleetRelocationRow, FleetReleaseRow, FleetRetirementRow, FleetView, TransportAllocationRow,
     TransportAllocationsView, VehicleProductionOptionRow, VehicleProductionRow,
 )
-from .transport.models import PathPolicy
 from .shared import DefinitionId, SpatialNodeId
 
 
@@ -172,9 +171,7 @@ class LogisticsStateProjectorMixin:
                     anchor_node_id=str(allocation.anchor_node_id),
                     destination_id=str(allocation.destination_id),
                     provisioning_priority=allocation.provisioning_priority,
-                    control_mode=allocation.control_mode.value,
-                    target_units=allocation.target_units,
-                    target_capacity=None if allocation.target_capacity is None else self._capacity_row(allocation.target_capacity),
+                    target_capacity=self._capacity_row(allocation.target_capacity),
                     active_units=sim.transport.transport_active_units(allocation.id),
                     required_units=snapshot.required_units,
                     unfilled_units=snapshot.unfilled_units,
@@ -183,8 +180,20 @@ class LogisticsStateProjectorMixin:
                     used=self._capacity_row(snapshot.used),
                     spare=self._capacity_row(snapshot.spare),
                     utilization=snapshot.utilization,
-                    path=None if allocation.path is None else tuple(str(movement_plan_id) for movement_plan_id in allocation.path),
-                    path_policy=allocation.path_policy.value,
+                    movement_hard_constraint=(
+                        None
+                        if allocation.movement_hard_constraint is None
+                        else tuple(
+                            str(movement_plan_id)
+                            for movement_plan_id in allocation.movement_hard_constraint
+                        )
+                    ),
+                    selected_forward_path=tuple(
+                        str(movement_plan_id) for movement_plan_id in plan.forward_path
+                    ),
+                    selected_reverse_path=tuple(
+                        str(movement_plan_id) for movement_plan_id in plan.reverse_path
+                    ),
                     paused=allocation.paused,
                     cycle_days=plan.cycle_days,
                     forward_latency_days=plan.forward_latency_days,
@@ -363,13 +372,16 @@ class LogisticsStateProjectorMixin:
 
     def _fleet_relocation_preview_view(self, query) -> FleetRelocationPreviewView:
         sim = self._simulation
-        policy = PathPolicy(query.path_policy)
         plan = sim.transport.fleet_relocation_plan(
             DefinitionId(query.vehicle_definition_id),
             int(query.units),
             SpatialNodeId(query.source_id),
             SpatialNodeId(query.destination_id),
-            path_policy=policy,
+            movement_hard_constraint=(
+                None
+                if query.movement_hard_constraint is None
+                else tuple(query.movement_hard_constraint)
+            ),
             day=sim.day,
         )
         definition = self._vehicle_definition(plan.vehicle_definition_id)
@@ -379,7 +391,7 @@ class LogisticsStateProjectorMixin:
             units=plan.units,
             source_id=str(plan.source_id),
             destination_id=str(plan.destination_id),
-            path_policy=policy.value,
+            movement_hard_constraint=query.movement_hard_constraint,
             path=tuple(str(movement_plan_id) for movement_plan_id in plan.path),
             travel_days=plan.travel_days,
             departure_day=plan.departure_day,

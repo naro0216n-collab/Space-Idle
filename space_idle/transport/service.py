@@ -23,7 +23,6 @@ from .models import (
     FleetCommitmentState,
     MovementExecution,
     MovementPlan,
-    PathPolicy,
     TransportAllocation,
     TransportCapacitySnapshot,
     TransportOperationDependencyProjection,
@@ -235,20 +234,15 @@ class TransportService(
         vehicle_definition_id: DefinitionId,
         *,
         day: int = 0,
-        path_policy=None,
-        explicit_path: tuple[MovementPlanId, ...] | None = None,
+        movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
         require_destination_disposition: bool = False,
     ) -> tuple[MovementPlan, ...]:
-        from .models import PathPolicy
-
-        policy = PathPolicy.BALANCED if path_policy is None else PathPolicy(path_policy)
         path = self._movement_path_for_vehicle(
             origin_id,
             destination_id,
             vehicle_definition_id,
             day,
-            policy,
-            explicit_path,
+            movement_hard_constraint,
             require_destination_disposition=require_destination_disposition,
         )
         return tuple(self.require_movement_plan(plan_id) for plan_id in path)
@@ -285,9 +279,9 @@ class TransportService(
             raise ValueError(
                 f"no executable movement plan {origin_id} -> physical target {target_cell_id}"
             )
-        from ..path_selection import select_tradeoff_candidate
+        from ..path_selection import select_canonical_candidate
 
-        return select_tradeoff_candidate(
+        return select_canonical_candidate(
             candidates,
             metric_time=lambda plan: self.performance_movement_transit_days(
                 plan, vehicle.performance
@@ -295,8 +289,11 @@ class TransportService(
             metric_propellant=lambda plan: vehicle.propellant_t(
                 plan, max(vehicle.max_cargo_for_movement(plan), 0.0)
             ),
+            metric_handoffs=lambda _plan: 0.0,
+            metric_capacity_burden=lambda plan: 1.0 / max(
+                vehicle.max_cargo_for_movement(plan), 1.0e-12
+            ),
             stable_key=lambda plan: str(plan.id),
-            preference=PathPolicy.BALANCED,
         )
 
     def movement_plan_to_non_surface_physical_target_for_vehicle(
@@ -324,7 +321,22 @@ class TransportService(
             candidates.append(plan)
         if not candidates:
             raise ValueError(f"no executable movement plan {origin_id} -> non-surface physical target {target_node_id}")
-        return min(candidates, key=lambda row: (self.performance_movement_transit_days(row, vehicle.performance), row.delta_v_km_s, str(row.id)))
+        from ..path_selection import select_canonical_candidate
+
+        return select_canonical_candidate(
+            candidates,
+            metric_time=lambda plan: self.performance_movement_transit_days(
+                plan, vehicle.performance
+            ),
+            metric_propellant=lambda plan: vehicle.propellant_t(
+                plan, max(vehicle.max_cargo_for_movement(plan), 0.0)
+            ),
+            metric_handoffs=lambda _plan: 0.0,
+            metric_capacity_burden=lambda plan: 1.0 / max(
+                vehicle.max_cargo_for_movement(plan), 1.0e-12
+            ),
+            stable_key=lambda plan: str(plan.id),
+        )
 
     def outbound_movement_plans(self, origin_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
         cached = self._movement_plan_outbound_index.get(origin_id)

@@ -5,7 +5,7 @@ from .bootstrap import build_game_application
 from .application import (
     AcceptContract, AdvanceTime, ApplicationError, AssignExplorationFleet, CreateResearchProviderAssignment, ResizeResearchProviderAssignment, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, ReleaseResearchProviderAssignment, CreateSurveyProviderAssignment, ResizeSurveyProviderAssignment, ReleaseSurveyProviderAssignment, CancelBuild,
     CreateTradeOrder, UpdateTradeOrder, CancelTradeOrder,
-    ChangeTransportAllocationMode, CreateTransportAllocation,
+    ClearTransportMovementConstraint, CreateTransportAllocation, SetTransportMovementConstraint,
     DeclineContract, DeleteTransportAllocation,
     SetResearchPriority, GameApplication, GetBottlenecks, GetBuildOptions, GetCatalog,
     GetCargoFlows, GetContracts, GetDependencyAnalytics, GetMarket, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode, GetLogistics,

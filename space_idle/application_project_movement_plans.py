@@ -10,7 +10,6 @@ from .application_views import (
     TransportAllocationOptionRow,
     TransportAllocationOptionsView,
 )
-from .transport.models import PathPolicy
 
 
 class LogisticsMovementPlanProjectorMixin:
@@ -30,7 +29,7 @@ class LogisticsMovementPlanProjectorMixin:
                 movement_plan.origin_id,
                 movement_plan.destination_id,
                 day=sim.day,
-                path=(movement_plan.id,),
+                movement_hard_constraint=(movement_plan.id,),
             )
             fleet = sim.transport.fleet_pool_snapshot(
                 definition.id, movement_plan.origin_id
@@ -160,40 +159,37 @@ class LogisticsMovementPlanProjectorMixin:
         options: list[TransportAllocationOptionRow] = []
         for definition in sim.transport.vehicle_definitions():
             fleet = sim.transport.fleet_pool_snapshot(definition.id, source_id)
-            for policy in PathPolicy:
-                plan = sim.transport.transport_service_plan_for(
-                    definition.id,
-                    source_id,
-                    destination_id,
-                    day=sim.day,
-                    path_policy=policy,
+            plan = sim.transport.transport_service_plan_for(
+                definition.id,
+                source_id,
+                destination_id,
+                day=sim.day,
+            )
+            options.append(
+                TransportAllocationOptionRow(
+                    vehicle_definition_id=str(definition.id),
+                    display_name=definition.display_name,
+                    source_id=str(source_id),
+                    destination_id=str(destination_id),
+                    forward_path=tuple(str(value) for value in plan.forward_path),
+                    reverse_path=tuple(str(value) for value in plan.reverse_path),
+                    cycle_days=plan.cycle_days,
+                    forward_latency_days=plan.forward_latency_days,
+                    reverse_latency_days=plan.reverse_latency_days,
+                    nominal_capacity=self._directional_capacity_row(
+                        plan.nominal_per_unit
+                    ),
+                    fleet_total_units=fleet.total_units,
+                    fleet_free_units=fleet.free_units,
+                    operational_supply_at_full_unit=tuple(
+                        (str(location_id), str(resource_id), amount)
+                        for location_id, resource_id, amount
+                        in plan.resource_t_per_full_utilization_day
+                    ),
+                    infrastructure_requirements=infrastructure_requirement_rows(plan),
+                    blockers=plan.blockers,
                 )
-                options.append(
-                    TransportAllocationOptionRow(
-                        vehicle_definition_id=str(definition.id),
-                        display_name=definition.display_name,
-                        source_id=str(source_id),
-                        destination_id=str(destination_id),
-                        policy=policy.value,
-                        forward_path=tuple(str(value) for value in plan.forward_path),
-                        reverse_path=tuple(str(value) for value in plan.reverse_path),
-                        cycle_days=plan.cycle_days,
-                        forward_latency_days=plan.forward_latency_days,
-                        reverse_latency_days=plan.reverse_latency_days,
-                        nominal_capacity=self._directional_capacity_row(
-                            plan.nominal_per_unit
-                        ),
-                        fleet_total_units=fleet.total_units,
-                        fleet_free_units=fleet.free_units,
-                        operational_supply_at_full_unit=tuple(
-                            (str(location_id), str(resource_id), amount)
-                            for location_id, resource_id, amount
-                            in plan.resource_t_per_full_utilization_day
-                        ),
-                        infrastructure_requirements=infrastructure_requirement_rows(plan),
-                        blockers=plan.blockers,
-                    )
-                )
+            )
         return TransportAllocationOptionsView(
             str(source_id), str(destination_id), tuple(options)
         )

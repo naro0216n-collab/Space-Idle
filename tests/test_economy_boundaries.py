@@ -33,7 +33,11 @@ def test_transport_requires_player_owned_capacity_and_never_spends_market_funds(
     ]
 
     sim.transport.create_transport_allocation(
-        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
+        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO,
+        target_capacity=sim.transport.transport_capacity_for_units(
+            REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, 1, day=sim.day
+        ),
+        day=sim.day,
     )
     sim.advance_days(1)
     assert app.query(GetWorld()).funds_musd == before

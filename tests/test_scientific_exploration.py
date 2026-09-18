@@ -208,6 +208,7 @@ def test_scientific_exploration_fleet_contract_checks_usable_payload_and_generic
 
 def test_exploration_commitment_excludes_transport_and_release_refills_target():
     app = build_game_application()
+    sim = app._simulation
     app.execute(StartScientificExploration(str(ids.CISLUNAR_SCIENCE_EXPLORATION)))
     app.execute(AssignExplorationFleet(
         str(ids.CISLUNAR_SCIENCE_EXPLORATION),
@@ -215,11 +216,16 @@ def test_exploration_commitment_excludes_transport_and_release_refills_target():
     ))
     committed = _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
     assert committed.exploration_units > 0
+    capacity = sim.transport.transport_capacity_for_units(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT,
+        committed.total_units, day=sim.day,
+    )
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_ORBITAL_CARGO_TUG),
         str(ids.LEO),
         str(ids.LUNAR_ORBIT),
-        target_units=committed.total_units,
+        target_forward_t_per_day=capacity.forward_t_per_day,
+        target_reverse_t_per_day=capacity.reverse_t_per_day,
     )).created_id
     assert allocation_id is not None
     allocation = next(

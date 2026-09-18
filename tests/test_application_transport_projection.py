@@ -32,6 +32,7 @@ from space_idle import (
     SetProjectProcurementPolicy,
     SetVehicleProductionSettings,
     UpdateTransportAllocation,
+    SetTransportMovementConstraint, ClearTransportMovementConstraint,
     RelocateFleet,
     SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
     SetTargetStock, DeleteTargetStock,
@@ -49,6 +50,16 @@ from space_idle.spatial import AtmosphereField, GravityField
 from space_idle.transport import PoweredAscentCapability, TransportPerformanceProfile, VehicleDef
 from space_idle.transport.movement import MovementResolver
 
+
+
+def _capacity_command_kwargs(app, vehicle_definition_id, source_id, destination_id, units):
+    capacity = app._simulation.transport.transport_capacity_for_units(
+        vehicle_definition_id, source_id, destination_id, units, day=app._simulation.day
+    )
+    return {
+        "target_forward_t_per_day": capacity.forward_t_per_day,
+        "target_reverse_t_per_day": capacity.reverse_t_per_day,
+    }
 
 def test_vehicle_catalog_and_movement_modes_follow_definition_and_capability_contracts():
     app = build_game_application()
@@ -145,7 +156,9 @@ def test_movement_plan_projection_reuses_derived_state_and_scoped_queries_avoid_
         str(ids.REUSABLE_ORBITAL_CARGO_TUG),
         str(ids.LEO),
         str(ids.LUNAR_ORBIT),
-        target_units=1,
+        **_capacity_command_kwargs(
+            app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 1
+        ),
     )).created_id
     assert allocation_id is not None
     allocation_entity_id = next(
@@ -213,13 +226,12 @@ def test_application_decision_queries_are_observational_and_reuse_projection_wit
     assert capture_state(sim) == before
 
 
-def test_transport_allocation_projection_exposes_target_capacity_policy_and_plan_requirements():
+def test_transport_allocation_projection_exposes_capacity_target_and_canonical_plan_requirements():
     app = build_game_application()
     option = next(
         row
         for row in app.query(GetTransportAllocationOptions(str(EARTH), str(LEO))).options
         if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
-        and row.policy == "fastest"
     )
     requirements = {
         (row.operational_node_id, row.capability_id, row.required_state)
@@ -235,19 +247,24 @@ def test_transport_allocation_projection_exposes_target_capacity_policy_and_plan
         in option.operational_supply_at_full_unit
     )
 
+    two_unit_capacity = app._simulation.transport.transport_capacity_for_units(
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=app._simulation.day
+    )
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
-        provisioning_priority=4, control_mode="units", target_units=2,
-        path_policy="fastest",
+        provisioning_priority=4,
+        target_forward_t_per_day=two_unit_capacity.forward_t_per_day,
+        target_reverse_t_per_day=two_unit_capacity.reverse_t_per_day,
     )).created_id
     assert allocation_id is not None
 
     row = next(item for item in app.query(GetTransportAllocations()).items if item.id == allocation_id)
-    assert row.control_mode == "units"
-    assert row.target_units == 2
-    assert row.target_capacity is None
-    assert row.required_units == row.target_units
+    assert row.target_capacity.forward_t_per_day == pytest.approx(two_unit_capacity.forward_t_per_day)
+    assert row.target_capacity.reverse_t_per_day == pytest.approx(two_unit_capacity.reverse_t_per_day)
+    assert row.required_units == 2
     assert row.active_units + row.unfilled_units == row.required_units
+    assert row.movement_hard_constraint is None
+    assert row.selected_forward_path == option.forward_path
     assert row.nominal.forward_t_per_day > 0
     assert row.available.forward_t_per_day <= row.nominal.forward_t_per_day
     assert row.spare.forward_t_per_day == pytest.approx(
@@ -255,19 +272,38 @@ def test_transport_allocation_projection_exposes_target_capacity_policy_and_plan
     )
     assert row.infrastructure_requirements == option.infrastructure_requirements
 
+    app.execute(SetTransportMovementConstraint(allocation_id, option.forward_path))
+    constrained = next(
+        item for item in app.query(GetTransportAllocations()).items
+        if item.id == allocation_id
+    )
+    assert constrained.movement_hard_constraint == option.forward_path
+    assert constrained.selected_forward_path == option.forward_path
+
+    one_unit_capacity = app._simulation.transport.transport_capacity_for_units(
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1,
+        day=app._simulation.day,
+        movement_hard_constraint=tuple(
+            app._simulation.transport.require_movement_plan(value).id
+            for value in option.forward_path
+        ),
+    )
     app.execute(UpdateTransportAllocation(
-        allocation_id, provisioning_priority=5, target_units=1,
-        path_policy="lowest_propellant",
+        allocation_id, provisioning_priority=5,
+        target_forward_t_per_day=one_unit_capacity.forward_t_per_day,
+        target_reverse_t_per_day=one_unit_capacity.reverse_t_per_day,
     ))
     updated = next(
         item for item in app.query(GetTransportAllocations()).items
         if item.id == allocation_id
     )
     assert updated.provisioning_priority == 5
-    assert updated.path_policy == "lowest_propellant"
-    assert updated.target_units == 1
-    assert updated.required_units == updated.target_units
+    assert updated.required_units == 1
     assert updated.active_units + updated.unfilled_units == updated.required_units
+
+    app.execute(ClearTransportMovementConstraint(allocation_id))
+    cleared = next(item for item in app.query(GetTransportAllocations()).items if item.id == allocation_id)
+    assert cleared.movement_hard_constraint is None
 
 def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
     app = build_game_application()
@@ -279,11 +315,17 @@ def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
     sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
 
+    auto_preview = app.query(GetFleetRelocationPreview(
+        str(vehicle_id), 1, str(ids.LEO), str(ids.LUNAR_ORBIT)
+    ))
+    assert auto_preview.feasible
+    assert auto_preview.path
     preview = app.query(GetFleetRelocationPreview(
-        str(vehicle_id), 1, str(ids.LEO), str(ids.LUNAR_ORBIT), "fastest"
+        str(vehicle_id), 1, str(ids.LEO), str(ids.LUNAR_ORBIT), auto_preview.path
     ))
     assert preview.feasible
-    assert preview.path
+    assert preview.path == auto_preview.path
+    assert preview.movement_hard_constraint == auto_preview.path
     assert preview.arrival_day == sim.day + preview.travel_days
     assert any(
         row.capability_id == "vehicle_refueling"
@@ -295,7 +337,8 @@ def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
     )
 
     relocation_id = app.execute(RelocateFleet(
-        str(vehicle_id), 1, str(ids.LEO), str(ids.LUNAR_ORBIT), path_policy="fastest"
+        str(vehicle_id), 1, str(ids.LEO), str(ids.LUNAR_ORBIT),
+        movement_hard_constraint=auto_preview.path,
     )).created_id
     relocation = next(row for row in app.query(GetFleet()).relocations if row.id == relocation_id)
     assert relocation.departure_day is None
@@ -306,12 +349,11 @@ def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
     assert relocation.departure_day == 0
     assert relocation.arrival_day == preview.arrival_day
 
-
 def test_supply_routing_constraint_and_target_stock_update_planning_intent_without_transport_reprovisioning():
     app = build_game_application()
     allocation_id = app.execute(CreateTransportAllocation(
         str(ids.REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
-        control_mode="capacity", target_forward_t_per_day=1.0,
+        target_forward_t_per_day=1.0,
         target_reverse_t_per_day=0.0, provisioning_priority=4,
     )).created_id
     assert allocation_id is not None

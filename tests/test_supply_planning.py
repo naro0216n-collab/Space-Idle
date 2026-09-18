@@ -57,9 +57,19 @@ def _requirement(
     )
 
 
+def _capacity_for_units(sim, vehicle_definition_id, source_id, destination_id, units):
+    return sim.transport.transport_capacity_for_units(
+        vehicle_definition_id, source_id, destination_id, units, day=sim.day
+    )
+
+
 def _owned_earth_leo_capacity(sim, units: int = 1):
     return sim.transport.create_transport_allocation(
-        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=units, day=sim.day
+        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO,
+        target_capacity=_capacity_for_units(
+            sim, REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, units
+        ),
+        day=sim.day,
     )
 
 
@@ -78,11 +88,18 @@ def _owned_multistage_capacity(sim):
     sim.inventory.add(LEO, PROPELLANT, 10.0)
     sim.inventory.add(LUNAR_ORBIT, PROPELLANT, 10.0)
     launch = sim.transport.create_transport_allocation(
-        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, target_units=1, day=sim.day
+        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO,
+        target_capacity=_capacity_for_units(
+            sim, REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, 1
+        ),
+        day=sim.day,
     )
     tug = sim.transport.create_transport_allocation(
-        REUSABLE_ORBITAL_CARGO_TUG,
-        LEO, LUNAR_ORBIT, target_units=1, day=sim.day
+        REUSABLE_ORBITAL_CARGO_TUG, LEO, LUNAR_ORBIT,
+        target_capacity=_capacity_for_units(
+            sim, REUSABLE_ORBITAL_CARGO_TUG, LEO, LUNAR_ORBIT, 1
+        ),
+        day=sim.day,
     )
     return launch, tug
 
@@ -338,7 +355,11 @@ def test_auto_source_selection_and_hard_source_constraint_have_no_preference_fal
     constrained.refresh_storage()
     constrained.inventory.add(LEO, PROPELLANT, 10.0)
     constrained.transport.create_transport_allocation(
-        REUSABLE_ORBITAL_CARGO_TUG, LEO, LUNAR_ORBIT, target_units=1, day=constrained.day
+        REUSABLE_ORBITAL_CARGO_TUG, LEO, LUNAR_ORBIT,
+        target_capacity=_capacity_for_units(
+            constrained, REUSABLE_ORBITAL_CARGO_TUG, LEO, LUNAR_ORBIT, 1
+        ),
+        day=constrained.day,
     )
     constrained.inventory.add(EARTH, MACHINERY, 1.0)
     constrained.inventory.add(LEO, MACHINERY, 1.0)

@@ -1,13 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Literal
-
 from ..priority import (
     ActivityPriority, DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PROVISIONING_PRIORITY, ProvisioningPriority,
 )
-
-PathPolicyLiteral = Literal["balanced", "fastest", "lowest_propellant"]
-TransportControlModeLiteral = Literal["units", "capacity"]
 
 
 @dataclass(frozen=True)
@@ -38,30 +33,30 @@ class CreateTransportAllocation:
     vehicle_definition_id: str
     anchor_node_id: str
     destination_id: str
+    target_forward_t_per_day: float
+    target_reverse_t_per_day: float
     provisioning_priority: ProvisioningPriority = DEFAULT_PROVISIONING_PRIORITY
-    control_mode: TransportControlModeLiteral = "units"
-    target_units: int | None = None
-    target_forward_t_per_day: float | None = None
-    target_reverse_t_per_day: float | None = None
-    path: tuple[str, ...] | None = None
-    path_policy: PathPolicyLiteral = "balanced"
+    movement_hard_constraint: tuple[str, ...] | None = None
     paused: bool = False
 
 
 @dataclass(frozen=True)
 class UpdateTransportAllocation:
     allocation_id: str
-    provisioning_priority: ProvisioningPriority | None = None
-    target_units: int | None = None
     target_forward_t_per_day: float | None = None
     target_reverse_t_per_day: float | None = None
-    path_policy: PathPolicyLiteral | None = None
+    provisioning_priority: ProvisioningPriority | None = None
 
 
 @dataclass(frozen=True)
-class ChangeTransportAllocationMode:
+class SetTransportMovementConstraint:
     allocation_id: str
-    control_mode: TransportControlModeLiteral
+    movement_plan_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ClearTransportMovementConstraint:
+    allocation_id: str
 
 
 @dataclass(frozen=True)
@@ -104,5 +99,4 @@ class RelocateFleet:
     units: int
     source_id: str
     destination_id: str
-    path: tuple[str, ...] | None = None
-    path_policy: PathPolicyLiteral = "balanced"
+    movement_hard_constraint: tuple[str, ...] | None = None

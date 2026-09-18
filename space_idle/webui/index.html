@@ -123,8 +123,8 @@
         <div class="field-pair"><label>Vehicle type<div id="relocationVehicle" class="cell-main">—</div></label><label>出発地<div id="relocationSource" class="cell-main">—</div></label></div>
         <div class="cell-sub">現在free: <span id="relocationFree">0</span> unit。移動中はsource Fleetとして拘束され、到着時にdestination Poolへ移ります。</div>
         <label>到着地<select id="relocationDestination" required></select></label>
-        <div class="field-pair"><label>移動unit数<input id="relocationUnits" type="number" min="1" step="1" value="1" required></label><label>経路方針<select id="relocationPolicy"><option value="balanced" selected>時間・推進剤バランス</option><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label></div>
-        <div id="relocationPreview" class="inspector-section"><div class="cell-sub">到着地・unit数・経路方針から移動計画を確認します。</div></div>
+        <label>移動unit数<input id="relocationUnits" type="number" min="1" step="1" value="1" required></label>
+        <div id="relocationPreview" class="inspector-section"><div class="cell-sub">到着地・unit数から正準Movement評価で移動計画を確認します。</div></div>
         <div class="dialog-actions"><button type="button" class="secondary" id="relocationCancelButton">取消</button><button type="submit" class="primary" id="relocationSubmitButton">移動開始</button></div>
       </form>
     </dialog>
@@ -135,12 +135,11 @@
         <label>Vehicle type<select id="allocationVehicle" required></select></label>
         <label>Anchor / 出発地<select id="allocationSource" required></select></label>
         <label>Transport relation / 到着地<select id="allocationDestination" required></select></label>
-        <div class="field-pair"><label>Control mode<select id="allocationMode"><option value="units">UNITS</option><option value="capacity">CAPACITY</option></select></label><label>配備優先度<select id="allocationPriority" required><option value="1">1 最低</option><option value="2">2 低</option><option value="3" selected>3 標準</option><option value="4">4 高</option><option value="5">5 最高</option></select></label></div>
-        <div id="allocationUnitsGroup"><label>Authoritative target units<input id="allocationUnits" type="number" min="0" step="1" value="1" required></label></div>
-        <div id="allocationCapacityGroup" hidden><div class="field-pair"><label>Forward target (t/日)<input id="allocationForward" type="number" min="0" step="0.01" value="1"></label><label>Reverse target (t/日)<input id="allocationReverse" type="number" min="0" step="0.01" value="0"></label></div></div>
-        <label>経路方針<select id="allocationPolicy"><option value="balanced" selected>時間・推進剤バランス</option><option value="fastest">最速</option><option value="lowest_propellant">推進剤最少</option></select></label>
+        <label>配備優先度<select id="allocationPriority" required><option value="1">1 最低</option><option value="2">2 低</option><option value="3" selected>3 標準</option><option value="4">4 高</option><option value="5">5 最高</option></select></label>
+        <div class="field-pair"><label>Forward target (t/日)<input id="allocationForward" type="number" min="0" step="0.01" value="1" required></label><label>Reverse target (t/日)<input id="allocationReverse" type="number" min="0" step="0.01" value="0" required></label></div>
+        <label>Movement hard constraint（任意）<input id="allocationMovementConstraint" type="text" placeholder="Movement Plan IDをカンマ区切り。空欄なら自動選択"></label>
         <div id="allocationServiceOptions" class="inspector-section"><div class="cell-sub">出発地と到着地からTransport Service候補を取得します。</div></div>
-        <div class="cell-sub">UNITSではunit数だけ、CAPACITYでは方向別capacityだけが正本です。Fleet不足でもtargetは保持され、active / unfilledとして表示されます。</div>
+        <div class="cell-sub">方向別Target Capacityが正本です。Required Fleet UnitsはVehicleと選択済みServiceから導出され、Fleet不足でもtargetは保持されます。</div>
         <div class="dialog-actions"><button type="button" class="secondary" id="allocationCancelButton">取消</button><button type="submit" class="primary">Allocation作成</button></div>
       </form>
     </dialog>

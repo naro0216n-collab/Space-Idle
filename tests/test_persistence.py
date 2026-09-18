@@ -53,6 +53,16 @@ from space_idle.simulation import OfflineProgressPolicy
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
 
 
+def _capacity_command_kwargs(app, vehicle_definition_id, source_id, destination_id, units):
+    capacity = app._simulation.transport.transport_capacity_for_units(
+        vehicle_definition_id, source_id, destination_id, units, day=app._simulation.day
+    )
+    return {
+        "target_forward_t_per_day": capacity.forward_t_per_day,
+        "target_reverse_t_per_day": capacity.reverse_t_per_day,
+    }
+
+
 def _make_nontrivial_state():
     app = build_game_application()
     sim = app._simulation
@@ -110,7 +120,8 @@ def _make_nontrivial_state():
     ))
     allocation_id = app.execute(
         CreateTransportAllocation(
-            str(REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO), target_units=1
+            str(REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
+            **_capacity_command_kwargs(app, REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, 1),
         )
     ).created_id
 
@@ -148,7 +159,8 @@ def test_supply_routing_constraint_roundtrips_and_preserves_future_resolution(tm
     assert target_id is not None
     allocation_id = app.execute(
         CreateTransportAllocation(
-            str(REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO), target_units=1
+            str(REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
+            **_capacity_command_kwargs(app, REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, 1),
         )
     ).created_id
     assert allocation_id is not None
@@ -312,7 +324,10 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
     app = build_game_application()
     sim = app._simulation
     allocation_id = app.execute(CreateTransportAllocation(
-        str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO), target_units=1
+        str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
+        **_capacity_command_kwargs(
+            app, ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1
+        ),
     )).created_id
     assert allocation_id is not None
 
@@ -325,10 +340,30 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
     )
 
     allocation_entity_id = EntityId(allocation_id)
+    selected_plan = sim.transport.derive_transport_service_plan(
+        allocation_entity_id, sim.day
+    )
+    sim.transport.set_transport_movement_constraint(
+        allocation_entity_id, selected_plan.forward_path, day=sim.day
+    )
     before_capacity = sim.logistics.current_transport_capacity_snapshot(
         allocation_entity_id, day=sim.day
     )
+    before_required_units = sim.transport.allocation_required_units(
+        allocation_entity_id, sim.day
+    )
     before_flows = dict(sim.logistics.cargo_flows)
+    transport_state = capture_state(sim)["transport"]
+    allocation_state = next(
+        row for row in transport_state["transport_allocations"]
+        if row["id"] == allocation_id
+    )
+    assert allocation_state["movement_hard_constraint"] == [
+        str(value) for value in selected_plan.forward_path
+    ]
+    assert "required_units" not in allocation_state
+    assert "selected_plan" not in allocation_state
+    assert "nominal_capacity" not in allocation_state
 
     path = tmp_path / "cargo-flow.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -338,6 +373,15 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
     assert loaded._simulation.logistics.current_transport_capacity_snapshot(
         allocation_entity_id, day=loaded._simulation.day
     ) == before_capacity
+    loaded_allocation = loaded._simulation.transport.transport_allocations[allocation_entity_id]
+    assert loaded_allocation.movement_hard_constraint == selected_plan.forward_path
+    assert loaded._simulation.transport.allocation_required_units(
+        allocation_entity_id, loaded._simulation.day
+    ) == before_required_units
+    assert loaded._simulation.transport.derive_transport_service_plan(
+        allocation_entity_id, loaded._simulation.day
+    ).forward_path == selected_plan.forward_path
+
 
 def test_save_load_preserves_vehicle_production_staging_and_future_completion(tmp_path):
     app = build_game_application()

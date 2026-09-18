@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 from typing import Protocol, runtime_checkable
 
 from ..priority import (
@@ -32,17 +33,6 @@ class OperationAssetDisposition(str, Enum):
     ORIGIN = "origin"
 
 
-class PathPolicy(str, Enum):
-    BALANCED = "balanced"
-    FASTEST = "fastest"
-    LOWEST_PROPELLANT = "lowest_propellant"
-
-
-class TransportControlMode(str, Enum):
-    UNITS = "units"
-    CAPACITY = "capacity"
-
-
 @dataclass(frozen=True)
 class FleetActivityRef:
     """Open owner reference for an exclusive Fleet commitment.
@@ -66,8 +56,9 @@ class DirectionalCapacity:
     reverse_t_per_day: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.forward_t_per_day < 0 or self.reverse_t_per_day < 0:
-            raise ValueError("directional transport capacity must be non-negative")
+        values = (self.forward_t_per_day, self.reverse_t_per_day)
+        if any(not math.isfinite(value) or value < 0 for value in values):
+            raise ValueError("directional transport capacity must be finite and non-negative")
 
 
 @dataclass
@@ -212,11 +203,8 @@ class TransportAllocation:
     anchor_node_id: SpatialNodeId
     destination_id: SpatialNodeId
     provisioning_priority: ProvisioningPriority
-    control_mode: TransportControlMode
-    target_units: int | None = None
-    target_capacity: DirectionalCapacity | None = None
-    path: tuple[MovementPlanId, ...] | None = None
-    path_policy: PathPolicy = PathPolicy.BALANCED
+    target_capacity: DirectionalCapacity
+    movement_hard_constraint: tuple[MovementPlanId, ...] | None = None
     paused: bool = False
     last_operated_day: int | None = None
 
@@ -224,14 +212,8 @@ class TransportAllocation:
         self.provisioning_priority = ProvisioningPriority(self.provisioning_priority)
         if self.anchor_node_id == self.destination_id:
             raise ValueError("transport allocation endpoints must differ")
-        if self.control_mode is TransportControlMode.UNITS:
-            if self.target_units is None or self.target_units < 0 or self.target_capacity is not None:
-                raise ValueError("UNITS allocation requires only target_units")
-        elif self.control_mode is TransportControlMode.CAPACITY:
-            if self.target_capacity is None or self.target_units is not None:
-                raise ValueError("CAPACITY allocation requires only target_capacity")
-        else:
-            raise ValueError(f"unsupported transport control mode: {self.control_mode}")
+        if self.movement_hard_constraint is not None and not self.movement_hard_constraint:
+            raise ValueError("transport movement hard constraint must be non-empty when set")
 
 
 @dataclass(frozen=True)

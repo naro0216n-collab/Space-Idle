@@ -45,7 +45,7 @@ class FleetRelocationPreviewView:
     units: int
     source_id: str
     destination_id: str
-    path_policy: str
+    movement_hard_constraint: tuple[str, ...] | None
     path: tuple[str, ...]
     travel_days: int
     departure_day: int

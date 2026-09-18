@@ -22,7 +22,8 @@ from .app_contracts.progression import (
 from .app_contracts.transport import (
     ProduceVehicle, PauseVehicleProduction, ResumeVehicleProduction,
     SetVehicleProductionSettings, CreateTransportAllocation, UpdateTransportAllocation,
-    ChangeTransportAllocationMode, PauseTransportAllocation, ResumeTransportAllocation,
+    SetTransportMovementConstraint, ClearTransportMovementConstraint,
+    PauseTransportAllocation, ResumeTransportAllocation,
     DeleteTransportAllocation, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
 )
 from .app_contracts.logistics import (
@@ -51,7 +52,8 @@ Command: TypeAlias = (
     SetResearchProviderAssignmentPriority | PauseResearchProviderAssignment |
     ResumeResearchProviderAssignment | ReleaseResearchProviderAssignment | CreateSurveyProviderAssignment | ResizeSurveyProviderAssignment | ReleaseSurveyProviderAssignment |
     ProduceVehicle | PauseVehicleProduction | ResumeVehicleProduction | SetVehicleProductionSettings |
-    CreateTransportAllocation | UpdateTransportAllocation | ChangeTransportAllocationMode |
+    CreateTransportAllocation | UpdateTransportAllocation | SetTransportMovementConstraint |
+    ClearTransportMovementConstraint |
     PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |
     RetireFleet | CancelFleetRetirement | SetFleetRetirementPriority |
     SetTargetStock | DeleteTargetStock | SetSupplyRoutingConstraint | ClearSupplyRoutingConstraint | AcceptContract |

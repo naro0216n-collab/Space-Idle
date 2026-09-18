@@ -23,10 +23,8 @@ from .models import (
     FleetCommitmentState,
     OperationAssetDisposition,
     OperationSupportLocation,
-    PathPolicy,
     TransportAllocation,
     TransportCapacitySnapshot,
-    TransportControlMode,
     TransportServiceLeg,
     TransportServicePlan,
     TransportOperationUsageRequirements,
@@ -241,7 +239,6 @@ class FleetAllocationMixin:
                     movement_plan.origin_id,
                     vehicle_definition_id,
                     day,
-                    PathPolicy.BALANCED,
                 )
                 travel_days += sum(
                     self.performance_movement_transit_days(self.require_movement_plan(movement_plan_id), definition.performance)
@@ -418,7 +415,6 @@ class FleetAllocationMixin:
         destination_id: SpatialNodeId,
         vehicle_definition_id: DefinitionId,
         day: int,
-        policy: PathPolicy,
         explicit_path: tuple[MovementPlanId, ...] | None = None,
         *,
         require_destination_disposition: bool = False,
@@ -451,9 +447,9 @@ class FleetAllocationMixin:
                     )
             return explicit_path
 
-        # Select across physically compatible paths with the canonical route
-        # preference. Availability belongs to current Capacity, not Nominal pathing.
-        from ..path_selection import select_tradeoff_path
+        # Select across physically compatible paths with the canonical operational
+        # evaluator. Current availability belongs to Capacity, not Nominal pathing.
+        from ..path_selection import select_canonical_path
 
         definition = self.vehicle_defs[vehicle_definition_id]
 
@@ -469,7 +465,7 @@ class FleetAllocationMixin:
                     continue
                 yield plan
 
-        plans = select_tradeoff_path(
+        plans = select_canonical_path(
             source_id,
             destination_id,
             outgoing=outgoing,
@@ -480,8 +476,8 @@ class FleetAllocationMixin:
             edge_propellant=lambda plan: definition.propellant_t(
                 plan, max(definition.max_cargo_for_movement(plan), 0.0)
             ),
+            edge_capacity=lambda plan: max(definition.max_cargo_for_movement(plan), 1.0e-12),
             edge_key=lambda plan: str(plan.id),
-            preference=policy,
         )
         return tuple(plan.id for plan in plans)
 
@@ -544,8 +540,7 @@ class FleetAllocationMixin:
             allocation.vehicle_definition_id,
             allocation.anchor_node_id,
             allocation.destination_id,
-            allocation.path,
-            allocation.path_policy,
+            allocation.movement_hard_constraint,
         )
         cached = cache.get(cache_key)
         if cached is None:
@@ -560,22 +555,19 @@ class FleetAllocationMixin:
         destination_id: SpatialNodeId,
         *,
         day: int = 0,
-        path: tuple[MovementPlanId, ...] | None = None,
-        path_policy: PathPolicy = PathPolicy.BALANCED,
+        movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
     ) -> TransportServicePlan:
         """Derive a deterministic service plan without creating authoritative state."""
         preview = TransportAllocation(
             id=EntityId(
-                f"transport.service.preview:{vehicle_definition_id}:{anchor_node_id}:{destination_id}:{path_policy.value}"
+                f"transport.service.preview:{vehicle_definition_id}:{anchor_node_id}:{destination_id}"
             ),
             vehicle_definition_id=vehicle_definition_id,
             anchor_node_id=anchor_node_id,
             destination_id=destination_id,
             provisioning_priority=DEFAULT_PROVISIONING_PRIORITY,
-            control_mode=TransportControlMode.UNITS,
-            target_units=0,
-            path=path,
-            path_policy=path_policy,
+            target_capacity=DirectionalCapacity(),
+            movement_hard_constraint=movement_hard_constraint,
             paused=False,
         )
         return self._derive_transport_service_plan(preview, day)
@@ -591,8 +583,7 @@ class FleetAllocationMixin:
                 allocation.destination_id,
                 allocation.vehicle_definition_id,
                 day,
-                allocation.path_policy,
-                allocation.path,
+                allocation.movement_hard_constraint,
             )
         except ValueError as exc:
             return TransportServicePlan(
@@ -646,7 +637,6 @@ class FleetAllocationMixin:
                     allocation.anchor_node_id,
                     allocation.vehicle_definition_id,
                     day,
-                    allocation.path_policy,
                 )
                 reverse_plans = tuple(self.require_movement_plan(movement_plan_id) for movement_plan_id in reverse)
                 for index, movement_plan in enumerate(reverse_plans):
@@ -793,11 +783,38 @@ class FleetAllocationMixin:
 
     def allocation_required_units(self, allocation_id: EntityId, day: int = 0) -> int:
         allocation = self.transport_allocations[allocation_id]
-        if allocation.control_mode is TransportControlMode.UNITS:
-            return int(allocation.target_units or 0)
         plan = self.derive_transport_service_plan(allocation_id, day)
-        assert allocation.target_capacity is not None
         return self._units_for_capacity(allocation.target_capacity, plan.nominal_per_unit)
+
+    def transport_capacity_for_units(
+        self,
+        vehicle_definition_id: DefinitionId,
+        anchor_node_id: SpatialNodeId,
+        destination_id: SpatialNodeId,
+        units: int,
+        *,
+        day: int = 0,
+        movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
+    ) -> DirectionalCapacity:
+        """Convert a unit-count convenience input into the authoritative capacity target.
+
+        The returned value is derived from the currently selected Transport Service
+        Plan and is never stored as a unit target. Callers may use it for previews or
+        input assistance while Transport Allocation state remains capacity-only.
+        """
+        if units < 0:
+            raise ValueError("transport unit convenience input must be non-negative")
+        plan = self.transport_service_plan_for(
+            vehicle_definition_id,
+            anchor_node_id,
+            destination_id,
+            day=day,
+            movement_hard_constraint=movement_hard_constraint,
+        )
+        return DirectionalCapacity(
+            plan.nominal_per_unit.forward_t_per_day * units,
+            plan.nominal_per_unit.reverse_t_per_day * units,
+        )
 
     def create_transport_allocation(
         self,
@@ -805,12 +822,9 @@ class FleetAllocationMixin:
         anchor_node_id: SpatialNodeId,
         destination_id: SpatialNodeId,
         *,
+        target_capacity: DirectionalCapacity,
         provisioning_priority: ProvisioningPriority = DEFAULT_PROVISIONING_PRIORITY,
-        control_mode: TransportControlMode = TransportControlMode.UNITS,
-        target_units: int | None = 0,
-        target_capacity: DirectionalCapacity | None = None,
-        path: tuple[MovementPlanId, ...] | None = None,
-        path_policy: PathPolicy = PathPolicy.BALANCED,
+        movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
         paused: bool = False,
         day: int = 0,
     ) -> EntityId:
@@ -828,22 +842,17 @@ class FleetAllocationMixin:
             anchor_node_id=anchor_node_id,
             destination_id=destination_id,
             provisioning_priority=provisioning_priority,
-            control_mode=control_mode,
-            target_units=target_units,
             target_capacity=target_capacity,
-            path=path,
-            path_policy=path_policy,
+            movement_hard_constraint=movement_hard_constraint,
             paused=paused,
         )
         self.transport_allocations[allocation_id] = allocation
         try:
-            # Reject structurally invalid explicit paths immediately, while allowing
-            # allocations whose capacity is temporarily unavailable. CAPACITY targets
-            # must also refer only to directions this service can carry cargo.
+            # Reject structurally invalid hard constraints immediately, while allowing
+            # allocations whose capacity is temporarily unavailable. Targets must refer
+            # only to directions this service can carry cargo.
             plan = self.derive_transport_service_plan(allocation_id, day)
-            if control_mode is TransportControlMode.CAPACITY:
-                assert target_capacity is not None
-                self._units_for_capacity(target_capacity, plan.nominal_per_unit)
+            self._units_for_capacity(target_capacity, plan.nominal_per_unit)
             self.reconcile_fleet_allocations(day)
         except Exception:
             self.transport_allocations.pop(allocation_id, None)
@@ -856,90 +865,68 @@ class FleetAllocationMixin:
         allocation_id: EntityId,
         *,
         provisioning_priority: ProvisioningPriority | None = None,
-        target_units: int | None = None,
         target_capacity: DirectionalCapacity | None = None,
-        path_policy: PathPolicy | None = None,
         paused: bool | None = None,
         day: int = 0,
     ) -> None:
         current = self.transport_allocations[allocation_id]
-        if current.control_mode is TransportControlMode.UNITS:
-            if target_capacity is not None:
-                raise ValueError("UNITS allocation cannot accept capacity target")
-            updated = replace(
-                current,
-                provisioning_priority=(
-                    current.provisioning_priority
-                    if provisioning_priority is None
-                    else ProvisioningPriority(provisioning_priority)
-                ),
-                target_units=current.target_units if target_units is None else target_units,
-                path_policy=current.path_policy if path_policy is None else path_policy,
-                paused=current.paused if paused is None else paused,
-            )
-        else:
-            if target_units is not None:
-                raise ValueError("CAPACITY allocation cannot accept unit target")
-            updated = replace(
-                current,
-                provisioning_priority=(
-                    current.provisioning_priority
-                    if provisioning_priority is None
-                    else ProvisioningPriority(provisioning_priority)
-                ),
-                target_capacity=current.target_capacity if target_capacity is None else target_capacity,
-                path_policy=current.path_policy if path_policy is None else path_policy,
-                paused=current.paused if paused is None else paused,
-            )
+        updated = replace(
+            current,
+            provisioning_priority=(
+                current.provisioning_priority
+                if provisioning_priority is None
+                else ProvisioningPriority(provisioning_priority)
+            ),
+            target_capacity=current.target_capacity if target_capacity is None else target_capacity,
+            paused=current.paused if paused is None else paused,
+        )
         self.transport_allocations[allocation_id] = updated
         try:
             plan = self.derive_transport_service_plan(allocation_id, day)
-            if updated.control_mode is TransportControlMode.CAPACITY:
-                assert updated.target_capacity is not None
-                self._units_for_capacity(updated.target_capacity, plan.nominal_per_unit)
+            self._units_for_capacity(updated.target_capacity, plan.nominal_per_unit)
             self.reconcile_fleet_allocations(day)
         except Exception:
             self.transport_allocations[allocation_id] = current
             self.reconcile_fleet_allocations(day)
             raise
 
-    def change_transport_allocation_mode(
+    def set_transport_movement_constraint(
         self,
         allocation_id: EntityId,
-        mode: TransportControlMode,
+        movement_plan_ids: tuple[MovementPlanId, ...],
         *,
         day: int = 0,
     ) -> None:
+        if not movement_plan_ids:
+            raise ValueError("transport movement hard constraint must be non-empty")
         current = self.transport_allocations[allocation_id]
-        if current.control_mode is mode:
-            return
-        plan = self.derive_transport_service_plan(allocation_id, day)
-        if mode is TransportControlMode.CAPACITY:
-            # Mode conversion preserves the player's authoritative UNITS target,
-            # not the currently fulfilled Fleet quantity. Temporary Fleet scarcity
-            # must not silently rewrite intent during a control-mode change.
-            units = int(current.target_units or 0)
-            target = DirectionalCapacity(
-                plan.nominal_per_unit.forward_t_per_day * units,
-                plan.nominal_per_unit.reverse_t_per_day * units,
-            )
-            updated = replace(
-                current,
-                control_mode=mode,
-                target_units=None,
-                target_capacity=target,
-            )
-        else:
-            assert current.target_capacity is not None
-            units = self._units_for_capacity(current.target_capacity, plan.nominal_per_unit)
-            updated = replace(
-                current,
-                control_mode=mode,
-                target_units=units,
-                target_capacity=None,
-            )
+        updated = replace(current, movement_hard_constraint=movement_plan_ids)
         self.transport_allocations[allocation_id] = updated
-        self.reconcile_fleet_allocations(day)
+        try:
+            plan = self.derive_transport_service_plan(allocation_id, day)
+            self._units_for_capacity(updated.target_capacity, plan.nominal_per_unit)
+            self.reconcile_fleet_allocations(day)
+        except Exception:
+            self.transport_allocations[allocation_id] = current
+            self.reconcile_fleet_allocations(day)
+            raise
+
+    def clear_transport_movement_constraint(
+        self, allocation_id: EntityId, *, day: int = 0
+    ) -> None:
+        current = self.transport_allocations[allocation_id]
+        if current.movement_hard_constraint is None:
+            return
+        updated = replace(current, movement_hard_constraint=None)
+        self.transport_allocations[allocation_id] = updated
+        try:
+            plan = self.derive_transport_service_plan(allocation_id, day)
+            self._units_for_capacity(updated.target_capacity, plan.nominal_per_unit)
+            self.reconcile_fleet_allocations(day)
+        except Exception:
+            self.transport_allocations[allocation_id] = current
+            self.reconcile_fleet_allocations(day)
+            raise
 
     def delete_transport_allocation(self, allocation_id: EntityId, *, day: int = 0) -> None:
         allocation = self.transport_allocations[allocation_id]
@@ -1027,8 +1014,7 @@ class FleetAllocationMixin:
         source_id: SpatialNodeId,
         destination_id: SpatialNodeId,
         *,
-        path: tuple[MovementPlanId, ...] | None = None,
-        path_policy: PathPolicy = PathPolicy.BALANCED,
+        movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
         day: int = 0,
     ) -> FleetRelocationPlan:
         """Derive the exact decision contract used to start a Fleet relocation."""
@@ -1057,8 +1043,7 @@ class FleetAllocationMixin:
                     destination_id,
                     vehicle_definition_id,
                     day,
-                    path_policy,
-                    path,
+                    movement_hard_constraint,
                     require_destination_disposition=True,
                 )
             except ValueError as exc:
@@ -1145,8 +1130,7 @@ class FleetAllocationMixin:
         source_id: SpatialNodeId,
         destination_id: SpatialNodeId,
         *,
-        path: tuple[MovementPlanId, ...] | None = None,
-        path_policy: PathPolicy = PathPolicy.BALANCED,
+        movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
         day: int = 0,
     ) -> EntityId:
         plan = self.fleet_relocation_plan(
@@ -1154,8 +1138,7 @@ class FleetAllocationMixin:
             units,
             source_id,
             destination_id,
-            path=path,
-            path_policy=path_policy,
+            movement_hard_constraint=movement_hard_constraint,
             day=day,
         )
         # Inventory shortage is resolved by the shared Resource Claim allocator,
@@ -1326,19 +1309,17 @@ class FleetAllocationMixin:
     @staticmethod
     def _allocation_order_key(allocation: TransportAllocation) -> tuple:
         """Stable same-priority ordering derived from authoritative allocation state."""
-        if allocation.control_mode is TransportControlMode.UNITS:
-            target_key = (int(allocation.target_units or 0), 0.0, 0.0)
-        else:
-            target = allocation.target_capacity or DirectionalCapacity()
-            target_key = (0, target.forward_t_per_day, target.reverse_t_per_day)
+        target = allocation.target_capacity
+        target_key = (target.forward_t_per_day, target.reverse_t_per_day)
         return (
             -allocation.provisioning_priority,
             str(allocation.vehicle_definition_id),
             str(allocation.anchor_node_id),
             str(allocation.destination_id),
-            tuple(str(movement_plan_id) for movement_plan_id in (allocation.path or ())),
-            allocation.path_policy.value,
-            allocation.control_mode.value,
+            tuple(
+                str(movement_plan_id)
+                for movement_plan_id in (allocation.movement_hard_constraint or ())
+            ),
             target_key,
         )
 

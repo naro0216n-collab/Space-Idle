@@ -113,7 +113,7 @@ def test_surface_transport_physics_derive_latency_and_range_blockers_from_endpoi
         forward, vehicle.performance
     ) == expected_days
     service = sim.transport.transport_service_plan_for(
-        vehicle.id, a, b, path=(forward.id,)
+        vehicle.id, a, b, movement_hard_constraint=(forward.id,)
     )
     assert service.feasible
     assert service.forward_latency_days == expected_days

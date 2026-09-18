@@ -17,7 +17,7 @@ from .execution_requirements import (
 from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
-from .transport.models import FleetActivityRef, MovementExecutionKind, PathPolicy
+from .transport.models import FleetActivityRef, MovementExecutionKind
 
 if TYPE_CHECKING:
     from .transport.service import TransportService
@@ -38,7 +38,6 @@ class ScientificExplorationDefinition:
     required_units: int = 1
     minimum_payload_t: float = 0.0
     required_vehicle_capabilities: tuple[str, ...] = ()
-    path_policy: PathPolicy = PathPolicy.BALANCED
 
     def __post_init__(self) -> None:
         if self.origin_id == self.destination_id:
@@ -53,7 +52,6 @@ class ScientificExplorationDefinition:
             raise ValueError("scientific exploration required units must be positive")
         if self.minimum_payload_t < 0:
             raise ValueError("scientific exploration minimum payload must be non-negative")
-        object.__setattr__(self, "path_policy", PathPolicy(self.path_policy))
 
     @property
     def points_per_day(self) -> float:
@@ -146,7 +144,6 @@ class ScientificExplorationService:
             destination_id,
             vehicle_definition_id,
             day=day,
-            path_policy=definition.path_policy,
             require_destination_disposition=True,
         )
 

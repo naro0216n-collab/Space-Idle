@@ -74,10 +74,14 @@ def run() -> None:
         )
     ).data.created_id
     assert project_id is not None
-    # Establish Supply Requirements before Fleet capacity exists. The scenario-global
-    # policy provides the initial selection delegation; the browser flow below then
-    # assigns an explicit project policy without mutating Fleet provisioning.
+    # Establish Supply Requirements before Fleet capacity exists. Auto-routing stays
+    # within the player-built network; the browser flow below adds a sparse project
+    # hard source constraint without mutating Fleet provisioning.
     runtime.execute(AdvanceTime(1))
+    allocation_capacity = runtime._app._simulation.transport.transport_capacity_for_units(  # noqa: SLF001 - deterministic E2E fixture setup
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1,
+        day=runtime._app._simulation.day,  # noqa: SLF001
+    )
 
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     origin = f"http://127.0.0.1:{int(server.server_address[1])}"
@@ -130,8 +134,8 @@ def run() -> None:
             page.locator("#allocationVehicle").select_option(OWNED_LAUNCH_VEHICLE)
             page.locator("#allocationSource").select_option(EARTH)
             page.locator("#allocationDestination").select_option(LEO)
-            page.locator("#allocationMode").select_option("units")
-            page.locator("#allocationUnits").fill("1")
+            page.locator("#allocationForward").fill(str(allocation_capacity.forward_t_per_day))
+            page.locator("#allocationReverse").fill(str(allocation_capacity.reverse_t_per_day))
             page.locator("#allocationPriority").select_option("5")
             page.get_by_role("button", name="Allocation作成").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
@@ -139,14 +143,14 @@ def run() -> None:
             allocation_row = page.locator("#allocationTable [data-allocation-row]").first
             allocation_row.wait_for(timeout=10000)
             allocation_text = allocation_row.inner_text()
-            assert "UNITS" in allocation_text and "1 unit" in allocation_text
+            assert "方向別Capacity target" in allocation_text
             assert "1 / 1" in allocation_text and "unfilled 0" in allocation_text
             nominal_text = allocation_row.locator("td").nth(3).inner_text()
             available_text = allocation_row.locator("td").nth(4).inner_text()
             assert "t/日" in nominal_text and not nominal_text.startswith("0 / 0")
             assert "t/日" in available_text and not available_text.startswith("0 / 0")
-            assert "1 unit" in allocation_row.inner_text(), (
-                "Supply Routing Constraint must not resize authoritative Fleet provisioning"
+            assert "1 / 1" in allocation_row.inner_text(), (
+                "Supply Routing Constraint must not resize derived Fleet provisioning"
             )
 
             # A canonical day lets Supply Planning consume the now-available capacity.
@@ -159,7 +163,7 @@ def run() -> None:
             )
             cargo_text = page.locator("#cargoTable").inner_text()
             assert "in_transit" in cargo_text
-            assert "1 unit" in allocation_row.inner_text()
+            assert "1 / 1" in allocation_row.inner_text()
 
             # Target Stock is a persistent Supply Planning intent with Activity Priority.
             page.get_by_role("button", name="Target Stockを設定").click()
@@ -177,7 +181,7 @@ def run() -> None:
             target_row = target_delete.locator("xpath=ancestor::tr")
             target_text = target_row.inner_text()
             assert "2" in target_text and "高" in target_text
-            assert "1 unit" in allocation_row.inner_text(), (
+            assert "1 / 1" in allocation_row.inner_text(), (
                 "Target Stock must not mutate Transport Allocation target"
             )
 

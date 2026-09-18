@@ -310,7 +310,11 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
                 units=int(_required(params, "units")),
                 source_id=_required(params, "source_id"),
                 destination_id=_required(params, "destination_id"),
-                path_policy=_one(params, "path_policy") or "balanced",
+                movement_hard_constraint=(
+                    None
+                    if not params.get("movement_plan_id")
+                    else tuple(params["movement_plan_id"])
+                ),
             ))
             return
         if path == "/api/v1/logistics/transport-allocations":

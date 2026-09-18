@@ -16,7 +16,6 @@ from space_idle.transport.models import (
     OperationSupportLocation,
     OperationSupportRequirement,
     ResourceSupportRequirement,
-    TransportControlMode,
 )
 
 
@@ -25,6 +24,41 @@ def _fleet_sim(count: int = 5):
     # Core invariants must not depend on the provisional initial Fleet content.
     sim.transport.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).total_units = count
     return sim
+
+
+def _capacity_for_units(
+    transport, vehicle_definition_id, source_id, destination_id, units, *, day=0,
+    movement_hard_constraint=None,
+):
+    return transport.transport_capacity_for_units(
+        vehicle_definition_id, source_id, destination_id, units,
+        day=day, movement_hard_constraint=movement_hard_constraint,
+    )
+
+
+def _create_transport_for_units(
+    transport, vehicle_definition_id, source_id, destination_id, units, *, day=0, **kwargs
+):
+    return transport.create_transport_allocation(
+        vehicle_definition_id, source_id, destination_id,
+        target_capacity=_capacity_for_units(
+            transport, vehicle_definition_id, source_id, destination_id, units, day=day,
+            movement_hard_constraint=kwargs.get("movement_hard_constraint"),
+        ),
+        day=day, **kwargs,
+    )
+
+
+def _update_transport_units(transport, allocation_id, units, *, day=0, **kwargs):
+    allocation = transport.transport_allocations[allocation_id]
+    capacity = _capacity_for_units(
+        transport, allocation.vehicle_definition_id, allocation.anchor_node_id,
+        allocation.destination_id, units, day=day,
+        movement_hard_constraint=allocation.movement_hard_constraint,
+    )
+    transport.update_transport_allocation(
+        allocation_id, target_capacity=capacity, day=day, **kwargs
+    )
 
 
 
@@ -43,11 +77,8 @@ def test_fleet_commitment_ownership_conservation_and_query_projection():
         ids.LEO,
         1,
     )
-    allocation_id = lg.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        target_units=3,
+    allocation_id = _create_transport_for_units(
+        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 3,
         day=sim.day,
     )
 
@@ -103,11 +134,8 @@ def test_fleet_commitment_ownership_conservation_and_query_projection():
 def test_runtime_validation_enforces_fleet_commitment_owner_and_location_integrity():
     mismatched = _fleet_sim(1)
     transport = mismatched.transport
-    allocation_id = transport.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        target_units=1,
+    allocation_id = _create_transport_for_units(
+        transport, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 1,
         day=mismatched.day,
     )
     commitment = next(
@@ -120,11 +148,8 @@ def test_runtime_validation_enforces_fleet_commitment_owner_and_location_integri
 
     orphaned_transport = _fleet_sim(1)
     transport = orphaned_transport.transport
-    allocation_id = transport.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        target_units=1,
+    allocation_id = _create_transport_for_units(
+        transport, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 1,
         day=orphaned_transport.day,
     )
     assert transport.transport_active_units(allocation_id) == 1
@@ -167,11 +192,8 @@ def test_provisioning_allocator_honors_priority_refill_and_registration_order_in
         ids.LEO,
         1,
     )
-    refill_allocation = refill.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        target_units=3,
+    refill_allocation = _create_transport_for_units(
+        refill, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 3,
         day=refill_sim.day,
     )
     assert refill.transport_active_units(refill_allocation) == 1
@@ -183,25 +205,17 @@ def test_provisioning_allocator_honors_priority_refill_and_registration_order_in
 
     sim = _fleet_sim(3)
     lg = sim.transport
-    low = lg.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        provisioning_priority=1,
-        target_units=3,
-        day=sim.day,
+    low = _create_transport_for_units(
+        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 3,
+        provisioning_priority=1, day=sim.day,
     )
-    high = lg.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        provisioning_priority=5,
-        target_units=2,
-        day=sim.day,
+    high = _create_transport_for_units(
+        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 2,
+        provisioning_priority=5, day=sim.day,
     )
     # No service has operated yet in this simulation day, so reprioritization is
     # a pure allocation edit and can be settled without a recovery delay.
-    assert lg.transport_allocations[low].target_units == 3
+    assert lg.allocation_required_units(low, sim.day) == 3
     assert lg.transport_active_units(low) == 1
     assert lg.transport_active_units(high) == 2
     assert not lg.fleet_releases
@@ -231,13 +245,9 @@ def test_provisioning_allocator_honors_priority_refill_and_registration_order_in
             for destination in destinations
         ]
         for destination in actual:
-            registration_logistics.create_transport_allocation(
-                ids.REUSABLE_SURFACE_CARGO_LANDER,
-                ids.LUNAR_ORBIT,
-                destination,
-                provisioning_priority=3,
-                target_units=1,
-                day=0,
+            _create_transport_for_units(
+                registration_logistics, ids.REUSABLE_SURFACE_CARGO_LANDER,
+                ids.LUNAR_ORBIT, destination, 1, provisioning_priority=3, day=0,
             )
         return {
             str(allocation.destination_id): registration_logistics.transport_active_units(
@@ -254,18 +264,13 @@ def test_provisioning_allocator_honors_priority_refill_and_registration_order_in
         registration_sim = _fleet_sim(2)
         registration_logistics = registration_sim.transport
         for target in targets:
-            registration_logistics.create_transport_allocation(
-                ids.REUSABLE_ORBITAL_CARGO_TUG,
-                ids.LEO,
-                ids.LUNAR_ORBIT,
-                provisioning_priority=3,
-                target_units=target,
-                day=0,
+            _create_transport_for_units(
+                registration_logistics, ids.REUSABLE_ORBITAL_CARGO_TUG,
+                ids.LEO, ids.LUNAR_ORBIT, target, provisioning_priority=3, day=0,
             )
         return {
-            allocation.target_units: registration_logistics.transport_active_units(
-                allocation.id
-            )
+            registration_logistics.allocation_required_units(allocation.id, 0):
+                registration_logistics.transport_active_units(allocation.id)
             for allocation in registration_logistics.transport_allocations.values()
         }
 
@@ -274,56 +279,39 @@ def test_provisioning_allocator_honors_priority_refill_and_registration_order_in
 
 
 
-def test_transport_control_modes_preserve_authoritative_targets_and_reject_invalid_capacity():
+def test_transport_capacity_is_authoritative_and_required_units_are_derived():
     invalid_sim = build_game_application()._simulation
-    invalid_logistics = invalid_sim.transport
-    before_allocations = dict(invalid_logistics.transport_allocations)
+    invalid_transport = invalid_sim.transport
+    before_allocations = dict(invalid_transport.transport_allocations)
     with pytest.raises(ValueError, match="reverse capacity target"):
-        invalid_logistics.create_transport_allocation(
-            ids.REUSABLE_LAUNCH_VEHICLE,
-            ids.EARTH,
-            ids.LEO,
-            control_mode=TransportControlMode.CAPACITY,
-            target_units=None,
-            target_capacity=DirectionalCapacity(1.0, 1.0),
-            day=invalid_sim.day,
+        invalid_transport.create_transport_allocation(
+            ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO,
+            target_capacity=DirectionalCapacity(1.0, 1.0), day=invalid_sim.day,
         )
-    assert invalid_logistics.transport_allocations == before_allocations
+    assert invalid_transport.transport_allocations == before_allocations
 
-    one_way_id = invalid_logistics.create_transport_allocation(
-        ids.REUSABLE_LAUNCH_VEHICLE,
-        ids.EARTH,
-        ids.LEO,
-        control_mode=TransportControlMode.CAPACITY,
-        target_units=None,
-        target_capacity=DirectionalCapacity(1.0, 0.0),
-        day=invalid_sim.day,
+    one_way_id = invalid_transport.create_transport_allocation(
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO,
+        target_capacity=DirectionalCapacity(1.0, 0.0), day=invalid_sim.day,
     )
-    before_one_way = replace(invalid_logistics.transport_allocations[one_way_id])
+    before_one_way = replace(invalid_transport.transport_allocations[one_way_id])
     with pytest.raises(ValueError, match="reverse capacity target"):
-        invalid_logistics.update_transport_allocation(
-            one_way_id,
-            target_capacity=DirectionalCapacity(1.0, 1.0),
+        invalid_transport.update_transport_allocation(
+            one_way_id, target_capacity=DirectionalCapacity(1.0, 1.0),
             day=invalid_sim.day,
         )
-    assert invalid_logistics.transport_allocations[one_way_id] == before_one_way
+    assert invalid_transport.transport_allocations[one_way_id] == before_one_way
 
     capacity_sim = _fleet_sim(10)
-    capacity_logistics = capacity_sim.transport
-    capacity_allocation_id = capacity_logistics.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        control_mode=TransportControlMode.CAPACITY,
-        target_units=None,
-        target_capacity=DirectionalCapacity(3.0, 3.0),
-        day=capacity_sim.day,
+    capacity_transport = capacity_sim.transport
+    capacity_allocation_id = capacity_transport.create_transport_allocation(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT,
+        target_capacity=DirectionalCapacity(3.0, 3.0), day=capacity_sim.day,
     )
-    plan = capacity_logistics.derive_transport_service_plan(
+    plan = capacity_transport.derive_transport_service_plan(
         capacity_allocation_id, capacity_sim.day
     )
-    target = capacity_logistics.transport_allocations[capacity_allocation_id].target_capacity
-    assert target is not None
+    target = capacity_transport.transport_allocations[capacity_allocation_id].target_capacity
     forward_units = math.ceil(
         target.forward_t_per_day / plan.nominal_per_unit.forward_t_per_day - 1e-12
     )
@@ -331,44 +319,89 @@ def test_transport_control_modes_preserve_authoritative_targets_and_reject_inval
         target.reverse_t_per_day / plan.nominal_per_unit.reverse_t_per_day - 1e-12
     )
     expected = max(forward_units, reverse_units)
-    required = capacity_logistics.allocation_required_units(
+    assert capacity_transport.allocation_required_units(
         capacity_allocation_id, capacity_sim.day
-    )
-    assert required == expected
-    assert required < forward_units + reverse_units
-    assert capacity_logistics.transport_capacity_snapshot(
+    ) == expected
+    assert expected < forward_units + reverse_units
+    assert capacity_transport.transport_capacity_snapshot(
         capacity_allocation_id, day=capacity_sim.day
     ).required_units == expected
 
-    units_sim = _fleet_sim(3)
-    units_logistics = units_sim.transport
-    units_allocation_id = units_logistics.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        target_units=5,
-        day=units_sim.day,
+    convenience_sim = _fleet_sim(3)
+    convenience_transport = convenience_sim.transport
+    five_unit_capacity = convenience_transport.transport_capacity_for_units(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 5,
+        day=convenience_sim.day,
     )
-    before = units_logistics.transport_allocations[units_allocation_id]
-    assert before.target_units == 5
-    assert units_logistics.transport_active_units(units_allocation_id) == 3
-    per_unit = units_logistics.derive_transport_service_plan(
-        units_allocation_id, units_sim.day
-    ).nominal_per_unit
-
-    units_logistics.change_transport_allocation_mode(
-        units_allocation_id, TransportControlMode.CAPACITY, day=units_sim.day
+    convenience_id = convenience_transport.create_transport_allocation(
+        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT,
+        target_capacity=five_unit_capacity, day=convenience_sim.day,
     )
-    converted = units_logistics.transport_allocations[units_allocation_id]
-    assert converted.target_units is None
-    assert converted.target_capacity == DirectionalCapacity(
-        per_unit.forward_t_per_day * 5,
-        per_unit.reverse_t_per_day * 5,
-    )
-    assert units_logistics.allocation_required_units(
-        units_allocation_id, units_sim.day
+    allocation = convenience_transport.transport_allocations[convenience_id]
+    assert allocation.target_capacity == five_unit_capacity
+    assert convenience_transport.allocation_required_units(
+        convenience_id, convenience_sim.day
     ) == 5
+    assert convenience_transport.transport_active_units(convenience_id) == 3
+    with pytest.raises(ValueError, match="non-negative"):
+        convenience_transport.transport_capacity_for_units(
+            ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, -1,
+            day=convenience_sim.day,
+        )
 
+    auto_plan = capacity_transport.derive_transport_service_plan(
+        capacity_allocation_id, capacity_sim.day
+    )
+    incompatible_plan = capacity_transport.movement_plan_candidates(
+        ids.EARTH, ids.LEO
+    )[0]
+    before_constraint = capacity_transport.transport_allocations[capacity_allocation_id]
+    with pytest.raises(ValueError):
+        capacity_transport.set_transport_movement_constraint(
+            capacity_allocation_id, (incompatible_plan.id,), day=capacity_sim.day
+        )
+    after_constraint = capacity_transport.transport_allocations[capacity_allocation_id]
+    assert after_constraint == before_constraint
+    assert after_constraint.movement_hard_constraint is None
+    assert capacity_transport.derive_transport_service_plan(
+        capacity_allocation_id, capacity_sim.day
+    ).forward_path == auto_plan.forward_path
+
+
+def test_transport_pause_preserves_capacity_target_and_safely_releases_then_reprovisions():
+    sim = _fleet_sim(2)
+    lg = sim.transport
+    allocation_id = _create_transport_for_units(
+        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 2, day=0
+    )
+    allocation = lg.transport_allocations[allocation_id]
+    target = allocation.target_capacity
+    required = lg.allocation_required_units(allocation_id, 0)
+    assert required == 2
+    assert lg.transport_active_units(allocation_id) == 2
+
+    allocation.last_operated_day = 2
+    lg.update_transport_allocation(allocation_id, paused=True, day=3)
+    paused = lg.transport_allocations[allocation_id]
+    assert paused.paused
+    assert paused.target_capacity == target
+    assert lg.allocation_required_units(allocation_id, 3) == required
+    assert lg.transport_active_units(allocation_id) == 0
+    assert sum(
+        lg.fleet_commitment_snapshot(row.fleet_commitment_id).quantity
+        for row in lg.fleet_release_snapshots()
+    ) == 2
+
+    recovery_day = max(row.release_day for row in lg.fleet_releases.values())
+    lg.advance_fleet_state(recovery_day)
+    assert lg.transport_active_units(allocation_id) == 0
+    assert not lg.fleet_releases
+
+    lg.update_transport_allocation(allocation_id, paused=False, day=recovery_day)
+    resumed = lg.transport_allocations[allocation_id]
+    assert not resumed.paused
+    assert resumed.target_capacity == target
+    assert lg.transport_active_units(allocation_id) == required
 
 
 def test_relocation_plan_is_the_execution_contract_for_eligibility_allocation_time_and_resources():
@@ -464,8 +497,8 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     )
     assert required > 0.0
 
-    lg.create_transport_allocation(
-        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, target_units=1, day=sim.day
+    _create_transport_for_units(
+        lg, ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1, day=sim.day
     )
     sim.inventory.add(ids.EARTH, ids.PROPELLANT, required)
 
@@ -532,8 +565,8 @@ def test_resource_support_uses_definition_capability_instead_of_magic_refueling_
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 10.0)
     sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
 
-    allocation_id = lg.create_transport_allocation(
-        vehicle_id, ids.LEO, ids.LUNAR_ORBIT, target_units=1, day=sim.day
+    allocation_id = _create_transport_for_units(
+        lg, vehicle_id, ids.LEO, ids.LUNAR_ORBIT, 1, day=sim.day
     )
     snapshot = lg.transport_capacity_snapshot(allocation_id, day=sim.day)
 
@@ -562,11 +595,8 @@ def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execut
         for row in lg.spaceflight_movement_rules
     )
     lg.invalidate_movement_plans()
-    allocation_id = lg.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        target_units=1,
+    allocation_id = _create_transport_for_units(
+        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 1,
         day=sim.day,
     )
 
@@ -574,6 +604,7 @@ def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execut
     snapshot = lg.transport_capacity_snapshot(allocation_id, day=sim.day)
 
     assert plan.nominal_per_unit.forward_t_per_day > 0
+    assert lg.allocation_required_units(allocation_id, sim.day) == 1
     assert any("research_lab" in blocker for blocker in plan.blockers)
     assert snapshot.nominal.forward_t_per_day > 0
     assert snapshot.available.forward_t_per_day == 0
@@ -617,19 +648,19 @@ def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
     )
     lg.fleet_pool(vehicle_id, ids.LEO).total_units = 1
     sim.facilities.install(ids.MICROGRAVITY_EXPERIMENT_PLATFORM, ids.LEO)
-    allocation_id = lg.create_transport_allocation(
-        vehicle_id, ids.LEO, target_id, target_units=1,
-        path=(
-            min(
-                (
-                    plan for plan in lg.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT)
-                    if tuple(operation.operation_type for operation in plan.operations) == ("spaceflight",)
-                ),
-                key=lambda row: str(row.id),
-            ).id,
-            landing_plan.id,
-        ),
-        day=sim.day,
+    movement_constraint = (
+        min(
+            (
+                plan for plan in lg.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT)
+                if tuple(operation.operation_type for operation in plan.operations) == ("spaceflight",)
+            ),
+            key=lambda row: str(row.id),
+        ).id,
+        landing_plan.id,
+    )
+    allocation_id = _create_transport_for_units(
+        lg, vehicle_id, ids.LEO, target_id, 1,
+        movement_hard_constraint=movement_constraint, day=sim.day,
     )
     snapshot = lg.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert snapshot.available.forward_t_per_day == 0
@@ -694,17 +725,13 @@ def test_relocation_keeps_units_exclusive_until_arrival():
 def test_releasing_uses_remaining_cycle_time_not_a_new_full_cycle():
     sim = _fleet_sim(2)
     lg = sim.transport
-    allocation_id = lg.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        target_units=2,
-        day=0,
+    allocation_id = _create_transport_for_units(
+        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 2, day=0,
     )
     allocation = lg.transport_allocations[allocation_id]
     cycle_days = int(math.ceil(lg.derive_transport_service_plan(allocation_id, 0).cycle_days))
     allocation.last_operated_day = 2
-    lg.update_transport_allocation(allocation_id, target_units=1, day=3)
+    _update_transport_units(lg, allocation_id, 1, day=3)
     release = next(iter(lg.fleet_releases.values()))
     assert release.release_day == 2 + cycle_days
 
@@ -712,7 +739,7 @@ def test_releasing_uses_remaining_cycle_time_not_a_new_full_cycle():
     # frees the unit immediately instead of starting an artificial new cycle.
     lg.advance_fleet_state(release.release_day)
     allocation.last_operated_day = 2
-    lg.update_transport_allocation(allocation_id, target_units=0, day=release.release_day)
+    _update_transport_units(lg, allocation_id, 0, day=release.release_day)
     assert not lg.fleet_releases
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 2
 
@@ -728,12 +755,12 @@ def test_fleet_query_exposes_and_scopes_transitional_state():
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
     sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
 
-    allocation_id = lg.create_transport_allocation(
-        vehicle_id, ids.LEO, ids.LUNAR_ORBIT, target_units=2, day=0
+    allocation_id = _create_transport_for_units(
+        lg, vehicle_id, ids.LEO, ids.LUNAR_ORBIT, 2, day=0
     )
     lg.transport_allocations[allocation_id].last_operated_day = 2
     sim.day = 3
-    lg.update_transport_allocation(allocation_id, target_units=1, day=sim.day)
+    _update_transport_units(lg, allocation_id, 1, day=sim.day)
     relocation_id = lg.relocate_fleet(
         vehicle_id, 1, ids.LEO, ids.LUNAR_ORBIT, day=sim.day
     )
@@ -765,9 +792,8 @@ def test_bidirectional_service_resource_use_counts_empty_return_not_loaded_retur
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
     sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
     sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
-    allocation_id = lg.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT,
-        target_units=1, day=0,
+    allocation_id = _create_transport_for_units(
+        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 1, day=0,
     )
     plan = lg.derive_transport_service_plan(allocation_id, 0)
     nominal = lg.transport_capacity_snapshot(allocation_id, day=0).nominal
@@ -794,12 +820,8 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
     sim.refresh_storage()
-    allocation_id = lg.create_transport_allocation(
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        ids.LUNAR_ORBIT,
-        target_units=1,
-        day=0,
+    allocation_id = _create_transport_for_units(
+        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 1, day=0,
     )
     service_plan = lg.derive_transport_service_plan(allocation_id, 0)
     physical = lg.transport_capacity_snapshot(allocation_id, day=0)
