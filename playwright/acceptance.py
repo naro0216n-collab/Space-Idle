@@ -310,7 +310,6 @@ def run() -> dict[str, object]:
             _assert("必要資源" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose physical resource requirements")
             _assert(page.locator("#upgradePlanPriorityInput").is_visible(), "upgrade planning must expose priority before project creation")
             _assert(page.locator("#upgradePlanProcurementTimingPolicy").is_visible(), "upgrade planning must expose procurement timing policy before project creation")
-            _assert(page.locator("#upgradePlanLogisticsPolicy").is_visible(), "upgrade planning must expose Logistics Policy before project creation")
             page.locator("#upgradePlanPriorityInput").select_option("4")
             # The form is a multi-field draft. Moving focus to another control
             # must not let periodic synchronization overwrite the first edit.
@@ -321,18 +320,11 @@ def run() -> dict[str, object]:
                 "non-focused construction planning drafts must survive periodic refresh",
             )
             page.locator("#upgradePlanProcurementTimingPolicy").select_option("immediate")
-            policy_select = page.locator("#upgradePlanLogisticsPolicy")
-            policy_values = policy_select.locator("option").evaluate_all("opts => opts.map(o => o.value).filter(Boolean)")
-            selected_policy = policy_values[0] if policy_values else None
-            if selected_policy is not None:
-                policy_select.select_option(selected_policy)
             # Unsaved planning values are client-owned drafts. A refresh with no
             # authoritative change must not silently reset them before submission.
             page.evaluate("async () => { await window.SpaceIdleApp.loadUiSnapshot(); }")
             _assert(page.locator("#upgradePlanPriorityInput").input_value() == "4", "upgrade planning priority must survive refresh")
             _assert(page.locator("#upgradePlanProcurementTimingPolicy").input_value() == "immediate", "upgrade procurement timing policy must survive refresh")
-            if selected_policy is not None:
-                _assert(page.locator("#upgradePlanLogisticsPolicy").input_value() == selected_policy, "upgrade Logistics Policy must survive refresh")
             upgrade_button = page.locator('#inspectorContent [data-upgrade]').first
             upgrade_button.click()
             page.wait_for_function(
@@ -347,8 +339,10 @@ def run() -> dict[str, object]:
             _assert("Facility Upgrade" in inspector_text, "project inspector must retain typed upgrade target information")
             _assert(page.locator("#projectPriorityInput").input_value() == "4", "project inspector must retain the planned priority")
             _assert(page.locator("#projectProcurementTimingPolicy").input_value() == "immediate", "project inspector must retain the planned procurement timing policy")
-            if selected_policy is not None:
-                _assert(page.locator("#projectLogisticsPolicy").input_value() == selected_policy, "project inspector must retain the planned Logistics Policy")
+            _assert(
+                page.locator('#inspectorContent [data-project-routing-constraint]').count() > 0,
+                "project Supply Requirements must expose Routing Constraint actions at the decision point",
+            )
             _assert(page.locator("#projectPriorityInput").is_enabled(), "mutable project priority must stay visible and enabled")
             _assert(page.locator("#projectProcurementTimingPolicy").is_enabled(), "mutable procurement timing policy must stay visible and enabled")
             page.locator("#projectPriorityInput").select_option("5")

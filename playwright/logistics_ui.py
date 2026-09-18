@@ -103,38 +103,25 @@ def run() -> None:
             assert "輸送能力阻害" in requirement_row.inner_text(), (
                 "Supply Requirement must remain visible while Transport Capacity is unavailable"
             )
-            policy_table = page.locator("#logisticsPolicyTable")
-            assert "logistics.policy.standard" in policy_table.inner_text()
-            assert "GLOBAL" in policy_table.inner_text()
-
-            # Logistics Policy is reusable source/path intent only. Creating and
-            # assigning one to the project must not provision Fleet.
-            policy_id = "logistics.policy.e2e-earth-fast"
-            page.get_by_role("button", name="Logistics Policyを作成").click()
-            page.locator("#logisticsPolicyDialog").wait_for(state="visible", timeout=10000)
-            page.locator("#logisticsPolicyId").fill(policy_id)
-            page.locator("#logisticsPolicySourceMode").select_option("pinned")
-            page.locator("#logisticsPolicySource").select_option(EARTH)
-            page.locator("#logisticsPolicyPathMode").select_option("preferred")
-            page.locator("#logisticsPolicyPathPreference").select_option("fastest")
-            page.get_by_role("button", name="方針を保存").click()
-            page.locator("#logisticsPolicyDialog").wait_for(state="hidden", timeout=10000)
-            policy_delete = page.locator(f'[data-logistics-policy-delete="{policy_id}"]')
-            policy_delete.wait_for(timeout=10000)
-            policy_row = policy_delete.locator("xpath=ancestor::tr")
-            assert "固定" in policy_row.inner_text() and "最速" in policy_row.inner_text()
-
-            requirement_policy = requirement_row.locator("[data-requirement-policy-select]")
-            requirement_policy.select_option(policy_id)
-            requirement_row.locator("[data-requirement-policy-apply]").click()
+            # A project-scoped Supply Routing Constraint is sparse hard intent.
+            # Setting it must not create strategic transport capacity or Fleet.
+            requirement_row.locator("[data-requirement-constraint]").click()
+            page.locator("#routingConstraintDialog").wait_for(state="visible", timeout=10000)
+            assert page.locator("#routingConstraintOwnerId").input_value() == project_id
+            assert page.locator("#routingConstraintDestination").input_value() == LEO
+            page.locator("#routingConstraintSource").select_option(EARTH)
+            page.get_by_role("button", name="Constraintを保存").click()
+            page.locator("#routingConstraintDialog").wait_for(state="hidden", timeout=10000)
             page.wait_for_function(
-                """({projectId, policyId}) => [...document.querySelectorAll('#requirementTable tbody tr')]
-                  .some(row => row.innerText.includes(projectId) && row.innerText.includes(policyId))""",
-                arg={"projectId": project_id, "policyId": policy_id},
+                """projectId => [...document.querySelectorAll('#requirementTable tbody tr')]
+                  .some(row => row.innerText.includes(projectId) && row.innerText.includes('hard: source'))""",
+                arg=project_id,
                 timeout=10000,
             )
+            requirement_row = page.locator("#requirementTable tbody tr", has_text=project_id).first
+            assert "地球" in requirement_row.inner_text(), "hard source constraint must be projected on the requirement"
             assert page.locator("#allocationTable [data-allocation-row]").count() == 0, (
-                "Logistics Policy must not create or resize Transport Allocation"
+                "Supply Routing Constraint must not create or resize Transport Allocation"
             )
 
             # Player Fleet provisioning is explicit and remains a separate decision.
@@ -159,7 +146,7 @@ def run() -> None:
             assert "t/日" in nominal_text and not nominal_text.startswith("0 / 0")
             assert "t/日" in available_text and not available_text.startswith("0 / 0")
             assert "1 unit" in allocation_row.inner_text(), (
-                "Logistics Policy must not resize authoritative Fleet provisioning"
+                "Supply Routing Constraint must not resize authoritative Fleet provisioning"
             )
 
             # A canonical day lets Supply Planning consume the now-available capacity.
