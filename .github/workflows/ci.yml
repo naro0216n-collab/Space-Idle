@@ -106,11 +106,8 @@ jobs:
       - name: Run direct browser-to-server smoke
         env:
           SPACE_IDLE_BROWSER: chromium
-          SPACE_IDLE_E2E_TRANSPORT: direct
           NO_PROXY: 127.0.0.1,localhost
-        run: |
-          python playwright/acceptance.py
-          python playwright/lane_ui.py
+        run: python playwright/run_suite.py acceptance interaction_continuity logistics_ui
 
   status-rollup:
     name: Fast CI status

@@ -132,12 +132,8 @@ jobs:
       - name: Run full direct browser-to-server acceptance
         env:
           SPACE_IDLE_BROWSER: chromium
-          SPACE_IDLE_E2E_TRANSPORT: direct
           NO_PROXY: 127.0.0.1,localhost
-        run: |
-          python playwright/acceptance.py
-          python playwright/interaction_continuity.py
-          python playwright/logistics_ui.py
+        run: python playwright/run_suite.py acceptance interaction_continuity logistics_ui
 
   webkit-e2e:
     name: macOS WebKit / direct HTTP E2E
@@ -156,9 +152,5 @@ jobs:
       - name: Run full iPad-like WebKit acceptance
         env:
           SPACE_IDLE_BROWSER: webkit
-          SPACE_IDLE_E2E_TRANSPORT: direct
           NO_PROXY: 127.0.0.1,localhost
-        run: |
-          python playwright/acceptance.py
-          python playwright/interaction_continuity.py
-          python playwright/logistics_ui.py
+        run: python playwright/run_suite.py acceptance interaction_continuity logistics_ui
