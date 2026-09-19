@@ -2,8 +2,6 @@
   'use strict';
 
   let selectedId = null;
-  let scrollLeft = 0;
-  let scrollTop = 0;
 
   const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;',
@@ -129,14 +127,6 @@
   function render(research) {
     const items = research?.items || [];
     const providers = research?.providers || [];
-    const existingScroller = document.getElementById('researchTreeScroll');
-    if (existingScroller) {
-      scrollLeft = existingScroller.scrollLeft;
-      scrollTop = existingScroller.scrollTop;
-    }
-    const restoreLeft = scrollLeft;
-    const restoreTop = scrollTop;
-
     const stored = Number(research?.stored_points || 0);
     const capacity = Number(research?.storage_capacity_points || 0);
     const generation = Number(research?.generation_points_per_day || 0);
@@ -183,25 +173,10 @@
       </button>`;
     }).join('');
 
-    requestAnimationFrame(() => {
-      const scroller = document.getElementById('researchTreeScroll');
-      if (scroller) {
-        scroller.scrollLeft = restoreLeft;
-        scroller.scrollTop = restoreTop;
-      }
-    });
-
     const completed = items.filter((item) => item.status === 'complete').length;
-    const tree = `<section class="card research-tree-card"><div class="card-heading"><div><h3>技術ツリー</h3><div class="cell-sub">技術を選択すると、右側に前提・進行段階・実行条件・制約を表示します。</div></div><span class="badge">完了 ${completed}/${items.length}</span></div>${rpStrip}<div id="researchTreeScroll" class="research-tree-scroll"><div id="researchTree" class="research-tree-stage" style="width:${graph.width}px;height:${graph.height}px"><svg class="research-tree-links" viewBox="0 0 ${graph.width} ${graph.height}" aria-hidden="true">${links.join('')}</svg>${nodes}</div></div></section>`;
+    const tree = `<section class="card research-tree-card"><div class="card-heading"><div><h3>技術ツリー</h3><div class="cell-sub">技術を選択すると、右側に前提・進行段階・実行条件・制約を表示します。</div></div><span class="badge">完了 ${completed}/${items.length}</span></div>${rpStrip}<div id="researchTreeScroll" class="research-tree-scroll" data-preserve-scroll="research-tree"><div id="researchTree" class="research-tree-stage" style="width:${graph.width}px;height:${graph.height}px"><svg class="research-tree-links" viewBox="0 0 ${graph.width} ${graph.height}" aria-hidden="true">${links.join('')}</svg>${nodes}</div></div></section>`;
     return `${tree}${providerSummary}`;
   }
-
-  document.addEventListener('scroll', (event) => {
-    if (event.target?.id === 'researchTreeScroll') {
-      scrollLeft = event.target.scrollLeft;
-      scrollTop = event.target.scrollTop;
-    }
-  }, true);
 
   document.addEventListener('click', (event) => {
     const node = event.target.closest?.('.research-node[data-id]');

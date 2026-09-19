@@ -13,6 +13,7 @@
 
   const $ = (sel, root=document) => root.querySelector(sel);
   const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+  const preservedScrollPositions = new Map();
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[c]));
   const fmt = (v, digits=1) => Number.isFinite(Number(v)) ? Number(v).toLocaleString('ja-JP',{maximumFractionDigits:digits}) : '—';
   const pct = (v) => Number.isFinite(Number(v)) ? `${Math.round(Number(v)*100)}%` : '—';
@@ -651,6 +652,23 @@
     });
   }
 
+  function capturePreservedScrollRegions(){
+    $$('[data-preserve-scroll]').forEach((region)=>{
+      const key=region.dataset.preserveScroll;
+      if(!key)return;
+      preservedScrollPositions.set(key,{left:region.scrollLeft,top:region.scrollTop});
+    });
+  }
+  function restorePreservedScrollRegions(){
+    $$('[data-preserve-scroll]').forEach((region)=>{
+      const key=region.dataset.preserveScroll;
+      const position=key?preservedScrollPositions.get(key):null;
+      if(!position)return;
+      region.scrollLeft=position.left;
+      region.scrollTop=position.top;
+    });
+  }
+
   function renderSectionChrome(){
     renderInspectorWidth();
     $$('.primary-nav-button').forEach((button)=>button.classList.toggle('is-active',button.dataset.section===state.activeSection));
@@ -662,10 +680,11 @@
     const tabbar=$('#operationsView .tabbar');if(tabbar)tabbar.hidden=state.activeSection==='research';
   }
   function renderAll(){
+    capturePreservedScrollRegions();
     renderHeader(); renderLocations(); renderGlobalIssues(); renderSectionChrome(); renderGlobalView(); renderEconomyContext();
     if(['location','research','exploration'].includes(state.activeSection))window.SpaceIdleOperations?.render();
     if(['logistics','economy'].includes(state.activeSection))window.SpaceIdleLogistics?.render();
-    restoreActiveDraftValues(); renderActiveDraftBar();
+    restoreActiveDraftValues(); renderActiveDraftBar(); restorePreservedScrollRegions();
   }
 
   function clearLocationSnapshot(){

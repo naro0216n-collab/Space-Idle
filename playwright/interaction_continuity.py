@@ -75,10 +75,13 @@ def run(*, browser=None) -> None:
             initial_tree_scroll = page.evaluate("el => el.scrollLeft", scroller.element_handle())
             assert initial_tree_scroll > 0
 
-            page.locator("#refreshButton").click()
-            page.wait_for_function(
-                "() => !document.body.classList.contains('is-busy')", timeout=10000
-            )
+            with page.expect_response(
+                lambda response: response.request.method == "GET"
+                and "/api/v1/ui-state" in response.url,
+                timeout=10000,
+            ) as explicit_refresh:
+                page.locator("#refreshButton").click()
+            assert explicit_refresh.value.ok
             assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "research"
             assert page.locator("#inspectorTitle").inner_text() == research_title
             assert page.locator("#researchTree .research-node.is-selected").count() == 1
