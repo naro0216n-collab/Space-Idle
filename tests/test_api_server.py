@@ -83,6 +83,28 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert target_stock_options["normal_demand_t_per_day"] > 0
         assert [row["display_name"] for row in target_stock_options["presets"]] == ["1日分", "3日分", "7日分"]
 
+        allocation_options_status, _, allocation_options_payload = _request(
+            port, "GET",
+            f"/api/v1/transport-allocation-options?source_id={ids.EARTH}&destination_id={ids.LEO}",
+        )
+        assert allocation_options_status == 200
+        allocation_option = next(
+            row for row in allocation_options_payload["data"]["options"]
+            if row["vehicle_definition_id"] == str(ids.REUSABLE_LAUNCH_VEHICLE)
+        )
+        one_unit = next(row for row in allocation_option["capacity_presets"] if row["units"] == 1)
+        preview_status, _, preview_payload = _request(
+            port, "GET",
+            "/api/v1/transport-allocation-preview"
+            f"?vehicle_definition_id={ids.REUSABLE_LAUNCH_VEHICLE}"
+            f"&source_id={ids.EARTH}&destination_id={ids.LEO}"
+            f"&target_forward_t_per_day={one_unit['capacity']['forward_t_per_day']}"
+            f"&target_reverse_t_per_day={one_unit['capacity']['reverse_t_per_day']}",
+        )
+        assert preview_status == 200
+        assert preview_payload["data"]["required_units"] == 1
+        assert preview_payload["data"]["selected_forward_path"] == allocation_option["forward_path"]
+
         status, _, payload = _request(
             port, "GET",
             f"/api/v1/dependency-analytics?scope_kind=operational_nodes&node_id={ids.EARTH}&time_basis=FORECAST",

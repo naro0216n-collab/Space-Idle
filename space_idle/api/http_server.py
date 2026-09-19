@@ -14,7 +14,7 @@ from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
     GetContracts, GetDependencyAnalytics, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys, GetSurveyCampaignIntentPreview,
-    GetTransportAllocationOptions, GetTargetStockOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
+    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
 )
 from ..persistence import SaveFormatError
 from .codec import ApiPayloadError, command_schema, decode_command, to_jsonable
@@ -327,6 +327,20 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             source_id = _required(params, "source_id")
             destination_id = _required(params, "destination_id")
             self._query_result(GetTransportAllocationOptions(source_id, destination_id))
+            return
+        if path == "/api/v1/transport-allocation-preview":
+            self._query_result(GetTransportAllocationPreview(
+                vehicle_definition_id=_required(params, "vehicle_definition_id"),
+                source_id=_required(params, "source_id"),
+                destination_id=_required(params, "destination_id"),
+                target_forward_t_per_day=float(_required(params, "target_forward_t_per_day")),
+                target_reverse_t_per_day=float(_required(params, "target_reverse_t_per_day")),
+                movement_hard_constraint=(
+                    None if not params.get("movement_plan_id")
+                    else tuple(params["movement_plan_id"])
+                ),
+                allocation_id=_one(params, "allocation_id"),
+            ))
             return
         if path == "/api/v1/target-stock-options":
             self._query_result(GetTargetStockOptions(

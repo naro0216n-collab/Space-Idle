@@ -327,6 +327,14 @@ class LogisticsView:
 
 
 @dataclass(frozen=True)
+class TransportCapacityPresetRow:
+    key: str
+    display_name: str
+    capacity: DirectionalCapacityRow
+    units: int
+
+
+@dataclass(frozen=True)
 class TransportAllocationOptionRow:
     vehicle_definition_id: str
     display_name: str
@@ -338,6 +346,8 @@ class TransportAllocationOptionRow:
     forward_latency_days: int
     reverse_latency_days: int | None
     nominal_capacity: DirectionalCapacityRow
+    suggested_capacity_max: DirectionalCapacityRow
+    capacity_presets: tuple[TransportCapacityPresetRow, ...]
     fleet_total_units: int
     fleet_free_units: int
     operational_supply_at_full_unit: tuple[tuple[str, str, float], ...]
@@ -350,3 +360,24 @@ class TransportAllocationOptionsView:
     source_id: str
     destination_id: str
     options: tuple[TransportAllocationOptionRow, ...]
+
+
+@dataclass(frozen=True)
+class TransportAllocationPreviewView:
+    vehicle_definition_id: str
+    source_id: str
+    destination_id: str
+    target_capacity: DirectionalCapacityRow
+    nominal_capacity_per_unit: DirectionalCapacityRow
+    suggested_capacity_max: DirectionalCapacityRow
+    capacity_presets: tuple[TransportCapacityPresetRow, ...]
+    achievable_capacity: DirectionalCapacityRow
+    required_units: int | None
+    available_units: int
+    unfilled_units: int | None
+    selected_forward_path: tuple[str, ...]
+    selected_reverse_path: tuple[str, ...]
+    cycle_days: float
+    forward_latency_days: int
+    reverse_latency_days: int | None
+    blockers: tuple[str, ...]

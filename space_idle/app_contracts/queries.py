@@ -55,6 +55,15 @@ class GetTransportAllocationOptions:
     source_id: str
     destination_id: str
 @dataclass(frozen=True)
+class GetTransportAllocationPreview:
+    vehicle_definition_id: str
+    source_id: str
+    destination_id: str
+    target_forward_t_per_day: float
+    target_reverse_t_per_day: float
+    movement_hard_constraint: tuple[str, ...] | None = None
+    allocation_id: str | None = None
+@dataclass(frozen=True)
 class GetTargetStockOptions:
     destination_id: str
     resource_id: str

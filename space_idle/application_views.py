@@ -22,7 +22,7 @@ from .app_contracts.logistics_views import (
     InfrastructureRequirementRow, MovementEndpointRow, MovementServiceModeRow, MovementPlanRow, DirectionalCapacityRow, FleetPoolRow, FleetCommitmentRow, TransportAllocationRow,
     FleetRelocationResourceRequirementRow, FleetRelocationRow, FleetReleaseRow, FleetRetirementRow, CargoFlowRow, VehicleProductionOptionRow, VehicleProductionRow,
     SupplyRequirementRow, SupplyRoutingConstraintRow, TargetStockRow, TargetStockPresetRow, TargetStockOptionsView, LogisticsView, TransportAllocationOptionRow,
-    TransportAllocationOptionsView,
+    TransportAllocationOptionsView, TransportAllocationPreviewView, TransportCapacityPresetRow,
 )
 from .app_contracts.logistics_reports import (
     LogisticsSummaryView, MovementPlansView, FleetView, FleetRelocationPreviewView, TransportAllocationsView,
@@ -49,7 +49,7 @@ QueryResult: TypeAlias = (
     DependencyAnalyticsView |
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     MovementPlansView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |
-    TransportAllocationOptionsView | TargetStockOptionsView | ResearchView |
+    TransportAllocationOptionsView | TransportAllocationPreviewView | TargetStockOptionsView | ResearchView |
     ScientificExplorationsView | SurveysView | SurveyCampaignIntentPreviewView | ContractsView | MarketView
 )
 

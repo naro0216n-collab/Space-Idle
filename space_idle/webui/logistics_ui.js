@@ -13,6 +13,10 @@
   let targetStockOptionsSerial=0;
   let allocationOptionsView=null;
   let allocationOptionSerial=0;
+  let allocationMovementSelection=[];
+  let allocationCapacityInitialized=false;
+  let allocationPreviewSerial=0;
+  let allocationPreviewTimer=null;
   let relocationContext=null;
   let relocationPreviewSerial=0;
   let relocationPreviewKey=null;
@@ -37,6 +41,86 @@
   const pathText=(path)=>{const rows=path||[];return rows.length?rows.map((id)=>definitionName(id)).join(' → '):'—';};
   const relocationKey=(destination,units)=>`${destination}\u001f${units}`;
 
+  function setAllocationPriority(priority){
+    const value=String(priority??3);$('#allocationPriority').value=value;
+    for(const button of document.querySelectorAll('[data-allocation-priority]'))button.classList.toggle('is-selected',button.dataset.allocationPriority===value);
+  }
+  function setAllocationCapacity(direction,value,{expandRange=false}={}){
+    const number=Math.max(0,Number(value)||0),range=$(`#allocation${direction}Range`),input=$(`#allocation${direction}`),label=$(`#allocation${direction}Value`);
+    if(expandRange&&number>Number(range.max||0))range.max=String(number);
+    range.value=String(Math.min(number,Number(range.max||number||1)));input.value=String(number);label.textContent=`${fmt(number,2)} t/日`;
+    scheduleAllocationPreview();
+  }
+  function selectedAllocationOption(){
+    const vehicle=$('#allocationVehicle')?.value;return (allocationOptionsView?.options||[]).find((row)=>row.vehicle_definition_id===vehicle)||null;
+  }
+  function renderAllocationCapacityAssistance(source){
+    if(!source)return;
+    const forwardMax=Math.max(0.01,Number(source.suggested_capacity_max?.forward_t_per_day)||0.01),reverseMax=Math.max(0.01,Number(source.suggested_capacity_max?.reverse_t_per_day)||0.01);
+    $('#allocationForwardRange').max=String(Math.max(forwardMax,Number($('#allocationForward').value)||0));$('#allocationReverseRange').max=String(Math.max(reverseMax,Number($('#allocationReverse').value)||0));
+    const presets=source.capacity_presets||[];
+    $('#allocationForwardPresets').innerHTML=`<button type="button" data-allocation-capacity-preset="forward" data-allocation-capacity-value="0">停止</button>`+presets.map((row)=>`<button type="button" data-allocation-capacity-preset="forward" data-allocation-capacity-value="${esc(row.capacity.forward_t_per_day)}">${esc(row.display_name)}<span class="cell-sub">${fmt(row.capacity.forward_t_per_day,2)} t/日</span></button>`).join('');
+    $('#allocationReversePresets').innerHTML=`<button type="button" data-allocation-capacity-preset="reverse" data-allocation-capacity-value="0">なし</button>`+presets.map((row)=>`<button type="button" data-allocation-capacity-preset="reverse" data-allocation-capacity-value="${esc(row.capacity.reverse_t_per_day)}">${esc(row.display_name)}<span class="cell-sub">${fmt(row.capacity.reverse_t_per_day,2)} t/日</span></button>`).join('');
+  }
+  function renderAllocationCapacityControls(){
+    const option=selectedAllocationOption();if(!option)return;
+    renderAllocationCapacityAssistance(option);
+    if(!allocationCapacityInitialized){setAllocationCapacity('Forward',option.nominal_capacity?.forward_t_per_day||0,{expandRange:true});setAllocationCapacity('Reverse',0,{expandRange:true});allocationCapacityInitialized=true;}else{setAllocationCapacity('Forward',$('#allocationForward').value,{expandRange:true});setAllocationCapacity('Reverse',$('#allocationReverse').value,{expandRange:true});}
+  }
+  function renderAllocationMovementChoices(){
+    const root=$('#allocationMovementChoices');if(!root)return;const source=$('#allocationSource').value,destination=$('#allocationDestination').value;
+    const candidates=(state.movementPlans?.items||[]).filter((row)=>row.origin_id===source&&row.destination_id===destination);
+    root.innerHTML=candidates.map((row)=>{const index=allocationMovementSelection.indexOf(row.id),selected=index>=0;return `<button type="button" class="choice-button ${selected?'is-selected':''}" data-allocation-movement="${esc(row.id)}"><span class="cell-main">${selected?`${index+1}. `:''}${esc(row.display_name)}</span><span class="cell-sub">${esc(locationName(row.origin_id))} → ${esc(locationName(row.destination_id))} · ${row.service_feasible_now?'Service可':row.available?'運用条件待ち':'不成立'}</span></button>`;}).join('')||'<span class="cell-sub">固定候補なし。自動選択を使用します。</span>';
+  }
+
+  function renderAllocationPreview(preview=null,{loading=false,error=null}={}){
+    const root=$('#allocationPreview');if(!root)return;
+    if(loading){root.innerHTML='<h3>設定結果</h3><div class="cell-sub">必要Fleetと成立見込みを計算中…</div>';return;}
+    if(error){root.innerHTML=`<h3>設定結果</h3><div class="issue"><div class="issue-title">${esc(error)}</div></div>`;return;}
+    if(!preview){root.innerHTML='<h3>設定結果</h3><div class="cell-sub">Capacity targetを調整すると必要Fleetと成立見込みを表示します。</div>';return;}
+    renderAllocationCapacityAssistance(preview);
+    const required=preview.required_units==null?'算出不可':fmt(preview.required_units,0);
+    const unfilled=preview.unfilled_units==null?'—':fmt(preview.unfilled_units,0);
+    const route=`F ${pathText(preview.selected_forward_path)}${(preview.selected_reverse_path||[]).length?` / R ${pathText(preview.selected_reverse_path)}`:''}`;
+    const blockers=(preview.blockers||[]).length?`<div class="issue-stack">${preview.blockers.map((row)=>issueHtml(['transport',row])).join('')}</div>`:'<span class="badge ok">現在のblockerなし</span>';
+    root.innerHTML=`<h3>設定結果</h3>${kv([
+      ['Target',esc(capText(preview.target_capacity))],
+      ['必要Fleet',`${esc(required)} unit`],
+      ['利用可能Fleet',`${fmt(preview.available_units,0)} unit`],
+      ['不足',`${esc(unfilled)} unit`],
+      ['成立可能Capacity',esc(capText(preview.achievable_capacity))],
+      ['選択経路',esc(route)],
+      ['Cycle / latency',`${fmt(preview.cycle_days,1)} 日 / F ${fmt(preview.forward_latency_days,0)} 日${preview.reverse_latency_days==null?'':` / R ${fmt(preview.reverse_latency_days,0)} 日`}`],
+    ])}${blockers}`;
+  }
+
+  function scheduleAllocationPreview({immediate=false}={}){
+    if(allocationPreviewTimer){clearTimeout(allocationPreviewTimer);allocationPreviewTimer=null;}
+    if(!$('#allocationDialog')?.open)return;
+    const run=()=>updateAllocationPreview();
+    if(immediate)run();else allocationPreviewTimer=setTimeout(run,150);
+  }
+
+  async function updateAllocationPreview(){
+    allocationPreviewTimer=null;
+    if(!$('#allocationDialog')?.open)return;
+    const vehicle=$('#allocationVehicle').value,source=$('#allocationSource').value,destination=$('#allocationDestination').value;
+    if(!vehicle||!source||!destination||source===destination){renderAllocationPreview();return;}
+    const serial=++allocationPreviewSerial;renderAllocationPreview(null,{loading:true});
+    const params=new URLSearchParams({
+      vehicle_definition_id:vehicle,source_id:source,destination_id:destination,
+      target_forward_t_per_day:$('#allocationForward').value||'0',
+      target_reverse_t_per_day:$('#allocationReverse').value||'0',
+    });
+    for(const movementId of allocationMovementSelection)params.append('movement_plan_id',movementId);
+    if(editingAllocationId)params.set('allocation_id',editingAllocationId);
+    try{
+      const preview=await api(`/api/v1/transport-allocation-preview?${params}`);
+      if(serial!==allocationPreviewSerial||!$('#allocationDialog')?.open)return;
+      renderAllocationPreview(preview);
+    }catch(err){if(serial===allocationPreviewSerial&&$('#allocationDialog')?.open)renderAllocationPreview(null,{error:err.message||'設定結果を取得できません'});}
+  }
+
   function renderAllocationServiceOptions(view=allocationOptionsView){
     const root=$('#allocationServiceOptions');if(!root)return;
     if(!view){root.innerHTML='<div class="cell-sub">Transport Service候補を取得中…</div>';return;}
@@ -55,7 +139,7 @@
         ['Full-use Resource',esc(resources)],
       ])}${blockers}</div>`;
     }).join('');
-    root.innerHTML=`<h3>Transport Service候補</h3><div class="cell-sub">Vehicle性能と正準Movement評価からApplicationが導出した候補です。経路を固定する必要がある場合だけMovement hard constraintを指定します。</div>${cards||'<div class="empty-state">候補なし</div>'}`;
+    root.innerHTML=`<h3>Transport Service候補</h3><div class="cell-sub">Vehicle性能と正準Movement評価からApplicationが導出した候補です。経路を固定する必要がある場合だけ候補経路を選択します。</div>${cards||'<div class="empty-state">候補なし</div>'}`;
   }
 
   async function updateAllocationServiceOptions(){
@@ -71,7 +155,7 @@
       const params=new URLSearchParams({source_id:source,destination_id:destination});
       const view=await api(`/api/v1/transport-allocation-options?${params}`);
       if(serial!==allocationOptionSerial||!$('#allocationDialog')?.open)return;
-      allocationOptionsView=view;renderAllocationServiceOptions(view);
+      allocationOptionsView=view;renderAllocationServiceOptions(view);renderAllocationCapacityControls();renderAllocationMovementChoices();scheduleAllocationPreview({immediate:true});
     }catch(err){
       if(serial===allocationOptionSerial&&$('#allocationDialog')?.open){
         const root=$('#allocationServiceOptions');if(root)root.innerHTML=`<h3>Transport Service候補</h3><div class="issue"><div class="issue-title">${esc(err.message||'候補を取得できません')}</div></div>`;
@@ -200,8 +284,8 @@
   function allocationTarget(a){return `F ${fmt(a.target_capacity?.forward_t_per_day,2)} / R ${fmt(a.target_capacity?.reverse_t_per_day,2)} t/日`;}
   function renderAllocations(){
     const items=state.transportAllocations?.items||logistics().allocations||[]; $('#allocationCountBadge').textContent=`${items.length}件`;
-    const rows=items.map((a)=>{const blocked=(a.blockers||[]).length+(a.limiting_factors||[]).length;const constraint=(a.movement_hard_constraint||[]).length?`固定: ${pathText(a.movement_hard_constraint)}`:'自動選択';const selected=`F ${pathText(a.selected_forward_path)}${(a.selected_reverse_path||[]).length?` / R ${pathText(a.selected_reverse_path)}`:''}`;return `<tr class="${isDecisionContext('transport_allocation',a.id)?'is-context-target':''}" data-allocation-row="${esc(a.id)}"><td><div class="cell-main">${esc(a.display_name)}</div><div class="cell-sub">${esc(locationName(a.anchor_node_id))} → ${esc(locationName(a.destination_id))} · ${esc(a.id)}</div><div class="cell-sub">Route: ${esc(selected)} · ${esc(constraint)}</div><div class="cell-sub">Infrastructure: ${esc(infrastructureText(a.infrastructure_requirements))}</div><div class="cell-sub">Resource: ${(a.operational_supply||[]).map(([loc,rid,amount])=>`${esc(locationName(loc))} ${esc(resourceName(rid))} ${fmt(amount,2)} t/日`).join(' / ')||'追加運用Resourceなし'}</div></td><td><div class="cell-main">${esc(allocationTarget(a))}</div><div class="cell-sub">方向別Capacity target</div></td><td>${fmt(a.active_units,0)} / ${fmt(a.required_units,0)}<div class="cell-sub">unfilled ${fmt(a.unfilled_units,0)}</div></td><td>${capText(a.nominal)}</td><td>${capText(a.available)}</td><td>${capText(a.used)}</td><td>${capText(a.spare)}</td><td>${fmt(a.cycle_days,1)}日<div class="cell-sub">latency ${fmt(a.forward_latency_days,0)}日</div></td><td>${blocked}<div class="cell-sub">${esc([...(a.blockers||[]),...(a.limiting_factors||[])].slice(0,2).map(A.userFacingText).join(' / '))}</div></td><td><div class="action-row"><button type="button" data-allocation-edit="${esc(a.id)}">設定</button><button type="button" data-allocation-toggle="${esc(a.id)}" data-paused="${a.paused?'1':'0'}">${a.paused?'再開':'停止'}</button><button type="button" class="danger-button" data-allocation-delete="${esc(a.id)}">削除</button></div></td></tr>`;}).join('');
-    $('#allocationTable').innerHTML=`<div style="padding:8px"><button type="button" class="primary" id="newAllocationButton">Transport Allocationを作成</button></div><table><thead><tr><th>Service / route</th><th>Target Capacity</th><th>active / required</th><th>Nominal F/R</th><th>Available F/R</th><th>Used F/R</th><th>Spare F/R</th><th>cycle</th><th>blocker</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="10">Transport Allocationなし。Fleetはfreeのままです。</td></tr>'}</tbody></table>`;
+    const rows=items.map((a)=>{const blocked=(a.blockers||[]).length+(a.limiting_factors||[]).length;const constraint=(a.movement_hard_constraint||[]).length?`固定: ${pathText(a.movement_hard_constraint)}`:'自動選択';const selected=`F ${pathText(a.selected_forward_path)}${(a.selected_reverse_path||[]).length?` / R ${pathText(a.selected_reverse_path)}`:''}`;return `<tr class="${isDecisionContext('transport_allocation',a.id)?'is-context-target':''}" data-allocation-row="${esc(a.id)}"><td><div class="cell-main">${esc(a.display_name)}</div><div class="cell-sub">${esc(locationName(a.anchor_node_id))} → ${esc(locationName(a.destination_id))}</div><div class="cell-sub">Route: ${esc(selected)} · ${esc(constraint)}</div><div class="cell-sub">Infrastructure: ${esc(infrastructureText(a.infrastructure_requirements))}</div><div class="cell-sub">Resource: ${(a.operational_supply||[]).map(([loc,rid,amount])=>`${esc(locationName(loc))} ${esc(resourceName(rid))} ${fmt(amount,2)} t/日`).join(' / ')||'追加運用Resourceなし'}</div></td><td><div class="cell-main">${esc(allocationTarget(a))}</div><div class="cell-sub">方向別Capacity target</div></td><td>${fmt(a.active_units,0)} / ${fmt(a.required_units,0)}<div class="cell-sub">unfilled ${fmt(a.unfilled_units,0)}</div></td><td>${capText(a.nominal)}</td><td>${capText(a.available)}</td><td>${capText(a.used)}</td><td>${capText(a.spare)}</td><td>${fmt(a.cycle_days,1)}日<div class="cell-sub">latency ${fmt(a.forward_latency_days,0)}日</div></td><td>${blocked}<div class="cell-sub">${esc([...(a.blockers||[]),...(a.limiting_factors||[])].slice(0,2).map(A.userFacingText).join(' / '))}</div></td><td><div class="action-row"><button type="button" data-allocation-edit="${esc(a.id)}">設定</button><button type="button" data-allocation-toggle="${esc(a.id)}" data-paused="${a.paused?'1':'0'}">${a.paused?'再開':'停止'}</button><button type="button" class="danger-button" data-allocation-delete="${esc(a.id)}">削除</button></div></td></tr>`;}).join('');
+    $('#allocationTable').innerHTML=`<div style="padding:8px"><button type="button" class="primary" id="newAllocationButton">輸送能力を設定</button></div><table><thead><tr><th>Service / route</th><th>Target Capacity</th><th>active / required</th><th>Nominal F/R</th><th>Available F/R</th><th>Used F/R</th><th>Spare F/R</th><th>cycle</th><th>blocker</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="10">輸送能力設定なし。Fleetはfreeのままです。</td></tr>'}</tbody></table>`;
   }
 
   function renderVehicleProduction(){
@@ -294,7 +378,7 @@
     const via=(state.world?.operational_nodes||[]).filter((row)=>row.id!==scope.destination_id).map((row)=>`<button type="button" class="choice-button ${routingConstraintViaSelection.has(row.id)?'is-selected':''}" data-routing-via-node="${esc(row.id)}">${esc(row.display_name)}</button>`).join('');
     $('#routingConstraintViaChoices').innerHTML=via||'<div class="cell-sub">選択可能な経由拠点なし</div>';
     const allocations=state.transportAllocations?.items||logistics().allocations||[];
-    $('#routingConstraintAllocationChoices').innerHTML=allocations.map((row)=>`<button type="button" class="choice-button ${routingConstraintAllocationSelection.has(row.id)?'is-selected':''}" data-routing-allocation="${esc(row.id)}"><span>${esc(locationName(row.anchor_node_id))} → ${esc(locationName(row.destination_id))}</span><span class="cell-sub">${esc(allocationTarget(row))}</span></button>`).join('')||'<div class="cell-sub">成立済みTransport Allocationなし</div>';
+    $('#routingConstraintAllocationChoices').innerHTML=allocations.map((row)=>`<button type="button" class="choice-button ${routingConstraintAllocationSelection.has(row.id)?'is-selected':''}" data-routing-allocation="${esc(row.id)}"><span>${esc(locationName(row.anchor_node_id))} → ${esc(locationName(row.destination_id))}</span><span class="cell-sub">${esc(allocationTarget(row))}</span></button>`).join('')||'<div class="cell-sub">成立済み輸送区間なし</div>';
   }
   function openRoutingConstraintDialog(row=null,prefill=null){
     const value=row||prefill;if(!value?.destination_id){banner('Supply Requirementから対象需要を選択してください','error');return;}
@@ -344,15 +428,16 @@
   }
 
   function openAllocationDialog(movementPlan=null,allocation=null){
-    editingAllocationId=allocation?.id||null;allocationOptionsView=null;allocationOptionSerial++;populateLocationSelects();const editing=Boolean(allocation);
-    $('#allocationDialog h2').textContent=editing?'Transport Allocationを編集':'Fleetを輸送へ配分';
-    $('#allocationForm button[type="submit"]').textContent=editing?'設定を更新':'Allocation作成';
+    editingAllocationId=allocation?.id||null;allocationOptionsView=null;allocationOptionSerial++;allocationCapacityInitialized=Boolean(allocation);populateLocationSelects();const editing=Boolean(allocation);
+    $('#allocationDialog h2').textContent=editing?'輸送能力を編集':'輸送能力を設定';
+    $('#allocationForm button[type="submit"]').textContent=editing?'設定を更新':'輸送設定を作成';
     for(const id of ['allocationVehicle','allocationSource','allocationDestination'])$('#'+id).disabled=editing;
+    allocationMovementSelection=allocation?.movement_hard_constraint?[...(allocation.movement_hard_constraint||[])]:movementPlan?.id?[movementPlan.id]:[];
     if(allocation){
-      $('#allocationVehicle').value=allocation.vehicle_definition_id;$('#allocationSource').value=allocation.anchor_node_id;$('#allocationDestination').value=allocation.destination_id;$('#allocationPriority').value=String(allocation.provisioning_priority);$('#allocationForward').value=String(allocation.target_capacity?.forward_t_per_day??0);$('#allocationReverse').value=String(allocation.target_capacity?.reverse_t_per_day??0);$('#allocationMovementConstraint').value=(allocation.movement_hard_constraint||[]).join(', ');
-    }else if(movementPlan){$('#allocationSource').value=movementPlan.origin_id;$('#allocationDestination').value=movementPlan.destination_id;$('#allocationMovementConstraint').value=movementPlan.id||'';}else{$('#allocationMovementConstraint').value='';}
+      $('#allocationVehicle').value=allocation.vehicle_definition_id;$('#allocationSource').value=allocation.anchor_node_id;$('#allocationDestination').value=allocation.destination_id;setAllocationPriority(allocation.provisioning_priority);setAllocationCapacity('Forward',allocation.target_capacity?.forward_t_per_day??0,{expandRange:true});setAllocationCapacity('Reverse',allocation.target_capacity?.reverse_t_per_day??0,{expandRange:true});
+    }else{setAllocationPriority(3);setAllocationCapacity('Forward',0);setAllocationCapacity('Reverse',0);if(movementPlan){$('#allocationSource').value=movementPlan.origin_id;$('#allocationDestination').value=movementPlan.destination_id;}}
     if($('#allocationSource').value===$('#allocationDestination').value){const other=[...$('#allocationDestination').options].find((o)=>o.value!==$('#allocationSource').value);if(other)$('#allocationDestination').value=other.value;}
-    $('#allocationDialog').showModal();updateAllocationServiceOptions();
+    renderAllocationMovementChoices();renderAllocationPreview();$('#allocationDialog').showModal();updateAllocationServiceOptions();
   }
   function openRelocationDialog(vehicleDefinitionId,sourceId,freeUnits){
     relocationContext={vehicle_definition_id:vehicleDefinitionId,source_id:sourceId};relocationPreviewKey=null;populateLocationSelects();
@@ -376,7 +461,10 @@
     if(event.target.closest('#newTargetStockButton')){openTargetStockDialog();return;}
     if(event.target.closest('#newAllocationButton')){openAllocationDialog();return;} if(event.target.closest('#movementPlanAllocationButton')){openAllocationDialog((state.movementPlans?.items||[]).find((x)=>x.id===state.selectedMovementPlanId));return;}
     const allocationEdit=event.target.closest('[data-allocation-edit]');if(allocationEdit){const a=(state.transportAllocations?.items||[]).find((x)=>x.id===allocationEdit.dataset.allocationEdit);if(a)openAllocationDialog(null,a);return;}
-    const allocationOption=event.target.closest('[data-allocation-option]');if(allocationOption){$('#allocationVehicle').value=allocationOption.dataset.allocationOption;renderAllocationServiceOptions();return;}
+    const allocationOption=event.target.closest('[data-allocation-option]');if(allocationOption){$('#allocationVehicle').value=allocationOption.dataset.allocationOption;allocationCapacityInitialized=false;renderAllocationServiceOptions();renderAllocationCapacityControls();scheduleAllocationPreview({immediate:true});return;}
+    const allocationPriority=event.target.closest('[data-allocation-priority]');if(allocationPriority){setAllocationPriority(allocationPriority.dataset.allocationPriority);return;}
+    const allocationPreset=event.target.closest('[data-allocation-capacity-preset]');if(allocationPreset){const direction=allocationPreset.dataset.allocationCapacityPreset==='forward'?'Forward':'Reverse';setAllocationCapacity(direction,Number(allocationPreset.dataset.allocationCapacityValue),{expandRange:true});scheduleAllocationPreview({immediate:true});return;}
+    const allocationMovement=event.target.closest('[data-allocation-movement]');if(allocationMovement){const id=allocationMovement.dataset.allocationMovement,index=allocationMovementSelection.indexOf(id);if(index>=0)allocationMovementSelection.splice(index,1);else allocationMovementSelection.push(id);renderAllocationMovementChoices();scheduleAllocationPreview();return;}
     const relocate=event.target.closest('[data-fleet-relocate]');if(relocate){openRelocationDialog(relocate.dataset.fleetRelocate,relocate.dataset.fleetSource,Number(relocate.dataset.fleetFree));return;}
     const retire=event.target.closest('[data-fleet-retire]');if(retire){const row=retire.closest('[data-fleet-pool-row]');try{await command('RetireFleet',{vehicle_definition_id:retire.dataset.fleetRetire,operational_node_id:retire.dataset.fleetRetireNode,units:Number(row.querySelector('[data-retirement-units]').value),priority:Number(row.querySelector('[data-retirement-priority]').value)});}catch{}return;}
     const retirementCancel=event.target.closest('[data-retirement-cancel]');if(retirementCancel){try{await command('CancelFleetRetirement',{retirement_id:retirementCancel.dataset.retirementCancel});}catch{}return;}
@@ -410,8 +498,9 @@
     $('#targetStockDestination').addEventListener('change',updateTargetStockOptions);$('#targetStockResource').addEventListener('change',updateTargetStockOptions);
     $('#targetStockQuantityRange').addEventListener('input',(event)=>setTargetStockQuantity(event.target.value));$('#targetStockQuantity').addEventListener('input',(event)=>setTargetStockQuantity(event.target.value,{expandRange:true}));
     $('#targetStockForm').addEventListener('submit',async(event)=>{event.preventDefault();try{await command('SetTargetStock',{destination_id:$('#targetStockDestination').value,resource_id:$('#targetStockResource').value,target_quantity_t:Number($('#targetStockQuantity').value),priority:Number($('#targetStockPriority').value)});closeTargetStock();}catch{}});
-    $('#allocationVehicle').addEventListener('change',()=>renderAllocationServiceOptions());$('#allocationSource').addEventListener('change',updateAllocationServiceOptions);$('#allocationDestination').addEventListener('change',updateAllocationServiceOptions);$('#allocationCloseButton').addEventListener('click',()=>{editingAllocationId=null;allocationOptionSerial++;allocationOptionsView=null;$('#allocationDialog').close();});$('#allocationCancelButton').addEventListener('click',()=>{editingAllocationId=null;allocationOptionSerial++;allocationOptionsView=null;$('#allocationDialog').close();});
-    $('#allocationForm').addEventListener('submit',async(event)=>{event.preventDefault();const split=(value)=>value.split(',').map((v)=>v.trim()).filter(Boolean);const constraint=split($('#allocationMovementConstraint').value);try{const capacity={target_forward_t_per_day:Number($('#allocationForward').value),target_reverse_t_per_day:Number($('#allocationReverse').value),provisioning_priority:Number($('#allocationPriority').value)};if(editingAllocationId){await command('UpdateTransportAllocation',{allocation_id:editingAllocationId,...capacity});if(constraint.length)await command('SetTransportMovementConstraint',{allocation_id:editingAllocationId,movement_plan_ids:constraint});else await command('ClearTransportMovementConstraint',{allocation_id:editingAllocationId});editingAllocationId=null;}else{await command('CreateTransportAllocation',{vehicle_definition_id:$('#allocationVehicle').value,anchor_node_id:$('#allocationSource').value,destination_id:$('#allocationDestination').value,...capacity,movement_hard_constraint:constraint.length?constraint:null});}$('#allocationDialog').close();}catch{}});
+    $('#allocationVehicle').addEventListener('change',()=>{allocationCapacityInitialized=false;renderAllocationServiceOptions();renderAllocationCapacityControls();scheduleAllocationPreview();});$('#allocationSource').addEventListener('change',()=>{allocationMovementSelection=[];renderAllocationMovementChoices();updateAllocationServiceOptions();});$('#allocationDestination').addEventListener('change',()=>{allocationMovementSelection=[];renderAllocationMovementChoices();updateAllocationServiceOptions();});$('#allocationCloseButton').addEventListener('click',()=>{editingAllocationId=null;allocationOptionSerial++;allocationOptionsView=null;allocationMovementSelection=[];allocationPreviewSerial++;if(allocationPreviewTimer){clearTimeout(allocationPreviewTimer);allocationPreviewTimer=null;}$('#allocationDialog').close();});$('#allocationCancelButton').addEventListener('click',()=>{editingAllocationId=null;allocationOptionSerial++;allocationOptionsView=null;allocationMovementSelection=[];allocationPreviewSerial++;if(allocationPreviewTimer){clearTimeout(allocationPreviewTimer);allocationPreviewTimer=null;}$('#allocationDialog').close();});
+    $('#allocationForwardRange').addEventListener('input',(event)=>setAllocationCapacity('Forward',event.target.value));$('#allocationReverseRange').addEventListener('input',(event)=>setAllocationCapacity('Reverse',event.target.value));$('#allocationForward').addEventListener('input',(event)=>setAllocationCapacity('Forward',event.target.value,{expandRange:true}));$('#allocationReverse').addEventListener('input',(event)=>setAllocationCapacity('Reverse',event.target.value,{expandRange:true}));
+    $('#allocationForm').addEventListener('submit',async(event)=>{event.preventDefault();const constraint=[...allocationMovementSelection];try{const capacity={target_forward_t_per_day:Number($('#allocationForward').value),target_reverse_t_per_day:Number($('#allocationReverse').value),provisioning_priority:Number($('#allocationPriority').value)};if(editingAllocationId){await command('UpdateTransportAllocation',{allocation_id:editingAllocationId,...capacity});if(constraint.length)await command('SetTransportMovementConstraint',{allocation_id:editingAllocationId,movement_plan_ids:constraint});else await command('ClearTransportMovementConstraint',{allocation_id:editingAllocationId});editingAllocationId=null;}else{await command('CreateTransportAllocation',{vehicle_definition_id:$('#allocationVehicle').value,anchor_node_id:$('#allocationSource').value,destination_id:$('#allocationDestination').value,...capacity,movement_hard_constraint:constraint.length?constraint:null});}allocationMovementSelection=[];$('#allocationDialog').close();}catch{}});
     $('#relocationCloseButton').addEventListener('click',()=>{relocationContext=null;relocationPreviewKey=null;relocationPreviewSerial++;$('#relocationDialog').close();});$('#relocationCancelButton').addEventListener('click',()=>{relocationContext=null;relocationPreviewKey=null;relocationPreviewSerial++;$('#relocationDialog').close();});
     $('#relocationDestination').addEventListener('change',updateRelocationPreview);$('#relocationUnits').addEventListener('input',updateRelocationPreview);
     $('#relocationForm').addEventListener('submit',async(event)=>{event.preventDefault();if(!relocationContext)return;const destination=$('#relocationDestination').value;if(destination===relocationContext.source_id){banner('Fleet移動の出発地と到着地は異なる必要があります','error');return;}try{await command('RelocateFleet',{vehicle_definition_id:relocationContext.vehicle_definition_id,units:Number($('#relocationUnits').value),source_id:relocationContext.source_id,destination_id:destination,movement_hard_constraint:null});relocationContext=null;relocationPreviewKey=null;$('#relocationDialog').close();}catch{}});

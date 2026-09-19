@@ -767,9 +767,10 @@ class FleetAllocationMixin:
         )
 
     @staticmethod
-    def _units_for_capacity(
+    def required_units_for_capacity(
         target: DirectionalCapacity, nominal_per_unit: DirectionalCapacity
     ) -> int:
+        """Convert a directional capacity target into required homogeneous units."""
         ratios: list[float] = []
         if target.forward_t_per_day > 1e-12:
             if nominal_per_unit.forward_t_per_day <= 1e-12:
@@ -781,10 +782,46 @@ class FleetAllocationMixin:
             ratios.append(target.reverse_t_per_day / nominal_per_unit.reverse_t_per_day)
         return 0 if not ratios else int(math.ceil(max(ratios) - 1e-12))
 
+    @staticmethod
+    def capacity_for_service_units(
+        nominal_per_unit: DirectionalCapacity, units: int
+    ) -> DirectionalCapacity:
+        """Scale an already-derived service capacity without re-deriving its route."""
+        if units < 0:
+            raise ValueError("transport unit convenience input must be non-negative")
+        return DirectionalCapacity(
+            nominal_per_unit.forward_t_per_day * units,
+            nominal_per_unit.reverse_t_per_day * units,
+        )
+
     def allocation_required_units(self, allocation_id: EntityId, day: int = 0) -> int:
         allocation = self.transport_allocations[allocation_id]
         plan = self.derive_transport_service_plan(allocation_id, day)
-        return self._units_for_capacity(allocation.target_capacity, plan.nominal_per_unit)
+        return self.required_units_for_capacity(allocation.target_capacity, plan.nominal_per_unit)
+
+    def transport_required_units_for_target(
+        self,
+        vehicle_definition_id: DefinitionId,
+        anchor_node_id: SpatialNodeId,
+        destination_id: SpatialNodeId,
+        target_capacity: DirectionalCapacity,
+        *,
+        day: int = 0,
+        movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
+    ) -> int:
+        """Derive Fleet units required by a hypothetical capacity target.
+
+        This is a projection helper only. The authoritative Transport Allocation
+        state remains the directional capacity target.
+        """
+        plan = self.transport_service_plan_for(
+            vehicle_definition_id,
+            anchor_node_id,
+            destination_id,
+            day=day,
+            movement_hard_constraint=movement_hard_constraint,
+        )
+        return self.required_units_for_capacity(target_capacity, plan.nominal_per_unit)
 
     def transport_capacity_for_units(
         self,
@@ -802,8 +839,6 @@ class FleetAllocationMixin:
         Plan and is never stored as a unit target. Callers may use it for previews or
         input assistance while Transport Allocation state remains capacity-only.
         """
-        if units < 0:
-            raise ValueError("transport unit convenience input must be non-negative")
         plan = self.transport_service_plan_for(
             vehicle_definition_id,
             anchor_node_id,
@@ -811,10 +846,7 @@ class FleetAllocationMixin:
             day=day,
             movement_hard_constraint=movement_hard_constraint,
         )
-        return DirectionalCapacity(
-            plan.nominal_per_unit.forward_t_per_day * units,
-            plan.nominal_per_unit.reverse_t_per_day * units,
-        )
+        return self.capacity_for_service_units(plan.nominal_per_unit, units)
 
     def create_transport_allocation(
         self,
@@ -852,7 +884,7 @@ class FleetAllocationMixin:
             # allocations whose capacity is temporarily unavailable. Targets must refer
             # only to directions this service can carry cargo.
             plan = self.derive_transport_service_plan(allocation_id, day)
-            self._units_for_capacity(target_capacity, plan.nominal_per_unit)
+            self.required_units_for_capacity(target_capacity, plan.nominal_per_unit)
             self.reconcile_fleet_allocations(day)
         except Exception:
             self.transport_allocations.pop(allocation_id, None)
@@ -883,7 +915,7 @@ class FleetAllocationMixin:
         self.transport_allocations[allocation_id] = updated
         try:
             plan = self.derive_transport_service_plan(allocation_id, day)
-            self._units_for_capacity(updated.target_capacity, plan.nominal_per_unit)
+            self.required_units_for_capacity(updated.target_capacity, plan.nominal_per_unit)
             self.reconcile_fleet_allocations(day)
         except Exception:
             self.transport_allocations[allocation_id] = current
@@ -904,7 +936,7 @@ class FleetAllocationMixin:
         self.transport_allocations[allocation_id] = updated
         try:
             plan = self.derive_transport_service_plan(allocation_id, day)
-            self._units_for_capacity(updated.target_capacity, plan.nominal_per_unit)
+            self.required_units_for_capacity(updated.target_capacity, plan.nominal_per_unit)
             self.reconcile_fleet_allocations(day)
         except Exception:
             self.transport_allocations[allocation_id] = current
@@ -921,7 +953,7 @@ class FleetAllocationMixin:
         self.transport_allocations[allocation_id] = updated
         try:
             plan = self.derive_transport_service_plan(allocation_id, day)
-            self._units_for_capacity(updated.target_capacity, plan.nominal_per_unit)
+            self.required_units_for_capacity(updated.target_capacity, plan.nominal_per_unit)
             self.reconcile_fleet_allocations(day)
         except Exception:
             self.transport_allocations[allocation_id] = current

@@ -53,11 +53,6 @@ def run() -> None:
     # Establish a real project-owned Supply Requirement so browser controls can
     # exercise sparse routing intent against an Application-projected decision row.
     runtime.execute(AdvanceTime(1))
-    allocation_capacity = runtime._app._simulation.transport.transport_capacity_for_units(  # noqa: SLF001 - deterministic E2E fixture setup
-        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1,
-        day=runtime._app._simulation.day,  # noqa: SLF001
-    )
-
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     origin = f"http://127.0.0.1:{int(server.server_address[1])}"
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -108,15 +103,18 @@ def run() -> None:
 
             # Create, edit, pause, resume, and delete Transport Allocation using only
             # browser controls. Domain allocation invariants are covered below E2E.
-            page.get_by_role("button", name="Transport Allocationを作成").click()
+            page.get_by_role("button", name="輸送能力を設定").click()
             page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
             page.locator("#allocationVehicle").select_option(OWNED_LAUNCH_VEHICLE)
             page.locator("#allocationSource").select_option(EARTH)
             page.locator("#allocationDestination").select_option(LEO)
-            page.locator("#allocationForward").fill(str(allocation_capacity.forward_t_per_day))
-            page.locator("#allocationReverse").fill(str(allocation_capacity.reverse_t_per_day))
-            page.locator("#allocationPriority").select_option("5")
-            page.get_by_role("button", name="Allocation作成").click()
+            page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).wait_for(timeout=10000)
+            page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).click()
+            assert float(page.locator("#allocationForward").input_value()) > 0
+            page.locator("#allocationPreview").get_by_text("必要Fleet", exact=True).wait_for(timeout=10000)
+            assert "unit" in page.locator("#allocationPreview").inner_text()
+            page.locator('[data-allocation-priority="5"]').click()
+            page.get_by_role("button", name="輸送設定を作成").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
 
             allocation_row = page.locator("#allocationTable [data-allocation-row]").first
@@ -127,7 +125,7 @@ def run() -> None:
 
             allocation_row.locator('[data-allocation-edit]').click()
             page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
-            page.locator("#allocationPriority").select_option("4")
+            page.locator('[data-allocation-priority="4"]').click()
             page.get_by_role("button", name="設定を更新").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
             allocation_row = page.locator(f'[data-allocation-row="{allocation_id}"]')
@@ -160,7 +158,9 @@ def run() -> None:
             page.locator("#targetStockDialog").wait_for(state="visible", timeout=10000)
             page.locator("#targetStockDestination").select_option(LEO)
             page.locator("#targetStockResource").select_option(PROPELLANT)
-            page.locator("#targetStockOptionSummary").get_by_text("通常需要", exact=False).wait_for(timeout=10000)
+            summary_primary = page.locator("#targetStockOptionSummary .cell-sub").first
+            summary_primary.wait_for(timeout=10000)
+            assert "通常需要" in summary_primary.inner_text()
             page.locator("#targetStockQuantityRange").fill("1")
             page.locator('[data-target-stock-priority="4"]').click()
             page.get_by_role("button", name="追加備蓄を保存").click()

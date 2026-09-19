@@ -5,7 +5,7 @@ from .application_commands import (
     GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
-    GetTransportAllocationOptions, GetTargetStockOptions, GetWorld, GetSurfaceMap, Query,
+    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetWorld, GetSurfaceMap, Query,
     GetMarket,
 )
 from .application_views import ProjectsView, QueryResult
@@ -101,6 +101,16 @@ class ApplicationQueryRouterMixin:
             return self._cargo_flows_view()
         if isinstance(query, GetTransportAllocationOptions):
             return self._transport_allocation_options_view(
+                self._require_operational_node(query.source_id),
+                self._require_operational_node(query.destination_id),
+            )
+        if isinstance(query, GetTransportAllocationPreview):
+            if query.vehicle_definition_id not in {
+                str(value.id) for value in self._simulation.transport.vehicle_definitions()
+            }:
+                raise KeyError(query.vehicle_definition_id)
+            return self._transport_allocation_preview_view(
+                query,
                 self._require_operational_node(query.source_id),
                 self._require_operational_node(query.destination_id),
             )

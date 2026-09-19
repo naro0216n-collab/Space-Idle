@@ -26,6 +26,7 @@ from space_idle import (
     GetSurveys,
     GetTransportAllocations,
     GetTransportAllocationOptions,
+    GetTransportAllocationPreview,
     GetTargetStockOptions,
     GetWorld,
     PlanBuild,
@@ -218,6 +219,13 @@ def test_application_decision_queries_are_observational_and_reuse_projection_wit
         GetFleet(),
         GetTransportAllocations(),
         GetTransportAllocationOptions(str(ids.LEO), str(ids.LUNAR_ORBIT)),
+        GetTransportAllocationPreview(
+            vehicle_definition_id=str(ids.REUSABLE_LAUNCH_VEHICLE),
+            source_id=str(ids.EARTH),
+            destination_id=str(ids.LEO),
+            target_forward_t_per_day=0.0,
+            target_reverse_t_per_day=0.0,
+        ),
         GetScientificExplorations(),
         GetResearch(),
         GetBottlenecks(),
@@ -310,6 +318,27 @@ def test_transport_allocation_projection_exposes_capacity_target_and_canonical_p
         for location_id, resource_id, amount
         in option.operational_supply_at_full_unit
     )
+
+    assert option.suggested_capacity_max.forward_t_per_day >= option.nominal_capacity.forward_t_per_day
+    assert option.capacity_presets
+    assert any(preset.units == 1 for preset in option.capacity_presets)
+    assert all(preset.capacity.forward_t_per_day >= 0 for preset in option.capacity_presets)
+
+    two_unit_capacity = app._simulation.transport.transport_capacity_for_units(
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=app._simulation.day
+    )
+    preview = app.query(GetTransportAllocationPreview(
+        vehicle_definition_id=str(ids.REUSABLE_LAUNCH_VEHICLE),
+        source_id=str(EARTH),
+        destination_id=str(LEO),
+        target_forward_t_per_day=two_unit_capacity.forward_t_per_day,
+        target_reverse_t_per_day=two_unit_capacity.reverse_t_per_day,
+    ))
+    assert preview.required_units == 2
+    assert preview.target_capacity.forward_t_per_day == pytest.approx(two_unit_capacity.forward_t_per_day)
+    assert preview.selected_forward_path == option.forward_path
+    assert preview.achievable_capacity.forward_t_per_day <= preview.target_capacity.forward_t_per_day
+    assert preview.available_units >= 0
 
     two_unit_capacity = app._simulation.transport.transport_capacity_for_units(
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=app._simulation.day
