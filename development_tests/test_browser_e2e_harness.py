@@ -189,13 +189,13 @@ def test_lazy_suite_browser_defers_launch_until_first_context(monkeypatch) -> No
     class FakePlaywright:
         chromium = FakeBrowserType()
 
+        def stop(self):
+            events.append("playwright-stop")
+
     class FakeManager:
         def start(self):
             events.append("playwright-start")
             return FakePlaywright()
-
-        def stop(self):
-            events.append("playwright-stop")
 
     monkeypatch.setitem(
         sys.modules,

@@ -1031,7 +1031,8 @@
     if(!state.inspector){setInspector('選択項目','<div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div>');return;}
     const {type,id}=state.inspector;
     const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,'dependency-resource':renderDependencyResourceInspector,'dependency-service':renderDependencyServiceInspector,'extraction-resource':renderExtractionResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'survey-campaign':renderSurveyCampaignInspector,'survey-candidate':renderSurveyCandidateInspector,'founding-candidate':renderFoundingCandidateInspector,'surface-cell':renderSurfaceCellInspector};
-    if(!handlers[type]?.(id)){state.inspector=null;setInspector('選択項目','<div class="empty-state">項目の状態が変化しました。再選択してください。</div>');}
+    if(!handlers[type]?.(id)){state.inspector=null;setInspector('選択項目','<div class="empty-state">項目の状態が変化しました。再選択してください。</div>');return;}
+    if(type==='survey-campaign')queueMicrotask(refreshVisibleSurveyIntentPreview);
   }
 
   function render(){

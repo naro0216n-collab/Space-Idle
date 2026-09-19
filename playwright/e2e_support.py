@@ -70,7 +70,7 @@ class LazyBrowser:
                 **browser_launch_kwargs(self.browser_name)
             )
         except Exception:
-            manager.stop()
+            playwright.stop()
             raise
         self._playwright_manager = manager
         self._playwright = playwright
@@ -84,8 +84,8 @@ class LazyBrowser:
         if self._browser is not None:
             self._browser.close()
             self._browser = None
-        if self._playwright_manager is not None:
-            self._playwright_manager.stop()
+        if self._playwright is not None:
+            self._playwright.stop()
             self._playwright_manager = None
             self._playwright = None
 
