@@ -107,14 +107,22 @@
     if(el.lastElementChild)el.lastElementChild.textContent=text;
   }
 
+  const NOT_MODIFIED=Symbol('not-modified');
+  const responseEtags=new Map();
+
   async function api(path,options={}){
-    const headers={'Accept':'application/json',...(options.headers||{})};
-    if(options.body!==undefined)headers['Content-Type']='application/json';
-    const response=await fetch(path,{...options,headers,cache:'no-store'});
+    const {etagKey=null,...fetchOptions}=options;
+    const headers={'Accept':'application/json',...(fetchOptions.headers||{})};
+    if(fetchOptions.body!==undefined)headers['Content-Type']='application/json';
+    if(etagKey&&responseEtags.has(etagKey))headers['If-None-Match']=responseEtags.get(etagKey);
+    const response=await fetch(path,{...fetchOptions,headers,cache:'no-store'});
+    const etag=response.headers.get('ETag');
+    if(etagKey&&etag)responseEtags.set(etagKey,etag);
     const text=response.status===304?'':await response.text();
     const payload=text?JSON.parse(text):null;
     const rev=response.headers.get('X-Space-Idle-Revision');
     if(rev!==null)state.revision=Math.max(state.revision??0,Number(rev));
+    if(response.status===304)return NOT_MODIFIED;
     if(!response.ok){
       const err=new Error(payload?.error?.message||`${response.status} ${response.statusText}`);
       err.code=payload?.error?.code; err.status=response.status; err.details=payload?.error?.details; throw err;
@@ -643,7 +651,9 @@
       if(locationId)params.set('operational_node_id',locationId);
       if(locationSummary?.body_id&&['surface','survey'].includes(state.activeTab))params.set('surface_body_id',locationSummary.body_id);
       const suffix=params.size?`?${params.toString()}`:'';
-      const data=await api(`/api/v1/ui-state${suffix}`);
+      const snapshotPath=`/api/v1/ui-state${suffix}`;
+      const data=await api(snapshotPath,{etagKey:snapshotPath});
+      if(data===NOT_MODIFIED){setConnection('ok','PC Server');return data;}
       if(locationId!==state.operationalNodeId)return data;
       applyUiSnapshot(data);
       if(!state.operationalNodeId||!(state.world?.operational_nodes||[]).some((x)=>x.id===state.operationalNodeId)){

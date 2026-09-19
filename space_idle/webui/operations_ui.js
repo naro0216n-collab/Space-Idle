@@ -149,6 +149,7 @@
   }
   const surveyIntentPreviewSerial=new Map();
   const surveyIntentPreviewCache=new Map();
+  const surveyIntentPreviewPending=new Map();
   function surveyIntentDraft(campaignId=null){
     const editing=campaignId!=null;
     return {
@@ -201,7 +202,13 @@
     params.set('goal_knowledge_level',String(intent.goal_knowledge_level));
     if(campaignId!=null)params.set('campaign_id',campaignId);
     try{
-      const result=await api(`/api/v1/survey-campaign-intent-preview?${params.toString()}`);
+      let pending=surveyIntentPreviewPending.get(signature);
+      if(!pending){
+        pending=api(`/api/v1/survey-campaign-intent-preview?${params.toString()}`)
+          .finally(()=>surveyIntentPreviewPending.delete(signature));
+        surveyIntentPreviewPending.set(signature,pending);
+      }
+      const result=await pending;
       surveyIntentPreviewCache.set(signature,result);
       if(serial!==surveyIntentPreviewSerial.get(previewKey)||surveyIntentSignature(surveyIntentDraft(campaignId))!==signature)return;
       applySurveyIntentPreview(intent,result);

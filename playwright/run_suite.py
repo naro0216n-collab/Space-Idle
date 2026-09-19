@@ -9,7 +9,7 @@ import time
 from collections.abc import Sequence
 from types import ModuleType
 
-from e2e_support import managed_browser
+from e2e_support import managed_lazy_browser
 
 
 _SCENARIO_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -44,12 +44,12 @@ def run_scenarios(names: Sequence[str]) -> None:
 
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     print(
-        f"E2E suite browser: {browser_name}; one browser process with a fresh context per scenario",
+        f"E2E suite browser: {browser_name}; one lazily launched browser process with a fresh context per scenario",
         flush=True,
     )
 
     suite_started = time.monotonic()
-    with managed_browser(browser_name) as browser:
+    with managed_lazy_browser(browser_name) as browser:
         for name, module in zip(names, modules, strict=True):
             scenario_started = time.monotonic()
             print(f"E2E scenario start: {name}", flush=True)

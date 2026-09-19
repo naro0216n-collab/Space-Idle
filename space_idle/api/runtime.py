@@ -136,6 +136,29 @@ class GameRuntime:
             data.update(self._app.query_many(queries))
             return RuntimeResult(self._revision, data)
 
+    def snapshot_if_changed(
+        self,
+        queries: Mapping[str, Query],
+        *,
+        known_revision: int | None,
+    ) -> RuntimeResult | None:
+        """Return a coherent snapshot only when authoritative state changed.
+
+        Periodic UI synchronization frequently asks for the same projection while
+        the game is paused or before the next canonical state transition.  Sync the
+        runtime clock first, then skip all Application projection work when the
+        caller already has the current revision.  The caller is responsible for
+        binding ``known_revision`` to the same representation scope (for example,
+        the same operational node and surface body).
+        """
+        with self._lock:
+            self._sync_clock_locked()
+            if known_revision is not None and known_revision == self._revision:
+                return None
+            data: dict[str, object] = {"session": self._metadata_locked()}
+            data.update(self._app.query_many(queries))
+            return RuntimeResult(self._revision, data)
+
     def set_time_control(
         self,
         *,

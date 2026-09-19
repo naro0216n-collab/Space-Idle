@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from hashlib import sha256
+import re
 import ssl
 from urllib.parse import parse_qs, urlsplit
 
@@ -50,6 +52,14 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             raise ApiPayloadError("surface_body_id must appear once")
         surface_body_id = surface_body_values[0] if surface_body_values else None
 
+        scope_key = f"{operational_node_id or ''}\0{surface_body_id or ''}"
+        scope_hash = sha256(scope_key.encode("utf-8")).hexdigest()[:12]
+        known_revision = None
+        if_none_match = self.headers.get("If-None-Match", "").strip()
+        match = re.fullmatch(rf'"ui-state-(\d+)-{scope_hash}"', if_none_match)
+        if match is not None:
+            known_revision = int(match.group(1))
+
         queries = {
             "world": GetWorld(),
             "global_issues": GetAttention(),
@@ -78,8 +88,26 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
         if surface_body_id:
             queries["surface_map"] = GetSurfaceMap(surface_body_id)
 
-        result = self.server.runtime.snapshot(queries)
-        self._result(result, etag=f'"rev-{result.revision}"')
+        result = self.server.runtime.snapshot_if_changed(
+            queries,
+            known_revision=known_revision,
+        )
+        if result is None:
+            assert known_revision is not None
+            etag = f'"ui-state-{known_revision}-{scope_hash}"'
+            self._write_empty(
+                304,
+                headers={
+                    "ETag": etag,
+                    "X-Space-Idle-Revision": str(known_revision),
+                    "Cache-Control": "no-cache",
+                },
+            )
+            return
+        self._result(
+            result,
+            etag=f'"ui-state-{result.revision}-{scope_hash}"',
+        )
 
     def _handle_post(self) -> None:
         path = urlsplit(self.path).path.rstrip("/") or "/"

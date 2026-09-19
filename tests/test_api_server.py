@@ -253,6 +253,83 @@ def test_http_api_rejects_stale_command_revision(tmp_path):
         thread.join(timeout=5)
 
 
+def test_ui_state_conditional_refresh_skips_projection_until_revision_changes(tmp_path, monkeypatch):
+    runtime = GameRuntime(
+        new_game_factory=build_game_application,
+        load_factory=build_game_application_for_load,
+        save_dir=tmp_path,
+    )
+    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
+    port = server.server_address[1]
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        path = f"/api/v1/ui-state?operational_node_id={ids.EARTH}"
+        status, headers, payload = _request(port, "GET", path)
+        assert status == 200
+        assert payload["revision"] == 0
+        etag = headers["ETag"]
+        assert etag.startswith('"ui-state-0-')
+
+        original_query_many = runtime._app.query_many
+        projection_calls = 0
+
+        def counted_query_many(queries):
+            nonlocal projection_calls
+            projection_calls += 1
+            return original_query_many(queries)
+
+        monkeypatch.setattr(runtime._app, "query_many", counted_query_many)
+        status, headers, payload = _request(
+            port,
+            "GET",
+            path,
+            headers={"If-None-Match": etag},
+        )
+        assert status == 304
+        assert payload is None
+        assert projection_calls == 0
+        assert headers["ETag"] == etag
+        assert headers["X-Space-Idle-Revision"] == "0"
+
+        # An ETag belongs to one concrete UI-state representation. Reusing the
+        # Earth-node ETag for another scope must not suppress that projection.
+        other_path = f"/api/v1/ui-state?operational_node_id={ids.LUNAR_ORBIT}"
+        status, _, payload = _request(
+            port,
+            "GET",
+            other_path,
+            headers={"If-None-Match": etag},
+        )
+        assert status == 200
+        assert payload["data"]["operational_node"]["id"] == str(ids.LUNAR_ORBIT)
+        assert projection_calls == 1
+
+        status, _, payload = _request(
+            port,
+            "POST",
+            "/api/v1/commands",
+            {"type": "AdvanceTime", "payload": {"days": 1}},
+        )
+        assert status == 200
+        assert payload["revision"] == 1
+
+        status, headers, payload = _request(
+            port,
+            "GET",
+            path,
+            headers={"If-None-Match": etag},
+        )
+        assert status == 200
+        assert payload["revision"] == 1
+        assert projection_calls == 2
+        assert headers["ETag"].startswith('"ui-state-1-')
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_static_webui_is_served_and_path_traversal_is_rejected(tmp_path):
     runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
