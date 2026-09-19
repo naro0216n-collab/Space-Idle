@@ -61,10 +61,18 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
     expected_salvage = dict(facility_row.expected_salvage)
     assert facility_row.lifecycle == FacilityLifecycle.NORMAL.value
     assert expected_salvage == {str(SALVAGE_RESOURCE): 5.0}
+    assert facility_row.can_decommission
+    assert facility_row.active_decommission_project_id is None
 
     # Planning is reversible and must not change the Facility lifecycle.
     first = app.execute(PlanFacilityDecommission(facility_row.id, priority=5, procurement_policy="extended_wait"))
     assert first.created_id is not None
+    planned_facility_row = next(
+        row for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
+        if row.id == str(facility_id)
+    )
+    assert not planned_facility_row.can_decommission
+    assert planned_facility_row.active_decommission_project_id == first.created_id
     app.execute(CancelBuild(first.created_id))
     assert sim.facilities.facilities[facility_id].lifecycle is FacilityLifecycle.NORMAL
 

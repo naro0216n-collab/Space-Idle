@@ -22,6 +22,7 @@ from .application_views import (
 )
 from .shared import SpatialNodeId
 from .disposal import project_salvage_recovery
+from .construction.models import FacilityDecommissionTarget, ProjectStatus
 from .spatial import EnvironmentFieldScope, SpatialContextId
 
 
@@ -248,6 +249,14 @@ class LocationProjectorMixin:
                 recovery_potential,
                 admission_headroom_by_pool=post_removal_headroom,
             )
+            decommission_failures = sim.projects.decommission_plan_failures(facility.id)
+            active_decommission = next((
+                project
+                for project in sim.projects.projects.values()
+                if isinstance(project.target, FacilityDecommissionTarget)
+                and project.target.facility_id == facility.id
+                and project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
+            ), None)
             facilities.append(
                 FacilityRow(
                     str(facility.id),
@@ -285,10 +294,7 @@ class LocationProjectorMixin:
                         )
                     ),
                     facility.lifecycle.value,
-                    tuple(
-                        (blocker.code, blocker.detail)
-                        for blocker in sim.projects.decommission_plan_failures(facility.id)
-                    ),
+                    tuple((blocker.code, blocker.detail) for blocker in decommission_failures),
                     tuple(
                         (str(resource_id), amount)
                         for resource_id, amount in sorted(
@@ -300,6 +306,8 @@ class LocationProjectorMixin:
                         (str(resource_id), amount)
                         for resource_id, amount in recovery_projection.recovered_by_resource
                     ),
+                    not decommission_failures,
+                    None if active_decommission is None else str(active_decommission.id),
                 )
             )
 

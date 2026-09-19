@@ -30,6 +30,10 @@ class BuildOptionRow:
     resources: tuple[BuildResourceOption, ...]
     blockers: tuple[tuple[str, str], ...]
     can_plan: bool
+    capabilities: tuple[str, ...] = ()
+    service_capacity_supplies: tuple[tuple[str, float], ...] = ()
+    process_options: tuple[tuple[str, str], ...] = ()
+    placement_scope: str = "OPERATIONAL_NODE"
 
 
 @dataclass(frozen=True)

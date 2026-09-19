@@ -84,6 +84,8 @@ class FacilityRow:
     expected_salvage: tuple[tuple[str, float], ...] = ()
     projected_salvage_fraction: float = 1.0
     projected_salvage: tuple[tuple[str, float], ...] = ()
+    can_decommission: bool = False
+    active_decommission_project_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -38,6 +38,8 @@
     base_construction:'基礎建設',basic_machine_shop:'基礎機械加工',bulk_storage:'バルク保管',
     cargo_storage:'一般貨物保管',cargo_transfer:'貨物移送',construction_yard:'建設ヤード',
     cryogenic_storage:'極低温保管',grid_power:'外部電力網',heavy_equipment_assembly:'重機組立',
+    basic_machinery_production:'基礎機械製造',basic_structural_material:'基礎構造材製造',
+    industrial_water_supply:'工業用水供給',metal_ore_extraction:'金属鉱石採掘',aggregate_extraction:'骨材採掘',
     industrial_electrolysis:'工業電解',industrial_power:'産業電力',launch_operations:'打上げ運用',
     launch_vehicle_servicing:'打上げ機整備',metallurgy:'金属精錬',ore_processing:'鉱石処理',
     power_grid:'電力網',propellant_production:'推進剤製造',regolith_excavation:'レゴリス採掘',
@@ -143,6 +145,7 @@
   const controlIdentity=(control)=>control?.dataset?.draftKey?{kind:'draft',key:control.dataset.draftKey}:control?.id?{kind:'id',key:control.id}:null;
   const controlBaseline=(control)=>{
     if(!control)return null;
+    if(control.dataset?.draftBaseline!==undefined)return control.dataset.draftBaseline;
     if(control.tagName==='SELECT'){
       const option=[...control.options].find((row)=>row.defaultSelected);
       return option?.value??control.options[0]?.value??'';
@@ -157,10 +160,20 @@
     }
     return snapshot;
   };
+  const syncPrioritySegment=(control)=>{
+    if(!control?.matches?.('[data-priority-value-holder]'))return;
+    const group=control.closest('.priority-segment');
+    if(!group)return;
+    group.querySelectorAll('[data-priority-choice]').forEach((button)=>{
+      const selected=button.dataset.priorityChoice===String(control.value);
+      button.classList.toggle('is-selected',selected);
+      button.setAttribute('aria-pressed',selected?'true':'false');
+    });
+  };
   const restoreDraftValue=(control,snapshot)=>{
     if(!control||!snapshot)return;
     const baseline=controlBaseline(control);
-    if(baseline===snapshot.baseline||baseline===snapshot.value)control.value=snapshot.value;
+    if(baseline===snapshot.baseline||baseline===snapshot.value){control.value=snapshot.value;syncPrioritySegment(control);}
     if((control.type==='checkbox'||control.type==='radio')&&snapshot.checked!==undefined){
       const baselineChecked=control.defaultChecked;
       if(baselineChecked===snapshot.baselineChecked||baselineChecked===snapshot.checked)control.checked=snapshot.checked;
@@ -267,7 +280,7 @@
     const value=Math.min(5,Math.max(1,Number(selected)||3));
     const disabledAttr=disabled?'disabled':'';
     const buttons=[1,2,3,4,5].map((level)=>`<button type="button" data-priority-choice="${level}" class="${level===value?'is-selected':''}" aria-pressed="${level===value?'true':'false'}" ${disabledAttr}>${level}<span>${priorityLabels[level]}</span></button>`).join('');
-    return `<div class="priority-field"><span class="priority-field-label">${esc(label)}</span><div class="priority-segment" role="group" aria-label="${esc(label)}">${buttons}<input type="hidden" data-priority-value-holder value="${value}" ${inputAttributes}></div></div>`;
+    return `<div class="priority-field"><span class="priority-field-label">${esc(label)}</span><div class="priority-segment" role="group" aria-label="${esc(label)}">${buttons}<input type="hidden" data-priority-value-holder data-draft-baseline="${value}" value="${value}" ${inputAttributes}></div></div>`;
   }
   const metricHtml=([label,value])=>`<div class="metric-chip"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
   const statHtml=(label,value)=>`<div class="stat-box"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
@@ -517,7 +530,7 @@
   };
 
   document.addEventListener('click',async(event)=>{
-    const priorityChoice=event.target.closest('[data-priority-choice]');if(priorityChoice){const group=priorityChoice.closest('.priority-segment');const holder=group?.querySelector('[data-priority-value-holder]');if(holder){holder.value=priorityChoice.dataset.priorityChoice;group.querySelectorAll('[data-priority-choice]').forEach((button)=>{const selected=button===priorityChoice;button.classList.toggle('is-selected',selected);button.setAttribute('aria-pressed',selected?'true':'false');});holder.dispatchEvent(new Event('change',{bubbles:true}));}return;}
+    const priorityChoice=event.target.closest('[data-priority-choice]');if(priorityChoice){const group=priorityChoice.closest('.priority-segment');const holder=group?.querySelector('[data-priority-value-holder]');if(holder){holder.value=priorityChoice.dataset.priorityChoice;syncPrioritySegment(holder);holder.dispatchEvent(new Event('change',{bubbles:true}));}return;}
     const inspectorToggle=event.target.closest('[data-toggle-inspector]');if(inspectorToggle){state.inspectorExpanded=!state.inspectorExpanded;renderInspectorWidth();return;}
     const sectionBtn=event.target.closest('[data-section]'); if(sectionBtn){setActiveSection(sectionBtn.dataset.section);return;}
     const openLocation=event.target.closest('[data-open-location]'); if(openLocation){await loadLocation(openLocation.dataset.openLocation);setActiveSection('location');return;}

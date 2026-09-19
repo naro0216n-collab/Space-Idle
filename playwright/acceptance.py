@@ -278,6 +278,63 @@ def run() -> dict[str, object]:
                 "() => !document.body.classList.contains('is-busy')",
                 timeout=10000,
             )
+
+            # Facility decommission is an ordinary construction decision backed
+            # by the Application projection. It must expose salvage and blockers
+            # before commitment, then create a normal cancellable project.
+            page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
+            upgrade_row = page.locator(
+                f'[data-inspect="facility"][data-id="{_fixture_facility.id}"]'
+            )
+            upgrade_row.click()
+            decommission_button = page.locator('#inspectorContent [data-decommission]').first
+            _assert(decommission_button.count() == 1, "facility inspector must expose the Application-projected decommission action")
+            _assert(decommission_button.is_enabled(), "unblocked facility decommission must be selectable")
+            _assert("見込回収量" in page.locator('#inspectorContent').inner_text(), "decommission decision must expose projected salvage before commitment")
+            _assert(_priority_group(page, '#decommissionPlanPriorityInput').is_visible(), "decommission planning must expose priority")
+            _assert(page.locator('#decommissionPlanProcurementTimingPolicy').is_visible(), "decommission planning must expose procurement timing")
+            _choose_priority(page, '#decommissionPlanPriorityInput', 2)
+            page.locator('#decommissionPlanProcurementTimingPolicy').select_option('extended_wait')
+            decommission_button.click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            page.wait_for_function(
+                "() => document.querySelector('#inspectorContent')?.innerText.includes('撤去案件進行中')",
+                timeout=10000,
+            )
+            _assert(not page.locator('#inspectorContent [data-decommission]').is_enabled(), "active decommission must keep the action visible but unavailable")
+            page.locator('[data-section-tab="location"][data-tab="construction"]').click()
+            decommission_rows = page.locator('[data-inspect="project"]', has_text="設備撤去")
+            _assert(decommission_rows.count() > 0, "decommission command must create a construction project")
+            decommission_rows.first.click()
+            _assert("撤去時の回収" in page.locator('#inspectorContent').inner_text(), "decommission project must expose salvage projection")
+            cancel_decommission = page.locator('#inspectorContent [data-command="CancelBuild"]')
+            _assert(cancel_decommission.is_enabled(), "reversible decommission planning must remain cancellable before irreversible work")
+            cancel_decommission.click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+
+            # Construction candidates must explain their resulting capability at
+            # the decision point rather than requiring catalog cross-reference.
+            page.locator('[data-section-tab="location"][data-tab="construction"]').click()
+            build_option = page.locator('[data-inspect="build-option"]').first
+            _assert(build_option.count() == 1, "construction surface must expose at least one candidate")
+            _assert("利用可能になる機能" in build_option.inner_text(), "construction candidate card must summarize what it enables")
+            build_option.click()
+            _assert("建設後に利用可能" in page.locator('#inspectorContent').inner_text(), "construction candidate inspector must expose Application-projected capabilities and services")
+
+            # Process selection is a Direct Action. A facility with a process
+            # option keeps the choices visible and does not require a second Apply.
+            page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
+            process_choice_found = False
+            facility_rows = page.locator('[data-inspect="facility"]')
+            for index in range(facility_rows.count()):
+                facility_rows.nth(index).click()
+                if page.locator('#inspectorContent [data-facility-process]').count() > 0:
+                    process_choice_found = True
+                    _assert(page.locator('#inspectorContent [data-set-facility-process]').count() == 0, "process selection must not require a second Apply action")
+                    _assert(page.locator('#inspectorContent [data-facility-process][aria-pressed="true"]').count() == 1, "current process must remain visibly selected")
+                    break
+            _assert(process_choice_found, "base application must expose at least one facility process decision")
+
             page.locator('.primary-nav-button[data-section="research"]').click()
             page.locator('.research-tree-card').wait_for(timeout=10000)
             _assert(page.locator('.research-rp-strip').count() == 1, "research canvas must expose RP state beside the primary DAG")

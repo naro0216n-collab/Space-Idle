@@ -401,6 +401,11 @@ class ProjectProjectorMixin:
                     key=str,
                 )
             ) + tuple((failure.code, failure.detail) for failure in site_failures)
+            process_options = tuple(
+                (str(process.id), process.display_name)
+                for process in sorted(sim.industry.processes.values(), key=lambda row: str(row.id))
+                if process.facility_def_id == recipe.facility_def_id
+            )
             rows.append(BuildOptionRow(
                 facility_definition_id=str(recipe.facility_def_id),
                 display_name=definition.display_name,
@@ -409,6 +414,12 @@ class ProjectProjectorMixin:
                 resources=self._construction_resource_options(recipe),
                 blockers=blockers,
                 can_plan=not plan_failures,
+                capabilities=tuple(sorted(supply.id for supply in definition.capability_supplies)),
+                service_capacity_supplies=tuple(
+                    sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
+                ),
+                process_options=process_options,
+                placement_scope=definition.placement_scope.value,
             ))
         return BuildOptionsView(
             str(location_id),

@@ -89,6 +89,24 @@ def test_surface_map_owns_surface_buildability_and_location_build_options_do_not
     assert str(ids.ROBOTIC_GEOLOGY_STATION) not in {
         row.facility_definition_id for row in build_options.items
     }
+    # Construction candidates own the player-facing effect summary used by the
+    # iPad decision surface; the UI must not reconstruct facility capabilities
+    # or service/process effects from unrelated catalog structures.
+    candidate = next(row for row in build_options.items if row.facility_definition_id is not None)
+    definition = next(
+        row for row in sim.facilities.definitions.values()
+        if str(row.id) == candidate.facility_definition_id
+    )
+    assert candidate.capabilities == tuple(sorted(supply.id for supply in definition.capability_supplies))
+    assert candidate.service_capacity_supplies == tuple(
+        sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
+    )
+    assert candidate.placement_scope == definition.placement_scope.value
+    assert candidate.process_options == tuple(
+        (str(process.id), process.display_name)
+        for process in sorted(sim.industry.processes.values(), key=lambda row: str(row.id))
+        if process.facility_def_id == definition.id
+    )
 
     surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
     industrial = next(row for row in surface.cells if row.id == str(ids.EARTH_CELL_INDUSTRIAL))
