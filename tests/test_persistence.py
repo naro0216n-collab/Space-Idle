@@ -226,9 +226,26 @@ def test_facility_owned_process_selection_roundtrips_in_facility_state(tmp_path)
     )
     assert unresolved.selection_required
     assert unresolved.process_id is None
-    assert tuple(process_id for process_id, _name in unresolved.process_options) == tuple(sorted((
+    assert tuple(option.process_id for option in unresolved.process_options) == tuple(sorted((
         str(process.id), str(alternate_process_id),
     )))
+    assert unresolved.process_comparison_axes
+    assert any(axis.differs for axis in unresolved.process_comparison_axes)
+    primary_option = next(
+        option for option in unresolved.process_options if option.process_id == str(process.id)
+    )
+    assert primary_option.input_rates_per_day == tuple(
+        (str(resource_id), amount)
+        for resource_id, amount in sorted(process.inputs_per_day.items(), key=lambda row: str(row[0]))
+    )
+    assert primary_option.output_rates_per_day == tuple(
+        (str(resource_id), amount)
+        for resource_id, amount in sorted(process.outputs_per_day.items(), key=lambda row: str(row[0]))
+    )
+    assert primary_option.service_requirements == ((f"process:{process.id}", 1.0),)
+    assert {value.axis_key for value in primary_option.comparison_values} == {
+        axis.key for axis in unresolved.process_comparison_axes
+    }
 
     app.execute(SetFacilityProcess(str(facility.id), str(process.id)))
     assert facility.selected_process_id == process.id

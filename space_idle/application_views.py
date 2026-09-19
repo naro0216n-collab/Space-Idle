@@ -13,7 +13,7 @@ from .app_contracts.project_views import (
     BuildOptionsView, ProjectKnowledgeRequirementRow, ProjectRow, ProjectsView,
 )
 from .app_contracts.location_views import (
-    InventoryRow, ResourceAllocationRow, StorageRow, FacilityRow, CapabilityRow, ServiceCapacityRow, IndustryRow,
+    InventoryRow, ResourceAllocationRow, StorageRow, FacilityRow, CapabilityRow, ServiceCapacityRow, IndustryProcessOptionRow, IndustryRow,
     SurfaceInfrastructureLoadRow, SurfaceInfrastructureRow,
     EnvironmentFacetRow, LocationEnvironmentSummaryRow, SurfaceAccessAnchorRow,
     SurfaceLocationDecisionRow, ExtractionRow, ExtractionResourceRow, OperationalNodeView,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
-from .ui_reports import DecisionConstraintRow
+from .ui_reports import ComparisonAxisRow, ComparisonValueRow, DecisionConstraintRow
 from ..priority import ActivityPriority, ProvisioningPriority
 from .project_views import FacilityUpgradeOption, ProjectRow
 
@@ -127,13 +127,26 @@ class SurfaceInfrastructureRow:
 
 
 @dataclass(frozen=True)
+class IndustryProcessOptionRow:
+    process_id: str
+    display_name: str
+    input_rates_per_day: tuple[tuple[str, float], ...]
+    output_rates_per_day: tuple[tuple[str, float], ...]
+    service_requirements: tuple[tuple[str, float], ...]
+    blockers: tuple[DecisionConstraintRow, ...]
+    comparison_key: str
+    comparison_values: tuple[ComparisonValueRow, ...]
+
+
+@dataclass(frozen=True)
 class IndustryRow:
     facility_id: str
     facility_definition_id: str
     display_name: str
     process_id: str | None
     process_display_name: str | None
-    process_options: tuple[tuple[str, str], ...]
+    process_options: tuple[IndustryProcessOptionRow, ...]
+    process_comparison_axes: tuple[ComparisonAxisRow, ...]
     selection_required: bool
     scale: float
     limiting_factors: tuple[DecisionConstraintRow, ...]

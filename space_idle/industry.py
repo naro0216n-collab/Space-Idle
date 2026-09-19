@@ -34,6 +34,34 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
     def execution_bundle_id(facility_id: EntityId) -> EntityId:
         return EntityId(f"execution.industry:{facility_id}")
 
+    def execution_requirements_for_process(
+        self, process: ProcessSpec, inventory: InventoryBook
+    ) -> tuple[ResourceRequirement | ServiceCapacityRequirement | StockOrPoolAdmissionRequirement, ...]:
+        """Return the canonical one-unit requirements for a compatible Process.
+
+        Application candidate projections use the same requirement construction as
+        live execution, so Process comparison never duplicates Resource or Storage
+        semantics in Presentation.
+        """
+        requirements: list[
+            ResourceRequirement | ServiceCapacityRequirement | StockOrPoolAdmissionRequirement
+        ] = [
+            ResourceRequirement(resource_id, amount)
+            for resource_id, amount in sorted(process.inputs_per_day.items(), key=lambda row: str(row[0]))
+            if amount > 1e-12
+        ]
+        requirements.append(
+            ServiceCapacityRequirement(self.process_service_type(process.id), 1.0)
+        )
+        for storage_pool_key, delta in sorted(
+            self._storage_delta_per_scale(process, inventory).items()
+        ):
+            if delta > 1e-12:
+                requirements.append(
+                    StockOrPoolAdmissionRequirement(storage_pool_key, delta)
+                )
+        return tuple(requirements)
+
     def execution_requirement_bundles(
         self,
         location_id: SpatialNodeId,
@@ -48,21 +76,6 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             process = self.process_for(facility)
             if process is None:
                 continue
-            requirements = [
-                ResourceRequirement(resource_id, amount)
-                for resource_id, amount in sorted(process.inputs_per_day.items(), key=lambda row: str(row[0]))
-                if amount > 1e-12
-            ]
-            requirements.append(
-                ServiceCapacityRequirement(self.process_service_type(process.id), 1.0)
-            )
-            for storage_pool_key, delta in sorted(
-                self._storage_delta_per_scale(process, inventory).items()
-            ):
-                if delta > 1e-12:
-                    requirements.append(
-                        StockOrPoolAdmissionRequirement(storage_pool_key, delta)
-                    )
             rows.append(ExecutionRequirementBundle(
                 id=self.execution_bundle_id(facility.id),
                 owner_kind="industry_process",
@@ -71,7 +84,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 operational_node_id=location_id,
                 requested_execution=1.0,
                 priority=facility.activity_priority,
-                requirements=tuple(requirements),
+                requirements=self.execution_requirements_for_process(process, inventory),
             ))
         return tuple(rows)
 

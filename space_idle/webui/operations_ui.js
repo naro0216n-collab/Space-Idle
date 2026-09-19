@@ -141,6 +141,19 @@
       blockerHtml:(row)=>(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">制約なし</span>',
     });
   }
+  function processComparisonScope(industry){return `process:${industry.facility_id}`;}
+  function processComparisonHtml(industry){
+    return comparisonSurfaceHtml({
+      scopeKey:processComparisonScope(industry),
+      axes:industry.process_comparison_axes||[],
+      candidates:industry.process_options||[],
+      emptyText:'現在の生産工程候補には、比較が必要な戦略差はありません。',
+      promptText:'生産工程から2〜4候補を比較に追加すると、投入・産出・保管負荷と制約を共通軸で確認できます。',
+      headingHtml:(row)=>`<strong>${esc(row.display_name||'生産工程')}</strong><small>${row.process_id===industry.process_id?'現在の工程':'切替候補'}</small>`,
+      detailButtonHtml:()=>' ',
+      blockerHtml:(row)=>(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">現在の制約なし</span>',
+    });
+  }
   function researchComparisonScope(research){return `research:${research.id}:${research.current_stage_id||''}:execution-context`;}
   function researchComparisonPinnedKeys(research){return comparisonPinnedKeys(researchComparisonScope(research),research.execution_context_options||[]);}
   function researchComparisonHtml(research){
@@ -645,9 +658,18 @@
     const rateCards=(rows)=>(rows||[]).map(([resourceId,rate])=>`<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(resourceId))}</span><span>${fmt(rate,3)} t/日</span></div></div>`).join('')||'<div class="empty-state">なし</div>';
     let productionSection='';
     if(industry){
-      const processOptions=(industry.process_options||[]).map(([processId,name])=>{const selected=processId===industry.process_id;return `<button type="button" class="choice-button ${selected?'is-selected':''}" data-facility-process="${esc(f.id)}" data-process-id="${esc(processId)}" aria-pressed="${selected?'true':'false'}" ${selected?'disabled':''}><strong>${esc(name||definitionName(processId))}</strong>${selected?'<small>現在の工程</small>':'<small>この工程へ切替</small>'}</button>`;}).join('');
-      const processControl=`<div class="choice-section"><div class="choice-label">生産工程を選択</div><div class="choice-grid facility-process-choices">${processOptions||'<div class="empty-state">候補なし</div>'}</div></div>`;
-      productionSection+=section('生産工程',kv([['現在の工程',esc(industry.process_display_name||'未選択')],['工程選択',industry.selection_required?'選択が必要':'確定'],['実効稼働率',pct(industry.scale)]])+processControl+`<h4>投入/日</h4>${rateCards(industry.input_rates_per_day)}<h4>生産物/日</h4>${rateCards(industry.output_rates_per_day)}<h4>主な制約</h4>${limitingHtml(industry.limiting_factors)}`);
+      const comparisonAvailable=(industry.process_comparison_axes||[]).length>0;
+      const pins=new Set(comparisonPinnedKeys(processComparisonScope(industry),industry.process_options||[]));
+      const processOptions=(industry.process_options||[]).map((option)=>{
+        const selected=option.process_id===industry.process_id,pinned=pins.has(option.comparison_key),pinDisabled=comparisonAvailable&&!pinned&&pins.size>=4;
+        const inputs=(option.input_rates_per_day||[]).map(([resourceId,rate])=>`${resourceName(resourceId)} ${fmt(rate,3)} t/日`).join(' / ')||'投入なし';
+        const outputs=(option.output_rates_per_day||[]).map(([resourceId,rate])=>`${resourceName(resourceId)} ${fmt(rate,3)} t/日`).join(' / ')||'産出なし';
+        const services=(option.service_requirements||[]).map(([serviceId,rate])=>`${serviceName(serviceId)} ${fmt(rate,2)}`).join(' / ')||'追加Service要求なし';
+        const compareAction=comparisonAvailable?`<button type="button" data-process-compare-pin="${esc(f.id)}" data-comparison-key="${esc(option.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';
+        return `<div class="detail-card ${selected?'is-usable':''}" data-process-option="${esc(option.process_id)}"><div class="mode-title"><span>${esc(option.display_name||definitionName(option.process_id))}</span><span class="badge ${selected?'ok':(option.blockers||[]).length?'warn':''}">${selected?'現在の工程':(option.blockers||[]).length?'実行制約あり':'切替候補'}</span></div><div class="cell-sub">投入: ${esc(inputs)}</div><div class="cell-sub">産出: ${esc(outputs)}</div><div class="cell-sub">必要能力: ${esc(services)}</div>${(option.blockers||[]).length?`<div class="issue-stack">${option.blockers.map(issueHtml).join('')}</div>`:''}<div class="action-row">${compareAction}<button type="button" data-facility-process="${esc(f.id)}" data-process-id="${esc(option.process_id)}" ${selected?'disabled':''}>${selected?'選択中':'この工程へ切替'}</button></div></div>`;
+      }).join('');
+      const processControl=`<div class="choice-section"><div class="choice-label">生産工程を選択</div><div class="choice-grid facility-process-choices">${processOptions||'<div class="empty-state">候補なし</div>'}</div></div>${comparisonAvailable?`<h4>工程比較</h4>${processComparisonHtml(industry)}`:''}`;
+      productionSection+=section('生産工程',kv([['現在の工程',esc(industry.process_display_name||'未選択')],['工程選択',industry.selection_required?'選択が必要':'確定'],['実効稼働率',pct(industry.scale)]])+processControl+`<h4>現在工程の投入/日</h4>${rateCards(industry.input_rates_per_day)}<h4>現在工程の生産物/日</h4>${rateCards(industry.output_rates_per_day)}<h4>現在の主な制約</h4>${limitingHtml(industry.limiting_factors)}`);
     }
     if(extraction){
       productionSection+=section('採掘',kv([['対象資源',esc(resourceName(extraction.resource_id))],['基準能力',`${fmt(extraction.nominal_capacity_t_per_day,3)} t/日`],['有効採掘機会',fmt(extraction.effective_opportunity,3)],['限界効率',pct(extraction.marginal_efficiency)],['産出資源',esc(resourceName(extraction.output_resource_id))],['生産物/日',`${fmt(extraction.output_t_per_day,3)} t/日`],['実効稼働率',pct(extraction.scale)]])+`<h4>主な制約</h4>${limitingHtml(extraction.limiting_factors)}`);
@@ -658,7 +680,7 @@
       const plan=planningOptionState(u,'更新計画可');
       const planOptions=state.buildOptions||{};
       const planControls=constructionPlanControls('upgradePlan',{draftScope:`facility-upgrade:${f.id}`,policyOptions:planOptions.procurement_policy_options||[],disabled:plan.disabled});
-      upgradeSection=section(`次の更新 · Lv ${fmt(u.target_level,0)}`,`<h4>Current → Target</h4>${facilityUpgradeDifferencesHtml(u)}`+kv([['必要工数',fmt(u.construction_required,0)],['既存案件',u.active_project_id?esc(u.active_project_id):'なし'],['計画可否',esc(plan.label)]])+`<h4>必要資源</h4>${resourceCards(u.resources)}${plan.blockers.length?`<div class="issue-stack">${plan.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">制約なし</span>'}${planControls}<button type="button" class="primary" data-upgrade="${esc(f.id)}" data-plan-prefix="upgradePlan" ${plan.disabled?'disabled':''}>Lv ${fmt(u.target_level,0)} 更新案件を作成</button>`);
+      upgradeSection=section(`次の更新 · Lv ${fmt(u.target_level,0)}`,`<h4>現在 → 変更後</h4>${facilityUpgradeDifferencesHtml(u)}`+kv([['必要工数',fmt(u.construction_required,0)],['既存案件',u.active_project_id?esc(u.active_project_id):'なし'],['計画可否',esc(plan.label)]])+`<h4>必要資源</h4>${resourceCards(u.resources)}${plan.blockers.length?`<div class="issue-stack">${plan.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">制約なし</span>'}${planControls}<button type="button" class="primary" data-upgrade="${esc(f.id)}" data-plan-prefix="upgradePlan" ${plan.disabled?'disabled':''}>Lv ${fmt(u.target_level,0)} 更新案件を作成</button>`);
     }else upgradeSection=section('次の更新','<div class="empty-state">現在定義されている次Levelの更新はありません。</div>');
     const investment=(f.invested_resources||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a)} t</div>`).join('')||'<div class="empty-state">投入履歴なし</div>';
     const maintenance=(f.maintenance_demand_per_day||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a,4)} t/日</div>`).join('')||'<div class="empty-state">維持資源要求なし</div>';
@@ -1138,6 +1160,7 @@
     const upgrade=event.target.closest('[data-upgrade]');if(upgrade){const prefix=upgrade.dataset.planPrefix||'upgradePlan',priority=Number($(`#${prefix}PriorityInput`)?.value??3),procurementPolicy=$(`#${prefix}ProcurementTimingPolicy`)?.value||'standard_wait';try{await command('PlanFacilityUpgrade',{facility_id:upgrade.dataset.upgrade,priority,procurement_policy:procurementPolicy});await A.completeActiveDraft(`facility-upgrade:${upgrade.dataset.upgrade}`);banner('設備更新案件を作成しました');}catch{}return;}
     const decommission=event.target.closest('[data-decommission]');if(decommission){const prefix=decommission.dataset.planPrefix||'decommissionPlan',priority=Number($(`#${prefix}PriorityInput`)?.value??3),procurementPolicy=$(`#${prefix}ProcurementTimingPolicy`)?.value||'standard_wait';try{await command('PlanFacilityDecommission',{facility_id:decommission.dataset.decommission,priority,procurement_policy:procurementPolicy});await A.completeActiveDraft(`facility-decommission:${decommission.dataset.decommission}`);state.inspector={type:'facility',id:decommission.dataset.decommission};renderInspector();banner('設備撤去案件を作成しました');}catch{}return;}
     const cmd=event.target.closest('[data-command]');if(cmd){const payload={};if(cmd.dataset.facilityId)payload.facility_id=cmd.dataset.facilityId;if(cmd.dataset.projectId)payload.project_id=cmd.dataset.projectId;try{await command(cmd.dataset.command,payload);}catch{}return;}
+    const processComparePin=event.target.closest('[data-process-compare-pin]');if(processComparePin){const industry=(state.operationalNode?.industry||[]).find((row)=>row.facility_id===processComparePin.dataset.processComparePin);if(!industry)return;toggleComparisonPin(processComparisonScope(industry),industry.process_options||[],processComparePin.dataset.comparisonKey);renderInspector();return;}
     const process=event.target.closest('[data-facility-process]');if(process){try{await command('SetFacilityProcess',{facility_id:process.dataset.facilityProcess,process_id:process.dataset.processId});state.inspector={type:'facility',id:process.dataset.facilityProcess};renderInspector();banner('生産工程を更新しました');}catch{}return;}
     const projectSourcing=event.target.closest('[data-set-project-procurement]');if(projectSourcing){try{await command('SetProjectProcurementPolicy',{project_id:projectSourcing.dataset.setProjectProcurement,procurement_policy:$('#projectProcurementTimingPolicy').value});}catch{}return;}
     const projectRouting=event.target.closest('[data-project-routing-constraint]');if(projectRouting){const prefill={destination_id:projectRouting.dataset.destinationId,owner_kind:projectRouting.dataset.ownerKind,owner_id:projectRouting.dataset.ownerId,resource_id:projectRouting.dataset.resourceId};const existing=(state.logistics?.routing_constraints||[]).find((x)=>x.destination_id===prefill.destination_id&&x.owner_kind===prefill.owner_kind&&x.owner_id===prefill.owner_id&&x.resource_id===prefill.resource_id);window.SpaceIdleLogistics?.openRoutingConstraintDialog(existing||null,prefill);return;}
