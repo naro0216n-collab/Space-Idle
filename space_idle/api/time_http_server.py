@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from http import HTTPStatus
 import re
 import ssl
 from urllib.parse import parse_qs, urlsplit
@@ -95,13 +96,12 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
         if result is None:
             assert known_revision is not None
             etag = f'"ui-state-{known_revision}-{scope_hash}"'
-            self._write_empty(
-                204,
-                headers={
-                    "ETag": etag,
-                    "X-Space-Idle-Revision": str(known_revision),
-                    "Cache-Control": "no-store",
-                },
+            self._write_json(
+                HTTPStatus.OK,
+                {"ok": True, "revision": known_revision, "data": {"unchanged": True}},
+                revision=known_revision,
+                etag=etag,
+                cache_control="no-store",
             )
             return
         self._result(

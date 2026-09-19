@@ -286,8 +286,9 @@ def test_ui_state_conditional_refresh_skips_projection_until_revision_changes(tm
             path,
             headers={"X-Space-Idle-Known-View": etag},
         )
-        assert status == 204
-        assert payload is None
+        assert status == 200
+        assert payload["data"] == {"unchanged": True}
+        assert payload["revision"] == 0
         assert projection_calls == 0
         assert headers["ETag"] == etag
         assert headers["X-Space-Idle-Revision"] == "0"
