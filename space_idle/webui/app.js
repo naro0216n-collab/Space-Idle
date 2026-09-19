@@ -6,7 +6,7 @@
     flow:null, dependencyAnalyticsCurrent:null, dependencyAnalyticsForecast:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
     fleet:null, transportAllocations:null, cargoFlows:null, market:null,
-    selectedMovementPlanId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
+    selectedMovementPlanId:null, selectedGlobalNodeId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
     busy:false, syncInFlight:null,
   };
 
@@ -271,6 +271,46 @@
     const issues=state.globalIssues?.items||[];
     $('#globalIssues').innerHTML=issues.length?issues.slice(0,8).map(issueHtml).join('')+(issues.length>8?`<div class="cell-sub">ほか ${issues.length-8} 件</div>`:''):'<div class="empty-state">現在、全体blockerはありません。</div>';
   }
+  const kvHtml=(rows)=>`<dl class="kv-grid">${rows.map(([key,value])=>`<dt>${key}</dt><dd>${value}</dd>`).join('')}</dl>`;
+  function globalMapPositions(nodes){
+    const order={surface:0,orbital:1,orbit:1};
+    const rows=new Map();
+    [...nodes].sort((a,b)=>{
+      const ka=order[a.kind]??2,kb=order[b.kind]??2;
+      if(ka!==kb)return ka-kb;
+      return String(a.display_name||a.id).localeCompare(String(b.display_name||b.id),'ja');
+    }).forEach((node)=>{
+      const band=order[node.kind]??2;
+      if(!rows.has(band))rows.set(band,[]);
+      rows.get(band).push(node);
+    });
+    const positions={};
+    [...rows.entries()].sort(([a],[b])=>a-b).forEach(([band,items],rowIndex)=>{
+      const y=[72,42,18][Math.min(rowIndex,2)];
+      items.forEach((node,index)=>{
+        const x=items.length===1?50:14+(72*index/(items.length-1));
+        positions[node.id]=[x,y];
+      });
+    });
+    return positions;
+  }
+  function renderGlobalMap(nodes){
+    const positions=globalMapPositions(nodes);
+    const selected=state.selectedGlobalNodeId||state.operationalNodeId||nodes[0]?.id||null;
+    if(selected&&!state.selectedGlobalNodeId)state.selectedGlobalNodeId=selected;
+    const edges=(state.movementPlans?.items||[]).map((plan)=>{
+      const a=positions[plan.origin_id],b=positions[plan.destination_id];
+      if(!a||!b)return'';
+      const className=plan.service_feasible_now?'global-map-link is-available':'global-map-link';
+      return `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" class="${className}"><title>${esc(locationName(plan.origin_id))} → ${esc(locationName(plan.destination_id))}</title></line>`;
+    }).join('');
+    const nodeHtml=nodes.map((node)=>{
+      const [x,y]=positions[node.id]||[50,50];
+      const active=node.id===selected;
+      return `<button type="button" class="global-map-node ${active?'is-selected':''}" style="left:${x}%;top:${y}%" data-global-node-id="${esc(node.id)}" aria-pressed="${active?'true':'false'}"><span class="global-map-node-name">${esc(node.display_name)}</span><span class="global-map-node-meta">${esc(locationKindLabels[node.kind]||node.kind)} · 設備 ${node.facility_count}</span></button>`;
+    }).join('');
+    return `<section class="global-map-card"><div class="global-map-toolbar"><div><div class="eyebrow">SYSTEM MAP</div><h2>活動領域</h2></div><span class="badge">${nodes.length} 拠点</span></div><div class="global-map-stage" role="group" aria-label="全体Map"><svg class="global-map-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${edges}</svg>${nodeHtml||'<div class="empty-state">拠点なし</div>'}</div></section>`;
+  }
   function renderGlobalView(){
     const canvas=$('#globalCanvasContent'),inspector=$('#globalInspectorContent');
     if(!canvas||!inspector)return;
@@ -281,10 +321,14 @@
     const activeSurvey=campaigns.filter((row)=>!['complete','completed','cancelled','failed'].includes(row.state)).length;
     const fleetTotal=Number(state.logisticsSummary?.fleet_units||0),fleetFree=Number(state.logisticsSummary?.free_fleet_units||0);
     $('#globalHeadlineMetrics').innerHTML=[['拠点',nodes.length],['要確認',issues.length],['研究中',activeResearch],['Fleet',`${fleetFree}/${fleetTotal} free`]].map(metricHtml).join('');
-    const locationCards=nodes.map((loc)=>`<button type="button" class="global-location-card" data-open-location="${esc(loc.id)}"><span class="location-name">${esc(loc.display_name)}</span><span class="location-meta"><span>${esc(locationKindLabels[loc.kind]||loc.kind)}</span><span>設備 ${loc.facility_count}</span><span>建設 ${loc.active_project_count}</span></span></button>`).join('');
     const attentionItems=issues.length?issues.slice(0,8).map((issue,index)=>issue.navigation?`<button type="button" class="global-attention-item" data-attention-index="${index}">${issueHtml(issue)}<span class="attention-open-hint">関連箇所を開く</span></button>`:`<div class="global-attention-item">${issueHtml(issue)}</div>`).join(''):'<div class="empty-state">現在、Player判断を必要とする全体blockerはありません。</div>';
-    canvas.innerHTML=`<div class="global-summary-grid"><section class="card"><div class="card-heading"><h3>拠点</h3><span class="badge">${nodes.length}</span></div><div class="card-body"><div class="global-location-grid">${locationCards||'<div class="empty-state">拠点なし</div>'}</div></div></section><section class="card"><div class="card-heading"><h3>要確認</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length}</span></div><div class="card-body global-attention-list">${attentionItems}</div></section></div><div class="card-grid three global-activity-grid"><section class="card"><div class="card-heading"><h3>研究</h3></div><div class="card-body">${statHtml('進行中',activeResearch)}<button type="button" data-section="research">研究を開く</button></div></section><section class="card"><div class="card-heading"><h3>探査</h3></div><div class="card-body">${statHtml('科学探査 / Survey',`${activeExploration} / ${activeSurvey}`)}<button type="button" data-section="exploration">探査を開く</button></div></section><section class="card"><div class="card-heading"><h3>輸送</h3></div><div class="card-body">${statHtml('Fleet free',`${fleetFree} / ${fleetTotal}`)}<button type="button" data-section="logistics">輸送を開く</button></div></section></div>`;
-    inspector.innerHTML=`<section class="inspector-section"><h3>組織全体</h3><div class="kv-grid"><dt>Research Point</dt><dd>${fmt(state.research?.stored_points,1)} / ${fmt(state.research?.storage_capacity_points,1)}</dd><dt>Operational Node</dt><dd>${nodes.length}</dd><dt>Fleet</dt><dd>${fleetFree} free / ${fleetTotal}</dd><dt>輸送能力設定</dt><dd>${state.logisticsSummary?.allocation_count??'—'}</dd></div></section><section class="inspector-section"><h3>判断の入口</h3><div class="section-context-note">要確認項目または拠点を選択すると、そのContextを保持したまま関連する作業領域へ移動します。</div></section>`;
+    canvas.innerHTML=`<div class="global-decision-grid">${renderGlobalMap(nodes)}<section class="card global-attention-card"><div class="card-heading"><h3>要確認</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length}</span></div><div class="card-body global-attention-list">${attentionItems}</div></section></div><div class="global-domain-strip"><button type="button" class="domain-entry" data-section="research"><span>研究</span><strong>${activeResearch}</strong><small>進行中</small></button><button type="button" class="domain-entry" data-section="exploration"><span>探査</span><strong>${activeExploration+activeSurvey}</strong><small>科学探査 / Survey</small></button><button type="button" class="domain-entry" data-section="logistics"><span>輸送</span><strong>${fleetFree}/${fleetTotal}</strong><small>free Fleet</small></button></div>`;
+    const selectedId=state.selectedGlobalNodeId||state.operationalNodeId;
+    const selectedNode=nodes.find((row)=>row.id===selectedId)||nodes[0]||null;
+    const relatedPlans=(state.movementPlans?.items||[]).filter((row)=>selectedNode&&(row.origin_id===selectedNode.id||row.destination_id===selectedNode.id));
+    const relatedIssues=issues.filter((issue)=>issue.navigation?.operational_node_id===selectedNode?.id);
+    $('#globalInspectorTitle').textContent=selectedNode?.display_name||'全体状況';
+    inspector.innerHTML=selectedNode?`<section class="inspector-section"><h3>拠点Context</h3>${kvHtml([['種別',esc(locationKindLabels[selectedNode.kind]||selectedNode.kind)],['設備',fmt(selectedNode.facility_count,0)],['進行中建設',fmt(selectedNode.active_project_count,0)],['接続経路',fmt(relatedPlans.length,0)],['要確認',fmt(relatedIssues.length,0)]])}</section><section class="inspector-section"><h3>次の操作</h3><div class="action-stack"><button type="button" class="primary" data-open-location="${esc(selectedNode.id)}">この拠点を開く</button><button type="button" data-open-node-logistics="${esc(selectedNode.id)}">関連輸送を見る</button></div></section><section class="inspector-section"><h3>Context</h3><div class="section-context-note">Map選択を維持したまま拠点・輸送へ移動します。内部IDを覚えて入力する必要はありません。</div></section>`:`<section class="inspector-section"><h3>組織全体</h3><div class="kv-grid"><dt>Research Point</dt><dd>${fmt(state.research?.stored_points,1)} / ${fmt(state.research?.storage_capacity_points,1)}</dd><dt>Fleet</dt><dd>${fleetFree} free / ${fleetTotal}</dd></div></section>`;
   }
   function renderEconomyContext(){
     const root=$('#economyInspectorContent');if(!root)return;
@@ -410,6 +454,8 @@
   document.addEventListener('click',async(event)=>{
     const sectionBtn=event.target.closest('[data-section]'); if(sectionBtn){setActiveSection(sectionBtn.dataset.section);return;}
     const openLocation=event.target.closest('[data-open-location]'); if(openLocation){await loadLocation(openLocation.dataset.openLocation);setActiveSection('location');return;}
+    const globalNode=event.target.closest('[data-global-node-id]'); if(globalNode){state.selectedGlobalNodeId=globalNode.dataset.globalNodeId;renderGlobalView();return;}
+    const globalLogistics=event.target.closest('[data-open-node-logistics]'); if(globalLogistics){state.selectedGlobalNodeId=globalLogistics.dataset.openNodeLogistics;setActiveSection('logistics');return;}
     const attentionItem=event.target.closest('[data-attention-index]'); if(attentionItem){const issue=(state.globalIssues?.items||[])[Number(attentionItem.dataset.attentionIndex)];if(issue?.navigation)await openDecisionContext(issue.navigation);return;}
     if(event.target.closest('#attentionButton')){setActiveSection('global');return;}
     const locBtn=event.target.closest('[data-location-id]'); if(locBtn){await loadLocation(locBtn.dataset.locationId);return;}

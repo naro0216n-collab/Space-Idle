@@ -111,6 +111,9 @@ def run() -> None:
             page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).wait_for(timeout=10000)
             page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).click()
             assert float(page.locator("#allocationForward").input_value()) > 0
+            assert page.locator("#allocationForward").evaluate("input => input.checkValidity()"), (
+                "Application-derived capacity presets must remain valid precision inputs"
+            )
             page.locator("#allocationPreview").get_by_text("必要Fleet", exact=True).wait_for(timeout=10000)
             assert "unit" in page.locator("#allocationPreview").inner_text()
             page.locator('[data-allocation-priority="5"]').click()
