@@ -1107,6 +1107,10 @@ Simulation Core
 
 UIは天体Surface MapでSurvey状態、Resource Potential、Environment、Location領域、初期Location候補・Founding Deployment blocker、隣接開発候補、位置依存Facilityの配置候補を表示する。Surface Locationがまだ存在しない天体でも、non-surface Operational NodeからのRemote Survey、候補Cell比較、staging node、typed Founding target、Deployment Recipeを含む設立判断を同じMap上から追えるようにする。通常Facilityの建設・運用は設備一覧・Inspectorを中心とし、不要なCell選択を要求しない。設備一覧・InspectorではProcess inputs / outputs、Activity Priority、Execution Requirement / allocation、Service Capacity fulfillment、maintenance fulfillment、Vehicle production blocker等を安定配置で表示する。Fleet / Transport UIでは所在Operational Node・総数・用途配分、Retirement commitment、Directional Capacity target、Provisioning Priority、必要・投入隻数、Nominal / Available / Used / Spare Capacity、Movement latency、運用Resource需要、Cargo Flow / arrival waiting、blocker / limiting factorをApplication Queryから表示する。通常auto-routingの選択結果と必要なhard constraintも確認可能にする。Market UIではFunds、Market Interface、buy / sell offer、availability、Trade Order target / commitment / settlement、物流blockerを表示する。Location / region分析ではlocal production、imports、unmet demand等のロケーション産業自立・外部依存状態を表示できる。Survey UIではMap上のCell scope、Resource scope、goal Knowledge Levelを主要操作とし、resolved provider / observation modeを表示する。provider / observation modeに戦略差がある場合だけ候補差とhard constraint操作を提示する。Asset disposalではrecovery potentialと見込回収量を区別して表示する。必要情報を隠してUIを簡略化しない。
 
+Presentationの正本は `ui.md` とする。BrowserはNavigation / Decision Canvas / Context InspectorのDecision Contextを保持し、別Canvasへの遷移でも関連Entity、Resource、blocker等のContextを引き継げる。ApplicationはBlocker、limiting factor、Current / Target / Preview、候補差等を文字列解析に依存しない構造化DTOとして返し、UIにDomain判定の再実装を要求しない。
+
+Fast Previewはauthoritative Stateを変更しないQueryとして扱い、要求scopeを不必要に拡大せず同一snapshotのprojection / indexを再利用する。Structured DecisionのDraftはPresentation側の一時状態であり、Commit時はbase revisionに対してPlayer intentをatomicに適用する。Planning Modeによるpause / speed制御はRuntime schedulingだけを制御し、canonical Simulation semanticsを変更しない。
+
 LLMはFAST PATHへ入れない。
 
 FAST PATH：Resource / Service Capacity allocation、生産、建設、維持、物流、Research Point、Research / Knowledge、Exploration、Survey、Offline Progress。

@@ -770,6 +770,8 @@ LLMはプレイヤーの主要判断を代行させない。
 
 UIは建設可否、維持率、機体適合、Movement、研究条件、資源・能力配分、routing、Survey推定値等を独自再計算しない。Core/Applicationが判断材料、Priority、Allocation結果、予測準備時期、停止理由、候補差を返す。操作不能な状態でも必要条件、現在設定、progress、commitment、候補とblockerを隠さない。Priority UIは5段階の固定選択として表示し、標準値3を「標準」として提示する。
 
+UIはiPad横画面を正式対応対象とし、Playerの判断対象を中心に構成する。別画面の数値や対象を記憶して戻って入力することを要求せず、blocker、必要条件、Current / Target / Preview、関連対象を判断地点で確認できるようにする。主要なPresentation構造、Navigation、直接操作、Attention、Planning Mode、各Domainの主要動線は `ui.md` を正本とする。
+
 ## 19. Save / Load / Offline / テスト
 
 Saveはversion付きSnapshotを基本とし、静的World / Content DefinitionはContentから再構築し、可変authoritative Stateだけを復元する。Snapshotはdomain-owned state sectionを保ち、Facility lifecycle / Process selection、Project / Activity control、FleetPool / Fleet Commitment、Transport Allocationの方向別Capacity target / Provisioning Priority / optional hard constraint、Inventory / Reservation / Cargo、Target Stock、必要なrouting hard constraint、Market State、Research Provider Assignment / Research Project current Stage、Exploration、Survey Knowledge / Survey Provider Assignment / Survey Campaign scope、Dynamic Environment等を各所有Domainの境界に沿って保存する。中央Save schemaへDomain内部fieldを無秩序に平坦化しない。
