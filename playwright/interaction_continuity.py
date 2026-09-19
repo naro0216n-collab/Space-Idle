@@ -135,6 +135,46 @@ def run() -> None:
             priority.wait_for(timeout=10000, state="attached")
             assert priority.input_value() == saved_priority
 
+            # Market order editing is a Structured Decision whose comparison baseline can
+            # drift with provider availability and Funds. Editing, not merely opening the
+            # screen, enters Planning Mode and auto-pauses. Discard restores the previous
+            # time state only when the player did not explicitly override Time Control.
+            page.locator('[data-time-speed="4"]').click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            assert page.locator('[data-time-speed="4"]').get_attribute("aria-pressed") == "true"
+            page.locator('.primary-nav-button[data-section="economy"]').click()
+            market_target = page.locator('[data-new-market-order] [data-market-target]')
+            market_target.wait_for(timeout=10000, state="visible")
+            assert page.locator("#timePauseButton").get_attribute("aria-pressed") == "false"
+            market_target.fill("1")
+            page.locator('#activeDraftBar').wait_for(timeout=10000, state="visible")
+            page.wait_for_function(
+                "() => document.querySelector('#timePauseButton')?.getAttribute('aria-pressed') === 'true'",
+                timeout=10000,
+            )
+            assert "Planning" in page.locator("#activeDraftPlanningState").inner_text()
+            page.locator("#activeDraftDiscard").click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            assert page.locator("#activeDraftBar").is_hidden()
+            assert page.locator("#timePauseButton").get_attribute("aria-pressed") == "false"
+            assert page.locator('[data-time-speed="4"]').get_attribute("aria-pressed") == "true"
+
+            market_target = page.locator('[data-new-market-order] [data-market-target]')
+            market_target.fill("1")
+            page.wait_for_function(
+                "() => document.querySelector('#timePauseButton')?.getAttribute('aria-pressed') === 'true'",
+                timeout=10000,
+            )
+            page.locator('[data-time-speed="1"]').click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            assert "時間操作あり" in page.locator("#activeDraftPlanningState").inner_text()
+            page.locator("#activeDraftDiscard").click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            assert page.locator("#timePauseButton").get_attribute("aria-pressed") == "true"
+            assert page.locator('[data-time-speed="1"]').get_attribute("aria-pressed") == "true"
+            page.locator("#timePauseButton").click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+
             # Save/Load must restore authoritative state after a direct priority action.
             page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
             first_facility = page.locator('[data-inspect="facility"]').first

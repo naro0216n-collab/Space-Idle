@@ -159,9 +159,22 @@
     if(!identity)return null;
     if(identity.kind==='id')return document.getElementById(identity.key);
     if(identity.kind==='draft')return $$('[data-draft-key]').find((control)=>control.dataset.draftKey===identity.key)||null;
+    if(identity.kind==='priority-choice'){
+      const holder=identity.ownerKind==='draft'
+        ? $$('[data-draft-key]').find((control)=>control.dataset.draftKey===identity.ownerKey)
+        : document.getElementById(identity.ownerKey);
+      return holder?.closest('.priority-segment')?.querySelector(`[data-priority-choice="${identity.choice}"]`)||null;
+    }
     return null;
   };
-  const controlIdentity=(control)=>control?.dataset?.draftKey?{kind:'draft',key:control.dataset.draftKey}:control?.id?{kind:'id',key:control.id}:null;
+  const controlIdentity=(control)=>{
+    if(control?.matches?.('[data-priority-choice]')){
+      const holder=control.closest('.priority-segment')?.querySelector('[data-priority-value-holder]');
+      if(holder?.dataset?.draftKey)return {kind:'priority-choice',ownerKind:'draft',ownerKey:holder.dataset.draftKey,choice:control.dataset.priorityChoice};
+      if(holder?.id)return {kind:'priority-choice',ownerKind:'id',ownerKey:holder.id,choice:control.dataset.priorityChoice};
+    }
+    return control?.dataset?.draftKey?{kind:'draft',key:control.dataset.draftKey}:control?.id?{kind:'id',key:control.id}:null;
+  };
   const controlBaseline=(control)=>{
     if(!control)return null;
     if(control.dataset?.draftBaseline!==undefined)return control.dataset.draftBaseline;
@@ -211,8 +224,39 @@
   function renderActiveDraftBar(){
     const bar=$('#activeDraftBar');if(!bar)return;
     const draft=state.activeDraft;bar.hidden=!draft;
-    if(!draft)return;
+    const planning=$('#activeDraftPlanningState');
+    if(!draft){if(planning)planning.hidden=true;return;}
     const title=$('#activeDraftTitle');if(title)title.textContent=draft.title||draftTitleForScope(draft.scope);
+    if(planning){
+      const mode=draft.planning;
+      planning.hidden=!mode?.required;
+      if(mode?.required)planning.textContent=mode.autoPaused&&!mode.playerOverrodeTime?'Planning · 自動停止中':mode.playerOverrodeTime?'Planning · 時間操作あり':'Planning · 停止中';
+    }
+  }
+  async function ensurePlanningMode(draft){
+    if(!draft?.planning?.required||draft.planning.started)return;
+    const planning=draft.planning;planning.started=true;
+    planning.previousPaused=Boolean(state.session?.time_paused);
+    planning.previousSpeed=Number(state.session?.time_speed_multiplier||1);
+    planning.autoPaused=!planning.previousPaused;
+    planning.playerOverrodeTime=false;
+    renderActiveDraftBar();
+    if(!planning.autoPaused)return;
+    planning.pausePromise=setTimeControl({paused:true},{source:'planning'}).then(()=>{
+      if(state.activeDraft===draft){planning.pausePromise=null;renderActiveDraftBar();}
+    }).catch((err)=>{
+      planning.pausePromise=null;planning.autoPaused=false;planning.started=false;
+      if(state.activeDraft===draft)renderActiveDraftBar();
+      banner(`Planning停止に失敗しました: ${err.message}`,'error',7000);
+    });
+    await planning.pausePromise;
+  }
+  async function restorePlanningMode(draft){
+    const planning=draft?.planning;
+    if(!planning?.required)return;
+    if(planning.pausePromise){try{await planning.pausePromise;}catch{}}
+    if(!planning.autoPaused||planning.playerOverrodeTime)return;
+    await setTimeControl({paused:Boolean(planning.previousPaused),speed_multiplier:Number(planning.previousSpeed||1)},{source:'planning'});
   }
   function restoreActiveDraftValues(){
     const draft=state.activeDraft;if(!draft)return;
@@ -227,7 +271,9 @@
       if(String(baseline??'')!==String(snapshot.baseline??'')){delete draft.values[key];continue;}
       restoreDraftValue(control,snapshot);restored+=1;
     }
-    if(!Object.keys(draft.values||{}).length)state.activeDraft=null;
+    if(!Object.keys(draft.values||{}).length){
+      state.activeDraft=null;renderActiveDraftBar();void restorePlanningMode(draft);return;
+    }
     renderActiveDraftBar();
     if(restored)queueMicrotask(()=>document.dispatchEvent(new CustomEvent('spaceidle:draft-restored',{detail:{scope:draft.scope}})));
   }
@@ -239,18 +285,28 @@
       return;
     }
     if(!state.activeDraft&&dirty){
-      state.activeDraft={scope,title:control.dataset.draftTitle||draftTitleForScope(scope),route:captureDraftRoute(),values:{}};
+      state.activeDraft={
+        scope,title:control.dataset.draftTitle||draftTitleForScope(scope),route:captureDraftRoute(),values:{},
+        planning:control.dataset.planningBaseline==='fixed'?{required:true,started:false,autoPaused:false,playerOverrodeTime:false}:null,
+      };
+      if(state.activeDraft.planning?.required)void ensurePlanningMode(state.activeDraft);
     }
     if(!state.activeDraft)return;
     if(dirty)state.activeDraft.values[control.dataset.draftKey]=snapshot;
     else delete state.activeDraft.values[control.dataset.draftKey];
-    if(!Object.keys(state.activeDraft.values).length)state.activeDraft=null;
+    if(!Object.keys(state.activeDraft.values).length){
+      const completed=state.activeDraft;state.activeDraft=null;renderActiveDraftBar();void restorePlanningMode(completed);return;
+    }
     renderActiveDraftBar();
   }
-  function completeActiveDraft(scope){
-    if(state.activeDraft?.scope===scope){state.activeDraft=null;renderAll();}
+  async function completeActiveDraft(scope){
+    if(state.activeDraft?.scope!==scope)return;
+    const completed=state.activeDraft;state.activeDraft=null;renderAll();await restorePlanningMode(completed);
   }
-  function discardActiveDraft(){state.activeDraft=null;renderAll();}
+  async function discardActiveDraft(){
+    const discarded=state.activeDraft;if(!discarded)return;
+    state.activeDraft=null;renderAll();await restorePlanningMode(discarded);
+  }
   async function returnToActiveDraft(){
     const draft=state.activeDraft;if(!draft)return;const route=draft.route||{};
     if(route.operationalNodeId&&route.operationalNodeId!==state.operationalNodeId)await loadLocation(route.operationalNodeId);
@@ -264,15 +320,16 @@
   }
   function captureInteraction(){
     const active=document.activeElement;
-    const activeControl=active&&/^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)?active:null;
+    const activeControl=active&&(/^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)||active.matches?.('[data-priority-choice]'))?active:null;
     const identity=controlIdentity(activeControl);
     const drafts=$$('[data-draft-key]').map((control)=>({
       key:control.dataset.draftKey,
       ...interactionValue(control),
     }));
     const scroll=document.scrollingElement;
+    const editableActive=activeControl&&/^(INPUT|SELECT|TEXTAREA)$/.test(activeControl.tagName);
     return {
-      control:identity?{...identity,...interactionValue(activeControl),selectionStart:typeof activeControl.selectionStart==='number'?activeControl.selectionStart:null,selectionEnd:typeof activeControl.selectionEnd==='number'?activeControl.selectionEnd:null}:null,
+      control:identity?{...identity,...(editableActive?interactionValue(activeControl):{}),selectionStart:editableActive&&typeof activeControl.selectionStart==='number'?activeControl.selectionStart:null,selectionEnd:editableActive&&typeof activeControl.selectionEnd==='number'?activeControl.selectionEnd:null}:null,
       drafts,
       scrollLeft:scroll?.scrollLeft||0,
       scrollTop:scroll?.scrollTop||0,
@@ -285,12 +342,14 @@
     }
     if(snapshot.control){
       const control=interactionControl(snapshot.control);
-      if(control&&/^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)){
-        restoreDraftValue(control,snapshot.control);
-        control.focus({preventScroll:true});
-        if(snapshot.control.selectionStart!==null&&typeof control.setSelectionRange==='function'){
-          try{control.setSelectionRange(snapshot.control.selectionStart,snapshot.control.selectionEnd);}catch{}
+      if(control){
+        if(/^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)){
+          restoreDraftValue(control,snapshot.control);
+          if(snapshot.control.selectionStart!==null&&typeof control.setSelectionRange==='function'){
+            try{control.setSelectionRange(snapshot.control.selectionStart,snapshot.control.selectionEnd);}catch{}
+          }
         }
+        control.focus({preventScroll:true});
       }
     }
     if(document.scrollingElement){document.scrollingElement.scrollLeft=snapshot.scrollLeft;document.scrollingElement.scrollTop=snapshot.scrollTop;}
@@ -331,7 +390,11 @@
       throw err;
     }finally{endMutation();}
   }
-  async function setTimeControl(payload){
+  async function setTimeControl(payload,{source='player'}={}){
+    if(source==='player'&&state.activeDraft?.planning?.required){
+      state.activeDraft.planning.playerOverrodeTime=true;
+      renderActiveDraftBar();
+    }
     await beginMutation();
     try{state.session=await api('/api/v1/time-control',{method:'POST',body:JSON.stringify(payload)});renderHeader();await loadUiSnapshot();}
     finally{endMutation();}
@@ -615,7 +678,7 @@
 
   document.addEventListener('click',async(event)=>{
     if(event.target.closest('#activeDraftReturn')){try{await returnToActiveDraft();}catch(e){banner(e.message,'error');}return;}
-    if(event.target.closest('#activeDraftDiscard')){discardActiveDraft();banner('Draftを破棄しました');return;}
+    if(event.target.closest('#activeDraftDiscard')){await discardActiveDraft();banner('Draftを破棄しました');return;}
     const priorityChoice=event.target.closest('[data-priority-choice]');if(priorityChoice){const group=priorityChoice.closest('.priority-segment');const holder=group?.querySelector('[data-priority-value-holder]');if(holder){holder.value=priorityChoice.dataset.priorityChoice;syncPrioritySegment(holder);holder.dispatchEvent(new Event('change',{bubbles:true}));}return;}
     const inspectorToggle=event.target.closest('[data-toggle-inspector]');if(inspectorToggle){state.inspectorExpanded=!state.inspectorExpanded;renderInspectorWidth();return;}
     const sectionBtn=event.target.closest('[data-section]'); if(sectionBtn){setActiveSection(sectionBtn.dataset.section);return;}
