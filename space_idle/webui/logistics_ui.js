@@ -206,7 +206,11 @@
     const target=state.decisionContext;if(target?.decision_area!=='logistics')return new Set();
     if(target.subject_kind==='movement_plan'&&target.subject_id)return new Set([target.subject_id]);
     if(target.subject_kind==='operational_node'&&target.subject_id)return new Set((state.movementPlans?.items||[]).filter((row)=>row.origin_id===target.subject_id||row.destination_id===target.subject_id).map((row)=>row.id));
-    const requirement=contextSupplyRequirement();if(requirement)return new Set(requirement.selected_movement_plan_ids||[]);
+    const requirement=contextSupplyRequirement();if(requirement){
+      const selected=requirement.selected_movement_plan_ids||[];
+      if(selected.length)return new Set(selected);
+      return new Set((requirement.path_candidates||[]).flatMap(([,planIds])=>planIds||[]));
+    }
     const allocation=contextTransportAllocation();if(allocation)return new Set([...(allocation.selected_forward_path||[]),...(allocation.selected_reverse_path||[])]);
     return new Set();
   }
