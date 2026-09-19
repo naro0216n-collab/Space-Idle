@@ -21,7 +21,7 @@
   let relocationPreviewSerial=0;
   let relocationPreviewKey=null;
 
-  const ownerLabels={project:'建設',founding:'Location設立',target_stock:'追加備蓄',research:'研究',industry:'産業',facility_maintenance:'設備維持',vehicle_production:'機体建造',scientific_exploration:'科学探査',contract:'契約'};
+  const ownerLabels={project:'建設',founding:'拠点設立',target_stock:'追加備蓄',research:'研究',industry:'産業',facility_maintenance:'設備維持',vehicle_production:'機体建造',scientific_exploration:'科学探査',contract:'契約'};
   const priorityLabels={1:'最低',2:'低',3:'標準',4:'高',5:'最高'};
   const priorityOptions=(selected=3)=>[1,2,3,4,5].map((level)=>`<option value="${level}" ${Number(selected)===level?'selected':''}>${level} ${priorityLabels[level]}</option>`).join('');
   const priorityText=(value)=>`${Number(value)} ${priorityLabels[Number(value)]||''}`.trim();
@@ -77,12 +77,12 @@
     const root=$('#allocationPreview');if(!root)return;
     if(loading){root.innerHTML='<h3>設定結果</h3><div class="cell-sub">必要Fleetと成立見込みを計算中…</div>';return;}
     if(error){root.innerHTML=`<h3>設定結果</h3><div class="issue"><div class="issue-title">${esc(error)}</div></div>`;return;}
-    if(!preview){root.innerHTML='<h3>設定結果</h3><div class="cell-sub">Capacity targetを調整すると必要Fleetと成立見込みを表示します。</div>';return;}
+    if(!preview){root.innerHTML='<h3>設定結果</h3><div class="cell-sub">輸送能力目標を調整すると必要Fleetと成立見込みを表示します。</div>';return;}
     renderAllocationCapacityAssistance(preview);
     const required=preview.required_units==null?'算出不可':fmt(preview.required_units,0);
     const unfilled=preview.unfilled_units==null?'—':fmt(preview.unfilled_units,0);
     const route=`F ${pathText(preview.selected_forward_path)}${(preview.selected_reverse_path||[]).length?` / R ${pathText(preview.selected_reverse_path)}`:''}`;
-    const blockers=(preview.blockers||[]).length?`<div class="issue-stack">${preview.blockers.map((row)=>issueHtml(['transport',row])).join('')}</div>`:'<span class="badge ok">現在のblockerなし</span>';
+    const blockers=(preview.blockers||[]).length?`<div class="issue-stack">${preview.blockers.map((row)=>issueHtml(['transport',row])).join('')}</div>`:'<span class="badge ok">現在の制約なし</span>';
     root.innerHTML=`<h3>設定結果</h3>${kv([
       ['Target',esc(capText(preview.target_capacity))],
       ['必要Fleet',`${esc(required)} unit`],
@@ -90,7 +90,7 @@
       ['不足',`${esc(unfilled)} unit`],
       ['成立可能Capacity',esc(capText(preview.achievable_capacity))],
       ['選択経路',esc(route)],
-      ['Cycle / latency',`${fmt(preview.cycle_days,1)} 日 / F ${fmt(preview.forward_latency_days,0)} 日${preview.reverse_latency_days==null?'':` / R ${fmt(preview.reverse_latency_days,0)} 日`}`],
+      ['運行周期 / 所要時間',`${fmt(preview.cycle_days,1)} 日 / F ${fmt(preview.forward_latency_days,0)} 日${preview.reverse_latency_days==null?'':` / R ${fmt(preview.reverse_latency_days,0)} 日`}`],
     ])}${blockers}`;
   }
 
@@ -123,23 +123,23 @@
 
   function renderAllocationServiceOptions(view=allocationOptionsView){
     const root=$('#allocationServiceOptions');if(!root)return;
-    if(!view){root.innerHTML='<div class="cell-sub">Transport Service候補を取得中…</div>';return;}
+    if(!view){root.innerHTML='<div class="cell-sub">輸送手段候補を取得中…</div>';return;}
     const selectedVehicle=$('#allocationVehicle')?.value;
     const cards=(view.options||[]).map((option)=>{
       const selected=option.vehicle_definition_id===selectedVehicle;
       const resources=(option.operational_supply_at_full_unit||[]).map(([locationId,resourceId,amount])=>`${locationName(locationId)}: ${resourceName(resourceId)} ${fmt(amount,2)} t/日`).join(' / ')||'追加運用資源なし';
-      const blockers=(option.blockers||[]).length?`<div class="issue-stack">${option.blockers.map((b)=>issueHtml(['transport',b])).join('')}</div>`:'<span class="badge ok">Service成立</span>';
+      const blockers=(option.blockers||[]).length?`<div class="issue-stack">${option.blockers.map((b)=>issueHtml(['transport',b])).join('')}</div>`:'<span class="badge ok">輸送可能</span>';
       return `<div class="detail-card ${selected?'is-usable':''}" data-allocation-option-card="${esc(option.vehicle_definition_id)}"><div class="mode-title"><span>${esc(option.display_name)}</span><button type="button" class="secondary" data-allocation-option="${esc(option.vehicle_definition_id)}">${selected?'選択中':'このVehicleを選択'}</button></div>${kv([
         ['往路',esc(pathText(option.forward_path))],
         ['復路 / 回収',esc(pathText(option.reverse_path))],
-        ['Nominal F/R',esc(capText(option.nominal_capacity))],
-        ['Cycle / latency',`${fmt(option.cycle_days,1)} 日 / F ${fmt(option.forward_latency_days,0)} 日${option.reverse_latency_days==null?'':` / R ${fmt(option.reverse_latency_days,0)} 日`}`],
-        ['Fleet',`${fmt(option.fleet_free_units,0)} free / ${fmt(option.fleet_total_units,0)} total`],
-        ['Infrastructure',esc(infrastructureText(option.infrastructure_requirements))],
-        ['Full-use Resource',esc(resources)],
+        ['基準輸送能力（往路 / 復路）',esc(capText(option.nominal_capacity))],
+        ['運行周期 / 所要時間',`${fmt(option.cycle_days,1)} 日 / F ${fmt(option.forward_latency_days,0)} 日${option.reverse_latency_days==null?'':` / R ${fmt(option.reverse_latency_days,0)} 日`}`],
+        ['Fleet',`${fmt(option.fleet_free_units,0)} 機空き / ${fmt(option.fleet_total_units,0)} 機`],
+        ['必要インフラ',esc(infrastructureText(option.infrastructure_requirements))],
+        ['最大運用時の必要資源',esc(resources)],
       ])}${blockers}</div>`;
     }).join('');
-    root.innerHTML=`<h3>Transport Service候補</h3><div class="cell-sub">Vehicle性能と正準Movement評価からApplicationが導出した候補です。経路を固定する必要がある場合だけ候補経路を選択します。</div>${cards||'<div class="empty-state">候補なし</div>'}`;
+    root.innerHTML=`<h3>輸送手段候補</h3><div class="cell-sub">機体性能と正準移動評価からApplicationが導出した候補です。経路を固定する必要がある場合だけ候補経路を選択します。</div>${cards||'<div class="empty-state">候補なし</div>'}`;
   }
 
   async function updateAllocationServiceOptions(){
@@ -147,7 +147,7 @@
     const source=$('#allocationSource').value,destination=$('#allocationDestination').value;
     const serial=++allocationOptionSerial;allocationOptionsView=null;
     if(!source||!destination||source===destination){
-      const root=$('#allocationServiceOptions');if(root)root.innerHTML='<h3>Transport Service候補</h3><div class="cell-sub">異なる出発地と到着地を選択してください。</div>';
+      const root=$('#allocationServiceOptions');if(root)root.innerHTML='<h3>輸送手段候補</h3><div class="cell-sub">異なる出発地と到着地を選択してください。</div>';
       return;
     }
     renderAllocationServiceOptions(null);
@@ -158,7 +158,7 @@
       allocationOptionsView=view;renderAllocationServiceOptions(view);renderAllocationCapacityControls();renderAllocationMovementChoices();scheduleAllocationPreview({immediate:true});
     }catch(err){
       if(serial===allocationOptionSerial&&$('#allocationDialog')?.open){
-        const root=$('#allocationServiceOptions');if(root)root.innerHTML=`<h3>Transport Service候補</h3><div class="issue"><div class="issue-title">${esc(err.message||'候補を取得できません')}</div></div>`;
+        const root=$('#allocationServiceOptions');if(root)root.innerHTML=`<h3>輸送手段候補</h3><div class="issue"><div class="issue-title">${esc(err.message||'候補を取得できません')}</div></div>`;
       }
     }
   }
@@ -169,11 +169,11 @@
     relocationPreviewKey=relocationKey(preview.destination_id,preview.units);
     const resources=(preview.resource_requirements||[]).map((r)=>`<div class="cell-sub">${esc(locationName(r.operational_node_id))}: ${esc(resourceName(r.resource_id))} ${fmt(r.required_t,2)} t 必要 / ${fmt(r.available_t,2)} t 利用可能</div>`).join('')||'<div class="cell-sub">運用Resource消費なし</div>';
     const blockers=(preview.blockers||[]).map((row)=>`<div class="issue"><div class="issue-title">${esc(A.userFacingText(row))}</div></div>`).join('');
-    root.innerHTML=`<h3>移動計画 <span class="badge ${preview.feasible?'ok':'warn'}">${preview.feasible?'実行可能':'blockerあり'}</span></h3>${kv([
+    root.innerHTML=`<h3>移動計画 <span class="badge ${preview.feasible?'ok':'warn'}">${preview.feasible?'実行可能':'制約あり'}</span></h3>${kv([
       ['経路',(preview.path||[]).length?(preview.path||[]).map((id)=>esc(definitionName(id))).join(' → '):'—'],
       ['所要時間',preview.arrival_day===null?'—':`${fmt(preview.travel_days,0)} 日（Day ${fmt(preview.arrival_day,0)} 到着）`],
-      ['Infrastructure',esc(infrastructureText(preview.infrastructure_requirements))],
-    ])}<div class="cell-main">必要Resource</div>${resources}${blockers?`<div class="issue-list">${blockers}</div>`:'<div class="cell-sub">現在のblockerなし</div>'}`;
+      ['必要インフラ',esc(infrastructureText(preview.infrastructure_requirements))],
+    ])}<div class="cell-main">必要資源</div>${resources}${blockers?`<div class="issue-list">${blockers}</div>`:'<div class="cell-sub">現在の制約なし</div>'}`;
     if(submit){submit.disabled=!preview.feasible;submit.title=preview.feasible?'':(preview.blockers||[]).map(A.userFacingText).join(' / ');}
   }
 

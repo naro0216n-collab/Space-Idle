@@ -448,6 +448,9 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     assert option.payload_t > 0
     assert 0 < option.payload_t_per_unit <= option.payload_t
     assert option.required_units > 0
+    assert cell.movement_accessible is True
+    assert cell.minimum_transit_days is not None
+    assert cell.minimum_transit_days >= 0
     displayed_resources = dict(option.resources)
     expected_resources = {
         str(row.resource_id): row.amount_t

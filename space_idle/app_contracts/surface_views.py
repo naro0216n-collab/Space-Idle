@@ -81,6 +81,8 @@ class SurfaceCellRow:
     facility_placement_options: tuple[SurfaceFacilityPlacementOption, ...] = ()
     foundation_options: tuple[SurfaceCellFoundationOption, ...] = ()
     display_name: str = ""
+    movement_accessible: bool | None = None
+    minimum_transit_days: int | None = None
 
 
 @dataclass(frozen=True)

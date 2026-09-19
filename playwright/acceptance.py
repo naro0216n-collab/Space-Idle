@@ -242,7 +242,7 @@ def run() -> dict[str, object]:
                 timeout=10000,
             )
             page.locator('[data-section-tab="location"][data-tab="construction"]').click()
-            upgrade_rows = page.locator('[data-inspect="project"]', has_text="Upgrade")
+            upgrade_rows = page.locator('[data-inspect="project"]', has_text="設備更新")
             _assert(upgrade_rows.count() > 0, "upgrade command must create a construction project visible in the project list")
             upgrade_rows.first.click()
             inspector_text = page.locator("#inspectorContent").inner_text()
@@ -314,8 +314,8 @@ def run() -> dict[str, object]:
             exploration_rows.first.click()
             exploration_text = page.locator("#inspectorContent").inner_text()
             _assert("現地活動期間" in exploration_text, "exploration inspector must expose activity duration separately from Movement latency")
-            _assert("最低payload" in exploration_text, "exploration inspector must expose minimum payload requirement")
-            _assert("必要Vehicle能力" in exploration_text, "exploration inspector must expose generic vehicle capability requirements")
+            _assert("最低搭載量" in exploration_text, "exploration inspector must expose minimum payload requirement with player-facing terminology")
+            _assert("必要機体能力" in exploration_text, "exploration inspector must expose generic vehicle capability requirements with player-facing terminology")
             _assert("RP獲得速度" in exploration_text, "exploration inspector must expose application-projected RP rate")
             _assert("空間条件: 軌道地点が必要" in exploration_text, "exploration inspector must expose spatial classification requirements")
             _assert("移動要件:" in exploration_text, "exploration inspector must expose required operations")
@@ -357,13 +357,19 @@ def run() -> dict[str, object]:
             page.locator('[data-section-tab="exploration"][data-tab="survey"]').click()
             page.locator('.survey-scope-map').wait_for(timeout=10000)
             _assert(page.locator('.survey-scope-map').count() == 1, "Survey must use the surface map as the primary scope-selection canvas")
-            _assert(page.locator('[data-survey-draft-cell]').count() > 0, "Survey surface canvas must expose direct Cell scope controls")
-            _assert(page.locator('[data-survey-draft-resource]').count() > 0, "Survey surface canvas must expose direct Resource scope controls")
+            _assert(page.locator('[data-survey-map-layer]').count() == 5, "Survey surface canvas must expose the five canonical information layers")
+            movement_layer = page.locator('[data-survey-map-layer="movement"]')
+            movement_layer.click()
+            _assert(page.locator('.survey-scope-map').get_attribute('data-survey-layer') == 'movement', "Survey layer switching must not require leaving the map context")
+            _assert(page.locator('.survey-scope-map [data-survey-layer-value="movement"]:visible').count() > 0, "movement accessibility must come from the Application surface projection")
+            page.locator('[data-survey-map-layer="knowledge"]').click()
+            _assert(page.locator('[data-survey-draft-cell]').count() > 0, "Survey surface canvas must expose direct region scope controls")
+            _assert(page.locator('[data-survey-draft-resource]').count() > 0, "Survey surface canvas must expose direct resource scope controls")
             known_survey = page.locator('[data-inspect="survey"]').first
             known_survey.wait_for(timeout=10000)
-            _assert("Knowledge" in known_survey.inner_text(), "raw Survey Knowledge must be presented independently from Campaign lifecycle")
+            _assert("調査知識" in known_survey.inner_text(), "Survey knowledge must be presented independently from campaign lifecycle")
             known_survey.click()
-            _assert("地表知識" in page.locator("#inspectorContent").inner_text(), "Survey target inspector must expose raw Knowledge state")
+            _assert("地表知識" in page.locator("#inspectorContent").inner_text(), "Survey target inspector must expose knowledge state")
             _assert(page.locator('#inspectorContent [data-lifecycle-control="survey"]').count() == 0, "fine-grained Knowledge must not expose a per-target Campaign lifecycle")
 
             page.locator('[data-section-tab="exploration"][data-tab="surface"]').click()
@@ -376,18 +382,18 @@ def run() -> dict[str, object]:
                 surface_cells.nth(index).click()
                 if (
                     page.locator('#inspectorContent [data-surface-develop]').count() > 0
-                    and "Location設立" in page.locator("#inspectorContent").inner_text()
+                    and "新拠点設立" in page.locator("#inspectorContent").inner_text()
                 ):
                     surface_decision_found = True
                     break
             _assert(surface_decision_found, "surface map must expose a projected development/founding decision")
             surface_inspector = page.locator("#inspectorContent").inner_text()
-            _assert("Cell状態" in surface_inspector, "surface cell inspector must expose physical cell state")
-            _assert("Current Environment" in surface_inspector, "surface cell inspector must expose application-projected current environment")
-            _assert("Resource Knowledge" in surface_inspector, "surface cell inspector must expose survey-derived resource knowledge")
+            _assert("地域状態" in surface_inspector, "surface cell inspector must expose physical cell state")
+            _assert("現在の環境" in surface_inspector, "surface cell inspector must expose application-projected current environment")
+            _assert("資源調査情報" in surface_inspector, "surface cell inspector must expose survey-derived resource knowledge")
             _assert(page.locator('#inspectorContent [data-inspect="survey"]').count() > 0, "surface map resource decisions must link directly to survey controls")
-            _assert("既存Locationから開発" in surface_inspector, "undeveloped cell must expose location development options in-place")
-            _assert("Location設立" in surface_inspector, "unowned cell must expose founding options in-place")
+            _assert("既存拠点から開発" in surface_inspector, "undeveloped cell must expose location development options in-place")
+            _assert("新拠点設立" in surface_inspector, "unowned cell must expose founding options in-place")
             _assert(page.locator('#inspectorContent [data-surface-develop]').count() > 0, "surface cell inspector must expose application-projected development commands")
             page.locator('.primary-nav-button[data-section="location"]').click()
             # Top-level navigation preserves the last Location context by design.
@@ -449,7 +455,7 @@ def run() -> dict[str, object]:
             campaign_row = page.locator('[data-inspect="survey-campaign"]').first
             campaign_row.wait_for(timeout=10000)
             _assert(campaign_row.evaluate("el => el.classList.contains('survey-campaign-card')"), "Survey Campaign must remain a touch decision card after creation")
-            _assert("1 Cell × 1 Resource" in campaign_row.inner_text(), "Survey Campaign creation must round-trip the selected UI scope")
+            _assert("1 地域 × 1 資源" in campaign_row.inner_text(), "Survey Campaign creation must round-trip the selected UI scope")
             _assert("base." not in campaign_row.inner_text(), "Survey Campaign row must use presentation labels rather than raw definition ids")
             campaign_row.click()
             campaign_text = page.locator('#inspectorContent').inner_text()
@@ -505,7 +511,7 @@ def run() -> dict[str, object]:
             _assert(founding_button.count() == 1, "surveyed lunar cell must expose the canonical Founding option")
             _assert(founding_button.is_enabled(), "surveyed lunar cell must allow player-selected Founding when planning requirements are met")
             founding_card = founding_button.locator('xpath=ancestor::*[contains(@class,"surface-action-card")][1]')
-            _assert("Staging必要Resource" in founding_card.inner_text(), "Founding decision surface must expose staging resources before commitment")
+            _assert("出発拠点で必要な資源" in founding_card.inner_text(), "Founding decision surface must expose staging resources before commitment")
             _assert(
                 founding_card.locator('.surface-resource-list .cell-sub').count() > 0,
                 "Founding decision surface must present its Application-projected staging resources",

@@ -147,7 +147,10 @@ class SurfaceProjectorMixin:
                     if sim.facilities.definitions[recipe.facility_def_id].placement_scope is FacilityPlacementScope.SURFACE_CELL
                 )
             foundation_options = ()
+            movement_accessible = None
+            minimum_transit_days = None
             if sim.founding is not None:
+                movement_accessible = False
                 foundation_rows = []
                 active_founding = sim.founding.active_project_for_cell(cell.id)
                 for staging_id in sorted(sim.graph.operational_node_ids(), key=str):
@@ -163,6 +166,12 @@ class SurfaceProjectorMixin:
                                 )
                                 transit_days = sim.transport.performance_movement_transit_days(
                                     movement_plan, vehicle.performance
+                                )
+                                movement_accessible = True
+                                minimum_transit_days = (
+                                    transit_days
+                                    if minimum_transit_days is None
+                                    else min(minimum_transit_days, transit_days)
                                 )
                                 founding_resources = sim.founding.resource_requirements_for(
                                     recipe.id, vehicle.id, staging_id, target_spec, day=sim.day
@@ -215,6 +224,8 @@ class SurfaceProjectorMixin:
                     facility_placement_options,
                     foundation_options,
                     cell.display_name or str(cell.id),
+                    movement_accessible,
+                    minimum_transit_days,
                 )
             )
         return SurfaceMapView(str(body.id), body.display_name, tuple(rows), locations)

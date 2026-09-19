@@ -177,7 +177,7 @@
       const selected = selectedId === item.id;
       return `<button type="button" class="research-node status-${esc(item.status)}${selected ? ' is-selected' : ''}" data-inspect="research" data-id="${esc(item.id)}" style="left:${pos.x}px;top:${pos.y}px" aria-label="${esc(item.display_name)} ${esc(state)}">
         <span class="research-node-head"><span class="research-node-title">${esc(item.display_name)}</span><span class="badge ${item.status === 'complete' ? 'ok' : blockerCount ? 'warn' : ''}">${esc(state)}</span></span>
-        <span class="research-node-meta">前提 ${prerequisiteCount} · blocker ${blockerCount} · 優先度 ${fmt(item.priority,0)}</span>
+        <span class="research-node-meta">前提 ${prerequisiteCount} · 制約 ${blockerCount} · 優先度 ${fmt(item.priority,0)}</span>
         <span class="research-node-progress"><span>${esc(phase.text)}</span>${item.status==='theory'?`<span>RP ${fmt(item.rp_allocated,1)}/${fmt(item.rp_requested,1)} /日</span>`:''}</span>
         <span class="progress-track"><span class="progress-bar" style="width:${Math.max(0, Math.min(100, phase.ratio * 100))}%"></span></span>
       </button>`;
@@ -192,7 +192,7 @@
     });
 
     const completed = items.filter((item) => item.status === 'complete').length;
-    const tree = `<section class="card research-tree-card"><div class="card-heading"><div><h3>技術ツリー</h3><div class="cell-sub">技術を選択すると、右側に前提・進行段階・実行条件・blockerを表示します。</div></div><span class="badge">完了 ${completed}/${items.length}</span></div>${rpStrip}<div id="researchTreeScroll" class="research-tree-scroll"><div id="researchTree" class="research-tree-stage" style="width:${graph.width}px;height:${graph.height}px"><svg class="research-tree-links" viewBox="0 0 ${graph.width} ${graph.height}" aria-hidden="true">${links.join('')}</svg>${nodes}</div></div></section>`;
+    const tree = `<section class="card research-tree-card"><div class="card-heading"><div><h3>技術ツリー</h3><div class="cell-sub">技術を選択すると、右側に前提・進行段階・実行条件・制約を表示します。</div></div><span class="badge">完了 ${completed}/${items.length}</span></div>${rpStrip}<div id="researchTreeScroll" class="research-tree-scroll"><div id="researchTree" class="research-tree-stage" style="width:${graph.width}px;height:${graph.height}px"><svg class="research-tree-links" viewBox="0 0 ${graph.width} ${graph.height}" aria-hidden="true">${links.join('')}</svg>${nodes}</div></div></section>`;
     return `${tree}${providerSummary}`;
   }
 

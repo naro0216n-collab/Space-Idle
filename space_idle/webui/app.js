@@ -67,39 +67,39 @@
 
   function userFacingText(value){
     let text=String(value??'');
-    text=text.replace(/fleet_units:([0-9.+-]+)\/([0-9.+-]+)/g,(_,current,required)=>`free Fleet不足: ${current} / ${required} unit`);
-    text=text.replace(/relocation_units:positive_required/g,'移動unit数は1以上が必要です');
+    text=text.replace(/fleet_units:([0-9.+-]+)\/([0-9.+-]+)/g,(_,current,required)=>`空きFleet不足: ${current} / ${required} 機`);
+    text=text.replace(/relocation_units:positive_required/g,'移動機数は1以上が必要です');
     text=text.replace(/relocation_endpoints:must_differ/g,'出発地と到着地は異なる必要があります');
     text=text.replace(/endurance:([0-9.+-]+)\/([0-9.+-]+)/g,(_,required,available)=>`航続期間不足: ${required} / ${available} 日`);
     text=text.replace(/resource:([^:;]+):([^:;]+):([0-9.+-]+)\/([0-9.+-]+)/g,(_,locationId,resourceId,current,required)=>`${locationName(locationId)}の${resourceName(resourceId)}不足: ${current} / ${required} t`);
     text=text.replace(/relocation_path:(.+)/g,(_,detail)=>`移動経路不成立: ${detail}`);
-    text=text.replace(/market_interface_disabled/g,'Market Interface停止');
+    text=text.replace(/market_interface_disabled/g,'市場接続拠点が停止しています');
     text=text.replace(/offer_unavailable/g,'Market offerなし');
     text=text.replace(/price_condition/g,'価格条件外');
-    text=text.replace(/provider_supply/g,'Market Provider供給不足');
-    text=text.replace(/provider_demand/g,'Market Provider需要不足');
-    text=text.replace(/resource_not_at_market_interface/g,'Market Interfaceに売却対象Resourceなし');
-    text=text.replace(/survey_scope_empty/g,'Survey対象Cellを1つ以上選択してください');
-    text=text.replace(/survey_resource_scope_empty/g,'Survey対象Resourceを1つ以上選択してください');
-    text=text.replace(/knowledge_goal_reached/g,'選択範囲は指定したKnowledge Goalへ到達済みです');
-    text=text.replace(/invalid_target_knowledge_level/g,'Knowledge Goalが不正です');
+    text=text.replace(/provider_supply/g,'市場供給不足');
+    text=text.replace(/provider_demand/g,'市場需要不足');
+    text=text.replace(/resource_not_at_market_interface/g,'市場接続拠点に売却対象資源なし');
+    text=text.replace(/survey_scope_empty/g,'調査対象地域を1つ以上選択してください');
+    text=text.replace(/survey_resource_scope_empty/g,'調査対象資源を1つ以上選択してください');
+    text=text.replace(/knowledge_goal_reached/g,'選択範囲は指定した調査目標へ到達済みです');
+    text=text.replace(/invalid_target_knowledge_level/g,'調査目標が不正です');
     text=text.replace(/campaign_scope_conflict:([^;]+)/g,(_,id)=>`既存Survey Campaignと対象が重複しています: ${id}`);
     text=text.replace(/unknown_target:([^:;]+):([^;]+)/g,(_,cellId,resourceId)=>`Survey対象外の組み合わせです: ${cellId} / ${resourceName(resourceId)}`);
-    text=text.replace(/unknown_target:([^;]+)/g,(_,cellId)=>`Survey対象外のCellです: ${cellId}`);
+    text=text.replace(/unknown_target:([^;]+)/g,(_,cellId)=>`調査対象外の地域です`);
     text=text.replace(/unmet_demand/g,'未充足需要');
     text=text.replace(/external_dependency/g,'外部依存');
-    text=text.replace(/storage_over_capacity/g,'Usable Storage Capacity超過');
-    text=text.replace(/physical_storage_full/g,'Physical Storage Capacity満杯');
-    text=text.replace(/usable_storage_full/g,'Usable Storage Capacity満杯');
+    text=text.replace(/storage_over_capacity/g,'利用可能保管容量を超過しています');
+    text=text.replace(/physical_storage_full/g,'物理保管容量が満杯です');
+    text=text.replace(/usable_storage_full/g,'利用可能保管容量が満杯です');
     for(const map of definitionMaps()){
       for(const [id,item] of Object.entries(map)){
         if(text.includes(id)&&item?.display_name)text=text.split(id).join(item.display_name);
       }
     }
     text=text.replace(/technology:([^;]+)/g,(_,ids)=>`技術不足: ${ids.split(',').map((x)=>definitionName(x.trim())).join('、')}`);
-    text=text.replace(/vehicle_capability:([a-zA-Z0-9_.-]+)/g,(_,id)=>`Vehicle能力不足: ${capabilityName(id)}`);
+    text=text.replace(/vehicle_capability:([a-zA-Z0-9_.-]+)/g,(_,id)=>`機体能力不足: ${capabilityName(id)}`);
     text=text.replace(/capability:([a-zA-Z0-9_.-]+)/g,(_,id)=>`能力不足: ${capabilityName(id)}`);
-    text=text.replace(/payload_capacity:([0-9.+-]+)\/([0-9.+-]+)/g,(_,current,required)=>`利用可能Payload不足: ${current} / ${required} t`);
+    text=text.replace(/payload_capacity:([0-9.+-]+)\/([0-9.+-]+)/g,(_,current,required)=>`利用可能搭載能力不足: ${current} / ${required} t`);
     text=text.replace(/(available|active|infrastructure):([a-zA-Z0-9_.-]+):([0-9.+-]+)\/([0-9.+-]+)/g,(_,kind,id,current,required)=>{
       const label=kind==='available'?'利用可能能力':kind==='active'?'稼働能力':'インフラ能力';
       return `${label}不足: ${capabilityName(id)} ${current} / ${required}`;
@@ -251,6 +251,15 @@
     const category=categoryLabels[rawCategory]||userFacingText(rawCategory);
     const context=!Array.isArray(issue)&&issue.entity_id?definitionName(issue.entity_id):'';
     const meta=[category,context&&context!==issue.entity_id?context:''].filter(Boolean).join(' · ');
+    const nav=!Array.isArray(issue)?issue.navigation:null;
+    if(nav?.decision_area){
+      const attrs=[
+        ['data-issue-area',nav.decision_area],['data-issue-node',nav.operational_node_id],
+        ['data-issue-subject-kind',nav.subject_kind],['data-issue-subject-id',nav.subject_id],
+        ['data-issue-resource-id',nav.resource_id],
+      ].filter(([,value])=>value!=null).map(([key,value])=>`${key}="${esc(value)}"`).join(' ');
+      return `<button type="button" class="issue issue-link" ${attrs}><span class="issue-title">${esc(message)}</span>${meta?`<span class="issue-meta">${esc(meta)}</span>`:''}<span class="issue-open-hint">関連する判断へ</span></button>`;
+    }
     return `<div class="issue"><div class="issue-title">${esc(message)}</div>${meta?`<div class="issue-meta">${esc(meta)}</div>`:''}</div>`;
   }
   const metricHtml=([label,value])=>`<div class="metric-chip"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
@@ -277,7 +286,7 @@
   }
   function renderGlobalIssues(){
     const issues=state.globalIssues?.items||[];
-    $('#globalIssues').innerHTML=issues.length?issues.slice(0,8).map(issueHtml).join('')+(issues.length>8?`<div class="cell-sub">ほか ${issues.length-8} 件</div>`:''):'<div class="empty-state">現在、全体blockerはありません。</div>';
+    $('#globalIssues').innerHTML=issues.length?issues.slice(0,8).map(issueHtml).join('')+(issues.length>8?`<div class="cell-sub">ほか ${issues.length-8} 件</div>`:''):'<div class="empty-state">現在、全体制約はありません。</div>';
   }
   const kvHtml=(rows)=>`<dl class="kv-grid">${rows.map(([key,value])=>`<dt>${key}</dt><dd>${value}</dd>`).join('')}</dl>`;
   function globalMapPositions(nodes){
@@ -328,20 +337,20 @@
     const activeExploration=explorations.filter((row)=>!['complete','completed','cancelled','failed'].includes(row.state)).length;
     const activeSurvey=campaigns.filter((row)=>!['complete','completed','cancelled','failed'].includes(row.state)).length;
     const fleetTotal=Number(state.logisticsSummary?.fleet_units||0),fleetFree=Number(state.logisticsSummary?.free_fleet_units||0);
-    $('#globalHeadlineMetrics').innerHTML=[['拠点',nodes.length],['要確認',issues.length],['研究中',activeResearch],['Fleet',`${fleetFree}/${fleetTotal} free`]].map(metricHtml).join('');
-    const attentionItems=issues.length?issues.slice(0,8).map((issue,index)=>issue.navigation?`<button type="button" class="global-attention-item" data-attention-index="${index}">${issueHtml(issue)}<span class="attention-open-hint">関連箇所を開く</span></button>`:`<div class="global-attention-item">${issueHtml(issue)}</div>`).join(''):'<div class="empty-state">現在、Player判断を必要とする全体blockerはありません。</div>';
-    canvas.innerHTML=`<div class="global-decision-grid">${renderGlobalMap(nodes)}<section class="card global-attention-card"><div class="card-heading"><h3>要確認</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length}</span></div><div class="card-body global-attention-list">${attentionItems}</div></section></div><div class="global-domain-strip"><button type="button" class="domain-entry" data-section="research"><span>研究</span><strong>${activeResearch}</strong><small>進行中</small></button><button type="button" class="domain-entry" data-section="exploration"><span>探査</span><strong>${activeExploration+activeSurvey}</strong><small>科学探査 / Survey</small></button><button type="button" class="domain-entry" data-section="logistics"><span>輸送</span><strong>${fleetFree}/${fleetTotal}</strong><small>free Fleet</small></button></div>`;
+    $('#globalHeadlineMetrics').innerHTML=[['拠点',nodes.length],['要確認',issues.length],['研究中',activeResearch],['Fleet',`${fleetFree}/${fleetTotal} 空き`]].map(metricHtml).join('');
+    const attentionItems=issues.length?issues.slice(0,8).map(issueHtml).join(''):'<div class="empty-state">現在、判断を必要とする全体制約はありません。</div>';
+    canvas.innerHTML=`<div class="global-decision-grid">${renderGlobalMap(nodes)}<section class="card global-attention-card"><div class="card-heading"><h3>要確認</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length}</span></div><div class="card-body global-attention-list">${attentionItems}</div></section></div><div class="global-domain-strip"><button type="button" class="domain-entry" data-section="research"><span>研究</span><strong>${activeResearch}</strong><small>進行中</small></button><button type="button" class="domain-entry" data-section="exploration"><span>探査</span><strong>${activeExploration+activeSurvey}</strong><small>科学探査 / 地表調査</small></button><button type="button" class="domain-entry" data-section="logistics"><span>輸送</span><strong>${fleetFree}/${fleetTotal}</strong><small>空きFleet</small></button></div>`;
     const selectedId=state.selectedGlobalNodeId||state.operationalNodeId;
     const selectedNode=nodes.find((row)=>row.id===selectedId)||nodes[0]||null;
     const relatedPlans=(state.movementPlans?.items||[]).filter((row)=>selectedNode&&(row.origin_id===selectedNode.id||row.destination_id===selectedNode.id));
     const relatedIssues=issues.filter((issue)=>issue.navigation?.operational_node_id===selectedNode?.id);
     $('#globalInspectorTitle').textContent=selectedNode?.display_name||'全体状況';
-    inspector.innerHTML=selectedNode?`<section class="inspector-section"><h3>拠点Context</h3>${kvHtml([['種別',esc(locationKindLabels[selectedNode.kind]||selectedNode.kind)],['設備',fmt(selectedNode.facility_count,0)],['進行中建設',fmt(selectedNode.active_project_count,0)],['接続経路',fmt(relatedPlans.length,0)],['要確認',fmt(relatedIssues.length,0)]])}</section><section class="inspector-section"><h3>次の操作</h3><div class="action-stack"><button type="button" class="primary" data-open-location="${esc(selectedNode.id)}">この拠点を開く</button><button type="button" data-open-node-logistics="${esc(selectedNode.id)}">関連輸送を見る</button></div></section><section class="inspector-section"><h3>Context</h3><div class="section-context-note">Map選択を維持したまま拠点・輸送へ移動します。内部IDを覚えて入力する必要はありません。</div></section>`:`<section class="inspector-section"><h3>組織全体</h3><div class="kv-grid"><dt>Research Point</dt><dd>${fmt(state.research?.stored_points,1)} / ${fmt(state.research?.storage_capacity_points,1)}</dd><dt>Fleet</dt><dd>${fleetFree} free / ${fleetTotal}</dd></div></section>`;
+    inspector.innerHTML=selectedNode?`<section class="inspector-section"><h3>拠点状況</h3>${kvHtml([['種別',esc(locationKindLabels[selectedNode.kind]||selectedNode.kind)],['設備',fmt(selectedNode.facility_count,0)],['進行中建設',fmt(selectedNode.active_project_count,0)],['接続経路',fmt(relatedPlans.length,0)],['要確認',fmt(relatedIssues.length,0)]])}</section><section class="inspector-section"><h3>次の操作</h3><div class="action-stack"><button type="button" class="primary" data-open-location="${esc(selectedNode.id)}">この拠点を開く</button><button type="button" data-open-node-logistics="${esc(selectedNode.id)}">関連輸送を見る</button></div></section><section class="inspector-section"><h3>選択の引き継ぎ</h3><div class="section-context-note">Map選択を維持したまま拠点・輸送へ移動します。内部IDを覚えて入力する必要はありません。</div></section>`:`<section class="inspector-section"><h3>組織全体</h3><div class="kv-grid"><dt>Research Point</dt><dd>${fmt(state.research?.stored_points,1)} / ${fmt(state.research?.storage_capacity_points,1)}</dd><dt>Fleet</dt><dd>${fleetFree} 機空き / ${fleetTotal} 機</dd></div></section>`;
   }
   function renderEconomyContext(){
     const root=$('#economyInspectorContent');if(!root)return;
     const market=state.market;
-    root.innerHTML=market?`<section class="inspector-section"><h3>資金</h3><div class="kv-grid"><dt>総残高</dt><dd>$${fmt(market.funds_total_musd,2)}M</dd><dt>利用可能</dt><dd>$${fmt(market.funds_available_musd,2)}M</dd><dt>市場接続</dt><dd>${(market.interfaces||[]).length}</dd><dt>注文</dt><dd>${(market.orders||[]).length}</dd></div></section><section class="inspector-section"><h3>意味</h3><div class="section-context-note">資金は外部資源市場の決済専用です。建設・研究・輸送等の一般活動コストとしては使用しません。</div></section>`:'<div class="empty-state">Market状態を読み込み中です。</div>';
+    root.innerHTML=market?`<section class="inspector-section"><h3>資金</h3><div class="kv-grid"><dt>総残高</dt><dd>$${fmt(market.funds_total_musd,2)}M</dd><dt>利用可能</dt><dd>$${fmt(market.funds_available_musd,2)}M</dd><dt>市場接続</dt><dd>${(market.interfaces||[]).length}</dd><dt>注文</dt><dd>${(market.orders||[]).length}</dd></div></section><section class="inspector-section"><h3>意味</h3><div class="section-context-note">資金は外部資源市場の決済専用です。建設・研究・輸送等の一般活動コストとしては使用しません。</div></section>`:'<div class="empty-state">市場状態を読み込み中です。</div>';
   }
   const operationsSections=new Set(['location','research','exploration']);
   function saveSectionContext(section=state.activeSection){
@@ -468,6 +477,7 @@
     else if(target.subject_kind==='research'&&target.subject_id)state.inspector={type:'research',id:target.subject_id};
     else if(target.subject_kind==='scientific_exploration'&&target.subject_id)state.inspector={type:'scientific-exploration',id:target.subject_id};
     else if(target.subject_kind==='survey_campaign'&&target.subject_id)state.inspector={type:'survey-campaign',id:target.subject_id};
+    else if(target.subject_kind==='inventory'&&target.resource_id)state.inspector={type:'resource',id:target.resource_id};
     if(target.subject_kind==='movement_plan'&&target.subject_id)state.selectedMovementPlanId=target.subject_id;
     renderAll();
     queueMicrotask(()=>{
@@ -496,7 +506,7 @@
     const openLocation=event.target.closest('[data-open-location]'); if(openLocation){await loadLocation(openLocation.dataset.openLocation);setActiveSection('location');return;}
     const globalNode=event.target.closest('[data-global-node-id]'); if(globalNode){state.selectedGlobalNodeId=globalNode.dataset.globalNodeId;renderGlobalView();return;}
     const globalLogistics=event.target.closest('[data-open-node-logistics]'); if(globalLogistics){state.selectedGlobalNodeId=globalLogistics.dataset.openNodeLogistics;setActiveSection('logistics');return;}
-    const attentionItem=event.target.closest('[data-attention-index]'); if(attentionItem){const issue=(state.globalIssues?.items||[])[Number(attentionItem.dataset.attentionIndex)];if(issue?.navigation)await openDecisionContext(issue.navigation);return;}
+    const issueLink=event.target.closest('[data-issue-area]'); if(issueLink){await openDecisionContext({decision_area:issueLink.dataset.issueArea,operational_node_id:issueLink.dataset.issueNode||null,subject_kind:issueLink.dataset.issueSubjectKind||null,subject_id:issueLink.dataset.issueSubjectId||null,resource_id:issueLink.dataset.issueResourceId||null});return;}
     if(event.target.closest('#attentionButton')){setActiveSection('global');return;}
     const locBtn=event.target.closest('[data-location-id]'); if(locBtn){await loadLocation(locBtn.dataset.locationId);return;}
     if(event.target.closest('#timePauseButton')){try{await setTimeControl({paused:!Boolean(state.session?.time_paused)});}catch(e){banner(e.message,'error');}return;}
