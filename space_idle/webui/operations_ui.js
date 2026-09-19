@@ -1048,6 +1048,14 @@
 
   document.addEventListener('change',(event)=>{
     if(state.activeView!=='operations')return;
+    const explorationDisposition=event.target.closest('[data-exploration-disposition]');
+    if(explorationDisposition){
+      void command('SetScientificExplorationCompletionDisposition',{
+        exploration_id:explorationDisposition.dataset.explorationDisposition,
+        disposition:explorationDisposition.value,
+      }).catch(()=>{});
+      return;
+    }
     const priorityHolder=event.target.closest('[data-priority-direct]');
     if(priorityHolder){
       const id=priorityHolder.dataset.priorityId,priority=Number(priorityHolder.value),kind=priorityHolder.dataset.priorityDirect;

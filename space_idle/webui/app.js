@@ -62,7 +62,7 @@
     in_transit:'輸送中',arrival_waiting:'到着待機',theory:'理論',prototype:'試作',demonstration:'実証',operational_experience:'運用経験',
     planned:'計画',procuring:'調達中',ready:'施工待ち',building:'施工中',cancelled:'取消済み',
     awaiting_inputs:'資材待ち',awaiting_vehicle:'Vehicle待ち',awaiting_fleet:'Fleet待ち',
-    preparing:'出発準備',outbound:'往路移動中',exploration:'科学探査中',return_preparing:'復路準備',returning:'復路移動中',
+    preparing:'出発準備',outbound:'往路移動中',exploration:'科学探査中',return_preparing:'復路準備',returning:'復路移動中',aborted:'中止済み',
   };
   const capabilityName=(id)=>capabilityLabels[id]||id||'—';
   const serviceLabels={
