@@ -406,7 +406,7 @@
       const locationSummary=(state.world?.operational_nodes||[]).find((row)=>row.id===locationId);
       const params=new URLSearchParams();
       if(locationId)params.set('operational_node_id',locationId);
-      if(locationSummary?.body_id&&state.activeTab==='surface')params.set('surface_body_id',locationSummary.body_id);
+      if(locationSummary?.body_id&&['surface','survey'].includes(state.activeTab))params.set('surface_body_id',locationSummary.body_id);
       const suffix=params.size?`?${params.toString()}`:'';
       const data=await api(`/api/v1/ui-state${suffix}`);
       if(locationId!==state.operationalNodeId)return data;
@@ -462,6 +462,7 @@
     state.decisionContext={...target};
     const tab=decisionContextTab(target);
     if(tab)state.activeTab=tab;
+    if(['surface','survey'].includes(state.activeTab))await loadUiSnapshot({preserveInteraction:false});
     if(target.subject_kind==='facility'&&target.subject_id)state.inspector={type:'facility',id:target.subject_id};
     else if(target.subject_kind==='project'&&target.subject_id)state.inspector={type:'project',id:target.subject_id};
     else if(target.subject_kind==='research'&&target.subject_id)state.inspector={type:'research',id:target.subject_id};

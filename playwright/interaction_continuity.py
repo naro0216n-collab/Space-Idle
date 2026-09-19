@@ -82,7 +82,7 @@ def run() -> None:
             # A live editable control must keep its unsaved value and focus while
             # the authoritative clock refreshes the surrounding projection.
             page.locator('.primary-nav-button[data-section="location"]').click()
-            page.locator('[data-tab="facilities"]').click()
+            page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
             first_facility = page.locator('[data-inspect="facility"]').first
             first_facility.click()
             inspector_title = page.locator("#inspectorTitle").inner_text()

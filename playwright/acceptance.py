@@ -205,7 +205,7 @@ def run() -> dict[str, object]:
             page.locator('.primary-nav-button[data-section="location"]').click()
             _assert(page.locator("#operationsView").is_visible(), "location section must open the location decision canvas")
             _assert(page.locator(".location-button").count() > 0, "location context browser must expose spatial nodes")
-            page.locator('[data-tab="facilities"]').click()
+            page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
             upgrade_row = page.locator(
                 f'[data-inspect="facility"][data-id="{_fixture_facility.id}"]'
             )
@@ -241,7 +241,7 @@ def run() -> dict[str, object]:
                 "() => !document.body.classList.contains('is-busy')",
                 timeout=10000,
             )
-            page.locator('[data-tab="construction"]').click()
+            page.locator('[data-section-tab="location"][data-tab="construction"]').click()
             upgrade_rows = page.locator('tr[data-inspect="project"]', has_text="Upgrade")
             _assert(upgrade_rows.count() > 0, "upgrade command must create a construction project visible in the project list")
             upgrade_rows.first.click()
@@ -267,6 +267,9 @@ def run() -> dict[str, object]:
                 timeout=10000,
             )
             page.locator('.primary-nav-button[data-section="research"]').click()
+            page.locator('.research-tree-card').wait_for(timeout=10000)
+            _assert(page.locator('.research-rp-strip').count() == 1, "research canvas must expose RP state beside the primary DAG")
+            _assert(page.locator('.research-tree-card').evaluate("el => Boolean(el.compareDocumentPosition(document.querySelector('.research-provider-summary')) & Node.DOCUMENT_POSITION_FOLLOWING)"), "research DAG must precede provider allocation details in the decision flow")
             research_rows = page.locator('#researchTree [data-inspect="research"]')
             _assert(research_rows.count() > 0, "research tree must expose research decisions")
             startable_research = None
@@ -304,17 +307,18 @@ def run() -> dict[str, object]:
                 timeout=10000,
             )
             page.locator('.primary-nav-button[data-section="exploration"]').click()
-            page.locator('[data-tab="scientific-exploration"]').click()
-            exploration_rows = page.locator('tr[data-inspect="scientific-exploration"]')
+            page.locator('[data-section-tab="exploration"][data-tab="scientific-exploration"]').click()
+            exploration_rows = page.locator('[data-inspect="scientific-exploration"]')
             _assert(exploration_rows.count() > 0, "scientific exploration campaign must be visible")
+            _assert(page.locator('.exploration-decision-card').count() == exploration_rows.count(), "scientific exploration must present touch decision cards rather than a dense management table")
             exploration_rows.first.click()
             exploration_text = page.locator("#inspectorContent").inner_text()
-            _assert("Campaign所要期間" in exploration_text, "exploration inspector must expose activity duration separately from Movement latency")
-            _assert("Minimum Payload" in exploration_text, "exploration inspector must expose minimum payload requirement")
-            _assert("Vehicle Capability" in exploration_text, "exploration inspector must expose generic vehicle capability requirements")
-            _assert("RP/日" in exploration_text, "exploration inspector must expose application-projected RP rate")
+            _assert("現地活動期間" in exploration_text, "exploration inspector must expose activity duration separately from Movement latency")
+            _assert("最低payload" in exploration_text, "exploration inspector must expose minimum payload requirement")
+            _assert("必要Vehicle能力" in exploration_text, "exploration inspector must expose generic vehicle capability requirements")
+            _assert("RP獲得速度" in exploration_text, "exploration inspector must expose application-projected RP rate")
             _assert("空間条件: 軌道地点が必要" in exploration_text, "exploration inspector must expose spatial classification requirements")
-            _assert("Operation:" in exploration_text, "exploration inspector must expose required operations")
+            _assert("移動要件:" in exploration_text, "exploration inspector must expose required operations")
             _assert("消耗資源:" in exploration_text, "exploration inspector must expose consumable resources")
             exploration_assign_buttons = page.locator('#inspectorContent [data-exploration-assign]')
             _assert(exploration_assign_buttons.count() > 0, "exploration inspector must keep vehicle assignment controls visible before campaign start")
@@ -350,15 +354,19 @@ def run() -> dict[str, object]:
                 timeout=10000,
             )
             _select_location(page, ids.EARTH)
-            page.locator('[data-tab="survey"]').click()
-            known_survey = page.locator('tr[data-inspect="survey"]').first
+            page.locator('[data-section-tab="exploration"][data-tab="survey"]').click()
+            page.locator('.survey-scope-map').wait_for(timeout=10000)
+            _assert(page.locator('.survey-scope-map').count() == 1, "Survey must use the surface map as the primary scope-selection canvas")
+            _assert(page.locator('[data-survey-draft-cell]').count() > 0, "Survey surface canvas must expose direct Cell scope controls")
+            _assert(page.locator('[data-survey-draft-resource]').count() > 0, "Survey surface canvas must expose direct Resource scope controls")
+            known_survey = page.locator('[data-inspect="survey"]').first
             known_survey.wait_for(timeout=10000)
             _assert("Knowledge" in known_survey.inner_text(), "raw Survey Knowledge must be presented independently from Campaign lifecycle")
             known_survey.click()
-            _assert("Knowledge State" in page.locator("#inspectorContent").inner_text(), "Survey target inspector must expose raw Knowledge state")
+            _assert("地表知識" in page.locator("#inspectorContent").inner_text(), "Survey target inspector must expose raw Knowledge state")
             _assert(page.locator('#inspectorContent [data-lifecycle-control="survey"]').count() == 0, "fine-grained Knowledge must not expose a per-target Campaign lifecycle")
 
-            page.locator('[data-tab="surface"]').click()
+            page.locator('[data-section-tab="exploration"][data-tab="surface"]').click()
             surface_cells = page.locator('.surface-cell-button')
             surface_cells.first.wait_for(timeout=10000)
             _assert(surface_cells.count() > 0, "surface map must render Application-projected body cells")
@@ -390,8 +398,8 @@ def run() -> dict[str, object]:
 
             _select_location(page, ids.LUNAR_ORBIT)
             page.locator('.primary-nav-button[data-section="exploration"]').click()
-            page.locator('[data-tab="survey"]').click()
-            survey_rows = page.locator('tr[data-inspect="survey"]')
+            page.locator('[data-section-tab="exploration"][data-tab="survey"]').click()
+            survey_rows = page.locator('[data-inspect="survey"]')
             survey_rows.first.wait_for(timeout=10000)
             _assert(survey_rows.count() > 0, "Survey UI must expose at least one Application-projected target")
             campaign_cell_id = campaign_resource_id = None
@@ -435,15 +443,16 @@ def run() -> dict[str, object]:
             page.locator('#surveyDraftPriority').select_option("4")
             page.locator('[data-start-survey-campaign]').click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            campaign_row = page.locator('tr[data-inspect="survey-campaign"]').first
+            campaign_row = page.locator('[data-inspect="survey-campaign"]').first
             campaign_row.wait_for(timeout=10000)
+            _assert(campaign_row.evaluate("el => el.classList.contains('survey-campaign-card')"), "Survey Campaign must remain a touch decision card after creation")
             _assert("1 Cell × 1 Resource" in campaign_row.inner_text(), "Survey Campaign creation must round-trip the selected UI scope")
             _assert("base." not in campaign_row.inner_text(), "Survey Campaign row must use presentation labels rather than raw definition ids")
             campaign_row.click()
             campaign_text = page.locator('#inspectorContent').inner_text()
-            _assert("Scope / Goal編集" in campaign_text, "Survey Campaign inspector must expose the selected scope and goal")
-            _assert("Provider / Mode候補差" in campaign_text, "Survey Campaign inspector must expose candidate differences at the decision point")
-            _assert("Projected Provider / Mode" in campaign_text, "Survey Campaign inspector must expose the auto-resolved operational choice")
+            _assert("範囲・目標の編集" in campaign_text, "Survey Campaign inspector must expose the selected scope and goal")
+            _assert("観測手段の候補差" in campaign_text, "Survey Campaign inspector must expose candidate differences at the decision point")
+            _assert("解決された観測手段" in campaign_text, "Survey Campaign inspector must expose the auto-resolved operational choice")
             _assert(page.locator('#inspectorContent [data-set-survey-priority]').is_enabled(), "active Survey Campaign must expose priority control")
             page.wait_for_function(
                 "() => !document.querySelector('[data-survey-update-intent-status]')?.textContent?.includes('可否確認中')",
@@ -480,7 +489,7 @@ def run() -> dict[str, object]:
             # A surveyed Cell must become a player-selectable founding site; the
             # UI must use the Application-projected option rather than inventing
             # a fixed pre-existing lunar Location.
-            page.locator('[data-tab="surface"]').click()
+            page.locator('[data-section-tab="exploration"][data-tab="surface"]').click()
             founding_cell = page.locator(f'.surface-cell-button[data-id="{founding_fixture_cell}"]')
             founding_cell.wait_for(timeout=10000)
             founding_cell.click()

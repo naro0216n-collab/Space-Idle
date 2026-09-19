@@ -347,3 +347,69 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
   .logistics-route-context-bar .movement-plan-button { min-width: 160px; flex-basis: 180px; }
   .logistics-bottom-grid { grid-template-columns: 1fr; }
 }
+
+/* Research / exploration / survey decision surfaces: primary choice first, operational detail second. */
+.research-rp-strip { display: grid; grid-template-columns: repeat(4, minmax(92px, 1fr)) auto; gap: 7px; align-items: stretch; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); background: #0a1620; }
+.research-rp-strip > div { min-width: 0; padding: 7px 9px; border: 1px solid var(--line-soft); border-radius: 7px; background: #0c1923; }
+.research-rp-strip span { display: block; color: var(--muted); font-size: 9px; }
+.research-rp-strip strong { display: block; margin-top: 3px; font-size: 13px; }
+.research-rp-strip > .badge { align-self: center; justify-self: end; }
+.research-tree-card { min-height: 610px; }
+.research-provider-summary { margin-top: 12px; }
+.research-provider-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.research-provider-sections h4 { margin: 0 0 8px; }
+.research-provider-grid { display: grid; gap: 8px; }
+.research-provider-card { min-width: 0; }
+.research-provider-actions { margin-top: 8px; }
+.research-tree-empty.research-provider-empty { min-height: 120px; }
+
+.exploration-decision-surface, .survey-decision-surface { display: grid; gap: 12px; }
+.exploration-card-grid, .survey-campaign-grid, .survey-knowledge-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.exploration-decision-card, .survey-campaign-card, .survey-knowledge-card { width: 100%; min-width: 0; display: grid; gap: 10px; align-content: start; text-align: left; padding: 12px; background: #0b1721; border-color: var(--line-soft); }
+.exploration-decision-card, .survey-campaign-card { min-height: 190px; }
+.survey-knowledge-card { min-height: 124px; }
+.exploration-decision-card.is-selected, .survey-campaign-card.is-selected, .survey-knowledge-card.is-selected { border-color: var(--accent); background: #123049; box-shadow: inset 0 0 0 1px #64c6ff55; }
+.decision-card-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.decision-card-title > span:first-child { min-width: 0; }
+.decision-card-title strong { display: block; overflow-wrap: anywhere; font-size: 14px; }
+.decision-card-title small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.exploration-progress { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }
+.decision-card-metrics { display: flex; flex-wrap: wrap; gap: 7px 12px; color: var(--muted); font-size: 10px; }
+.decision-card-metrics strong { color: var(--text); font-weight: 600; }
+.decision-card-footer { align-self: end; min-height: 30px; display: flex; align-items: center; padding-top: 7px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 10px; }
+.decision-card-footer.has-warning { color: var(--warn); }
+
+.survey-decision-card { min-width: 0; border: 1px solid var(--line-soft); border-radius: 10px; overflow: hidden; background: var(--panel); }
+.survey-decision-body { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(260px, .75fr); gap: 12px; padding: 12px; }
+.survey-map-column, .survey-intent-column { min-width: 0; }
+.survey-intent-column { display: grid; gap: 12px; align-content: start; padding: 10px; border: 1px solid var(--line-soft); border-radius: 9px; background: #0a1620; }
+.survey-intent-column h4 { margin: 0 0 8px; }
+.survey-scope-map { position: relative; min-height: 420px; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 9px; background: radial-gradient(circle at 50% 50%, #10283a 0, #0a1924 55%, #07121b 100%); }
+.survey-scope-map > svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.survey-scope-map line { stroke: #31506a; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.survey-scope-node { position: absolute; z-index: 2; width: 145px; min-height: 60px; transform: translate(-50%, -50%); cursor: pointer; }
+.survey-scope-node input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.survey-scope-node > span { min-height: 60px; display: grid; align-content: center; padding: 8px 10px; border: 1px solid #36566d; border-radius: 9px; background: #0f2230e8; box-shadow: 0 7px 20px #0005; }
+.survey-scope-node strong { font-size: 11px; line-height: 1.25; }
+.survey-scope-node small { margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.3; }
+.survey-scope-node:has(input:checked) > span { border-color: var(--accent); background: #15354a; box-shadow: 0 0 0 2px #4c9ccf33, 0 10px 24px #0007; }
+.survey-resource-choices, .survey-fallback-cells { display: flex; flex-wrap: wrap; gap: 7px; }
+.survey-fallback-cells { margin-top: 8px; }
+.survey-resource-choice { position: relative; min-width: 112px; min-height: 44px; cursor: pointer; }
+.survey-resource-choice input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.survey-resource-choice > span { min-height: 44px; display: grid; place-items: center; padding: 7px 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: #0b1721; font-size: 11px; text-align: center; }
+.survey-resource-choice:has(input:checked) > span { border-color: var(--accent); background: #143047; box-shadow: inset 0 0 0 1px #64c6ff55; }
+.survey-goal-row { grid-template-columns: 1fr 1fr; }
+.survey-start-button { width: 100%; min-height: 48px; }
+
+@media (max-width: 1080px) and (orientation: landscape) {
+  .research-rp-strip { grid-template-columns: repeat(4, minmax(72px, 1fr)); }
+  .research-rp-strip > .badge { grid-column: 1 / -1; justify-self: start; }
+  .research-provider-sections { grid-template-columns: 1fr; }
+  .exploration-card-grid, .survey-campaign-grid, .survey-knowledge-grid { grid-template-columns: repeat(auto-fit, minmax(225px, 1fr)); }
+  .survey-decision-body { grid-template-columns: minmax(0, 1.35fr) minmax(230px, .75fr); padding: 10px; }
+  .survey-scope-map { min-height: 380px; }
+  .survey-scope-node { width: 124px; }
+  .survey-goal-row { grid-template-columns: 1fr; }
+}
+.network-line-hit { stroke: transparent; stroke-width: 20; fill: none; pointer-events: stroke; cursor: pointer; }

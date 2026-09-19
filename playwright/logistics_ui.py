@@ -124,7 +124,7 @@ def run() -> None:
             allocation_row.wait_for(timeout=10000)
             allocation_id = allocation_row.get_attribute("data-allocation-row")
             assert allocation_id
-            assert "方向別Capacity target" in allocation_row.inner_text()
+            assert "方向別能力目標" in allocation_row.inner_text()
 
             allocation_row.locator('[data-allocation-edit]').click()
             page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
