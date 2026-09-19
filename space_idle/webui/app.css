@@ -566,3 +566,11 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 
 
 .active-draft-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel);min-height:52px}.active-draft-bar[hidden]{display:none}.active-draft-bar>div:first-child{display:flex;align-items:baseline;gap:10px;min-width:0}.active-draft-bar strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.active-draft-planning{font-size:12px;font-weight:700;padding:4px 8px;border:1px solid var(--line);border-radius:999px;white-space:nowrap}.active-draft-planning[hidden]{display:none}.active-draft-actions{display:flex;gap:8px;flex:0 0 auto}.active-draft-actions button{min-height:44px}.active-draft-bar .eyebrow{margin:0}
+.network-decision-context { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px; border: 1px solid #3c6d83; border-radius: 10px; background: #102b3a; }
+.network-decision-context[hidden] { display: none; }
+.network-decision-context .eyebrow { margin: 0; }
+.network-decision-context strong { color: #d8f4ff; }
+.network-decision-context > span:last-child { color: var(--muted); font-size: 12px; }
+.network-line.is-context-related { stroke: #f2c26b; stroke-width: 5; opacity: 1; }
+.network-line.is-context-related.selected { stroke-width: 6; }
+.network-node.is-context-related { border-color: #f2c26b; box-shadow: 0 0 0 2px rgba(242,194,107,.16); }

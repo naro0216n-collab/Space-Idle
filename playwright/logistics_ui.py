@@ -138,7 +138,15 @@ def run() -> None:
             allocation_row.wait_for(timeout=10000)
             allocation_id = allocation_row.get_attribute("data-allocation-row")
             assert allocation_id
-            assert "方向別能力目標" in allocation_row.inner_text()
+            allocation_text = allocation_row.inner_text()
+            for label in ("目標", "必要機体", "利用可能", "使用中", "余力", "周期"):
+                assert label in allocation_text, f"Transport Allocation card must expose {label}"
+
+            allocation_row.get_by_role("button", name="Networkで確認").click()
+            page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
+            assert "輸送能力設定" in page.locator("#networkDecisionContext").inner_text()
+            page.locator("#networkSvg .network-line.is-context-related").first.wait_for(timeout=10000)
+            assert page.locator("#networkNodes .network-node.is-context-related").count() >= 2
 
             allocation_row.locator('[data-allocation-edit]').click()
             page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
