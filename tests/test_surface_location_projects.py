@@ -16,6 +16,7 @@ from space_idle import (
     SurfaceLocationFoundingTarget,
     GetProjects,
     GetSurfaceMap,
+    GetWorld,
     build_game_application,
 )
 from space_idle.bootstrap import build_game_application_for_load
@@ -182,6 +183,8 @@ def test_non_surface_operational_node_founding_uses_common_lifecycle_without_ear
     assert target_id in sim.graph.nodes
     assert not sim.graph.has_operational_node(target_id)
     assert target_id not in sim.graph.locations
+    staging_summary = next(row for row in app.query(GetWorld()).operational_nodes if row.id == str(ids.LEO))
+    assert staging_summary.active_founding_count == 1
 
     with pytest.raises(ApplicationError, match="target_claimed"):
         app.execute(PlanOperationalNodeFounding(
@@ -199,6 +202,8 @@ def test_non_surface_operational_node_founding_uses_common_lifecycle_without_ear
     assert project.status.value == "complete"
     assert sim.graph.has_operational_node(target_id)
     assert target_id not in sim.graph.locations
+    staging_summary = next(row for row in app.query(GetWorld()).operational_nodes if row.id == str(ids.LEO))
+    assert staging_summary.active_founding_count == 0
 
     row = next(
         item for item in app.query(GetProjects(str(ids.LEO))).items

@@ -94,6 +94,17 @@ def run(*, browser=None) -> None:
             assert "輸送能力阻害" in requirement_row.inner_text(), (
                 "Supply Requirement must remain visible while Transport Capacity is unavailable"
             )
+            decision_item = page.locator(
+                '#logisticsDecisionLane [data-logistics-decision-kind="supply_requirement"]'
+            ).first
+            decision_item.wait_for(timeout=10000)
+            assert "輸送能力阻害" in decision_item.inner_text(), (
+                "Transport Decision Lane must surface the same Application-projected blocker"
+            )
+            decision_item.click()
+            page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
+            assert "補給需要" in page.locator("#networkDecisionContext").inner_text()
+            assert page.locator("#networkSvg .network-line.is-context-related").count() > 0
             # Create and later clear a project-scoped Routing Constraint through the UI.
             requirement_row.locator("[data-requirement-constraint]").click()
             page.locator("#routingConstraintDialog").wait_for(state="visible", timeout=10000)

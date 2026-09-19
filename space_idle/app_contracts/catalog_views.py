@@ -147,6 +147,7 @@ class OperationalNodeSummary:
     kind: str
     facility_count: int
     active_project_count: int
+    active_founding_count: int = 0
 
 
 @dataclass(frozen=True)

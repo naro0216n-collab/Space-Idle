@@ -102,14 +102,16 @@
                 <div id="networkDecisionContext" class="network-decision-context" hidden></div>
                 <div id="movementPlanList" class="movement-plan-list"></div>
               </div>
+              <section id="logisticsDecisionLane" class="logistics-decision-lane" aria-label="現在の輸送判断"></section>
               <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
+              <div class="logistics-support-heading"><div><span class="eyebrow">詳細・設定</span><h2>物流状態とPlayer intent</h2></div><span>上の判断から必要な項目へ進み、必要時だけ設定を変更します。</span></div>
               <div class="logistics-bottom-grid">
-                <section class="card"><div class="card-heading"><h3>供給経路 / 追加備蓄</h3><span id="routingConstraintCountBadge" class="badge"></span></div><div id="routingConstraintTable" class="table-wrap"></div></section>
-                <section class="card"><div class="card-heading"><h3>補給需要</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
-                <section class="card"><div class="card-heading"><h3>保有機体</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
-                <section class="card"><div class="card-heading"><h3>輸送能力設定</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
-                <section class="card"><div class="card-heading"><h3>機体建造</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
-                <section class="card"><div class="card-heading"><h3>輸送中貨物</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
+                <section class="card logistics-support-card is-primary-support"><div class="card-heading"><h3>補給需要</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
+                <section class="card logistics-support-card is-primary-support"><div class="card-heading"><h3>輸送能力設定</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
+                <section class="card logistics-support-card"><div class="card-heading"><h3>保有機体</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
+                <section class="card logistics-support-card"><div class="card-heading"><h3>供給経路 / 追加備蓄</h3><span id="routingConstraintCountBadge" class="badge"></span></div><div id="routingConstraintTable" class="table-wrap"></div></section>
+                <section class="card logistics-support-card"><div class="card-heading"><h3>輸送中貨物</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
+                <section class="card logistics-support-card"><div class="card-heading"><h3>機体建造</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
               </div>
             </section>
           </div>

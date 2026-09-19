@@ -38,11 +38,17 @@ class CatalogWorldProjectorMixin:
                 1 for project in sim.projects.projects.values()
                 if project.operational_node_id == node.id and project.status not in {"complete", "cancelled"}
             )
+            active_foundings = (
+                0 if sim.founding is None else sum(
+                    1 for project in sim.founding.projects.values()
+                    if project.staging_node_id == node.id and project.status.value not in {"complete", "cancelled"}
+                )
+            )
             operational_nodes.append(OperationalNodeSummary(
                 str(node.id), node.display_name,
                 None if node.parent_id is None else str(node.parent_id),
                 None if node.body_id is None else str(node.body_id),
-                node.kind.value, facility_count, active_projects,
+                node.kind.value, facility_count, active_projects, active_foundings,
             ))
         return WorldView(
             sim.content_id,

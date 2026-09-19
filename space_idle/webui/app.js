@@ -513,7 +513,7 @@
   }
   function renderLocations(){
     const root=$('#locationList');if(!root)return;
-    root.innerHTML=(state.world?.operational_nodes||[]).map((loc)=>`<button type="button" class="location-button ${loc.id===state.operationalNodeId?'is-active':''}" data-location-id="${esc(loc.id)}" aria-pressed="${loc.id===state.operationalNodeId?'true':'false'}"><span class="location-name">${esc(loc.display_name)}</span><span class="location-meta"><span>${esc(locationKindLabels[loc.kind]||loc.kind)}</span><span>設備 ${loc.facility_count}</span><span>建設 ${loc.active_project_count}</span></span></button>`).join('');
+    root.innerHTML=(state.world?.operational_nodes||[]).map((loc)=>`<button type="button" class="location-button ${loc.id===state.operationalNodeId?'is-active':''}" data-location-id="${esc(loc.id)}" aria-pressed="${loc.id===state.operationalNodeId?'true':'false'}"><span class="location-name">${esc(loc.display_name)}</span><span class="location-meta"><span>${esc(locationKindLabels[loc.kind]||loc.kind)}</span><span>建設 ${loc.active_project_count}</span><span>設立 ${loc.active_founding_count||0}</span></span></button>`).join('');
   }
   function renderGlobalIssues(){
     const issues=state.globalIssues?.items||[];
@@ -542,7 +542,41 @@
     });
     return positions;
   }
-  function renderGlobalMap(nodes){
+  const activeResearchStatuses=new Set(['theory','prototype','demonstration','operational_experience']);
+  const inactiveExplorationStatuses=new Set(['complete','completed','aborted','cancelled','failed']);
+  const inactiveSurveyStatuses=new Set(['complete','completed','cancelled','failed']);
+  function globalNodeSignals(nodes,issues,researchItems,explorations,campaigns){
+    const signals=Object.fromEntries(nodes.map((node)=>[node.id,{attention:0,projects:Number(node.active_project_count||0),founding:Number(node.active_founding_count||0),research:0,survey:0,exploration:0}]));
+    for(const issue of issues||[]){
+      const nodeId=issue.navigation?.operational_node_id||issue.operational_node_id;
+      if(nodeId&&signals[nodeId])signals[nodeId].attention+=1;
+    }
+    for(const research of researchItems||[]){
+      if(!activeResearchStatuses.has(research.status))continue;
+      const nodeId=research.execution_context?.operational_node_id;
+      if(nodeId&&signals[nodeId])signals[nodeId].research+=1;
+    }
+    for(const exploration of explorations||[]){
+      if(inactiveExplorationStatuses.has(exploration.status))continue;
+      const nodeId=exploration.destination_id||exploration.origin_id;
+      if(nodeId&&signals[nodeId])signals[nodeId].exploration+=1;
+    }
+    for(const campaign of campaigns||[]){
+      if(inactiveSurveyStatuses.has(campaign.status))continue;
+      const nodeId=campaign.projected_provider_operational_node_id;
+      if(nodeId&&signals[nodeId])signals[nodeId].survey+=1;
+    }
+    return signals;
+  }
+  function globalSignalHtml(signal){
+    if(!signal)return'';
+    const rows=[
+      ['attention','要確認',signal.attention],['projects','案件',signal.projects],['founding','設立',signal.founding],['research','研究',signal.research],
+      ['survey','調査',signal.survey],['exploration','探査',signal.exploration],
+    ].filter(([, ,count])=>Number(count)>0);
+    return rows.length?`<span class="global-map-node-signals">${rows.map(([kind,label,count])=>`<span class="global-map-signal is-${kind}">${esc(label)} ${fmt(count,0)}</span>`).join('')}</span>`:'';
+  }
+  function renderGlobalMap(nodes,signals){
     const positions=globalMapPositions(nodes);
     const selected=state.selectedGlobalNodeId||state.operationalNodeId||nodes[0]?.id||null;
     if(selected&&!state.selectedGlobalNodeId)state.selectedGlobalNodeId=selected;
@@ -554,29 +588,34 @@
     }).join('');
     const nodeHtml=nodes.map((node)=>{
       const [x,y]=positions[node.id]||[50,50];
-      const active=node.id===selected;
-      return `<button type="button" class="global-map-node ${active?'is-selected':''}" style="left:${x}%;top:${y}%" data-global-node-id="${esc(node.id)}" aria-pressed="${active?'true':'false'}"><span class="global-map-node-name">${esc(node.display_name)}</span><span class="global-map-node-meta">${esc(locationKindLabels[node.kind]||node.kind)} · 設備 ${node.facility_count}</span></button>`;
+      const active=node.id===selected,signal=signals?.[node.id]||{};
+      const signalClass=signal.attention?'has-attention':(signal.projects||signal.founding||signal.research||signal.survey||signal.exploration)?'has-activity':'';
+      return `<button type="button" class="global-map-node ${active?'is-selected':''} ${signalClass}" style="left:${x}%;top:${y}%" data-global-node-id="${esc(node.id)}" aria-pressed="${active?'true':'false'}"><span class="global-map-node-name">${esc(node.display_name)}</span><span class="global-map-node-meta">${esc(locationKindLabels[node.kind]||node.kind)} · 設備 ${node.facility_count}</span>${globalSignalHtml(signal)}</button>`;
     }).join('');
-    return `<section class="global-map-card"><div class="global-map-toolbar"><div><div class="eyebrow">SYSTEM MAP</div><h2>活動領域</h2></div><span class="badge">${nodes.length} 拠点</span></div><div class="global-map-stage" role="group" aria-label="全体Map"><svg class="global-map-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${edges}</svg>${nodeHtml||'<div class="empty-state">拠点なし</div>'}</div></section>`;
+    return `<section class="global-map-card"><div class="global-map-toolbar"><div><div class="eyebrow">SYSTEM MAP</div><h2>活動領域</h2></div><div class="global-map-toolbar-meta"><span class="badge">${nodes.length} 拠点</span><div class="global-map-legend"><span class="is-attention">要確認</span><span>案件</span><span>設立</span><span>研究</span><span>調査</span><span>探査</span></div></div></div><div class="global-map-stage" role="group" aria-label="全体Map"><svg class="global-map-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${edges}</svg>${nodeHtml||'<div class="empty-state">拠点なし</div>'}</div></section>`;
   }
   function renderGlobalView(){
     const canvas=$('#globalCanvasContent'),inspector=$('#globalInspectorContent');
     if(!canvas||!inspector)return;
     const nodes=state.world?.operational_nodes||[],issues=state.globalIssues?.items||[];
     const researchItems=state.research?.items||[],explorations=state.scientificExplorations?.items||[],campaigns=state.surveys?.campaigns||[];
-    const activeResearch=researchItems.filter((row)=>row.state==='active').length;
-    const activeExploration=explorations.filter((row)=>!['complete','completed','cancelled','failed'].includes(row.state)).length;
-    const activeSurvey=campaigns.filter((row)=>!['complete','completed','cancelled','failed'].includes(row.state)).length;
+    const activeResearch=researchItems.filter((row)=>activeResearchStatuses.has(row.status)).length;
+    const activeExploration=explorations.filter((row)=>!inactiveExplorationStatuses.has(row.status)).length;
+    const activeSurvey=campaigns.filter((row)=>!inactiveSurveyStatuses.has(row.status)).length;
+    const nodeSignals=globalNodeSignals(nodes,issues,researchItems,explorations,campaigns);
     const fleetTotal=Number(state.logisticsSummary?.fleet_units||0),fleetFree=Number(state.logisticsSummary?.free_fleet_units||0);
     $('#globalHeadlineMetrics').innerHTML=[['拠点',nodes.length],['要確認',issues.length],['研究中',activeResearch],['Fleet',`${fleetFree}/${fleetTotal} 空き`]].map(metricHtml).join('');
     const attentionItems=issues.length?issues.slice(0,8).map(issueHtml).join(''):'<div class="empty-state">現在、判断を必要とする全体制約はありません。</div>';
-    canvas.innerHTML=`<div class="global-decision-grid">${renderGlobalMap(nodes)}<section class="card global-attention-card"><div class="card-heading"><h3>要確認</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length}</span></div><div class="card-body global-attention-list">${attentionItems}</div></section></div><div class="global-domain-strip"><button type="button" class="domain-entry" data-section="research"><span>研究</span><strong>${activeResearch}</strong><small>進行中</small></button><button type="button" class="domain-entry" data-section="exploration"><span>探査</span><strong>${activeExploration+activeSurvey}</strong><small>科学探査 / 地表調査</small></button><button type="button" class="domain-entry" data-section="logistics"><span>輸送</span><strong>${fleetFree}/${fleetTotal}</strong><small>空きFleet</small></button></div>`;
+    canvas.innerHTML=`<div class="global-decision-grid">${renderGlobalMap(nodes,nodeSignals)}<section class="card global-attention-card"><div class="card-heading"><h3>要確認</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length}</span></div><div class="card-body global-attention-list">${attentionItems}</div></section></div><div class="global-domain-strip"><button type="button" class="domain-entry" data-section="research"><span>研究</span><strong>${activeResearch}</strong><small>進行中</small></button><button type="button" class="domain-entry" data-section="exploration"><span>探査</span><strong>${activeExploration+activeSurvey}</strong><small>科学探査 / 地表調査</small></button><button type="button" class="domain-entry" data-section="logistics"><span>輸送</span><strong>${fleetFree}/${fleetTotal}</strong><small>空きFleet</small></button></div>`;
     const selectedId=state.selectedGlobalNodeId||state.operationalNodeId;
     const selectedNode=nodes.find((row)=>row.id===selectedId)||nodes[0]||null;
     const relatedPlans=(state.movementPlans?.items||[]).filter((row)=>selectedNode&&(row.origin_id===selectedNode.id||row.destination_id===selectedNode.id));
-    const relatedIssues=issues.filter((issue)=>issue.navigation?.operational_node_id===selectedNode?.id);
+    const relatedIssues=issues.filter((issue)=>(issue.navigation?.operational_node_id||issue.operational_node_id)===selectedNode?.id);
+    const selectedSignals=selectedNode?nodeSignals[selectedNode.id]||{}:{};
+    const activityRows=[['進行中案件',selectedSignals.projects||0],['拠点設立',selectedSignals.founding||0],['研究',selectedSignals.research||0],['地表調査',selectedSignals.survey||0],['科学探査',selectedSignals.exploration||0]];
+    const activityActions=[selectedSignals.research?'<button type="button" data-section="research">研究を見る</button>':'',selectedSignals.survey||selectedSignals.exploration?'<button type="button" data-section="exploration">探査を見る</button>':''].filter(Boolean).join('');
     $('#globalInspectorTitle').textContent=selectedNode?.display_name||'全体状況';
-    inspector.innerHTML=selectedNode?`<section class="inspector-section"><h3>拠点状況</h3>${kvHtml([['種別',esc(locationKindLabels[selectedNode.kind]||selectedNode.kind)],['設備',fmt(selectedNode.facility_count,0)],['進行中建設',fmt(selectedNode.active_project_count,0)],['接続経路',fmt(relatedPlans.length,0)],['要確認',fmt(relatedIssues.length,0)]])}</section><section class="inspector-section"><h3>次の操作</h3><div class="action-stack"><button type="button" class="primary" data-open-location="${esc(selectedNode.id)}">この拠点を開く</button><button type="button" data-open-node-logistics="${esc(selectedNode.id)}">関連輸送を見る</button></div></section><section class="inspector-section"><h3>選択の引き継ぎ</h3><div class="section-context-note">Map選択を維持したまま拠点・輸送へ移動します。内部IDを覚えて入力する必要はありません。</div></section>`:`<section class="inspector-section"><h3>組織全体</h3><div class="kv-grid"><dt>Research Point</dt><dd>${fmt(state.research?.stored_points,1)} / ${fmt(state.research?.storage_capacity_points,1)}</dd><dt>Fleet</dt><dd>${fleetFree} 機空き / ${fleetTotal} 機</dd></div></section>`;
+    inspector.innerHTML=selectedNode?`<section class="inspector-section"><h3>拠点状況</h3>${kvHtml([['種別',esc(locationKindLabels[selectedNode.kind]||selectedNode.kind)],['設備',fmt(selectedNode.facility_count,0)],['進行中案件',fmt(selectedSignals.projects||0,0)],['接続経路',fmt(relatedPlans.length,0)],['要確認',fmt(relatedIssues.length,0)]])}</section><section class="inspector-section"><h3>活動</h3>${kvHtml(activityRows.map(([label,value])=>[label,fmt(value,0)]))}${activityActions?`<div class="action-stack global-activity-actions">${activityActions}</div>`:''}</section>${relatedIssues.length?`<section class="inspector-section"><h3>この拠点の要確認</h3><div class="issue-stack">${relatedIssues.slice(0,4).map(issueHtml).join('')}</div></section>`:''}<section class="inspector-section"><h3>次の操作</h3><div class="action-stack"><button type="button" class="primary" data-open-location="${esc(selectedNode.id)}">この拠点を開く</button><button type="button" data-open-node-logistics="${esc(selectedNode.id)}">関連輸送を見る</button></div></section><section class="inspector-section"><h3>選択の引き継ぎ</h3><div class="section-context-note">Map選択を維持したまま拠点・輸送へ移動します。内部IDを覚えて入力する必要はありません。</div></section>`:`<section class="inspector-section"><h3>組織全体</h3><div class="kv-grid"><dt>Research Point</dt><dd>${fmt(state.research?.stored_points,1)} / ${fmt(state.research?.storage_capacity_points,1)}</dd><dt>Fleet</dt><dd>${fleetFree} 機空き / ${fleetTotal} 機</dd></div></section>`;
   }
   function renderEconomyContext(){
     const root=$('#economyInspectorContent');if(!root)return;
@@ -742,7 +781,7 @@
     const sectionBtn=event.target.closest('[data-section]'); if(sectionBtn){setActiveSection(sectionBtn.dataset.section);return;}
     const openLocation=event.target.closest('[data-open-location]'); if(openLocation){await loadLocation(openLocation.dataset.openLocation);setActiveSection('location');return;}
     const globalNode=event.target.closest('[data-global-node-id]'); if(globalNode){state.selectedGlobalNodeId=globalNode.dataset.globalNodeId;renderGlobalView();return;}
-    const globalLogistics=event.target.closest('[data-open-node-logistics]'); if(globalLogistics){state.selectedGlobalNodeId=globalLogistics.dataset.openNodeLogistics;setActiveSection('logistics');return;}
+    const globalLogistics=event.target.closest('[data-open-node-logistics]'); if(globalLogistics){const nodeId=globalLogistics.dataset.openNodeLogistics;state.selectedGlobalNodeId=nodeId;setActiveSection('logistics');state.decisionContext={decision_area:'logistics',subject_kind:'operational_node',subject_id:nodeId};renderAll();return;}
     const issueLink=event.target.closest('[data-issue-area]'); if(issueLink){await openDecisionContext({decision_area:issueLink.dataset.issueArea,operational_node_id:issueLink.dataset.issueNode||null,subject_kind:issueLink.dataset.issueSubjectKind||null,subject_id:issueLink.dataset.issueSubjectId||null,resource_id:issueLink.dataset.issueResourceId||null});return;}
     if(event.target.closest('#attentionButton')){setActiveSection('global');return;}
     const locBtn=event.target.closest('[data-location-id]'); if(locBtn){await loadLocation(locBtn.dataset.locationId);return;}
