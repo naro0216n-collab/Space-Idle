@@ -3,11 +3,14 @@ from __future__ import annotations
 from collections import defaultdict
 
 from .application_views import (
-    BottlenecksView, CurrentDependencyMetricRow, DependencyAnalyticsView,
-    DecisionContextTarget, ForecastDependencyMetricRow, FlowReportView, IssueRow, ResourceFlowRow,
+    BottlenecksView, CurrentDependencyMetricRow, CurrentServiceDependencyMetricRow, DependencyAnalyticsView,
+    DecisionContextTarget, ForecastDependencyMetricRow, ForecastServiceDependencyMetricRow, FlowReportView, IssueRow, ResourceFlowRow,
 )
 from .application_commands import GetDependencyAnalytics
 from .shared import CelestialBodyId, SpatialNodeId
+from .execution_requirements import ServiceCapacityRequirement
+from .service_capacity import ServiceCapacityScope
+from .construction.models import ProjectStatus
 from .supply import SupplyRequirement, resolve_local_supply
 
 
@@ -46,15 +49,227 @@ class ApplicationReportProjectorMixin:
         nodes = self._dependency_scope_nodes(query)
         if basis == "CURRENT":
             rows, group_rows, critical = self._current_dependency_rows(nodes)
+            service_rows, critical_services = self._current_service_dependency_rows(nodes)
             return DependencyAnalyticsView(
-                query.scope_kind, query.scope_id, tuple(str(value) for value in nodes),
-                self._simulation.day, "CURRENT", tuple(rows), tuple(group_rows), (), (), tuple(critical),
+                scope_kind=query.scope_kind,
+                scope_id=query.scope_id,
+                node_ids=tuple(str(value) for value in nodes),
+                day=self._simulation.day,
+                time_basis="CURRENT",
+                current_resources=tuple(rows),
+                current_resource_groups=tuple(group_rows),
+                current_services=tuple(service_rows),
+                critical_dependency_resource_ids=tuple(critical),
+                critical_dependency_service_types=tuple(critical_services),
             )
         rows, group_rows, critical = self._forecast_dependency_rows(nodes)
+        service_rows, critical_services = self._forecast_service_dependency_rows(nodes)
         return DependencyAnalyticsView(
-            query.scope_kind, query.scope_id, tuple(str(value) for value in nodes),
-            self._simulation.day, "FORECAST", (), (), tuple(rows), tuple(group_rows), tuple(critical),
+            scope_kind=query.scope_kind,
+            scope_id=query.scope_id,
+            node_ids=tuple(str(value) for value in nodes),
+            day=self._simulation.day,
+            time_basis="FORECAST",
+            forecast_resources=tuple(rows),
+            forecast_resource_groups=tuple(group_rows),
+            forecast_services=tuple(service_rows),
+            critical_dependency_resource_ids=tuple(critical),
+            critical_dependency_service_types=tuple(critical_services),
         )
+
+    def _current_service_dependency_rows(
+        self, nodes: tuple[SpatialNodeId, ...]
+    ) -> tuple[list[CurrentServiceDependencyMetricRow], list[str]]:
+        sim = self._simulation
+        decision = self._tick_decision_projection()
+        plan = decision.allocations.services
+        execution = decision.allocations.execution
+        selected = set(nodes)
+        all_nodes = set(sim.graph.operational_node_ids())
+        provider_scopes = sim.service_capacity_scopes()
+
+        requested_by_node: dict[tuple[str, SpatialNodeId], float] = defaultdict(float)
+        allocated_by_service: dict[str, float] = defaultdict(float)
+        requested_by_service: dict[str, float] = defaultdict(float)
+        pure_organization_requested: dict[str, float] = defaultdict(float)
+        pure_organization_allocated: dict[str, float] = defaultdict(float)
+
+        for request in plan.requests:
+            if request.operational_node_id not in selected:
+                continue
+            requested_by_node[(request.service_type, request.operational_node_id)] += request.requested_rate
+            requested_by_service[request.service_type] += request.requested_rate
+            allocated_by_service[request.service_type] += plan.allocated(request.id)
+
+        # Organization-only requirements have no node-scoped projection request.
+        # Attribute them only when their bundle has an explicit selected node, or
+        # when the query covers the whole organization. Conservation duplicates
+        # added beside a node-scoped requirement are deliberately ignored here.
+        for bundle in execution.bundles:
+            requirements = tuple(
+                requirement for requirement in bundle.requirements
+                if isinstance(requirement, ServiceCapacityRequirement)
+            )
+            local_types = {
+                requirement.service_type for requirement in requirements
+                if requirement.scope is ServiceCapacityScope.OPERATIONAL_NODE
+            }
+            allocation = execution.allocation(bundle.id)
+            for requirement in requirements:
+                if (
+                    requirement.scope is not ServiceCapacityScope.ORGANIZATION
+                    or requirement.service_type in local_types
+                ):
+                    continue
+                attributable = (
+                    bundle.operational_node_id in selected
+                    if bundle.operational_node_id is not None
+                    else selected == all_nodes
+                )
+                if not attributable:
+                    continue
+                requested = bundle.requested_execution * requirement.amount_per_execution
+                allocated = allocation.allocated_execution * requirement.amount_per_execution
+                pure_organization_requested[requirement.service_type] += requested
+                pure_organization_allocated[requirement.service_type] += allocated
+                requested_by_service[requirement.service_type] += requested
+                allocated_by_service[requirement.service_type] += allocated
+
+        service_types = set(requested_by_service)
+        service_types.update(
+            service_type
+            for node_id, service_type in plan.supply_nominal
+            if node_id in selected
+        )
+        rows: list[CurrentServiceDependencyMetricRow] = []
+        critical: list[str] = []
+        for service_type in sorted(service_types):
+            scope = provider_scopes.get(service_type, ServiceCapacityScope.OPERATIONAL_NODE)
+            local_nominal = sum(
+                max(0.0, plan.supply_nominal.get((node_id, service_type), 0.0))
+                for node_id in selected
+            )
+            local_enabled = sum(
+                max(0.0, plan.supply_enabled.get((node_id, service_type), 0.0))
+                for node_id in selected
+            )
+            outside_enabled = sum(
+                max(0.0, enabled)
+                for (node_id, row_type), enabled in plan.supply_enabled.items()
+                if row_type == service_type and node_id not in selected
+            )
+
+            node_shortfall = 0.0
+            locally_covered = 0.0
+            for node_id in selected:
+                demand = requested_by_node[(service_type, node_id)]
+                enabled = max(0.0, plan.supply_enabled.get((node_id, service_type), 0.0))
+                node_shortfall += max(0.0, demand - enabled)
+                locally_covered += min(demand, enabled)
+
+            organization_demand = pure_organization_requested[service_type]
+            organization_total_enabled = local_enabled + outside_enabled
+            organization_shortfall = max(0.0, organization_demand - organization_total_enabled)
+            external_dependency = min(
+                outside_enabled, max(0.0, organization_demand - local_enabled)
+            )
+            locally_covered += min(organization_demand, local_enabled)
+            requested = requested_by_service[service_type]
+            coverage = None if requested <= 1e-12 else min(1.0, locally_covered / requested)
+            unmet = node_shortfall + organization_shortfall
+
+            limiting: list[str] = []
+            for node_id in selected:
+                limiting.extend(plan.supply_limiting_factors.get((node_id, service_type), ()))
+            if unmet > 1e-9:
+                limiting.append("service_capacity_shortfall")
+            if external_dependency > 1e-9:
+                limiting.append("outside_scope_service_dependency")
+            limiting = list(dict.fromkeys(limiting))
+            if unmet > 1e-9 or external_dependency > 1e-9:
+                critical.append(service_type)
+            if requested <= 1e-12 and unmet <= 1e-12 and external_dependency <= 1e-12:
+                continue
+            rows.append(CurrentServiceDependencyMetricRow(
+                service_type=service_type,
+                scope=scope.value,
+                local_nominal_rate=local_nominal,
+                local_enabled_rate=local_enabled,
+                outside_scope_enabled_rate=outside_enabled,
+                requested_rate=requested,
+                allocated_rate=allocated_by_service[service_type],
+                unmet_rate=unmet,
+                external_dependency_rate=external_dependency,
+                local_coverage_ratio=coverage,
+                limiting_factors=tuple(limiting),
+            ))
+        return rows, critical
+
+    def _forecast_service_dependency_rows(
+        self, nodes: tuple[SpatialNodeId, ...]
+    ) -> tuple[list[ForecastServiceDependencyMetricRow], list[str]]:
+        sim = self._simulation
+        decision = self._tick_decision_projection()
+        plan = decision.allocations.services
+        selected = set(nodes)
+        provider_scopes = sim.service_capacity_scopes()
+        planned: dict[str, float] = defaultdict(float)
+        earliest: dict[str, int | None] = {}
+        paused: set[str] = set()
+
+        for project in sim.projects.projects.values():
+            if project.operational_node_id not in selected:
+                continue
+            if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
+                continue
+            for service_type, amount in sim.projects.project_service_requirement_forecast(project):
+                if amount <= 1e-12:
+                    continue
+                planned[service_type] += amount
+                day = sim.day if project.status in {ProjectStatus.READY, ProjectStatus.BUILDING} else None
+                prior = earliest.get(service_type)
+                if day is not None and (prior is None or day < prior):
+                    earliest[service_type] = day
+                elif service_type not in earliest:
+                    earliest[service_type] = None
+                if project.paused:
+                    paused.add(service_type)
+
+        rows: list[ForecastServiceDependencyMetricRow] = []
+        critical: list[str] = []
+        for service_type in sorted(planned):
+            scope = provider_scopes.get(service_type, ServiceCapacityScope.OPERATIONAL_NODE)
+            local_enabled = sum(
+                max(0.0, plan.supply_enabled.get((node_id, service_type), 0.0))
+                for node_id in selected
+            )
+            outside_enabled = sum(
+                max(0.0, enabled)
+                for (node_id, row_type), enabled in plan.supply_enabled.items()
+                if row_type == service_type and node_id not in selected
+            )
+            limiting: list[str] = []
+            if scope is ServiceCapacityScope.OPERATIONAL_NODE and local_enabled <= 1e-12:
+                limiting.append("no_local_service_capacity")
+            elif (
+                scope is ServiceCapacityScope.ORGANIZATION
+                and local_enabled + outside_enabled <= 1e-12
+            ):
+                limiting.append("no_organization_service_capacity")
+            if service_type in paused:
+                limiting.append("paused_plan")
+            if any(value.startswith("no_") for value in limiting):
+                critical.append(service_type)
+            rows.append(ForecastServiceDependencyMetricRow(
+                service_type=service_type,
+                scope=scope.value,
+                planned_requirement=planned[service_type],
+                local_enabled_rate=local_enabled,
+                outside_scope_enabled_rate=outside_enabled,
+                earliest_requirement_day=earliest.get(service_type),
+                limiting_factors=tuple(limiting),
+            ))
+        return rows, critical
 
     def _current_dependency_rows(
         self, nodes: tuple[SpatialNodeId, ...]

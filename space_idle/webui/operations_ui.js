@@ -3,11 +3,11 @@
 
   const A=window.SpaceIdleApp;
   if(!A)throw new Error('SpaceIdleApp must load before operations_ui.js');
-  const {state,$,$$,esc,fmt,pct,resourceName,locationName,definitionName,capabilityName,stateLabels,issueHtml,statHtml,signed,api,command,banner}=A;
+  const {state,$,$$,esc,fmt,pct,resourceName,locationName,definitionName,capabilityName,serviceName,stateLabels,issueHtml,statHtml,signed,api,command,banner}=A;
 
   const section=(title,body)=>`<section class="inspector-section"><h3>${esc(title)}</h3>${body}</section>`;
   const kv=(rows)=>`<dl class="kv-grid">${rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
-  const setInspector=(title,html)=>{$('#inspectorTitle').textContent=title;$('#inspectorContent').innerHTML=html;};
+  const setInspector=(title,html)=>{$('#inspectorTitle').textContent=title;$('#inspectorContent').innerHTML=html;A.restoreActiveDraftValues?.();};
   const resourceCards=(resources)=>(resources||[]).map((r)=>`<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div></div>`).join('')||'<div class="empty-state">追加資源なし</div>';
   const procurementPolicyLabels={immediate:'即時外部調達',standard_wait:'標準待機後に外部調達',extended_wait:'現地在庫を長く待つ'};
   const priorityLabels={1:'最低',2:'低',3:'標準',4:'高',5:'最高'};
@@ -249,6 +249,8 @@
     const forecastAnalytics=state.dependencyAnalyticsForecast;
     const currentCritical=new Set(currentAnalytics?.critical_dependency_resource_ids||[]);
     const forecastCritical=new Set(forecastAnalytics?.critical_dependency_resource_ids||[]);
+    const currentCriticalServices=new Set(currentAnalytics?.critical_dependency_service_types||[]);
+    const forecastCriticalServices=new Set(forecastAnalytics?.critical_dependency_service_types||[]);
     const dependencyCards=(dependencyView==='current'?(currentAnalytics?.current_resources||[]):(forecastAnalytics?.forecast_resources||[])).map((r)=>{
       const isCurrent=dependencyView==='current';
       const critical=(isCurrent?currentCritical:forecastCritical).has(r.id);
@@ -260,16 +262,28 @@
       const timing=!isCurrent&&r.earliest_requirement_day!=null?`最早必要 Day ${fmt(r.earliest_requirement_day,0)}`:'';
       return `<button type="button" class="dependency-card ${critical?'has-warning':''}" data-inspect="dependency-resource" data-id="${esc(r.id)}"><span class="decision-card-title"><span><strong>${esc(r.display_name)}</strong><small>${esc(sources)}</small></span><span class="badge ${critical?'warn':'ok'}">${critical?'要対処':'安定'}</span></span><span class="dependency-metrics">${metrics}</span><span class="decision-card-footer ${limits.length?'has-warning':''}">${esc(limits[0]||timing||'主要な制約なし')}${timing&&limits.length?` · ${esc(timing)}`:''}</span></button>`;
     }).join('');
+    const serviceRows=dependencyView==='current'?(currentAnalytics?.current_services||[]):(forecastAnalytics?.forecast_services||[]);
+    const serviceCards=serviceRows.map((r)=>{
+      const isCurrent=dependencyView==='current';
+      const critical=(isCurrent?currentCriticalServices:forecastCriticalServices).has(r.service_type);
+      const scope=r.scope==='ORGANIZATION'?'組織共有':'拠点内';
+      const limits=(r.limiting_factors||[]).map(A.userFacingText);
+      const metrics=isCurrent
+        ? `<span><small>利用可能</small><strong>${fmt(r.local_enabled_rate,2)} /日</strong></span><span><small>需要</small><strong>${fmt(r.requested_rate,2)} /日</strong></span><span><small>実使用</small><strong>${fmt(r.allocated_rate,2)} /日</strong></span><span><small>能力不足</small><strong>${fmt(r.unmet_rate,2)} /日</strong></span><span><small>範囲外依存</small><strong>${fmt(r.external_dependency_rate,2)} /日</strong></span>`
+        : `<span><small>計画要求</small><strong>${fmt(r.planned_requirement,2)}</strong></span><span><small>現在能力</small><strong>${fmt(r.local_enabled_rate,2)} /日</strong></span><span><small>範囲外能力</small><strong>${fmt(r.outside_scope_enabled_rate,2)} /日</strong></span><span><small>必要時期</small><strong>${r.earliest_requirement_day==null?'未確定':`Day ${fmt(r.earliest_requirement_day,0)}`}</strong></span>`;
+      return `<button type="button" class="dependency-card ${critical?'has-warning':''}" data-inspect="dependency-service" data-id="${esc(r.service_type)}"><span class="decision-card-title"><span><strong>${esc(serviceName(r.service_type))}</strong><small>${esc(scope)}</small></span><span class="badge ${critical?'warn':'ok'}">${critical?'要対処':'安定'}</span></span><span class="dependency-metrics">${metrics}</span><span class="decision-card-footer ${limits.length?'has-warning':''}">${esc(limits[0]||'主要な制約なし')}</span></button>`;
+    }).join('');
     const groupRows=dependencyView==='current'?(currentAnalytics?.current_resource_groups||[]):(forecastAnalytics?.forecast_resource_groups||[]);
     const groupCards=groupRows.map((r)=>dependencyView==='current'
       ? `<div class="dependency-group-card"><strong>${esc(r.display_name)}</strong><span>生産 ${fmt(r.production_per_day,2)} /日</span><span>消費 ${fmt(r.consumption_per_day,2)} /日</span><span>外部依存 ${fmt(r.external_dependency_per_day,2)} /日</span><span>未充足 ${fmt(r.unmet_demand_t,2)} t</span></div>`
       : `<div class="dependency-group-card"><strong>${esc(r.display_name)}</strong><span>計画需要 ${fmt(r.planned_requirement_t,2)} t</span><span>外部必要量 ${fmt(r.external_requirement_t,2)} t</span><span>継続外部依存 ${fmt(r.external_recurring_dependency_per_day,2)} /日</span><span>${r.earliest_requirement_day==null?'必要日未定':`最早 Day ${fmt(r.earliest_requirement_day,0)}`}</span></div>`).join('');
 
-    const criticalCount=dependencyView==='current'?currentCritical.size:forecastCritical.size;
+    const criticalResourceCount=dependencyView==='current'?currentCritical.size:forecastCritical.size;
+    const criticalServiceCount=dependencyView==='current'?currentCriticalServices.size:forecastCriticalServices.size;
     return `<div class="inventory-decision-surface">
       <section class="decision-surface-block"><div class="decision-surface-heading"><div><span class="eyebrow">資源</span><h2>在庫とフロー</h2><p>現在量・利用可能量・入出荷を比較し、資源を選択すると右の詳細パネルで供給源と制約を確認できます。</p></div><span class="badge">${state.operationalNode?.inventory?.length||0} 資源</span></div><div class="resource-flow-grid">${inventoryCards||'<div class="empty-state">表示対象の資源はありません。</div>'}</div></section>
       <section class="decision-surface-block"><div class="decision-card-heading"><div><span class="eyebrow">配分</span><h3>現在の資源配分</h3></div><span class="badge ${allocations.some((c)=>Number(c.unmet||0)>1e-9)?'warn':'ok'}">${allocations.length} 件</span></div><div class="resource-allocation-grid">${allocationCards||'<div class="empty-state compact-empty">現在の資源配分はありません。</div>'}</div></section>
-      <section class="decision-surface-block dependency-surface"><div class="decision-surface-heading"><div><span class="eyebrow">依存分析</span><h2>外部依存</h2><p>現在の不足と、計画済み案件から生じる将来需要を切り替えて確認します。</p></div><div class="segmented-control dependency-mode-switch" role="group" aria-label="外部依存の表示"><button type="button" data-dependency-view="current" class="${dependencyView==='current'?'is-active':''}" aria-pressed="${dependencyView==='current'?'true':'false'}">現在</button><button type="button" data-dependency-view="forecast" class="${dependencyView==='forecast'?'is-active':''}" aria-pressed="${dependencyView==='forecast'?'true':'false'}">予測</button></div></div><div class="dependency-status-row"><span class="badge ${criticalCount?'warn':'ok'}">要対処 ${criticalCount} 資源</span><span class="cell-sub">${dependencyView==='current'?'実際の生産・消費・物流状態':'計画済み需要・備蓄目標・必要時期'}</span></div><div class="dependency-card-grid">${dependencyCards||'<div class="empty-state">外部依存の対象はありません。</div>'}</div>${groupCards?`<details class="dependency-group-details"><summary>資源グループ集計</summary><div class="dependency-group-grid">${groupCards}</div></details>`:''}</section>
+      <section class="decision-surface-block dependency-surface"><div class="decision-surface-heading"><div><span class="eyebrow">依存分析</span><h2>外部依存</h2><p>現在の不足と、計画済み案件から生じる将来需要を切り替えて確認します。</p></div><div class="segmented-control dependency-mode-switch" role="group" aria-label="外部依存の表示"><button type="button" data-dependency-view="current" class="${dependencyView==='current'?'is-active':''}" aria-pressed="${dependencyView==='current'?'true':'false'}">現在</button><button type="button" data-dependency-view="forecast" class="${dependencyView==='forecast'?'is-active':''}" aria-pressed="${dependencyView==='forecast'?'true':'false'}">予測</button></div></div><div class="dependency-status-row"><span class="badge ${criticalResourceCount||criticalServiceCount?'warn':'ok'}">要対処 ${criticalResourceCount} 資源 · ${criticalServiceCount} サービス</span><span class="cell-sub">${dependencyView==='current'?'実際の生産・消費・物流状態':'計画済み需要・備蓄目標・必要時期'}</span></div><h3>資源依存</h3><div class="dependency-card-grid">${dependencyCards||'<div class="empty-state">資源外部依存の対象はありません。</div>'}</div>${groupCards?`<details class="dependency-group-details"><summary>資源グループ集計</summary><div class="dependency-group-grid">${groupCards}</div></details>`:''}<h3>サービス依存</h3><div class="dependency-card-grid">${serviceCards||'<div class="empty-state">サービス依存の対象はありません。</div>'}</div></section>
     </div>`;
   }
 
@@ -277,8 +291,8 @@
     const blockers=option?.blockers||[];
     const canPlan=Boolean(option?.can_plan);
     const label=canPlan
-      ? (blockers.length?`計画可 · ${blockers.length} blocker`:readyLabel)
-      : (blockers.length?`計画不可 · ${blockers.length} blocker`:'計画不可');
+      ? (blockers.length?`計画可 · ${blockers.length} 制約`:readyLabel)
+      : (blockers.length?`計画不可 · ${blockers.length} 制約`:'計画不可');
     return {blockers,canPlan,disabled:!canPlan,label};
   }
 
@@ -550,6 +564,32 @@
     setInspector(displayName,currentSection+forecastSection);
     return true;
   }
+  function renderDependencyServiceInspector(id){
+    const current=(state.dependencyAnalyticsCurrent?.current_services||[]).find((row)=>row.service_type===id);
+    const forecast=(state.dependencyAnalyticsForecast?.forecast_services||[]).find((row)=>row.service_type===id);
+    if(!current&&!forecast)return false;
+    const scopeName=(scope)=>scope==='ORGANIZATION'?'組織共有':'拠点内';
+    const currentSection=current?section('現在',kv([
+      ['適用範囲',esc(scopeName(current.scope))],
+      ['基準能力',`${fmt(current.local_nominal_rate,2)} /日`],
+      ['利用可能能力',`${fmt(current.local_enabled_rate,2)} /日`],
+      ['需要',`${fmt(current.requested_rate,2)} /日`],
+      ['実使用',`${fmt(current.allocated_rate,2)} /日`],
+      ['能力不足',`${fmt(current.unmet_rate,2)} /日`],
+      ['選択範囲外依存',`${fmt(current.external_dependency_rate,2)} /日`],
+      ['選択範囲外能力',`${fmt(current.outside_scope_enabled_rate,2)} /日`],
+      ['範囲内充足',pct(current.local_coverage_ratio)],
+    ])+`<h4>主な制約</h4>${limitingHtml(current.limiting_factors)}`):section('現在','<div class="empty-state">現在のサービス需要はありません。</div>');
+    const forecastSection=forecast?section('予測',kv([
+      ['適用範囲',esc(scopeName(forecast.scope))],
+      ['計画要求',fmt(forecast.planned_requirement,2)],
+      ['現在の範囲内能力',`${fmt(forecast.local_enabled_rate,2)} /日`],
+      ['選択範囲外能力',`${fmt(forecast.outside_scope_enabled_rate,2)} /日`],
+      ['最早必要日',forecast.earliest_requirement_day==null?'未確定':`Day ${fmt(forecast.earliest_requirement_day,0)}`],
+    ])+`<h4>主な制約</h4>${limitingHtml(forecast.limiting_factors)}`):section('予測','<div class="empty-state">計画済みの将来サービス需要はありません。</div>');
+    setInspector(serviceName(id),currentSection+forecastSection);
+    return true;
+  }
   function renderProjectInspector(id){
     const p=state.projects?.items?.find((x)=>x.id===id);if(!p)return false;
     const target=projectTargetLabel(p);
@@ -766,7 +806,7 @@
   function renderInspector(){
     if(!state.inspector){setInspector('選択項目','<div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div>');return;}
     const {type,id}=state.inspector;
-    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,'dependency-resource':renderDependencyResourceInspector,'extraction-resource':renderExtractionResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'survey-campaign':renderSurveyCampaignInspector,'surface-cell':renderSurfaceCellInspector};
+    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,'dependency-resource':renderDependencyResourceInspector,'dependency-service':renderDependencyServiceInspector,'extraction-resource':renderExtractionResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'survey-campaign':renderSurveyCampaignInspector,'surface-cell':renderSurfaceCellInspector};
     if(!handlers[type]?.(id)){state.inspector=null;setInspector('選択項目','<div class="empty-state">項目の状態が変化しました。再選択してください。</div>');}
   }
 

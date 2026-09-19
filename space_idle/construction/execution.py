@@ -108,6 +108,22 @@ class ConstructionExecutionMixin:
         )
         return max(0.0, prospective - service.demand(project.operational_node_id))
 
+    def project_service_requirement_forecast(
+        self, project: ConstructionProject
+    ) -> tuple[tuple[str, float], ...]:
+        """Project remaining finite-Service demand without mutating Project state."""
+        recipe = self.recipe_for_project(project)
+        if recipe.self_deploying or recipe.construction_work <= 1e-12:
+            return ()
+        remaining_work = max(0.0, recipe.construction_work - project.construction_done)
+        if remaining_work <= 1e-12:
+            return ()
+        rows: list[tuple[str, float]] = [(CONSTRUCTION_SERVICE_TYPE, remaining_work)]
+        incremental = self._surface_development_incremental_service(project)
+        if incremental > 1e-12 and self.surface_infrastructure is not None:
+            rows.append((self.surface_infrastructure.service_type, incremental))
+        return tuple(rows)
+
     def execution_requirement_bundles(
         self, day: int = 0
     ) -> tuple[ExecutionRequirementBundle, ...]:
@@ -124,7 +140,11 @@ class ConstructionExecutionMixin:
                 continue
             if self.project_site_failures(project, day, None):
                 continue
-            remaining_work = max(0.0, recipe.construction_work - project.construction_done)
+            forecast_services = self.project_service_requirement_forecast(project)
+            remaining_work = next(
+                (amount for service_type, amount in forecast_services if service_type == CONSTRUCTION_SERVICE_TYPE),
+                0.0,
+            )
             if remaining_work <= 1e-12:
                 if isinstance(project.target, FacilityDecommissionTarget) and project.irreversible_started:
                     requirements = self._decommission_admission_requirements(project)
@@ -140,13 +160,9 @@ class ConstructionExecutionMixin:
                     ))
                 continue
             requirements = [
-                ServiceCapacityRequirement(CONSTRUCTION_SERVICE_TYPE, remaining_work)
+                ServiceCapacityRequirement(service_type, amount)
+                for service_type, amount in forecast_services
             ]
-            incremental = self._surface_development_incremental_service(project)
-            if incremental > 1e-12 and self.surface_infrastructure is not None:
-                requirements.append(
-                    ServiceCapacityRequirement(self.surface_infrastructure.service_type, incremental)
-                )
             rows.append(ExecutionRequirementBundle(
                 id=self.construction_execution_bundle_id(project.id),
                 owner_kind="construction",

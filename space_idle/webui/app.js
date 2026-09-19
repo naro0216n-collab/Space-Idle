@@ -65,6 +65,19 @@
     preparing:'出発準備',outbound:'往路移動中',exploration:'科学探査中',return_preparing:'復路準備',returning:'復路移動中',
   };
   const capabilityName=(id)=>capabilityLabels[id]||id||'—';
+  const serviceLabels={
+    construction_work:'建設施工能力',research_execution:'研究実行能力',surface_distribution:'地表物流能力',
+    cargo_transfer:'貨物移送能力',vehicle_assembly:'輸送機組立能力',launch_vehicle_servicing:'打上げ機整備能力',
+    spacecraft_servicing:'宇宙船整備能力',
+  };
+  const serviceName=(id)=>{
+    if(!id)return '—';
+    if(serviceLabels[id])return serviceLabels[id];
+    if(id.startsWith('process:'))return `${definitionName(id.slice('process:'.length))} 工程能力`;
+    if(id.startsWith('extraction:'))return `${resourceName(id.slice('extraction:'.length))} 採掘能力`;
+    if(id.startsWith('survey_observation:'))return `${definitionName(id.slice('survey_observation:'.length))} 調査能力`;
+    return capabilityName(id);
+  };
   const operationName=(id)=>operationLabels[id]||id||'—';
 
   function userFacingText(value){
@@ -89,6 +102,11 @@
     text=text.replace(/unknown_target:([^:;]+):([^;]+)/g,(_,cellId,resourceId)=>`Survey対象外の組み合わせです: ${cellId} / ${resourceName(resourceId)}`);
     text=text.replace(/unknown_target:([^;]+)/g,(_,cellId)=>`調査対象外の地域です`);
     text=text.replace(/unmet_demand/g,'未充足需要');
+    text=text.replace(/outside_scope_service_dependency/g,'選択範囲外の共有サービスに依存');
+    text=text.replace(/service_capacity_shortfall/g,'サービス能力不足');
+    text=text.replace(/no_local_service_capacity/g,'拠点内サービス能力なし');
+    text=text.replace(/no_organization_service_capacity/g,'組織共有サービス能力なし');
+    text=text.replace(/paused_plan/g,'計画停止中');
     text=text.replace(/external_dependency/g,'外部依存');
     text=text.replace(/storage_over_capacity/g,'利用可能保管容量を超過しています');
     text=text.replace(/physical_storage_full/g,'物理保管容量が満杯です');
@@ -158,10 +176,10 @@
   const interactionControl=(identity)=>{
     if(!identity)return null;
     if(identity.kind==='id')return document.getElementById(identity.key);
-    if(identity.kind==='draft')return $$('[data-draft-key]').find((control)=>control.dataset.draftKey===identity.key)||null;
+    if(identity.kind==='draft')return $$('[data-draft-key]').find((control)=>control.dataset.draftKey===identity.key&&(!identity.scope||control.dataset.draftScope===identity.scope))||null;
     if(identity.kind==='priority-choice'){
       const holder=identity.ownerKind==='draft'
-        ? $$('[data-draft-key]').find((control)=>control.dataset.draftKey===identity.ownerKey)
+        ? $$('[data-draft-key]').find((control)=>control.dataset.draftKey===identity.ownerKey&&(!identity.scope||control.dataset.draftScope===identity.scope))
         : document.getElementById(identity.ownerKey);
       return holder?.closest('.priority-segment')?.querySelector(`[data-priority-choice="${identity.choice}"]`)||null;
     }
@@ -170,10 +188,10 @@
   const controlIdentity=(control)=>{
     if(control?.matches?.('[data-priority-choice]')){
       const holder=control.closest('.priority-segment')?.querySelector('[data-priority-value-holder]');
-      if(holder?.dataset?.draftKey)return {kind:'priority-choice',ownerKind:'draft',ownerKey:holder.dataset.draftKey,choice:control.dataset.priorityChoice};
+      if(holder?.dataset?.draftKey)return {kind:'priority-choice',ownerKind:'draft',ownerKey:holder.dataset.draftKey,scope:holder.dataset.draftScope||'',choice:control.dataset.priorityChoice};
       if(holder?.id)return {kind:'priority-choice',ownerKind:'id',ownerKey:holder.id,choice:control.dataset.priorityChoice};
     }
-    return control?.dataset?.draftKey?{kind:'draft',key:control.dataset.draftKey}:control?.id?{kind:'id',key:control.id}:null;
+    return control?.dataset?.draftKey?{kind:'draft',key:control.dataset.draftKey,scope:control.dataset.draftScope||''}:control?.id?{kind:'id',key:control.id}:null;
   };
   const controlBaseline=(control)=>{
     if(!control)return null;
@@ -262,7 +280,7 @@
     const draft=state.activeDraft;if(!draft)return;
     let restored=0;
     for(const [key,snapshot] of Object.entries(draft.values||{})){
-      const control=interactionControl({kind:'draft',key});
+      const control=interactionControl({kind:'draft',key,scope:draft.scope});
       if(!control)continue;
       const baseline=controlBaseline(control);
       const checkbox=control.type==='checkbox'||control.type==='radio';
@@ -324,6 +342,7 @@
     const identity=controlIdentity(activeControl);
     const drafts=$$('[data-draft-key]').map((control)=>({
       key:control.dataset.draftKey,
+      scope:control.dataset.draftScope||'',
       ...interactionValue(control),
     }));
     const scroll=document.scrollingElement;
@@ -338,7 +357,7 @@
   function restoreInteraction(snapshot){
     if(!snapshot)return;
     for(const draft of snapshot.drafts||[]){
-      restoreDraftValue(interactionControl({kind:'draft',key:draft.key}),draft);
+      restoreDraftValue(interactionControl({kind:'draft',key:draft.key,scope:draft.scope}),draft);
     }
     if(snapshot.control){
       const control=interactionControl(snapshot.control);
@@ -671,9 +690,9 @@
   }
 
   window.SpaceIdleApp={
-    state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,operationName,
+    state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,serviceName,operationName,
     locationKindLabels,stateLabels,playerTerms,playerTerm,userFacingText,issueHtml,metricHtml,statHtml,signed,stableUiSignature,prioritySegmentedHtml,
-    api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveSection,setActiveView,openDecisionContext,completeActiveDraft,
+    api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveSection,setActiveView,openDecisionContext,completeActiveDraft,restoreActiveDraftValues,
   };
 
   document.addEventListener('click',async(event)=>{

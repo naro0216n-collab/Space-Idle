@@ -40,6 +40,32 @@ class ForecastDependencyMetricRow:
 
 
 @dataclass(frozen=True)
+class CurrentServiceDependencyMetricRow:
+    service_type: str
+    scope: str
+    local_nominal_rate: float
+    local_enabled_rate: float
+    outside_scope_enabled_rate: float
+    requested_rate: float
+    allocated_rate: float
+    unmet_rate: float
+    external_dependency_rate: float
+    local_coverage_ratio: float | None
+    limiting_factors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ForecastServiceDependencyMetricRow:
+    service_type: str
+    scope: str
+    planned_requirement: float
+    local_enabled_rate: float
+    outside_scope_enabled_rate: float
+    earliest_requirement_day: int | None
+    limiting_factors: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class DependencyAnalyticsView:
     scope_kind: str
     scope_id: str | None
@@ -50,4 +76,7 @@ class DependencyAnalyticsView:
     current_resource_groups: tuple[CurrentDependencyMetricRow, ...] = ()
     forecast_resources: tuple[ForecastDependencyMetricRow, ...] = ()
     forecast_resource_groups: tuple[ForecastDependencyMetricRow, ...] = ()
+    current_services: tuple[CurrentServiceDependencyMetricRow, ...] = ()
+    forecast_services: tuple[ForecastServiceDependencyMetricRow, ...] = ()
     critical_dependency_resource_ids: tuple[str, ...] = ()
+    critical_dependency_service_types: tuple[str, ...] = ()

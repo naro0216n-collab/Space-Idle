@@ -19,6 +19,10 @@ def _resource(view, resource_id):
     return next(row for row in view.current_resources if row.id == str(resource_id))
 
 
+def _service(view, service_type):
+    return next(row for row in view.current_services if row.service_type == service_type)
+
+
 def test_scope_boundary_changes_import_export_without_double_counting_internal_flow():
     app = build_game_application()
     sim = app._simulation
@@ -226,6 +230,51 @@ def test_current_and_forecast_use_distinct_contracts_and_forecast_reads_active_p
         for row in current.current_resources
     )
     assert sim.projects.projects[project_id].status.value == "procuring"
+
+
+def test_current_service_dependency_keeps_capacity_shortfall_separate_from_other_execution_blockers():
+    app = build_game_application()
+    view = app.query(GetDependencyAnalytics(
+        "operational_nodes", node_ids=(str(EARTH),), time_basis="CURRENT"
+    ))
+
+    row = _service(view, f"process:{ids.PROCESS_BASIC_MACHINERY}")
+    assert row.scope == "OPERATIONAL_NODE"
+    assert row.requested_rate > 0
+    # Opening Machinery production is blocked by Resource constraints, but the
+    # Process Service itself has enough local Capacity. Service dependency must
+    # therefore not mirror generic execution under-allocation as a Service lack.
+    assert row.allocated_rate == pytest.approx(0.0)
+    assert row.local_enabled_rate >= row.requested_rate
+    assert row.unmet_rate == pytest.approx(0.0)
+    assert row.local_coverage_ratio == pytest.approx(1.0)
+    assert row.service_type not in view.critical_dependency_service_types
+
+
+def test_forecast_service_dependency_projects_planned_construction_without_treating_remote_capacity_as_local():
+    app = build_game_application()
+    sim = app._simulation
+    project_id = sim.projects.plan_build(
+        ids.CARGO_WAREHOUSE, LEO, 3, "standard_wait", day=sim.day
+    )
+    sim.projects.advance_procurement(sim.day)
+
+    current = app.query(GetDependencyAnalytics(
+        "operational_nodes", node_ids=(str(LEO),), time_basis="CURRENT"
+    ))
+    forecast = app.query(GetDependencyAnalytics(
+        "operational_nodes", node_ids=(str(LEO),), time_basis="FORECAST"
+    ))
+
+    assert not any(row.service_type == "construction_work" for row in current.current_services)
+    row = next(row for row in forecast.forecast_services if row.service_type == "construction_work")
+    recipe = sim.projects.recipe_for_project(sim.projects.projects[project_id])
+    assert row.scope == "OPERATIONAL_NODE"
+    assert row.planned_requirement == pytest.approx(recipe.construction_work)
+    assert row.local_enabled_rate == pytest.approx(0.0)
+    assert row.outside_scope_enabled_rate > 0
+    assert "no_local_service_capacity" in row.limiting_factors
+    assert "construction_work" in forecast.critical_dependency_service_types
 
 
 def test_invalid_dependency_analytics_time_basis_is_rejected():

@@ -473,6 +473,15 @@ def run() -> dict[str, object]:
             _assert("在庫とフロー" in overview_text, "location overview must expose resource state at the decision point")
             _assert("サービス能力" in overview_text, "location overview must expose service capacity constraints")
             _assert("外部依存" in overview_text, "location overview must expose external dependency as a decision category")
+            page.locator('[data-section-tab="location"][data-tab="inventory"]').click()
+            dependency_text = page.locator('#operationsTabContent').inner_text()
+            _assert("資源依存" in dependency_text, "dependency analytics must keep Resource dependency as its own projection")
+            _assert("サービス依存" in dependency_text, "dependency analytics must expose Service dependency separately from Resources")
+            service_dependency = page.locator('[data-inspect="dependency-service"]').first
+            _assert(service_dependency.count() > 0, "current Location service demand must be selectable from dependency analytics")
+            service_dependency.click()
+            service_inspector = page.locator('#inspectorContent').inner_text()
+            _assert("利用可能能力" in service_inspector and "能力不足" in service_inspector, "Service dependency Inspector must expose Application-projected capacity and shortfall")
 
             _select_location(page, ids.LUNAR_ORBIT)
             page.locator('.primary-nav-button[data-section="exploration"]').click()
