@@ -7,7 +7,8 @@ from .execution_requirements import ServiceCapacityRequirement
 from .service_capacity import ServiceCapacityScope
 from .application_views import (
     ResearchExperienceRow, ResearchKnowledgeRow, ResearchPrototypeResourceRow,
-    ResearchProviderFleetRow, ResearchProviderRow, ResearchStageRow, ResearchRow, ResearchView,
+    ResearchProviderFleetRow, ResearchProviderRow, ResearchStageRow, ResearchUnlockRow,
+    ResearchRow, ResearchView,
 )
 from .app_contracts.progression_views import ResearchExecutionSiteRow, ResearchSiteOptionRow
 from .research_models import (
@@ -19,6 +20,80 @@ from .site import requires_surface_cell_context
 
 
 class ResearchProgressionProjectorMixin:
+    def _research_unlock_rows_by_id(self) -> dict[object, tuple[ResearchUnlockRow, ...]]:
+        """Reverse player-facing Research prerequisites once per Research projection."""
+        sim = self._simulation
+        if sim.research is None:
+            return {}
+        completed = set(sim.research.completed)
+        rows_by_id: dict[object, list[ResearchUnlockRow]] = {
+            research_id: [] for research_id in sim.research.definitions
+        }
+
+        def append(kind: str, row_id: str, display_name: str, prerequisites) -> None:
+            prerequisite_set = set(prerequisites)
+            for research_id in prerequisite_set:
+                if research_id not in rows_by_id:
+                    continue
+                remaining = tuple(sorted(
+                    str(item)
+                    for item in (prerequisite_set - completed - {research_id})
+                ))
+                rows_by_id[research_id].append(
+                    ResearchUnlockRow(kind, row_id, display_name, remaining)
+                )
+
+        for definition in sim.research.definitions.values():
+            append(
+                "research", str(definition.id), definition.display_name,
+                definition.prerequisites,
+            )
+        for recipe in sim.projects.recipes.values():
+            definition = sim.facilities.definitions[recipe.facility_def_id]
+            append(
+                "facility", str(recipe.facility_def_id), definition.display_name,
+                recipe.prerequisite_technologies,
+            )
+        for (facility_id, target_level), recipe in sim.projects.upgrade_recipes.items():
+            definition = sim.facilities.definitions[facility_id]
+            append(
+                "facility_upgrade", f"{facility_id}:level:{target_level}",
+                f"{definition.display_name} Lv {target_level} 更新",
+                recipe.prerequisite_technologies,
+            )
+        for facility_id, recipe in sim.projects.decommission_recipes.items():
+            definition = sim.facilities.definitions[facility_id]
+            append(
+                "facility_decommission", f"{facility_id}:decommission",
+                f"{definition.display_name} 撤去",
+                recipe.prerequisite_technologies,
+            )
+        for recipe_id, recipe in sim.projects.spatial_recipes.items():
+            append(
+                "surface_development", str(recipe_id), recipe.display_name,
+                recipe.prerequisite_technologies,
+            )
+
+        kind_order = {
+            "research": 0,
+            "facility": 1,
+            "facility_upgrade": 2,
+            "surface_development": 3,
+            "facility_decommission": 4,
+        }
+        return {
+            research_id: tuple(sorted(
+                rows,
+                key=lambda row: (
+                    bool(row.remaining_prerequisite_ids),
+                    kind_order.get(row.kind, 99),
+                    row.display_name,
+                    row.id,
+                ),
+            ))
+            for research_id, rows in rows_by_id.items()
+        }
+
     def _research_site_options(self, definition, spec, *, remaining_work, power_by_location, service_plan) -> tuple[ResearchSiteOptionRow, ...]:
         sim = self._simulation
         if sim.research is None or not isinstance(spec, (ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec)):
@@ -270,6 +345,7 @@ class ResearchProgressionProjectorMixin:
         )
 
         rows: list[ResearchRow] = []
+        unlocks_by_id = self._research_unlock_rows_by_id()
         for definition in sorted(sim.research.definitions.values(), key=lambda row: str(row.id)):
             state = sim.research.active.get(definition.id)
             complete = definition.id in sim.research.completed
@@ -391,6 +467,7 @@ class ResearchProgressionProjectorMixin:
                 execution_context_comparison_axes=execution_context_comparison_axes,
                 operational_experience=tuple(experience_rows),
                 prerequisites=tuple(sorted(str(item) for item in definition.prerequisites)),
+                unlocks=unlocks_by_id.get(definition.id, ()),
             ))
         return ResearchView(
             sim.research.stored_points, capacity, generation, admitted_generation,

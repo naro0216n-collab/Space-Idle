@@ -262,6 +262,7 @@ class SupplyRequirementRow:
     operational_source_ids: tuple[str, ...] = ()
     stocked_source_ids: tuple[str, ...] = ()
     path_candidates: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    physical_movement_plan_ids: tuple[str, ...] = ()
     forecast_requirement_day: int | None = None
     recurring_rate_t_per_day: float | None = None
     local_runway_days: float | None = None

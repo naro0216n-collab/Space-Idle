@@ -209,7 +209,9 @@
     const requirement=contextSupplyRequirement();if(requirement){
       const selected=requirement.selected_movement_plan_ids||[];
       if(selected.length)return new Set(selected);
-      return new Set((requirement.path_candidates||[]).flatMap(([,planIds])=>planIds||[]));
+      const serviceCandidates=(requirement.path_candidates||[]).flatMap(([,planIds])=>planIds||[]);
+      if(serviceCandidates.length)return new Set(serviceCandidates);
+      return new Set(requirement.physical_movement_plan_ids||[]);
     }
     const allocation=contextTransportAllocation();if(allocation)return new Set([...(allocation.selected_forward_path||[]),...(allocation.selected_reverse_path||[])]);
     return new Set();

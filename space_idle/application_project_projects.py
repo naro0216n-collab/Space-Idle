@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from math import ceil
+
 from .application_comparison import project_comparison_axes
 from .application_constraints import constraints_from_pairs, limiting_factors_from_codes
 from .app_contracts.ui_reports import ComparisonValueRow
@@ -19,6 +21,7 @@ from .construction.models import (
 from .facilities import FacilityPlacementScope
 from .disposal import project_salvage_recovery
 from .shared import EntityId, SpatialNodeId
+from .supply import SupplyRequirement
 
 
 class ProjectProjectorMixin:
@@ -49,11 +52,116 @@ class ProjectProjectorMixin:
                 return None
             readiness_days.append(requirement.earliest_confirmed_arrival_day)
         return max(readiness_days, default=day)
-    @staticmethod
-    def _construction_resource_options(recipe) -> tuple[BuildResourceOption, ...]:
-        return tuple(
-            BuildResourceOption(str(requirement.resource_id), requirement.amount_t)
-            for requirement in recipe.resources
+    def _construction_resource_options(
+        self, recipe, location_id: SpatialNodeId, execution_allocation
+    ) -> tuple[tuple[BuildResourceOption, ...], int | None]:
+        """Project candidate material availability without creating procurement state.
+
+        Candidate projection must not borrow Cargo already committed to another owner.
+        It starts with unreserved local Inventory and asks Logistics for the residual.
+        Resources whose selected paths share Transport Services are grouped so they
+        cannot each claim the full shared capacity at the same time.
+        """
+        sim = self._simulation
+        projections: list[dict[str, object]] = []
+        for requirement in recipe.resources:
+            available = sim.inventory.available(location_id, requirement.resource_id)
+            shortage = max(0.0, requirement.amount_t - available)
+            projection: dict[str, object] = {
+                "resource_id": str(requirement.resource_id),
+                "required_t": requirement.amount_t,
+                "available_t": available,
+                "shortage_t": shortage,
+                "source_id": None,
+                "arrival_day": sim.day if shortage <= 1e-9 else None,
+                "capacity": None,
+                "service_ids": frozenset(),
+            }
+            if shortage > 1e-9:
+                # Path selection is amount-independent.  Reusing a location/resource
+                # projection identity lets Logistics share candidate-path work across
+                # multiple Facility candidates in the same derived projection scope.
+                projection_id = EntityId(
+                    f"projection.build:{location_id}:{requirement.resource_id}"
+                )
+                options = sim.logistics.supply_planning_options(
+                    SupplyRequirement(
+                        id=projection_id,
+                        owner_kind="construction_preview",
+                        owner_id=projection_id,
+                        destination_id=location_id,
+                        resource_id=requirement.resource_id,
+                        amount_t=shortage,
+                        forecast_requirement_day=sim.day,
+                        purpose="construction_preview",
+                    ),
+                    sim.day,
+                    execution_allocation=execution_allocation,
+                )
+                if options.selected_source_id is not None:
+                    source_available = sim.inventory.available(
+                        options.selected_source_id, requirement.resource_id
+                    )
+                    capacity = options.selected_bottleneck_capacity_t_per_day
+                    if (
+                        source_available + 1e-9 >= shortage
+                        and options.projected_arrival_day is not None
+                        and capacity is not None
+                        and capacity > 1e-12
+                    ):
+                        projection.update(
+                            source_id=str(options.selected_source_id),
+                            arrival_day=options.projected_arrival_day,
+                            capacity=float(capacity),
+                            service_ids=frozenset(options.selected_service_ids),
+                        )
+            projections.append(projection)
+
+        # Connected components of overlapping Service paths share at least one
+        # bottleneck.  Serialize their aggregate shortage through the lowest current
+        # bottleneck capacity; this is conservative when paths only partially overlap.
+        remote_indices = [
+            index for index, row in enumerate(projections)
+            if row["shortage_t"] > 1e-9 and row["arrival_day"] is not None
+        ]
+        remaining = set(remote_indices)
+        while remaining:
+            component = {remaining.pop()}
+            changed = True
+            while changed:
+                changed = False
+                component_services = set().union(*(projections[i]["service_ids"] for i in component))
+                connected = {
+                    index for index in remaining
+                    if component_services.intersection(projections[index]["service_ids"])
+                }
+                if connected:
+                    component.update(connected)
+                    remaining.difference_update(connected)
+                    changed = True
+            total_shortage = sum(float(projections[i]["shortage_t"]) for i in component)
+            capacity = min(float(projections[i]["capacity"]) for i in component)
+            first_arrival = max(int(projections[i]["arrival_day"]) for i in component)
+            readiness = first_arrival + max(1, ceil(total_shortage / capacity)) - 1
+            for index in component:
+                projections[index]["arrival_day"] = readiness
+
+        rows = tuple(
+            BuildResourceOption(
+                row["resource_id"],
+                float(row["required_t"]),
+                available_t=float(row["available_t"]),
+                projected_source_id=row["source_id"],
+                projected_arrival_day=row["arrival_day"],
+            )
+            for row in projections
+        )
+        readiness_days = [row.projected_arrival_day for row in rows]
+        return (
+            rows,
+            max(readiness_days, default=sim.day)
+            if all(day is not None for day in readiness_days)
+            else None,
         )
 
     def _facility_upgrade_differences(self, facility, recipe) -> tuple[tuple[FacilityUpgradeDifferenceRow, ...], tuple[str, ...]]:
@@ -119,10 +227,11 @@ class ProjectProjectorMixin:
             (failure.detail for failure in plan_failures if failure.code == "active_upgrade_project"),
             None,
         )
+        decision = self._tick_decision_projection()
         snapshot = (
             power
             if power is not None
-            else self._tick_decision_projection().allocations.power_by_location[facility.operational_node_id]
+            else decision.allocations.power_by_location[facility.operational_node_id]
         )
         site_failures = sim.projects.upgrade_site_failures(
             facility.id, recipe.target_level, sim.day, snapshot
@@ -139,10 +248,13 @@ class ProjectProjectorMixin:
             if row not in blockers:
                 blockers += (row,)
         differences, unchanged_aspects = self._facility_upgrade_differences(facility, recipe)
+        resources, _ = self._construction_resource_options(
+            recipe, facility.operational_node_id, decision.allocations.transport
+        )
         return FacilityUpgradeOption(
             target_level=recipe.target_level,
             construction_required=recipe.construction_work,
-            resources=self._construction_resource_options(recipe),
+            resources=resources,
             blockers=constraints_from_pairs(
                 blockers,
                 affected_action="plan_facility_upgrade",
@@ -479,7 +591,8 @@ class ProjectProjectorMixin:
 
     def _build_options_view(self, location_id: SpatialNodeId) -> BuildOptionsView:
         sim = self._simulation
-        powers = self._tick_decision_projection().allocations.power_by_location
+        decision = self._tick_decision_projection()
+        powers = decision.allocations.power_by_location
         rows = []
         for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id)):
             definition = sim.facilities.definitions[recipe.facility_def_id]
@@ -503,7 +616,9 @@ class ProjectProjectorMixin:
                 for process in sorted(sim.industry.processes.values(), key=lambda row: str(row.id))
                 if process.facility_def_id == recipe.facility_def_id
             )
-            build_resources = self._construction_resource_options(recipe)
+            build_resources, material_readiness_day = self._construction_resource_options(
+                recipe, location_id, decision.allocations.transport
+            )
             capabilities = tuple(sorted(supply.id for supply in definition.capability_supplies))
             service_capacity_supplies = tuple(
                 sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
@@ -549,6 +664,7 @@ class ProjectProjectorMixin:
                 service_capacity_supplies=service_capacity_supplies,
                 process_options=process_options,
                 placement_scope=definition.placement_scope.value,
+                projected_material_readiness_day=material_readiness_day,
                 comparison_key=str(recipe.facility_def_id),
                 comparison_values=comparison_values,
             ))

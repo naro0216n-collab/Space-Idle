@@ -237,6 +237,9 @@ def run(*, browser=None) -> dict[str, object]:
     ))
     _prepare_research_comparison_fixture(runtime._app)
     _seed_scientific_exploration_resources(runtime._app)
+    unlock_fixture = next(
+        row for row in runtime._app.query(GetResearch()).items if row.unlocks
+    )
 
     server = create_server(
         runtime,
@@ -432,7 +435,10 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(build_option.count() == 1, "construction surface must expose at least one candidate")
             _assert("利用可能になる機能" in build_option.inner_text(), "construction candidate card must summarize what it enables")
             build_option.click()
-            _assert("建設後に利用可能" in page.locator('#inspectorContent').inner_text(), "construction candidate inspector must expose Application-projected capabilities and services")
+            build_option_inspector_text = page.locator('#inspectorContent').inner_text()
+            _assert("建設後に利用可能" in build_option_inspector_text, "construction candidate inspector must expose Application-projected capabilities and services")
+            _assert("資材準備見込み" in build_option_inspector_text, "construction candidate inspector must expose projected material readiness at the decision point")
+            _assert("現地利用可能" in build_option_inspector_text, "construction candidate inspector must expose current local material availability")
             construction_candidates = page.locator('[data-inspect="build-option"]')
             first_construction_pin = page.locator('#inspectorContent [data-construction-compare-pin]')
             if first_construction_pin.count() > 0:
@@ -475,6 +481,16 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(page.locator('.research-tree-card').evaluate("el => Boolean(el.compareDocumentPosition(document.querySelector('.research-provider-summary')) & Node.DOCUMENT_POSITION_FOLLOWING)"), "research DAG must precede provider allocation details in the decision flow")
             research_rows = page.locator('#researchTree [data-inspect="research"]')
             _assert(research_rows.count() > 0, "research tree must expose research decisions")
+            unlock_node = page.locator(
+                f'#researchTree [data-inspect="research"][data-id="{unlock_fixture.id}"]'
+            )
+            unlock_node.click()
+            unlock_inspector_text = page.locator('#inspectorContent').inner_text()
+            _assert("解禁内容" in unlock_inspector_text, "research inspector must prioritize projected unlock consequences")
+            _assert(
+                unlock_fixture.unlocks[0].display_name in unlock_inspector_text,
+                "research unlock text must come from the Application projection",
+            )
             startable_research = None
             for index in range(research_rows.count()):
                 research_rows.nth(index).click()

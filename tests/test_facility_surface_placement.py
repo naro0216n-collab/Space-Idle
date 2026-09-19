@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from space_idle import (
+    CreateTransportAllocation,
     GetBuildOptions,
     GetCatalog,
     GetSurfaceMap,
@@ -125,6 +126,37 @@ def test_surface_map_owns_surface_buildability_and_location_build_options_do_not
         sum(resource.required_t for resource in candidate.resources)
     )
     assert comparison_values["self_deploying"].text_value in {"自己展開", "通常施工"}
+    assert candidate.projected_material_readiness_day == sim.day
+    for resource in candidate.resources:
+        assert resource.available_t == pytest.approx(
+            sim.inventory.available(ids.EARTH, resource.resource_id)
+        )
+        assert resource.available_t >= resource.required_t
+        assert resource.projected_arrival_day == sim.day
+        assert resource.projected_source_id is None
+
+    capacity = sim.transport.transport_capacity_for_units(
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1, day=sim.day
+    )
+    app.execute(CreateTransportAllocation(
+        str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
+        capacity.forward_t_per_day, capacity.reverse_t_per_day,
+    ))
+    remote_candidate = next(
+        row for row in app.query(GetBuildOptions(str(ids.LEO))).items
+        if row.facility_definition_id == candidate.facility_definition_id
+    )
+    shortages = [
+        resource for resource in remote_candidate.resources
+        if resource.available_t + 1e-9 < resource.required_t
+    ]
+    assert shortages
+    assert remote_candidate.projected_material_readiness_day == max(
+        resource.projected_arrival_day for resource in shortages
+    )
+    assert remote_candidate.projected_material_readiness_day > sim.day
+    assert all(resource.projected_source_id == str(ids.EARTH) for resource in shortages)
+    assert all(resource.projected_arrival_day is not None for resource in shortages)
 
     surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
     industrial = next(row for row in surface.cells if row.id == str(ids.EARTH_CELL_INDUSTRIAL))

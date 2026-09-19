@@ -151,6 +151,9 @@ class SupplyPlanningProjectorMixin:
                         (str(source_id), tuple(str(plan_id) for plan_id in plan_ids))
                         for source_id, plan_ids in options.path_candidates
                     ),
+                    physical_movement_plan_ids=tuple(
+                        str(plan_id) for plan_id in options.physical_movement_plan_ids
+                    ),
                     forecast_requirement_day=requirement.forecast_requirement_day,
                     recurring_rate_t_per_day=rate,
                     local_runway_days=runway,

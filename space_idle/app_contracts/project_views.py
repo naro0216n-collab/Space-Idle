@@ -21,6 +21,9 @@ class ProjectResourceRow:
 class BuildResourceOption:
     resource_id: str
     required_t: float
+    available_t: float = 0.0
+    projected_source_id: str | None = None
+    projected_arrival_day: int | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,7 @@ class BuildOptionRow:
     service_capacity_supplies: tuple[tuple[str, float], ...] = ()
     process_options: tuple[tuple[str, str], ...] = ()
     placement_scope: str = "OPERATIONAL_NODE"
+    projected_material_readiness_day: int | None = None
     comparison_key: str = ""
     comparison_values: tuple[ComparisonValueRow, ...] = ()
 

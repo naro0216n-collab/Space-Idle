@@ -95,6 +95,14 @@ class ResearchStageRow:
 
 
 @dataclass(frozen=True)
+class ResearchUnlockRow:
+    kind: str
+    id: str
+    display_name: str
+    remaining_prerequisite_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ResearchRow:
     id: str
     display_name: str
@@ -124,6 +132,7 @@ class ResearchRow:
     execution_context_comparison_axes: tuple[ComparisonAxisRow, ...]
     operational_experience: tuple[ResearchExperienceRow, ...]
     prerequisites: tuple[str, ...]
+    unlocks: tuple[ResearchUnlockRow, ...] = ()
 
 
 @dataclass(frozen=True)

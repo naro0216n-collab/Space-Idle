@@ -8,7 +8,15 @@
   const section=(title,body)=>`<section class="inspector-section"><h3>${esc(title)}</h3>${body}</section>`;
   const kv=(rows)=>`<dl class="kv-grid">${rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
   const setInspector=(title,html)=>{$('#inspectorTitle').textContent=title;$('#inspectorContent').innerHTML=html;A.restoreActiveDraftValues?.();};
-  const resourceCards=(resources)=>(resources||[]).map((r)=>`<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div></div>`).join('')||'<div class="empty-state">追加資源なし</div>';
+  const resourceCards=(resources)=>(resources||[]).map((r)=>{
+    const available=Number(r.available_t||0),required=Number(r.required_t||0),shortage=Math.max(0,required-available);
+    const sourcing=shortage<=1e-9
+      ? '<span class="badge ok">現地準備済み</span>'
+      : r.projected_arrival_day!=null
+        ? `<span class="cell-sub">不足 ${fmt(shortage,2)} t · ${esc(locationName(r.projected_source_id))} から Day ${fmt(r.projected_arrival_day,0)} 見込み</span>`
+        : `<span class="cell-sub">不足 ${fmt(shortage,2)} t · 供給見込み未確定</span>`;
+    return `<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(required)} t</span></div><div class="cell-sub">現地利用可能 ${fmt(available,2)} t</div>${sourcing}</div>`;
+  }).join('')||'<div class="empty-state">追加資源なし</div>';
   const procurementPolicyLabels={immediate:'即時外部調達',standard_wait:'標準待機後に外部調達',extended_wait:'現地在庫を長く待つ'};
   const priorityLabels={1:'最低',2:'低',3:'標準',4:'高',5:'最高'};
   const knowledgeGoalLabels={1:'存在確認',2:'埋蔵量推定',3:'精密測定'};
@@ -445,7 +453,8 @@
       const selected=state.inspector?.type==='build-option'&&state.inspector.id===o.facility_definition_id;
       const resources=(o.resources||[]).slice(0,3).map((r)=>`${resourceName(r.resource_id)} ${fmt(r.required_t,1)} t`).join(' · ');
       const primaryEnable=buildOptionPrimaryEnable(o);
-      return `<button type="button" class="construction-option-card ${selected?'is-selected':''}" data-inspect="build-option" data-id="${esc(o.facility_definition_id)}" aria-pressed="${selected?'true':'false'}"><span class="decision-card-title"><span><strong>${esc(o.display_name)}</strong><small>利用可能になる機能: ${esc(primaryEnable)}</small></span><span class="badge ${plan.blockers.length?'warn':plan.canPlan?'ok':''}">${esc(plan.canPlan?'計画可能':'条件不足')}</span></span><span class="construction-option-metrics"><span><small>必要工数</small><strong>${fmt(o.construction_required,0)}</strong></span><span><small>必要資源</small><strong>${o.resources?.length||0} 種</strong></span><span><small>状態</small><strong>${esc(plan.label)}</strong></span></span><span class="decision-card-footer ${plan.blockers.length?'has-warning':''}">${plan.blockers.length?`制約: ${esc(A.constraintSummary(plan.blockers[0]))}`:esc(resources||'追加建設資源なし')}</span></button>`;
+      const readiness=o.projected_material_readiness_day==null?'未確定':Number(o.projected_material_readiness_day)<=Number(state.world?.day??state.session?.day??0)?'準備済み':`Day ${fmt(o.projected_material_readiness_day,0)}`;
+      return `<button type="button" class="construction-option-card ${selected?'is-selected':''}" data-inspect="build-option" data-id="${esc(o.facility_definition_id)}" aria-pressed="${selected?'true':'false'}"><span class="decision-card-title"><span><strong>${esc(o.display_name)}</strong><small>利用可能になる機能: ${esc(primaryEnable)}</small></span><span class="badge ${plan.blockers.length?'warn':plan.canPlan?'ok':''}">${esc(plan.canPlan?'計画可能':'条件不足')}</span></span><span class="construction-option-metrics"><span><small>必要工数</small><strong>${fmt(o.construction_required,0)}</strong></span><span><small>資材準備見込み</small><strong>${esc(readiness)}</strong></span><span><small>状態</small><strong>${esc(plan.label)}</strong></span></span><span class="decision-card-footer ${plan.blockers.length?'has-warning':''}">${plan.blockers.length?`制約: ${esc(A.constraintSummary(plan.blockers[0]))}`:esc(resources||'追加建設資源なし')}</span></button>`;
     }).join('');
     return `<div class="construction-decision-surface">
       <section class="decision-surface-block"><div class="decision-surface-heading"><div><span class="eyebrow">進行中</span><h2>建設案件</h2><p>進捗・優先度・調達・制約を比較し、案件を選択すると右の詳細パネルから設定を変更できます。</p></div><span class="badge">${projects.length} 件</span></div><div class="construction-project-grid">${projectCards||'<div class="empty-state">進行中の建設案件はありません。</div>'}</div></section>
@@ -778,8 +787,9 @@
     const pinned=pinnedKeys.has(o.comparison_key);
     const pinDisabled=comparisonAvailable&&!pinned&&pinnedKeys.size>=4;
     const compareAction=comparisonAvailable?`<button type="button" data-construction-compare-pin="${esc(o.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';
+    const readiness=o.projected_material_readiness_day==null?'未確定':Number(o.projected_material_readiness_day)<=Number(state.world?.day??state.session?.day??0)?'現地準備済み':`Day ${fmt(o.projected_material_readiness_day,0)}`;
     setInspector(o.display_name,
-      section('建設',kv([['必要工数',fmt(o.construction_required,0)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],['計画可否',esc(plan.label)]]))+
+      section('建設',kv([['必要工数',fmt(o.construction_required,0)],['資材準備見込み',esc(readiness)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],['計画可否',esc(plan.label)]]))+
       section('実行条件',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+
       section('操作',`<div class="action-stack">${compareAction}${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button></div>`)+
       (comparisonAvailable?section('建設候補比較',constructionComparisonHtml()):'')+
@@ -813,6 +823,21 @@
     if(!rows.length)return '<div class="empty-state">運用経験要件なし</div>';
     return rows.map((x)=>`<div class="detail-card"><div class="mode-title"><span>${esc(definitionName(x.category_id))}</span><span>${fmt(x.current,1)} / ${fmt(x.required,1)}</span></div><div class="cell-sub">残り ${fmt(x.unmet,1)}</div></div>`).join('');
   }
+  function researchUnlocksHtml(r){
+    const kindLabels={research:'次の研究',facility:'設備',facility_upgrade:'設備更新',surface_development:'地表開発',facility_decommission:'設備撤去'};
+    const rows=r.unlocks||[];
+    if(!rows.length)return '<div class="empty-state">この研究から直接つながる新しい研究・設備・開発操作はありません。</div>';
+    return rows.map((row)=>{
+      const remaining=row.remaining_prerequisite_ids||[];
+      const stateBadge=remaining.length
+        ? `<span class="badge">追加前提 ${remaining.length}</span>`
+        : '<span class="badge ok">完了時に解禁</span>';
+      const remainingText=remaining.length
+        ? `<div class="cell-sub">ほかに必要: ${remaining.map((id)=>esc(definitionName(id))).join(' · ')}</div>`
+        : '<div class="cell-sub">この研究の完了で前提技術が成立します。</div>';
+      return `<div class="detail-card"><div class="mode-title"><span><small>${esc(kindLabels[row.kind]||'解禁')}</small><strong>${esc(row.display_name)}</strong></span>${stateBadge}</div>${remainingText}</div>`;
+    }).join('');
+  }
   function renderResearchInspector(id){
     const r=state.research?.items?.find((x)=>x.id===id);if(!r)return false;
     const action=lifecycleButton({domain:'research',id:r.id,canStart:r.can_start,canPause:r.can_pause,canResume:r.can_resume,complete:r.status==='complete',startLabel:'研究開始',pauseLabel:'研究停止',resumeLabel:'研究再開',completeLabel:'研究完了'});
@@ -835,6 +860,7 @@
     const priorityControlHtml=`<div class="form-row">${priorityControl(r.priority??3,researchPriorityAttributes,'研究優先度',!(r.can_start||r.can_set_priority))}</div>`;
     setInspector(r.display_name,
       section('研究状態',kv([['段階',esc(stateLabels[r.status]||A.userFacingText(r.status))],['優先度',esc(priorityName(r.priority??3))],['段階進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)}`],['RP要求 / 割当',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)}`],['研究実行要求 / 割当',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)}`]]))+
+      section('解禁内容',researchUnlocksHtml(r))+
       section('現在の制約',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(x)).join('')}</div>`:'<span class="badge ok">なし</span>')+
       section('研究操作',`<div class="action-stack">${priorityControlHtml}${action}</div>`)+
       phase+

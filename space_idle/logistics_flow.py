@@ -1445,6 +1445,13 @@ class LogisticsFlowMixin:
             elif stocked and not any(source_id in stocked for source_id in operational):
                 blockers.append("routing_constraint:path_unavailable")
 
+        stocked_sources = set(stocked)
+        physical_movement_plan_ids = tuple(
+            plan.id
+            for plan in self.transport.inbound_movement_plans(requirement.destination_id)
+            if plan.origin_id in stocked_sources
+        )
+
         selected_rows = self._candidate_supply_paths(requirement, day, edges)
         selected_source_id = None
         selected_path: tuple[TransportServiceSupply, ...] = ()
@@ -1487,4 +1494,5 @@ class LogisticsFlowMixin:
             selected_propellant_t_per_t=selected_propellant,
             selected_handoff_count=(None if not selected_path else max(0, len(selected_path) - 1)),
             selected_bottleneck_capacity_t_per_day=selected_capacity,
+            physical_movement_plan_ids=physical_movement_plan_ids,
         )

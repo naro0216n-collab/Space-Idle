@@ -31,6 +31,7 @@ class SupplyPlanningOptions:
     selected_propellant_t_per_t: float | None = None
     selected_handoff_count: int | None = None
     selected_bottleneck_capacity_t_per_day: float | None = None
+    physical_movement_plan_ids: tuple[MovementPlanId, ...] = ()
 
 
 class SupplyPlanningMixin:

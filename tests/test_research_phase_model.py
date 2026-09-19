@@ -26,6 +26,7 @@ from space_idle.research import (
     ResearchPrototypeStageSpec,
     ResearchStage,
 )
+from space_idle.construction.models import ConstructionRecipe
 from space_idle.execution_requirements import ServiceCapacityRequirement
 from space_idle.facilities import CapabilitySupply, FacilityDef, ServiceCapacitySupply
 from space_idle.shared import DefinitionId
@@ -63,6 +64,52 @@ def _research_site_fixture(sim):
     )
     facility_id = sim.facilities.install(TEST_RESEARCH_SITE_FACILITY, EARTH)
     return sim.facilities.facilities[facility_id]
+
+
+def test_research_projection_exposes_player_facing_unlocks_without_hiding_other_prerequisites():
+    app = build_game_application()
+    sim = app._simulation
+    unlock_source = DefinitionId("test.research.unlock_source")
+    other_prerequisite = DefinitionId("test.research.unlock_other")
+    immediate_child = DefinitionId("test.research.unlock_immediate")
+    compound_child = DefinitionId("test.research.unlock_compound")
+    facility_id = DefinitionId("test.facility.unlock_projection")
+    for research_id, name, prerequisites in (
+        (unlock_source, "Unlock Source", frozenset()),
+        (other_prerequisite, "Other Prerequisite", frozenset()),
+        (immediate_child, "Immediate Child", frozenset({unlock_source})),
+        (compound_child, "Compound Child", frozenset({unlock_source, other_prerequisite})),
+    ):
+        sim.research.definitions[research_id] = ResearchDefinition(
+            research_id,
+            name,
+            (ResearchTheoryStageSpec("theory", 1.0),),
+            prerequisites=prerequisites,
+        )
+    sim.facilities.definitions[facility_id] = FacilityDef(facility_id, "Unlocked Facility")
+    sim.projects.recipes[facility_id] = ConstructionRecipe(
+        facility_id,
+        (),
+        1.0,
+        prerequisite_technologies=frozenset({unlock_source}),
+    )
+
+    row = _research_row(app, unlock_source)
+    unlocks = {(unlock.kind, unlock.id): unlock for unlock in row.unlocks}
+
+    immediate = unlocks[("research", str(immediate_child))]
+    assert immediate.display_name == "Immediate Child"
+    assert immediate.remaining_prerequisite_ids == ()
+
+    compound = unlocks[("research", str(compound_child))]
+    assert compound.display_name == "Compound Child"
+    assert compound.remaining_prerequisite_ids == (
+        str(other_prerequisite),
+    )
+
+    facility = unlocks[("facility", str(facility_id))]
+    assert facility.display_name == "Unlocked Facility"
+    assert facility.remaining_prerequisite_ids == ()
 
 
 def _remove_research_site_service(sim):

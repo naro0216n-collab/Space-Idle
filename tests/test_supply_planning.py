@@ -207,6 +207,10 @@ def test_supply_projection_exposes_transport_blockers_only_when_external_transpo
     assert all(row.operational_source_count == 0 for row in rows)
     assert all(row.supply_state == "transport_blocked" for row in rows)
     assert all(any(blocker.code == "no_transport_capacity" for blocker in row.blockers) for row in rows)
+    assert all(row.physical_movement_plan_ids for row in rows)
+    for row in rows:
+        plans = [sim.transport.require_movement_plan(plan_id) for plan_id in row.physical_movement_plan_ids]
+        assert all(plan.origin_id == EARTH and plan.destination_id == LEO for plan in plans)
 
     covered = [
         row for row in app.query(GetLogistics()).requirements
