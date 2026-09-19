@@ -145,7 +145,9 @@ def run() -> None:
             allocation_row.get_by_role("button", name="Networkで確認").click()
             page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
             assert "輸送能力設定" in page.locator("#networkDecisionContext").inner_text()
-            page.locator("#networkSvg .network-line.is-context-related").first.wait_for(timeout=10000)
+            context_line = page.locator("#networkSvg .network-line.is-context-related").first
+            context_line.wait_for(state="attached", timeout=10000)
+            assert context_line.evaluate("el => parseFloat(getComputedStyle(el).strokeWidth) >= 5 && Number(getComputedStyle(el).opacity) === 1")
             assert page.locator("#networkNodes .network-node.is-context-related").count() >= 2
 
             allocation_row.locator('[data-allocation-edit]').click()

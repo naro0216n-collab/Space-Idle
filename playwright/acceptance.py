@@ -42,6 +42,11 @@ def _choose_priority(page, holder_selector: str, level: int | str) -> None:
     _assert(page.locator(holder_selector).input_value() == value, f"priority {holder_selector} must select {value}")
 
 
+def _assert_inspector_section_order(page, expected_prefix: list[str], message: str) -> None:
+    headings = page.locator("#inspectorContent > .inspector-section > h3").all_inner_texts()
+    _assert(headings[: len(expected_prefix)] == expected_prefix, f"{message}: {headings}")
+
+
 def _select_location(page, location_id: object) -> None:
     button = page.locator(f'[data-location-id="{location_id}"]')
     target_name = button.locator('.location-name').inner_text().strip()
@@ -381,6 +386,11 @@ def run() -> dict[str, object]:
             _assert(exploration_rows.count() > 0, "scientific exploration campaign must be visible")
             _assert(page.locator('.exploration-decision-card').count() == exploration_rows.count(), "scientific exploration must present touch decision cards rather than a dense management table")
             exploration_rows.first.click()
+            _assert_inspector_section_order(
+                page,
+                ["探査状態", "現在の制約", "操作", "Fleet適合性", "必要条件"],
+                "scientific exploration Inspector must keep decision-critical sections before detail breakdowns",
+            )
             exploration_text = page.locator("#inspectorContent").inner_text()
             _assert("現地活動期間" in exploration_text, "exploration inspector must expose activity duration separately from Movement latency")
             _assert("最低搭載量" in exploration_text, "exploration inspector must expose minimum payload requirement with player-facing terminology")
@@ -536,6 +546,11 @@ def run() -> dict[str, object]:
             _assert("1 地域 × 1 資源" in campaign_row.inner_text(), "Survey Campaign creation must round-trip the selected UI scope")
             _assert("base." not in campaign_row.inner_text(), "Survey Campaign row must use presentation labels rather than raw definition ids")
             campaign_row.click()
+            _assert_inspector_section_order(
+                page,
+                ["調査状態", "現在の制約", "操作"],
+                "Survey Inspector must keep blockers and primary actions ahead of edit/detail sections",
+            )
             campaign_text = page.locator('#inspectorContent').inner_text()
             _assert("範囲・目標の編集" in campaign_text, "Survey Campaign inspector must expose the selected scope and goal")
             _assert("観測手段の候補差" in campaign_text, "Survey Campaign inspector must expose candidate differences at the decision point")

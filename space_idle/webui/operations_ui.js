@@ -520,7 +520,7 @@
       ? `<span class="badge warn">撤去案件進行中</span><button type="button" data-inspect="project" data-id="${esc(f.active_decommission_project_id)}">案件を開く</button>`
       : f.can_decommission?'<span class="badge ok">撤去計画可</span>':'<span class="badge warn">撤去不可</span>';
     const decommissionSection=section('設備撤去',kv([['状態',decommissionStatus],['回収可能量',esc(salvagePotential)],['見込回収率',pct(f.projected_salvage_fraction??1)],['見込回収量',esc(salvageProjected)]])+`<h4>撤去条件</h4>${decommissionBlockers.length?`<div class="issue-stack">${decommissionBlockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">制約なし</span>'}${decommissionControls}<button type="button" class="danger-button" data-decommission="${esc(f.id)}" data-plan-prefix="decommissionPlan" ${decommissionDisabled?'disabled':''}>${f.active_decommission_project_id?'撤去案件進行中':'設備撤去案件を作成'}</button>`);
-    setInspector(f.display_name,section('状態',kv([['Level',fmt(f.level,0)],['運転',f.paused?'手動停止':'稼働'],['電力利用率',pct(f.power_utilization)],['維持充足率',pct(f.maintenance_satisfaction)],['実効稼働率',pct(f.operational_utilization)],['活動優先度',esc(priorityName(f.activity_priority))],['維持優先度',esc(priorityName(f.maintenance_priority??3))],...researchRows]))+productionSection+section('建造・更新投入資源',investment)+section('維持資源需要',maintenance)+section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'<div class="badge ok">なし</div>')+upgradeSection+decommissionSection+section('運用操作',`<div class="action-stack"><button type="button" data-command="${f.paused?'ResumeFacility':'PauseFacility'}" data-facility-id="${esc(f.id)}">${f.paused?'設備を再開':'設備を停止'}</button><div class="form-row">${priorityControl(f.activity_priority??3,`id="facilityPriorityInput" data-priority-direct="facility-activity" data-priority-id="${esc(f.id)}"`,'活動優先度')}</div><div class="form-row">${priorityControl(f.maintenance_priority??3,`id="maintenancePriorityInput" data-priority-direct="maintenance" data-priority-id="${esc(f.id)}"`,'維持優先度')}</div></div>`));
+    setInspector(f.display_name,section('状態',kv([['Level',fmt(f.level,0)],['運転',f.paused?'手動停止':'稼働'],['電力利用率',pct(f.power_utilization)],['維持充足率',pct(f.maintenance_satisfaction)],['実効稼働率',pct(f.operational_utilization)],['活動優先度',esc(priorityName(f.activity_priority))],['維持優先度',esc(priorityName(f.maintenance_priority??3))],...researchRows]))+section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'<div class="badge ok">なし</div>')+section('運用操作',`<div class="action-stack"><button type="button" data-command="${f.paused?'ResumeFacility':'PauseFacility'}" data-facility-id="${esc(f.id)}">${f.paused?'設備を再開':'設備を停止'}</button><div class="form-row">${priorityControl(f.activity_priority??3,`id="facilityPriorityInput" data-priority-direct="facility-activity" data-priority-id="${esc(f.id)}"`,'活動優先度')}</div><div class="form-row">${priorityControl(f.maintenance_priority??3,`id="maintenancePriorityInput" data-priority-direct="maintenance" data-priority-id="${esc(f.id)}"`,'維持優先度')}</div></div>`)+productionSection+upgradeSection+decommissionSection+section('建造・更新投入資源',investment)+section('維持資源需要',maintenance));
     return true;
   }
   function renderExtractionResourceInspector(id){
@@ -617,7 +617,7 @@
       : `<div class="action-stack"><button type="button" data-command="${p.paused?'ResumeBuild':'PauseBuild'}" data-project-id="${esc(p.id)}" ${settingsDisabled}>${p.paused?'建設再開':'建設停止'}</button><div class="form-row">${priorityControl(p.priority??3,`id="projectPriorityInput" data-priority-direct="project" data-priority-id="${esc(p.id)}"`,'優先度',!p.settings_editable)}</div><div class="form-row"><label>調達方針<select id="projectProcurementTimingPolicy" data-draft-key="project:${esc(p.id)}:procurement" ${procurementDisabled}>${procurementOptions}</select></label><button type="button" data-set-project-procurement="${esc(p.id)}" ${procurementDisabled}>方針を適用</button></div><button type="button" class="danger-button" data-command="CancelBuild" data-project-id="${esc(p.id)}" ${settingsDisabled}>案件取消</button></div>`;
     const foundingDecision=foundingProject?section('拠点設立判断',kv([['設立先種別',esc(p.founding_target_type==='surface_location'?'地表拠点':p.founding_target_type==='non_surface_operational_node'?'宇宙拠点':A.userFacingText(p.founding_target_type||'—'))],['設立段階',esc(stateLabels[p.deployment_phase]||stateLabels[p.status]||A.userFacingText(p.deployment_phase||p.status||'—'))],['展開資材',p.manifest_ready?'<span class="badge ok">準備済み</span>':'<span class="badge warn">準備不足</span>'],['設立用Fleet',p.fleet_commitment_id?'<span class="badge ok">確保済み</span>':'<span class="badge warn">未確保</span>']])+`<h3>調査知識条件</h3>${(p.founding_knowledge_requirements||[]).map((row)=>`<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(row.subject_resource_id))}</span><span class="badge ${row.met?'ok':'warn'}">${fmt(row.current_level,0)} / ${fmt(row.minimum_level,0)}</span></div><div class="cell-sub">${esc(surfaceCellLabel(row.target_cell_id))}</div></div>`).join('')||'<div class="empty-state">調査知識条件なし</div>'}<h3>地点条件の制約</h3>${(p.site_blockers||[]).length?`<div class="issue-stack">${p.site_blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">なし</span>'}<h3>移動条件の制約</h3>${(p.movement_blockers||[]).length?`<div class="issue-stack">${p.movement_blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">なし</span>'}`):'';
     const disposalDecision=p.target_kind==='facility_decommission'?section('撤去時の回収',kv([['取消不能状態',p.irreversible_started?'開始済み':'未開始'],['回収可能量',esc((p.expected_salvage||[]).map(([r,a])=>`${resourceName(r)} ${fmt(a,2)}t`).join(' / ')||'なし')],['見込回収率',p.projected_salvage_fraction==null?'—':pct(p.projected_salvage_fraction)],['見込回収量',esc((p.projected_salvage||[]).map(([r,a])=>`${resourceName(r)} ${fmt(a,2)}t`).join(' / ')||'なし')],['実績回収率',p.actual_salvage_fraction==null?'—':pct(p.actual_salvage_fraction)],['実績回収量',esc((p.actual_salvage||[]).map(([r,a])=>`${resourceName(r)} ${fmt(a,2)}t`).join(' / ')||'なし')]])):'';
-    setInspector(p.display_name||p.facility_display_name||p.id,section('案件',kv(targetRows))+foundingDecision+disposalDecision+section('必要資源 / 調達',resourceRows||'<div class="empty-state">追加資源なし</div>')+section('補給需要',requirementHtml)+section('主な制約',limitingHtml(p.limiting_factors||[]))+section('実行条件',(p.blockers||[]).length?`<div class="issue-stack">${p.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">なし</span>')+section('操作',projectControls));
+    setInspector(p.display_name||p.facility_display_name||p.id,section('案件',kv(targetRows))+section('主な制約',limitingHtml(p.limiting_factors||[]))+section('実行条件',(p.blockers||[]).length?`<div class="issue-stack">${p.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">なし</span>')+section('操作',projectControls)+foundingDecision+disposalDecision+section('必要資源 / 調達',resourceRows||'<div class="empty-state">追加資源なし</div>')+section('補給需要',requirementHtml));
     return true;
   }
   function renderBuildOptionInspector(id){
@@ -630,7 +630,7 @@
     const processCards=(o.process_options||[]).map(([,name])=>`<div class="detail-card"><div class="mode-title"><span>生産工程</span><strong>${esc(name)}</strong></div></div>`).join('');
     const enables=capabilityCards+serviceCards+processCards||'<div class="empty-state">追加される能力情報なし</div>';
     const placement=o.placement_scope==='SURFACE_CELL'?'地表地域':'拠点';
-    setInspector(o.display_name,section('建設',kv([['必要工数',fmt(o.construction_required,0)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],['計画可否',esc(plan.label)]]))+section('建設後に利用可能',enables)+section('必要資源',resourceCards(o.resources))+section('実行条件',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+section('操作',`${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button>`));
+    setInspector(o.display_name,section('建設',kv([['必要工数',fmt(o.construction_required,0)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],['計画可否',esc(plan.label)]]))+section('実行条件',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+section('操作',`${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button>`)+section('建設後に利用可能',enables)+section('必要資源',resourceCards(o.resources)));
     return true;
   }
 
@@ -680,11 +680,11 @@
     const priorityControlHtml=`<div class="form-row">${priorityControl(r.priority??3,researchPriorityAttributes,'研究優先度',!(r.can_start||r.can_set_priority))}</div>`;
     setInspector(r.display_name,
       section('研究状態',kv([['段階',esc(stateLabels[r.status]||A.userFacingText(r.status))],['優先度',esc(priorityName(r.priority??3))],['段階進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)}`],['RP要求 / 割当',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)}`],['研究実行要求 / 割当',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)}`]]))+
-      section('前提技術',(r.prerequisites||[]).length?(r.prerequisites||[]).map((x)=>`<span class="badge">${esc(definitionName(x))}</span>`).join(' '):'<span class="badge ok">なし</span>')+
-      startState+
       section('現在の制約',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(['research',x[1]||x])).join('')}</div>`:'<span class="badge ok">なし</span>')+
+      section('研究操作',`<div class="action-stack">${priorityControlHtml}${action}</div>`)+
       phase+
-      section('研究操作',`<div class="action-stack">${priorityControlHtml}${action}</div>`)
+      startState+
+      section('前提技術',(r.prerequisites||[]).length?(r.prerequisites||[]).map((x)=>`<span class="badge">${esc(definitionName(x))}</span>`).join(' '):'<span class="badge ok">なし</span>')
     );
     return true;
   }
@@ -707,10 +707,10 @@
     if(x.can_unassign)action+=`<button type="button" data-exploration-unassign="${esc(x.id)}">Fleet配備を解除</button>`;
     setInspector(x.display_name,
       section('探査状態',kv([['出発地',esc(locationName(x.origin_id))],['探査先',esc(locationName(x.destination_id))],['往路時間',x.outbound_latency_days==null?'未確定':`${fmt(x.outbound_latency_days,0)}日`],['復路時間',x.return_latency_days==null?(x.assigned_vehicle_definition_id?'なし':'未確定'):`${fmt(x.return_latency_days,0)}日`],['現地活動期間',`${fmt(x.duration_days,1)}日`],['活動進捗',`${fmt(x.progress_days,1)}日`],['獲得RP',`${fmt(x.research_points_awarded,1)} / ${fmt(x.research_points_total,1)}`],['RP獲得速度',`${fmt(x.research_points_per_day,2)} /日`],['本日のRP要求 / 受入',`${fmt(x.rp_requested_today,2)} / ${fmt(x.rp_admitted_today,2)}`],['RP受入余力',fmt(x.rp_admission_headroom,2)],['RP受入制約',x.rp_admission_blocker?esc(A.userFacingText(x.rp_admission_blocker)):'なし'],['必要機数',fmt(x.required_units,0)],['活動優先度',esc(priorityName(x.priority??3))],['配備Fleet',x.assigned_vehicle_definition_id?`${esc(definitionName(x.assigned_vehicle_definition_id))} · ${fmt(x.committed_units,0)} 機`:'未配備'],['完了時のFleet',esc(disposition)],['現在可能な操作',esc(transitions)]]))+
-      section('必要条件',`<div class="cell-sub">移動要件: ${operations}</div><div class="cell-sub">最低搭載量: ${fmt(x.minimum_payload_t,2)} t</div><div class="cell-sub">必要機体能力: ${vehicleCapabilities}</div><div class="cell-sub">消耗資源: ${inputs}</div><h3>${esc(locationName(x.origin_id))} の地点条件</h3>${siteRequirementsHtml(x.origin_requirements)}<h3>${esc(locationName(x.destination_id))} の地点条件</h3>${siteRequirementsHtml(x.destination_requirements)}`)+
       section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['exploration',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+
+      section('操作',`<div class="action-stack"><div class="form-row">${priorityControl(x.priority??3,x.can_set_priority?`id="explorationPriorityInput" data-priority-direct="exploration" data-priority-id="${esc(x.id)}"`:`id="explorationPriorityInput" data-draft-key="exploration:${esc(x.id)}:priority"`,'活動優先度',!(x.can_start||x.can_set_priority))}</div>${action||'<span class="badge">操作なし</span>'}</div>`)+
       section('Fleet適合性',vehicleRows)+
-      section('操作',`<div class="action-stack"><div class="form-row">${priorityControl(x.priority??3,x.can_set_priority?`id="explorationPriorityInput" data-priority-direct="exploration" data-priority-id="${esc(x.id)}"`:`id="explorationPriorityInput" data-draft-key="exploration:${esc(x.id)}:priority"`,'活動優先度',!(x.can_start||x.can_set_priority))}</div>${action||'<span class="badge">操作なし</span>'}</div>`)
+      section('必要条件',`<div class="cell-sub">移動要件: ${operations}</div><div class="cell-sub">最低搭載量: ${fmt(x.minimum_payload_t,2)} t</div><div class="cell-sub">必要機体能力: ${vehicleCapabilities}</div><div class="cell-sub">消耗資源: ${inputs}</div><h3>${esc(locationName(x.origin_id))} の地点条件</h3>${siteRequirementsHtml(x.origin_requirements)}<h3>${esc(locationName(x.destination_id))} の地点条件</h3>${siteRequirementsHtml(x.destination_requirements)}`)
     );
     return true;
   }
@@ -742,12 +742,12 @@
     const actions=lifecycleButton({domain:'survey-campaign',id:c.id,canStart:false,canPause:c.can_pause,canResume:c.can_resume,complete:c.status==='completed',pauseLabel:'調査停止',resumeLabel:'調査再開',completeLabel:'調査完了'});
     setInspector(`地表調査 · ${knowledgeGoalName(c.goal_knowledge_level)}`,
       section('調査状態',kv([['状態',esc(stateLabels[c.status]||A.userFacingText(c.status))],['調査目標',esc(knowledgeGoalName(c.goal_knowledge_level))],['完了 / 残り対象',`${fmt(c.covered_targets,0)} / ${fmt(c.remaining_targets,0)}`],['解決された観測手段',esc(provider)],['能力要求 / 割当',`${fmt(c.requested_service_units_per_day,2)} / ${fmt(c.allocated_service_units_per_day,2)}`],['調査進行能力',`${fmt(c.capacity_points_per_day,2)} /日`],['必要 / 配備Fleet',c.required_fleet_units==null?'—':`${fmt(c.required_fleet_units,0)} / ${fmt(c.assigned_fleet_units,0)}`],['予測残り時間',c.projected_remaining_days==null?'—':`${fmt(c.projected_remaining_days,1)}日`],['優先度',esc(priorityName(c.priority??3))]]))+
+      section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+
+      section('操作',`<div class="action-stack">${actions}<div class="form-row">${priorityControl(c.priority??3,`id="surveyPriorityInput" data-priority-direct="survey" data-priority-id="${esc(c.id)}"`,'活動優先度',!c.can_set_priority)}</div></div>`)+
       section('範囲・目標の編集',`<div class="detail-grid"><div class="detail-card"><div class="mode-title"><span>対象地域</span></div>${cellChecks}</div><div class="detail-card"><div class="mode-title"><span>対象資源</span></div>${resourceChecks}</div></div><div class="form-row"><label>調査目標<select id="surveyCampaignGoal" data-draft-key="survey:${esc(c.id)}:goal" data-structured-draft data-draft-scope="survey:${esc(c.id)}"><option value="1" ${Number(c.goal_knowledge_level)===1?'selected':''}>1 存在確認</option><option value="2" ${Number(c.goal_knowledge_level)===2?'selected':''}>2 埋蔵量推定</option><option value="3" ${Number(c.goal_knowledge_level)===3?'selected':''}>3 精密測定</option></select></label><button type="button" data-update-survey-campaign="${esc(c.id)}" disabled>範囲・目標を適用</button></div><div data-survey-update-intent-status><span class="badge">可否確認中</span></div>`)+
       section('対象ごとの進捗',`<div class="survey-target-progress-grid">${targetCards||'<div class="empty-state">調査対象はありません。</div>'}</div>`)+
       section('観測手段の候補差',candidates)+
-      section('観測手段の固定',`<div class="cell-sub">観測手段: ${esc(c.provider_constraint_definition_id?`${definitionName(c.provider_constraint_definition_id)} @ ${locationName(c.provider_constraint_operational_node_id)}`:'自動')} · 観測方式: ${esc(c.observation_mode_constraint?definitionName(c.observation_mode_constraint):'自動')}</div><button type="button" data-clear-survey-constraint="${esc(c.id)}">自動選択へ戻す</button>`)+
-      section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+
-      section('操作',`<div class="action-stack">${actions}<div class="form-row">${priorityControl(c.priority??3,`id="surveyPriorityInput" data-priority-direct="survey" data-priority-id="${esc(c.id)}"`,'活動優先度',!c.can_set_priority)}</div></div>`)
+      section('観測手段の固定',`<div class="cell-sub">観測手段: ${esc(c.provider_constraint_definition_id?`${definitionName(c.provider_constraint_definition_id)} @ ${locationName(c.provider_constraint_operational_node_id)}`:'自動')} · 観測方式: ${esc(c.observation_mode_constraint?definitionName(c.observation_mode_constraint):'自動')}</div><button type="button" data-clear-survey-constraint="${esc(c.id)}">自動選択へ戻す</button>`)
     );return true;
   }
 
@@ -789,16 +789,16 @@
         ['緯度',`${fmt(cell.latitude_deg,2)}°`],
         ['経度',`${fmt(cell.longitude_deg,2)}°`],
       ]))+
+      foundationSection+developmentSection+facilitySection+
+      section('資源調査情報',surfaceResourcesHtml(cell.resources,cell.id))+
+      section('現在の環境',environmentHtml(cell.environment))+
       section('地形',kv([
         ['地形係数',fmt(terrain.terrain_factor,2)],
         ['支持力係数',fmt(terrain.bearing_capacity_factor,2)],
         ['粉塵係数',fmt(terrain.dust_factor,2)],
         ['傾斜係数',fmt(terrain.slope_factor,2)],
       ]))+
-      section('隣接地域',neighbors)+
-      section('現在の環境',environmentHtml(cell.environment))+
-      section('資源調査情報',surfaceResourcesHtml(cell.resources,cell.id))+
-      foundationSection+developmentSection+facilitySection
+      section('隣接地域',neighbors)
     );
     return true;
   }
