@@ -119,6 +119,22 @@ def run() -> None:
             assert priority.input_value() == draft_priority
             assert page.evaluate("el => document.activeElement === el", priority_button.element_handle())
 
+            # Structured Draft ownership is UI state, not DOM state. It must survive
+            # leaving the decision surface entirely and returning later.
+            assert page.locator("#activeDraftBar").is_visible()
+            page.locator('[data-section-tab="location"][data-tab="inventory"]').click()
+            assert page.locator("#activeDraftBar").is_visible()
+            page.locator('[data-section-tab="location"][data-tab="construction"]').click()
+            page.locator('[data-inspect="build-option"]').first.click()
+            priority = page.locator("#buildPlanPriorityInput")
+            priority.wait_for(timeout=10000, state="attached")
+            assert priority.input_value() == draft_priority
+            page.locator("#activeDraftDiscard").click()
+            assert page.locator("#activeDraftBar").is_hidden()
+            priority = page.locator("#buildPlanPriorityInput")
+            priority.wait_for(timeout=10000, state="attached")
+            assert priority.input_value() == saved_priority
+
             # Save/Load must restore authoritative state after a direct priority action.
             page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
             first_facility = page.locator('[data-inspect="facility"]').first

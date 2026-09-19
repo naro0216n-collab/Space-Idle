@@ -8,7 +8,7 @@
     fleet:null, transportAllocations:null, cargoFlows:null, market:null,
     selectedMovementPlanId:null, selectedGlobalNodeId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
     inspectorExpanded:false, sectionContexts:{location:null,research:null,exploration:null},
-    busy:false, syncInFlight:null,
+    activeDraft:null, busy:false, syncInFlight:null,
   };
 
   const $ = (sel, root=document) => root.querySelector(sel);
@@ -136,6 +136,25 @@
     return payload?.data??payload;
   }
 
+  const structuredDraftScope=(control)=>control?.dataset?.structuredDraft!==undefined?(control.dataset.draftScope||''):'';
+  const draftTitleForScope=(scope)=>{
+    if(scope.startsWith('facility-build:'))return '設備建設計画';
+    if(scope.startsWith('facility-upgrade:'))return '設備更新計画';
+    if(scope.startsWith('facility-decommission:'))return '設備撤去計画';
+    if(scope.startsWith('surface-build:'))return '地表設備建設';
+    if(scope.startsWith('development:'))return '地表地域開発';
+    if(scope.startsWith('foundation:'))return '拠点設立';
+    if(scope==='survey:new')return '地表調査計画';
+    if(scope.startsWith('survey:'))return '地表調査条件の編集';
+    if(scope==='market:new')return '新規市場注文';
+    if(scope.startsWith('market:'))return '市場注文の編集';
+    return '計画編集';
+  };
+  const captureDraftRoute=()=>({
+    operationalNodeId:state.operationalNodeId,activeSection:state.activeSection,activeTab:state.activeTab,
+    inspector:state.inspector?{...state.inspector}:null,decisionContext:state.decisionContext?{...state.decisionContext}:null,
+    selectedMovementPlanId:state.selectedMovementPlanId,
+  });
   const interactionControl=(identity)=>{
     if(!identity)return null;
     if(identity.kind==='id')return document.getElementById(identity.key);
@@ -179,6 +198,70 @@
       if(baselineChecked===snapshot.baselineChecked||baselineChecked===snapshot.checked)control.checked=snapshot.checked;
     }
   };
+  const draftValueDirty=(snapshot)=>{
+    if(snapshot.checked!==undefined&&snapshot.checked!==snapshot.baselineChecked)return true;
+    return String(snapshot.value??'')!==String(snapshot.baseline??'');
+  };
+  function resetControlToBaseline(control){
+    if(!control)return;
+    if(control.type==='checkbox'||control.type==='radio')control.checked=control.defaultChecked;
+    else control.value=controlBaseline(control)??'';
+    syncPrioritySegment(control);
+  }
+  function renderActiveDraftBar(){
+    const bar=$('#activeDraftBar');if(!bar)return;
+    const draft=state.activeDraft;bar.hidden=!draft;
+    if(!draft)return;
+    const title=$('#activeDraftTitle');if(title)title.textContent=draft.title||draftTitleForScope(draft.scope);
+  }
+  function restoreActiveDraftValues(){
+    const draft=state.activeDraft;if(!draft)return;
+    let restored=0;
+    for(const [key,snapshot] of Object.entries(draft.values||{})){
+      const control=interactionControl({kind:'draft',key});
+      if(!control)continue;
+      const baseline=controlBaseline(control);
+      const checkbox=control.type==='checkbox'||control.type==='radio';
+      const authoritativeMatchesDraft=checkbox?snapshot.checked===control.defaultChecked:String(baseline??'')===String(snapshot.value??'');
+      if(authoritativeMatchesDraft){delete draft.values[key];continue;}
+      if(String(baseline??'')!==String(snapshot.baseline??'')){delete draft.values[key];continue;}
+      restoreDraftValue(control,snapshot);restored+=1;
+    }
+    if(!Object.keys(draft.values||{}).length)state.activeDraft=null;
+    renderActiveDraftBar();
+    if(restored)queueMicrotask(()=>document.dispatchEvent(new CustomEvent('spaceidle:draft-restored',{detail:{scope:draft.scope}})));
+  }
+  function trackStructuredDraft(control){
+    const scope=structuredDraftScope(control);if(!scope||!control?.dataset?.draftKey)return;
+    const snapshot=interactionValue(control),dirty=draftValueDirty(snapshot);
+    if(state.activeDraft&&state.activeDraft.scope!==scope){
+      if(dirty){resetControlToBaseline(control);banner(`「${state.activeDraft.title}」を編集中です。先に戻るかDraftを破棄してください。`,'error',6000);}
+      return;
+    }
+    if(!state.activeDraft&&dirty){
+      state.activeDraft={scope,title:control.dataset.draftTitle||draftTitleForScope(scope),route:captureDraftRoute(),values:{}};
+    }
+    if(!state.activeDraft)return;
+    if(dirty)state.activeDraft.values[control.dataset.draftKey]=snapshot;
+    else delete state.activeDraft.values[control.dataset.draftKey];
+    if(!Object.keys(state.activeDraft.values).length)state.activeDraft=null;
+    renderActiveDraftBar();
+  }
+  function completeActiveDraft(scope){
+    if(state.activeDraft?.scope===scope){state.activeDraft=null;renderAll();}
+  }
+  function discardActiveDraft(){state.activeDraft=null;renderAll();}
+  async function returnToActiveDraft(){
+    const draft=state.activeDraft;if(!draft)return;const route=draft.route||{};
+    if(route.operationalNodeId&&route.operationalNodeId!==state.operationalNodeId)await loadLocation(route.operationalNodeId);
+    if(route.activeSection)setActiveSection(route.activeSection);
+    if(route.activeTab)state.activeTab=route.activeTab;
+    state.inspector=route.inspector?{...route.inspector}:null;
+    state.decisionContext=route.decisionContext?{...route.decisionContext}:null;
+    state.selectedMovementPlanId=route.selectedMovementPlanId||null;
+    if(['surface','survey'].includes(state.activeTab))await loadUiSnapshot({preserveInteraction:false});
+    renderAll();
+  }
   function captureInteraction(){
     const active=document.activeElement;
     const activeControl=active&&/^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)?active:null;
@@ -424,6 +507,7 @@
     renderHeader(); renderLocations(); renderGlobalIssues(); renderSectionChrome(); renderGlobalView(); renderEconomyContext();
     if(['location','research','exploration'].includes(state.activeSection))window.SpaceIdleOperations?.render();
     if(['logistics','economy'].includes(state.activeSection))window.SpaceIdleLogistics?.render();
+    restoreActiveDraftValues(); renderActiveDraftBar();
   }
 
   function clearLocationSnapshot(){
@@ -526,10 +610,12 @@
   window.SpaceIdleApp={
     state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,operationName,
     locationKindLabels,stateLabels,playerTerms,playerTerm,userFacingText,issueHtml,metricHtml,statHtml,signed,stableUiSignature,prioritySegmentedHtml,
-    api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveSection,setActiveView,openDecisionContext,
+    api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveSection,setActiveView,openDecisionContext,completeActiveDraft,
   };
 
   document.addEventListener('click',async(event)=>{
+    if(event.target.closest('#activeDraftReturn')){try{await returnToActiveDraft();}catch(e){banner(e.message,'error');}return;}
+    if(event.target.closest('#activeDraftDiscard')){discardActiveDraft();banner('Draftを破棄しました');return;}
     const priorityChoice=event.target.closest('[data-priority-choice]');if(priorityChoice){const group=priorityChoice.closest('.priority-segment');const holder=group?.querySelector('[data-priority-value-holder]');if(holder){holder.value=priorityChoice.dataset.priorityChoice;syncPrioritySegment(holder);holder.dispatchEvent(new Event('change',{bubbles:true}));}return;}
     const inspectorToggle=event.target.closest('[data-toggle-inspector]');if(inspectorToggle){state.inspectorExpanded=!state.inspectorExpanded;renderInspectorWidth();return;}
     const sectionBtn=event.target.closest('[data-section]'); if(sectionBtn){setActiveSection(sectionBtn.dataset.section);return;}
@@ -543,12 +629,14 @@
     const speed=event.target.closest('[data-time-speed]'); if(speed){try{await setTimeControl({speed_multiplier:Number(speed.dataset.timeSpeed)});}catch(e){banner(e.message,'error');}return;}
     if(event.target.closest('#refreshButton')){try{await loadUiSnapshot();banner('最新状態を取得しました');}catch(e){banner(e.message,'error');}return;}
   });
+  document.addEventListener('input',(event)=>{const control=event.target.closest?.('[data-structured-draft][data-draft-key]');if(control)trackStructuredDraft(control);});
+  document.addEventListener('change',(event)=>{const control=event.target.closest?.('[data-structured-draft][data-draft-key]');if(control)trackStructuredDraft(control);});
   window.addEventListener('online',()=>setConnection('ok','PC Server'));
   window.addEventListener('offline',()=>setConnection('error','オフライン'));
   window.setInterval(()=>{if(document.hidden||state.busy||$('#app')?.getAttribute('aria-busy')!=='false')return;loadUiSnapshot().catch((err)=>{setConnection('error','同期失敗');console.error(err);});},1000);
   document.addEventListener('DOMContentLoaded',()=>{
     $('#saveButton').addEventListener('click',async()=>{await beginMutation();try{await api('/api/v1/session/save',{method:'POST',body:JSON.stringify({slot:'manual'})});banner('manual スロットへ保存しました');}catch(e){banner(e.message,'error');}finally{endMutation();}});
-    $('#loadButton').addEventListener('click',async()=>{await beginMutation();try{await api('/api/v1/session/load',{method:'POST',body:JSON.stringify({slot:'manual',apply_offline:true})});await loadUiSnapshot({preserveInteraction:false});banner('manual スロットを読み込みました');}catch(e){banner(e.message,'error');}finally{endMutation();}});
+    $('#loadButton').addEventListener('click',async()=>{await beginMutation();try{await api('/api/v1/session/load',{method:'POST',body:JSON.stringify({slot:'manual',apply_offline:true})});state.activeDraft=null;await loadUiSnapshot({preserveInteraction:false});banner('manual スロットを読み込みました');}catch(e){banner(e.message,'error');}finally{endMutation();}});
     initialLoad().catch((err)=>{setConnection('error','接続失敗');banner(`Serverへ接続できません: ${err.message}`,'error',0);$('#app').setAttribute('aria-busy','false');});
   });
 })();

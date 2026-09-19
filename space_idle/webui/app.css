@@ -558,3 +558,6 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
   .target-stock-grid, .supply-policy-grid, .supply-requirement-grid, .transport-allocation-grid, .vehicle-production-grid, .cargo-flow-grid { grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)); }
   .requirement-quantity-grid, .allocation-capacity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+
+.active-draft-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel);min-height:52px}.active-draft-bar[hidden]{display:none}.active-draft-bar>div:first-child{display:flex;align-items:baseline;gap:10px;min-width:0}.active-draft-bar strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.active-draft-actions{display:flex;gap:8px;flex:0 0 auto}.active-draft-actions button{min-height:44px}.active-draft-bar .eyebrow{margin:0}

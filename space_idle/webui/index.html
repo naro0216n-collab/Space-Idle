@@ -35,6 +35,11 @@
       <div class="session-actions"><button type="button" id="saveButton">保存</button><button type="button" id="loadButton">読込</button></div>
     </header>
 
+    <div id="activeDraftBar" class="active-draft-bar" hidden aria-live="polite">
+      <div><span class="eyebrow">編集中の判断</span><strong id="activeDraftTitle">—</strong></div>
+      <div class="active-draft-actions"><button type="button" id="activeDraftReturn">判断へ戻る</button><button type="button" class="secondary" id="activeDraftDiscard">Draftを破棄</button></div>
+    </div>
+
     <div id="statusBanner" class="status-banner" hidden></div>
 
     <div class="main-shell">
