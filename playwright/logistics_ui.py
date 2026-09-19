@@ -79,11 +79,17 @@ def run() -> None:
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
             page.locator('.primary-nav-button[data-section="logistics"]').click()
 
+            fleet_pool = page.locator('#vehicleTable [data-fleet-pool-row]').first
+            fleet_pool.wait_for(timeout=10000)
+            fleet_text = fleet_pool.inner_text()
+            for usage_label in ("輸送", "研究", "地表調査", "科学探査", "拠点設立", "移動中", "回収中", "退役中"):
+                assert usage_label in fleet_text, f"Fleet pool must expose {usage_label} commitment state"
+
             constraint_button = page.locator(
                 f'#requirementTable [data-requirement-constraint][data-owner-id="{project_id}"]'
             ).first
             constraint_button.wait_for(timeout=10000)
-            requirement_row = constraint_button.locator("xpath=ancestor::tr")
+            requirement_row = constraint_button.locator("xpath=ancestor::*[contains(@class,'supply-requirement-card')][1]")
             assert "輸送能力阻害" in requirement_row.inner_text(), (
                 "Supply Requirement must remain visible while Transport Capacity is unavailable"
             )
@@ -98,13 +104,13 @@ def run() -> None:
             page.locator("#routingConstraintDialog").wait_for(state="hidden", timeout=10000)
             page.wait_for_function(
                 """projectId => [...document.querySelectorAll('#requirementTable [data-requirement-constraint]')]
-                  .some(button => button.dataset.ownerId === projectId && button.closest('tr')?.innerText.includes('固定条件'))""",
+                  .some(button => button.dataset.ownerId === projectId && button.closest('.supply-requirement-card')?.innerText.includes('固定:'))""",
                 arg=project_id,
                 timeout=10000,
             )
             requirement_row = page.locator(
                 f'#requirementTable [data-requirement-constraint][data-owner-id="{project_id}"]'
-            ).first.locator("xpath=ancestor::tr")
+            ).first.locator("xpath=ancestor::*[contains(@class,'supply-requirement-card')][1]")
             assert project_id not in requirement_row.inner_text()
             constraint_clear = page.locator('[data-routing-constraint-clear]').first
             constraint_clear.wait_for(timeout=10000)
@@ -123,7 +129,7 @@ def run() -> None:
                 "Application-derived capacity presets must remain valid precision inputs"
             )
             page.locator("#allocationPreview").get_by_text("必要Fleet", exact=True).wait_for(timeout=10000)
-            assert "unit" in page.locator("#allocationPreview").inner_text()
+            assert "機" in page.locator("#allocationPreview").inner_text()
             page.locator('[data-allocation-priority="5"]').click()
             page.get_by_role("button", name="輸送設定を作成").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)

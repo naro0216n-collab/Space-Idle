@@ -101,12 +101,17 @@ def test_fleet_commitment_ownership_conservation_and_query_projection():
     )
     commitment = next(item for item in view.commitments if item.id == str(special_commitment_id))
     assert commitment.owner_activity_type == "test_mission"
+    assert commitment.usage_kind == "other"
     assert commitment.quantity == 1
     assert pool.other_committed_units == 1
     assert (
         pool.free_units
         + pool.transport_units
+        + pool.research_units
+        + pool.survey_units
         + pool.exploration_units
+        + pool.founding_units
+        + pool.retirement_units
         + pool.other_committed_units
         + pool.relocating_units
         + pool.releasing_units
@@ -130,6 +135,52 @@ def test_fleet_commitment_ownership_conservation_and_query_projection():
             1,
         )
     assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 0
+
+
+def test_fleet_application_projection_separates_cross_domain_commitments():
+    app = build_game_application()
+    sim = app._simulation
+    lg = sim.transport
+    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
+    node_id = ids.LEO
+    lg.fleet_pool(vehicle_id, node_id).total_units = 8
+
+    commitments = (
+        ("research_provider_assignment", "research.assignment.test", 2),
+        ("survey_provider_assignment", "survey.assignment.test", 1),
+        ("scientific_exploration", "exploration.test", 1),
+        ("founding", "founding.test", 1),
+        ("test_activity", "other.test", 1),
+    )
+    for index, (activity_type, activity_id, quantity) in enumerate(commitments, start=1):
+        lg.commit_fleet_units(
+            EntityId(f"commitment.cross-domain.{index}"),
+            FleetActivityRef(activity_type, EntityId(activity_id)),
+            vehicle_id,
+            node_id,
+            quantity,
+        )
+
+    view = app.query(GetFleet())
+    pool = next(
+        item for item in view.pools
+        if item.vehicle_definition_id == str(vehicle_id)
+        and item.operational_node_id == str(node_id)
+    )
+    assert pool.free_units == 2
+    assert pool.research_units == 2
+    assert pool.survey_units == 1
+    assert pool.exploration_units == 1
+    assert pool.founding_units == 1
+    assert pool.other_committed_units == 1
+
+    usage_by_owner = {row.owner_activity_type: row.usage_kind for row in view.commitments}
+    assert usage_by_owner["research_provider_assignment"] == "research"
+    assert usage_by_owner["survey_provider_assignment"] == "survey"
+    assert usage_by_owner["scientific_exploration"] == "scientific_exploration"
+    assert usage_by_owner["founding"] == "founding"
+    assert usage_by_owner["test_activity"] == "other"
+
 
 def test_runtime_validation_enforces_fleet_commitment_owner_and_location_integrity():
     mismatched = _fleet_sim(1)

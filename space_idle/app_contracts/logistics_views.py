@@ -73,7 +73,10 @@ class FleetPoolRow:
     total_units: int
     free_units: int
     transport_units: int
+    research_units: int
+    survey_units: int
     exploration_units: int
+    founding_units: int
     retirement_units: int
     other_committed_units: int
     relocating_units: int
@@ -85,6 +88,7 @@ class FleetCommitmentRow:
     id: str
     owner_activity_type: str
     owner_activity_id: str
+    usage_kind: str
     vehicle_definition_id: str
     display_name: str
     quantity: int

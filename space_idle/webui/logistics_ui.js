@@ -26,6 +26,8 @@
   const priorityControl=(selected,inputAttributes,label='優先度',disabled=false)=>A.prioritySegmentedHtml(selected,{inputAttributes,label,disabled});
   const priorityText=(value)=>`${Number(value)} ${priorityLabels[Number(value)]||''}`.trim();
   const ownerLabel=(kind)=>ownerLabels[kind]||kind;
+  const fleetUsageLabels={transport:'輸送',research:'研究',survey:'地表調査',scientific_exploration:'科学探査',founding:'拠点設立',relocating:'移動',releasing:'回収',retirement:'退役',other:'その他'};
+  const fleetUsageLabel=(kind)=>fleetUsageLabels[kind]||'その他';
   function ownerContextName(kind,id){
     if(!kind)return '需要地全体';
     if(!id)return ownerLabel(kind);
@@ -37,7 +39,7 @@
   const section=(title,body)=>`<section class="inspector-section"><h3>${esc(title)}</h3>${body}</section>`;
   const kv=(rows)=>`<dl class="kv-grid">${rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
   const capText=(c)=>c?`${fmt(c.forward_t_per_day,2)} / ${fmt(c.reverse_t_per_day,2)} t/日`:'—';
-  const infrastructureText=(rows)=>{const items=rows||[];return items.length?items.map((r)=>`${locationName(r.operational_node_id)}: ${capabilityName(r.capability_id)} (${r.required_state==='ACTIVE'?'Active':'Installed'})`).join(' / '):'追加Capability要件なし';};
+  const infrastructureText=(rows)=>{const items=rows||[];return items.length?items.map((r)=>`${locationName(r.operational_node_id)}: ${capabilityName(r.capability_id)} (${r.required_state==='ACTIVE'?'稼働中':'設置済み'})`).join(' / '):'追加の機能要件なし';};
   const pathText=(path)=>{const rows=path||[];return rows.length?rows.map((id)=>definitionName(id)).join(' → '):'—';};
   const relocationKey=(destination,units)=>`${destination}\u001f${units}`;
 
@@ -85,9 +87,9 @@
     const blockers=(preview.blockers||[]).length?`<div class="issue-stack">${preview.blockers.map((row)=>issueHtml(['transport',row])).join('')}</div>`:'<span class="badge ok">現在の制約なし</span>';
     root.innerHTML=`<h3>設定結果</h3>${kv([
       ['Target',esc(capText(preview.target_capacity))],
-      ['必要Fleet',`${esc(required)} unit`],
-      ['利用可能Fleet',`${fmt(preview.available_units,0)} unit`],
-      ['不足',`${esc(unfilled)} unit`],
+      ['必要Fleet',`${esc(required)} 機`],
+      ['利用可能Fleet',`${fmt(preview.available_units,0)} 機`],
+      ['不足',`${esc(unfilled)} 機`],
       ['成立可能Capacity',esc(capText(preview.achievable_capacity))],
       ['選択経路',esc(route)],
       ['運行周期 / 所要時間',`${fmt(preview.cycle_days,1)} 日 / F ${fmt(preview.forward_latency_days,0)} 日${preview.reverse_latency_days==null?'':` / R ${fmt(preview.reverse_latency_days,0)} 日`}`],
@@ -272,19 +274,31 @@
     $('#requirementTable').innerHTML=`<div class="supply-requirement-grid">${cards||`<div class="empty-state">現在の${playerTerm('supply_requirement')}はありません。</div>`}</div>`;
   }
 
+  function fleetCommitmentContext(commitment){
+    if(commitment.usage_kind==='transport')return transportAllocationLabel(commitment.owner_activity_id);
+    if(commitment.usage_kind==='scientific_exploration'){const row=(state.scientificExplorations?.items||[]).find((item)=>item.id===commitment.owner_activity_id);return row?.display_name||'科学探査';}
+    if(commitment.usage_kind==='founding'){const row=(state.projects?.items||[]).find((item)=>item.id===commitment.owner_activity_id);return row?.display_name||'拠点設立';}
+    if(commitment.usage_kind==='research')return '研究支援';
+    if(commitment.usage_kind==='survey')return '地表調査支援';
+    return fleetUsageLabel(commitment.usage_kind);
+  }
+
   function renderFleet(){
-    const pools=state.fleet?.pools||logistics().fleet_pools||[]; const relocations=state.fleet?.relocations||logistics().relocations||[]; const releases=state.fleet?.releases||logistics().releases||[]; const retirements=state.fleet?.retirements||logistics().retirements||[];
+    const pools=state.fleet?.pools||logistics().fleet_pools||[]; const commitments=state.fleet?.commitments||logistics().fleet_commitments||[]; const relocations=state.fleet?.relocations||logistics().relocations||[]; const releases=state.fleet?.releases||logistics().releases||[]; const retirements=state.fleet?.retirements||logistics().retirements||[];
     $('#vehicleCountBadge').textContent=`${pools.reduce((n,p)=>n+Number(p.total_units||0),0)} 機`;
     const poolCards=pools.map((p)=>{
       const free=Number(p.free_units||0);
       const active=Number(p.total_units||0)-free;
-      return `<article class="fleet-pool-card" data-fleet-pool-row><div class="decision-card-title"><span><strong>${esc(p.display_name)}</strong><small>${esc(locationName(p.operational_node_id))}</small></span><span class="badge ${free>0?'ok':'warn'}">空き ${fmt(free,0)} / ${fmt(p.total_units,0)}</span></div><div class="fleet-commitment-grid"><span><small>輸送</small><strong>${fmt(p.transport_units,0)}</strong></span><span><small>探査</small><strong>${fmt(p.exploration_units,0)}</strong></span><span><small>その他配備</small><strong>${fmt(p.other_committed_units,0)}</strong></span><span><small>移動中</small><strong>${fmt(p.relocating_units,0)}</strong></span><span><small>回収中</small><strong>${fmt(p.releasing_units,0)}</strong></span><span><small>退役中</small><strong>${fmt(p.retirement_units,0)}</strong></span></div><div class="fleet-utilization-line"><span>配備中 ${fmt(active,0)} 機</span><span>空き ${fmt(free,0)} 機</span></div><div class="fleet-card-actions"><button type="button" data-fleet-relocate="${esc(p.vehicle_definition_id)}" data-fleet-source="${esc(p.operational_node_id)}" data-fleet-free="${fmt(free,0)}" ${free<=0?'disabled title="空き機体なし"':''}>機体を移動</button><label>退役数<input data-retirement-units type="number" min="1" max="${fmt(free,0)}" value="1" ${free<=0?'disabled':''}></label>${priorityControl(3,'data-retirement-priority','優先度',free<=0)}<button type="button" data-fleet-retire="${esc(p.vehicle_definition_id)}" data-fleet-retire-node="${esc(p.operational_node_id)}" ${free<=0?'disabled title="空き機体なし"':''}>退役を計画</button></div></article>`;
+      const poolCommitments=commitments.filter((c)=>c.vehicle_definition_id===p.vehicle_definition_id&&c.operational_node_id===p.operational_node_id&&!['relocating','releasing','retirement'].includes(c.usage_kind));
+      const assignmentRows=poolCommitments.map((c)=>`<div class="fleet-assignment-row"><span><strong>${esc(fleetUsageLabel(c.usage_kind))}</strong><small>${esc(fleetCommitmentContext(c))}</small></span><strong>${fmt(c.quantity,0)} 機</strong></div>`).join('');
+      const otherMetric=Number(p.other_committed_units||0)>0?`<span><small>その他</small><strong>${fmt(p.other_committed_units,0)}</strong></span>`:'';
+      return `<article class="fleet-pool-card" data-fleet-pool-row><div class="decision-card-title"><span><strong>${esc(p.display_name)}</strong><small>${esc(locationName(p.operational_node_id))}</small></span><span class="badge ${free>0?'ok':'warn'}">空き ${fmt(free,0)} / ${fmt(p.total_units,0)}</span></div><div class="fleet-commitment-grid"><span><small>輸送</small><strong>${fmt(p.transport_units,0)}</strong></span><span><small>研究</small><strong>${fmt(p.research_units,0)}</strong></span><span><small>地表調査</small><strong>${fmt(p.survey_units,0)}</strong></span><span><small>科学探査</small><strong>${fmt(p.exploration_units,0)}</strong></span><span><small>拠点設立</small><strong>${fmt(p.founding_units,0)}</strong></span><span><small>移動中</small><strong>${fmt(p.relocating_units,0)}</strong></span><span><small>回収中</small><strong>${fmt(p.releasing_units,0)}</strong></span><span><small>退役中</small><strong>${fmt(p.retirement_units,0)}</strong></span>${otherMetric}</div><div class="fleet-utilization-line"><span>配備中 ${fmt(active,0)} 機</span><span>空き ${fmt(free,0)} 機</span></div>${assignmentRows?`<div class="fleet-assignment-list"><span class="eyebrow">現在の配備先</span>${assignmentRows}</div>`:''}<div class="fleet-card-actions"><button type="button" data-fleet-relocate="${esc(p.vehicle_definition_id)}" data-fleet-source="${esc(p.operational_node_id)}" data-fleet-free="${fmt(free,0)}" ${free<=0?'disabled title="空き機体なし"':''}>機体を移動</button><label>退役数<input data-retirement-units type="number" min="1" max="${fmt(free,0)}" value="1" ${free<=0?'disabled':''}></label>${priorityControl(3,'data-retirement-priority','優先度',free<=0)}<button type="button" data-fleet-retire="${esc(p.vehicle_definition_id)}" data-fleet-retire-node="${esc(p.operational_node_id)}" ${free<=0?'disabled title="空き機体なし"':''}>退役を計画</button></div></article>`;
     }).join('');
     const relocationCards=relocations.map((r)=>`<article class="fleet-transition-card"><span class="badge">移動中</span><strong>${esc(r.display_name)} · ${fmt(r.units,0)} 機</strong><span>${esc(locationName(r.source_id))} → ${esc(locationName(r.destination_id))}</span><small>到着予定 Day ${fmt(r.arrival_day,0)}</small></article>`).join('');
     const releaseCards=releases.map((r)=>`<article class="fleet-transition-card"><span class="badge">回収中</span><strong>${esc(r.display_name)} · ${fmt(r.units,0)} 機</strong><span>${esc(locationName(r.operational_node_id))}</span><small>解放予定 Day ${fmt(r.release_day,0)} · 残り ${fmt(r.remaining_days,0)} 日</small></article>`).join('');
     const retirementCards=retirements.map((r)=>{const salvage=(r.expected_salvage||[]).map(([rid,amount])=>`${resourceName(rid)} ${fmt(amount,2)} t`).join(' / ')||'なし';const projected=(r.projected_salvage||[]).map(([rid,amount])=>`${resourceName(rid)} ${fmt(amount,2)} t`).join(' / ')||'なし';const blockers=(r.blockers||[]).map(A.userFacingText);return `<article class="fleet-retirement-card" data-retirement-row="${esc(r.id)}"><div class="decision-card-title"><span><strong>${esc(r.display_name)} · ${fmt(r.units,0)} 機</strong><small>${esc(locationName(r.operational_node_id))}</small></span><span class="badge ${r.phase==='complete'?'ok':blockers.length?'warn':''}">${r.phase==='complete'?'完了':'退役処理中'}</span></div><div class="fleet-retirement-metrics"><span>進捗 <strong>${fmt(r.progress_work,1)} / ${fmt(r.required_work,1)}</strong></span><span>回収見込 <strong>${esc(projected)}</strong></span><span>回収可能性 <strong>${esc(salvage)}</strong></span></div>${blockers.length?`<div class="decision-card-footer has-warning">制約: ${esc(blockers[0])}</div>`:''}<div class="fleet-card-actions">${priorityControl(r.priority??3,`data-retirement-active-priority data-priority-direct="retirement" data-priority-id="${esc(r.id)}"`,'優先度',['complete','cancelled'].includes(r.phase))}<button type="button" class="danger-button" data-retirement-cancel="${esc(r.id)}" ${r.irreversible_started||['complete','cancelled'].includes(r.phase)?'disabled title="不可逆処理開始後は取消不可"':''}>退役取消</button></div></article>`;}).join('');
     const transitions=relocationCards+releaseCards+retirementCards;
-    $('#vehicleTable').innerHTML=`<div class="fleet-decision-surface"><div class="decision-surface-heading"><div><span class="eyebrow">機体配備</span><h3>Fleet</h3><p>所在地ごとに空き機体と用途別の拘束を確認し、移動・退役を判断します。</p></div><span class="badge">${pools.length} 配備群</span></div><div class="fleet-pool-grid">${poolCards||'<div class="empty-state">Fleetはありません。</div>'}</div>${transitions?`<section class="fleet-transition-section"><h4>進行中の機体状態変更</h4><div class="fleet-transition-grid">${transitions}</div></section>`:''}</div>`;
+    $('#vehicleTable').innerHTML=`<div class="fleet-decision-surface"><div class="decision-surface-heading"><div><span class="eyebrow">機体配備</span><h3>Fleet</h3><p>所在地ごとに空き機体と用途別の拘束を確認し、移動・退役を判断します。研究・地表調査・科学探査・輸送を同じ配備群で比較できます。</p></div><span class="badge">${pools.length} 配備群</span></div><div class="fleet-pool-grid">${poolCards||'<div class="empty-state">Fleetはありません。</div>'}</div>${transitions?`<section class="fleet-transition-section"><h4>進行中の機体状態変更</h4><div class="fleet-transition-grid">${transitions}</div></section>`:''}</div>`;
   }
 
   function allocationTarget(a){return `F ${fmt(a.target_capacity?.forward_t_per_day,2)} / R ${fmt(a.target_capacity?.reverse_t_per_day,2)} t/日`;}

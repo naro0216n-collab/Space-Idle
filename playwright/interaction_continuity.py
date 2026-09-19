@@ -176,6 +176,8 @@ def run() -> None:
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
 
             # Save/Load must restore authoritative state after a direct priority action.
+            # Follow the visible user navigation path back to Location before opening its tab.
+            page.locator('.primary-nav-button[data-section="location"]').click()
             page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
             first_facility = page.locator('[data-inspect="facility"]').first
             first_facility.click()

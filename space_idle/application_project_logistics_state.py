@@ -12,6 +12,21 @@ from .disposal import project_salvage_recovery
 
 
 class LogisticsStateProjectorMixin:
+    _FLEET_USAGE_KIND_BY_OWNER_TYPE = {
+        "transport_allocation": "transport",
+        "research_provider_assignment": "research",
+        "survey_provider_assignment": "survey",
+        "scientific_exploration": "scientific_exploration",
+        "founding": "founding",
+        "fleet_relocation": "relocating",
+        "fleet_release": "releasing",
+        "fleet_retirement": "retirement",
+    }
+
+    @classmethod
+    def _fleet_usage_kind(cls, owner_activity_type: str) -> str:
+        return cls._FLEET_USAGE_KIND_BY_OWNER_TYPE.get(owner_activity_type, "other")
+
     @staticmethod
     def _capacity_row(value) -> DirectionalCapacityRow:
         return DirectionalCapacityRow(
@@ -49,19 +64,39 @@ class LogisticsStateProjectorMixin:
             if vehicle_definition_id is not None and str(definition_id) != vehicle_definition_id:
                 continue
             snapshot = sim.transport.fleet_pool_snapshot(definition_id, node_id)
+            commitment_units_by_usage: dict[str, int] = {}
+            for commitment in sim.transport.fleet_commitment_snapshots():
+                if (
+                    commitment.vehicle_definition_id != definition_id
+                    or commitment.operational_node_id != node_id
+                ):
+                    continue
+                usage_kind = self._fleet_usage_kind(commitment.owner_activity_ref.activity_type)
+                commitment_units_by_usage[usage_kind] = (
+                    commitment_units_by_usage.get(usage_kind, 0) + commitment.quantity
+                )
+            research_units = commitment_units_by_usage.get("research", 0)
+            survey_units = commitment_units_by_usage.get("survey", 0)
+            founding_units = commitment_units_by_usage.get("founding", 0)
+            application_classified_other = research_units + survey_units + founding_units
             rows.append(
                 FleetPoolRow(
-                    str(definition_id),
-                    self._vehicle_definition(definition_id).display_name,
-                    str(node_id),
-                    snapshot.total_units,
-                    snapshot.free_units,
-                    snapshot.transport_units,
-                    snapshot.exploration_units,
-                    snapshot.retirement_units,
-                    snapshot.other_committed_units,
-                    snapshot.relocating_units,
-                    snapshot.releasing_units,
+                    vehicle_definition_id=str(definition_id),
+                    display_name=self._vehicle_definition(definition_id).display_name,
+                    operational_node_id=str(node_id),
+                    total_units=snapshot.total_units,
+                    free_units=snapshot.free_units,
+                    transport_units=snapshot.transport_units,
+                    research_units=research_units,
+                    survey_units=survey_units,
+                    exploration_units=snapshot.exploration_units,
+                    founding_units=founding_units,
+                    retirement_units=snapshot.retirement_units,
+                    other_committed_units=max(
+                        0, snapshot.other_committed_units - application_classified_other
+                    ),
+                    relocating_units=snapshot.relocating_units,
+                    releasing_units=snapshot.releasing_units,
                 )
             )
         return tuple(rows)
@@ -85,6 +120,7 @@ class LogisticsStateProjectorMixin:
                 id=str(commitment.id),
                 owner_activity_type=commitment.owner_activity_ref.activity_type,
                 owner_activity_id=str(commitment.owner_activity_ref.activity_id),
+                usage_kind=self._fleet_usage_kind(commitment.owner_activity_ref.activity_type),
                 vehicle_definition_id=str(commitment.vehicle_definition_id),
                 display_name=self._vehicle_definition(commitment.vehicle_definition_id).display_name,
                 quantity=commitment.quantity,
