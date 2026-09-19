@@ -347,10 +347,11 @@ def run(*, browser=None) -> dict[str, object]:
             _assert("必要工数" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose construction work")
             _assert("必要資源" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose physical resource requirements")
             upgrade_deltas = page.locator('#inspectorContent .upgrade-delta')
-            _assert(upgrade_deltas.count() > 0, "upgrade inspector must expose Application-projected Current to Target differences")
+            _assert(upgrade_deltas.count() > 0, "upgrade inspector must expose Application-projected current-to-target differences")
             _assert(
-                "Current" in upgrade_deltas.first.inner_text() and "Target" in upgrade_deltas.first.inner_text(),
-                "upgrade differences must present Current and Target in the same Inspector",
+                upgrade_deltas.first.locator('[data-upgrade-value-role="current"]').count() == 1
+                and upgrade_deltas.first.locator('[data-upgrade-value-role="target"]').count() == 1,
+                "upgrade differences must present current and target values in the same Inspector",
             )
             _assert(_priority_group(page, "#upgradePlanPriorityInput").is_visible(), "upgrade planning must expose priority before project creation")
             _assert(page.locator("#upgradePlanProcurementTimingPolicy").is_visible(), "upgrade planning must expose procurement timing policy before project creation")

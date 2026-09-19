@@ -83,16 +83,16 @@
     renderAllocationCapacityAssistance(preview);
     const required=preview.required_units==null?'算出不可':fmt(preview.required_units,0);
     const unfilled=preview.unfilled_units==null?'—':fmt(preview.unfilled_units,0);
-    const route=`F ${pathText(preview.selected_forward_path)}${(preview.selected_reverse_path||[]).length?` / R ${pathText(preview.selected_reverse_path)}`:''}`;
+    const route=`往路 ${pathText(preview.selected_forward_path)}${(preview.selected_reverse_path||[]).length?` / 復路 ${pathText(preview.selected_reverse_path)}`:''}`;
     const blockers=(preview.blockers||[]).length?`<div class="issue-stack">${preview.blockers.map((row)=>issueHtml(row)).join('')}</div>`:'<span class="badge ok">現在の制約なし</span>';
     root.innerHTML=`<h3>設定結果</h3>${kv([
-      ['Target',esc(capText(preview.target_capacity))],
+      ['輸送能力目標',esc(capText(preview.target_capacity))],
       ['必要Fleet',`${esc(required)} 機`],
       ['利用可能Fleet',`${fmt(preview.available_units,0)} 機`],
       ['不足',`${esc(unfilled)} 機`],
-      ['成立可能Capacity',esc(capText(preview.achievable_capacity))],
+      ['成立可能輸送能力',esc(capText(preview.achievable_capacity))],
       ['選択経路',esc(route)],
-      ['運行周期 / 所要時間',`${fmt(preview.cycle_days,1)} 日 / F ${fmt(preview.forward_latency_days,0)} 日${preview.reverse_latency_days==null?'':` / R ${fmt(preview.reverse_latency_days,0)} 日`}`],
+      ['運行周期 / 所要時間',`${fmt(preview.cycle_days,1)} 日 / 往路 ${fmt(preview.forward_latency_days,0)} 日${preview.reverse_latency_days==null?'':` / 復路 ${fmt(preview.reverse_latency_days,0)} 日`}`],
     ])}${blockers}`;
   }
 
@@ -135,7 +135,7 @@
         ['往路',esc(pathText(option.forward_path))],
         ['復路 / 回収',esc(pathText(option.reverse_path))],
         ['基準輸送能力（往路 / 復路）',esc(capText(option.nominal_capacity))],
-        ['運行周期 / 所要時間',`${fmt(option.cycle_days,1)} 日 / F ${fmt(option.forward_latency_days,0)} 日${option.reverse_latency_days==null?'':` / R ${fmt(option.reverse_latency_days,0)} 日`}`],
+        ['運行周期 / 所要時間',`${fmt(option.cycle_days,1)} 日 / 往路 ${fmt(option.forward_latency_days,0)} 日${option.reverse_latency_days==null?'':` / 復路 ${fmt(option.reverse_latency_days,0)} 日`}`],
         ['Fleet',`${fmt(option.fleet_free_units,0)} 機空き / ${fmt(option.fleet_total_units,0)} 機`],
         ['必要インフラ',esc(infrastructureText(option.infrastructure_requirements))],
         ['最大運用時の必要資源',esc(resources)],
@@ -292,7 +292,7 @@
       const attrs=item.kind==='cargo_flow'
         ? 'data-logistics-decision-target="cargo"'
         : `data-logistics-decision-kind="${esc(item.kind)}" data-logistics-decision-id="${esc(item.id)}"`;
-      return `<button type="button" class="logistics-decision-item ${item.severity==='attention'?'has-warning':''} ${selected?'is-selected':''}" ${attrs}><span class="eyebrow">${esc(item.eyebrow)}</span><strong>${esc(item.title)}</strong><span>${esc(item.detail)}</span><small>${item.kind==='cargo_flow'?'輸送中貨物で確認':'Networkで原因を確認'}</small></button>`;
+      return `<button type="button" class="logistics-decision-item ${item.severity==='attention'?'has-warning':''} ${selected?'is-selected':''}" ${attrs}><span class="eyebrow">${esc(item.eyebrow)}</span><strong>${esc(item.title)}</strong><span>${esc(item.detail)}</span><small>${item.kind==='cargo_flow'?'輸送中貨物で確認':'輸送網で原因を確認'}</small></button>`;
     }).join('');
     root.innerHTML=`<div class="logistics-decision-heading"><div><span class="eyebrow">現在の輸送判断</span><h2>${items.length?'対処が必要な物流状態':'重大な輸送判断なし'}</h2></div><span class="badge ${items.length?'warn':'ok'}">${items.length} 件</span></div>${items.length?`<div class="logistics-decision-grid">${cards}</div>${items.length>visible.length?`<div class="cell-sub">ほか ${items.length-visible.length} 件。詳細一覧は下段で確認できます。</div>`:''}`:'<div class="logistics-decision-clear">現在の補給需要、輸送能力、到着待機にPlayer判断を要求する状態はありません。Networkと詳細状態は引き続き下段で確認できます。</div>'}`;
   }
@@ -311,7 +311,7 @@
     const allocation=allocations[0];
     if(allocation){box.hidden=false;box.innerHTML=`<span class="eyebrow">選択中の判断</span><strong>${esc(allocation.display_name)}</strong><span>この輸送能力設定で利用する経路を強調中</span>`;return;}
     if(target.subject_kind==='movement_plan'&&target.subject_id){const plan=(state.movementPlans?.items||[]).find((row)=>row.id===target.subject_id);box.hidden=false;box.innerHTML=`<span class="eyebrow">選択中の判断</span><strong>${esc(plan?.display_name||playerTerm('movement_plan'))}</strong><span>選択した移動経路を強調中</span>`;return;}
-    if(target.subject_kind==='operational_node'&&target.subject_id){box.hidden=false;box.innerHTML=`<span class="eyebrow">全体Mapから引き継ぎ</span><strong>${esc(locationName(target.subject_id))}</strong><span>この拠点に接続する輸送Networkを強調中</span>`;return;}
+    if(target.subject_kind==='operational_node'&&target.subject_id){box.hidden=false;box.innerHTML=`<span class="eyebrow">全体Mapから引き継ぎ</span><strong>${esc(locationName(target.subject_id))}</strong><span>この拠点に接続する輸送網を強調中</span>`;return;}
     box.hidden=true;box.textContent='';
   }
 
@@ -376,7 +376,7 @@
       return `<article class="supply-policy-card"><div class="decision-card-title"><span><strong>${esc(locationName(row.destination_id))}</strong><small>${esc(scope)}</small></span><span class="badge">固定条件</span></div><div class="supply-policy-metrics"><span><small>供給元</small><strong>${row.source_node_id?esc(locationName(row.source_node_id)):'自動選択'}</strong></span><span><small>必須経由</small><strong>${esc(via)}</strong></span><span><small>必須輸送区間</small><strong>${esc(allocations)}</strong></span></div><div class="action-row"><button type="button" data-routing-constraint-edit="${esc(key)}">編集</button><button type="button" class="danger-button" data-routing-constraint-clear="${esc(key)}">解除</button></div></article>`;
     }).join('');
     const targetCards=targets.map((row)=>`<article class="target-stock-card" data-target-stock-row><div class="decision-card-title"><span><strong>${esc(resourceName(row.resource_id))}</strong><small>${esc(locationName(row.destination_id))}</small></span><span class="badge">${esc(priorityText(row.priority))}</span></div><div class="target-stock-value"><span>追加備蓄目標</span><strong>${fmt(row.target_quantity_t)} t</strong></div><div class="action-row"><button type="button" data-target-stock-edit="${esc(row.destination_id)}" data-resource-id="${esc(row.resource_id)}">設定</button><button type="button" class="danger-button" data-target-stock-delete="${esc(row.destination_id)}" data-resource-id="${esc(row.resource_id)}">削除</button></div></article>`).join('');
-    $('#routingConstraintTable').innerHTML=`<div class="supply-policy-surface"><div class="supply-policy-heading"><div><span class="eyebrow">追加備蓄</span><h4>需要地の在庫目標</h4><p>通常需要とは別に、需要地へ追加で確保したい備蓄量を設定します。</p></div><button type="button" id="newTargetStockButton" class="primary">追加備蓄を設定</button></div><div class="target-stock-grid">${targetCards||'<div class="empty-state compact-empty">追加備蓄目標はありません。</div>'}</div><div class="supply-policy-heading"><div><span class="eyebrow">経路条件</span><h4>供給経路の固定条件</h4><p>通常はNetworkから自動選択します。固定が必要な需要だけ供給元・経由・輸送区間を指定します。</p></div></div><div class="supply-policy-grid">${constraintCards||'<div class="empty-state compact-empty">固定条件はありません。既存Networkから自動選択します。</div>'}</div></div>`;
+    $('#routingConstraintTable').innerHTML=`<div class="supply-policy-surface"><div class="supply-policy-heading"><div><span class="eyebrow">追加備蓄</span><h4>需要地の在庫目標</h4><p>通常需要とは別に、需要地へ追加で確保したい備蓄量を設定します。</p></div><button type="button" id="newTargetStockButton" class="primary">追加備蓄を設定</button></div><div class="target-stock-grid">${targetCards||'<div class="empty-state compact-empty">追加備蓄目標はありません。</div>'}</div><div class="supply-policy-heading"><div><span class="eyebrow">経路条件</span><h4>供給経路の固定条件</h4><p>通常は輸送網から自動選択します。固定が必要な需要だけ供給元・経由・輸送区間を指定します。</p></div></div><div class="supply-policy-grid">${constraintCards||'<div class="empty-state compact-empty">固定条件はありません。既存の輸送網から自動選択します。</div>'}</div></div>`;
   }
 
   function requirementStateLabel(d){return {local_covered:'現地充足',pipeline_covered:'輸送中で充足',no_source:'供給元なし',transport_blocked:'輸送能力阻害',source_shortage:'供給元不足',coverage_gap:'供給空白',low_runway:'猶予小',uncovered:'未充足'}[d.supply_state]||d.supply_state;}
@@ -510,7 +510,7 @@
     const segmentRows=[['出発',esc(endpointText(movementPlan.origin_endpoint))],['到着',esc(endpointText(movementPlan.destination_endpoint))],['移動条件',movementPlan.available?'成立':'不成立'],['輸送運用',movementPlan.service_feasible_now?'可能':'不可']];
     if(movementPlan.same_body_surface&&movementPlan.distance_km!=null)segmentRows.push(['地表距離',`${fmt(movementPlan.distance_km,1)} km`]);else segmentRows.push(['基準移動日数',`${fmt(movementPlan.transit_days)}日`]);
     segmentRows.push(['必要Δv',`${fmt(movementPlan.delta_v_km_s,2)} km/s`]);
-    content.innerHTML=section('区間',kv(segmentRows))+section('必要移動操作',(movementPlan.operations||[]).map((o)=>`<span class="badge">${esc(operationName(Array.isArray(o)?o[0]:o))}</span>`).join(' ')||'—')+section('現在のblocker',(movementPlan.blockers||[]).length?`<div class="issue-stack">${movementPlan.blockers.map((b)=>issueHtml(b)).join('')}</div>`:'<span class="badge ok">なし</span>')+section('輸送手段候補',modes||'<div class="empty-state">候補なし</div>')+section('操作','<div class="action-stack"><button type="button" class="primary" id="movementPlanAllocationButton">この区間へFleetを配備</button></div>');
+    content.innerHTML=section('区間',kv(segmentRows))+section('必要移動操作',(movementPlan.operations||[]).map((o)=>`<span class="badge">${esc(operationName(Array.isArray(o)?o[0]:o))}</span>`).join(' ')||'—')+section('現在の制約',(movementPlan.blockers||[]).length?`<div class="issue-stack">${movementPlan.blockers.map((b)=>issueHtml(b)).join('')}</div>`:'<span class="badge ok">なし</span>')+section('輸送手段候補',modes||'<div class="empty-state">候補なし</div>')+section('操作','<div class="action-stack"><button type="button" class="primary" id="movementPlanAllocationButton">この区間へFleetを配備</button></div>');
   }
 
   function populateLocationSelects(){
@@ -555,10 +555,10 @@
   function renderTargetStockOptions(view){
     if(!view)return;
     targetStockOptionsView=view;
-    $('#targetStockOptionSummary').innerHTML=`<div class="cell-main">${esc(locationName(view.destination_id))} · ${esc(resourceName(view.resource_id))}</div><div class="cell-sub">現在在庫 ${fmt(view.current_stock_t,2)} t · Inbound ${fmt(view.inbound_t,2)} t · 通常需要 ${fmt(view.normal_demand_t_per_day,3)} t/日</div><div class="cell-sub">追加備蓄目標は通常需要とは別に保持したい在庫量です。</div>`;
+    $('#targetStockOptionSummary').innerHTML=`<div class="cell-main">${esc(locationName(view.destination_id))} · ${esc(resourceName(view.resource_id))}</div><div class="cell-sub target-stock-summary"><span data-stock-summary="current">現在在庫 ${fmt(view.current_stock_t,2)} t</span> · <span data-stock-summary="inbound">入庫予定 ${fmt(view.inbound_t,2)} t</span> · <span data-stock-summary="demand">通常需要 ${fmt(view.normal_demand_t_per_day,3)} t/日</span></div><div class="cell-sub">追加備蓄目標は通常需要とは別に保持したい在庫量です。</div>`;
     const range=$('#targetStockQuantityRange');range.max=String(Math.max(1,Number(view.suggested_max_t)||1));
     setTargetStockQuantity(view.current_target_quantity_t,{expandRange:true});setTargetStockPriority(view.priority);
-    $('#targetStockPresets').innerHTML=(view.presets||[]).map((row)=>`<button type="button" class="choice-button" data-target-stock-preset="${esc(row.key)}" data-target-stock-value="${esc(row.target_quantity_t)}">${esc(row.display_name)}<span class="cell-sub">${fmt(row.target_quantity_t,2)} t</span></button>`).join('')||'<span class="cell-sub">通常需要がないため日数Presetはありません。必要な追加備蓄量を直接設定してください。</span>';
+    $('#targetStockPresets').innerHTML=(view.presets||[]).map((row)=>`<button type="button" class="choice-button" data-target-stock-preset="${esc(row.key)}" data-target-stock-value="${esc(row.target_quantity_t)}">${esc(row.display_name)}<span class="cell-sub">${fmt(row.target_quantity_t,2)} t</span></button>`).join('')||'<span class="cell-sub">通常需要がないため日数候補はありません。必要な追加備蓄量を直接設定してください。</span>';
   }
   async function updateTargetStockOptions(){
     if(!$('#targetStockDialog')?.open)return;
