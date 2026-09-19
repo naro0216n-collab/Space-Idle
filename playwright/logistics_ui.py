@@ -141,6 +141,13 @@ def run(*, browser=None) -> None:
             page.locator("#allocationVehicle").select_option(OWNED_LAUNCH_VEHICLE)
             page.locator("#allocationSource").select_option(EARTH)
             page.locator("#allocationDestination").select_option(LEO)
+            movement_card = page.locator("#allocationMovementChoices [data-allocation-movement-card]").first
+            movement_card.wait_for(timeout=10000)
+            movement_text = movement_card.inner_text()
+            for label in ("所要時間", "必要Δv", "運行周期", "1機あたり往路能力", "満載時運用資源"):
+                assert label in movement_text, f"Movement candidate must expose {label} before hard-constraint selection"
+            movement_control = movement_card.locator("[data-allocation-movement]")
+            assert movement_control.get_attribute("aria-pressed") == "false"
             page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).wait_for(timeout=10000)
             page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).click()
             assert float(page.locator("#allocationForward").input_value()) > 0
@@ -161,7 +168,7 @@ def run(*, browser=None) -> None:
             for label in ("目標", "必要機体", "利用可能", "使用中", "余力", "周期"):
                 assert label in allocation_text, f"Transport Allocation card must expose {label}"
 
-            allocation_row.get_by_role("button", name="Networkで確認").click()
+            allocation_row.locator("[data-allocation-network]").click()
             page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
             assert "輸送能力設定" in page.locator("#networkDecisionContext").inner_text()
             context_line = page.locator("#networkSvg .network-line.is-context-related").first

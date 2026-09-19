@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
-from .ui_reports import DecisionConstraintRow
+from .ui_reports import ComparisonValueRow, DecisionConstraintRow
 from ..priority import ActivityPriority, ProvisioningPriority
 
 
@@ -64,6 +64,8 @@ class MovementPlanRow:
     operations: tuple[tuple[str, float], ...]
     blockers: tuple[DecisionConstraintRow, ...]
     modes: tuple[MovementServiceModeRow, ...]
+    comparison_key: str
+    comparison_values: tuple[ComparisonValueRow, ...]
 
 
 @dataclass(frozen=True)

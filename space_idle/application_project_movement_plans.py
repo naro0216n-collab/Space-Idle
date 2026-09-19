@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from .application_transport_support import infrastructure_requirement_rows, vehicle_concept
+from .application_comparison import project_comparison_axes
+from .app_contracts.ui_reports import ComparisonValueRow
 from .application_constraints import constraints_from_codes
 from .application_views import (
     DirectionalCapacityRow,
@@ -116,6 +118,7 @@ class LogisticsMovementPlanProjectorMixin:
         destination_id: str | None = None,
         movement_plan_id: str | None = None,
         include_modes: bool = True,
+        comparison_vehicle_definition_id: str | None = None,
     ) -> tuple[MovementPlanRow, ...]:
         sim = self._simulation
         if movement_plan_id is not None:
@@ -157,6 +160,30 @@ class LogisticsMovementPlanProjectorMixin:
                 )
                 same_body_surface = False
                 distance_km = None
+            comparison_mode = (
+                next(
+                    (row for row in mode_rows if row.vehicle_definition_id == str(comparison_vehicle_definition_id)),
+                    None,
+                )
+                if comparison_vehicle_definition_id is not None
+                else None
+            )
+            comparison_requested = origin_id is not None and destination_id is not None
+            comparison_values = []
+            if comparison_requested:
+                comparison_values.extend((
+                    ComparisonValueRow(axis_key="transit_days", number_value=float(movement_plan.transit_days)),
+                    ComparisonValueRow(axis_key="delta_v_km_s", number_value=float(movement_plan.delta_v_km_s)),
+                    ComparisonValueRow(axis_key="operation_count", number_value=float(len(movement_plan.operations))),
+                ))
+            if comparison_requested and comparison_mode is not None:
+                comparison_values.extend((
+                    ComparisonValueRow(axis_key="service_feasible", text_value=("運用可能" if comparison_mode.service_feasible else "条件不足")),
+                    ComparisonValueRow(axis_key="cycle_days", number_value=comparison_mode.cycle_days),
+                    ComparisonValueRow(axis_key="nominal_forward_t_per_day", number_value=comparison_mode.nominal_capacity.forward_t_per_day),
+                    ComparisonValueRow(axis_key="full_load_propellant_t", number_value=(comparison_mode.full_load_propellant_t or 0.0)),
+                    ComparisonValueRow(axis_key="infrastructure_count", number_value=float(len(comparison_mode.infrastructure_requirements))),
+                ))
             rows.append(
                 MovementPlanRow(
                     id=str(movement_plan.id),
@@ -184,6 +211,8 @@ class LogisticsMovementPlanProjectorMixin:
                         related_entity_id=str(movement_plan.id),
                     ),
                     modes=mode_rows if include_modes else (),
+                    comparison_key=str(movement_plan.id),
+                    comparison_values=tuple(comparison_values),
                 )
             )
         return tuple(rows)
@@ -194,10 +223,36 @@ class LogisticsMovementPlanProjectorMixin:
             destination_id=query.destination_id,
             movement_plan_id=query.movement_plan_id,
             include_modes=query.include_modes,
+            comparison_vehicle_definition_id=query.vehicle_definition_id,
         )
         if query.movement_plan_id is not None and not rows:
             raise KeyError(query.movement_plan_id)
-        return MovementPlansView(rows)
+        comparison_axes = ()
+        if query.origin_id is not None and query.destination_id is not None:
+            axis_definitions = [
+                ("transit_days", "移動所要時間", "integer", "日"),
+                ("delta_v_km_s", "必要Δv", "number", "km/s"),
+                ("operation_count", "運用工程数", "integer", None),
+            ]
+            if query.vehicle_definition_id is not None:
+                propellant_name = "推進剤"
+                for row in rows:
+                    mode = next((mode for mode in row.modes if mode.vehicle_definition_id == query.vehicle_definition_id), None)
+                    if mode is not None and mode.propellant_resource_id is not None:
+                        propellant_name = self._resource_name(mode.propellant_resource_id)
+                        break
+                axis_definitions.extend((
+                    ("service_feasible", "現在の運用可否", "text", None),
+                    ("cycle_days", "往復運行周期", "number", "日"),
+                    ("nominal_forward_t_per_day", "1機あたり往路能力", "number", "t/日"),
+                    ("full_load_propellant_t", f"満載時{propellant_name}", "number", "t/便"),
+                    ("infrastructure_count", "必要インフラ数", "integer", None),
+                ))
+            comparison_axes = project_comparison_axes(
+                tuple(axis_definitions),
+                (row.comparison_values for row in rows),
+            )
+        return MovementPlansView(rows, comparison_axes)
 
     def _transport_allocation_options_view(
         self, source_id, destination_id

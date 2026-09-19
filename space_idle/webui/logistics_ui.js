@@ -14,6 +14,9 @@
   let allocationOptionsView=null;
   let allocationOptionSerial=0;
   let allocationMovementSelection=[];
+  let allocationMovementChoicesView=null;
+  let allocationMovementChoiceSerial=0;
+  let allocationMovementComparisonPins=[];
   let allocationCapacityInitialized=false;
   let allocationPreviewSerial=0;
   let allocationPreviewTimer=null;
@@ -69,10 +72,58 @@
     renderAllocationCapacityAssistance(option);
     if(!allocationCapacityInitialized){setAllocationCapacity('Forward',option.nominal_capacity?.forward_t_per_day||0,{expandRange:true});setAllocationCapacity('Reverse',0,{expandRange:true});allocationCapacityInitialized=true;}else{setAllocationCapacity('Forward',$('#allocationForward').value,{expandRange:true});setAllocationCapacity('Reverse',$('#allocationReverse').value,{expandRange:true});}
   }
-  function renderAllocationMovementChoices(){
-    const root=$('#allocationMovementChoices');if(!root)return;const source=$('#allocationSource').value,destination=$('#allocationDestination').value;
-    const candidates=(state.movementPlans?.items||[]).filter((row)=>row.origin_id===source&&row.destination_id===destination);
-    root.innerHTML=candidates.map((row)=>{const index=allocationMovementSelection.indexOf(row.id),selected=index>=0;return `<button type="button" class="choice-button ${selected?'is-selected':''}" data-allocation-movement="${esc(row.id)}"><span class="cell-main">${selected?`${index+1}. `:''}${esc(row.display_name)}</span><span class="cell-sub">${esc(locationName(row.origin_id))} → ${esc(locationName(row.destination_id))} · ${row.service_feasible_now?'運用可能':row.available?'運用条件待ち':'不成立'}</span></button>`;}).join('')||'<span class="cell-sub">固定候補なし。自動選択を使用します。</span>';
+  function movementComparisonValue(row,axisKey){return (row.comparison_values||[]).find((value)=>value.axis_key===axisKey)||null;}
+  function movementComparisonValueText(axis,value){
+    if(!value)return '—';
+    if(value.text_value!=null)return String(value.text_value);
+    if(value.number_value==null)return '—';
+    const n=Number(value.number_value),digits=axis.value_kind==='integer'?0:2;
+    return `${fmt(n,digits)}${axis.unit?` ${axis.unit}`:''}`;
+  }
+  function movementModeForVehicle(row){
+    const vehicle=$('#allocationVehicle')?.value;
+    return (row.modes||[]).find((mode)=>mode.vehicle_definition_id===vehicle)||null;
+  }
+  function renderAllocationMovementComparison(view){
+    const axes=view?.comparison_axes||[],candidates=view?.items||[];
+    if(!axes.length)return '<div class="empty-state">現在の移動候補には、比較が必要な戦略差はありません。</div>';
+    const valid=new Set(candidates.map((row)=>row.comparison_key));
+    allocationMovementComparisonPins=allocationMovementComparisonPins.filter((key)=>valid.has(key)).slice(0,4);
+    if(allocationMovementComparisonPins.length<2)return `<div class="comparison-empty"><strong>${allocationMovementComparisonPins.length?'1候補を選択中':'比較候補を選択'}</strong><span>移動候補から2〜4候補を比較に追加すると、所要時間・運用負担・現在の成立条件を並べて確認できます。</span></div>`;
+    const pinned=allocationMovementComparisonPins.map((key)=>candidates.find((row)=>row.comparison_key===key)).filter(Boolean);
+    const headers=pinned.map((row)=>`<div class="comparison-candidate-heading"><strong>${esc(row.display_name)}</strong><small>${esc(locationName(row.origin_id))} → ${esc(locationName(row.destination_id))}</small></div>`).join('');
+    const rows=axes.map((axis)=>`<div class="comparison-axis-row ${axis.differs?'is-different':''}"><strong>${esc(axis.label)}</strong>${pinned.map((row)=>`<span>${esc(movementComparisonValueText(axis,movementComparisonValue(row,axis.key)))}</span>`).join('')}</div>`).join('');
+    const blockers=pinned.map((row)=>{const mode=movementModeForVehicle(row),items=[...(row.blockers||[]),...(mode?.blockers||[])];return `<div class="comparison-blocker-cell">${items.length?`<div class="issue-stack">${items.map(issueHtml).join('')}</div>`:'<span class="badge ok">制約なし</span>'}</div>`;}).join('');
+    return `<div class="comparison-surface" style="--comparison-columns:${pinned.length}"><div class="comparison-heading-row"><div class="comparison-axis-heading">比較軸</div>${headers}</div>${rows}<div class="comparison-axis-row comparison-blocker-row"><strong>現在の制約</strong>${blockers}</div></div>`;
+  }
+  function renderAllocationMovementChoices(view=allocationMovementChoicesView,{loading=false,error=null}={}){
+    const root=$('#allocationMovementChoices');if(!root)return;
+    if(loading){root.innerHTML='<div class="cell-sub">移動候補を取得中…</div>';return;}
+    if(error){root.innerHTML=`<div class="issue"><div class="issue-title">${esc(error)}</div></div>`;return;}
+    const candidates=view?.items||[];
+    const existingMulti=allocationMovementSelection.length>1?`<div class="detail-card"><div class="mode-title"><span>現在の固定経路</span><button type="button" class="secondary" data-allocation-movement-clear>自動選択へ戻す</button></div><div class="cell-sub">${esc(pathText(allocationMovementSelection))}</div></div>`:'';
+    const cards=candidates.map((row)=>{
+      const selected=allocationMovementSelection.length===1&&allocationMovementSelection[0]===row.id;
+      const pinned=allocationMovementComparisonPins.includes(row.comparison_key),pinDisabled=!pinned&&allocationMovementComparisonPins.length>=4;
+      const mode=movementModeForVehicle(row),status=mode?.service_feasible?'運用可能':row.available?'運用条件待ち':'不成立';
+      const propellant=mode?.propellant_resource_id&&mode.full_load_propellant_t!=null?`${resourceName(mode.propellant_resource_id)} ${fmt(mode.full_load_propellant_t,2)} t/便`:'追加推進剤なし';
+      const compare=(view?.comparison_axes||[]).length?`<button type="button" data-allocation-movement-compare="${esc(row.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';
+      return `<div class="detail-card ${selected?'is-usable':''}" data-allocation-movement-card="${esc(row.id)}"><div class="mode-title"><span>${esc(row.display_name)}</span><span class="badge ${mode?.service_feasible?'ok':row.available?'':'warn'}">${esc(status)}</span></div>${kv([['所要時間',`${fmt(row.transit_days,0)} 日`],['必要Δv',`${fmt(row.delta_v_km_s,2)} km/s`],['運行周期',mode?.cycle_days==null?'—':`${fmt(mode.cycle_days,1)} 日`],['1機あたり往路能力',mode?`${fmt(mode.nominal_capacity?.forward_t_per_day,2)} t/日`:'—'],['満載時運用資源',esc(propellant)]])}<div class="action-row">${compare}<button type="button" data-allocation-movement="${esc(row.id)}" aria-pressed="${selected?'true':'false'}">${selected?'固定を解除':'この経路で固定'}</button></div></div>`;
+    }).join('');
+    root.innerHTML=`${existingMulti}${cards||'<div class="empty-state">直通の固定候補はありません。自動経路選択を使用します。</div>'}${candidates.length>1?`<h4>移動候補比較</h4>${renderAllocationMovementComparison(view)}`:''}`;
+  }
+  async function updateAllocationMovementChoices(){
+    if(!$('#allocationDialog')?.open)return;
+    const source=$('#allocationSource').value,destination=$('#allocationDestination').value,vehicle=$('#allocationVehicle').value,serial=++allocationMovementChoiceSerial;
+    allocationMovementChoicesView=null;
+    if(!source||!destination||source===destination||!vehicle){renderAllocationMovementChoices({items:[],comparison_axes:[]});return;}
+    renderAllocationMovementChoices(null,{loading:true});
+    try{
+      const params=new URLSearchParams({origin_id:source,destination_id:destination,vehicle_definition_id:vehicle,include_modes:'true'});
+      const view=await api(`/api/v1/logistics/movement-plans?${params}`);
+      if(serial!==allocationMovementChoiceSerial||!$('#allocationDialog')?.open)return;
+      allocationMovementChoicesView=view;renderAllocationMovementChoices(view);
+    }catch(err){if(serial===allocationMovementChoiceSerial&&$('#allocationDialog')?.open)renderAllocationMovementChoices(null,{error:err.message||'移動候補を取得できません'});}
   }
 
   function renderAllocationPreview(preview=null,{loading=false,error=null}={}){
@@ -157,7 +208,7 @@
       const params=new URLSearchParams({source_id:source,destination_id:destination});
       const view=await api(`/api/v1/transport-allocation-options?${params}`);
       if(serial!==allocationOptionSerial||!$('#allocationDialog')?.open)return;
-      allocationOptionsView=view;renderAllocationServiceOptions(view);renderAllocationCapacityControls();renderAllocationMovementChoices();scheduleAllocationPreview({immediate:true});
+      allocationOptionsView=view;renderAllocationServiceOptions(view);renderAllocationCapacityControls();void updateAllocationMovementChoices();scheduleAllocationPreview({immediate:true});
     }catch(err){
       if(serial===allocationOptionSerial&&$('#allocationDialog')?.open){
         const root=$('#allocationServiceOptions');if(root)root.innerHTML=`<h3>輸送手段候補</h3><div class="issue"><div class="issue-title">${esc(err.message||'候補を取得できません')}</div></div>`;
@@ -587,7 +638,7 @@
       $('#allocationVehicle').value=allocation.vehicle_definition_id;$('#allocationSource').value=allocation.anchor_node_id;$('#allocationDestination').value=allocation.destination_id;setAllocationPriority(allocation.provisioning_priority);setAllocationCapacity('Forward',allocation.target_capacity?.forward_t_per_day??0,{expandRange:true});setAllocationCapacity('Reverse',allocation.target_capacity?.reverse_t_per_day??0,{expandRange:true});
     }else{setAllocationPriority(3);setAllocationCapacity('Forward',0);setAllocationCapacity('Reverse',0);if(movementPlan){$('#allocationSource').value=movementPlan.origin_id;$('#allocationDestination').value=movementPlan.destination_id;}}
     if($('#allocationSource').value===$('#allocationDestination').value){const other=[...$('#allocationDestination').options].find((o)=>o.value!==$('#allocationSource').value);if(other)$('#allocationDestination').value=other.value;}
-    renderAllocationMovementChoices();renderAllocationPreview();$('#allocationDialog').showModal();updateAllocationServiceOptions();
+    allocationMovementComparisonPins=[];allocationMovementChoicesView=null;renderAllocationPreview();$('#allocationDialog').showModal();updateAllocationServiceOptions();
   }
   function openRelocationDialog(vehicleDefinitionId,sourceId,freeUnits){
     relocationContext={vehicle_definition_id:vehicleDefinitionId,source_id:sourceId};relocationPreviewKey=null;populateLocationSelects();
@@ -634,10 +685,12 @@
     const requirementNetwork=event.target.closest('[data-requirement-network]');if(requirementNetwork){state.decisionContext={decision_area:'logistics',subject_kind:'supply_requirement',subject_id:requirementNetwork.dataset.requirementNetwork};state.selectedMovementPlanId=null;render();$('#networkStage')?.scrollIntoView?.({block:'nearest'});return;}
     const allocationNetwork=event.target.closest('[data-allocation-network]');if(allocationNetwork){state.decisionContext={decision_area:'logistics',subject_kind:'transport_allocation',subject_id:allocationNetwork.dataset.allocationNetwork};state.selectedMovementPlanId=null;render();$('#networkStage')?.scrollIntoView?.({block:'nearest'});return;}
     const allocationEdit=event.target.closest('[data-allocation-edit]');if(allocationEdit){const a=(state.transportAllocations?.items||[]).find((x)=>x.id===allocationEdit.dataset.allocationEdit);if(a)openAllocationDialog(null,a);return;}
-    const allocationOption=event.target.closest('[data-allocation-option]');if(allocationOption){$('#allocationVehicle').value=allocationOption.dataset.allocationOption;allocationCapacityInitialized=false;renderAllocationServiceOptions();renderAllocationCapacityControls();scheduleAllocationPreview({immediate:true});return;}
+    const allocationOption=event.target.closest('[data-allocation-option]');if(allocationOption){$('#allocationVehicle').value=allocationOption.dataset.allocationOption;allocationCapacityInitialized=false;allocationMovementComparisonPins=[];renderAllocationServiceOptions();renderAllocationCapacityControls();void updateAllocationMovementChoices();scheduleAllocationPreview({immediate:true});return;}
     const allocationPriority=event.target.closest('[data-allocation-priority]');if(allocationPriority){setAllocationPriority(allocationPriority.dataset.allocationPriority);return;}
     const allocationPreset=event.target.closest('[data-allocation-capacity-preset]');if(allocationPreset){const direction=allocationPreset.dataset.allocationCapacityPreset==='forward'?'Forward':'Reverse';setAllocationCapacity(direction,Number(allocationPreset.dataset.allocationCapacityValue),{expandRange:true});scheduleAllocationPreview({immediate:true});return;}
-    const allocationMovement=event.target.closest('[data-allocation-movement]');if(allocationMovement){const id=allocationMovement.dataset.allocationMovement,index=allocationMovementSelection.indexOf(id);if(index>=0)allocationMovementSelection.splice(index,1);else allocationMovementSelection.push(id);renderAllocationMovementChoices();scheduleAllocationPreview();return;}
+    const allocationMovementClear=event.target.closest('[data-allocation-movement-clear]');if(allocationMovementClear){allocationMovementSelection=[];renderAllocationMovementChoices();scheduleAllocationPreview();return;}
+    const allocationMovementCompare=event.target.closest('[data-allocation-movement-compare]');if(allocationMovementCompare){const key=allocationMovementCompare.dataset.allocationMovementCompare,index=allocationMovementComparisonPins.indexOf(key);if(index>=0)allocationMovementComparisonPins.splice(index,1);else if(allocationMovementComparisonPins.length<4)allocationMovementComparisonPins.push(key);renderAllocationMovementChoices();return;}
+    const allocationMovement=event.target.closest('[data-allocation-movement]');if(allocationMovement){const id=allocationMovement.dataset.allocationMovement;allocationMovementSelection=allocationMovementSelection.length===1&&allocationMovementSelection[0]===id?[]:[id];renderAllocationMovementChoices();scheduleAllocationPreview();return;}
     const relocate=event.target.closest('[data-fleet-relocate]');if(relocate){openRelocationDialog(relocate.dataset.fleetRelocate,relocate.dataset.fleetSource,Number(relocate.dataset.fleetFree));return;}
     const retire=event.target.closest('[data-fleet-retire]');if(retire){const row=retire.closest('[data-fleet-pool-row]');try{await command('RetireFleet',{vehicle_definition_id:retire.dataset.fleetRetire,operational_node_id:retire.dataset.fleetRetireNode,units:Number(row.querySelector('[data-retirement-units]').value),priority:Number(row.querySelector('[data-retirement-priority]').value)});}catch{}return;}
     const retirementCancel=event.target.closest('[data-retirement-cancel]');if(retirementCancel){try{await command('CancelFleetRetirement',{retirement_id:retirementCancel.dataset.retirementCancel});}catch{}return;}
@@ -669,7 +722,7 @@
     $('#targetStockDestination').addEventListener('change',updateTargetStockOptions);$('#targetStockResource').addEventListener('change',updateTargetStockOptions);
     $('#targetStockQuantityRange').addEventListener('input',(event)=>setTargetStockQuantity(event.target.value));$('#targetStockQuantity').addEventListener('input',(event)=>setTargetStockQuantity(event.target.value,{expandRange:true}));
     $('#targetStockForm').addEventListener('submit',async(event)=>{event.preventDefault();try{await command('SetTargetStock',{destination_id:$('#targetStockDestination').value,resource_id:$('#targetStockResource').value,target_quantity_t:Number($('#targetStockQuantity').value),priority:Number($('#targetStockPriority').value)});closeTargetStock();}catch{}});
-    $('#allocationVehicle').addEventListener('change',()=>{allocationCapacityInitialized=false;renderAllocationServiceOptions();renderAllocationCapacityControls();scheduleAllocationPreview();});$('#allocationSource').addEventListener('change',()=>{allocationMovementSelection=[];renderAllocationMovementChoices();updateAllocationServiceOptions();});$('#allocationDestination').addEventListener('change',()=>{allocationMovementSelection=[];renderAllocationMovementChoices();updateAllocationServiceOptions();});$('#allocationCloseButton').addEventListener('click',()=>{editingAllocationId=null;allocationOptionSerial++;allocationOptionsView=null;allocationMovementSelection=[];allocationPreviewSerial++;if(allocationPreviewTimer){clearTimeout(allocationPreviewTimer);allocationPreviewTimer=null;}$('#allocationDialog').close();});$('#allocationCancelButton').addEventListener('click',()=>{editingAllocationId=null;allocationOptionSerial++;allocationOptionsView=null;allocationMovementSelection=[];allocationPreviewSerial++;if(allocationPreviewTimer){clearTimeout(allocationPreviewTimer);allocationPreviewTimer=null;}$('#allocationDialog').close();});
+    $('#allocationVehicle').addEventListener('change',()=>{allocationCapacityInitialized=false;allocationMovementComparisonPins=[];renderAllocationServiceOptions();renderAllocationCapacityControls();void updateAllocationMovementChoices();scheduleAllocationPreview();});$('#allocationSource').addEventListener('change',()=>{allocationMovementSelection=[];allocationMovementComparisonPins=[];allocationMovementChoicesView=null;updateAllocationServiceOptions();});$('#allocationDestination').addEventListener('change',()=>{allocationMovementSelection=[];allocationMovementComparisonPins=[];allocationMovementChoicesView=null;updateAllocationServiceOptions();});$('#allocationCloseButton').addEventListener('click',()=>{editingAllocationId=null;allocationOptionSerial++;allocationOptionsView=null;allocationMovementChoiceSerial++;allocationMovementChoicesView=null;allocationMovementComparisonPins=[];allocationMovementSelection=[];allocationPreviewSerial++;if(allocationPreviewTimer){clearTimeout(allocationPreviewTimer);allocationPreviewTimer=null;}$('#allocationDialog').close();});$('#allocationCancelButton').addEventListener('click',()=>{editingAllocationId=null;allocationOptionSerial++;allocationOptionsView=null;allocationMovementChoiceSerial++;allocationMovementChoicesView=null;allocationMovementComparisonPins=[];allocationMovementSelection=[];allocationPreviewSerial++;if(allocationPreviewTimer){clearTimeout(allocationPreviewTimer);allocationPreviewTimer=null;}$('#allocationDialog').close();});
     $('#allocationForwardRange').addEventListener('input',(event)=>setAllocationCapacity('Forward',event.target.value));$('#allocationReverseRange').addEventListener('input',(event)=>setAllocationCapacity('Reverse',event.target.value));$('#allocationForward').addEventListener('input',(event)=>setAllocationCapacity('Forward',event.target.value,{expandRange:true}));$('#allocationReverse').addEventListener('input',(event)=>setAllocationCapacity('Reverse',event.target.value,{expandRange:true}));
     $('#allocationForm').addEventListener('submit',async(event)=>{event.preventDefault();const constraint=[...allocationMovementSelection];try{const capacity={target_forward_t_per_day:Number($('#allocationForward').value),target_reverse_t_per_day:Number($('#allocationReverse').value),provisioning_priority:Number($('#allocationPriority').value)};if(editingAllocationId){await command('UpdateTransportAllocation',{allocation_id:editingAllocationId,...capacity});if(constraint.length)await command('SetTransportMovementConstraint',{allocation_id:editingAllocationId,movement_plan_ids:constraint});else await command('ClearTransportMovementConstraint',{allocation_id:editingAllocationId});editingAllocationId=null;}else{await command('CreateTransportAllocation',{vehicle_definition_id:$('#allocationVehicle').value,anchor_node_id:$('#allocationSource').value,destination_id:$('#allocationDestination').value,...capacity,movement_hard_constraint:constraint.length?constraint:null});}allocationMovementSelection=[];$('#allocationDialog').close();}catch{}});
     $('#relocationCloseButton').addEventListener('click',()=>{relocationContext=null;relocationPreviewKey=null;relocationPreviewSerial++;$('#relocationDialog').close();});$('#relocationCancelButton').addEventListener('click',()=>{relocationContext=null;relocationPreviewKey=null;relocationPreviewSerial++;$('#relocationDialog').close();});

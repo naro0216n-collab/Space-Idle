@@ -75,6 +75,8 @@ def test_vehicle_catalog_and_movement_modes_follow_definition_and_capability_con
     assert definitions
     assert all(pool.vehicle_definition_id in definitions for pool in fleet.pools)
     for movement_plan in movement_plans.items:
+        assert movement_plan.comparison_key == movement_plan.id
+        assert movement_plan.comparison_values == ()
         for mode in movement_plan.modes:
             if mode.vehicle_definition_id is not None:
                 assert mode.vehicle_definition_id in definitions
@@ -189,12 +191,26 @@ def test_movement_plan_projection_reuses_derived_state_and_scoped_queries_avoid_
     view = app.query(GetMovementPlans(
         origin_id=str(EARTH),
         destination_id=str(LEO),
-        include_modes=False,
+        vehicle_definition_id=str(ids.REUSABLE_LAUNCH_VEHICLE),
+        include_modes=True,
     ))
 
     assert view.items
     assert {row.origin_id for row in view.items} == {str(EARTH)}
     assert {row.destination_id for row in view.items} == {str(LEO)}
+    for row in view.items:
+        assert row.comparison_key == row.id
+        value_keys = {value.axis_key for value in row.comparison_values}
+        assert {
+            "transit_days",
+            "delta_v_km_s",
+            "operation_count",
+            "service_feasible",
+            "cycle_days",
+            "nominal_forward_t_per_day",
+            "full_load_propellant_t",
+            "infrastructure_count",
+        } <= value_keys
 
 def test_application_decision_queries_are_observational_and_reuse_projection_within_query(monkeypatch):
     app = build_game_application()

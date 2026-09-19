@@ -42,6 +42,7 @@ class GetMovementPlans:
     destination_id: str | None = None
     movement_plan_id: str | None = None
     include_modes: bool = True
+    vehicle_definition_id: str | None = None
 @dataclass(frozen=True)
 class GetFleet:
     operational_node_id: str | None = None

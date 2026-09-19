@@ -299,6 +299,7 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
                 destination_id=_one(params, "destination_id"),
                 movement_plan_id=_one(params, "movement_plan_id"),
                 include_modes=_bool(params, "include_modes", False),
+                vehicle_definition_id=_one(params, "vehicle_definition_id"),
             ))
             return
         movement_plan_prefix = "/api/v1/logistics/movement-plans/"

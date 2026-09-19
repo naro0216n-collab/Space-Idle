@@ -82,6 +82,8 @@ class ApplicationQueryRouterMixin:
                 self._require_operational_node(query.origin_id)
             if query.destination_id is not None:
                 self._require_operational_node(query.destination_id)
+            if query.vehicle_definition_id is not None and query.vehicle_definition_id not in {str(value.id) for value in self._simulation.transport.vehicle_definitions()}:
+                raise KeyError(query.vehicle_definition_id)
             return self._movement_plans_view(query)
         if isinstance(query, GetFleet):
             if query.operational_node_id is not None:

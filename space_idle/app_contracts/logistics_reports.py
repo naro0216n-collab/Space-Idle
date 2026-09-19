@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from .ui_reports import DecisionConstraintRow
+from .ui_reports import ComparisonAxisRow, DecisionConstraintRow
 from .logistics_views import (
     CargoFlowRow, FleetPoolRow, FleetCommitmentRow, FleetRelocationResourceRequirementRow,
     FleetRelocationRow, FleetReleaseRow, FleetRetirementRow, InfrastructureRequirementRow,
@@ -28,6 +28,7 @@ class LogisticsSummaryView:
 @dataclass(frozen=True)
 class MovementPlansView:
     items: tuple[MovementPlanRow, ...]
+    comparison_axes: tuple[ComparisonAxisRow, ...] = ()
 
 
 @dataclass(frozen=True)
