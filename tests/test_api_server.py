@@ -284,9 +284,9 @@ def test_ui_state_conditional_refresh_skips_projection_until_revision_changes(tm
             port,
             "GET",
             path,
-            headers={"If-None-Match": etag},
+            headers={"X-Space-Idle-Known-View": etag},
         )
-        assert status == 304
+        assert status == 204
         assert payload is None
         assert projection_calls == 0
         assert headers["ETag"] == etag
@@ -299,7 +299,7 @@ def test_ui_state_conditional_refresh_skips_projection_until_revision_changes(tm
             port,
             "GET",
             other_path,
-            headers={"If-None-Match": etag},
+            headers={"X-Space-Idle-Known-View": etag},
         )
         assert status == 200
         assert payload["data"]["operational_node"]["id"] == str(ids.LUNAR_ORBIT)
@@ -318,7 +318,7 @@ def test_ui_state_conditional_refresh_skips_projection_until_revision_changes(tm
             port,
             "GET",
             path,
-            headers={"If-None-Match": etag},
+            headers={"X-Space-Idle-Known-View": etag},
         )
         assert status == 200
         assert payload["revision"] == 1

@@ -55,8 +55,8 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
         scope_key = f"{operational_node_id or ''}\0{surface_body_id or ''}"
         scope_hash = sha256(scope_key.encode("utf-8")).hexdigest()[:12]
         known_revision = None
-        if_none_match = self.headers.get("If-None-Match", "").strip()
-        match = re.fullmatch(rf'"ui-state-(\d+)-{scope_hash}"', if_none_match)
+        known_view = self.headers.get("X-Space-Idle-Known-View", "").strip()
+        match = re.fullmatch(rf'"ui-state-(\d+)-{scope_hash}"', known_view)
         if match is not None:
             known_revision = int(match.group(1))
 
@@ -96,11 +96,11 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             assert known_revision is not None
             etag = f'"ui-state-{known_revision}-{scope_hash}"'
             self._write_empty(
-                304,
+                204,
                 headers={
                     "ETag": etag,
                     "X-Space-Idle-Revision": str(known_revision),
-                    "Cache-Control": "no-cache",
+                    "Cache-Control": "no-store",
                 },
             )
             return

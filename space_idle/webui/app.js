@@ -107,22 +107,22 @@
     if(el.lastElementChild)el.lastElementChild.textContent=text;
   }
 
-  const NOT_MODIFIED=Symbol('not-modified');
-  const responseEtags=new Map();
+  const UNCHANGED_VIEW=Symbol('unchanged-view');
+  const responseViewTokens=new Map();
 
   async function api(path,options={}){
-    const {etagKey=null,...fetchOptions}=options;
+    const {viewTokenKey=null,...fetchOptions}=options;
     const headers={'Accept':'application/json',...(fetchOptions.headers||{})};
     if(fetchOptions.body!==undefined)headers['Content-Type']='application/json';
-    if(etagKey&&responseEtags.has(etagKey))headers['If-None-Match']=responseEtags.get(etagKey);
+    if(viewTokenKey&&responseViewTokens.has(viewTokenKey))headers['X-Space-Idle-Known-View']=responseViewTokens.get(viewTokenKey);
     const response=await fetch(path,{...fetchOptions,headers,cache:'no-store'});
-    const etag=response.headers.get('ETag');
-    if(etagKey&&etag)responseEtags.set(etagKey,etag);
-    const text=response.status===304?'':await response.text();
+    const viewToken=response.headers.get('ETag');
+    if(viewTokenKey&&viewToken)responseViewTokens.set(viewTokenKey,viewToken);
+    const text=response.status===204?'':await response.text();
     const payload=text?JSON.parse(text):null;
     const rev=response.headers.get('X-Space-Idle-Revision');
     if(rev!==null)state.revision=Math.max(state.revision??0,Number(rev));
-    if(response.status===304)return NOT_MODIFIED;
+    if(response.status===204)return UNCHANGED_VIEW;
     if(!response.ok){
       const err=new Error(payload?.error?.message||`${response.status} ${response.statusText}`);
       err.code=payload?.error?.code; err.status=response.status; err.details=payload?.error?.details; throw err;
@@ -652,8 +652,8 @@
       if(locationSummary?.body_id&&['surface','survey'].includes(state.activeTab))params.set('surface_body_id',locationSummary.body_id);
       const suffix=params.size?`?${params.toString()}`:'';
       const snapshotPath=`/api/v1/ui-state${suffix}`;
-      const data=await api(snapshotPath,{etagKey:snapshotPath});
-      if(data===NOT_MODIFIED){setConnection('ok','PC Server');return data;}
+      const data=await api(snapshotPath,{viewTokenKey:snapshotPath});
+      if(data===UNCHANGED_VIEW){setConnection('ok','PC Server');return data;}
       if(locationId!==state.operationalNodeId)return data;
       applyUiSnapshot(data);
       if(!state.operationalNodeId||!(state.world?.operational_nodes||[]).some((x)=>x.id===state.operationalNodeId)){
