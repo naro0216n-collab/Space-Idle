@@ -178,3 +178,43 @@ def test_application_queries_expose_surface_knowledge_and_extraction_decision_st
     assert 0.0 <= extraction.operational_fulfillment <= 1.0
     assert extraction.marginal_efficiency > 0.0
     assert extraction.output_t_per_day > 0.0
+
+
+def test_extraction_stops_when_output_storage_admission_is_full():
+    app = build_game_application()
+    sim = app._simulation
+    decision = sim.tick_decision_projection()
+    power = decision.allocations.power_by_location[ids.EARTH]
+    execution = decision.allocations.execution
+    initial = next(
+        row
+        for row in sim.extraction.snapshots(
+            ids.EARTH, sim.facilities, sim.inventory, power, sim.day, execution
+        )
+        if row.output_t_per_day > 0
+    )
+    spec = sim.extraction.specs[initial.facility_def_id]
+    free = sim.inventory.admission_state(
+        ids.EARTH, spec.output_resource_id
+    ).admission_capacity_t
+    assert free is not None and free > 0
+
+    sim.inventory.add(ids.EARTH, spec.output_resource_id, free)
+    before = sim.inventory.amount(ids.EARTH, spec.output_resource_id)
+    decision = sim.tick_decision_projection()
+    power = decision.allocations.power_by_location[ids.EARTH]
+    execution = decision.allocations.execution
+    blocked = next(
+        row
+        for row in sim.extraction.snapshots(
+            ids.EARTH, sim.facilities, sim.inventory, power, sim.day, execution
+        )
+        if row.facility_id == initial.facility_id
+    )
+    assert blocked.output_t_per_day == 0.0
+    assert any(reason.startswith("storage:") for reason in blocked.limiting_factors)
+
+    sim.extraction.advance_day(
+        ids.EARTH, sim.facilities, sim.inventory, power, sim.day, execution
+    )
+    assert sim.inventory.amount(ids.EARTH, spec.output_resource_id) == before

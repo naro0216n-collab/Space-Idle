@@ -709,54 +709,31 @@ def test_current_schema_rejects_missing_authoritative_domain_fields(
         load_game(path, build_game_application_for_load)
 
 
-def test_current_schema_rejects_removed_transport_allocation_fields(tmp_path):
+@pytest.mark.parametrize(
+    ("boundary", "error_pattern"),
+    (
+        ("envelope", "save file has invalid fields"),
+        ("transport_allocation", "transport allocation has invalid fields"),
+        ("survey_campaign", "survey campaign has invalid fields"),
+        ("construction_project", "construction project has invalid fields"),
+    ),
+)
+def test_current_save_schema_rejects_unexpected_fields_at_persisted_boundaries(
+    tmp_path, boundary, error_pattern
+):
     app = _make_nontrivial_state()
-    path = tmp_path / "stale-transport-allocation.json"
+    path = tmp_path / f"unexpected-{boundary}.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     payload = json.loads(path.read_text(encoding="utf-8"))
-    allocation = payload["state"]["transport"]["transport_allocations"][0]
-    allocation["target_units"] = 1
-    allocation["control_mode"] = "units"
-    allocation["path_policy"] = "balanced"
+
+    targets = {
+        "envelope": payload,
+        "transport_allocation": payload["state"]["transport"]["transport_allocations"][0],
+        "survey_campaign": payload["state"]["survey"]["campaigns"][0],
+        "construction_project": payload["state"]["projects"]["items"][0],
+    }
+    targets[boundary]["unexpected_field"] = None
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(SaveFormatError, match="transport allocation has invalid fields"):
-        load_game(path, build_game_application_for_load)
-
-
-def test_current_schema_rejects_derived_survey_campaign_fields(tmp_path):
-    app = _make_nontrivial_state()
-    path = tmp_path / "stale-survey-campaign.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    campaign = payload["state"]["survey"]["campaigns"][0]
-    campaign["resolved_provider_definition_id"] = str(ids.LUNAR_RESOURCE_SURVEY_ORBITER)
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(SaveFormatError, match="survey campaign has invalid fields"):
-        load_game(path, build_game_application_for_load)
-
-
-def test_current_schema_rejects_removed_project_logistics_policy_field(tmp_path):
-    app = _make_nontrivial_state()
-    path = tmp_path / "stale-project-logistics-policy.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    project = payload["state"]["projects"]["items"][0]
-    project["logistics_policy_id"] = "legacy.policy"
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(SaveFormatError, match="construction project has invalid fields"):
-        load_game(path, build_game_application_for_load)
-
-
-def test_current_schema_rejects_unexpected_envelope_fields(tmp_path):
-    app = _make_nontrivial_state()
-    path = tmp_path / "unexpected-envelope-field.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["legacy_state"] = {}
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(SaveFormatError, match="save file has invalid fields"):
+    with pytest.raises(SaveFormatError, match=error_pattern):
         load_game(path, build_game_application_for_load)

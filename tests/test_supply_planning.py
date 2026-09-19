@@ -688,3 +688,30 @@ def test_routing_via_and_transport_allocation_constraints_are_hard_limits():
     dispatch = sim.logistics.plan_capacity_logistics(sim.day, (requirement,)).dispatches[0]
     assert dispatch.source_id == EARTH
     assert tuple(edge.key for edge in dispatch.path) == tuple(edge.key for edge in initial_path)
+
+
+def test_supply_dispatch_requires_player_owned_transport_capacity_without_spending_market_funds():
+    from space_idle import GetWorld
+
+    app = build_game_application()
+    sim = app._simulation
+    sim.inventory.stock[(LEO, CONSTRUCTION_EQUIPMENT)] = 0.0
+    sim.inventory.add(EARTH, CONSTRUCTION_EQUIPMENT, 2.0)
+    target_id = sim.logistics.set_target_stock(LEO, CONSTRUCTION_EQUIPMENT, 1.0, 5)
+    sim.transport.transport_allocations.clear()
+    before_funds = app.query(GetWorld()).funds_musd
+
+    sim.advance_days(1)
+    assert app.query(GetWorld()).funds_musd == before_funds
+    assert not [
+        row for row in sim.logistics.cargo_flows.values()
+        if row.owner_id == target_id
+    ]
+
+    _owned_earth_leo_capacity(sim)
+    sim.advance_days(1)
+    assert app.query(GetWorld()).funds_musd == before_funds
+    assert any(
+        row.owner_id == target_id
+        for row in sim.logistics.cargo_flows.values()
+    )
