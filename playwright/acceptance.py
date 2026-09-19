@@ -530,7 +530,7 @@ def run() -> dict[str, object]:
             (blocked.first if blocked.count() else movement_plan_buttons.first).click()
             page.locator("#movementPlanInspectorContent .detail-card").first.wait_for(timeout=10000)
             _assert(
-                page.locator("#movementPlanInspectorTitle").inner_text() != "Movement Planを選択",
+                page.locator("#movementPlanInspectorTitle").inner_text() != "移動経路を選択",
                 "movement plan inspector should show selected plan",
             )
             _assert(

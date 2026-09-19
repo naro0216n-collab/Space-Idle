@@ -47,6 +47,12 @@
   };
   const operationLabels={powered_ascent:'動力離昇',launch:'打上げ',spaceflight:'宇宙航行',landing:'着陸',atmospheric_entry:'大気圏突入'};
   const locationKindLabels={surface:'地表',orbital:'軌道',orbit:'軌道'};
+  const playerTerms={
+    movement_plan:'移動経路', transport_allocation:'輸送能力設定', supply_requirement:'補給需要',
+    target_stock:'追加備蓄目標', provisioning_priority:'配備優先度', hard_constraint:'固定条件',
+    execution_requirement_bundle:'稼働要件', transport_capacity:'輸送能力', cargo_flow:'輸送中貨物',
+  };
+  const playerTerm=(key,fallback=null)=>playerTerms[key]||fallback||key;
   const stateLabels={
     available:'利用可能',active:'稼働',paused:'停止',locked:'未解禁',complete:'完了',
     offered:'提示中',accepted:'受諾済み',declined:'辞退',failed:'失敗',waiting:'待機',
@@ -333,7 +339,7 @@
   function renderEconomyContext(){
     const root=$('#economyInspectorContent');if(!root)return;
     const market=state.market;
-    root.innerHTML=market?`<section class="inspector-section"><h3>Funds</h3><div class="kv-grid"><dt>総残高</dt><dd>$${fmt(market.funds_total_musd,2)}M</dd><dt>利用可能</dt><dd>$${fmt(market.funds_available_musd,2)}M</dd><dt>Interface</dt><dd>${(market.interfaces||[]).length}</dd><dt>Order</dt><dd>${(market.orders||[]).length}</dd></div></section><section class="inspector-section"><h3>意味</h3><div class="section-context-note">FundsはExternal Resource Marketの決済専用です。建設・研究・輸送等の一般活動コストとしては使用しません。</div></section>`:'<div class="empty-state">Market状態を読み込み中です。</div>';
+    root.innerHTML=market?`<section class="inspector-section"><h3>資金</h3><div class="kv-grid"><dt>総残高</dt><dd>$${fmt(market.funds_total_musd,2)}M</dd><dt>利用可能</dt><dd>$${fmt(market.funds_available_musd,2)}M</dd><dt>市場接続</dt><dd>${(market.interfaces||[]).length}</dd><dt>注文</dt><dd>${(market.orders||[]).length}</dd></div></section><section class="inspector-section"><h3>意味</h3><div class="section-context-note">資金は外部資源市場の決済専用です。建設・研究・輸送等の一般活動コストとしては使用しません。</div></section>`:'<div class="empty-state">Market状態を読み込み中です。</div>';
   }
   function renderSectionChrome(){
     $$('.primary-nav-button').forEach((button)=>button.classList.toggle('is-active',button.dataset.section===state.activeSection));
@@ -447,7 +453,7 @@
 
   window.SpaceIdleApp={
     state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,operationName,
-    locationKindLabels,stateLabels,userFacingText,issueHtml,metricHtml,statHtml,signed,
+    locationKindLabels,stateLabels,playerTerms,playerTerm,userFacingText,issueHtml,metricHtml,statHtml,signed,
     api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveSection,setActiveView,openDecisionContext,
   };
 

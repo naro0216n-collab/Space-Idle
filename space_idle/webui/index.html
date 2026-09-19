@@ -92,7 +92,7 @@
         <main id="logisticsView" class="view-root logistics-view" hidden>
           <div class="decision-canvas-with-browser logistics-decision-canvas">
             <aside class="panel logistics-list-panel">
-              <div class="panel-heading"><div><div class="eyebrow">MOVEMENT PLANS</div><h2>Movement Plan</h2></div></div>
+              <div class="panel-heading"><div><div class="eyebrow">ROUTES</div><h2>移動経路</h2></div></div>
               <div class="filter-row"><select id="movementPlanOriginFilter" aria-label="出発地"></select><select id="movementPlanDestinationFilter" aria-label="到着地"></select></div>
               <div id="movementPlanList" class="movement-plan-list"></div>
             </aside>
@@ -102,26 +102,26 @@
               <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
               <div class="logistics-bottom-grid">
                 <section class="card"><div class="card-heading"><h3>供給経路 / 追加備蓄</h3><span id="routingConstraintCountBadge" class="badge"></span></div><div id="routingConstraintTable" class="table-wrap"></div></section>
-                <section class="card"><div class="card-heading"><h3>Supply Requirement</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
-                <section class="card"><div class="card-heading"><h3>Fleet</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
+                <section class="card"><div class="card-heading"><h3>補給需要</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
+                <section class="card"><div class="card-heading"><h3>保有機体</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
                 <section class="card"><div class="card-heading"><h3>輸送能力設定</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
-                <section class="card"><div class="card-heading"><h3>Vehicle Production</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
-                <section class="card"><div class="card-heading"><h3>Cargo Flow</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
+                <section class="card"><div class="card-heading"><h3>機体建造</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
+                <section class="card"><div class="card-heading"><h3>輸送中貨物</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
               </div>
             </section>
           </div>
 
           <aside class="panel inspector-panel logistics-inspector">
-            <div class="panel-heading"><div><div class="eyebrow">MOVEMENT CONTEXT</div><h2 id="movementPlanInspectorTitle">Movement Planを選択</h2></div></div>
-            <div id="movementPlanInspectorContent" class="inspector-content"><div class="empty-state">Network上の接続またはMovement Planを選択すると、結果・理由・制約を表示します。</div></div>
+            <div class="panel-heading"><div><div class="eyebrow">ROUTE CONTEXT</div><h2 id="movementPlanInspectorTitle">移動経路を選択</h2></div></div>
+            <div id="movementPlanInspectorContent" class="inspector-content"><div class="empty-state">ネットワーク上の接続または移動経路を選択すると、結果・理由・制約を表示します。</div></div>
           </aside>
         </main>
 
         <main id="economyView" class="view-root economy-view" hidden>
           <section class="workspace economy-workspace">
-            <div class="workspace-heading"><div><div class="eyebrow">EXTERNAL RESOURCE MARKET</div><h1>経済</h1></div><span id="marketFundsBadge" class="badge"></span></div>
+            <div class="workspace-heading"><div><div class="eyebrow">MARKET</div><h1>経済</h1></div><span id="marketFundsBadge" class="badge"></span></div>
             <div class="economy-canvas-content">
-              <section class="card market-card"><div class="card-heading"><h3>External Resource Market / Funds</h3></div><div id="marketPanel"></div></section>
+              <section class="card market-card"><div class="card-heading"><h3>外部資源市場 / 資金</h3></div><div id="marketPanel"></div></section>
             </div>
           </section>
           <aside class="panel inspector-panel economy-inspector">

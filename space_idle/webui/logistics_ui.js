@@ -3,7 +3,7 @@
 
   const A=window.SpaceIdleApp;
   if(!A)throw new Error('SpaceIdleApp must load before logistics_ui.js');
-  const {state,$,esc,fmt,locationName,resourceName,definitionName,capabilityName,operationName,issueHtml,metricHtml,api,command,banner}=A;
+  const {state,$,esc,fmt,locationName,resourceName,definitionName,capabilityName,operationName,playerTerm,issueHtml,metricHtml,api,command,banner}=A;
   let editingAllocationId=null;
   let editingRoutingConstraintScope=null;
   let routingConstraintDraftScope=null;
@@ -70,7 +70,7 @@
   function renderAllocationMovementChoices(){
     const root=$('#allocationMovementChoices');if(!root)return;const source=$('#allocationSource').value,destination=$('#allocationDestination').value;
     const candidates=(state.movementPlans?.items||[]).filter((row)=>row.origin_id===source&&row.destination_id===destination);
-    root.innerHTML=candidates.map((row)=>{const index=allocationMovementSelection.indexOf(row.id),selected=index>=0;return `<button type="button" class="choice-button ${selected?'is-selected':''}" data-allocation-movement="${esc(row.id)}"><span class="cell-main">${selected?`${index+1}. `:''}${esc(row.display_name)}</span><span class="cell-sub">${esc(locationName(row.origin_id))} → ${esc(locationName(row.destination_id))} · ${row.service_feasible_now?'Service可':row.available?'運用条件待ち':'不成立'}</span></button>`;}).join('')||'<span class="cell-sub">固定候補なし。自動選択を使用します。</span>';
+    root.innerHTML=candidates.map((row)=>{const index=allocationMovementSelection.indexOf(row.id),selected=index>=0;return `<button type="button" class="choice-button ${selected?'is-selected':''}" data-allocation-movement="${esc(row.id)}"><span class="cell-main">${selected?`${index+1}. `:''}${esc(row.display_name)}</span><span class="cell-sub">${esc(locationName(row.origin_id))} → ${esc(locationName(row.destination_id))} · ${row.service_feasible_now?'運用可能':row.available?'運用条件待ち':'不成立'}</span></button>`;}).join('')||'<span class="cell-sub">固定候補なし。自動選択を使用します。</span>';
   }
 
   function renderAllocationPreview(preview=null,{loading=false,error=null}={}){
@@ -205,7 +205,7 @@
     return (state.movementPlans?.items||[]).filter((r)=>(!origin||r.origin_id===origin)&&(!dest||r.destination_id===dest));
   }
   function renderMovementPlanList(){
-    $('#movementPlanList').innerHTML=filteredMovementPlans().map((r)=>`<button type="button" class="movement-plan-button ${r.id===state.selectedMovementPlanId?'is-selected':''}" data-movement-plan-id="${esc(r.id)}"><div class="cell-main">${esc(r.display_name)}</div><div class="movement-plan-status"><span>${esc(locationName(r.origin_id))} → ${esc(locationName(r.destination_id))}</span><span class="badge ${r.service_feasible_now?'ok':r.available?'warn':''}">${r.service_feasible_now?'Service可':r.available?'運用条件待ち':'Movement不成立'}</span></div></button>`).join('')||'<div class="empty-state">条件に一致するMovement Planなし</div>';
+    $('#movementPlanList').innerHTML=filteredMovementPlans().map((r)=>`<button type="button" class="movement-plan-button ${r.id===state.selectedMovementPlanId?'is-selected':''}" data-movement-plan-id="${esc(r.id)}"><div class="cell-main">${esc(r.display_name)}</div><div class="movement-plan-status"><span>${esc(locationName(r.origin_id))} → ${esc(locationName(r.destination_id))}</span><span class="badge ${r.service_feasible_now?'ok':r.available?'warn':''}">${r.service_feasible_now?'運用可能':r.available?'運用条件待ち':'移動不可'}</span></div></button>`).join('')||`<div class="empty-state">条件に一致する${playerTerm('movement_plan')}なし</div>`;
   }
 
   function networkPositions(locations){
@@ -268,7 +268,7 @@
       const hardAllocations=(d.routing_constraint_transport_allocation_ids||[]).map(transportAllocationLabel).join(' / ')||'なし';
       return `<tr class="${isDecisionContext('supply_requirement',d.id)?'is-context-target':''}"><td><div class="cell-main">${esc(ownerContextName(d.owner_kind,d.owner_id))}</div><div class="cell-sub">${esc(locationName(d.destination_id))}</div><button type="button" data-requirement-constraint data-owner-kind="${esc(d.owner_kind)}" data-owner-id="${esc(d.owner_id)}" data-destination-id="${esc(d.destination_id)}" data-resource-id="${esc(d.resource_id)}">${constrained?'経路条件編集':'経路条件設定'}</button></td><td>${esc(resourceName(d.resource_id))}</td><td><div class="cell-main">${esc(selectedRouteText(d))}</div><div class="cell-sub">${esc(metrics)}</div>${constrained?`<div class="cell-sub">固定条件: 供給元 ${esc(d.routing_constraint_source_id?locationName(d.routing_constraint_source_id):'自動')} / 経由 ${esc((d.routing_constraint_via_node_ids||[]).map(locationName).join(', ')||'なし')} / 輸送区間 ${esc(hardAllocations)}</div>`:''}</td><td>${fmt(d.requested_t)} t<div class="cell-sub">現地 ${fmt(d.local_supply_t)} / 外部 ${fmt(d.external_required_t)} t</div></td><td>${esc(forecast)}</td><td>${fmt(d.pipeline_t)} t<div class="cell-sub">予測到着 ${esc(arrival)}</div></td><td>${fmt(d.remaining_t)} t<div class="cell-sub">猶予 ${esc(runway)} · gap ${esc(gap)}</div></td><td><span class="badge ${stateClass}">${esc(requirementStateLabel(d))}</span><div class="cell-sub">供給元 ${d.operational_source_count}/${d.candidate_source_count} · 在庫源 ${d.stocked_source_count}</div><div class="cell-sub">${esc((d.blockers||[]).map(A.userFacingText).join(' / ')||'blockerなし')}</div></td><td>${esc(priorityText(d.priority))}</td></tr>`;
     }).join('');
-    $('#requirementTable').innerHTML=`<table><thead><tr><th>発生元 / Constraint</th><th>資源</th><th>選択供給・経路</th><th>要求/現地</th><th>必要時期</th><th>輸送系内</th><th>未充足/猶予</th><th>供給状態</th><th>優先</th></tr></thead><tbody>${rows||'<tr><td colspan="9">現在のSupply Requirementなし</td></tr>'}</tbody></table>`;
+    $('#requirementTable').innerHTML=`<table><thead><tr><th>発生元 / Constraint</th><th>資源</th><th>選択供給・経路</th><th>要求/現地</th><th>必要時期</th><th>輸送系内</th><th>未充足/猶予</th><th>供給状態</th><th>優先</th></tr></thead><tbody>${rows||`<tr><td colspan="9">現在の${playerTerm('supply_requirement')}なし</td></tr>`}</tbody></table>`;
   }
 
   function renderFleet(){
@@ -347,15 +347,15 @@
     const cargo=state.cargoFlows?.items||logistics().cargo_flows||[];
     $('#cargoCountBadge').textContent=`${cargo.length}件`;
     const cargoRows=cargo.map((f)=>`<tr><td><div class="cell-main">${esc(resourceName(f.resource_id))}</div><div class="cell-sub">${esc(ownerLabel(f.owner_kind))} · ${esc(f.owner_id)}</div></td><td>${esc(locationName(f.source_id))} → ${esc(locationName(f.destination_id))}</td><td>${fmt(f.amount_t)} t</td><td>${esc(f.status)}</td><td>Day ${fmt(f.departure_day,0)} → ${fmt(f.ready_day,0)}</td><td>${esc((f.service_ids||[]).map(definitionName).join(' → '))}</td><td>${esc((f.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')}</td></tr>`).join('');
-    $('#cargoTable').innerHTML=`<table><thead><tr><th>資源 / 発生元</th><th>区間</th><th>量</th><th>状態</th><th>dispatch / arrival</th><th>Service path</th><th>入庫blocker</th></tr></thead><tbody>${cargoRows||'<tr><td colspan="7">輸送中・到着待機Cargo Flowなし</td></tr>'}</tbody></table>`;
+    $('#cargoTable').innerHTML=`<table><thead><tr><th>資源 / 発生元</th><th>区間</th><th>量</th><th>状態</th><th>dispatch / arrival</th><th>Service path</th><th>入庫blocker</th></tr></thead><tbody>${cargoRows||`<tr><td colspan="7">輸送中・到着待機の貨物なし</td></tr>`}</tbody></table>`;
   }
 
   function renderMovementPlanInspector(){
     const title=$('#movementPlanInspectorTitle'),content=$('#movementPlanInspectorContent');
-    if(!state.selectedMovementPlanId){title.textContent='Movement Planを選択';content.innerHTML='<div class="empty-state">左のMovement Planまたはネットワーク上の接続を選択してください。</div>';return;}
+    if(!state.selectedMovementPlanId){title.textContent='移動経路を選択';content.innerHTML=`<div class="empty-state">左の${playerTerm('movement_plan')}またはネットワーク上の接続を選択してください。</div>`;return;}
     const movementPlan=(state.movementPlans?.items||[]).find((row)=>row.id===state.selectedMovementPlanId);if(!movementPlan)return;
     title.textContent=movementPlan.display_name;
-    const modes=(movementPlan.modes||[]).map((m)=>`<div class="detail-card ${m.service_feasible?'is-usable':''}"><div class="mode-title"><span>${esc(m.display_name)}</span><span class="badge ${m.service_feasible?'ok':'warn'}">${m.service_feasible?'Service可':'阻害'}</span></div><div class="cell-sub">Fleet total ${fmt(m.fleet_total_units,0)} / free ${fmt(m.fleet_free_units,0)} · nominal ${capText(m.nominal_capacity)} · cycle ${m.cycle_days==null?'—':fmt(m.cycle_days,1)+'日'}</div><div class="cell-sub">Infrastructure: ${esc(infrastructureText(m.infrastructure_requirements))}</div>${(m.blockers||[]).length?`<div class="issue-stack">${m.blockers.map((b)=>issueHtml(['transport',b])).join('')}</div>`:''}</div>`).join('');
+    const modes=(movementPlan.modes||[]).map((m)=>`<div class="detail-card ${m.service_feasible?'is-usable':''}"><div class="mode-title"><span>${esc(m.display_name)}</span><span class="badge ${m.service_feasible?'ok':'warn'}">${m.service_feasible?'運用可能':'阻害'}</span></div><div class="cell-sub">Fleet total ${fmt(m.fleet_total_units,0)} / free ${fmt(m.fleet_free_units,0)} · nominal ${capText(m.nominal_capacity)} · cycle ${m.cycle_days==null?'—':fmt(m.cycle_days,1)+'日'}</div><div class="cell-sub">Infrastructure: ${esc(infrastructureText(m.infrastructure_requirements))}</div>${(m.blockers||[]).length?`<div class="issue-stack">${m.blockers.map((b)=>issueHtml(['transport',b])).join('')}</div>`:''}</div>`).join('');
     const endpointText=(endpoint)=>endpoint?`${locationName(endpoint.node_id)} · ${endpoint.locator_kind}:${endpoint.locator_id}${endpoint.surface_cell_id?` · cell ${endpoint.surface_cell_id}`:''}`:'—';
     const segmentRows=[['出発',esc(endpointText(movementPlan.origin_endpoint))],['到着',esc(endpointText(movementPlan.destination_endpoint))],['Movement条件',movementPlan.available?'成立':'不成立'],['Service成立',movementPlan.service_feasible_now?'はい':'いいえ']];
     if(movementPlan.same_body_surface&&movementPlan.distance_km!=null)segmentRows.push(['地表距離',`${fmt(movementPlan.distance_km,1)} km`]);else segmentRows.push(['基準日数',fmt(movementPlan.transit_days)]);
@@ -381,7 +381,7 @@
     $('#routingConstraintAllocationChoices').innerHTML=allocations.map((row)=>`<button type="button" class="choice-button ${routingConstraintAllocationSelection.has(row.id)?'is-selected':''}" data-routing-allocation="${esc(row.id)}"><span>${esc(locationName(row.anchor_node_id))} → ${esc(locationName(row.destination_id))}</span><span class="cell-sub">${esc(allocationTarget(row))}</span></button>`).join('')||'<div class="cell-sub">成立済み輸送区間なし</div>';
   }
   function openRoutingConstraintDialog(row=null,prefill=null){
-    const value=row||prefill;if(!value?.destination_id){banner('Supply Requirementから対象需要を選択してください','error');return;}
+    const value=row||prefill;if(!value?.destination_id){banner('補給需要から対象需要を選択してください','error');return;}
     populateLocationSelects();
     routingConstraintDraftScope={destination_id:value.destination_id,owner_kind:value.owner_kind||null,owner_id:value.owner_id||null,resource_id:value.resource_id||null};
     editingRoutingConstraintScope=row?constraintScopePayload(row):null;
@@ -449,7 +449,7 @@
 
   function render(){
     if(!state.logisticsSummary||!state.movementPlans)return;const s=state.logisticsSummary;
-    $('#logisticsSummary').innerHTML=[['Fleet',`${s.free_fleet_units}/${s.fleet_units} free`],['Allocation',`${s.allocation_count} · 未充足 ${s.unfilled_allocation_units}`],['経路固定',`${s.routing_constraint_count}`],['追加備蓄',`${s.target_stock_count}`],['Requirement',`${s.requirement_count}`],['待ち供給',`${fmt(s.queued_supply_t)} t`],['輸送中',`${fmt(s.in_transit_t)} t`],['到着待機',`${fmt(s.arrival_waiting_t)} t`]].map(metricHtml).join('');
+    $('#logisticsSummary').innerHTML=[['保有機体',`${s.free_fleet_units}/${s.fleet_units} 使用可能`],['輸送能力',`${s.allocation_count} · 未充足 ${s.unfilled_allocation_units}`],['経路固定',`${s.routing_constraint_count}`],['追加備蓄',`${s.target_stock_count}`],['補給需要',`${s.requirement_count}`],['待ち供給',`${fmt(s.queued_supply_t)} t`],['輸送中',`${fmt(s.in_transit_t)} t`],['到着待機',`${fmt(s.arrival_waiting_t)} t`]].map(metricHtml).join('');
     populateLocationSelects();renderMovementPlanFilters();renderMovementPlanList();renderNetwork();renderSupplyPolicies();renderRequirements();renderFleet();renderAllocations();renderVehicleProduction();renderCargoFlows();renderMarket();renderMovementPlanInspector();
   }
 
@@ -492,7 +492,7 @@
     $('#movementPlanOriginFilter').addEventListener('change',renderMovementPlanList);$('#movementPlanDestinationFilter').addEventListener('change',renderMovementPlanList);
     const closeRoutingConstraint=()=>{editingRoutingConstraintScope=null;routingConstraintDraftScope=null;routingConstraintViaSelection.clear();routingConstraintAllocationSelection.clear();$('#routingConstraintDialog').close();};
     $('#routingConstraintCloseButton').addEventListener('click',closeRoutingConstraint);$('#routingConstraintCancelButton').addEventListener('click',closeRoutingConstraint);
-    $('#routingConstraintForm').addEventListener('submit',async(event)=>{event.preventDefault();if(!routingConstraintDraftScope){banner('Supply Requirementから対象需要を選択してください','error');return;}const payload={...routingConstraintDraftScope,source_node_id:$('#routingConstraintSource').value||null,required_via_node_ids:[...routingConstraintViaSelection],required_transport_allocation_ids:[...routingConstraintAllocationSelection]};if(!payload.source_node_id&&!payload.required_via_node_ids.length&&!payload.required_transport_allocation_ids.length){banner('固定供給元、必須経由拠点、必須輸送区間のいずれかを選択してください','error');return;}try{await command('SetSupplyRoutingConstraint',payload);editingRoutingConstraintScope=null;routingConstraintDraftScope=null;$('#routingConstraintDialog').close();}catch{}});
+    $('#routingConstraintForm').addEventListener('submit',async(event)=>{event.preventDefault();if(!routingConstraintDraftScope){banner('補給需要から対象需要を選択してください','error');return;}const payload={...routingConstraintDraftScope,source_node_id:$('#routingConstraintSource').value||null,required_via_node_ids:[...routingConstraintViaSelection],required_transport_allocation_ids:[...routingConstraintAllocationSelection]};if(!payload.source_node_id&&!payload.required_via_node_ids.length&&!payload.required_transport_allocation_ids.length){banner('固定供給元、必須経由拠点、必須輸送区間のいずれかを選択してください','error');return;}try{await command('SetSupplyRoutingConstraint',payload);editingRoutingConstraintScope=null;routingConstraintDraftScope=null;$('#routingConstraintDialog').close();}catch{}});
     const closeTargetStock=()=>{targetStockOptionsSerial++;targetStockOptionsView=null;$('#targetStockDialog').close();};
     $('#targetStockCloseButton').addEventListener('click',closeTargetStock);$('#targetStockCancelButton').addEventListener('click',closeTargetStock);
     $('#targetStockDestination').addEventListener('change',updateTargetStockOptions);$('#targetStockResource').addEventListener('change',updateTargetStockOptions);
