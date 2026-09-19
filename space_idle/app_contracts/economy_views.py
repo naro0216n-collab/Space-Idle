@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from .ui_reports import DecisionConstraintRow
 from ..priority import ActivityPriority
 
 
@@ -39,8 +40,8 @@ class TradeOrderRow:
     in_flight_quantity_t: float
     presented_quantity_t: float
     settled_quantity_t: float
-    blockers: tuple[str, ...]
-    limiting_factors: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
+    limiting_factors: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,7 @@ class BuyCommitmentRow:
     committed_price_musd_per_t: float
     reserved_funds_musd: float
     maturity_day: int
-    blockers: tuple[str, ...] = ()
+    blockers: tuple[DecisionConstraintRow, ...] = ()
 
 
 @dataclass(frozen=True)

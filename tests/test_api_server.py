@@ -187,10 +187,14 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         status, _, payload = _request(port, "GET", preview_path)
         assert status == 200
         assert payload["data"]["can_apply"] is False
-        assert any(
-            blocker.startswith("campaign_scope_conflict:")
+        conflict = next(
+            blocker
             for blocker in payload["data"]["blockers"]
+            if blocker["code"].startswith("campaign_scope_conflict:")
         )
+        assert conflict["severity"] == "blocking"
+        assert conflict["affected_action"] == "start_survey"
+        assert conflict["related_entity_kind"] == "survey_campaign"
 
         status, _, payload = _request(port, "POST", "/api/v1/session/save", {"slot": "boundary"})
         assert status == 200 and payload["data"]["saved"] is True

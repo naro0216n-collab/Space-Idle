@@ -107,7 +107,7 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
 
     row = _research_row(app, research_id)
     earth = next(site for site in row.execution_context_options if site.operational_node_id == str(EARTH))
-    assert not any(code.startswith("service") for code, _detail in earth.blockers)
+    assert not any(blocker.code.startswith("service") for blocker in earth.blockers)
     assert earth.can_select
 
     leo = next(site for site in row.execution_context_options if site.operational_node_id == str(LEO))
@@ -122,8 +122,8 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
     assert selected.execution_context.operational_node_id == str(EARTH)
     assert selected.execution_context.surface_cell_id is None
     assert any(
-        code == "service:allocation"
-        for code, _detail in selected.current_blockers
+        blocker.code == "service:allocation"
+        for blocker in selected.current_blockers
     )
     app.execute(AdvanceTime(1))
     assert _research_row(app, research_id).status == "prototype"
@@ -222,7 +222,7 @@ def test_prototype_resource_staging_is_site_owned_durable_and_completes_when_run
     resource = row.stage_resources[0]
     assert resource.reserved_t == pytest.approx(1.0)
     assert resource.requested_t == pytest.approx(0.0)
-    assert not any(code == "prototype_resource" for code, _detail in row.current_blockers)
+    assert not any(blocker.code == "prototype_resource" for blocker in row.current_blockers)
 
     app.execute(PauseResearch(str(research_id)))
     paused_reserved = sim.research.prototype_reserved_t(
@@ -265,20 +265,20 @@ def test_demonstration_site_selection_tolerates_transient_blockers_but_progress_
         for candidate in row.execution_context_options
         if candidate.operational_node_id == str(EARTH)
     )
-    assert any(code == "capability:active" for code, _detail in earth.blockers)
+    assert any(blocker.code == "capability:active" for blocker in earth.blockers)
     assert earth.can_select
     app.execute(SetResearchDemonstrationSite(str(research_id), "demonstration", str(EARTH)))
     selected = _research_row(app, research_id)
     assert selected.execution_context is not None
     assert selected.execution_context.operational_node_id == str(EARTH)
     assert selected.execution_context.surface_cell_id is None
-    assert any(code == "capability:active" for code, _detail in selected.current_blockers)
+    assert any(blocker.code == "capability:active" for blocker in selected.current_blockers)
 
     app.execute(ResumeFacility(str(site.id)))
     original = _remove_research_site_service(sim)
     app.execute(AdvanceTime(1))
     blocked = _research_row(app, research_id)
-    assert any(code == "service:allocation" for code, _detail in blocked.current_blockers)
+    assert any(blocker.code == "service:allocation" for blocker in blocked.current_blockers)
     assert sim.research.active[research_id].stage_progress == 0.0
 
     sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original

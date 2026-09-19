@@ -92,7 +92,7 @@ def test_vehicle_catalog_and_movement_modes_follow_definition_and_capability_con
         if mode.id == str(ids.REUSABLE_SURFACE_CARGO_LANDER)
     )
     assert not lander_mode.service_feasible
-    assert any("operation:powered_ascent" in blocker for blocker in lander_mode.blockers)
+    assert any("operation:powered_ascent" in blocker.code for blocker in lander_mode.blockers)
 
     origin_context = sim.transport.movement_geometry(plan.id).origin.environment_context_id
     gravity = sim.environment.require(origin_context, GravityField).local_acceleration_m_s2
@@ -517,7 +517,15 @@ def test_vehicle_production_application_contract_exposes_planning_blockers_and_p
         if row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
         and row.operational_node_id == str(LEO)
     )
-    assert any(blocker.startswith("service:enabled:") for blocker in option.blockers)
+    service_blocker = next(
+        blocker
+        for blocker in option.blockers
+        if blocker.kind == "service" and blocker.subject_id == "vehicle_assembly"
+    )
+    assert service_blocker.current == 0
+    assert service_blocker.required == "positive"
+    assert service_blocker.affected_action == "plan_vehicle_production"
+    assert service_blocker.related_entity_kind == "vehicle_definition"
     assert option.can_plan is True
     assert app.execute(
         ProduceVehicle(str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(LEO), priority=3)

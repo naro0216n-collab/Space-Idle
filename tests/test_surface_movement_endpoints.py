@@ -158,7 +158,7 @@ def test_player_founded_location_gets_orbit_movement_only_after_active_gateway_e
     sim.facilities.pause(gateway)
     blocked = app.query(GetMovementPlans(movement_plan_id=str(up.id), include_modes=False)).items[0]
     assert not blocked.available
-    assert any(item.startswith("origin:interface:manual_pause:") for item in blocked.blockers)
+    assert any(item.code.startswith("origin:interface:manual_pause:") for item in blocked.blockers)
 
 
 def test_physical_target_endpoint_uses_surface_cell_without_operational_node():

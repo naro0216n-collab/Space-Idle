@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .ui_reports import DecisionConstraintRow
 from .location_views import EnvironmentFacetRow
 from .ui_reports import ComparisonAxisRow, ComparisonValueRow
 
@@ -26,7 +27,7 @@ class SurfaceFacilityPlacementOption:
     construction_required: float
     self_deploying: bool
     resources: tuple[tuple[str, float], ...]
-    blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_plan: bool
     procurement_policy_options: tuple[str, ...] = ()
 
@@ -44,7 +45,7 @@ class SurfaceCellFoundationOption:
     payload_t_per_unit: float
     required_units: int
     resources: tuple[tuple[str, float], ...]
-    blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_plan: bool
     active_project_id: str | None = None
     comparison_key: str = ""
@@ -54,11 +55,11 @@ class SurfaceCellFoundationOption:
 @dataclass(frozen=True)
 class SurfaceCellDevelopmentOption:
     location_id: str
-    blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_plan: bool
     projected_surface_infrastructure_demand: float | None = None
     projected_surface_infrastructure_fulfillment: float | None = None
-    limiting_factors: tuple[str, ...] = ()
+    limiting_factors: tuple[DecisionConstraintRow, ...] = ()
     construction_required: float | None = None
     resources: tuple[tuple[str, float], ...] = ()
     active_project_id: str | None = None
@@ -79,7 +80,7 @@ class SurfaceCellRow:
     developed: bool
     location_id: str | None
     is_location_core: bool
-    foundation_blockers: tuple[tuple[str, str], ...]
+    foundation_blockers: tuple[DecisionConstraintRow, ...]
     development_options: tuple[SurfaceCellDevelopmentOption, ...]
     facility_placement_options: tuple[SurfaceFacilityPlacementOption, ...] = ()
     foundation_options: tuple[SurfaceCellFoundationOption, ...] = ()

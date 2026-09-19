@@ -115,7 +115,7 @@ def test_scientific_exploration_is_separate_from_survey_and_uses_fleet_performan
         option for option in row.fleet_options
         if option.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
     )
-    assert any(blocker.startswith("movement_path:") for blocker in launch_vehicle.blockers)
+    assert any(blocker.code.startswith("movement_path:") for blocker in launch_vehicle.blockers)
     assert tug.blockers == ()
     assert tug.outbound_latency_days is not None and tug.outbound_latency_days > 0
     assert tug.can_assign is False  # Campaign state must exist first.
@@ -395,7 +395,7 @@ def test_rp_admission_blocks_only_active_science_and_resumes_after_headroom_reco
     assert full.rp_admission_headroom == pytest.approx(0.0)
     assert full.rp_requested_today == pytest.approx(definition.points_per_day)
     assert full.rp_admitted_today == pytest.approx(0.0)
-    assert full.rp_admission_blocker == "research_point_pool_headroom"
+    assert full.rp_admission_blocker is not None and full.rp_admission_blocker.code == "research_point_pool_headroom"
     before_progress = state.progress_days
     before_awarded = state.research_points_awarded
     commitment_id = state.fleet_commitment_id
@@ -416,7 +416,7 @@ def test_rp_admission_blocks_only_active_science_and_resumes_after_headroom_reco
     assert sim.transport.fleet_commitment_snapshot(commitment_id) is not None
 
     app.execute(ResumeScientificExploration(str(exploration_id)))
-    assert _row(app).rp_admission_blocker == "research_point_pool_headroom"
+    assert _row(app).rp_admission_blocker is not None and _row(app).rp_admission_blocker.code == "research_point_pool_headroom"
     app.execute(AdvanceTime(1))
     assert state.progress_days == pytest.approx(before_progress)
     assert state.research_points_awarded == pytest.approx(before_awarded)

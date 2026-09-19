@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from .application_constraints import constraint_from_code, limiting_factors_from_codes
 from .application_views import (
     BottlenecksView, CurrentDependencyMetricRow, CurrentServiceDependencyMetricRow, DependencyAnalyticsView,
     DecisionContextTarget, ForecastDependencyMetricRow, ForecastServiceDependencyMetricRow, FlowReportView, IssueRow, ResourceFlowRow,
 )
 from .application_commands import GetDependencyAnalytics
+from .app_contracts.ui_reports import DecisionConstraintRow
 from .shared import CelestialBodyId, SpatialNodeId
 from .execution_requirements import ServiceCapacityRequirement
 from .service_capacity import ServiceCapacityScope
@@ -201,7 +203,12 @@ class ApplicationReportProjectorMixin:
                 unmet_rate=unmet,
                 external_dependency_rate=external_dependency,
                 local_coverage_ratio=coverage,
-                limiting_factors=tuple(limiting),
+                limiting_factors=limiting_factors_from_codes(
+                    limiting,
+                    affected_action="satisfy_service_demand",
+                    related_entity_kind="service",
+                    related_entity_id=service_type,
+                ),
             ))
         return rows, critical
 
@@ -267,7 +274,12 @@ class ApplicationReportProjectorMixin:
                 local_enabled_rate=local_enabled,
                 outside_scope_enabled_rate=outside_enabled,
                 earliest_requirement_day=earliest.get(service_type),
-                limiting_factors=tuple(limiting),
+                limiting_factors=limiting_factors_from_codes(
+                    limiting,
+                    affected_action="satisfy_forecast_service_demand",
+                    related_entity_kind="service",
+                    related_entity_id=service_type,
+                ),
             ))
         return rows, critical
 
@@ -435,7 +447,12 @@ class ApplicationReportProjectorMixin:
                 external_inflow[resource_id], external_outflow[resource_id],
                 imports_pipeline[resource_id], exports_pipeline[resource_id], unmet[resource_id],
                 tuple(str(value) for value in sorted(dependency_sources[resource_id], key=str)),
-                tuple(limiting),
+                limiting_factors_from_codes(
+                    limiting,
+                    affected_action="satisfy_resource_demand",
+                    related_entity_kind="resource",
+                    related_entity_id=str(resource_id),
+                ),
             ))
 
         by_id = {row.id: row for row in rows}
@@ -535,7 +552,13 @@ class ApplicationReportProjectorMixin:
                 "t" if definition is None else definition.unit, (str(resource_id),),
                 planned[resource_id], recurring[resource_id], external[resource_id], recurring_dependency,
                 target_stock[resource_id], earliest_day.get(resource_id),
-                tuple(str(value) for value in sorted(dependency_sources[resource_id], key=str)), tuple(limiting),
+                tuple(str(value) for value in sorted(dependency_sources[resource_id], key=str)),
+                limiting_factors_from_codes(
+                    limiting,
+                    affected_action="satisfy_forecast_resource_demand",
+                    related_entity_kind="resource",
+                    related_entity_id=str(resource_id),
+                ),
             ))
 
         by_id = {row.id: row for row in rows}
@@ -640,16 +663,98 @@ class ApplicationReportProjectorMixin:
             definition_id=definition_id,
             resource_id=resource_id,
         )
+        action_by_source = {
+            "facility": "operate_facility",
+            "industry": "run_process",
+            "extraction": "run_extraction",
+            "project": "progress_construction_project",
+            "storage": "admit_storage",
+            "power": "allocate_power",
+            "movement_plan": "use_movement_plan",
+            "transport_allocation": "operate_transport_allocation",
+            "transport_capacity": "operate_transport_allocation",
+            "vehicle_production": "progress_vehicle_production",
+            "supply": "satisfy_supply_requirement",
+            "scientific_exploration": "progress_scientific_exploration",
+            "survey": "progress_survey",
+        }
+        affected_action = action_by_source.get(source, "progress_research" if category == "research" else None)
+        related_kind = source if entity_id is not None else ("resource" if resource_id is not None else None)
+        related_id = entity_id if entity_id is not None else resource_id
+        structured = constraint_from_code(
+            code,
+            affected_action=affected_action,
+            related_entity_kind=related_kind,
+            related_entity_id=related_id,
+            severity="limiting" if impact == "limited" else "blocking",
+            message=message,
+            navigation=navigation,
+        )
         return IssueRow(
             code=str(code),
             message=str(message if message else code),
+            category=category,
+            source=source,
+            kind=structured.kind,
+            subject_kind=structured.subject_kind,
+            subject_id=structured.subject_id,
+            current=structured.current,
+            required=structured.required,
+            unit=structured.unit,
+            severity=structured.severity,
+            affected_action=structured.affected_action,
+            related_entity_kind=structured.related_entity_kind,
+            related_entity_id=structured.related_entity_id,
+            operational_node_id=operational_node_id,
+            entity_id=entity_id,
+            definition_id=definition_id,
+            resource_id=resource_id,
+            impact=impact,
+            attention_required=attention_required,
+            navigation=navigation,
+        )
+
+    @classmethod
+    def _issue_from_constraint(
+        cls,
+        constraint: DecisionConstraintRow,
+        *,
+        category: str,
+        source: str,
+        operational_node_id: str | None = None,
+        entity_id: str | None = None,
+        definition_id: str | None = None,
+        resource_id: str | None = None,
+        attention_required: bool = True,
+    ) -> IssueRow:
+        navigation = constraint.navigation or cls._issue_navigation(
             category=category,
             source=source,
             operational_node_id=operational_node_id,
             entity_id=entity_id,
             definition_id=definition_id,
             resource_id=resource_id,
-            impact=impact,
+        )
+        return IssueRow(
+            code=constraint.code,
+            message=constraint.message or constraint.code,
+            category=category,
+            source=source,
+            kind=constraint.kind,
+            subject_kind=constraint.subject_kind,
+            subject_id=constraint.subject_id,
+            current=constraint.current,
+            required=constraint.required,
+            unit=constraint.unit,
+            severity=constraint.severity,
+            affected_action=constraint.affected_action,
+            related_entity_kind=constraint.related_entity_kind,
+            related_entity_id=constraint.related_entity_id,
+            operational_node_id=operational_node_id,
+            entity_id=entity_id,
+            definition_id=definition_id,
+            resource_id=resource_id,
+            impact="limited" if constraint.severity == "limiting" else "blocked",
             attention_required=attention_required,
             navigation=navigation,
         )
@@ -768,36 +873,27 @@ class ApplicationReportProjectorMixin:
             }:
                 continue
             for blocker in allocation.blockers:
-                issues.append(self._issue(
-                    blocker, blocker, category="logistics", source="transport_allocation",
+                issues.append(self._issue_from_constraint(
+                    blocker, category="logistics", source="transport_allocation",
                     operational_node_id=allocation.anchor_node_id, entity_id=allocation.id,
                     definition_id=allocation.vehicle_definition_id,
                 ))
             for limiting in allocation.limiting_factors:
-                issues.append(self._issue(
-                    limiting, limiting, category="logistics", source="transport_capacity",
+                issues.append(self._issue_from_constraint(
+                    limiting, category="logistics", source="transport_capacity",
                     operational_node_id=allocation.anchor_node_id, entity_id=allocation.id,
-                    definition_id=allocation.vehicle_definition_id, impact="limited",
+                    definition_id=allocation.vehicle_definition_id,
                 ))
 
-        for state in sim.transport.vehicle_production_snapshots():
-            state_location = str(state.operational_node_id)
-            if location_filter is not None and state_location != location_filter:
+        for row in self._vehicle_production_rows():
+            if location_filter is not None and row.operational_node_id != location_filter:
                 continue
-            for blocker in sim.transport.vehicle_production_blockers(
-                state.id,
-                day=sim.day,
-                power=decision.allocations.power_by_location[state.operational_node_id],
-            ):
-                code, _, detail = blocker.partition(":")
-                resource_id = None
-                if code == "resource" and detail:
-                    resource_id = detail.partition(":")[0]
-                issues.append(self._issue(
-                    code, detail or blocker,
-                    category="vehicle_production", source="vehicle_production",
-                    operational_node_id=state_location, entity_id=str(state.id),
-                    definition_id=str(state.vehicle_definition_id), resource_id=resource_id,
+            for blocker in row.blockers:
+                resource_id = blocker.subject_id if blocker.subject_kind == "resource" else None
+                issues.append(self._issue_from_constraint(
+                    blocker, category="vehicle_production", source="vehicle_production",
+                    operational_node_id=row.operational_node_id, entity_id=row.id,
+                    definition_id=row.vehicle_definition_id, resource_id=resource_id,
                 ))
 
         for requirement in self._requirement_rows(
@@ -823,7 +919,7 @@ class ApplicationReportProjectorMixin:
         issues: list[IssueRow] = []
         research = self._research_view()
         for row in research.items:
-            groups: list[tuple[str, tuple[tuple[str, str], ...], str | None]] = []
+            groups: list[tuple[str, tuple[DecisionConstraintRow, ...], str | None]] = []
             if row.status in {"available", "locked"}:
                 groups.append(("research_start", row.start_blockers, None))
             elif row.status in {"prototype", "demonstration"}:
@@ -836,9 +932,9 @@ class ApplicationReportProjectorMixin:
             for source, blockers, selected_location in groups:
                 if location_filter is not None and selected_location != location_filter:
                     continue
-                for code, detail in blockers:
-                    issues.append(self._issue(
-                        code, detail, category="research", source=source,
+                for blocker in blockers:
+                    issues.append(self._issue_from_constraint(
+                        blocker, category="research", source=source,
                         operational_node_id=selected_location, definition_id=row.id,
                         attention_required=source != "research_start",
                     ))
@@ -850,18 +946,12 @@ class ApplicationReportProjectorMixin:
             }:
                 continue
             for blocker in row.blockers:
-                code, _, detail = blocker.partition(":")
-                resource_id = None
-                if code == "resource" and detail:
-                    resource_id = detail.partition(":")[0]
-                issue_location = row.origin_id
-                if code == "destination":
-                    issue_location = row.destination_id
-                elif location_filter is not None:
+                resource_id = blocker.subject_id if blocker.subject_kind == "resource" else None
+                issue_location = row.destination_id if blocker.kind == "destination" else row.origin_id
+                if location_filter is not None:
                     issue_location = location_filter
-                issues.append(self._issue(
-                    code, detail or blocker,
-                    category="exploration", source="scientific_exploration",
+                issues.append(self._issue_from_constraint(
+                    blocker, category="exploration", source="scientific_exploration",
                     operational_node_id=issue_location, definition_id=row.id,
                     resource_id=resource_id,
                 ))
@@ -872,8 +962,8 @@ class ApplicationReportProjectorMixin:
             if location_filter is not None and issue_location != location_filter:
                 continue
             for blocker in row.blockers:
-                issues.append(self._issue(
-                    blocker, blocker, category="survey", source="survey",
+                issues.append(self._issue_from_constraint(
+                    blocker, category="survey", source="survey",
                     operational_node_id=issue_location, entity_id=row.id,
                 ))
 
@@ -881,9 +971,8 @@ class ApplicationReportProjectorMixin:
             contracts = self._contracts_view()
             for row in contracts.items:
                 for blocker in row.blockers:
-                    code, _, detail = blocker.partition(":")
-                    issues.append(self._issue(
-                        code, detail or blocker, category="contract", source="contract",
+                    issues.append(self._issue_from_constraint(
+                        blocker, category="contract", source="contract",
                         entity_id=row.id, definition_id=row.template_id, attention_required=False,
                     ))
         return tuple(issues)

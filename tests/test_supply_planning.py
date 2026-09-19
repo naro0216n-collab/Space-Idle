@@ -206,7 +206,7 @@ def test_supply_projection_exposes_transport_blockers_only_when_external_transpo
     assert all(row.stocked_source_count == 1 for row in rows)
     assert all(row.operational_source_count == 0 for row in rows)
     assert all(row.supply_state == "transport_blocked" for row in rows)
-    assert all("no_transport_capacity" in row.blockers for row in rows)
+    assert all(any(blocker.code == "no_transport_capacity" for blocker in row.blockers) for row in rows)
 
     covered = [
         row for row in app.query(GetLogistics()).requirements
@@ -271,7 +271,7 @@ def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_
         for row in requirements
     )
     project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
-    assert any(code in {"logistics_source", "import_source", "import_transport_blocked"} for code, _ in project.blockers)
+    assert any(blocker.code in {"logistics_source", "import_source", "import_transport_blocked"} for blocker in project.blockers)
 
     allocation_id = _owned_earth_leo_capacity(sim)
     for row in requirements:
@@ -621,7 +621,7 @@ def test_arrival_waiting_exposes_admission_blocker_and_backpressures_transport_u
         row for row in app.query(GetCargoFlows()).items if row.id == str(waiting.id)
     )
     assert projected.status == "arrival_waiting"
-    assert any("storage" in blocker for blocker in projected.admission_blockers)
+    assert any(blocker.kind == "storage" or "storage" in blocker.code for blocker in projected.admission_blockers)
 
     blocked = sim.logistics.current_transport_capacity_snapshot(
         allocation_id, day=ready_day

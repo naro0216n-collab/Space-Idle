@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+from .ui_reports import DecisionConstraintRow
 from ..priority import ActivityPriority, ProvisioningPriority
 
 
@@ -43,7 +44,7 @@ class MovementServiceModeRow:
     full_load_propellant_t: float | None
     service_feasible: bool
     infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)
@@ -61,7 +62,7 @@ class MovementPlanRow:
     transit_days: int
     delta_v_km_s: float
     operations: tuple[tuple[str, float], ...]
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     modes: tuple[MovementServiceModeRow, ...]
 
 
@@ -122,8 +123,8 @@ class TransportAllocationRow:
     reverse_latency_days: int | None
     operational_supply: tuple[tuple[str, str, float], ...]
     infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
-    blockers: tuple[str, ...]
-    limiting_factors: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
+    limiting_factors: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)
@@ -163,7 +164,7 @@ class FleetRetirementRow:
     required_work: float
     priority: ActivityPriority
     expected_salvage: tuple[tuple[str, float], ...]
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     projected_salvage_fraction: float = 1.0
     projected_salvage: tuple[tuple[str, float], ...] = ()
     actual_salvage_fraction: float | None = None
@@ -194,7 +195,7 @@ class CargoFlowRow:
     departure_day: int
     ready_day: int
     status: str
-    admission_blockers: tuple[str, ...] = ()
+    admission_blockers: tuple[DecisionConstraintRow, ...] = ()
     final_destination_id: str | None = None
     dispatch_end_day: int | None = None
     dispatch_rate_t_per_day: float | None = None
@@ -209,7 +210,7 @@ class VehicleProductionOptionRow:
     production_service_type: str | None
     production_days: float
     resources: tuple[tuple[str, float], ...]
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_plan: bool
 
 
@@ -229,7 +230,7 @@ class VehicleProductionRow:
     resources: tuple[tuple[str, float], ...]
     priority: ActivityPriority
     priority_editable: bool
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     completed_units: int
 
 
@@ -270,7 +271,7 @@ class SupplyRequirementRow:
     operational_source_count: int = 0
     stocked_source_count: int = 0
     supply_state: str = "covered"
-    blockers: tuple[str, ...] = ()
+    blockers: tuple[DecisionConstraintRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -356,7 +357,7 @@ class TransportAllocationOptionRow:
     fleet_free_units: int
     operational_supply_at_full_unit: tuple[tuple[str, str, float], ...]
     infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)
@@ -384,4 +385,4 @@ class TransportAllocationPreviewView:
     cycle_days: float
     forward_latency_days: int
     reverse_latency_days: int | None
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]

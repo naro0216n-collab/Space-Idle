@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .priority import ActivityPriority
+from .application_constraints import constraints_from_codes
 from .application_views import SupplyRequirementRow, SupplyRoutingConstraintRow, TargetStockRow, TargetStockPresetRow, TargetStockOptionsView
 
 
@@ -159,7 +160,12 @@ class SupplyPlanningProjectorMixin:
                     operational_source_count=len(options.operational_source_ids),
                     stocked_source_count=len(options.stocked_source_ids),
                     supply_state=supply_state,
-                    blockers=tuple(dict.fromkeys(blockers)),
+                    blockers=constraints_from_codes(
+                        tuple(dict.fromkeys(blockers)),
+                        affected_action="satisfy_supply_requirement",
+                        related_entity_kind="supply_requirement",
+                        related_entity_id=str(requirement.id),
+                    ),
                 )
             )
         result = tuple(rows)

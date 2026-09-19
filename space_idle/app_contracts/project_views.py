@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+from .ui_reports import DecisionConstraintRow
 from ..priority import ActivityPriority, ProvisioningPriority
 from .ui_reports import ComparisonAxisRow, ComparisonValueRow
 
@@ -29,7 +30,7 @@ class BuildOptionRow:
     construction_required: float
     self_deploying: bool
     resources: tuple[BuildResourceOption, ...]
-    blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_plan: bool
     capabilities: tuple[str, ...] = ()
     service_capacity_supplies: tuple[tuple[str, float], ...] = ()
@@ -44,7 +45,7 @@ class FacilityUpgradeOption:
     target_level: int
     construction_required: float
     resources: tuple[BuildResourceOption, ...]
-    blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_plan: bool
     active_project_id: str | None
 
@@ -87,13 +88,13 @@ class ProjectRow:
     materials_committed: bool
     completed_facility_id: str | None
     resources: tuple[ProjectResourceRow, ...]
-    blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     site_cell_id: str | None = None
     target_cell_id: str | None = None
     target_body_id: str | None = None
     target_location_id: str | None = None
     construction_fulfillment: float = 1.0
-    limiting_factors: tuple[str, ...] = ()
+    limiting_factors: tuple[DecisionConstraintRow, ...] = ()
     projected_material_readiness_day: int | None = None
     irreversible_started: bool = False
     expected_salvage: tuple[tuple[str, float], ...] = ()
@@ -106,8 +107,8 @@ class ProjectRow:
     fleet_commitment_id: str | None = None
     manifest_ready: bool | None = None
     deployment_phase: str | None = None
-    site_blockers: tuple[tuple[str, str], ...] = ()
-    movement_blockers: tuple[tuple[str, str], ...] = ()
+    site_blockers: tuple[DecisionConstraintRow, ...] = ()
+    movement_blockers: tuple[DecisionConstraintRow, ...] = ()
 
 
 @dataclass(frozen=True)

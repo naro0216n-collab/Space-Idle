@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .application_transport_support import infrastructure_requirement_rows
+from .application_constraints import constraints_from_codes, constraints_from_pairs, limiting_factors_from_codes
 from .application_views import (
     CargoFlowRow, CargoFlowsView, DirectionalCapacityRow, FleetPoolRow, FleetCommitmentRow,
     FleetRelocationPreviewView, FleetRelocationResourceRequirementRow,
@@ -240,8 +241,18 @@ class LogisticsStateProjectorMixin:
                         for location, resource_id, amount in snapshot.operational_supply
                     ),
                     infrastructure_requirements=infrastructure_requirement_rows(plan),
-                    blockers=snapshot.blockers,
-                    limiting_factors=snapshot.limiting_factors,
+                    blockers=constraints_from_codes(
+                        snapshot.blockers,
+                        affected_action="operate_transport_allocation",
+                        related_entity_kind="transport_allocation",
+                        related_entity_id=str(allocation.id),
+                    ),
+                    limiting_factors=limiting_factors_from_codes(
+                        snapshot.limiting_factors,
+                        affected_action="operate_transport_allocation",
+                        related_entity_kind="transport_allocation",
+                        related_entity_id=str(allocation.id),
+                    ),
                 )
             )
         return tuple(rows)
@@ -278,9 +289,14 @@ class LogisticsStateProjectorMixin:
                 service_destinations=tuple(str(leg.destination_id) for leg in legs),
                 departure_day=waiting.arrived_day - waiting.arrival_leg.latency_days,
                 ready_day=waiting.arrived_day, status="arrival_waiting",
-                admission_blockers=sim.inventory.admission_state(
-                    waiting.node_id, waiting.resource_id
-                ).blockers,
+                admission_blockers=constraints_from_codes(
+                    sim.inventory.admission_state(
+                        waiting.node_id, waiting.resource_id
+                    ).blockers,
+                    affected_action="admit_cargo",
+                    related_entity_kind="cargo_flow",
+                    related_entity_id=str(waiting.id),
+                ),
                 final_destination_id=str(waiting.final_destination_id),
                 latency_days=waiting.arrival_leg.latency_days,
             ))
@@ -297,7 +313,7 @@ class LogisticsStateProjectorMixin:
             for node in sim.graph.operational_nodes():
                 power = powers[node.id]
                 blockers = tuple(
-                    f"{failure.code}:{failure.detail}"
+                    (failure.code, failure.detail)
                     for failure in sim.transport.vehicle_production_site_failures(
                         definition.id, node.id, day=sim.day, power=power
                     )
@@ -316,7 +332,12 @@ class LogisticsStateProjectorMixin:
                             (str(resource_id), amount)
                             for resource_id, amount in definition.production.resources
                         ),
-                        blockers=blockers,
+                        blockers=constraints_from_pairs(
+                            blockers,
+                            affected_action="plan_vehicle_production",
+                            related_entity_kind="vehicle_definition",
+                            related_entity_id=str(definition.id),
+                        ),
                         can_plan=not plan_failures,
                     )
                 )
@@ -345,7 +366,13 @@ class LogisticsStateProjectorMixin:
                     tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.production.resources),
                     state.priority,
                     sim.transport.vehicle_production_priority_editable(state.id),
-                    blockers, state.completed_units,
+                    constraints_from_codes(
+                        blockers,
+                        affected_action="progress_vehicle_production",
+                        related_entity_kind="vehicle_production",
+                        related_entity_id=str(state.id),
+                    ),
+                    state.completed_units,
                 )
             )
         return tuple(rows)
@@ -387,7 +414,12 @@ class LogisticsStateProjectorMixin:
                 expected_salvage=tuple(
                     (str(resource_id), amount) for resource_id, amount in recovery_potential
                 ),
-                blockers=sim.transport.fleet_retirement_blockers(state.id, day=sim.day),
+                blockers=constraints_from_codes(
+                    sim.transport.fleet_retirement_blockers(state.id, day=sim.day),
+                    affected_action="progress_fleet_retirement",
+                    related_entity_kind="fleet_retirement",
+                    related_entity_id=str(state.id),
+                ),
                 projected_salvage_fraction=recovery_projection.recoverable_fraction,
                 projected_salvage=tuple(
                     (str(resource_id), amount)
@@ -466,7 +498,12 @@ class LogisticsStateProjectorMixin:
             ),
             infrastructure_requirements=infrastructure_requirement_rows(plan),
             feasible=plan.feasible,
-            blockers=plan.blockers,
+            blockers=constraints_from_codes(
+                plan.blockers,
+                affected_action="relocate_fleet",
+                related_entity_kind="fleet_relocation_preview",
+                related_entity_id=None,
+            ),
         )
 
     def _transport_allocations_view(self) -> TransportAllocationsView:

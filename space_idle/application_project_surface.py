@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .application_comparison import project_comparison_axes
+from .application_constraints import constraints_from_pairs, limiting_factors_from_codes
 from .app_contracts.ui_reports import ComparisonValueRow
 from .application_views import (
     SurfaceCellDevelopmentOption, SurfaceCellFoundationOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
@@ -81,11 +82,21 @@ class SurfaceProjectorMixin:
                 development_options_list.append(
                     SurfaceCellDevelopmentOption(
                         location_id=str(location.operational_node_id),
-                        blockers=blockers,
+                        blockers=constraints_from_pairs(
+                            blockers,
+                            affected_action="develop_surface_cell",
+                            related_entity_kind="surface_cell",
+                            related_entity_id=str(cell.id),
+                        ),
                         can_plan=not failures,
                         projected_surface_infrastructure_demand=projected_demand,
                         projected_surface_infrastructure_fulfillment=projected_fulfillment,
-                        limiting_factors=limiting_factors,
+                        limiting_factors=limiting_factors_from_codes(
+                            limiting_factors,
+                            affected_action="develop_surface_cell",
+                            related_entity_kind="surface_cell",
+                            related_entity_id=str(cell.id),
+                        ),
                         construction_required=None if development_recipe is None else development_recipe.construction_work,
                         resources=() if development_recipe is None else tuple(
                             (str(req.resource_id), req.amount_t) for req in development_recipe.resources
@@ -126,20 +137,25 @@ class SurfaceProjectorMixin:
                         construction_required=recipe.construction_work,
                         self_deploying=recipe.self_deploying,
                         resources=tuple((str(req.resource_id), req.amount_t) for req in recipe.resources),
-                        blockers=(
-                            tuple(
-                                ("technology", str(technology))
-                                for technology in sorted(
-                                    recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
-                                    key=str,
+                        blockers=constraints_from_pairs(
+                            (
+                                tuple(
+                                    ("technology", str(technology))
+                                    for technology in sorted(
+                                        recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
+                                        key=str,
+                                    )
                                 )
-                            )
-                            + tuple(
-                                (failure.code, failure.detail)
-                                for failure in sim.projects.site_failures(
-                                    recipe.facility_def_id, owner, sim.day, power, site_cell_id=cell.id
+                                + tuple(
+                                    (failure.code, failure.detail)
+                                    for failure in sim.projects.site_failures(
+                                        recipe.facility_def_id, owner, sim.day, power, site_cell_id=cell.id
+                                    )
                                 )
-                            )
+                            ),
+                            affected_action="plan_surface_facility",
+                            related_entity_kind="facility_definition",
+                            related_entity_id=str(recipe.facility_def_id),
                         ),
                         can_plan=not sim.projects.build_plan_failures(
                             recipe.facility_def_id, owner, site_cell_id=cell.id
@@ -230,7 +246,12 @@ class SurfaceProjectorMixin:
                                 resources=tuple(
                                     (str(req.resource_id), req.amount_t) for req in founding_resources
                                 ),
-                                blockers=tuple((failure.code, failure.detail) for failure in failures),
+                                blockers=constraints_from_pairs(
+                                    tuple((failure.code, failure.detail) for failure in failures),
+                                    affected_action="plan_founding",
+                                    related_entity_kind="surface_cell",
+                                    related_entity_id=str(cell.id),
+                                ),
                                 can_plan=not failures,
                                 active_project_id=None if active_founding is None else str(active_founding.id),
                                 comparison_key=(
@@ -262,7 +283,12 @@ class SurfaceProjectorMixin:
                     owner is not None,
                     None if owner is None else str(owner),
                     owner_state is not None and owner_state.core_cell_id == cell.id,
-                    sim.graph.location_foundation_failures(body_id, cell.id),
+                    constraints_from_pairs(
+                        sim.graph.location_foundation_failures(body_id, cell.id),
+                        affected_action="plan_founding",
+                        related_entity_kind="surface_cell",
+                        related_entity_id=str(cell.id),
+                    ),
                     development_options,
                     facility_placement_options,
                     foundation_options,

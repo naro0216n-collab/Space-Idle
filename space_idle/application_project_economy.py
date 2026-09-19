@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .application_constraints import constraints_from_codes, limiting_factors_from_codes
 from .application_views import (
     BuyCommitmentRow, MarketInterfaceRow, MarketOfferRow, MarketView, TradeOrderRow,
 )
@@ -61,16 +62,33 @@ class MarketProjectorMixin:
                 str(order.id), order.direction.value, str(order.resource_id), str(order.market_interface_id),
                 order.priority, order.control_mode.value, order.quantity_target_t, order.rate_target_t_per_day,
                 order.price_limit_musd_per_t, price, committed, in_flight, presented,
-                order.settled_quantity_t, tuple(dict.fromkeys(blockers)), tuple(dict.fromkeys(limiting)),
+                order.settled_quantity_t,
+                constraints_from_codes(
+                    tuple(dict.fromkeys(blockers)),
+                    affected_action="execute_market_order",
+                    related_entity_kind="trade_order",
+                    related_entity_id=str(order.id),
+                ),
+                limiting_factors_from_codes(
+                    tuple(dict.fromkeys(limiting)),
+                    affected_action="execute_market_order",
+                    related_entity_kind="trade_order",
+                    related_entity_id=str(order.id),
+                ),
             ))
         commitments = tuple(
             BuyCommitmentRow(
                 str(row.id), str(row.order_id), str(row.resource_id), row.remaining_quantity_t,
                 row.committed_price_musd_per_t, row.reserved_funds_musd, row.maturity_day,
-                sim.inventory.admission_state(
-                    market.interfaces[market.orders[row.order_id].market_interface_id].operational_node_id,
-                    row.resource_id,
-                ).blockers if row.maturity_day <= sim.day else (),
+                constraints_from_codes(
+                    sim.inventory.admission_state(
+                        market.interfaces[market.orders[row.order_id].market_interface_id].operational_node_id,
+                        row.resource_id,
+                    ).blockers if row.maturity_day <= sim.day else (),
+                    affected_action="settle_market_buy",
+                    related_entity_kind="buy_commitment",
+                    related_entity_id=str(row.id),
+                ),
             )
             for row in sorted(market.buy_commitments.values(), key=lambda value: str(value.id))
         )

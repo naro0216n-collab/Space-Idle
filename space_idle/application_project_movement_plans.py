@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .application_transport_support import infrastructure_requirement_rows, vehicle_concept
+from .application_constraints import constraints_from_codes
 from .application_views import (
     DirectionalCapacityRow,
     MovementEndpointRow,
@@ -97,7 +98,12 @@ class LogisticsMovementPlanProjectorMixin:
                     full_load_propellant_t=full_load_propellant,
                     service_feasible=plan.feasible,
                     infrastructure_requirements=infrastructure_requirement_rows(plan),
-                    blockers=plan.blockers,
+                    blockers=constraints_from_codes(
+                        plan.blockers,
+                        affected_action="use_movement_service",
+                        related_entity_kind="movement_plan",
+                        related_entity_id=str(movement_plan.id),
+                    ),
                 )
             )
 
@@ -171,7 +177,12 @@ class LogisticsMovementPlanProjectorMixin:
                         (operation.operation_type, operation.delta_v_km_s)
                         for operation in movement_plan.operations
                     ),
-                    blockers=movement_plan_blockers,
+                    blockers=constraints_from_codes(
+                        movement_plan_blockers,
+                        affected_action="use_movement_plan",
+                        related_entity_kind="movement_plan",
+                        related_entity_id=str(movement_plan.id),
+                    ),
                     modes=mode_rows if include_modes else (),
                 )
             )
@@ -229,7 +240,12 @@ class LogisticsMovementPlanProjectorMixin:
                         in plan.resource_t_per_full_utilization_day
                     ),
                     infrastructure_requirements=infrastructure_requirement_rows(plan),
-                    blockers=plan.blockers,
+                    blockers=constraints_from_codes(
+                        plan.blockers,
+                        affected_action="plan_transport_allocation",
+                        related_entity_kind="vehicle_definition",
+                        related_entity_id=str(definition.id),
+                    ),
                 )
             )
         return TransportAllocationOptionsView(
@@ -313,5 +329,10 @@ class LogisticsMovementPlanProjectorMixin:
             cycle_days=plan.cycle_days,
             forward_latency_days=plan.forward_latency_days,
             reverse_latency_days=plan.reverse_latency_days,
-            blockers=tuple(dict.fromkeys(blockers)),
+            blockers=constraints_from_codes(
+                tuple(dict.fromkeys(blockers)),
+                affected_action="preview_transport_allocation",
+                related_entity_kind="vehicle_definition",
+                related_entity_id=str(vehicle_definition_id),
+            ),
         )

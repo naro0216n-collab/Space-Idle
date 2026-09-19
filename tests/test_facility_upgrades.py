@@ -129,7 +129,7 @@ def test_upgrade_query_owns_plan_eligibility_and_single_active_project_contract(
     assert active is not None
     assert not active.can_plan
     assert active.active_project_id == first.created_id
-    assert ("active_upgrade_project", first.created_id) in active.blockers
+    assert any(blocker.code == "active_upgrade_project" and blocker.subject_id == first.created_id for blocker in active.blockers)
     with pytest.raises(ApplicationError):
         app.execute(PlanFacilityUpgrade(before_row.id, procurement_policy="extended_wait"))
 

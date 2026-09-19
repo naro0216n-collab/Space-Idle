@@ -77,7 +77,7 @@ def test_unmet_external_demand_is_projected_for_destination_scope():
     assert {
         row.id for row in view.current_resources if row.external_dependency_per_day > 1e-9
     } <= critical
-    assert all("unmet_demand" in row.limiting_factors for row in unmet)
+    assert all(any(factor.code == "unmet_demand" for factor in row.limiting_factors) for row in unmet)
 
 
 def test_content_defined_resource_group_aggregates_members_without_cross_resource_substitution():
@@ -273,7 +273,7 @@ def test_forecast_service_dependency_projects_planned_construction_without_treat
     assert row.planned_requirement == pytest.approx(recipe.construction_work)
     assert row.local_enabled_rate == pytest.approx(0.0)
     assert row.outside_scope_enabled_rate > 0
-    assert "no_local_service_capacity" in row.limiting_factors
+    assert any(factor.code == "no_local_service_capacity" for factor in row.limiting_factors)
     assert "construction_work" in forecast.critical_dependency_service_types
 
 

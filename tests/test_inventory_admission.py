@@ -110,8 +110,10 @@ def test_application_exposes_pool_capacity_and_actual_limiting_factor():
     storage = next(item for item in view.storage if item.storage_pool_key == pool)
     assert row.over_capacity == pytest.approx(1.0)
     assert row.admission_capacity == pytest.approx(0.0)
-    assert row.limiting_factors == ("storage_power_limited",)
-    assert "storage_over_capacity" in row.admission_blockers
+    assert tuple(factor.code for factor in row.limiting_factors) == ("storage_power_limited",)
+    assert row.limiting_factors[0].severity == "limiting"
+    assert row.limiting_factors[0].affected_action == "admit_storage"
+    assert any(blocker.code == "storage_over_capacity" for blocker in row.admission_blockers)
     assert storage.unusable_occupied_t == pytest.approx(1.0)
-    assert storage.limiting_factors == ("storage_power_limited",)
-    assert "storage_over_capacity" in storage.admission_blockers
+    assert tuple(factor.code for factor in storage.limiting_factors) == ("storage_power_limited",)
+    assert any(blocker.code == "storage_over_capacity" for blocker in storage.admission_blockers)

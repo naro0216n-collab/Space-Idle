@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .application_catalog_support import site_requirements_definition
+from .application_constraints import constraint_from_code, constraints_from_codes
 from .execution_requirements import pool_admission_constraint
 from .application_views import (
     ScientificExplorationFleetOptionRow,
@@ -65,7 +66,7 @@ class ScientificExplorationProjectorMixin:
 
             rp_requested_today = 0.0
             rp_admitted_today = 0.0
-            rp_admission_blocker: str | None = None
+            rp_admission_blocker = None
             if state is not None and state.phase.value == "active" and not state.paused:
                 try:
                     allocation = execution.allocation(service.execution_bundle_id(definition.id))
@@ -78,8 +79,13 @@ class ScientificExplorationProjectorMixin:
                         allocation.unmet_execution > 1e-12
                         and rp_admission_key in allocation.limiting_constraints
                     ):
-                        rp_admission_blocker = "research_point_pool_headroom"
-                        blockers = blockers + (rp_admission_blocker,)
+                        rp_admission_blocker = constraint_from_code(
+                            "research_point_pool_headroom",
+                            affected_action="progress_scientific_exploration",
+                            related_entity_kind="scientific_exploration",
+                            related_entity_id=str(definition.id),
+                        )
+                        blockers = blockers + ("research_point_pool_headroom",)
 
             movement_operations: tuple[tuple[str, float], ...] = ()
             outbound_latency_days: int | None = None
@@ -184,7 +190,12 @@ class ScientificExplorationProjectorMixin:
                         total_units=fleet.total_units,
                         free_units=fleet.free_units,
                         required_units=definition.required_units,
-                        blockers=option_blockers,
+                        blockers=constraints_from_codes(
+                            option_blockers,
+                            affected_action="assign_scientific_exploration_fleet",
+                            related_entity_kind="scientific_exploration",
+                            related_entity_id=str(definition.id),
+                        ),
                         outbound_latency_days=option_outbound_latency,
                         return_latency_days=option_return_latency,
                         can_assign=service.can_assign_fleet(
@@ -231,7 +242,12 @@ class ScientificExplorationProjectorMixin:
                     committed_units=committed_units,
                     completion_disposition=service.completion_disposition(definition.id),
                     transition_options=service.transition_options(definition.id),
-                    blockers=blockers,
+                    blockers=constraints_from_codes(
+                        blockers,
+                        affected_action="progress_scientific_exploration",
+                        related_entity_kind="scientific_exploration",
+                        related_entity_id=str(definition.id),
+                    ),
                     can_start=service.can_start(definition.id),
                     can_pause=service.can_pause(definition.id),
                     can_resume=service.can_resume(definition.id),

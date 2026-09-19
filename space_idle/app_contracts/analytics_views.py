@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .ui_reports import DecisionConstraintRow
 from dataclasses import dataclass
 
 
@@ -20,7 +21,7 @@ class CurrentDependencyMetricRow:
     exports_pipeline_t: float
     unmet_demand_t: float
     dependency_source_node_ids: tuple[str, ...]
-    limiting_factors: tuple[str, ...]
+    limiting_factors: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,7 @@ class ForecastDependencyMetricRow:
     target_stock_t: float
     earliest_requirement_day: int | None
     dependency_source_node_ids: tuple[str, ...]
-    limiting_factors: tuple[str, ...]
+    limiting_factors: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ class CurrentServiceDependencyMetricRow:
     unmet_rate: float
     external_dependency_rate: float
     local_coverage_ratio: float | None
-    limiting_factors: tuple[str, ...]
+    limiting_factors: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ class ForecastServiceDependencyMetricRow:
     local_enabled_rate: float
     outside_scope_enabled_rate: float
     earliest_requirement_day: int | None
-    limiting_factors: tuple[str, ...]
+    limiting_factors: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)

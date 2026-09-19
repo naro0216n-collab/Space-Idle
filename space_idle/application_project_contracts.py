@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .application_constraints import constraints_from_codes, constraints_from_pairs
 from .application_views import ContractRow, ContractsView
 from .site import evaluate_site_requirements
 
@@ -27,11 +28,14 @@ class ContractProgressionProjectorMixin:
                     sim.environment,
                     sim.facilities,
                 )
-                blockers = tuple(
-                    f"{failure.code}:{failure.detail}" for failure in failures
+                blockers = constraints_from_pairs(
+                    tuple((failure.code, failure.detail) for failure in failures),
+                    affected_action="accept_contract",
+                    related_entity_kind="contract",
+                    related_entity_id=str(state.id),
                 )
             else:
-                blockers = (
+                blocker_codes = (
                     ()
                     if any(
                         not evaluate_site_requirements(
@@ -44,6 +48,12 @@ class ContractProgressionProjectorMixin:
                         for node in sim.graph.operational_nodes()
                     )
                     else ("site_requirements",)
+                )
+                blockers = constraints_from_codes(
+                    blocker_codes,
+                    affected_action="accept_contract",
+                    related_entity_kind="contract",
+                    related_entity_id=str(state.id),
                 )
             rows.append(
                 ContractRow(

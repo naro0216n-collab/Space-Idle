@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from .ui_reports import DecisionConstraintRow
 from .logistics_views import (
     CargoFlowRow, FleetPoolRow, FleetCommitmentRow, FleetRelocationResourceRequirementRow,
     FleetRelocationRow, FleetReleaseRow, FleetRetirementRow, InfrastructureRequirementRow,
@@ -53,7 +54,7 @@ class FleetRelocationPreviewView:
     resource_requirements: tuple[FleetRelocationResourceRequirementRow, ...]
     infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
     feasible: bool
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)

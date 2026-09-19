@@ -212,7 +212,7 @@ def test_decommission_storage_provider_blocks_only_when_existing_stock_cannot_su
         row for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
         if row.id == str(facility_id)
     )
-    assert any(code == "storage_stock" for code, _detail in facility_row.decommission_blockers)
+    assert any(blocker.code == "storage_stock" for blocker in facility_row.decommission_blockers)
     with pytest.raises(ApplicationError, match="storage_stock"):
         app.execute(
             PlanFacilityDecommission(str(facility_id), priority=5, procurement_policy="extended_wait")

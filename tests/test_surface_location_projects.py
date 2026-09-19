@@ -319,10 +319,10 @@ def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_
         if row.id == project_id
     )
     assert any(
-        code in {"import_source", "import_transport_blocked"}
-        for code, _detail in planned.blockers
+        blocker.code in {"import_source", "import_transport_blocked"}
+        for blocker in planned.blockers
     )
-    assert any(code == "resource_shortage" for code, _detail in planned.blockers)
+    assert any(blocker.code == "resource_shortage" for blocker in planned.blockers)
 
     app.execute(AdvanceTime(1))
     project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)
@@ -463,7 +463,7 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     }
     assert displayed_resources == expected_resources
     assert str(ids.PROPELLANT) in displayed_resources
-    assert any(code == "knowledge_requirement" for code, _detail in option.blockers)
+    assert any(blocker.code == "knowledge_requirement" for blocker in option.blockers)
 
     surface = app.query(GetSurfaceMap(str(ids.MOON)))
     assert surface.founding_comparison_axes

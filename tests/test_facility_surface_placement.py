@@ -136,7 +136,7 @@ def test_surface_map_owns_surface_buildability_and_location_build_options_do_not
     assert option.location_id == str(ids.EARTH)
     assert option.can_plan
     recipe = sim.projects.recipes[ids.ROBOTIC_GEOLOGY_STATION]
-    assert {detail for code, detail in option.blockers if code == "technology"} == {
+    assert {blocker.subject_id for blocker in option.blockers if blocker.code == "technology"} == {
         str(technology_id) for technology_id in recipe.prerequisite_technologies
     }
     assert option.procurement_policy_options == build_options.procurement_policy_options

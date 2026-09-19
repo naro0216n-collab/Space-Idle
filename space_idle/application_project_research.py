@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .application_constraints import constraints_from_pairs
 from .application_views import (
     ResearchExperienceRow, ResearchKnowledgeRow, ResearchPrototypeResourceRow,
     ResearchProviderFleetRow, ResearchProviderRow, ResearchStageRow, ResearchRow, ResearchView,
@@ -31,7 +32,14 @@ class ResearchProgressionProjectorMixin:
                     blockers = sim.research.demonstration_site_blockers(definition.id, node.id, sim.day, power_by_location.get(node.id), surface_cell_id)
                     can_select = sim.research.can_select_demonstration_site(definition.id, node.id, sim.day, surface_cell_id)
                 rows.append(ResearchSiteOptionRow(
-                    str(node.id), None if surface_cell_id is None else str(surface_cell_id), blockers, can_select
+                    str(node.id), None if surface_cell_id is None else str(surface_cell_id),
+                    constraints_from_pairs(
+                        blockers,
+                        affected_action="select_research_execution_site",
+                        related_entity_kind="research",
+                        related_entity_id=str(definition.id),
+                    ),
+                    can_select,
                 ))
         return tuple(rows)
 
@@ -76,7 +84,12 @@ class ResearchProgressionProjectorMixin:
                     committed_units=committed_units,
                     free_units=free_units,
                     max_units=max_units,
-                    blockers=blockers,
+                    blockers=constraints_from_pairs(
+                        blockers,
+                        affected_action="set_research_provider_fleet",
+                        related_entity_kind="research_provider",
+                        related_entity_id=str(provider.id),
+                    ),
                     can_set_quantity=(committed_units > 0 or max_units > 0),
                 ))
         return tuple(rows)
@@ -123,7 +136,12 @@ class ResearchProgressionProjectorMixin:
                     facility.id, power_by_location, sim.day
                 ),
                 research_execution_per_day=execution_supply,
-                blockers=tuple(blockers),
+                blockers=constraints_from_pairs(
+                    blockers,
+                    affected_action="operate_research_provider",
+                    related_entity_kind="facility",
+                    related_entity_id=str(facility.id),
+                ),
                 can_pause=False,
                 can_resume=False,
                 facility_id=str(facility.id),
@@ -162,7 +180,12 @@ class ResearchProgressionProjectorMixin:
                 admitted_generation_points_per_day=admitted,
                 storage_capacity_points=capacity,
                 research_execution_per_day=execution_supply,
-                blockers=blockers,
+                blockers=constraints_from_pairs(
+                    blockers,
+                    affected_action="operate_research_provider",
+                    related_entity_kind="research_provider_assignment",
+                    related_entity_id=str(assignment_id),
+                ),
                 can_pause=not assignment.paused,
                 can_resume=assignment.paused,
             ))
@@ -277,7 +300,18 @@ class ResearchProgressionProjectorMixin:
                 rp_allocated=point_allocations.get(definition.id, 0.0),
                 rp_remaining=sim.research.theory_remaining(definition.id),
                 execution_requested=execution_requested, execution_allocated=execution_allocated,
-                current_blockers=current_blockers, start_blockers=start_blockers,
+                current_blockers=constraints_from_pairs(
+                    current_blockers,
+                    affected_action="progress_research",
+                    related_entity_kind="research",
+                    related_entity_id=str(definition.id),
+                ),
+                start_blockers=constraints_from_pairs(
+                    start_blockers,
+                    affected_action="start_research",
+                    related_entity_kind="research",
+                    related_entity_id=str(definition.id),
+                ),
                 stage_resources=tuple(stage_resources), execution_context=execution_context,
                 execution_context_options=execution_context_options,
                 operational_experience=tuple(experience_rows),

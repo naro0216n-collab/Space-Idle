@@ -93,7 +93,7 @@
     const app = window.SpaceIdleApp;
     const definitionName = (id) => app?.definitionName?.(id) || id || '—';
     const locationName = (id) => app?.locationName?.(id) || id || '—';
-    const issueText = (row) => app?.userFacingText?.(Array.isArray(row) ? row[1] || row[0] : row) || (Array.isArray(row) ? row.join(': ') : row);
+    const issueText = (row) => app?.constraintSummary?.(row) || '実行条件を確認してください';
     const providerRows = providers.length ? `<div class="research-provider-grid">${providers.map((provider) => {
       const blocked = (provider.blockers || []).length;
       const isFleet = provider.source_kind === 'fleet';

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+from .ui_reports import DecisionConstraintRow
 from ..priority import ActivityPriority, ProvisioningPriority
 
 from .catalog_views import SiteRequirementsDefinitionRow
@@ -11,7 +12,7 @@ from .ui_reports import ComparisonAxisRow, ComparisonValueRow
 class ResearchSiteOptionRow:
     operational_node_id: str
     surface_cell_id: str | None
-    blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_select: bool
 
 
@@ -38,7 +39,7 @@ class ResearchProviderRow:
     admitted_generation_points_per_day: float
     storage_capacity_points: float
     research_execution_per_day: float
-    blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_pause: bool
     can_resume: bool
     # Facility identity remains explicit for inspection links; Fleet rows use None.
@@ -56,7 +57,7 @@ class ResearchProviderFleetRow:
     committed_units: int
     free_units: int
     max_units: int
-    blockers: tuple[tuple[str, str], ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_set_quantity: bool
 
 
@@ -113,8 +114,8 @@ class ResearchRow:
     rp_remaining: float
     execution_requested: float
     execution_allocated: float
-    current_blockers: tuple[tuple[str, str], ...]
-    start_blockers: tuple[tuple[str, str], ...]
+    current_blockers: tuple[DecisionConstraintRow, ...]
+    start_blockers: tuple[DecisionConstraintRow, ...]
     stage_resources: tuple[ResearchPrototypeResourceRow, ...]
     execution_context: ResearchExecutionSiteRow | None
     execution_context_options: tuple[ResearchSiteOptionRow, ...]
@@ -144,7 +145,7 @@ class ScientificExplorationFleetOptionRow:
     total_units: int
     free_units: int
     required_units: int
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     outbound_latency_days: int | None = None
     return_latency_days: int | None = None
     can_assign: bool = False
@@ -173,7 +174,7 @@ class ScientificExplorationRow:
     rp_admission_headroom: float
     rp_requested_today: float
     rp_admitted_today: float
-    rp_admission_blocker: str | None
+    rp_admission_blocker: DecisionConstraintRow | None
     consumable_resources: tuple[tuple[str, float], ...]
     required_units: int
     minimum_payload_t: float
@@ -183,7 +184,7 @@ class ScientificExplorationRow:
     committed_units: int
     completion_disposition: str
     transition_options: tuple[str, ...]
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_start: bool
     can_pause: bool
     can_resume: bool
@@ -206,7 +207,7 @@ class SurveyProviderFleetRow:
     free_units: int
     max_units: int
     capacity_units_per_day: float
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_set_quantity: bool
 
 
@@ -218,6 +219,7 @@ class SurveyCandidateRow:
     provider_source_kind: str
     source_definition_id: str
     observation_mode_id: str
+    observation_mode_display_name: str
     survey_rate: float
     max_knowledge_level: int
     estimate_uncertainty_fraction: float
@@ -227,7 +229,7 @@ class SurveyCandidateRow:
     capacity_units_per_day: float
     matches_constraints: bool
     viable: bool
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     comparison_values: tuple[ComparisonValueRow, ...]
 
 
@@ -257,6 +259,8 @@ class SurveyCampaignRow:
     projected_provider_definition_id: str | None
     projected_provider_operational_node_id: str | None
     projected_observation_mode_id: str | None
+    projected_observation_mode_display_name: str | None
+    observation_mode_constraint_display_name: str | None
     covered_targets: int
     remaining_targets: int
     requested_service_units_per_day: float
@@ -265,7 +269,7 @@ class SurveyCampaignRow:
     projected_remaining_days: float | None
     required_fleet_units: int | None
     assigned_fleet_units: int | None
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_pause: bool
     can_resume: bool
     can_set_priority: bool
@@ -295,7 +299,7 @@ class SurveyCampaignIntentPreviewView:
     resource_ids: tuple[str, ...]
     goal_knowledge_level: int
     campaign_id: str | None
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
     can_apply: bool
 
 
@@ -314,7 +318,7 @@ class ContractRow:
     status: str
     deadline_day: int
     target_operational_node_id: str | None
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)

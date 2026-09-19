@@ -153,7 +153,7 @@ def test_location_query_exposes_surface_infrastructure_decision_state_and_improv
     assert row is not None
     assert row.requested_capacity > 0.0
     assert row.fulfillment == 0.0
-    assert row.limiting_factors == ("surface_infrastructure",)
+    assert tuple(factor.code for factor in row.limiting_factors) == ("surface_infrastructure",)
     assert str(ids.SURFACE_DISTRIBUTION_HUB) in row.improvement_facility_definition_ids
 
     spatial = view.surface_location
@@ -234,7 +234,7 @@ def test_surface_cell_development_projection_execution_and_completion_share_one_
     assert option.projected_surface_infrastructure_demand is not None
     assert option.projected_surface_infrastructure_demand > 0.0
     assert option.projected_surface_infrastructure_fulfillment == 0.0
-    assert option.limiting_factors == ("surface_infrastructure",)
+    assert tuple(factor.code for factor in option.limiting_factors) == ("surface_infrastructure",)
 
     project_id = app.execute(DevelopSurfaceCell(
         str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), procurement_policy="extended_wait"
@@ -247,7 +247,7 @@ def test_surface_cell_development_projection_execution_and_completion_share_one_
     project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
     assert project.construction_done == 0.0
     assert project.construction_fulfillment == 0.0
-    assert project.limiting_factors == ("surface_infrastructure",)
+    assert tuple(factor.code for factor in project.limiting_factors) == ("surface_infrastructure",)
     assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
 
     sim.facilities.install(
@@ -263,7 +263,7 @@ def test_surface_cell_development_projection_execution_and_completion_share_one_
     project_view = next(row for row in app.query(GetProjects()).items if row.id == project_id)
     assert project_view.construction_done > 0.0
     assert project_view.construction_fulfillment > 0.0
-    assert "surface_infrastructure" not in project_view.limiting_factors
+    assert all(factor.code != "surface_infrastructure" for factor in project_view.limiting_factors)
     assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
 
     project_state = next(row for row in sim.projects.projects.values() if str(row.id) == project_id)

@@ -74,7 +74,7 @@ def test_research_shared_allocation_respects_priority_fairness_and_registration_
             assert row.rp_allocated == 0.5
             assert second_rows[rid].execution_allocated == row.execution_allocated
             assert second_rows[rid].rp_allocated == row.rp_allocated
-            assert any(code == blocker_code for code, _ in row.current_blockers)
+            assert any(blocker.code == blocker_code for blocker in row.current_blockers)
 
         first.execute(SetResearchPriority(str(a), 5))
         first.execute(SetResearchPriority(str(b), 1))
@@ -87,7 +87,7 @@ def test_research_shared_allocation_respects_priority_fairness_and_registration_
         assert high.rp_requested == low.rp_requested == 10.0
         assert high.rp_allocated == 1.0
         assert low.rp_allocated == 0.0
-        assert any(code == blocker_code for code, _ in low.current_blockers)
+        assert any(blocker.code == blocker_code for blocker in low.current_blockers)
 
 
 def test_organization_research_execution_aggregates_provider_sites_after_local_power():

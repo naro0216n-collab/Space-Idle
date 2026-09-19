@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+from .ui_reports import DecisionConstraintRow
 from ..priority import ActivityPriority, ProvisioningPriority
 from .project_views import FacilityUpgradeOption, ProjectRow
 
@@ -19,8 +20,8 @@ class InventoryRow:
     free_capacity: float | None
     admission_capacity: float | None = None
     over_capacity: float = 0.0
-    admission_blockers: tuple[str, ...] = ()
-    limiting_factors: tuple[str, ...] = ()
+    admission_blockers: tuple[DecisionConstraintRow, ...] = ()
+    limiting_factors: tuple[DecisionConstraintRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -50,8 +51,8 @@ class StorageRow:
     usable_capacity_t: float
     free_usable_t: float
     unusable_occupied_t: float
-    admission_blockers: tuple[str, ...] = ()
-    limiting_factors: tuple[str, ...] = ()
+    admission_blockers: tuple[DecisionConstraintRow, ...] = ()
+    limiting_factors: tuple[DecisionConstraintRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ class FacilityRow:
     level: int
     paused: bool
     active_and_site_compatible: bool
-    activation_blockers: tuple[tuple[str, str], ...]
+    activation_blockers: tuple[DecisionConstraintRow, ...]
     activity_priority: ActivityPriority
     maintenance_priority: ActivityPriority
     capabilities: tuple[str, ...]
@@ -75,12 +76,12 @@ class FacilityRow:
     maintenance_demand_per_day: tuple[tuple[str, float], ...] = ()
     maintenance_satisfaction: float = 1.0
     operational_utilization: float = 1.0
-    operating_blockers: tuple[tuple[str, str], ...] = ()
+    operating_blockers: tuple[DecisionConstraintRow, ...] = ()
     placement_scope: str = "OPERATIONAL_NODE"
     site_cell_id: str | None = None
     service_capacity_supplies: tuple[tuple[str, float], ...] = ()
     lifecycle: str = "NORMAL"
-    decommission_blockers: tuple[tuple[str, str], ...] = ()
+    decommission_blockers: tuple[DecisionConstraintRow, ...] = ()
     expected_salvage: tuple[tuple[str, float], ...] = ()
     projected_salvage_fraction: float = 1.0
     projected_salvage: tuple[tuple[str, float], ...] = ()
@@ -103,7 +104,7 @@ class ServiceCapacityRow:
     requested: float
     allocated: float
     spare: float
-    limiting_factors: tuple[str, ...] = ()
+    limiting_factors: tuple[DecisionConstraintRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,7 @@ class SurfaceInfrastructureRow:
     spare_capacity: float
     fulfillment: float
     load_sources: tuple[SurfaceInfrastructureLoadRow, ...]
-    limiting_factors: tuple[str, ...]
+    limiting_factors: tuple[DecisionConstraintRow, ...]
     improvement_facility_definition_ids: tuple[str, ...]
 
 
@@ -135,7 +136,7 @@ class IndustryRow:
     process_options: tuple[tuple[str, str], ...]
     selection_required: bool
     scale: float
-    limiting_factors: tuple[str, ...]
+    limiting_factors: tuple[DecisionConstraintRow, ...]
     input_rates_per_day: tuple[tuple[str, float], ...]
     output_rates_per_day: tuple[tuple[str, float], ...]
 
@@ -183,7 +184,7 @@ class ExtractionRow:
     marginal_efficiency: float
     scale: float
     output_t_per_day: float
-    limiting_factors: tuple[str, ...]
+    limiting_factors: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)

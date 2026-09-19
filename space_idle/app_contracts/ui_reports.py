@@ -14,6 +14,29 @@ class DecisionContextTarget:
 
 
 @dataclass(frozen=True)
+class DecisionConstraintRow:
+    """Structured Application-facing blocker or limiting factor.
+
+    Domain-specific codes are retained for diagnostics, while UI decisions use the
+    structured fields and never need to split or interpret the code string.
+    """
+
+    code: str
+    kind: str
+    subject_kind: str | None = None
+    subject_id: str | None = None
+    current: float | str | None = None
+    required: float | str | None = None
+    unit: str | None = None
+    severity: str = "blocking"
+    affected_action: str | None = None
+    related_entity_kind: str | None = None
+    related_entity_id: str | None = None
+    message: str | None = None
+    navigation: DecisionContextTarget | None = None
+
+
+@dataclass(frozen=True)
 class IssueRow:
     """Normalized UI-facing explanation of a blocked or constrained state."""
 
@@ -21,6 +44,16 @@ class IssueRow:
     message: str
     category: str
     source: str
+    kind: str | None = None
+    subject_kind: str | None = None
+    subject_id: str | None = None
+    current: float | str | None = None
+    required: float | str | None = None
+    unit: str | None = None
+    severity: str = "blocking"
+    affected_action: str | None = None
+    related_entity_kind: str | None = None
+    related_entity_id: str | None = None
     operational_node_id: str | None = None
     entity_id: str | None = None
     definition_id: str | None = None

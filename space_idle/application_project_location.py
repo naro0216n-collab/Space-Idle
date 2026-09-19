@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
 
+from .application_constraints import constraints_from_codes, constraints_from_pairs, limiting_factors_from_codes
 from .application_views import (
     CapabilityRow,
     ServiceCapacityRow,
@@ -69,8 +70,18 @@ class LocationProjectorMixin:
                     free,
                     admission.admission_capacity_t,
                     admission.over_capacity_t,
-                    admission.blockers,
-                    admission.limiting_factors,
+                    constraints_from_codes(
+                        admission.blockers,
+                        affected_action="admit_storage",
+                        related_entity_kind="storage_pool",
+                        related_entity_id=storage_pool_key,
+                    ),
+                    limiting_factors_from_codes(
+                        admission.limiting_factors,
+                        affected_action="admit_storage",
+                        related_entity_kind="storage_pool",
+                        related_entity_id=storage_pool_key,
+                    ),
                 )
             )
         return tuple(rows)
@@ -108,8 +119,18 @@ class LocationProjectorMixin:
                     usable,
                     0.0 if admission.admission_capacity_t is None else admission.admission_capacity_t,
                     admission.over_capacity_t,
-                    admission.blockers,
-                    admission.limiting_factors,
+                    constraints_from_codes(
+                        admission.blockers,
+                        affected_action="admit_storage",
+                        related_entity_kind="storage_pool",
+                        related_entity_id=storage_pool_key,
+                    ),
+                    limiting_factors_from_codes(
+                        admission.limiting_factors,
+                        affected_action="admit_storage",
+                        related_entity_kind="storage_pool",
+                        related_entity_id=storage_pool_key,
+                    ),
                 )
             )
         return tuple(rows)
@@ -265,7 +286,12 @@ class LocationProjectorMixin:
                     facility.level,
                     facility.paused,
                     active_and_compatible,
-                    tuple(activation_failures),
+                    constraints_from_pairs(
+                        activation_failures,
+                        affected_action="operate_facility",
+                        related_entity_kind="facility",
+                        related_entity_id=str(facility.id),
+                    ),
                     facility.activity_priority,
                     facility.maintenance_priority,
                     tuple(sorted(supply.id for supply in definition.capability_supplies)),
@@ -284,7 +310,12 @@ class LocationProjectorMixin:
                     ),
                     maintenance_satisfaction,
                     operational_utilization,
-                    tuple(operating_blockers),
+                    constraints_from_pairs(
+                        operating_blockers,
+                        affected_action="operate_facility",
+                        related_entity_kind="facility",
+                        related_entity_id=str(facility.id),
+                    ),
                     definition.placement_scope.value,
                     None if facility.site_cell_id is None else str(facility.site_cell_id),
                     tuple(
@@ -294,7 +325,12 @@ class LocationProjectorMixin:
                         )
                     ),
                     facility.lifecycle.value,
-                    tuple((blocker.code, blocker.detail) for blocker in decommission_failures),
+                    constraints_from_pairs(
+                        tuple((blocker.code, blocker.detail) for blocker in decommission_failures),
+                        affected_action="plan_facility_decommission",
+                        related_entity_kind="facility",
+                        related_entity_id=str(facility.id),
+                    ),
                     tuple(
                         (str(resource_id), amount)
                         for resource_id, amount in sorted(
@@ -391,7 +427,12 @@ class LocationProjectorMixin:
                     options,
                     selection_required,
                     scale,
-                    limiting,
+                    limiting_factors_from_codes(
+                        limiting,
+                        affected_action="run_process",
+                        related_entity_kind="facility",
+                        related_entity_id=str(facility.id),
+                    ),
                     inputs,
                     outputs,
                 )
@@ -419,7 +460,12 @@ class LocationProjectorMixin:
                         snap.marginal_efficiency,
                         snap.scale,
                         snap.output_t_per_day,
-                        snap.limiting_factors,
+                        limiting_factors_from_codes(
+                            snap.limiting_factors,
+                            affected_action="run_extraction",
+                            related_entity_kind="facility",
+                            related_entity_id=str(snap.facility_id),
+                        ),
                     )
                 )
             extraction_resources.extend(
@@ -465,7 +511,12 @@ class LocationProjectorMixin:
                 summary.requested_rate,
                 summary.allocated_rate,
                 summary.spare_rate,
-                summary.limiting_factors,
+                limiting_factors_from_codes(
+                    summary.limiting_factors,
+                    affected_action="allocate_service_capacity",
+                    related_entity_kind="service",
+                    related_entity_id=summary.service_type,
+                ),
             )
             for summary in (
                 service_allocations.summary(location_id, service_type)
@@ -505,7 +556,12 @@ class LocationProjectorMixin:
                     SurfaceInfrastructureLoadRow(load.code, load.demand)
                     for load in snapshot.load_sources
                 ),
-                snapshot.limiting_factors,
+                limiting_factors_from_codes(
+                    snapshot.limiting_factors,
+                    affected_action="serve_surface_infrastructure",
+                    related_entity_kind="operational_node",
+                    related_entity_id=str(location_id),
+                ),
                 improvement_ids,
             )
 

@@ -95,10 +95,13 @@ class SurveyObservationModeSpec:
     site_requirements: SiteRequirements = SiteRequirements()
     required_source_capabilities: frozenset[str] = frozenset()
     minimum_source_units: int = 1
+    display_name: str | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("survey observation mode id must not be empty")
+        if self.display_name is not None and not self.display_name:
+            raise ValueError("survey observation mode display name must not be empty")
         if self.survey_rate <= 0:
             raise ValueError("survey observation mode rate must be positive")
         object.__setattr__(self, "max_knowledge_level", KnowledgeLevel(self.max_knowledge_level))

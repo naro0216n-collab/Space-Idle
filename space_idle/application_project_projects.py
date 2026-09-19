@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .application_comparison import project_comparison_axes
+from .application_constraints import constraints_from_pairs, limiting_factors_from_codes
 from .app_contracts.ui_reports import ComparisonValueRow
 from .application_views import (
     BuildResourceOption,
@@ -88,7 +89,12 @@ class ProjectProjectorMixin:
             target_level=recipe.target_level,
             construction_required=recipe.construction_work,
             resources=self._construction_resource_options(recipe),
-            blockers=blockers,
+            blockers=constraints_from_pairs(
+                blockers,
+                affected_action="plan_facility_upgrade",
+                related_entity_kind="facility",
+                related_entity_id=str(facility.id),
+            ),
             can_plan=not plan_failures,
             active_project_id=active_project_id,
         )
@@ -276,10 +282,20 @@ class ProjectProjectorMixin:
                 project.construction_done, recipe.construction_work,
                 project.materials_committed,
                 None if project.completed_facility_id is None else str(project.completed_facility_id),
-                tuple(resources), blockers,
+                tuple(resources), constraints_from_pairs(
+                    blockers,
+                    affected_action="progress_construction_project",
+                    related_entity_kind="project",
+                    related_entity_id=str(project.id),
+                ),
                 None if project.site_cell_id is None else str(project.site_cell_id),
                 target_cell_id, target_body_id, target_location_id,
-                construction_fulfillment, limiting_factors,
+                construction_fulfillment, limiting_factors_from_codes(
+                    limiting_factors,
+                    affected_action="progress_construction_project",
+                    related_entity_kind="project",
+                    related_entity_id=str(project.id),
+                ),
                 self._projected_material_readiness_day(
                     day=sim.day,
                     owner_kind="project",
@@ -363,12 +379,24 @@ class ProjectProjectorMixin:
                     procurement_policy_options=(),
                     construction_done=project.preparation_done, construction_required=recipe.preparation_work,
                     materials_committed=project.inputs_consumed, completed_facility_id=None,
-                    resources=tuple(resources), blockers=blockers, site_cell_id=None,
+                    resources=tuple(resources),
+                    blockers=constraints_from_pairs(
+                        blockers,
+                        affected_action="progress_founding",
+                        related_entity_kind="founding_project",
+                        related_entity_id=str(project.id),
+                    ),
+                    site_cell_id=None,
                     target_cell_id=None if target_cell is None else str(target_cell),
                     target_body_id=None if target_body is None else str(target_body),
                     target_location_id=str(target_node),
                     construction_fulfillment=sim.founding.preparation_fulfillment(project.id, decision.allocations.execution),
-                    limiting_factors=sim.founding.preparation_limiting_factors(project.id, decision.allocations.execution),
+                    limiting_factors=limiting_factors_from_codes(
+                        sim.founding.preparation_limiting_factors(project.id, decision.allocations.execution),
+                        affected_action="progress_founding",
+                        related_entity_kind="founding_project",
+                        related_entity_id=str(project.id),
+                    ),
                     projected_material_readiness_day=self._projected_material_readiness_day(
                         day=sim.day, owner_kind="founding", owner_id=str(project.id),
                         resources=resources, requirement_rows=requirement_rows,
@@ -378,7 +406,18 @@ class ProjectProjectorMixin:
                     fleet_commitment_id=None if project.fleet_commitment_id is None else str(project.fleet_commitment_id),
                     manifest_ready=all(row.shortage_t <= 1e-9 for row in resource_status),
                     deployment_phase=project.status.value,
-                    site_blockers=site_blockers, movement_blockers=movement_blockers,
+                    site_blockers=constraints_from_pairs(
+                        site_blockers,
+                        affected_action="progress_founding",
+                        related_entity_kind="founding_project",
+                        related_entity_id=str(project.id),
+                    ),
+                    movement_blockers=constraints_from_pairs(
+                        movement_blockers,
+                        affected_action="progress_founding",
+                        related_entity_kind="founding_project",
+                        related_entity_id=str(project.id),
+                    ),
                 ))
         return tuple(rows)
 
@@ -443,7 +482,12 @@ class ProjectProjectorMixin:
                 construction_required=recipe.construction_work,
                 self_deploying=recipe.self_deploying,
                 resources=build_resources,
-                blockers=blockers,
+                blockers=constraints_from_pairs(
+                    blockers,
+                    affected_action="plan_facility_construction",
+                    related_entity_kind="facility_definition",
+                    related_entity_id=str(recipe.facility_def_id),
+                ),
                 can_plan=not plan_failures,
                 capabilities=capabilities,
                 service_capacity_supplies=service_capacity_supplies,

@@ -54,7 +54,7 @@ def test_campaign_intent_preview_uses_domain_blockers_and_update_excludes_self()
         goal_knowledge_level=1,
     ))
     assert completed.can_apply is False
-    assert "knowledge_goal_reached" in completed.blockers
+    assert any(blocker.code == "knowledge_goal_reached" for blocker in completed.blockers)
 
     cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
     resource = ids.WATER
@@ -75,7 +75,7 @@ def test_campaign_intent_preview_uses_domain_blockers_and_update_excludes_self()
         goal_knowledge_level=1,
     ))
     assert conflicting_start.can_apply is False
-    assert any(blocker.startswith("campaign_scope_conflict:") for blocker in conflicting_start.blockers)
+    assert any(blocker.code.startswith("campaign_scope_conflict:") for blocker in conflicting_start.blockers)
 
     same_campaign_update = app.query(GetSurveyCampaignIntentPreview(
         target_cell_ids=(str(cell),),
@@ -213,7 +213,7 @@ def test_strategically_distinct_candidates_require_decision_and_do_not_arbitrari
     assert sim.survey.execution_requirement_bundles(sim.day) == ()
 
     row = next(c for c in app.query(GetSurveys(str(ids.LUNAR_ORBIT))).campaigns if c.id == campaign_id)
-    assert "survey_decision_required" in row.blockers
+    assert any(blocker.code == "survey_decision_required" for blocker in row.blockers)
     viable = [candidate for candidate in row.candidates if candidate.viable]
     assert len(viable) >= 2
     assert {candidate.provider_source_kind for candidate in viable} >= {"facility", "fleet"}
@@ -229,6 +229,8 @@ def test_strategically_distinct_candidates_require_decision_and_do_not_arbitrari
         "capacity_units_per_day",
     }
     for candidate in viable:
+        assert candidate.observation_mode_display_name
+        assert not candidate.observation_mode_display_name.startswith("base.")
         assert {value.axis_key for value in candidate.comparison_values} == {
             axis.key for axis in row.comparison_axes
         }

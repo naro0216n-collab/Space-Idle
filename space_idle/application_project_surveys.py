@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .application_constraints import constraints_from_codes
 from .application_views import (
     SurveyCandidateRow,
     SurveyCampaignRow,
@@ -14,6 +15,17 @@ from .application_comparison import project_comparison_axes
 from .exploration_models import SurveyCampaignControlState, SurveyProviderSourceKind
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 
+def _survey_observation_mode_display_name(mode) -> str:
+    if mode.display_name:
+        return mode.display_name
+    reach_labels = {
+        "same_body": "同一天体観測",
+        "same_system": "同一系内観測",
+        "location_territory": "拠点領域観測",
+    }
+    reach_label = reach_labels.get(mode.reach.scope.value, "観測方式")
+    return f"{reach_label} · 調査知識Lv {int(mode.max_knowledge_level)}"
+
 
 class SurveyProgressionProjectorMixin:
     def _survey_campaign_intent_preview_view(self, query) -> SurveyCampaignIntentPreviewView:
@@ -24,7 +36,11 @@ class SurveyProgressionProjectorMixin:
                 resource_ids=tuple(query.resource_ids),
                 goal_knowledge_level=query.goal_knowledge_level,
                 campaign_id=query.campaign_id,
-                blockers=("survey_unavailable",),
+                blockers=constraints_from_codes(
+                    ("survey_unavailable",),
+                    affected_action="start_survey",
+                    related_entity_kind="survey",
+                ),
                 can_apply=False,
             )
         target_cell_ids = tuple(SurfaceCellId(value) for value in query.target_cell_ids)
@@ -52,7 +68,12 @@ class SurveyProgressionProjectorMixin:
             resource_ids=tuple(map(str, resource_ids)),
             goal_knowledge_level=query.goal_knowledge_level,
             campaign_id=query.campaign_id,
-            blockers=blockers,
+            blockers=constraints_from_codes(
+                blockers,
+                affected_action="update_survey" if query.campaign_id is not None else "start_survey",
+                related_entity_kind="survey_campaign",
+                related_entity_id=query.campaign_id,
+            ),
             can_apply=not blockers,
         )
 
@@ -88,10 +109,37 @@ class SurveyProgressionProjectorMixin:
                 capacity_units_per_day=(
                     committed_units * provider.capacity_units_per_source_per_day
                 ),
-                blockers=blockers,
+                blockers=constraints_from_codes(
+                    blockers,
+                    affected_action="set_survey_provider_fleet",
+                    related_entity_kind="survey_provider",
+                    related_entity_id=str(provider.id),
+                ),
                 can_set_quantity=(committed_units > 0 or max_units > 0),
             ))
         return tuple(rows)
+
+    def _survey_mode_display_name(
+        self, provider_definition_id, observation_mode_id: str | None
+    ) -> str | None:
+        if observation_mode_id is None:
+            return None
+        sim = self._simulation
+        if sim.survey is None:
+            return None
+        providers = []
+        if provider_definition_id is not None:
+            provider = sim.survey.providers.get(provider_definition_id)
+            if provider is not None:
+                providers.append(provider)
+        providers.extend(
+            provider for provider in sim.survey.providers.values() if provider not in providers
+        )
+        for provider in providers:
+            for mode in provider.observation_modes:
+                if mode.id == observation_mode_id:
+                    return _survey_observation_mode_display_name(mode)
+        return "観測方式"
 
     def _survey_campaign_row(self, campaign, execution_plan, service_plan, powers) -> SurveyCampaignRow:
         sim = self._simulation
@@ -135,6 +183,9 @@ class SurveyProgressionProjectorMixin:
                 provider_source_kind=row.source_kind.value,
                 source_definition_id=str(row.source_definition_id),
                 observation_mode_id=row.observation_mode_id,
+                observation_mode_display_name=self._survey_mode_display_name(
+                    row.provider_definition_id, row.observation_mode_id
+                ) or "観測方式",
                 survey_rate=row.survey_rate,
                 max_knowledge_level=int(row.max_knowledge_level),
                 estimate_uncertainty_fraction=row.estimate_uncertainty_fraction,
@@ -144,7 +195,12 @@ class SurveyProgressionProjectorMixin:
                 capacity_units_per_day=capacity_units_per_day,
                 matches_constraints=sim.survey.candidate_matches_constraints(campaign, row),
                 viable=row.viable,
-                blockers=row.blockers,
+                blockers=constraints_from_codes(
+                    row.blockers,
+                    affected_action="select_survey_provider",
+                    related_entity_kind="survey_campaign",
+                    related_entity_id=str(campaign.id),
+                ),
                 comparison_values=comparison_values,
             ))
         candidates = tuple(candidate_rows)
@@ -233,6 +289,17 @@ class SurveyProgressionProjectorMixin:
             projected_observation_mode_id=(
                 None if candidate is None else candidate.observation_mode_id
             ),
+            projected_observation_mode_display_name=(
+                None
+                if candidate is None
+                else self._survey_mode_display_name(
+                    candidate.provider_definition_id, candidate.observation_mode_id
+                )
+            ),
+            observation_mode_constraint_display_name=self._survey_mode_display_name(
+                None if constraint is None else constraint.provider_definition_id,
+                campaign.observation_mode_constraint,
+            ),
             covered_targets=covered,
             remaining_targets=len(target_rows) - covered,
             requested_service_units_per_day=requested,
@@ -241,7 +308,12 @@ class SurveyProgressionProjectorMixin:
             projected_remaining_days=projected_days,
             required_fleet_units=required_fleet,
             assigned_fleet_units=assigned_fleet,
-            blockers=blockers,
+            blockers=constraints_from_codes(
+                blockers,
+                affected_action="progress_survey",
+                related_entity_kind="survey_campaign",
+                related_entity_id=str(campaign.id),
+            ),
             can_pause=sim.survey.can_pause(campaign.id),
             can_resume=sim.survey.can_resume(campaign.id),
             can_set_priority=sim.survey.can_set_priority(campaign.id),

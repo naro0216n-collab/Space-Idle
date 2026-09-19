@@ -80,52 +80,21 @@
   };
   const operationName=(id)=>operationLabels[id]||id||'—';
 
+  const genericValueLabels={
+    facility:'設備',fleet:'Fleet',project:'建設案件',research:'研究',survey:'地表調査',scientific_exploration:'科学探査',
+    construction:'建設',maintenance:'維持',process:'生産工程',extraction:'採掘',transport:'輸送',market:'市場',
+    target_stock:'目標在庫',trade_order:'取引注文',contract:'契約',founding:'拠点設立',relocation:'移動',retirement:'退役',
+    surface_location:'地表拠点',non_surface_operational_node:'宇宙拠点',organization:'組織共有',operational_node:'拠点',
+    fixed:'固定',auto:'自動',vehicle:'機体',provider:'提供元',manual:'手動',
+  };
   function userFacingText(value){
-    let text=String(value??'');
-    text=text.replace(/fleet_units:([0-9.+-]+)\/([0-9.+-]+)/g,(_,current,required)=>`空きFleet不足: ${current} / ${required} 機`);
-    text=text.replace(/relocation_units:positive_required/g,'移動機数は1以上が必要です');
-    text=text.replace(/relocation_endpoints:must_differ/g,'出発地と到着地は異なる必要があります');
-    text=text.replace(/endurance:([0-9.+-]+)\/([0-9.+-]+)/g,(_,required,available)=>`航続期間不足: ${required} / ${available} 日`);
-    text=text.replace(/resource:([^:;]+):([^:;]+):([0-9.+-]+)\/([0-9.+-]+)/g,(_,locationId,resourceId,current,required)=>`${locationName(locationId)}の${resourceName(resourceId)}不足: ${current} / ${required} t`);
-    text=text.replace(/relocation_path:(.+)/g,(_,detail)=>`移動経路不成立: ${detail}`);
-    text=text.replace(/market_interface_disabled/g,'市場接続拠点が停止しています');
-    text=text.replace(/offer_unavailable/g,'Market offerなし');
-    text=text.replace(/price_condition/g,'価格条件外');
-    text=text.replace(/provider_supply/g,'市場供給不足');
-    text=text.replace(/provider_demand/g,'市場需要不足');
-    text=text.replace(/resource_not_at_market_interface/g,'市場接続拠点に売却対象資源なし');
-    text=text.replace(/survey_scope_empty/g,'調査対象地域を1つ以上選択してください');
-    text=text.replace(/survey_resource_scope_empty/g,'調査対象資源を1つ以上選択してください');
-    text=text.replace(/knowledge_goal_reached/g,'選択範囲は指定した調査目標へ到達済みです');
-    text=text.replace(/invalid_target_knowledge_level/g,'調査目標が不正です');
-    text=text.replace(/campaign_scope_conflict:([^;]+)/g,(_,id)=>`既存Survey Campaignと対象が重複しています: ${id}`);
-    text=text.replace(/unknown_target:([^:;]+):([^;]+)/g,(_,cellId,resourceId)=>`Survey対象外の組み合わせです: ${cellId} / ${resourceName(resourceId)}`);
-    text=text.replace(/unknown_target:([^;]+)/g,(_,cellId)=>`調査対象外の地域です`);
-    text=text.replace(/unmet_demand/g,'未充足需要');
-    text=text.replace(/outside_scope_service_dependency/g,'選択範囲外の共有サービスに依存');
-    text=text.replace(/service_capacity_shortfall/g,'サービス能力不足');
-    text=text.replace(/no_local_service_capacity/g,'拠点内サービス能力なし');
-    text=text.replace(/no_organization_service_capacity/g,'組織共有サービス能力なし');
-    text=text.replace(/paused_plan/g,'計画停止中');
-    text=text.replace(/external_dependency/g,'外部依存');
-    text=text.replace(/storage_over_capacity/g,'利用可能保管容量を超過しています');
-    text=text.replace(/physical_storage_full/g,'物理保管容量が満杯です');
-    text=text.replace(/usable_storage_full/g,'利用可能保管容量が満杯です');
-    for(const map of definitionMaps()){
-      for(const [id,item] of Object.entries(map)){
-        if(text.includes(id)&&item?.display_name)text=text.split(id).join(item.display_name);
-      }
-    }
-    text=text.replace(/technology:([^;]+)/g,(_,ids)=>`技術不足: ${ids.split(',').map((x)=>definitionName(x.trim())).join('、')}`);
-    text=text.replace(/vehicle_capability:([a-zA-Z0-9_.-]+)/g,(_,id)=>`機体能力不足: ${capabilityName(id)}`);
-    text=text.replace(/capability:([a-zA-Z0-9_.-]+)/g,(_,id)=>`能力不足: ${capabilityName(id)}`);
-    text=text.replace(/payload_capacity:([0-9.+-]+)\/([0-9.+-]+)/g,(_,current,required)=>`利用可能搭載能力不足: ${current} / ${required} t`);
-    text=text.replace(/(available|active|infrastructure):([a-zA-Z0-9_.-]+):([0-9.+-]+)\/([0-9.+-]+)/g,(_,kind,id,current,required)=>{
-      const label=kind==='available'?'利用可能能力':kind==='active'?'稼働能力':'インフラ能力';
-      return `${label}不足: ${capabilityName(id)} ${current} / ${required}`;
-    });
-    return text;
+    const text=String(value??'');
+    if(genericValueLabels[text])return genericValueLabels[text];
+    if(stateLabels[text])return stateLabels[text];
+    const defined=definitionName(text);
+    return defined!==text?defined:text;
   }
+
 
   function banner(message,kind='info',timeout=4200){
     const el=$('#statusBanner'); if(!el)return;
@@ -419,17 +388,79 @@
     finally{endMutation();}
   }
 
+  const constraintKindLabels={
+    technology:'必要技術',capability:'必要能力',vehicle_capability:'必要機体能力',service:'サービス能力',
+    resource:'必要資源',storage:'保管容量',power:'電力',knowledge:'調査知識',movement:'移動経路',routing:'経路条件',
+    fleet:'Fleet',payload_capacity:'搭載能力',propellant_capacity:'推進剤容量',demand:'需要',
+    external_dependency:'外部依存',research_point_capacity:'研究ポイント容量',infrastructure:'インフラ能力',
+    active_upgrade_project:'更新案件進行中',storage_stock:'保管中資源あり',storage_over_capacity:'保管容量超過',
+    physical_storage_full:'物理保管容量不足',usable_storage_full:'利用可能保管容量不足',
+    knowledge_goal_reached:'調査目標へ到達済み',survey_decision_required:'観測手段の選択が必要',
+    campaign_scope_conflict:'既存調査との対象重複',survey_candidate_unavailable:'利用可能な調査手段なし',
+    no_transport_capacity:'輸送能力不足',market_interface_disabled:'市場接続停止中',offer_unavailable:'Market offerなし',
+    price_condition:'価格条件外',provider_supply:'市場供給不足',provider_demand:'市場需要不足',
+    resource_not_at_market_interface:'市場接続拠点に売却対象資源なし',paused_plan:'計画停止中',
+    service_capacity_shortfall:'サービス能力不足',no_local_service_capacity:'拠点内サービス能力なし',
+    no_organization_service_capacity:'組織共有サービス能力なし',outside_scope_service_dependency:'選択範囲外の共有サービス依存',
+    arrival_backpressure:'到着先の受入能力不足',surface_infrastructure:'地表インフラ不足',provider_dependency:'供給元依存',
+    constraint:'実行条件',
+  };
+  const affectedActionLabels={
+    admit_inventory:'入庫',admit_storage:'保管',operate_facility:'設備運用',plan_facility_decommission:'設備撤去',
+    plan_facility_upgrade:'設備更新',plan_build:'建設計画',progress_construction_project:'建設進行',develop_surface_cell:'地域開発',
+    plan_founding:'拠点設立',select_research_execution_site:'研究地点選択',set_research_provider_fleet:'研究Fleet配備',
+    operate_research_provider:'研究実行',progress_research:'研究進行',start_research:'研究開始',start_survey:'調査開始',
+    progress_survey:'調査進行',progress_scientific_exploration:'科学探査進行',plan_vehicle_production:'輸送機生産計画',
+    progress_vehicle_production:'輸送機生産',use_movement_plan:'移動',operate_transport_allocation:'輸送運用',
+    satisfy_supply_requirement:'補給',satisfy_service_demand:'サービス需要',satisfy_forecast_service_demand:'将来サービス需要',
+  };
+  function constraintSubjectName(row){
+    const id=row?.subject_id;if(id==null||id==='')return '';
+    const kind=row.subject_kind||row.kind;
+    if(kind==='resource'||kind==='knowledge')return resourceName(id);
+    if(kind==='capability'||kind==='vehicle_capability'||kind==='infrastructure')return capabilityName(id);
+    if(kind==='service')return serviceName(id);
+    if(kind==='operational_node'||kind==='location')return locationName(id);
+    const resolved=definitionName(id);
+    return resolved===id?'':resolved;
+  }
+  function constraintValueText(value){
+    if(value==null||value==='')return '';
+    if(typeof value==='number')return fmt(value,Number.isInteger(value)?0:2);
+    if(value==='positive')return '1以上';
+    return String(value);
+  }
+  function constraintSummary(row){
+    if(!row||typeof row!=='object')return '実行条件を確認してください';
+    const label=constraintKindLabels[row.code]||constraintKindLabels[row.kind]||'実行条件';
+    const subject=constraintSubjectName(row);
+    const current=constraintValueText(row.current),required=constraintValueText(row.required);
+    const unit=row.unit?` ${row.unit}`:'';
+    if(current&&required)return `${label}${subject?` · ${subject}`:''}: ${current} / ${required}${unit}`;
+    if(required)return `${label}${subject?` · ${subject}`:''}: 必要 ${required}${unit}`;
+    if(current)return `${label}${subject?` · ${subject}`:''}: 現在 ${current}${unit}`;
+    if(subject)return `${label}: ${subject}`;
+    if(row.message&&row.message!==row.code)return String(row.message);
+    return label;
+  }
+  function constraintMeta(row){
+    if(!row||typeof row!=='object')return '';
+    const parts=[];
+    if(row.severity==='limiting')parts.push('制限要因');
+    else if(row.severity==='blocking')parts.push('実行を阻害');
+    if(row.affected_action&&affectedActionLabels[row.affected_action])parts.push(`対象: ${affectedActionLabels[row.affected_action]}`);
+    const related=row.related_entity_id?definitionName(row.related_entity_id):'';
+    if(related&&related!==row.related_entity_id)parts.push(related);
+    if(row.category){
+      const categoryLabels={technology:'技術条件',capability:'能力条件',environment:'環境条件',contract:'契約',logistics:'物流',construction:'建設',research:'研究',exploration:'科学探査',survey:'探査',storage:'保管',power:'電力'};
+      const category=categoryLabels[row.category];if(category)parts.unshift(category);
+    }
+    return [...new Set(parts)].join(' · ');
+  }
   function issueHtml(issue){
-    const rawMessage=Array.isArray(issue)?issue[1]:issue.message||issue.code||String(issue);
-    const rawCategory=Array.isArray(issue)?issue[0]:issue.category||issue.source||'';
-    let message=userFacingText(rawMessage);
-    if(rawCategory==='technology'&&definitionName(rawMessage)!==rawMessage)message=`必要技術: ${definitionName(rawMessage)}`;
-    if(rawCategory==='capability')message=`必要能力: ${capabilityName(rawMessage)}`;
-    const categoryLabels={technology:'技術条件',capability:'能力条件',environment:'環境条件',contract:'契約',logistics:'物流',construction:'建設',research:'研究',exploration:'科学探査',survey:'探査',storage:'保管',power:'電力'};
-    const category=categoryLabels[rawCategory]||userFacingText(rawCategory);
-    const context=!Array.isArray(issue)&&issue.entity_id?definitionName(issue.entity_id):'';
-    const meta=[category,context&&context!==issue.entity_id?context:''].filter(Boolean).join(' · ');
-    const nav=!Array.isArray(issue)?issue.navigation:null;
+    const message=constraintSummary(issue);
+    const meta=constraintMeta(issue);
+    const nav=issue?.navigation;
     if(nav?.decision_area){
       const attrs=[
         ['data-issue-area',nav.decision_area],['data-issue-node',nav.operational_node_id],
@@ -691,7 +722,7 @@
 
   window.SpaceIdleApp={
     state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,serviceName,operationName,
-    locationKindLabels,stateLabels,playerTerms,playerTerm,userFacingText,issueHtml,metricHtml,statHtml,signed,stableUiSignature,prioritySegmentedHtml,
+    locationKindLabels,stateLabels,playerTerms,playerTerm,userFacingText,constraintSummary,issueHtml,metricHtml,statHtml,signed,stableUiSignature,prioritySegmentedHtml,
     api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveSection,setActiveView,openDecisionContext,completeActiveDraft,restoreActiveDraftValues,
   };
 
