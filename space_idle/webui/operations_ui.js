@@ -17,6 +17,7 @@
   const priorityName=(value)=>priorityLabels[Number(value)]?`${value} ${priorityLabels[Number(value)]}`:String(value??'—');
   const procurementPolicyName=(value)=>procurementPolicyLabels[value]||value||'—';
   const limitingHtml=(rows)=>(rows||[]).length?`<div class="issue-stack">${rows.map((factor)=>`<div class="issue"><div class="issue-title">${esc(A.userFacingText(factor))}</div></div>`).join('')}</div>`:'<span class="badge ok">なし</span>';
+  let dependencyView='current';
   const surveyIntentPreviewSerial=new Map();
   const surveyIntentPreviewCache=new Map();
   function surveyIntentDraft(campaignId=null){
@@ -98,10 +99,10 @@
   }
 
   const projectTargetLabel=(p)=>{
-    if(p.target_kind==='facility_upgrade')return `Facility Upgrade → Lv ${fmt(p.target_level,0)}`;
-    if(p.target_kind==='operational_node_founding')return 'Operational Node Founding';
-    if(p.target_kind==='surface_cell_development')return 'Surface Cell開発';
-    return '新規施設建設';
+    if(p.target_kind==='facility_upgrade')return `設備更新 → Lv ${fmt(p.target_level,0)}`;
+    if(p.target_kind==='operational_node_founding')return '新拠点設立';
+    if(p.target_kind==='surface_cell_development')return '地表区域開発';
+    return '新規設備建設';
   };
   const surfaceCell=(id)=>(state.surfaceMap?.cells||[]).find((row)=>row.id===id);
   const surfaceCellLabel=(id)=>{
@@ -212,26 +213,46 @@
 
   function renderInventoryTab(){
     const flowMap=Object.fromEntries((state.flow?.resources||[]).map((r)=>[r.resource_id,r]));
-    const rows=(state.operationalNode?.inventory||[]).filter((r)=>r.amount||r.reserved||flowMap[r.resource_id]?.local_production_per_day||flowMap[r.resource_id]?.local_consumption_per_day||flowMap[r.resource_id]?.inbound_in_transit_t||flowMap[r.resource_id]?.arrival_waiting_t).map((r)=>{const f=flowMap[r.resource_id]||{};return `<tr class="selectable" data-inspect="resource" data-id="${esc(r.resource_id)}"><td><div class="cell-main">${esc(r.display_name)}</div><div class="cell-sub">${esc(r.storage_pool_key)}</div></td><td>${fmt(r.amount)}</td><td>${fmt(r.available)}</td><td>${signed(f.local_net_per_day)}</td><td>${fmt(f.inbound_in_transit_t)}</td><td>${fmt(f.outbound_in_transit_t)}</td><td>${fmt(f.arrival_waiting_t)}</td><td>${fmt(r.admission_capacity)}</td><td>${r.over_capacity>1e-9?`<span class="badge warn">${fmt(r.over_capacity)}</span>`:'—'}</td></tr>`;}).join('');
-    const allocationRows=(state.operationalNode?.resource_allocations||[]).map((c)=>`<tr><td><div class="cell-main">${esc(c.display_name)}</div><div class="cell-sub">${esc(c.resource_id)}</div></td><td><div class="cell-main">${esc(A.userFacingText(c.owner_kind))}</div><div class="cell-sub">${esc(c.owner_id)}</div></td><td>${esc(A.userFacingText(c.purpose))}</td><td>${c.priority}</td><td>${fmt(c.requested,2)}</td><td>${fmt(c.allocated,2)}</td><td>${fmt(c.unmet,2)}</td></tr>`).join('');
-    const allocationCard=`<section class="card"><div class="card-heading"><h3>Current Resource Allocations</h3><span class="badge ${(state.operationalNode?.resource_allocations||[]).some((c)=>Number(c.unmet)>1e-9)?'warn':'ok'}">${state.operationalNode?.resource_allocations?.length||0}</span></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>Owner</th><th>用途</th><th>Priority</th><th>Requested</th><th>Allocated</th><th>Unmet</th></tr></thead><tbody>${allocationRows||'<tr><td colspan="7">当tickのResource allocationなし</td></tr>'}</tbody></table></div></section>`;
+    const inventoryCards=(state.operationalNode?.inventory||[])
+      .filter((r)=>r.amount||r.reserved||flowMap[r.resource_id]?.local_production_per_day||flowMap[r.resource_id]?.local_consumption_per_day||flowMap[r.resource_id]?.inbound_in_transit_t||flowMap[r.resource_id]?.arrival_waiting_t)
+      .map((r)=>{
+        const f=flowMap[r.resource_id]||{};
+        const selected=state.inspector?.type==='resource'&&state.inspector.id===r.resource_id;
+        const warnings=[];
+        if(Number(r.over_capacity||0)>1e-9)warnings.push(`超過 ${fmt(r.over_capacity,2)} t`);
+        if(Number(f.arrival_waiting_t||0)>1e-9)warnings.push(`到着待ち ${fmt(f.arrival_waiting_t,2)} t`);
+        return `<button type="button" class="resource-flow-card ${selected?'is-selected':''}" data-inspect="resource" data-id="${esc(r.resource_id)}" aria-pressed="${selected?'true':'false'}"><span class="decision-card-title"><span><strong>${esc(r.display_name)}</strong><small>予約 ${fmt(r.reserved,2)} t</small></span>${warnings.length?`<span class="badge warn">要確認</span>`:'<span class="badge ok">通常</span>'}</span><span class="resource-stock-line"><span><small>在庫</small><strong>${fmt(r.amount,2)} t</strong></span><span><small>利用可能</small><strong>${fmt(r.available,2)} t</strong></span><span><small>空容量</small><strong>${fmt(r.admission_capacity,2)} t</strong></span></span><span class="resource-flow-line"><span>生産 <strong>${fmt(f.local_production_per_day,2)}</strong> /日</span><span>消費 <strong>${fmt(f.local_consumption_per_day,2)}</strong> /日</span><span>純変化 <strong>${signed(f.local_net_per_day)}</strong> /日</span></span><span class="decision-card-footer ${warnings.length?'has-warning':''}">${warnings.length?esc(warnings.join(' · ')):`入荷中 ${fmt(f.inbound_in_transit_t,2)} t · 出荷中 ${fmt(f.outbound_in_transit_t,2)} t`}</span></button>`;
+      }).join('');
+
+    const allocations=state.operationalNode?.resource_allocations||[];
+    const allocationCards=allocations.map((c)=>`<article class="resource-allocation-card ${Number(c.unmet||0)>1e-9?'has-warning':''}"><div class="decision-card-title"><span><strong>${esc(c.display_name)}</strong><small>${esc(A.userFacingText(c.purpose))} · ${esc(A.userFacingText(c.owner_kind))}</small></span><span class="badge ${Number(c.unmet||0)>1e-9?'warn':'ok'}">優先 ${esc(String(c.priority))}</span></div><div class="allocation-metrics"><span><small>要求</small><strong>${fmt(c.requested,2)}</strong></span><span><small>割当</small><strong>${fmt(c.allocated,2)}</strong></span><span><small>未充足</small><strong>${fmt(c.unmet,2)}</strong></span></div></article>`).join('');
+
     const currentAnalytics=state.dependencyAnalyticsCurrent;
     const forecastAnalytics=state.dependencyAnalyticsForecast;
-    const currentRows=(currentAnalytics?.current_resources||[]).map((r)=>{
-      const sources=(r.dependency_source_node_ids||[]).map(locationName).join(' / ')||'—';
-      const limits=(r.limiting_factors||[]).map(A.userFacingText).join(' / ')||'なし';
-      return `<tr><td><div class="cell-main">${esc(r.display_name)}</div><div class="cell-sub">${esc(r.id)}</div></td><td>${fmt(r.production_per_day,2)}</td><td>${fmt(r.consumption_per_day,2)}</td><td>${fmt(r.demand_per_day,2)}</td><td>${r.local_coverage_ratio==null?'—':pct(r.local_coverage_ratio)}</td><td>${fmt(r.external_dependency_per_day,2)}</td><td>${fmt(r.imports_per_day,2)}</td><td>${fmt(r.exports_per_day,2)}</td><td>${fmt(r.imports_pipeline_t,2)}</td><td>${fmt(r.exports_pipeline_t,2)}</td><td>${fmt(r.unmet_demand_t,2)}</td><td>${esc(sources)}</td><td>${esc(limits)}</td></tr>`;
+    const currentCritical=new Set(currentAnalytics?.critical_dependency_resource_ids||[]);
+    const forecastCritical=new Set(forecastAnalytics?.critical_dependency_resource_ids||[]);
+    const dependencyCards=(dependencyView==='current'?(currentAnalytics?.current_resources||[]):(forecastAnalytics?.forecast_resources||[])).map((r)=>{
+      const isCurrent=dependencyView==='current';
+      const critical=(isCurrent?currentCritical:forecastCritical).has(r.id);
+      const sources=(r.dependency_source_node_ids||[]).map(locationName).join(' / ')||'依存元なし';
+      const limits=(r.limiting_factors||[]).map(A.userFacingText);
+      const metrics=isCurrent
+        ? `<span><small>生産</small><strong>${fmt(r.production_per_day,2)} /日</strong></span><span><small>消費</small><strong>${fmt(r.consumption_per_day,2)} /日</strong></span><span><small>外部依存</small><strong>${fmt(r.external_dependency_per_day,2)} /日</strong></span><span><small>流入中</small><strong>${fmt(r.imports_pipeline_t,2)} t</strong></span><span><small>未充足</small><strong>${fmt(r.unmet_demand_t,2)} t</strong></span>`
+        : `<span><small>計画需要</small><strong>${fmt(r.planned_requirement_t,2)} t</strong></span><span><small>継続消費</small><strong>${fmt(r.recurring_consumption_per_day,2)} /日</strong></span><span><small>外部必要量</small><strong>${fmt(r.external_requirement_t,2)} t</strong></span><span><small>外部依存</small><strong>${fmt(r.external_recurring_dependency_per_day,2)} /日</strong></span><span><small>追加備蓄</small><strong>${fmt(r.target_stock_t,2)} t</strong></span>`;
+      const timing=!isCurrent&&r.earliest_requirement_day!=null?`最早必要 Day ${fmt(r.earliest_requirement_day,0)}`:'';
+      return `<button type="button" class="dependency-card ${critical?'has-warning':''}" data-inspect="dependency-resource" data-id="${esc(r.id)}"><span class="decision-card-title"><span><strong>${esc(r.display_name)}</strong><small>${esc(sources)}</small></span><span class="badge ${critical?'warn':'ok'}">${critical?'要対処':'安定'}</span></span><span class="dependency-metrics">${metrics}</span><span class="decision-card-footer ${limits.length?'has-warning':''}">${esc(limits[0]||timing||'主要な制約なし')}${timing&&limits.length?` · ${esc(timing)}`:''}</span></button>`;
     }).join('');
-    const currentGroupRows=(currentAnalytics?.current_resource_groups||[]).map((r)=>`<tr><td>${esc(r.display_name)}</td><td>${fmt(r.production_per_day,2)}</td><td>${fmt(r.consumption_per_day,2)}</td><td>${fmt(r.demand_per_day,2)}</td><td>${r.local_coverage_ratio==null?'—':pct(r.local_coverage_ratio)}</td><td>${fmt(r.external_dependency_per_day,2)}</td><td>${fmt(r.imports_per_day,2)}</td><td>${fmt(r.exports_per_day,2)}</td><td>${fmt(r.imports_pipeline_t,2)}</td><td>${fmt(r.exports_pipeline_t,2)}</td><td>${fmt(r.unmet_demand_t,2)}</td></tr>`).join('');
-    const forecastRows=(forecastAnalytics?.forecast_resources||[]).map((r)=>{
-      const sources=(r.dependency_source_node_ids||[]).map(locationName).join(' / ')||'—';
-      const limits=(r.limiting_factors||[]).map(A.userFacingText).join(' / ')||'なし';
-      return `<tr><td><div class="cell-main">${esc(r.display_name)}</div><div class="cell-sub">${esc(r.id)}</div></td><td>${fmt(r.planned_requirement_t,2)}</td><td>${fmt(r.recurring_consumption_per_day,2)}</td><td>${fmt(r.external_requirement_t,2)}</td><td>${fmt(r.external_recurring_dependency_per_day,2)}</td><td>${fmt(r.target_stock_t,2)}</td><td>${r.earliest_requirement_day==null?'—':fmt(r.earliest_requirement_day,0)}</td><td>${esc(sources)}</td><td>${esc(limits)}</td></tr>`;
-    }).join('');
-    const forecastGroupRows=(forecastAnalytics?.forecast_resource_groups||[]).map((r)=>`<tr><td>${esc(r.display_name)}</td><td>${fmt(r.planned_requirement_t,2)}</td><td>${fmt(r.recurring_consumption_per_day,2)}</td><td>${fmt(r.external_requirement_t,2)}</td><td>${fmt(r.external_recurring_dependency_per_day,2)}</td><td>${fmt(r.target_stock_t,2)}</td><td>${r.earliest_requirement_day==null?'—':fmt(r.earliest_requirement_day,0)}</td></tr>`).join('');
-    const currentCard=`<section class="card"><div class="card-heading"><h3>External Dependency — CURRENT</h3><span class="badge ${(currentAnalytics?.critical_dependency_resource_ids||[]).length?'warn':'ok'}">${(currentAnalytics?.critical_dependency_resource_ids||[]).length} critical</span></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>現在生産/日</th><th>現在消費/日</th><th>現在需要/日</th><th>Local coverage</th><th>現在外部依存/日</th><th>現在流入/日</th><th>現在流出/日</th><th>Import pipeline</th><th>Export pipeline</th><th>現在未充足</th><th>依存元</th><th>Limiting factor</th></tr></thead><tbody>${currentRows||'<tr><td colspan="13">現在フローなし</td></tr>'}</tbody></table></div>${currentGroupRows?`<div class="table-wrap"><table><thead><tr><th>Resource Group</th><th>現在生産/日</th><th>現在消費/日</th><th>現在需要/日</th><th>Local coverage</th><th>現在外部依存/日</th><th>現在流入/日</th><th>現在流出/日</th><th>Import pipeline</th><th>Export pipeline</th><th>現在未充足</th></tr></thead><tbody>${currentGroupRows}</tbody></table></div>`:''}</section>`;
-    const forecastCard=`<section class="card"><div class="card-heading"><h3>外部依存 — 予測</h3><span class="badge ${(forecastAnalytics?.critical_dependency_resource_ids||[]).length?'warn':'ok'}">${(forecastAnalytics?.critical_dependency_resource_ids||[]).length} critical</span></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>計画需要量</th><th>継続消費/日</th><th>外部必要量</th><th>継続外部依存/日</th><th>追加備蓄目標</th><th>最早必要日</th><th>依存元</th><th>Limiting factor</th></tr></thead><tbody>${forecastRows||'<tr><td colspan="9">計画済み将来需要なし</td></tr>'}</tbody></table></div>${forecastGroupRows?`<div class="table-wrap"><table><thead><tr><th>Resource Group</th><th>計画需要量</th><th>継続消費/日</th><th>外部必要量</th><th>継続外部依存/日</th><th>追加備蓄目標</th><th>最早必要日</th></tr></thead><tbody>${forecastGroupRows}</tbody></table></div>`:''}</section>`;
-    return `<div class="card-grid"><section class="card"><div class="card-heading"><h3>在庫・ローカルフロー・物流状態</h3></div><div class="table-wrap"><table><thead><tr><th>資源</th><th>在庫</th><th>利用可</th><th>Local net/日</th><th>入荷中</th><th>出荷中</th><th>到着待機</th><th>空容量</th></tr></thead><tbody>${rows||'<tr><td colspan="8">表示対象なし</td></tr>'}</tbody></table></div></section>${allocationCard}${currentCard}${forecastCard}</div>`;
+    const groupRows=dependencyView==='current'?(currentAnalytics?.current_resource_groups||[]):(forecastAnalytics?.forecast_resource_groups||[]);
+    const groupCards=groupRows.map((r)=>dependencyView==='current'
+      ? `<div class="dependency-group-card"><strong>${esc(r.display_name)}</strong><span>生産 ${fmt(r.production_per_day,2)} /日</span><span>消費 ${fmt(r.consumption_per_day,2)} /日</span><span>外部依存 ${fmt(r.external_dependency_per_day,2)} /日</span><span>未充足 ${fmt(r.unmet_demand_t,2)} t</span></div>`
+      : `<div class="dependency-group-card"><strong>${esc(r.display_name)}</strong><span>計画需要 ${fmt(r.planned_requirement_t,2)} t</span><span>外部必要量 ${fmt(r.external_requirement_t,2)} t</span><span>継続外部依存 ${fmt(r.external_recurring_dependency_per_day,2)} /日</span><span>${r.earliest_requirement_day==null?'必要日未定':`最早 Day ${fmt(r.earliest_requirement_day,0)}`}</span></div>`).join('');
+
+    const criticalCount=dependencyView==='current'?currentCritical.size:forecastCritical.size;
+    return `<div class="inventory-decision-surface">
+      <section class="decision-surface-block"><div class="decision-surface-heading"><div><span class="eyebrow">資源</span><h2>在庫とフロー</h2><p>現在量・利用可能量・入出荷を比較し、資源を選択すると右の詳細パネルで供給源と制約を確認できます。</p></div><span class="badge">${state.operationalNode?.inventory?.length||0} 資源</span></div><div class="resource-flow-grid">${inventoryCards||'<div class="empty-state">表示対象の資源はありません。</div>'}</div></section>
+      <section class="decision-surface-block"><div class="decision-card-heading"><div><span class="eyebrow">配分</span><h3>現在の資源配分</h3></div><span class="badge ${allocations.some((c)=>Number(c.unmet||0)>1e-9)?'warn':'ok'}">${allocations.length} 件</span></div><div class="resource-allocation-grid">${allocationCards||'<div class="empty-state compact-empty">現在の資源配分はありません。</div>'}</div></section>
+      <section class="decision-surface-block dependency-surface"><div class="decision-surface-heading"><div><span class="eyebrow">依存分析</span><h2>外部依存</h2><p>現在の不足と、計画済み案件から生じる将来需要を切り替えて確認します。</p></div><div class="segmented-control dependency-mode-switch" role="group" aria-label="外部依存の表示"><button type="button" data-dependency-view="current" class="${dependencyView==='current'?'is-active':''}" aria-pressed="${dependencyView==='current'?'true':'false'}">現在</button><button type="button" data-dependency-view="forecast" class="${dependencyView==='forecast'?'is-active':''}" aria-pressed="${dependencyView==='forecast'?'true':'false'}">予測</button></div></div><div class="dependency-status-row"><span class="badge ${criticalCount?'warn':'ok'}">要対処 ${criticalCount} 資源</span><span class="cell-sub">${dependencyView==='current'?'実際の生産・消費・物流状態':'計画済み需要・備蓄目標・必要時期'}</span></div><div class="dependency-card-grid">${dependencyCards||'<div class="empty-state">外部依存の対象はありません。</div>'}</div>${groupCards?`<details class="dependency-group-details"><summary>資源グループ集計</summary><div class="dependency-group-grid">${groupCards}</div></details>`:''}</section>
+    </div>`;
   }
 
   function planningOptionState(option, readyLabel='計画可'){
@@ -245,9 +266,23 @@
 
   function renderConstructionTab(){
     const projects=state.projects?.items||[],options=state.buildOptions?.items||[];
-    const pRows=projects.map((p)=>{const target=projectTargetLabel(p);return `<tr class="selectable ${state.inspector?.type==='project'&&state.inspector.id===p.id?'is-selected':''}" data-inspect="project" data-id="${esc(p.id)}"><td><div class="cell-main">${esc(p.display_name||p.facility_display_name||p.id)}</div><div class="cell-sub">${esc(target)} · ${esc(p.id)}</div></td><td>${esc(stateLabels[p.status]||p.status||(p.paused?'paused':'active'))}</td><td>${fmt(p.progress??p.construction_done??0)}/${fmt(p.construction_required??0)}</td><td>${p.priority??'—'}</td><td>${esc(procurementPolicyName(p.procurement_policy))}</td><td>${(p.blockers||[]).length}</td></tr>`;}).join('');
-    const optionCards=options.map((o)=>{const plan=planningOptionState(o,'建設可');return `<div class="detail-card"><div class="mode-title"><span>${esc(o.display_name)}</span><span class="badge ${plan.blockers.length?'warn':plan.canPlan?'ok':''}">${esc(plan.label)}</span></div><div class="cell-sub">工数 ${fmt(o.construction_required,0)} · 資源 ${o.resources?.length||0}種</div><div class="action-row" style="margin-top:8px"><button type="button" data-inspect="build-option" data-id="${esc(o.facility_definition_id)}">条件・詳細</button></div></div>`;}).join('');
-    return `<div class="card-grid"><section class="card"><div class="card-heading"><h3>建設案件</h3><span class="badge">${projects.length}</span></div><div class="table-wrap"><table><thead><tr><th>案件</th><th>状態</th><th>進捗</th><th>優先</th><th>配分</th><th>調達</th><th>blocker</th></tr></thead><tbody>${pRows||'<tr><td colspan="7">進行中案件なし</td></tr>'}</tbody></table></div></section><section class="card"><div class="card-heading"><h3>新規建設</h3><span class="badge">${options.length}</span></div><div class="card-body">${optionCards||'<div class="empty-state">建設候補なし</div>'}</div></section></div>`;
+    const projectCards=projects.map((p)=>{
+      const selected=state.inspector?.type==='project'&&state.inspector.id===p.id;
+      const blockers=p.blockers||[];
+      const done=p.progress??p.construction_done??0;
+      const required=p.construction_required??0;
+      return `<button type="button" class="construction-project-card ${selected?'is-selected':''}" data-inspect="project" data-id="${esc(p.id)}" aria-pressed="${selected?'true':'false'}"><span class="decision-card-title"><span><strong>${esc(p.display_name||p.facility_display_name||'建設案件')}</strong><small>${esc(projectTargetLabel(p))}</small></span><span class="badge ${blockers.length?'warn':p.paused?'':'ok'}">${esc(stateLabels[p.status]||p.status||(p.paused?'停止':'進行中'))}</span></span><span class="construction-progress"><span><small>進捗</small><strong>${fmt(done,1)} / ${fmt(required,1)}</strong></span><span><small>優先度</small><strong>${esc(priorityName(p.priority))}</strong></span><span><small>調達</small><strong>${esc(procurementPolicyName(p.procurement_policy))}</strong></span></span><span class="decision-card-footer ${blockers.length?'has-warning':''}">${blockers.length?`制約: ${esc(A.userFacingText(blockers[0]))}`:'主要な制約なし'}</span></button>`;
+    }).join('');
+    const optionCards=options.map((o)=>{
+      const plan=planningOptionState(o,'建設可');
+      const selected=state.inspector?.type==='build-option'&&state.inspector.id===o.facility_definition_id;
+      const resources=(o.resources||[]).slice(0,3).map((r)=>`${resourceName(r.resource_id)} ${fmt(r.required_t,1)} t`).join(' · ');
+      return `<button type="button" class="construction-option-card ${selected?'is-selected':''}" data-inspect="build-option" data-id="${esc(o.facility_definition_id)}" aria-pressed="${selected?'true':'false'}"><span class="decision-card-title"><span><strong>${esc(o.display_name)}</strong><small>${esc(resources||'追加建設資源なし')}</small></span><span class="badge ${plan.blockers.length?'warn':plan.canPlan?'ok':''}">${esc(plan.canPlan?'計画可能':'条件不足')}</span></span><span class="construction-option-metrics"><span><small>必要工数</small><strong>${fmt(o.construction_required,0)}</strong></span><span><small>必要資源</small><strong>${o.resources?.length||0} 種</strong></span><span><small>状態</small><strong>${esc(plan.label)}</strong></span></span><span class="decision-card-footer ${plan.blockers.length?'has-warning':''}">${plan.blockers.length?`制約: ${esc(A.userFacingText(plan.blockers[0]))}`:'選択して能力・必要資源・配置条件を確認'}</span></button>`;
+    }).join('');
+    return `<div class="construction-decision-surface">
+      <section class="decision-surface-block"><div class="decision-surface-heading"><div><span class="eyebrow">進行中</span><h2>建設案件</h2><p>進捗・優先度・調達・制約を比較し、案件を選択すると右の詳細パネルから設定を変更できます。</p></div><span class="badge">${projects.length} 件</span></div><div class="construction-project-grid">${projectCards||'<div class="empty-state">進行中の建設案件はありません。</div>'}</div></section>
+      <section class="decision-surface-block"><div class="decision-surface-heading"><div><span class="eyebrow">候補</span><h2>新規建設</h2><p>候補を選び、何が可能になるか・必要資源・現在の制約を確認してから計画します。</p></div><span class="badge">${options.length} 候補</span></div><div class="construction-option-grid">${optionCards||'<div class="empty-state">現在建設できる候補はありません。</div>'}</div></section>
+    </div>`;
   }
 
   function renderResearchTab(){
@@ -406,18 +441,47 @@
   }
   function renderResourceInspector(id){
     const inv=state.operationalNode?.inventory?.find((x)=>x.resource_id===id),f=state.flow?.resources?.find((x)=>x.resource_id===id);if(!inv)return false;
-    setInspector(inv.display_name,section('在庫',kv([['在庫',fmt(inv.amount)],['予約',fmt(inv.reserved)],['利用可能',fmt(inv.available)],['Physical',fmt(inv.physical_capacity)],['Usable',fmt(inv.usable_capacity)],['入庫可能',fmt(inv.admission_capacity)],['超過',fmt(inv.over_capacity)],['制限要因',esc((inv.limiting_factors||[]).map(A.userFacingText).join(' / ')||'なし')],['入庫blocker',esc((inv.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')],['Storage pool',esc(inv.storage_pool_key)]]))+section('フロー',kv([['生産/日',signed(f?.local_production_per_day)],['消費/日',signed(f?.local_consumption_per_day)],['Local net/日',signed(f?.local_net_per_day)],['入荷中',fmt(f?.inbound_in_transit_t)],['出荷中',fmt(f?.outbound_in_transit_t)],['到着待機',fmt(f?.arrival_waiting_t)]])));
+    setInspector(inv.display_name,section('在庫',kv([['在庫',fmt(inv.amount)],['予約',fmt(inv.reserved)],['利用可能',fmt(inv.available)],['物理容量',fmt(inv.physical_capacity)],['利用可能容量',fmt(inv.usable_capacity)],['入庫可能量',fmt(inv.admission_capacity)],['容量超過',fmt(inv.over_capacity)],['制限要因',esc((inv.limiting_factors||[]).map(A.userFacingText).join(' / ')||'なし')],['入庫制約',esc((inv.admission_blockers||[]).map(A.userFacingText).join(' / ')||'なし')]]))+section('フロー',kv([['生産/日',signed(f?.local_production_per_day)],['消費/日',signed(f?.local_consumption_per_day)],['純変化/日',signed(f?.local_net_per_day)],['入荷中',fmt(f?.inbound_in_transit_t)],['出荷中',fmt(f?.outbound_in_transit_t)],['到着待機',fmt(f?.arrival_waiting_t)]])));
+    return true;
+  }
+  function renderDependencyResourceInspector(id){
+    const current=(state.dependencyAnalyticsCurrent?.current_resources||[]).find((row)=>row.id===id);
+    const forecast=(state.dependencyAnalyticsForecast?.forecast_resources||[]).find((row)=>row.id===id);
+    if(!current&&!forecast)return false;
+    const displayName=current?.display_name||forecast?.display_name||resourceName(id);
+    const currentSection=current?section('現在',kv([
+      ['生産',`${fmt(current.production_per_day,2)} /日`],
+      ['消費',`${fmt(current.consumption_per_day,2)} /日`],
+      ['需要',`${fmt(current.demand_per_day,2)} /日`],
+      ['外部依存',`${fmt(current.external_dependency_per_day,2)} /日`],
+      ['流入',`${fmt(current.imports_per_day,2)} /日`],
+      ['流出',`${fmt(current.exports_per_day,2)} /日`],
+      ['流入中',`${fmt(current.imports_pipeline_t,2)} t`],
+      ['流出中',`${fmt(current.exports_pipeline_t,2)} t`],
+      ['未充足',`${fmt(current.unmet_demand_t,2)} t`],
+      ['依存元',esc((current.dependency_source_node_ids||[]).map(locationName).join(' / ')||'なし')],
+    ])+`<h4>主な制約</h4>${limitingHtml(current.limiting_factors)}`):section('現在','<div class="empty-state">現在の依存状態はありません。</div>');
+    const forecastSection=forecast?section('予測',kv([
+      ['計画需要',`${fmt(forecast.planned_requirement_t,2)} t`],
+      ['継続消費',`${fmt(forecast.recurring_consumption_per_day,2)} /日`],
+      ['外部必要量',`${fmt(forecast.external_requirement_t,2)} t`],
+      ['継続外部依存',`${fmt(forecast.external_recurring_dependency_per_day,2)} /日`],
+      ['追加備蓄目標',`${fmt(forecast.target_stock_t,2)} t`],
+      ['最早必要日',forecast.earliest_requirement_day==null?'未定':`Day ${fmt(forecast.earliest_requirement_day,0)}`],
+      ['依存元',esc((forecast.dependency_source_node_ids||[]).map(locationName).join(' / ')||'なし')],
+    ])+`<h4>主な制約</h4>${limitingHtml(forecast.limiting_factors)}`):section('予測','<div class="empty-state">計画済みの将来依存はありません。</div>');
+    setInspector(displayName,currentSection+forecastSection);
     return true;
   }
   function renderProjectInspector(id){
     const p=state.projects?.items?.find((x)=>x.id===id);if(!p)return false;
     const target=projectTargetLabel(p);
     const readiness=p.projected_material_readiness_day==null?'未確定':`Day ${fmt(p.projected_material_readiness_day,0)}`;
-    const targetRows=[['ID',esc(p.id)],['種別',esc(target)],['状態',esc(stateLabels[p.status]||p.status||(p.paused?'paused':'active'))],['優先度',esc(p.priority??'—')],['施工充足',pct(p.construction_fulfillment??1)],['Projected Material Readiness',esc(readiness)],['調達方針',esc(procurementPolicyName(p.procurement_policy))],['工数',`${fmt(p.progress??p.construction_done??0)}/${fmt(p.construction_required??0)}`]];
-    if(p.target_facility_id)targetRows.push(['対象設備',esc(p.target_facility_id)]);
+    const targetRows=[['種別',esc(target)],['状態',esc(stateLabels[p.status]||p.status||(p.paused?'停止':'進行中'))],['優先度',esc(priorityName(p.priority))],['施工充足',pct(p.construction_fulfillment??1)],['資材準備見込',esc(readiness)],['調達方針',esc(procurementPolicyName(p.procurement_policy))],['工数',`${fmt(p.progress??p.construction_done??0)}/${fmt(p.construction_required??0)}`]];
+    if(p.target_facility_id){const facility=state.operationalNode?.facilities?.find((row)=>row.id===p.target_facility_id);targetRows.push(['対象設備',esc(facility?.display_name||'設備')]);}
     if(p.target_cell_id)targetRows.push(['対象Cell',esc(surfaceCellLabel(p.target_cell_id))]);
     if(p.target_location_id)targetRows.push(['対象Location',esc(locationName(p.target_location_id))]);
-    if(p.completed_facility_id)targetRows.push(['反映設備',esc(p.completed_facility_id)]);
+    if(p.completed_facility_id){const facility=state.operationalNode?.facilities?.find((row)=>row.id===p.completed_facility_id);targetRows.push(['反映設備',esc(facility?.display_name||'設備')]);}
     const foundingProject=p.target_kind==='operational_node_founding';
     const committedLabel=foundingProject?'準備済':'投入済';
     const resourceRows=(p.resources||[]).map((r)=>{
@@ -427,12 +491,12 @@
       return `<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div><div class="cell-sub">${securedLabel} · ${committedLabel} ${fmt(r.committed_t)} t · 不足 ${fmt(r.shortage_t)} t</div></div>`;
     }).join('');
     const requirements=(state.logistics?.requirements||[]).filter((d)=>d.owner_kind===(foundingProject?'founding':'project')&&d.owner_id===p.id);
-    const requirementHtml=requirements.length?requirements.map((d)=>{const forecast=d.forecast_requirement_day==null?'指定なし':`Day ${fmt(d.forecast_requirement_day,0)}`,arrival=d.projected_arrival_day==null?(d.earliest_confirmed_arrival_day==null?'未確定':`Day ${fmt(d.earliest_confirmed_arrival_day,0)}`):`Day ${fmt(d.projected_arrival_day,0)}`;const source=d.selected_source_id?locationName(d.selected_source_id):'未選択';const services=(d.selected_service_ids||[]).map(definitionName).join(' → ')||'経路未確定';const constrained=Boolean(d.routing_constraint_source_id||(d.routing_constraint_via_node_ids||[]).length||(d.routing_constraint_transport_allocation_ids||[]).length);return `<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(d.resource_id))}</span><span>${fmt(d.remaining_t)} t 待ち</span></div><div class="cell-main">${esc(source)} → ${esc(locationName(d.destination_id))}</div><div class="cell-sub">${esc(services)} · 輸送系内 ${fmt(d.pipeline_t)} t</div><div class="cell-sub">必要時期 ${esc(forecast)} · 予測到着 ${esc(arrival)}${d.selected_latency_days==null?'':` · latency ${fmt(d.selected_latency_days,1)}日`}${d.selected_handoff_count==null?'':` · handoff ${fmt(d.selected_handoff_count,0)}`}</div>${constrained?`<div class="cell-sub">固定条件: 供給元 ${esc(d.routing_constraint_source_id?locationName(d.routing_constraint_source_id):'自動')} / 経由 ${esc((d.routing_constraint_via_node_ids||[]).map(locationName).join(', ')||'なし')} / 輸送能力設定 ${esc((d.routing_constraint_transport_allocation_ids||[]).join(', ')||'なし')}</div>`:''}<button type="button" data-project-routing-constraint data-owner-kind="${esc(d.owner_kind)}" data-owner-id="${esc(d.owner_id)}" data-destination-id="${esc(d.destination_id)}" data-resource-id="${esc(d.resource_id)}">${constrained?'固定条件を編集':'固定条件を設定'}</button></div>`;}).join(''):'<div class="empty-state">現在の補給需要なし</div>';
+    const requirementHtml=requirements.length?requirements.map((d)=>{const forecast=d.forecast_requirement_day==null?'指定なし':`Day ${fmt(d.forecast_requirement_day,0)}`,arrival=d.projected_arrival_day==null?(d.earliest_confirmed_arrival_day==null?'未確定':`Day ${fmt(d.earliest_confirmed_arrival_day,0)}`):`Day ${fmt(d.projected_arrival_day,0)}`;const source=d.selected_source_id?locationName(d.selected_source_id):'未選択';const services=(d.selected_service_ids||[]).map(definitionName).join(' → ')||'経路未確定';const constrained=Boolean(d.routing_constraint_source_id||(d.routing_constraint_via_node_ids||[]).length||(d.routing_constraint_transport_allocation_ids||[]).length);return `<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(d.resource_id))}</span><span>${fmt(d.remaining_t)} t 待ち</span></div><div class="cell-main">${esc(source)} → ${esc(locationName(d.destination_id))}</div><div class="cell-sub">${esc(services)} · 輸送系内 ${fmt(d.pipeline_t)} t</div><div class="cell-sub">必要時期 ${esc(forecast)} · 予測到着 ${esc(arrival)}${d.selected_latency_days==null?'':` · 輸送 ${fmt(d.selected_latency_days,1)}日`}${d.selected_handoff_count==null?'':` · 積替 ${fmt(d.selected_handoff_count,0)}`}</div>${constrained?`<div class="cell-sub">固定条件: 供給元 ${esc(d.routing_constraint_source_id?locationName(d.routing_constraint_source_id):'自動')} / 経由 ${esc((d.routing_constraint_via_node_ids||[]).map(locationName).join(', ')||'なし')} / 固定輸送区間 ${(d.routing_constraint_transport_allocation_ids||[]).length} 件</div>`:''}<button type="button" data-project-routing-constraint data-owner-kind="${esc(d.owner_kind)}" data-owner-id="${esc(d.owner_id)}" data-destination-id="${esc(d.destination_id)}" data-resource-id="${esc(d.resource_id)}">${constrained?'固定条件を編集':'固定条件を設定'}</button></div>`;}).join(''):'<div class="empty-state">現在の補給需要なし</div>';
     const settingsDisabled=p.settings_editable?'':'disabled';
     const procurementDisabled=p.procurement_editable?'':'disabled';
     const procurementOptions=(p.procurement_policy_options||[]).map((value)=>`<option value="${esc(value)}" ${value===p.procurement_policy?'selected':''}>${esc(procurementPolicyName(value))}</option>`).join('');
     const projectControls=foundingProject
-      ? `<div class="action-stack"><button type="button" data-command="${p.paused?'ResumeFounding':'PauseFounding'}" data-project-id="${esc(p.id)}" ${settingsDisabled}>${p.paused?'準備再開':'準備停止'}</button><div class="form-row"><label>優先度<select id="projectPriorityInput" ${settingsDisabled}>${priorityOptions(p.priority??3)}</select></label><button type="button" data-set-founding-priority="${esc(p.id)}" ${settingsDisabled}>優先度を適用</button></div><button type="button" class="danger-button" data-command="CancelFounding" data-project-id="${esc(p.id)}" ${settingsDisabled}>Deployment取消</button></div>`
+      ? `<div class="action-stack"><button type="button" data-command="${p.paused?'ResumeFounding':'PauseFounding'}" data-project-id="${esc(p.id)}" ${settingsDisabled}>${p.paused?'準備再開':'準備停止'}</button><div class="form-row"><label>優先度<select id="projectPriorityInput" ${settingsDisabled}>${priorityOptions(p.priority??3)}</select></label><button type="button" data-set-founding-priority="${esc(p.id)}" ${settingsDisabled}>優先度を適用</button></div><button type="button" class="danger-button" data-command="CancelFounding" data-project-id="${esc(p.id)}" ${settingsDisabled}>設立計画を取消</button></div>`
       : `<div class="action-stack"><button type="button" data-command="${p.paused?'ResumeBuild':'PauseBuild'}" data-project-id="${esc(p.id)}" ${settingsDisabled}>${p.paused?'建設再開':'建設停止'}</button><div class="form-row"><label>優先度<select id="projectPriorityInput" data-draft-key="project:${esc(p.id)}:priority" ${settingsDisabled}>${priorityOptions(p.priority??3)}</select></label><button type="button" data-set-project-priority="${esc(p.id)}" ${settingsDisabled}>優先度を適用</button></div><div class="form-row"><label>調達方針<select id="projectProcurementTimingPolicy" data-draft-key="project:${esc(p.id)}:procurement" ${procurementDisabled}>${procurementOptions}</select></label><button type="button" data-set-project-procurement="${esc(p.id)}" ${procurementDisabled}>方針を適用</button></div><button type="button" class="danger-button" data-command="CancelBuild" data-project-id="${esc(p.id)}" ${settingsDisabled}>案件取消</button></div>`;
     const foundingDecision=foundingProject?section('Founding Decision State',kv([['Target type',esc(p.founding_target_type||'—')],['Deployment phase',esc(p.deployment_phase||p.status||'—')],['Manifest readiness',p.manifest_ready?'<span class="badge ok">ready</span>':'<span class="badge warn">not ready</span>'],['Fleet commitment',p.fleet_commitment_id?esc(p.fleet_commitment_id):'—']])+`<h3>Knowledge Requirement</h3>${(p.founding_knowledge_requirements||[]).map((row)=>`<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(row.subject_resource_id))}</span><span class="badge ${row.met?'ok':'warn'}">${fmt(row.current_level,0)} / ${fmt(row.minimum_level,0)}</span></div><div class="cell-sub">${esc(surfaceCellLabel(row.target_cell_id))}</div></div>`).join('')||'<div class="empty-state">Knowledge Requirementなし</div>'}<h3>Site blocker</h3>${(p.site_blockers||[]).length?`<div class="issue-stack">${p.site_blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">なし</span>'}<h3>Movement blocker</h3>${(p.movement_blockers||[]).length?`<div class="issue-stack">${p.movement_blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">なし</span>'}`):'';
     const disposalDecision=p.target_kind==='facility_decommission'?section('撤去時の回収',kv([['Irreversible',p.irreversible_started?'開始済み':'未開始'],['Recovery potential',esc((p.expected_salvage||[]).map(([r,a])=>`${resourceName(r)} ${fmt(a,2)}t`).join(' / ')||'なし')],['Projected fraction',p.projected_salvage_fraction==null?'—':pct(p.projected_salvage_fraction)],['Projected recovery',esc((p.projected_salvage||[]).map(([r,a])=>`${resourceName(r)} ${fmt(a,2)}t`).join(' / ')||'なし')],['Actual fraction',p.actual_salvage_fraction==null?'—':pct(p.actual_salvage_fraction)],['Actual recovery',esc((p.actual_salvage||[]).map(([r,a])=>`${resourceName(r)} ${fmt(a,2)}t`).join(' / ')||'なし')]])):'';
@@ -617,7 +681,7 @@
   function renderInspector(){
     if(!state.inspector){setInspector('選択項目','<div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div>');return;}
     const {type,id}=state.inspector;
-    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,'extraction-resource':renderExtractionResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'survey-campaign':renderSurveyCampaignInspector,'surface-cell':renderSurfaceCellInspector};
+    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,'dependency-resource':renderDependencyResourceInspector,'extraction-resource':renderExtractionResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'survey-campaign':renderSurveyCampaignInspector,'surface-cell':renderSurfaceCellInspector};
     if(!handlers[type]?.(id)){state.inspector=null;setInspector('選択項目','<div class="empty-state">項目の状態が変化しました。再選択してください。</div>');}
   }
 
@@ -654,6 +718,7 @@
 
   document.addEventListener('click',async(event)=>{
     if(state.activeView!=='operations')return;
+    const dependencyToggle=event.target.closest('[data-dependency-view]');if(dependencyToggle){dependencyView=dependencyToggle.dataset.dependencyView==='forecast'?'forecast':'current';renderActiveTab();renderInspector();return;}
     const tab=event.target.closest('[data-tab]');if(tab){state.activeTab=tab.dataset.tab;state.inspector=null;render();if(['surface','survey'].includes(state.activeTab)){try{await A.loadUiSnapshot({preserveInteraction:false});}catch(e){banner(e.message,'error');}}return;}
     const inspect=event.target.closest('[data-inspect]');if(inspect){state.inspector={type:inspect.dataset.inspect,id:inspect.dataset.id};if(inspect.dataset.inspect==='surface-cell')render();else{renderInspector();$$('#operationsTabContent [data-inspect]').forEach((target)=>{const selected=target.dataset.inspect===inspect.dataset.inspect&&target.dataset.id===inspect.dataset.id;target.classList.toggle('is-selected',selected);if(target.hasAttribute('aria-pressed'))target.setAttribute('aria-pressed',selected?'true':'false');});}return;}
     const surfaceBuild=event.target.closest('[data-surface-build]');if(surfaceBuild){const plan=surfacePlanPayload(surfaceBuild);try{await command('PlanBuild',{operational_node_id:surfaceBuild.dataset.locationId,facility_id:surfaceBuild.dataset.surfaceBuild,site_cell_id:surfaceBuild.dataset.cellId,...plan});banner('Surface Cell建設Projectを作成しました');}catch{}return;}

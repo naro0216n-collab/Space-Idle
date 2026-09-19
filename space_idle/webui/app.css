@@ -413,3 +413,131 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
   .survey-goal-row { grid-template-columns: 1fr; }
 }
 .network-line-hit { stroke: transparent; stroke-width: 20; fill: none; pointer-events: stroke; cursor: pointer; }
+
+/* Remaining management-heavy surfaces use the same iPad decision pattern. */
+.decision-surface-block { min-width: 0; display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel); }
+.inventory-decision-surface, .construction-decision-surface, .fleet-decision-surface, .market-decision-surface { display: grid; gap: 12px; min-width: 0; }
+.segmented-control { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--line-soft); border-radius: 9px; background: #08141d; }
+.segmented-control button { min-height: 38px; padding: 7px 14px; border-color: transparent; background: transparent; }
+.segmented-control button.is-active { border-color: #397397; background: #143047; color: var(--text); box-shadow: inset 0 0 0 1px #64c6ff33; }
+
+.resource-flow-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); gap: 10px; }
+.resource-flow-card { width: 100%; min-width: 0; min-height: 178px; display: grid; grid-template-rows: auto auto auto 1fr; gap: 10px; align-content: start; padding: 12px; text-align: left; background: #0b1721; border-color: var(--line-soft); }
+.resource-flow-card.is-selected { border-color: var(--accent); background: #123049; box-shadow: inset 0 0 0 1px #64c6ff55; }
+.resource-stock-line { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.resource-stock-line > span, .allocation-metrics > span, .dependency-metrics > span, .construction-progress > span, .construction-option-metrics > span, .fleet-commitment-grid > span, .market-commitment-metrics > span { min-width: 0; padding: 7px 8px; border: 1px solid var(--line-soft); border-radius: 7px; background: #09151e; }
+.resource-stock-line small, .allocation-metrics small, .dependency-metrics small, .construction-progress small, .construction-option-metrics small, .fleet-commitment-grid small, .market-commitment-metrics small { display: block; color: var(--muted); font-size: 9px; }
+.resource-stock-line strong, .allocation-metrics strong, .dependency-metrics strong, .construction-progress strong, .construction-option-metrics strong, .fleet-commitment-grid strong, .market-commitment-metrics strong { display: block; margin-top: 3px; font-size: 12px; overflow-wrap: anywhere; }
+.resource-flow-line { display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--muted); font-size: 10px; }
+.resource-flow-line strong { color: var(--text); }
+.resource-allocation-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; }
+.resource-allocation-card { min-width: 0; display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: #0b1721; }
+.resource-allocation-card.has-warning { border-color: #886733; }
+.allocation-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.dependency-status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.dependency-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 10px; }
+.dependency-card { width: 100%; min-width: 0; min-height: 188px; display: grid; grid-template-rows: auto auto 1fr; gap: 10px; align-content: start; padding: 12px; text-align: left; background: #0b1721; border-color: var(--line-soft); }
+.dependency-card:hover { border-color: #3f6f8d; }
+.dependency-card.has-warning { border-color: #886733; background: #201b13; }
+.dependency-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 6px; }
+.dependency-group-details { border-top: 1px solid var(--line-soft); padding-top: 8px; }
+.dependency-group-details summary { min-height: 40px; display: flex; align-items: center; cursor: pointer; color: var(--muted); font-size: 11px; }
+.dependency-group-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 7px; padding-top: 7px; }
+.dependency-group-card { display: grid; gap: 4px; padding: 9px; border: 1px solid var(--line-soft); border-radius: 7px; background: #09151e; color: var(--muted); font-size: 9px; }
+.dependency-group-card strong { color: var(--text); font-size: 11px; }
+
+.construction-project-grid, .construction-option-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 10px; }
+.construction-project-card, .construction-option-card { width: 100%; min-width: 0; min-height: 174px; display: grid; grid-template-rows: auto auto 1fr; gap: 10px; align-content: start; padding: 12px; text-align: left; background: #0b1721; border-color: var(--line-soft); }
+.construction-project-card.is-selected, .construction-option-card.is-selected { border-color: var(--accent); background: #123049; box-shadow: inset 0 0 0 1px #64c6ff55; }
+.construction-progress, .construction-option-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+
+.fleet-pool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 10px; }
+.fleet-pool-card { min-width: 0; display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line-soft); border-radius: 9px; background: #0b1721; }
+.fleet-commitment-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.fleet-utilization-line { display: flex; justify-content: space-between; gap: 8px; padding-top: 7px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 10px; }
+.fleet-card-actions { display: grid; grid-template-columns: auto minmax(75px, .65fr) minmax(105px, 1fr) auto; gap: 7px; align-items: end; }
+.fleet-card-actions label { min-width: 0; color: var(--muted); font-size: 9px; }
+.fleet-card-actions input, .fleet-card-actions select { width: 100%; margin-top: 4px; }
+.fleet-transition-section { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
+.fleet-transition-section h4 { margin: 0; }
+.fleet-transition-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+.fleet-transition-card, .fleet-retirement-card { min-width: 0; display: grid; gap: 7px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: #09151e; }
+.fleet-transition-card { grid-template-columns: auto 1fr; align-items: center; }
+.fleet-transition-card > span:not(.badge), .fleet-transition-card > small { grid-column: 2; color: var(--muted); font-size: 10px; }
+.fleet-retirement-card { grid-column: span 2; }
+.fleet-retirement-metrics { display: flex; flex-wrap: wrap; gap: 7px 14px; color: var(--muted); font-size: 10px; }
+.fleet-retirement-metrics strong { color: var(--text); }
+
+.market-funds-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 9px; background: #09151e; }
+.market-funds-strip > div { padding: 8px; border: 1px solid var(--line-soft); border-radius: 7px; background: #0c1923; }
+.market-funds-strip span { display: block; color: var(--muted); font-size: 9px; }
+.market-funds-strip strong { display: block; margin-top: 3px; font-size: 14px; }
+.market-offer-grid, .market-order-grid, .market-commitment-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 10px; }
+.market-offer-card, .market-order-card, .market-commitment-card, .market-create-card { min-width: 0; display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line-soft); border-radius: 9px; background: #0b1721; }
+.market-offer-card.is-disabled { opacity: .62; }
+.market-order-card.has-warning, .market-commitment-card.has-warning { border-color: #886733; }
+.market-offer-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.market-offer-sides > div { display: grid; gap: 4px; padding: 9px; border: 1px solid var(--line-soft); border-radius: 7px; background: #09151e; }
+.market-offer-sides small, .market-offer-sides span { color: var(--muted); font-size: 9px; }
+.market-offer-sides strong { font-size: 12px; }
+.market-order-price { display: grid; grid-template-columns: minmax(0, .75fr) minmax(0, 1.25fr); gap: 8px; align-items: end; }
+.market-order-price > span, .market-order-price label { min-width: 0; padding: 8px; border: 1px solid var(--line-soft); border-radius: 7px; background: #09151e; }
+.market-order-price small, .market-order-price label, .market-order-controls label, .market-create-grid label { color: var(--muted); font-size: 9px; }
+.market-order-price strong { display: block; margin-top: 4px; }
+.market-order-price input { width: 100%; margin-top: 4px; }
+.market-order-controls { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(110px, .5fr); gap: 8px; }
+.market-target-control { display: grid; grid-template-columns: minmax(80px, .7fr) minmax(90px, 1fr) auto; gap: 5px; align-items: center; margin-top: 4px; }
+.market-target-control > * { min-width: 0; }
+.market-target-control > span { color: var(--muted); font-size: 9px; }
+.market-order-controls select, .market-order-controls input { width: 100%; }
+.market-order-progress { display: flex; flex-wrap: wrap; gap: 7px 12px; color: var(--muted); font-size: 10px; }
+.market-create-card { background: #0a1822; }
+.market-create-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.market-create-grid label { min-width: 0; }
+.market-create-grid select, .market-create-grid input { width: 100%; margin-top: 4px; }
+.market-commitment-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+
+@media (max-width: 1080px) and (orientation: landscape) {
+  .resource-flow-grid, .dependency-card-grid, .construction-project-grid, .construction-option-grid { grid-template-columns: repeat(auto-fit, minmax(225px, 1fr)); }
+  .fleet-pool-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .fleet-card-actions { grid-template-columns: 1fr 1fr; }
+  .fleet-retirement-card { grid-column: auto; }
+  .market-funds-strip { grid-template-columns: repeat(4, minmax(80px, 1fr)); }
+  .market-offer-grid, .market-order-grid, .market-commitment-grid { grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)); }
+  .market-create-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .market-order-price, .market-order-controls { grid-template-columns: 1fr; }
+}
+
+/* Logistics support surfaces remain secondary to the network canvas but are touch-first. */
+.supply-policy-surface, .transport-allocation-surface, .vehicle-production-surface { display: grid; gap: 10px; padding: 8px; }
+.supply-policy-heading { display: flex; align-items: end; justify-content: space-between; gap: 10px; }
+.supply-policy-heading h4 { margin: 2px 0 0; }
+.supply-policy-heading p { margin: 5px 0 0; max-width: 650px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.target-stock-grid, .supply-policy-grid, .supply-requirement-grid, .transport-allocation-grid, .vehicle-production-grid, .cargo-flow-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 9px; }
+.target-stock-card, .supply-policy-card, .supply-requirement-card, .transport-allocation-card, .vehicle-production-card, .cargo-flow-card { min-width: 0; display: grid; gap: 9px; padding: 11px; border: 1px solid var(--line-soft); border-radius: 8px; background: #0b1721; }
+.supply-requirement-card.has-warning, .transport-allocation-card.has-warning, .vehicle-production-card.has-warning, .cargo-flow-card.has-warning { border-color: #886733; }
+.supply-policy-metrics { display: grid; gap: 6px; }
+.supply-policy-metrics > span { padding: 7px; border: 1px solid var(--line-soft); border-radius: 7px; background: #09151e; }
+.supply-policy-metrics small { display: block; color: var(--muted); font-size: 9px; }
+.supply-policy-metrics strong { display: block; margin-top: 3px; font-size: 10px; overflow-wrap: anywhere; }
+.target-stock-value { display: flex; align-items: end; justify-content: space-between; gap: 10px; padding: 9px; border: 1px solid var(--line-soft); border-radius: 7px; background: #09151e; }
+.target-stock-value span { color: var(--muted); font-size: 9px; }
+.target-stock-value strong { font-size: 16px; }
+.requirement-quantity-grid, .allocation-capacity-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.requirement-quantity-grid > span, .allocation-capacity-grid > span { min-width: 0; padding: 7px; border: 1px solid var(--line-soft); border-radius: 7px; background: #09151e; }
+.requirement-quantity-grid small, .allocation-capacity-grid small { display: block; color: var(--muted); font-size: 9px; }
+.requirement-quantity-grid strong, .allocation-capacity-grid strong { display: block; margin-top: 3px; font-size: 11px; overflow-wrap: anywhere; }
+.requirement-route, .allocation-route-summary, .cargo-route { display: grid; gap: 4px; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.requirement-route strong, .allocation-route-summary strong, .cargo-route strong { color: var(--text); font-size: 10px; }
+.requirement-footer, .cargo-timing { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 10px; color: var(--muted); font-size: 9px; }
+.vehicle-production-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; align-items: end; }
+.vehicle-production-metrics > span, .vehicle-production-metrics > label { min-width: 0; padding: 7px; border: 1px solid var(--line-soft); border-radius: 7px; background: #09151e; }
+.vehicle-production-metrics small, .vehicle-production-metrics label, .vehicle-production-priority { color: var(--muted); font-size: 9px; }
+.vehicle-production-metrics strong { display: block; margin-top: 3px; font-size: 11px; }
+.vehicle-production-metrics select, .vehicle-production-priority select { width: 100%; margin-top: 4px; }
+.vehicle-production-resource { display: grid; gap: 4px; color: var(--muted); font-size: 10px; }
+
+@media (max-width: 1080px) and (orientation: landscape) {
+  .target-stock-grid, .supply-policy-grid, .supply-requirement-grid, .transport-allocation-grid, .vehicle-production-grid, .cargo-flow-grid { grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)); }
+  .requirement-quantity-grid, .allocation-capacity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

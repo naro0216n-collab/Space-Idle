@@ -242,11 +242,11 @@ def run() -> dict[str, object]:
                 timeout=10000,
             )
             page.locator('[data-section-tab="location"][data-tab="construction"]').click()
-            upgrade_rows = page.locator('tr[data-inspect="project"]', has_text="Upgrade")
+            upgrade_rows = page.locator('[data-inspect="project"]', has_text="Upgrade")
             _assert(upgrade_rows.count() > 0, "upgrade command must create a construction project visible in the project list")
             upgrade_rows.first.click()
             inspector_text = page.locator("#inspectorContent").inner_text()
-            _assert("Facility Upgrade" in inspector_text, "project inspector must retain typed upgrade target information")
+            _assert("設備更新" in inspector_text, "project inspector must retain typed upgrade target information")
             _assert(page.locator("#projectPriorityInput").input_value() == "4", "project inspector must retain the planned priority")
             _assert(page.locator("#projectProcurementTimingPolicy").input_value() == "immediate", "project inspector must retain the planned procurement timing policy")
             _assert(
@@ -390,6 +390,9 @@ def run() -> dict[str, object]:
             _assert("Location設立" in surface_inspector, "unowned cell must expose founding options in-place")
             _assert(page.locator('#inspectorContent [data-surface-develop]').count() > 0, "surface cell inspector must expose application-projected development commands")
             page.locator('.primary-nav-button[data-section="location"]').click()
+            # Top-level navigation preserves the last Location context by design.
+            # Select Overview explicitly when validating the Overview decision surface.
+            page.locator('[data-section-tab="location"][data-tab="overview"]').click()
             overview_text = page.locator('#operationsTabContent').inner_text()
             _assert("地表インフラ" in overview_text, "location overview must expose aggregate surface infrastructure state")
             _assert("在庫とフロー" in overview_text, "location overview must expose resource state at the decision point")

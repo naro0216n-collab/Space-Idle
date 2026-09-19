@@ -172,7 +172,7 @@ def run() -> None:
                 f'[data-target-stock-delete="{LEO}"][data-resource-id="{PROPELLANT}"]'
             )
             target_delete.wait_for(timeout=10000)
-            target_row = target_delete.locator("xpath=ancestor::tr")
+            target_row = target_delete.locator("xpath=ancestor::*[@data-target-stock-row]")
             target_text = target_row.inner_text()
             assert "1" in target_text and "高" in target_text
             target_delete.click()
