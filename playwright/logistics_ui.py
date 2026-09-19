@@ -94,12 +94,19 @@ def run(*, browser=None) -> None:
             assert "輸送能力阻害" in requirement_row.inner_text(), (
                 "Supply Requirement must remain visible while Transport Capacity is unavailable"
             )
+            requirement_id = requirement_row.get_attribute("data-requirement-id")
+            assert requirement_id
             decision_item = page.locator(
-                '#logisticsDecisionLane [data-logistics-decision-kind="supply_requirement"]'
-            ).first
+                f'#logisticsDecisionLane [data-logistics-decision-kind="supply_requirement"]'
+                f'[data-logistics-decision-id="{requirement_id}"]'
+            )
             decision_item.wait_for(timeout=10000)
-            assert "輸送能力阻害" in decision_item.inner_text(), (
-                "Transport Decision Lane must surface the same Application-projected blocker"
+            decision_text = decision_item.inner_text()
+            assert "輸送能力阻害" in decision_text, (
+                "Transport Decision Lane must preserve the Application supply-state classification"
+            )
+            assert "輸送能力不足" in decision_text, (
+                "Transport Decision Lane must surface the concrete Application-projected blocker"
             )
             decision_item.click()
             page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
