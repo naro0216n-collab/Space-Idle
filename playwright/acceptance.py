@@ -136,9 +136,17 @@ def run() -> dict[str, object]:
             page.goto(server_origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
 
-            _assert(page.locator("#operationsView").is_visible(), "operations view should be visible by default")
-            _assert(not page.locator("#logisticsView").is_visible(), "logistics view must not coexist with operations")
-            _assert(page.locator(".location-button").count() > 0, "at least one spatial node must be rendered")
+            _assert(page.locator("#globalView").is_visible(), "global decision canvas should be visible by default")
+            _assert(not page.locator("#operationsView").is_visible(), "location workspace must not coexist with global canvas")
+            _assert(not page.locator("#logisticsView").is_visible(), "logistics workspace must not coexist with global canvas")
+            expected_sections = ["global", "location", "research", "exploration", "logistics", "economy"]
+            _assert(
+                page.locator(".primary-nav-button").evaluate_all("rows => rows.map(row => row.dataset.section)") == expected_sections,
+                "landscape shell must expose the six canonical top-level sections in stable order",
+            )
+            _assert(page.locator("#researchPointValue").is_visible(), "global bar must expose Research Point")
+            _assert(page.locator("#fundsValue").count() == 0, "Funds must not be promoted to a global KPI")
+            _assert(page.locator(".global-location-card").count() > 0, "global canvas must expose spatial nodes")
             viewport_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(viewport_metrics["scroll"] <= viewport_metrics["w"], "1194px landscape must not horizontally overflow")
             _assert(_visible_button_min_height(page) >= 44, "visible touch controls must be at least 44 CSS px high")
@@ -176,6 +184,9 @@ def run() -> dict[str, object]:
             # Facility upgrades are ordinary construction projects. Verify the
             # decision surface and command path while the clock is paused so the
             # project cannot consume materials before we inspect it.
+            page.locator('[data-section="location"]').click()
+            _assert(page.locator("#operationsView").is_visible(), "location section must open the location decision canvas")
+            _assert(page.locator(".location-button").count() > 0, "location context browser must expose spatial nodes")
             page.locator('[data-tab="facilities"]').click()
             upgrade_row = page.locator(
                 f'tr[data-inspect="facility"][data-id="{_fixture_facility.id}"]'
@@ -237,9 +248,7 @@ def run() -> dict[str, object]:
                 "() => !document.body.classList.contains('is-busy')",
                 timeout=10000,
             )
-            page.locator('[data-tab="overview"]').click()
-
-            page.locator('[data-tab="research"]').click()
+            page.locator('[data-section="research"]').click()
             research_rows = page.locator('#researchTree [data-inspect="research"]')
             _assert(research_rows.count() > 0, "research tree must expose research decisions")
             startable_research = None
@@ -276,8 +285,7 @@ def run() -> dict[str, object]:
                 "() => document.querySelector('[data-lifecycle-control=research]')?.dataset.researchAction === 'resume'",
                 timeout=10000,
             )
-            page.locator('[data-tab="overview"]').click()
-
+            page.locator('[data-section="exploration"]').click()
             page.locator('[data-tab="scientific-exploration"]').click()
             exploration_rows = page.locator('tr[data-inspect="scientific-exploration"]')
             _assert(exploration_rows.count() > 0, "scientific exploration campaign must be visible")
@@ -323,8 +331,6 @@ def run() -> dict[str, object]:
                 "() => document.querySelector('[data-lifecycle-control=exploration]')?.dataset.explorationAction === 'resume'",
                 timeout=10000,
             )
-            page.locator('[data-tab="overview"]').click()
-
             _select_location(page, ids.EARTH)
             page.locator('[data-tab="survey"]').click()
             known_survey = page.locator('tr[data-inspect="survey"]').first
@@ -357,13 +363,14 @@ def run() -> dict[str, object]:
             _assert("既存Locationから開発" in surface_inspector, "undeveloped cell must expose location development options in-place")
             _assert("Location設立" in surface_inspector, "unowned cell must expose founding options in-place")
             _assert(page.locator('#inspectorContent [data-surface-develop]').count() > 0, "surface cell inspector must expose application-projected development commands")
-            page.locator('[data-tab="overview"]').click()
+            page.locator('[data-section="location"]').click()
             overview_text = page.locator('#operationsTabContent').inner_text()
             _assert("Surface Infrastructure" in overview_text, "location overview must expose aggregate surface infrastructure state")
             _assert("Resource Opportunity / Extraction" in overview_text, "location overview must expose aggregate extraction decision state")
             _assert("Current Environment" in overview_text, "location overview must expose current environment state")
 
             _select_location(page, ids.LUNAR_ORBIT)
+            page.locator('[data-section="exploration"]').click()
             page.locator('[data-tab="survey"]').click()
             survey_rows = page.locator('tr[data-inspect="survey"]')
             survey_rows.first.wait_for(timeout=10000)
@@ -478,7 +485,7 @@ def run() -> dict[str, object]:
             _assert("案件進行中" in page.locator('#inspectorContent').inner_text(), "Founding command must round-trip to an active project on the selected cell")
             _assert(founding_button.count() == 1, "Founding control must remain in the same place after project start")
             _assert(not founding_button.is_enabled(), "active Founding must keep the same action visible but unavailable")
-            page.locator('[data-tab="overview"]').click()
+            page.locator('[data-section="location"]').click()
 
             page.locator('[data-time-speed="4"]').click()
             page.wait_for_function(
@@ -491,7 +498,7 @@ def run() -> dict[str, object]:
                 arg=paused_day,
                 timeout=10000,
             )
-            rev_after = int(page.locator("#revisionValue").inner_text())
+            rev_after = int(page.evaluate("() => window.SpaceIdleApp.state.revision"))
 
             page.set_viewport_size({"width": 1180, "height": 820})
             page.wait_for_timeout(100)
@@ -501,7 +508,7 @@ def run() -> dict[str, object]:
                 "1180px full-size iPad landscape must not horizontally overflow",
             )
 
-            page.get_by_role("button", name="物流ネットワーク").click()
+            page.locator('[data-section="logistics"]').click()
             standard_logistics_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(
                 standard_logistics_metrics["scroll"] <= standard_logistics_metrics["w"],
@@ -509,8 +516,8 @@ def run() -> dict[str, object]:
             )
             page.set_viewport_size({"width": 1194, "height": 834})
             page.wait_for_timeout(100)
-            _assert(page.locator("#logisticsView").is_visible(), "logistics view should be visible after switch")
-            _assert(not page.locator("#operationsView").is_visible(), "operations view must be hidden after switch")
+            _assert(page.locator("#logisticsView").is_visible(), "logistics section should expose the network decision canvas")
+            _assert(not page.locator("#operationsView").is_visible(), "location workspace must be hidden in logistics")
             movement_plan_buttons = page.locator(".movement-plan-button")
             _assert(movement_plan_buttons.count() > 0, "at least one movement plan must be rendered")
             blocked = page.locator(".movement-plan-button", has=page.locator(".badge", has_text="未解禁"))
@@ -528,56 +535,32 @@ def run() -> dict[str, object]:
             _assert(all("base.tech." not in text for text in issue_titles), "technology IDs must not leak into blocker titles")
             _assert(all("technology:" not in text for text in issue_titles), "raw blocker prefixes must not leak into blocker titles")
 
-            page.get_by_role("button", name="拠点運用").click()
-            page.set_viewport_size({"width": 834, "height": 1194})
+            # Formal support is iPad landscape only. Verify the classic 1024px
+            # landscape viewport without inventing a portrait fallback or page-wide scroll.
+            page.locator('[data-section="location"]').click()
+            page.set_viewport_size({"width": 1024, "height": 768})
             page.wait_for_timeout(100)
-            portrait = page.evaluate(
-                """() => {
-                  const view=document.querySelector('#operationsView');
-                  const children=Array.from(view.children).map(x=>x.getBoundingClientRect());
-                  return {
-                    innerWidth,
-                    scrollWidth: document.documentElement.scrollWidth,
-                    display: getComputedStyle(view).display,
-                    left0: children[0]?.left,
-                    left1: children[1]?.left,
-                    left2: children[2]?.left,
-                    bodyText: document.body.innerText,
-                  };
-                }"""
-            )
-            _assert(portrait["scrollWidth"] >= 1180, "portrait must retain the landscape design width")
-            _assert(portrait["display"] == "grid", "portrait must not switch to a stacked alternate layout")
-            _assert(
-                portrait["left0"] < portrait["left1"] < portrait["left2"],
-                "portrait must preserve left/workspace/inspector order",
-            )
-            _assert("非対応" not in portrait["bodyText"], "portrait must not replace the UI with an unsupported notice")
-
-            page.get_by_role("button", name="物流ネットワーク").click()
-            portrait_logistics = page.evaluate(
-                """() => {
-                  const view=document.querySelector('#logisticsView');
-                  const children=Array.from(view.children).map(x=>x.getBoundingClientRect());
-                  return {
-                    scrollWidth: document.documentElement.scrollWidth,
-                    display: getComputedStyle(view).display,
-                    left0: children[0]?.left, left1: children[1]?.left, left2: children[2]?.left
-                  };
-                }"""
+            compact_landscape = page.evaluate(
+                "() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})"
             )
             _assert(
-                portrait_logistics["scrollWidth"] >= 1180,
-                "portrait logistics must retain the landscape design width",
+                compact_landscape["scroll"] <= compact_landscape["w"],
+                "1024px iPad landscape must not horizontally overflow the page",
             )
             _assert(
-                portrait_logistics["display"] == "grid",
-                "portrait logistics must not switch to a stacked layout",
+                page.locator('.primary-nav-button[data-section="location"]').get_attribute("class").find("is-active") >= 0,
+                "top-level section selection must remain stable at compact landscape width",
+            )
+            page.locator('[data-section="logistics"]').click()
+            compact_logistics = page.evaluate(
+                "() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})"
             )
             _assert(
-                portrait_logistics["left0"] < portrait_logistics["left1"] < portrait_logistics["left2"],
-                "portrait logistics must preserve movement-plan/network/inspector order",
+                compact_logistics["scroll"] <= compact_logistics["w"],
+                "1024px iPad landscape logistics must not horizontally overflow the page",
             )
+            page.set_viewport_size({"width": 1194, "height": 834})
+            page.wait_for_timeout(100)
             network_locations = page.locator("#networkNodes [data-network-location]")
             expected_network_locations = page.locator("#movementPlanOriginFilter option").count() - 1
             _assert(
@@ -600,8 +583,8 @@ def run() -> dict[str, object]:
                 "landscape_viewport": viewport_metrics,
                 "standard_ipad_landscape": standard_ipad_metrics,
                 "standard_ipad_logistics": standard_logistics_metrics,
-                "portrait_scroll_width": portrait["scrollWidth"],
-                "portrait_logistics_scroll_width": portrait_logistics["scrollWidth"],
+                "compact_ipad_landscape": compact_landscape,
+                "compact_ipad_logistics": compact_logistics,
                 "movement_plan_count": movement_plan_buttons.count(),
                 "issue_titles_checked": len(issue_titles),
                 "day_before": day_before,

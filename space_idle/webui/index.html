@@ -16,15 +16,14 @@
   <div id="app" class="app-shell" aria-busy="true">
     <header class="topbar">
       <div class="brand-block"><div class="brand">宇宙開発 Idle</div><div class="version" id="appVersion">v0.4.5</div></div>
-      <nav class="view-switch" aria-label="表示切替">
-        <button class="view-button is-active" data-view="operations" type="button">拠点運用</button>
-        <button class="view-button" data-view="logistics" type="button">物流ネットワーク</button>
-      </nav>
-      <div class="session-strip">
+      <div class="session-strip" aria-label="全体状態">
         <div class="session-stat"><span>Day</span><strong id="dayValue">—</strong></div>
-        <div class="session-stat"><span>資金</span><strong id="fundsValue">—</strong></div>
-        <div class="session-stat"><span>Rev</span><strong id="revisionValue">—</strong></div>
+        <div class="session-stat"><span>Research Point</span><strong id="researchPointValue">—</strong></div>
+        <button class="attention-button" id="attentionButton" type="button" data-section="global" aria-label="重要な通知">
+          <span>要確認</span><strong id="attentionCount">0</strong>
+        </button>
         <div class="connection-state" id="connectionState"><span class="dot"></span><span>接続中</span></div>
+        <span id="revisionValue" class="visually-hidden">—</span>
       </div>
       <div class="time-controls" aria-label="時間進行">
         <button type="button" id="timePauseButton" aria-label="一時停止" aria-pressed="false">⏸ 一時停止</button>
@@ -38,61 +37,100 @@
 
     <div id="statusBanner" class="status-banner" hidden></div>
 
-    <main id="operationsView" class="view-root operations-view">
-      <aside class="panel location-panel">
-        <div class="panel-heading"><div><div class="eyebrow">OPERATIONAL NODES</div><h2>拠点</h2></div><button class="icon-button" id="refreshButton" type="button" aria-label="再読込">↻</button></div>
-        <div id="locationList" class="location-list"></div>
-        <div class="panel-section compact"><div class="section-title">全体ボトルネック</div><div id="globalIssues" class="issue-stack"></div></div>
-      </aside>
+    <div class="main-shell">
+      <nav class="primary-nav" aria-label="主要領域">
+        <button class="primary-nav-button is-active" data-section="global" type="button"><span class="nav-glyph">◎</span><span>全体</span></button>
+        <button class="primary-nav-button" data-section="location" type="button"><span class="nav-glyph">⌂</span><span>拠点</span></button>
+        <button class="primary-nav-button" data-section="research" type="button"><span class="nav-glyph">⌬</span><span>研究</span></button>
+        <button class="primary-nav-button" data-section="exploration" type="button"><span class="nav-glyph">◇</span><span>探査</span></button>
+        <button class="primary-nav-button" data-section="logistics" type="button"><span class="nav-glyph">⇄</span><span>輸送</span></button>
+        <button class="primary-nav-button" data-section="economy" type="button"><span class="nav-glyph">¤</span><span>経済</span></button>
+      </nav>
 
-      <section class="workspace operations-workspace">
-        <div class="workspace-heading"><div><div class="eyebrow" id="locationKind">OPERATIONAL NODE</div><h1 id="locationTitle">拠点を読み込み中</h1></div><div class="headline-metrics" id="headlineMetrics"></div></div>
-        <div class="tabbar" role="tablist" aria-label="拠点情報">
-          <button type="button" class="tab-button is-active" data-tab="overview">概要</button>
-          <button type="button" class="tab-button" data-tab="facilities">設備</button>
-          <button type="button" class="tab-button" data-tab="inventory">在庫・フロー</button>
-          <button type="button" class="tab-button" data-tab="construction">建設</button>
-          <button type="button" class="tab-button" data-tab="research">研究</button>
-          <button type="button" class="tab-button" data-tab="scientific-exploration">科学探査</button>
-          <button type="button" class="tab-button" data-tab="survey">資源Survey</button>
-          <button type="button" class="tab-button" data-tab="surface">地表マップ</button>
-        </div>
-        <div id="operationsTabContent" class="tab-content"></div>
-      </section>
+      <div class="section-host">
+        <main id="globalView" class="view-root global-view">
+          <section class="workspace global-workspace">
+            <div class="workspace-heading"><div><div class="eyebrow">MISSION CONTROL</div><h1>全体</h1></div><div id="globalHeadlineMetrics" class="headline-metrics"></div></div>
+            <div id="globalCanvasContent" class="global-canvas-content"></div>
+          </section>
+          <aside class="panel inspector-panel global-inspector">
+            <div class="panel-heading"><div><div class="eyebrow">CONTEXT</div><h2 id="globalInspectorTitle">全体状況</h2></div></div>
+            <div id="globalInspectorContent" class="inspector-content"></div>
+          </aside>
+        </main>
 
-      <aside class="panel inspector-panel">
-        <div class="panel-heading"><div><div class="eyebrow">INSPECTOR</div><h2 id="inspectorTitle">選択項目</h2></div></div>
-        <div id="inspectorContent" class="inspector-content"><div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div></div>
-      </aside>
-    </main>
+        <main id="operationsView" class="view-root operations-view" hidden>
+          <div class="decision-canvas-with-browser operations-decision-canvas">
+            <aside class="panel location-panel">
+              <div class="panel-heading"><div><div class="eyebrow">OPERATIONAL NODES</div><h2>拠点</h2></div><button class="icon-button" id="refreshButton" type="button" aria-label="再読込">↻</button></div>
+              <div id="locationList" class="location-list"></div>
+              <div class="panel-section compact"><div class="section-title">全体ボトルネック</div><div id="globalIssues" class="issue-stack"></div></div>
+            </aside>
 
-    <main id="logisticsView" class="view-root logistics-view" hidden>
-      <aside class="panel logistics-list-panel">
-        <div class="panel-heading"><div><div class="eyebrow">MOVEMENT PLANS</div><h2>Movement Plan</h2></div></div>
-        <div class="filter-row"><select id="movementPlanOriginFilter" aria-label="出発地"></select><select id="movementPlanDestinationFilter" aria-label="到着地"></select></div>
-        <div id="movementPlanList" class="movement-plan-list"></div>
-      </aside>
+            <section class="workspace operations-workspace">
+              <div class="workspace-heading"><div><div class="eyebrow" id="locationKind">OPERATIONAL NODE</div><h1 id="locationTitle">拠点を読み込み中</h1></div><div class="headline-metrics" id="headlineMetrics"></div></div>
+              <div class="tabbar" role="tablist" aria-label="作業領域">
+                <button type="button" class="tab-button is-active" data-tab="overview" data-section-tab="location">概要</button>
+                <button type="button" class="tab-button" data-tab="facilities" data-section-tab="location">設備</button>
+                <button type="button" class="tab-button" data-tab="inventory" data-section-tab="location">在庫・フロー</button>
+                <button type="button" class="tab-button" data-tab="construction" data-section-tab="location">建設</button>
+                <button type="button" class="tab-button" data-tab="research" data-section-tab="research">研究ツリー</button>
+                <button type="button" class="tab-button" data-tab="scientific-exploration" data-section-tab="exploration">科学探査</button>
+                <button type="button" class="tab-button" data-tab="survey" data-section-tab="exploration">資源Survey</button>
+                <button type="button" class="tab-button" data-tab="surface" data-section-tab="exploration">地表マップ</button>
+              </div>
+              <div id="operationsTabContent" class="tab-content"></div>
+            </section>
+          </div>
 
-      <section class="workspace logistics-workspace">
-        <div class="workspace-heading logistics-heading"><div><div class="eyebrow">LOGISTICS NETWORK</div><h1>物流ネットワーク</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
-        <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
-        <div class="logistics-bottom-grid">
-          <section class="card"><div class="card-heading"><h3>Supply Routing Constraint / Target Stock</h3><span id="routingConstraintCountBadge" class="badge"></span></div><div id="routingConstraintTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Supply Requirement</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Fleet</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Transport Allocation</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Vehicle Production</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Cargo Flow</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>External Resource Market / Funds</h3><span id="marketFundsBadge" class="badge"></span></div><div id="marketPanel"></div></section>
-        </div>
-      </section>
+          <aside class="panel inspector-panel">
+            <div class="panel-heading"><div><div class="eyebrow">INSPECTOR</div><h2 id="inspectorTitle">選択項目</h2></div></div>
+            <div id="inspectorContent" class="inspector-content"><div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div></div>
+          </aside>
+        </main>
 
-      <aside class="panel inspector-panel logistics-inspector">
-        <div class="panel-heading"><div><div class="eyebrow">MOVEMENT PLAN INSPECTOR</div><h2 id="movementPlanInspectorTitle">Movement Planを選択</h2></div></div>
-        <div id="movementPlanInspectorContent" class="inspector-content"><div class="empty-state">左のMovement Planまたはネットワーク上の接続を選択してください。</div></div>
-      </aside>
-    </main>
+        <main id="logisticsView" class="view-root logistics-view" hidden>
+          <div class="decision-canvas-with-browser logistics-decision-canvas">
+            <aside class="panel logistics-list-panel">
+              <div class="panel-heading"><div><div class="eyebrow">MOVEMENT PLANS</div><h2>Movement Plan</h2></div></div>
+              <div class="filter-row"><select id="movementPlanOriginFilter" aria-label="出発地"></select><select id="movementPlanDestinationFilter" aria-label="到着地"></select></div>
+              <div id="movementPlanList" class="movement-plan-list"></div>
+            </aside>
 
+            <section class="workspace logistics-workspace">
+              <div class="workspace-heading logistics-heading"><div><div class="eyebrow">LOGISTICS NETWORK</div><h1>輸送</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
+              <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
+              <div class="logistics-bottom-grid">
+                <section class="card"><div class="card-heading"><h3>Supply Routing Constraint / Target Stock</h3><span id="routingConstraintCountBadge" class="badge"></span></div><div id="routingConstraintTable" class="table-wrap"></div></section>
+                <section class="card"><div class="card-heading"><h3>Supply Requirement</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
+                <section class="card"><div class="card-heading"><h3>Fleet</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
+                <section class="card"><div class="card-heading"><h3>Transport Allocation</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
+                <section class="card"><div class="card-heading"><h3>Vehicle Production</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
+                <section class="card"><div class="card-heading"><h3>Cargo Flow</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
+              </div>
+            </section>
+          </div>
+
+          <aside class="panel inspector-panel logistics-inspector">
+            <div class="panel-heading"><div><div class="eyebrow">MOVEMENT CONTEXT</div><h2 id="movementPlanInspectorTitle">Movement Planを選択</h2></div></div>
+            <div id="movementPlanInspectorContent" class="inspector-content"><div class="empty-state">Network上の接続またはMovement Planを選択すると、結果・理由・制約を表示します。</div></div>
+          </aside>
+        </main>
+
+        <main id="economyView" class="view-root economy-view" hidden>
+          <section class="workspace economy-workspace">
+            <div class="workspace-heading"><div><div class="eyebrow">EXTERNAL RESOURCE MARKET</div><h1>経済</h1></div><span id="marketFundsBadge" class="badge"></span></div>
+            <div class="economy-canvas-content">
+              <section class="card market-card"><div class="card-heading"><h3>External Resource Market / Funds</h3></div><div id="marketPanel"></div></section>
+            </div>
+          </section>
+          <aside class="panel inspector-panel economy-inspector">
+            <div class="panel-heading"><div><div class="eyebrow">MARKET CONTEXT</div><h2>市場と物流</h2></div></div>
+            <div id="economyInspectorContent" class="inspector-content"></div>
+          </aside>
+        </main>
+      </div>
+    </div>
     <dialog id="routingConstraintDialog" class="modal-dialog">
       <form method="dialog" id="routingConstraintForm">
         <div class="dialog-heading"><div><div class="eyebrow">SUPPLY ROUTING CONSTRAINT</div><h2>供給経路を固定</h2></div><button type="button" class="icon-button" id="routingConstraintCloseButton">×</button></div>

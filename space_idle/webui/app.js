@@ -6,7 +6,7 @@
     flow:null, dependencyAnalyticsCurrent:null, dependencyAnalyticsForecast:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
     fleet:null, transportAllocations:null, cargoFlows:null, market:null,
-    selectedMovementPlanId:null, activeView:'operations', activeTab:'overview', inspector:null,
+    selectedMovementPlanId:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
     busy:false, syncInFlight:null,
   };
 
@@ -252,7 +252,11 @@
 
   function renderHeader(){
     $('#dayValue').textContent=fmt(state.world?.day??state.session?.day,0);
-    $('#fundsValue').textContent=`${fmt(state.world?.funds_musd,1)} M$`;
+    const stored=state.research?.stored_points,capacity=state.research?.storage_capacity_points;
+    $('#researchPointValue').textContent=stored==null?'—':`${fmt(stored,1)} / ${fmt(capacity,1)}`;
+    const attention=(state.globalIssues?.items||[]).length;
+    $('#attentionCount').textContent=String(attention);
+    $('#attentionButton').classList.toggle('has-attention',attention>0);
     $('#revisionValue').textContent=state.revision??state.session?.revision??'—';
     $('#appVersion').textContent=`v${state.session?.app_version||'0.4.5'}`;
     const paused=Boolean(state.session?.time_paused),speed=Number(state.session?.time_speed_multiplier||1),pause=$('#timePauseButton');
@@ -267,10 +271,39 @@
     const issues=state.globalIssues?.items||[];
     $('#globalIssues').innerHTML=issues.length?issues.slice(0,8).map(issueHtml).join('')+(issues.length>8?`<div class="cell-sub">ほか ${issues.length-8} 件</div>`:''):'<div class="empty-state">現在、全体blockerはありません。</div>';
   }
+  function renderGlobalView(){
+    const canvas=$('#globalCanvasContent'),inspector=$('#globalInspectorContent');
+    if(!canvas||!inspector)return;
+    const nodes=state.world?.operational_nodes||[],issues=state.globalIssues?.items||[];
+    const researchItems=state.research?.items||[],explorations=state.scientificExplorations?.items||[],campaigns=state.surveys?.campaigns||[];
+    const activeResearch=researchItems.filter((row)=>row.state==='active').length;
+    const activeExploration=explorations.filter((row)=>!['complete','completed','cancelled','failed'].includes(row.state)).length;
+    const activeSurvey=campaigns.filter((row)=>!['complete','completed','cancelled','failed'].includes(row.state)).length;
+    const fleetTotal=Number(state.logisticsSummary?.fleet_units||0),fleetFree=Number(state.logisticsSummary?.free_fleet_units||0);
+    $('#globalHeadlineMetrics').innerHTML=[['拠点',nodes.length],['要確認',issues.length],['研究中',activeResearch],['Fleet',`${fleetFree}/${fleetTotal} free`]].map(metricHtml).join('');
+    const locationCards=nodes.map((loc)=>`<button type="button" class="global-location-card" data-open-location="${esc(loc.id)}"><span class="location-name">${esc(loc.display_name)}</span><span class="location-meta"><span>${esc(locationKindLabels[loc.kind]||loc.kind)}</span><span>設備 ${loc.facility_count}</span><span>建設 ${loc.active_project_count}</span></span></button>`).join('');
+    const attentionItems=issues.length?issues.slice(0,8).map((issue,index)=>`<button type="button" class="global-attention-item" data-attention-index="${index}">${issueHtml(issue)}</button>`).join(''):'<div class="empty-state">現在、Player判断を必要とする全体blockerはありません。</div>';
+    canvas.innerHTML=`<div class="global-summary-grid"><section class="card"><div class="card-heading"><h3>拠点</h3><span class="badge">${nodes.length}</span></div><div class="card-body"><div class="global-location-grid">${locationCards||'<div class="empty-state">拠点なし</div>'}</div></div></section><section class="card"><div class="card-heading"><h3>要確認</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length}</span></div><div class="card-body global-attention-list">${attentionItems}</div></section></div><div class="card-grid three global-activity-grid"><section class="card"><div class="card-heading"><h3>研究</h3></div><div class="card-body">${statHtml('進行中',activeResearch)}<button type="button" data-section="research">研究を開く</button></div></section><section class="card"><div class="card-heading"><h3>探査</h3></div><div class="card-body">${statHtml('科学探査 / Survey',`${activeExploration} / ${activeSurvey}`)}<button type="button" data-section="exploration">探査を開く</button></div></section><section class="card"><div class="card-heading"><h3>輸送</h3></div><div class="card-body">${statHtml('Fleet free',`${fleetFree} / ${fleetTotal}`)}<button type="button" data-section="logistics">輸送を開く</button></div></section></div>`;
+    inspector.innerHTML=`<section class="inspector-section"><h3>組織全体</h3><div class="kv-grid"><dt>Research Point</dt><dd>${fmt(state.research?.stored_points,1)} / ${fmt(state.research?.storage_capacity_points,1)}</dd><dt>Operational Node</dt><dd>${nodes.length}</dd><dt>Fleet</dt><dd>${fleetFree} free / ${fleetTotal}</dd><dt>Transport Allocation</dt><dd>${state.logisticsSummary?.allocation_count??'—'}</dd></div></section><section class="inspector-section"><h3>判断の入口</h3><div class="section-context-note">要確認項目または拠点を選択すると、そのContextを保持したまま関連する作業領域へ移動します。</div></section>`;
+  }
+  function renderEconomyContext(){
+    const root=$('#economyInspectorContent');if(!root)return;
+    const market=state.market;
+    root.innerHTML=market?`<section class="inspector-section"><h3>Funds</h3><div class="kv-grid"><dt>総残高</dt><dd>$${fmt(market.funds_total_musd,2)}M</dd><dt>利用可能</dt><dd>$${fmt(market.funds_available_musd,2)}M</dd><dt>Interface</dt><dd>${(market.interfaces||[]).length}</dd><dt>Order</dt><dd>${(market.orders||[]).length}</dd></div></section><section class="inspector-section"><h3>意味</h3><div class="section-context-note">FundsはExternal Resource Marketの決済専用です。建設・研究・輸送等の一般活動コストとしては使用しません。</div></section>`:'<div class="empty-state">Market状態を読み込み中です。</div>';
+  }
+  function renderSectionChrome(){
+    $$('.primary-nav-button').forEach((button)=>button.classList.toggle('is-active',button.dataset.section===state.activeSection));
+    $('#globalView').hidden=state.activeSection!=='global';
+    $('#operationsView').hidden=!['location','research','exploration'].includes(state.activeSection);
+    $('#logisticsView').hidden=state.activeSection!=='logistics';
+    $('#economyView').hidden=state.activeSection!=='economy';
+    $$('[data-section-tab]').forEach((button)=>{button.hidden=button.dataset.sectionTab!==state.activeSection;});
+    const tabbar=$('#operationsView .tabbar');if(tabbar)tabbar.hidden=state.activeSection==='research';
+  }
   function renderAll(){
-    renderHeader(); renderLocations(); renderGlobalIssues();
-    if(state.activeView==='operations')window.SpaceIdleOperations?.render();
-    else window.SpaceIdleLogistics?.render();
+    renderHeader(); renderLocations(); renderGlobalIssues(); renderSectionChrome(); renderGlobalView(); renderEconomyContext();
+    if(['location','research','exploration'].includes(state.activeSection))window.SpaceIdleOperations?.render();
+    if(['logistics','economy'].includes(state.activeSection))window.SpaceIdleLogistics?.render();
   }
 
   function clearLocationSnapshot(){
@@ -314,11 +347,17 @@
     renderAll();
     await loadUiSnapshot({preserveInteraction:false});
   }
-  function setActiveView(view){
-    state.activeView=view;
-    $$('.view-button').forEach((b)=>b.classList.toggle('is-active',b.dataset.view===view));
-    $('#operationsView').hidden=view!=='operations'; $('#logisticsView').hidden=view!=='logistics'; renderAll();
+  function setActiveSection(section){
+    if(!['global','location','research','exploration','logistics','economy'].includes(section))return;
+    state.activeSection=section;
+    state.activeView=['logistics','economy'].includes(section)?'logistics':section==='global'?'global':'operations';
+    if(section==='location'&&!['overview','facilities','inventory','construction'].includes(state.activeTab))state.activeTab='overview';
+    if(section==='research')state.activeTab='research';
+    if(section==='exploration'&&!['scientific-exploration','survey','surface'].includes(state.activeTab))state.activeTab='scientific-exploration';
+    state.inspector=null;
+    renderAll();
   }
+  function setActiveView(view){setActiveSection(view==='logistics'?'logistics':'location');}
 
   async function initialLoad(){
     setConnection('pending','接続中');
@@ -330,11 +369,12 @@
   window.SpaceIdleApp={
     state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,operationName,
     locationKindLabels,stateLabels,userFacingText,issueHtml,metricHtml,statHtml,signed,
-    api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveView,
+    api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveSection,setActiveView,
   };
 
   document.addEventListener('click',async(event)=>{
-    const viewBtn=event.target.closest('[data-view]'); if(viewBtn){setActiveView(viewBtn.dataset.view);return;}
+    const sectionBtn=event.target.closest('[data-section]'); if(sectionBtn){setActiveSection(sectionBtn.dataset.section);return;}
+    const openLocation=event.target.closest('[data-open-location]'); if(openLocation){await loadLocation(openLocation.dataset.openLocation);setActiveSection('location');return;}
     const locBtn=event.target.closest('[data-location-id]'); if(locBtn){await loadLocation(locBtn.dataset.locationId);return;}
     if(event.target.closest('#timePauseButton')){try{await setTimeControl({paused:!Boolean(state.session?.time_paused)});}catch(e){banner(e.message,'error');}return;}
     const speed=event.target.closest('[data-time-speed]'); if(speed){try{await setTimeControl({speed_multiplier:Number(speed.dataset.timeSpeed)});}catch(e){banner(e.message,'error');}return;}

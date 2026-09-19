@@ -44,7 +44,7 @@ def run() -> None:
 
             # Verify research-tree selection and navigation survive automatic
             # snapshots without relying on the removed Theory allocation control.
-            page.locator('[data-tab="research"]').click()
+            page.locator('[data-section="research"]').click()
             tree = page.locator("#researchTree")
             tree.wait_for(timeout=10000)
             assert page.locator("#researchTree .research-node").count() > 0
@@ -74,6 +74,7 @@ def run() -> None:
 
             # A live editable control must keep its unsaved value and focus while
             # the authoritative clock refreshes the surrounding projection.
+            page.locator('[data-section="location"]').click()
             page.locator('[data-tab="facilities"]').click()
             first_facility = page.locator('tr[data-inspect="facility"]').first
             first_facility.click()
