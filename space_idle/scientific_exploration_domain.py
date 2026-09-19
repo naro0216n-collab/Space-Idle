@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .domain import DomainExtension, StateCodec
-from .scientific_exploration import ScientificExplorationPhase, ScientificExplorationState
+from .scientific_exploration import (ScientificExplorationCompletionDisposition, ScientificExplorationPhase, ScientificExplorationState, ScientificExplorationTerminationIntent)
 from .shared import DefinitionId, EntityId
 from .transport.models import FleetActivityRef, MovementExecutionKind
 from .validation_support import ValidationContext, require as _require, validate_site_requirements
@@ -27,6 +27,8 @@ def capture_scientific_exploration(sim: Any) -> dict[str, Any]:
                 "movement_execution_id": (
                     None if state.movement_execution_id is None else str(state.movement_execution_id)
                 ),
+                "completion_disposition": state.completion_disposition.value,
+                "termination_intent": None if state.termination_intent is None else state.termination_intent.value,
             }
             for state in sorted(service.campaigns.values(), key=lambda row: str(row.definition_id))
         ]
@@ -57,6 +59,11 @@ def restore_scientific_exploration(sim: Any, data: dict[str, Any]) -> None:
                 None if row["movement_execution_id"] is None
                 else EntityId(row["movement_execution_id"])
             ),
+            completion_disposition=ScientificExplorationCompletionDisposition(
+                row.get("completion_disposition",
+                    "return_to_origin" if service.definitions[DefinitionId(row["definition_id"])].return_to_origin else "release_at_destination")
+            ),
+            termination_intent=(None if row.get("termination_intent") is None else ScientificExplorationTerminationIntent(row["termination_intent"])),
         )
         for row in data["campaigns"]
     }
@@ -114,12 +121,12 @@ def validate_runtime(sim: Any) -> None:
             else sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
         )
         if state.vehicle_definition_id is None:
-            _require(state.phase is ScientificExplorationPhase.AWAITING_FLEET, f"unassigned scientific exploration has invalid phase: {definition_id}")
+            _require(state.phase in {ScientificExplorationPhase.AWAITING_FLEET, ScientificExplorationPhase.ABORTED}, f"unassigned scientific exploration has invalid phase: {definition_id}")
             _require(state.fleet_commitment_id is None, f"unassigned scientific exploration retains Fleet commitment reference: {definition_id}")
             _require(commitment is None, f"unassigned scientific exploration retains Fleet commitment: {definition_id}")
-        elif state.phase is ScientificExplorationPhase.COMPLETE:
-            _require(state.fleet_commitment_id is None, f"completed scientific exploration retains Fleet commitment reference: {definition_id}")
-            _require(commitment is None, f"completed scientific exploration retains Fleet commitment: {definition_id}")
+        elif state.phase in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED}:
+            _require(state.fleet_commitment_id is None, f"terminal scientific exploration retains Fleet commitment reference: {definition_id}")
+            _require(commitment is None, f"terminal scientific exploration retains Fleet commitment: {definition_id}")
         else:
             _require(sim.transport.vehicle_definition(state.vehicle_definition_id) is not None, f"scientific exploration references unknown vehicle definition: {definition_id}")
             _require(commitment is not None, f"active scientific exploration lacks Fleet commitment: {definition_id}")
@@ -167,6 +174,8 @@ def validate_runtime(sim: Any) -> None:
         if state.phase is ScientificExplorationPhase.COMPLETE:
             _require(state.progress_days + 1e-8 >= definition.duration_days, f"completed exploration lacks duration: {definition_id}")
             _require(state.research_points_awarded + 1e-8 >= definition.research_points_total, f"completed exploration lacks RP reward: {definition_id}")
+        if state.phase in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED}:
+            _require(state.termination_intent is None, f"terminal exploration retains termination intent: {definition_id}")
 
     allowed_reservation_owners: set[EntityId] = set()
     known_reservation_owners: set[EntityId] = set()

@@ -114,6 +114,16 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert payload["data"]["forecast_resources"]
         assert not payload["data"]["current_resources"]
 
+        status, _, payload = _request(
+            port, "GET",
+            f"/api/v1/detailed-forecast?scope_kind=operational_nodes&node_id={ids.EARTH}&horizon=SHORT_TERM&period_days=2",
+        )
+        assert status == 200
+        assert payload["data"]["base_day"] == 2
+        assert payload["data"]["projected_day"] == 4
+        assert payload["data"]["period_days"] == 2
+        assert payload["data"]["inventory"]
+
         # Exercise nested command decoding through the real HTTP boundary.
         # Domain validation should reject this not-yet-surveyed founding target,
         # proving the typed target reached the application command contract.
@@ -183,6 +193,8 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert campaign["goal_knowledge_level"] == 1
         assert campaign["priority"] == 4
         assert campaign["projected_provider_definition_id"] == str(ids.LUNAR_RESOURCE_SURVEY_ORBITER)
+        assert campaign["projected_provider_display_name"]
+        assert "base." not in campaign["projected_provider_display_name"]
 
         status, _, payload = _request(port, "GET", preview_path)
         assert status == 200

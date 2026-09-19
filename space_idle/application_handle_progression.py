@@ -6,7 +6,7 @@ from .application_commands import (
     SetResearchProviderFleetQuantity,
     SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment,
     ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity,
-    SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, UpdateSurvey, StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration, AssignExplorationFleet, UnassignExplorationFleet,
+    SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, UpdateSurvey, StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration, AbortScientificExploration, ReturnScientificExploration, SetScientificExplorationCompletionDisposition, AssignExplorationFleet, UnassignExplorationFleet,
 )
 from .exploration_models import KnowledgeLevel, SurveyProviderConstraint
 from .shared import DefinitionId, EntityId, SurfaceCellId
@@ -71,7 +71,7 @@ class ProgressionCommandHandlerMixin:
                 sim.research.resume_provider_assignment(assignment_id)
             return CommandResult()
         if isinstance(command, (
-            StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration,
+            StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration, AbortScientificExploration, ReturnScientificExploration, SetScientificExplorationCompletionDisposition,
             AssignExplorationFleet, UnassignExplorationFleet,
         )):
             if sim.scientific_exploration is None:
@@ -85,6 +85,15 @@ class ProgressionCommandHandlerMixin:
                 sim.scientific_exploration.pause(exploration_id)
             elif isinstance(command, ResumeScientificExploration):
                 sim.scientific_exploration.resume(exploration_id)
+            elif isinstance(command, AbortScientificExploration):
+                sim.scientific_exploration.abort(exploration_id, day=sim.day)
+            elif isinstance(command, ReturnScientificExploration):
+                sim.scientific_exploration.request_return(exploration_id)
+            elif isinstance(command, SetScientificExplorationCompletionDisposition):
+                from .scientific_exploration import ScientificExplorationCompletionDisposition
+                sim.scientific_exploration.set_completion_disposition(
+                    exploration_id, ScientificExplorationCompletionDisposition(command.disposition), day=sim.day
+                )
             elif isinstance(command, AssignExplorationFleet):
                 powers = sim.tick_decision_projection().allocations.power_by_location
                 sim.scientific_exploration.assign_fleet(

@@ -41,6 +41,15 @@ class BuildOptionRow:
 
 
 @dataclass(frozen=True)
+class FacilityUpgradeDifferenceRow:
+    kind: str
+    label: str
+    current_value: float | str
+    target_value: float | str
+    unit: str | None = None
+
+
+@dataclass(frozen=True)
 class FacilityUpgradeOption:
     target_level: int
     construction_required: float
@@ -48,6 +57,8 @@ class FacilityUpgradeOption:
     blockers: tuple[DecisionConstraintRow, ...]
     can_plan: bool
     active_project_id: str | None
+    differences: tuple[FacilityUpgradeDifferenceRow, ...] = ()
+    unchanged_aspects: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

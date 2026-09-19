@@ -58,6 +58,16 @@ class ScientificExplorationDefinition:
         return self.research_points_total / self.duration_days
 
 
+class ScientificExplorationCompletionDisposition(str, Enum):
+    RETURN_TO_ORIGIN = "return_to_origin"
+    RELEASE_AT_DESTINATION = "release_at_destination"
+
+
+class ScientificExplorationTerminationIntent(str, Enum):
+    ABORT = "abort"
+    RETURN = "return"
+
+
 class ScientificExplorationPhase(str, Enum):
     AWAITING_FLEET = "awaiting_fleet"
     PREPARING = "preparing"
@@ -66,6 +76,7 @@ class ScientificExplorationPhase(str, Enum):
     RETURN_PREPARING = "return_preparing"
     RETURNING = "returning"
     COMPLETE = "complete"
+    ABORTED = "aborted"
 
 
 @dataclass
@@ -81,9 +92,14 @@ class ScientificExplorationState:
     created_day: int = 0
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     movement_execution_id: EntityId | None = None
+    completion_disposition: ScientificExplorationCompletionDisposition = ScientificExplorationCompletionDisposition.RELEASE_AT_DESTINATION
+    termination_intent: ScientificExplorationTerminationIntent | None = None
 
     def __post_init__(self) -> None:
         self.priority = ActivityPriority(self.priority)
+        self.completion_disposition = ScientificExplorationCompletionDisposition(self.completion_disposition)
+        if self.termination_intent is not None:
+            self.termination_intent = ScientificExplorationTerminationIntent(self.termination_intent)
 
 
 @dataclass
@@ -109,12 +125,17 @@ class ScientificExplorationService:
             definition_id=definition_id,
             created_day=day,
             priority=priority,
+            completion_disposition=(
+                ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN
+                if self.definitions[definition_id].return_to_origin
+                else ScientificExplorationCompletionDisposition.RELEASE_AT_DESTINATION
+            ),
         )
 
     def set_priority(self, definition_id: DefinitionId, priority: ActivityPriority) -> None:
         state = self.campaigns[definition_id]
-        if state.phase is ScientificExplorationPhase.COMPLETE:
-            raise ValueError("completed scientific exploration priority cannot change")
+        if state.phase in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED}:
+            raise ValueError("terminal scientific exploration priority cannot change")
         state.priority = ActivityPriority(priority)
 
     def pause(self, definition_id: DefinitionId) -> None:
@@ -153,6 +174,8 @@ class ScientificExplorationService:
         vehicle_definition_id: DefinitionId,
         day: int,
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+        *,
+        require_return: bool | None = None,
     ) -> tuple[str, ...]:
         if self.transport.vehicle_definition(vehicle_definition_id) is None:
             return ("unknown_vehicle_definition",)
@@ -166,7 +189,9 @@ class ScientificExplorationService:
 
         all_plans = list(outbound)
         return_plans = ()
-        if definition.return_to_origin:
+        if require_return is None:
+            require_return = definition.return_to_origin
+        if require_return:
             try:
                 return_plans = self.movement_path(
                     definition, vehicle_definition_id, day, reverse=True
@@ -229,12 +254,19 @@ class ScientificExplorationService:
         definition = self.definitions[definition_id]
         if self.transport.vehicle_definition(vehicle_definition_id) is None:
             return ("unknown_vehicle_definition",)
+        state = self.campaigns.get(definition_id)
+        require_return = (
+            definition.return_to_origin
+            if state is None
+            else state.completion_disposition is ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN
+        )
         failures = list(
             self._movement_failures_for_fleet(
                 definition,
                 vehicle_definition_id,
                 day,
                 power_by_location,
+                require_return=require_return,
             )
         )
         free = self.transport.fleet_free_units(
@@ -248,26 +280,85 @@ class ScientificExplorationService:
         return definition_id in self.definitions and definition_id not in self.campaigns
 
     def completion_disposition(self, definition_id: DefinitionId) -> str:
-        definition = self.definitions[definition_id]
+        state = self.campaigns.get(definition_id)
+        if state is None:
+            definition = self.definitions[definition_id]
+            disposition = (
+                ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN
+                if definition.return_to_origin
+                else ScientificExplorationCompletionDisposition.RELEASE_AT_DESTINATION
+            )
+        else:
+            disposition = state.completion_disposition
         return (
             "return_to_origin_then_release"
-            if definition.return_to_origin
+            if disposition is ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN
             else "release_at_destination"
         )
+
+    def set_completion_disposition(
+        self, definition_id: DefinitionId, disposition: ScientificExplorationCompletionDisposition, *, day: int = 0
+    ) -> None:
+        state = self.campaigns[definition_id]
+        disposition = ScientificExplorationCompletionDisposition(disposition)
+        if state.phase in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED, ScientificExplorationPhase.RETURN_PREPARING, ScientificExplorationPhase.RETURNING}:
+            raise ValueError("scientific exploration completion disposition can no longer change")
+        if disposition is ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN and state.vehicle_definition_id is not None:
+            definition = self.definitions[definition_id]
+            self.movement_path(definition, state.vehicle_definition_id, day, reverse=True)
+        state.completion_disposition = disposition
+
+    def can_abort(self, definition_id: DefinitionId) -> bool:
+        state = self.campaigns.get(definition_id)
+        return state is not None and state.phase not in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED}
+
+    def can_return(self, definition_id: DefinitionId) -> bool:
+        state = self.campaigns.get(definition_id)
+        return (state is not None and state.vehicle_definition_id is not None and state.phase in {ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.ACTIVE})
+
+    def abort(self, definition_id: DefinitionId, *, day: int = 0) -> None:
+        if not self.can_abort(definition_id):
+            raise ValueError("scientific exploration cannot be aborted in its current phase")
+        state = self.campaigns[definition_id]
+        state.paused = False
+        if state.phase in {ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.RETURNING}:
+            state.termination_intent = ScientificExplorationTerminationIntent.ABORT
+            return
+        self.inventory.release_reservation(self._input_reservation_owner_id(definition_id))
+        self.inventory.release_reservation(self._input_reservation_owner_id(definition_id, returning=True))
+        if state.fleet_commitment_id is not None:
+            self.transport.release_fleet_commitment(state.fleet_commitment_id, day=day)
+            state.fleet_commitment_id = None
+        state.phase = ScientificExplorationPhase.ABORTED
+        state.termination_intent = None
+
+    def request_return(self, definition_id: DefinitionId) -> None:
+        if not self.can_return(definition_id):
+            raise ValueError("scientific exploration cannot return in its current phase")
+        state = self.campaigns[definition_id]
+        state.paused = False
+        state.completion_disposition = ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN
+        if state.phase is ScientificExplorationPhase.OUTBOUND:
+            state.termination_intent = ScientificExplorationTerminationIntent.RETURN
+        else:
+            state.phase = ScientificExplorationPhase.RETURN_PREPARING
+            state.termination_intent = None
 
     def transition_options(self, definition_id: DefinitionId) -> tuple[str, ...]:
         state = self.campaigns.get(definition_id)
         if state is None:
             return ("start",)
-        if state.phase is ScientificExplorationPhase.COMPLETE:
+        if state.phase in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED}:
             return ()
         if state.phase is ScientificExplorationPhase.AWAITING_FLEET:
             return ("assign_fleet",)
-        if state.phase in {
-            ScientificExplorationPhase.OUTBOUND,
-            ScientificExplorationPhase.RETURNING,
-        }:
-            return ("continue",)
+        if state.phase in {ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.RETURNING}:
+            options = ["continue"]
+            if self.can_abort(definition_id):
+                options.append("abort")
+            if self.can_return(definition_id):
+                options.append("return")
+            return tuple(options)
         options: list[str] = []
         if state.paused:
             options.append("resume")
@@ -275,6 +366,10 @@ class ScientificExplorationService:
             options.extend(("continue", "pause"))
         if self.can_unassign_fleet(definition_id):
             options.append("unassign_fleet")
+        if self.can_abort(definition_id):
+            options.append("abort")
+        if self.can_return(definition_id):
+            options.append("return")
         return tuple(options)
 
     def can_pause(self, definition_id: DefinitionId) -> bool:
@@ -335,8 +430,8 @@ class ScientificExplorationService:
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> None:
         state = self.campaigns[definition_id]
-        if state.phase is ScientificExplorationPhase.COMPLETE:
-            raise ValueError("scientific exploration is complete")
+        if state.phase in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED}:
+            raise ValueError("scientific exploration is terminal")
         if state.vehicle_definition_id is not None:
             raise ValueError("scientific exploration already has Fleet assigned")
         failures = self.fleet_failures(
@@ -365,8 +460,8 @@ class ScientificExplorationService:
 
     def unassign_fleet(self, definition_id: DefinitionId, *, day: int = 0) -> None:
         state = self.campaigns[definition_id]
-        if state.phase is ScientificExplorationPhase.COMPLETE:
-            raise ValueError("scientific exploration is complete")
+        if state.phase in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED}:
+            raise ValueError("scientific exploration is terminal")
         if state.vehicle_definition_id is None:
             return
         if not self.can_unassign_fleet(definition_id):
@@ -871,7 +966,16 @@ class ScientificExplorationService:
                 )
                 self.transport.finish_movement_execution(execution_id)
                 state.movement_execution_id = None
-                state.phase = ScientificExplorationPhase.ACTIVE
+                if state.termination_intent is ScientificExplorationTerminationIntent.ABORT:
+                    self.transport.release_fleet_commitment(commitment_id, day=day)
+                    state.fleet_commitment_id = None
+                    state.phase = ScientificExplorationPhase.ABORTED
+                    state.termination_intent = None
+                elif state.termination_intent is ScientificExplorationTerminationIntent.RETURN:
+                    state.phase = ScientificExplorationPhase.RETURN_PREPARING
+                    state.termination_intent = None
+                else:
+                    state.phase = ScientificExplorationPhase.ACTIVE
             else:
                 self.transport.receive_fleet_commitment(
                     commitment_id,
@@ -883,7 +987,11 @@ class ScientificExplorationService:
                 state.movement_execution_id = None
                 self.transport.release_fleet_commitment(commitment_id, day=day)
                 state.fleet_commitment_id = None
-                state.phase = ScientificExplorationPhase.COMPLETE
+                if state.termination_intent is ScientificExplorationTerminationIntent.ABORT:
+                    state.phase = ScientificExplorationPhase.ABORTED
+                else:
+                    state.phase = ScientificExplorationPhase.COMPLETE
+                state.termination_intent = None
 
     def advance_day(
         self,
@@ -937,7 +1045,7 @@ class ScientificExplorationService:
             if state.phase is not ScientificExplorationPhase.ACTIVE or state.paused:
                 continue
             if state.progress_days + 1e-9 >= definition.duration_days:
-                if definition.return_to_origin:
+                if state.completion_disposition is ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN:
                     state.phase = ScientificExplorationPhase.RETURN_PREPARING
                 else:
                     self._complete_at_destination(definition, state, day)
@@ -967,7 +1075,7 @@ class ScientificExplorationService:
             state.research_points_awarded += admitted_points
             if state.progress_days + 1e-9 >= definition.duration_days:
                 state.progress_days = definition.duration_days
-                if definition.return_to_origin:
+                if state.completion_disposition is ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN:
                     state.phase = ScientificExplorationPhase.RETURN_PREPARING
                 else:
                     self._complete_at_destination(definition, state, day)

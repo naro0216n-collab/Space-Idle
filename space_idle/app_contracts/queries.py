@@ -18,6 +18,13 @@ class GetDependencyAnalytics:
     node_ids: tuple[str, ...] = ()
     time_basis: str = "CURRENT"
 @dataclass(frozen=True)
+class GetDetailedForecast:
+    scope_kind: str = "player"
+    scope_id: str | None = None
+    node_ids: tuple[str, ...] = ()
+    horizon: str = "SHORT_TERM"
+    period_days: int | None = None
+@dataclass(frozen=True)
 class GetBottlenecks: operational_node_id: str | None = None
 @dataclass(frozen=True)
 class GetAttention: pass

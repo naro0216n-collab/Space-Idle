@@ -5,9 +5,14 @@ from datetime import datetime, timezone
 
 import pytest
 
+from space_idle.validation import validate_runtime_state
+
 from space_idle import (
     AdvanceTime,
+    AbortScientificExploration,
     AssignExplorationFleet,
+    ReturnScientificExploration,
+    SetScientificExplorationCompletionDisposition,
     SetResearchProviderFleetQuantity,
     CreateTransportAllocation,
     GetFleet,
@@ -404,7 +409,7 @@ def test_rp_admission_blocks_only_active_science_and_resumes_after_headroom_reco
     app.execute(PauseScientificExploration(str(exploration_id)))
     paused = _row(app)
     assert paused.can_resume is True
-    assert paused.transition_options == ("resume",)
+    assert paused.transition_options == ("resume", "abort", "return")
     assert paused.rp_requested_today == pytest.approx(0.0)
     assert paused.rp_admitted_today == pytest.approx(0.0)
     assert paused.fleet_commitment_id == str(commitment_id)
@@ -590,3 +595,41 @@ def test_partial_exploration_inputs_are_reserved_and_unassign_releases_them():
     assert sim.inventory.amount(definition.origin_id, machinery) == pytest.approx(initial_stock)
     assert sim.inventory.reserved_for(owner_id, definition.origin_id, machinery) == pytest.approx(0.0)
     assert sim.inventory.available(definition.origin_id, machinery) == pytest.approx(initial_stock)
+
+
+def test_scientific_exploration_abort_return_and_completion_disposition_are_domain_transitions():
+    app = build_game_application()
+    sim = app._simulation
+    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
+    definition = sim.scientific_exploration.definitions[exploration_id]
+    for resource_id, amount_t in definition.consumable_resources:
+        sim.inventory.add(definition.origin_id, resource_id, amount_t)
+    _seed_exploration_movement_resources(app)
+    app.execute(StartScientificExploration(str(exploration_id)))
+    app.execute(SetScientificExplorationCompletionDisposition(str(exploration_id), "return_to_origin"))
+    app.execute(AssignExplorationFleet(str(exploration_id), str(ids.REUSABLE_ORBITAL_CARGO_TUG)))
+    app.execute(AdvanceTime(2))
+    state = sim.scientific_exploration.campaigns[exploration_id]
+    assert state.phase.value == "outbound"
+    commitment_id = state.fleet_commitment_id
+    assert commitment_id is not None
+
+    app.execute(ReturnScientificExploration(str(exploration_id)))
+    assert state.termination_intent.value == "return"
+    outbound = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(outbound.completion_day - sim.day))
+    assert state.phase.value == "return_preparing"
+    assert state.progress_days == pytest.approx(0.0)
+    assert state.fleet_commitment_id == commitment_id
+
+    _seed_exploration_movement_resources(app, returning=True)
+    app.execute(AdvanceTime(2))
+    assert state.phase.value == "returning"
+    app.execute(AbortScientificExploration(str(exploration_id)))
+    assert state.termination_intent.value == "abort"
+    returning = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(returning.completion_day - sim.day))
+    assert state.phase.value == "aborted"
+    assert state.fleet_commitment_id is None
+    assert sim.transport.fleet_commitment_snapshot(commitment_id) is None
+    validate_runtime_state(sim)

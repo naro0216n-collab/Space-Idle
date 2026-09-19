@@ -7,7 +7,7 @@ from .application_views import (
     BuildResourceOption,
     BuildOptionRow,
     BuildOptionsView,
-    FacilityUpgradeOption,
+    FacilityUpgradeOption, FacilityUpgradeDifferenceRow,
     ProjectResourceRow,
     ProjectKnowledgeRequirementRow,
     ProjectRow,
@@ -56,6 +56,59 @@ class ProjectProjectorMixin:
             for requirement in recipe.resources
         )
 
+    def _facility_upgrade_differences(self, facility, recipe) -> tuple[tuple[FacilityUpgradeDifferenceRow, ...], tuple[str, ...]]:
+        sim = self._simulation
+        target_level = recipe.target_level
+        rows: list[FacilityUpgradeDifferenceRow] = [
+            FacilityUpgradeDifferenceRow("level", "Level", facility.level, target_level),
+        ]
+        definition = sim.facilities.definitions[facility.definition_id]
+
+        if sim.extraction is not None:
+            extraction_spec = sim.extraction.specs.get(facility.definition_id)
+            if extraction_spec is not None:
+                current = extraction_spec.nominal_capacity_t_per_day * facility.level
+                target = extraction_spec.nominal_capacity_t_per_day * target_level
+                if abs(target - current) > 1e-9:
+                    rows.append(FacilityUpgradeDifferenceRow(
+                        "capacity", "抽出公称Capacity", current, target, "t/日"
+                    ))
+
+        provider = None if sim.research is None else sim.research.facility_provider_spec(facility.id)
+        if provider is not None:
+            current_spec = provider.level_spec(facility.level)
+            target_spec = provider.level_spec(target_level)
+            for kind, label, current, target, unit in (
+                ("capacity", "研究RP生成Capacity", current_spec.generation_points_per_day, target_spec.generation_points_per_day, "RP/日"),
+                ("capacity", "研究RP貯蔵Capacity", current_spec.storage_capacity_points, target_spec.storage_capacity_points, "RP"),
+                ("service", "研究実行Service供給", current_spec.research_execution_per_day, target_spec.research_execution_per_day, "work/日"),
+            ):
+                if abs(target - current) > 1e-9:
+                    rows.append(FacilityUpgradeDifferenceRow(kind, label, current, target, unit))
+
+        maintenance_fraction = definition.maintenance_fraction_per_year
+        if maintenance_fraction > 1e-12:
+            current_maintenance = sim.facilities.maintenance_requirements_per_day(facility.id)
+            target_investment = dict(facility.invested_resources)
+            for requirement in recipe.resources:
+                target_investment[requirement.resource_id] = target_investment.get(requirement.resource_id, 0.0) + requirement.amount_t
+            for resource_id in sorted(set(current_maintenance) | set(target_investment), key=str):
+                current = current_maintenance.get(resource_id, 0.0)
+                target = target_investment.get(resource_id, 0.0) * maintenance_fraction / 365.0
+                if abs(target - current) > 1e-12:
+                    rows.append(FacilityUpgradeDifferenceRow(
+                        "maintenance", f"維持需要 · {self._resource_name(resource_id)}", current, target, "t/日"
+                    ))
+
+        unchanged: list[str] = []
+        if definition.capability_supplies:
+            unchanged.append("Capability構成")
+        if sim.industry.compatible_processes(facility.definition_id):
+            unchanged.append("Process選択肢")
+        if definition.service_capacity_supplies:
+            unchanged.append("固定Service供給")
+        return tuple(rows), tuple(unchanged)
+
     def _facility_upgrade_option(self, facility, power=None) -> FacilityUpgradeOption | None:
         sim = self._simulation
         recipe = sim.projects.next_upgrade_recipe(facility.id)
@@ -85,6 +138,7 @@ class ProjectProjectorMixin:
             row = (failure.code, failure.detail)
             if row not in blockers:
                 blockers += (row,)
+        differences, unchanged_aspects = self._facility_upgrade_differences(facility, recipe)
         return FacilityUpgradeOption(
             target_level=recipe.target_level,
             construction_required=recipe.construction_work,
@@ -97,6 +151,8 @@ class ProjectProjectorMixin:
             ),
             can_plan=not plan_failures,
             active_project_id=active_project_id,
+            differences=differences,
+            unchanged_aspects=unchanged_aspects,
         )
 
     def _external_supply_blocker(

@@ -14,6 +14,8 @@ class ResearchSiteOptionRow:
     surface_cell_id: str | None
     blockers: tuple[DecisionConstraintRow, ...]
     can_select: bool
+    comparison_key: str = ""
+    comparison_values: tuple[ComparisonValueRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,7 @@ class ResearchRow:
     stage_resources: tuple[ResearchPrototypeResourceRow, ...]
     execution_context: ResearchExecutionSiteRow | None
     execution_context_options: tuple[ResearchSiteOptionRow, ...]
+    execution_context_comparison_axes: tuple[ComparisonAxisRow, ...]
     operational_experience: tuple[ResearchExperienceRow, ...]
     prerequisites: tuple[str, ...]
 
@@ -184,10 +187,14 @@ class ScientificExplorationRow:
     committed_units: int
     completion_disposition: str
     transition_options: tuple[str, ...]
+    termination_intent: str | None
     blockers: tuple[DecisionConstraintRow, ...]
     can_start: bool
     can_pause: bool
     can_resume: bool
+    can_abort: bool
+    can_return: bool
+    can_set_completion_disposition: bool
     can_unassign: bool
     fleet_options: tuple[ScientificExplorationFleetOptionRow, ...]
 
@@ -201,6 +208,7 @@ class ScientificExplorationsView:
 @dataclass(frozen=True)
 class SurveyProviderFleetRow:
     provider_definition_id: str
+    provider_display_name: str
     vehicle_definition_id: str
     operational_node_id: str
     committed_units: int
@@ -216,6 +224,7 @@ class SurveyCandidateRow:
     comparison_key: str
     provider_operational_node_id: str
     provider_definition_id: str
+    provider_display_name: str
     provider_source_kind: str
     source_definition_id: str
     observation_mode_id: str
@@ -257,6 +266,7 @@ class SurveyCampaignRow:
     provider_constraint_operational_node_id: str | None
     observation_mode_constraint: str | None
     projected_provider_definition_id: str | None
+    projected_provider_display_name: str | None
     projected_provider_operational_node_id: str | None
     projected_observation_mode_id: str | None
     projected_observation_mode_display_name: str | None

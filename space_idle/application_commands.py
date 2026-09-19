@@ -13,7 +13,7 @@ from .app_contracts.progression import (
     StartResearch, PauseResearch, ResumeResearch, SetResearchPrototypeSite,
     SetResearchPriority, SetResearchDemonstrationSite, SurveyProviderConstraintInput, StartSurvey, UpdateSurvey,
     PauseSurvey, ResumeSurvey, SetSurveyPriority, StartScientificExploration, SetScientificExplorationPriority,
-    PauseScientificExploration, ResumeScientificExploration,
+    PauseScientificExploration, ResumeScientificExploration, AbortScientificExploration, ReturnScientificExploration, SetScientificExplorationCompletionDisposition,
     AssignExplorationFleet, UnassignExplorationFleet,
     SetResearchProviderFleetQuantity,
     SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment,
@@ -34,7 +34,7 @@ from .app_contracts.economy import (
     CancelTradeOrder, CreateTradeOrder, UpdateTradeOrder,
 )
 from .app_contracts.queries import (
-    GetCatalog, GetWorld, GetSurfaceMap, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetBottlenecks, GetAttention, GetProjects,
+    GetCatalog, GetWorld, GetSurfaceMap, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetBottlenecks, GetAttention, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetMovementPlans, GetFleet,
     GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions,
     GetResearch, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetContracts, GetMarket,
@@ -47,7 +47,7 @@ Command: TypeAlias = (
     SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
     SetResearchPriority | SetResearchDemonstrationSite | StartSurvey | UpdateSurvey | PauseSurvey |
     ResumeSurvey | SetSurveyPriority | StartScientificExploration | SetScientificExplorationPriority | PauseScientificExploration |
-    ResumeScientificExploration | AssignExplorationFleet | UnassignExplorationFleet |
+    ResumeScientificExploration | AbortScientificExploration | ReturnScientificExploration | SetScientificExplorationCompletionDisposition | AssignExplorationFleet | UnassignExplorationFleet |
     SetResearchProviderFleetQuantity |
     SetResearchProviderAssignmentPriority | PauseResearchProviderAssignment |
     ResumeResearchProviderAssignment | SetSurveyProviderFleetQuantity |
@@ -60,7 +60,7 @@ Command: TypeAlias = (
     DeclineContract | CreateTradeOrder | UpdateTradeOrder | CancelTradeOrder | AdvanceTime
 )
 Query: TypeAlias = (
-    GetCatalog | GetWorld | GetSurfaceMap | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetBottlenecks | GetAttention | GetProjects |
+    GetCatalog | GetWorld | GetSurfaceMap | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetDetailedForecast | GetBottlenecks | GetAttention | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetMovementPlans | GetFleet |
     GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions | GetTransportAllocationPreview | GetTargetStockOptions |
     GetResearch | GetScientificExplorations | GetSurveys | GetSurveyCampaignIntentPreview | GetContracts | GetMarket

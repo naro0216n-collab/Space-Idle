@@ -28,6 +28,18 @@ def _survey_observation_mode_display_name(mode) -> str:
 
 
 class SurveyProgressionProjectorMixin:
+    def _survey_provider_display_name(self, provider_definition_id: DefinitionId) -> str:
+        sim = self._simulation
+        provider = sim.survey.providers[provider_definition_id]
+        if provider.source_kind is SurveyProviderSourceKind.FACILITY:
+            definition = sim.facilities.definitions.get(provider.source_definition_id)
+            if definition is not None:
+                return definition.display_name
+        vehicle = sim.transport.vehicle_definition(provider.source_definition_id)
+        if vehicle is not None:
+            return vehicle.display_name
+        return "調査Provider"
+
     def _survey_campaign_intent_preview_view(self, query) -> SurveyCampaignIntentPreviewView:
         sim = self._simulation
         if sim.survey is None:
@@ -101,6 +113,7 @@ class SurveyProgressionProjectorMixin:
             blockers = ("fleet_unavailable",) if max_units == 0 else ()
             rows.append(SurveyProviderFleetRow(
                 provider_definition_id=str(provider.id),
+                provider_display_name=self._survey_provider_display_name(provider.id),
                 vehicle_definition_id=str(provider.source_definition_id),
                 operational_node_id=str(provider_operational_node_id),
                 committed_units=committed_units,
@@ -180,6 +193,7 @@ class SurveyProgressionProjectorMixin:
                 ),
                 provider_operational_node_id=str(row.provider_operational_node_id),
                 provider_definition_id=str(row.provider_definition_id),
+                provider_display_name=self._survey_provider_display_name(row.provider_definition_id),
                 provider_source_kind=row.source_kind.value,
                 source_definition_id=str(row.source_definition_id),
                 observation_mode_id=row.observation_mode_id,
@@ -282,6 +296,9 @@ class SurveyProgressionProjectorMixin:
             observation_mode_constraint=campaign.observation_mode_constraint,
             projected_provider_definition_id=(
                 None if candidate is None else str(candidate.provider_definition_id)
+            ),
+            projected_provider_display_name=(
+                None if candidate is None else self._survey_provider_display_name(candidate.provider_definition_id)
             ),
             projected_provider_operational_node_id=(
                 None if candidate is None else str(candidate.provider_operational_node_id)

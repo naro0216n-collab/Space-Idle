@@ -57,7 +57,7 @@ class ScientificExplorationProjectorMixin:
                 )
                 committed_units = 0 if commitment is None else commitment.quantity
                 priority = state.priority
-                can_set_priority = state.phase.value != "complete"
+                can_set_priority = state.phase.value not in {"complete", "aborted"}
                 blockers = service.blockers(
                     definition.id,
                     day=sim.day,
@@ -108,6 +108,8 @@ class ScientificExplorationProjectorMixin:
                 elif state.phase.value == "returning":
                     return_latency_days = movement_execution.latency_days
 
+            requires_return = service.completion_disposition(definition.id) == "return_to_origin_then_release"
+
             if assigned_vehicle_definition_id is not None:
                 vehicle_id = state.vehicle_definition_id
                 assert vehicle_id is not None
@@ -130,7 +132,7 @@ class ScientificExplorationProjectorMixin:
                                 for plan in outbound_plans
                                 for operation in plan.operations
                             )
-                    if definition.return_to_origin and return_latency_days is None:
+                    if requires_return and return_latency_days is None:
                         return_plans = service.movement_path(
                             definition, vehicle_id, sim.day, reverse=True
                         )
@@ -170,7 +172,7 @@ class ScientificExplorationProjectorMixin:
                         )
                         for plan in option_outbound
                     )
-                    if definition.return_to_origin:
+                    if requires_return:
                         option_return = service.movement_path(
                             definition, vehicle_definition.id, sim.day, reverse=True
                         )
@@ -242,6 +244,7 @@ class ScientificExplorationProjectorMixin:
                     committed_units=committed_units,
                     completion_disposition=service.completion_disposition(definition.id),
                     transition_options=service.transition_options(definition.id),
+                    termination_intent=(None if state is None or state.termination_intent is None else state.termination_intent.value),
                     blockers=constraints_from_codes(
                         blockers,
                         affected_action="progress_scientific_exploration",
@@ -251,6 +254,9 @@ class ScientificExplorationProjectorMixin:
                     can_start=service.can_start(definition.id),
                     can_pause=service.can_pause(definition.id),
                     can_resume=service.can_resume(definition.id),
+                    can_abort=service.can_abort(definition.id),
+                    can_return=service.can_return(definition.id),
+                    can_set_completion_disposition=(state is not None and state.phase.value in {"awaiting_fleet", "preparing", "outbound", "active"}),
                     can_unassign=service.can_unassign_fleet(definition.id),
                     fleet_options=tuple(fleet_options),
                 )

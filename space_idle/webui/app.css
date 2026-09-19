@@ -152,6 +152,11 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .logistics-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 14px; }
 .detail-card { border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; margin-bottom: 8px; background: #0b1721; }
 .detail-card.is-usable { border-color: #2f6b5a; }
+.upgrade-delta { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: center; margin-top: 8px; }
+.upgrade-delta > span { display: grid; gap: 2px; }
+.upgrade-delta > span:nth-child(2) { display: block; opacity: .7; }
+.upgrade-delta small { color: var(--text-muted); font-size: .72rem; }
+.upgrade-delta strong { font-variant-numeric: tabular-nums; }
 .mode-title { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 650; }
 .modal-dialog { width: min(520px, 80vw); border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 0; box-shadow: 0 24px 80px #000b; }
 #allocationDialog { width: min(760px, 90vw); max-height: 88vh; overflow: auto; }

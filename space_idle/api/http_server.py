@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
-    GetContracts, GetDependencyAnalytics, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
+    GetContracts, GetDependencyAnalytics, GetDetailedForecast, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys, GetSurveyCampaignIntentPreview,
     GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
 )
@@ -273,6 +273,16 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             scope_id = _one(params, "scope_id")
             node_ids = tuple(params.get("node_id", ()))
             self._query_result(GetDependencyAnalytics(scope_kind, scope_id, node_ids, (_one(params, "time_basis") or "CURRENT")))
+            return
+        if path == "/api/v1/detailed-forecast":
+            scope_kind = _one(params, "scope_kind") or "player"
+            scope_id = _one(params, "scope_id")
+            node_ids = tuple(params.get("node_id", ()))
+            period_raw = _one(params, "period_days")
+            period_days = None if period_raw is None else int(period_raw)
+            self._query_result(GetDetailedForecast(
+                scope_kind, scope_id, node_ids, (_one(params, "horizon") or "SHORT_TERM"), period_days
+            ))
             return
         if path == "/api/v1/bottlenecks":
             self._query_result(GetBottlenecks(_one(params, "operational_node_id")))

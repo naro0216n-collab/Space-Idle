@@ -9,7 +9,7 @@ from .app_contracts.catalog_views import (
     CatalogView, OperationalNodeSummary, WorldView,
 )
 from .app_contracts.project_views import (
-    ProjectResourceRow, BuildResourceOption, BuildOptionRow, FacilityUpgradeOption,
+    ProjectResourceRow, BuildResourceOption, BuildOptionRow, FacilityUpgradeOption, FacilityUpgradeDifferenceRow,
     BuildOptionsView, ProjectKnowledgeRequirementRow, ProjectRow, ProjectsView,
 )
 from .app_contracts.location_views import (
@@ -38,7 +38,8 @@ from .app_contracts.ui_reports import DecisionContextTarget, IssueRow, ResourceF
 from .app_contracts.analytics_views import (
     CurrentDependencyMetricRow, ForecastDependencyMetricRow,
     CurrentServiceDependencyMetricRow, ForecastServiceDependencyMetricRow,
-    DependencyAnalyticsView,
+    DependencyAnalyticsView, DetailedForecastInventoryRow, DetailedForecastImpactRow,
+    DetailedForecastLogisticsRow, DetailedForecastView,
 )
 from .app_contracts.surface_views import (
     SurfaceCellDevelopmentOption, SurfaceCellFoundationOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
@@ -50,7 +51,7 @@ from .app_contracts.economy_views import (
 
 QueryResult: TypeAlias = (
     CatalogView | WorldView | SurfaceMapView | OperationalNodeView | FlowReportView | BottlenecksView |
-    DependencyAnalyticsView |
+    DependencyAnalyticsView | DetailedForecastView |
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     MovementPlansView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |
     TransportAllocationOptionsView | TransportAllocationPreviewView | TargetStockOptionsView | ResearchView |

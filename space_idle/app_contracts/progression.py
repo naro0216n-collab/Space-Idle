@@ -106,6 +106,16 @@ class PauseScientificExploration:
 class ResumeScientificExploration:
     exploration_id: str
 @dataclass(frozen=True)
+class AbortScientificExploration:
+    exploration_id: str
+@dataclass(frozen=True)
+class ReturnScientificExploration:
+    exploration_id: str
+@dataclass(frozen=True)
+class SetScientificExplorationCompletionDisposition:
+    exploration_id: str
+    disposition: str
+@dataclass(frozen=True)
 class AssignExplorationFleet:
     exploration_id: str
     vehicle_definition_id: str

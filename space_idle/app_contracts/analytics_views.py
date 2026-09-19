@@ -67,6 +67,58 @@ class ForecastServiceDependencyMetricRow:
 
 
 @dataclass(frozen=True)
+class DetailedForecastInventoryRow:
+    resource_id: str
+    display_name: str
+    unit: str
+    current_amount: float
+    projected_amount: float
+    delta_amount: float
+    projected_production_per_day: float
+    projected_consumption_per_day: float
+    projected_external_dependency_per_day: float
+    steady_state: str
+
+
+@dataclass(frozen=True)
+class DetailedForecastImpactRow:
+    kind: str
+    subject_id: str
+    display_name: str
+    current_state: str
+    projected_state: str
+
+
+@dataclass(frozen=True)
+class DetailedForecastLogisticsRow:
+    requirement_id: str
+    resource_id: str
+    destination_id: str
+    source_id: str | None
+    handoff_count: int
+    service_ids: tuple[str, ...]
+    projected_arrival_day: int | None
+    projected_latency_days: float | None
+    pipeline_t: float
+    remaining_t: float
+    supply_state: str
+
+
+@dataclass(frozen=True)
+class DetailedForecastView:
+    scope_kind: str
+    scope_id: str | None
+    node_ids: tuple[str, ...]
+    base_day: int
+    projected_day: int
+    horizon: str
+    period_days: int
+    inventory: tuple[DetailedForecastInventoryRow, ...]
+    downstream_impacts: tuple[DetailedForecastImpactRow, ...]
+    logistics_impacts: tuple[DetailedForecastLogisticsRow, ...]
+
+
+@dataclass(frozen=True)
 class DependencyAnalyticsView:
     scope_kind: str
     scope_id: str | None

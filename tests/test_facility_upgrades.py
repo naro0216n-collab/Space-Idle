@@ -58,8 +58,8 @@ def _build_upgrade_fixture_application(*, for_load: bool = False):
         UPGRADE_FACILITY,
         tier=1,
         levels=(
-            ResearchProviderLevelSpec(1, 2.0, 10.0),
-            ResearchProviderLevelSpec(2, 5.0, 25.0),
+            ResearchProviderLevelSpec(1, 2.0, 10.0, 0.5),
+            ResearchProviderLevelSpec(2, 5.0, 25.0, 1.0),
         ),
     )
     sim.projects.upgrade_recipes[(UPGRADE_FACILITY, 2)] = FacilityUpgradeRecipe(
@@ -118,6 +118,15 @@ def test_upgrade_query_owns_plan_eligibility_and_single_active_project_contract(
     assert option is not None
     assert option.can_plan
     assert option.active_project_id is None
+    differences = {row.label: row for row in option.differences}
+    assert differences["Level"].current_value == 1
+    assert differences["Level"].target_value == 2
+    assert differences["研究RP生成Capacity"].current_value == pytest.approx(2.0)
+    assert differences["研究RP生成Capacity"].target_value == pytest.approx(5.0)
+    assert differences["研究RP貯蔵Capacity"].current_value == pytest.approx(10.0)
+    assert differences["研究RP貯蔵Capacity"].target_value == pytest.approx(25.0)
+    assert differences["研究実行Service供給"].current_value == pytest.approx(0.5)
+    assert differences["研究実行Service供給"].target_value == pytest.approx(1.0)
 
     first = app.execute(
         PlanFacilityUpgrade(before_row.id, priority=3, procurement_policy="extended_wait")

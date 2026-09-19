@@ -343,3 +343,48 @@ def test_research_stage_identity_is_explicit_unique_and_stable_across_repeated_s
     ) != sim.research.prototype_reservation_requirement_id(
         research_id, "prototype-b", resource_id
     )
+
+
+def test_research_execution_context_projects_strategic_comparison_axes_from_application_state():
+    app = build_game_application()
+    sim = app._simulation
+    research_id = DefinitionId("test.research.execution_context_comparison")
+    resource_id = DefinitionId("test.resource.context_comparison")
+    _research_site_fixture(sim)
+    sim.inventory.add(EARTH, resource_id, 2.0)
+    sim.research.definitions[research_id] = ResearchDefinition(
+        research_id,
+        "Execution Context Comparison",
+        (
+            ResearchPrototypeStageSpec(
+                "prototype",
+                {resource_id: 2.0},
+                SiteRequirements(),
+                (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
+                required_work=2.0,
+            ),
+        ),
+        prerequisites=frozenset(),
+    )
+
+    app.execute(StartResearch(str(research_id)))
+    row = _research_row(app, research_id)
+
+    axis_keys = {axis.key for axis in row.execution_context_comparison_axes}
+    assert "location" in axis_keys
+    assert "resource_available_t" in axis_keys
+    assert "service_work_capacity" in axis_keys
+    assert "estimated_days" in axis_keys
+    resource_required_axis = next(axis for axis in row.execution_context_comparison_axes if axis.key == "resource_required_t")
+    assert not resource_required_axis.differs  # shared demand remains visible but is not highlighted as a strategic difference
+
+    earth = next(site for site in row.execution_context_options if site.operational_node_id == str(EARTH))
+    leo = next(site for site in row.execution_context_options if site.operational_node_id == str(LEO))
+    earth_values = {value.axis_key: value for value in earth.comparison_values}
+    leo_values = {value.axis_key: value for value in leo.comparison_values}
+    assert earth_values["resource_available_t"].number_value == pytest.approx(2.0)
+    assert leo_values["resource_available_t"].number_value == pytest.approx(0.0)
+    assert earth_values["service_work_capacity"].number_value == pytest.approx(1.0)
+    assert leo_values["service_work_capacity"].number_value == pytest.approx(0.0)
+    assert earth_values["estimated_days"].number_value == pytest.approx(2.0)
+    assert leo_values["estimated_days"].number_value is None
