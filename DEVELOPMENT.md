@@ -125,7 +125,7 @@ python scripts/publish_request.py record \
 
 transportは `.publish/transport/<target>/0000.b64` から始まる固定slotを使用する。bundleのBase64表現を16 KiB固定logical chunkへ分割するが、chunkごとの `create_blob` は行わない。`connector-plan` は各chunk本文を `create_tree` entryの `content` として直接指定し、Connectorの1 call上限144 KiB未満に収まるよう複数tree batchへpackする。transport全体は最大256 partまで扱い、144 KiBはtransport全体の上限ではなく単一Connector callの上限とする。
 
-helperはsource-snapshot由来の `publish` base tree、各chunk本文、削除対象pathから各batch後の期待root tree SHAをlocal Gitで事前計算する。第2batch以降は直前batchの期待treeをbaseとする。転記破損等で返却SHAが期待値と異なる場合、次batchが参照する期待tree objectが成立しないため正常系は先へ進めない。正常系ではGitのcontent-addressed object identityを利用し、tree write間にhelper round-tripを挟まない。
+helperはsource-snapshot由来の `publish` base tree、各chunk本文、削除対象pathから各batch後の期待root tree SHAをlocal Gitで事前計算する。第2batch以降は直前batchの期待treeをbaseとする。返却SHAが期待値と異なる場合は、そのcallに使用した転記情報を正しい入力の候補として保持せず、次batchへ進まない。正常系ではGitのcontent-addressed object identityを利用し、tree write間にhelper round-tripを挟まない。
 
 初回移行時に旧 `.publish` transport artifactが残っている場合も、固定slot以外の旧artifactを同じunreferenced tree組立の中で削除し、部分的なremote状態を作らない。
 
@@ -141,9 +141,11 @@ python scripts/publish_request.py cancel \
   --publish-head <current-publish-head>
 ```
 
-#### Pre-ref transport retry
+#### Pre-ref packet retry
 
-各 `create_tree` packetの返却SHAをpacket内の `expected_tree` と比較する。一致しない場合は、そのpacketから先へ進まず同一packetを再転記・再実行する。tree packetは16 KiB logical chunkを複数entryとして含むため、転記原因の切り分けが必要な場合は失敗batch内のentryだけを対象にし、成功済みbatchへ戻らない。logical chunkのpath・本文・16 KiB境界は変更しない。
+各 `create_tree` packetの返却SHAをpacket内の `expected_tree` と比較する。一致しない場合は、そのpacketから先へ進まず、そのcallに使った手動転記を再利用対象から外す。clipboard、scratch text、手元に保持した引数や部分文字列も破棄し、失敗callから得た情報は「現在の転記を再利用できない」という事実だけとする。
+
+再試行はactive transactionに記録済みのgenerated packet fileを正本として開き直すところから始める。packet全体を先頭から新しく転記してtool callを組み立て、`expected_tree`、logical chunkのpath・本文・16 KiB境界、batch順序は正本packetのまま使用する。返却SHAが `expected_tree` と一致した場合だけ次packetへ進む。新規転記でも不一致なら、そのcallの転記情報も同様に破棄し、generated packetからもう一度新しく組み立てる。remote tree / blobの内容比較や失敗転記の部分修正はこのretry経路の入力にしない。正本packetからの新規転記を繰り返しても継続的に成立しない場合だけ、Connector / helper経路の開発基盤障害として扱い、active transactionを保持したまま開発基盤側のrecoveryへ移る。
 
 正常系のための `connector-blob` / `connector-tree` / `connector-commit` のような返却SHA中継stageは置かない。返却tree SHAとの比較は生成済みpacket自身の `expected_tree` で完結し、commit返却SHAはそのままnon-force ref updateへ渡す。
 
@@ -156,7 +158,7 @@ ref更新後の一時的なGateway障害では、同じtransport commitのworkfl
 1. workflow-only commitを現在の `HEAD` として `prepare` する。
 2. remote `develop` HEADを1回取得し、そのSHAを `connector-plan` に渡す。
 3. helperが変更本文を `content` として持つ `create_tree` packet群、最終 `create_commit` packet、non-force ref updateの実行条件を一度に生成する。144 KiBを超える変更は複数tree batchへ分割する。
-4. tree packet群を順番に実行し、各返却SHAをpacketの `expected_tree` と比較する。成立後に生成済みcommit packetを実行し、その返却SHAを直接non-force `develop` ref updateへ渡す。中間helper round-tripやcommit再fetchは行わない。
+4. tree packet群を順番に実行し、各返却SHAをpacketの `expected_tree` と比較する。不一致時は `Pre-ref packet retry` に従って保持中の転記情報を破棄し、generated packetから新規転記する。成立後に生成済みcommit packetを実行し、その返却SHAを直接non-force `develop` ref updateへ渡す。中間helper round-tripやcommit再fetchは行わない。
 5. ref update成功後、同じcommit SHAを `record-update --result success` へ渡す。追加のremote HEAD/tree再取得は行わない。
 6. 成功後は新しい `develop` のFast CIが生成した `source-snapshot` からrepoを復元し、`publish_request.py init` で通常開発へ戻る。
 
@@ -177,7 +179,7 @@ Publish Gateway control plane (`.github/workflows/publish-gateway.yml` とvalida
 1. control plane変更をcommitし、clean worktreeで `prepare` する。
 2. remote `publish` HEADを1回観測して `connector-plan` へ渡す。base treeはsource-snapshot由来のlocal publish stateを使うため再取得しない。
 3. helperがcontrol file本文を `content` として持つ `create_tree` packet群と最終 `create_commit` packetを一度に生成する。各batchの期待tree SHAはlocal Gitで事前計算する。
-4. tree packet群を順番に実行し、各返却SHAをpacketの `expected_tree` と比較する。成立後にcommit packetを実行し、返却commit SHAを直接non-force `publish` ref updateへ渡す。中間helper round-tripやcommit object再fetchは行わない。
+4. tree packet群を順番に実行し、各返却SHAをpacketの `expected_tree` と比較する。不一致時は `Pre-ref packet retry` に従って保持中の転記情報を破棄し、generated packetから新規転記する。成立後にcommit packetを実行し、返却commit SHAを直接non-force `publish` ref updateへ渡す。中間helper round-tripやcommit object再fetchは行わない。
 5. `update_ref` 成功後は同じcommit SHAを `record-update --result success` へ渡す。追加のremote HEAD/tree再取得は行わず、helperがnormal publish stateの `publish` baseを更新する。
 
 ```bash
@@ -194,7 +196,7 @@ control planeでも正常系のための個別 `create_blob` と返却OID中継s
 
 ### Publish recovery
 
-pre-refの本文転記破損は `create_tree` の期待SHA不一致としてその場で処理するため、上位recoveryへ持ち込まない。ref更新後にGateway runが一時的理由で失敗した場合は、同じtransport commitのGitHub Actions rerunを使用する。別のrequest/generationを書き足して復旧しない。
+pre-refの `create_tree` 期待SHA不一致は `Pre-ref packet retry` に従い、失敗した転記情報を破棄してgenerated packetから新規転記する。pre-ref recoveryの入力は正本packetと返却SHAの一致判定に限定し、正本packetの新規転記を繰り返しても成立しない場合だけConnector / helper経路の開発基盤障害として扱う。ref更新後にGateway runが一時的理由で失敗した場合は、同じtransport commitのGitHub Actions rerunを使用する。別のrequest/generationを書き足して復旧しない。
 
 Gatewayがtarget branch移動、trusted workflow不一致、bundle不整合等の意味のある条件で停止した場合は、active transactionと該当runを証拠として原因を調査する。remote target状態やpublish対象そのものが変わった場合はtransport recoveryではなく、新しいsource stateから次のpublishを判断する。
 
