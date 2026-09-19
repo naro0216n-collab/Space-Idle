@@ -7,7 +7,7 @@ from .application_commands import (
     GetBuildOptions, GetCatalog, GetCargoFlows, GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics,
     GetOperationalNode, GetLogistics, GetLogisticsSummary, GetProjects,
     GetResearch, GetMovementPlans, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
-    GetTransportAllocationOptions, GetWorld, GetSurfaceMap, PauseBuild, PauseFacility,
+    GetTransportAllocationOptions, GetTargetStockOptions, GetWorld, GetSurfaceMap, PauseBuild, PauseFacility,
     PauseResearch, PauseScientificExploration, PauseSurvey, PauseTransportAllocation,
     PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
     ResumeBuild, ResumeFacility, ResumeResearch,

@@ -55,6 +55,10 @@ class GetTransportAllocationOptions:
     source_id: str
     destination_id: str
 @dataclass(frozen=True)
+class GetTargetStockOptions:
+    destination_id: str
+    resource_id: str
+@dataclass(frozen=True)
 class GetResearch: pass
 @dataclass(frozen=True)
 class GetScientificExplorations: pass

@@ -220,3 +220,24 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
   .metric-chip { min-width: 72px; padding: 6px 7px; }
   .global-summary-grid { grid-template-columns: 1fr; }
 }
+
+/* iPad decision controls: direct manipulation first, precision input second. */
+.decision-context-summary { border: 1px solid var(--line-soft); border-radius: 9px; padding: 10px; background: #09151f; }
+.choice-section { display: grid; gap: 7px; }
+.choice-label { color: var(--muted); font-size: 11px; }
+.choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.choice-grid .choice-button { min-height: 44px; text-align: left; padding: 8px 10px; border-color: var(--line-soft); background: #0b1721; }
+.choice-grid .choice-button.is-selected { border-color: var(--accent); background: #102c3f; box-shadow: inset 0 0 0 1px var(--accent); }
+.choice-grid .choice-button .cell-sub { margin-top: 2px; }
+.direct-control { display: grid; gap: 8px; border: 1px solid var(--line-soft); border-radius: 9px; padding: 10px; background: #09151f; }
+.direct-control-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.direct-control-heading strong { color: var(--accent); font-size: 18px; }
+.direct-control input[type="range"] { width: 100%; min-height: 30px; accent-color: var(--accent); }
+.preset-row { display: flex; flex-wrap: wrap; gap: 7px; }
+.preset-row button { min-height: 38px; padding: 6px 10px; }
+.priority-segment { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
+.priority-segment button { min-width: 0; min-height: 42px; padding: 6px 4px; font-size: 11px; }
+.priority-segment button.is-selected { border-color: var(--accent); background: #16354a; color: #fff; box-shadow: inset 0 0 0 1px var(--accent); }
+.precision-input { border-top: 1px solid var(--line-soft); padding-top: 8px; }
+.precision-input summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.precision-input[open] summary { margin-bottom: 8px; }

@@ -26,6 +26,7 @@ from space_idle import (
     GetSurveys,
     GetTransportAllocations,
     GetTransportAllocationOptions,
+    GetTargetStockOptions,
     GetWorld,
     PlanBuild,
     ProduceVehicle,
@@ -262,6 +263,32 @@ def test_global_attention_filters_diagnostic_blockers_and_exposes_decision_conte
     payload = to_jsonable(app.query(GetAttention()))
     assert payload["items"][0]["attention_required"] is True
     assert payload["items"][0]["navigation"]["decision_area"] == "location"
+
+def test_target_stock_options_project_current_state_and_application_owned_presets():
+    app = build_game_application()
+    destination_id = str(ids.EARTH)
+    resource_id = str(ids.STRUCTURAL_COMPONENTS)
+
+    view = app.query(GetTargetStockOptions(destination_id, resource_id))
+
+    assert view.destination_id == destination_id
+    assert view.resource_id == resource_id
+    assert view.current_stock_t == pytest.approx(
+        app._simulation.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
+    )
+    assert view.normal_demand_t_per_day > 0
+    assert [preset.days_of_supply for preset in view.presets] == [1.0, 3.0, 7.0]
+    for preset in view.presets:
+        assert preset.target_quantity_t == pytest.approx(
+            view.normal_demand_t_per_day * preset.days_of_supply
+        )
+    assert view.suggested_max_t >= view.current_stock_t
+
+    app.execute(SetTargetStock(destination_id, resource_id, 5.0, priority=4))
+    updated = app.query(GetTargetStockOptions(destination_id, resource_id))
+    assert updated.current_target_quantity_t == pytest.approx(5.0)
+    assert int(updated.priority) == 4
+
 
 def test_transport_allocation_projection_exposes_capacity_target_and_canonical_plan_requirements():
     app = build_game_application()

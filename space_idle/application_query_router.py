@@ -5,7 +5,7 @@ from .application_commands import (
     GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
-    GetTransportAllocationOptions, GetWorld, GetSurfaceMap, Query,
+    GetTransportAllocationOptions, GetTargetStockOptions, GetWorld, GetSurfaceMap, Query,
     GetMarket,
 )
 from .application_views import ProjectsView, QueryResult
@@ -104,6 +104,13 @@ class ApplicationQueryRouterMixin:
                 self._require_operational_node(query.source_id),
                 self._require_operational_node(query.destination_id),
             )
+        if isinstance(query, GetTargetStockOptions):
+            destination_id = self._require_operational_node(query.destination_id)
+            resource_ids = {str(value.id) for value in self._simulation.inventory.resource_definitions.values()}
+            if query.resource_id not in resource_ids:
+                raise KeyError(query.resource_id)
+            from .shared import DefinitionId
+            return self._target_stock_options_view(destination_id, DefinitionId(query.resource_id))
         if isinstance(query, GetResearch):
             return self._research_view()
         if isinstance(query, GetScientificExplorations):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from .application_views import SupplyRequirementRow, SupplyRoutingConstraintRow, TargetStockRow
+from .priority import ActivityPriority
+from .application_views import SupplyRequirementRow, SupplyRoutingConstraintRow, TargetStockRow, TargetStockPresetRow, TargetStockOptionsView
 
 
 class SupplyPlanningProjectorMixin:
@@ -165,6 +166,68 @@ class SupplyPlanningProjectorMixin:
         if cache is not None:
             cache["requirement_rows"] = (execution_allocation, resolutions, result)
         return result
+
+
+    def _target_stock_options_view(self, destination_id, resource_id) -> TargetStockOptionsView:
+        sim = self._simulation
+        decision = self._tick_decision_projection()
+        normal_demand = 0.0
+        for resolution in decision.plan.requirement_resolutions:
+            requirement = resolution.requirement
+            if requirement.destination_id != destination_id or requirement.resource_id != resource_id:
+                continue
+            if requirement.owner_kind == "target_stock":
+                continue
+            if requirement.recurring_rate_t_per_day is not None:
+                normal_demand += max(0.0, requirement.recurring_rate_t_per_day)
+
+        inbound = sum(
+            flow.amount_t
+            for flow in sim.logistics.cargo_flow_snapshots()
+            if flow.final_destination_id == destination_id and flow.resource_id == resource_id
+        ) + sum(
+            waiting.amount_t
+            for waiting in sim.logistics.arrival_waiting_snapshots()
+            if waiting.final_destination_id == destination_id and waiting.resource_id == resource_id
+        )
+        current = next(
+            (
+                row
+                for row in sim.logistics.target_stock_policies()
+                if row.destination_id == destination_id and row.resource_id == resource_id
+            ),
+            None,
+        )
+        current_target = 0.0 if current is None else current.target_quantity_t
+        priority = ActivityPriority(3) if current is None else current.priority
+        presets = tuple(
+            TargetStockPresetRow(
+                key=f"days_{days}",
+                display_name=f"{days}日分",
+                target_quantity_t=normal_demand * days,
+                days_of_supply=float(days),
+            )
+            for days in (1, 3, 7)
+            if normal_demand > 1e-12
+        )
+        current_stock = sim.inventory.amount(destination_id, resource_id)
+        suggested_max = max(
+            1.0,
+            current_stock + inbound,
+            current_target * 1.5,
+            normal_demand * 7.0,
+        )
+        return TargetStockOptionsView(
+            destination_id=str(destination_id),
+            resource_id=str(resource_id),
+            current_stock_t=current_stock,
+            inbound_t=inbound,
+            normal_demand_t_per_day=normal_demand,
+            current_target_quantity_t=current_target,
+            priority=priority,
+            suggested_max_t=suggested_max,
+            presets=presets,
+        )
 
     def _routing_constraint_rows(self) -> tuple[SupplyRoutingConstraintRow, ...]:
         return tuple(

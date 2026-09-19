@@ -614,17 +614,20 @@ Inspector最上部は次の順を基本とする。
 
 UI実装は、内部概念をPlayer-facing名称へ正面から対応付けるterminology tableを持つ。
 
-少なくとも次を整理対象とする。
-
-- Movement Plan
-- Transport Allocation
-- Supply Requirement
-- Execution Requirement Bundle
-- Provisioning Priority
-- hard constraint
-- commitment
-- admission
-- Projected Material Readiness
+| 内部概念 | Player-facing名称 | 通常UIでの扱い |
+|---|---|---|
+| Movement Plan | 移動経路 / 移動候補 | 経路候補として表示する。内部IDは表示しない。 |
+| Transport Allocation | 輸送能力設定 | origin / destinationと方向別Capacity targetを中心に表示する。内部Allocation IDは表示しない。 |
+| Supply Requirement | 補給需要 | 発生元、Resource、必要量、必要時期、供給状態として表示し、内部Requirement IDは表示しない。 |
+| Target Stock | 追加備蓄目標 | 通常需要とは別のPlayer intentとして表示する。 |
+| Provisioning Priority | 配備優先度 | 5段階Controlとして表示する。 |
+| hard constraint | 固定条件 | 自動選択をPlayerが意図的に制限する場合だけ表示・操作する。 |
+| Execution Requirement Bundle | 稼働要件 | Bundle名そのものは通常表示せず、Resource / Service /受入条件とfulfillmentを判断地点で示す。 |
+| commitment | 割当済み / 使用中 / 回収中 | 所有Domainの意味に合わせて具体状態を表示し、genericな`commitment`だけをPlayerへ見せない。 |
+| admission | 受入条件 / 受入余力 | Storage、RP Pool等の具体的な受入先と残余Capacityとして表示する。 |
+| Projected Material Readiness | 資材準備見込み | 建設・Projectの開始判断地点で見込み時期として表示する。 |
+| Transport Capacity | 輸送能力 | Target / Nominal / Available / Used / Spareを区別して表示する。 |
+| Cargo Flow | 輸送中貨物 / 貨物流れ | 通常dispatchをPlayer入力にせず、量、rate、latency、arrival waitingを可視化する。 |
 
 内部概念を無条件に隠すのではなく、Playerが戦略判断に使う概念だけを理解可能な名称で露出する。
 

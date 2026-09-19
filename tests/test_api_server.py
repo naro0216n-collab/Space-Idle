@@ -74,6 +74,17 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
 
         status, _, payload = _request(
             port, "GET",
+            f"/api/v1/target-stock-options?destination_id={ids.EARTH}&resource_id={ids.STRUCTURAL_COMPONENTS}",
+        )
+        assert status == 200
+        target_stock_options = payload["data"]
+        assert target_stock_options["destination_id"] == str(ids.EARTH)
+        assert target_stock_options["resource_id"] == str(ids.STRUCTURAL_COMPONENTS)
+        assert target_stock_options["normal_demand_t_per_day"] > 0
+        assert [row["display_name"] for row in target_stock_options["presets"]] == ["1日分", "3日分", "7日分"]
+
+        status, _, payload = _request(
+            port, "GET",
             f"/api/v1/dependency-analytics?scope_kind=operational_nodes&node_id={ids.EARTH}&time_basis=FORECAST",
         )
         assert status == 200

@@ -36,7 +36,7 @@ from .app_contracts.economy import (
 from .app_contracts.queries import (
     GetCatalog, GetWorld, GetSurfaceMap, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetBottlenecks, GetAttention, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetMovementPlans, GetFleet,
-    GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions,
+    GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions, GetTargetStockOptions,
     GetResearch, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetContracts, GetMarket,
 )
 
@@ -62,7 +62,7 @@ Command: TypeAlias = (
 Query: TypeAlias = (
     GetCatalog | GetWorld | GetSurfaceMap | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetBottlenecks | GetAttention | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetMovementPlans | GetFleet |
-    GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions |
+    GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions | GetTargetStockOptions |
     GetResearch | GetScientificExplorations | GetSurveys | GetSurveyCampaignIntentPreview | GetContracts | GetMarket
 )
 

@@ -14,7 +14,7 @@ from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
     GetContracts, GetDependencyAnalytics, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys, GetSurveyCampaignIntentPreview,
-    GetTransportAllocationOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
+    GetTransportAllocationOptions, GetTargetStockOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
 )
 from ..persistence import SaveFormatError
 from .codec import ApiPayloadError, command_schema, decode_command, to_jsonable
@@ -327,6 +327,12 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             source_id = _required(params, "source_id")
             destination_id = _required(params, "destination_id")
             self._query_result(GetTransportAllocationOptions(source_id, destination_id))
+            return
+        if path == "/api/v1/target-stock-options":
+            self._query_result(GetTargetStockOptions(
+                destination_id=_required(params, "destination_id"),
+                resource_id=_required(params, "resource_id"),
+            ))
             return
         if path == "/api/v1/research":
             self._query_result(GetResearch())

@@ -101,7 +101,7 @@
               <div class="workspace-heading logistics-heading"><div><div class="eyebrow">LOGISTICS NETWORK</div><h1>輸送</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
               <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
               <div class="logistics-bottom-grid">
-                <section class="card"><div class="card-heading"><h3>Supply Routing Constraint / Target Stock</h3><span id="routingConstraintCountBadge" class="badge"></span></div><div id="routingConstraintTable" class="table-wrap"></div></section>
+                <section class="card"><div class="card-heading"><h3>供給経路 / 追加備蓄</h3><span id="routingConstraintCountBadge" class="badge"></span></div><div id="routingConstraintTable" class="table-wrap"></div></section>
                 <section class="card"><div class="card-heading"><h3>Supply Requirement</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
                 <section class="card"><div class="card-heading"><h3>Fleet</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
                 <section class="card"><div class="card-heading"><h3>Transport Allocation</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
@@ -133,25 +133,31 @@
     </div>
     <dialog id="routingConstraintDialog" class="modal-dialog">
       <form method="dialog" id="routingConstraintForm">
-        <div class="dialog-heading"><div><div class="eyebrow">SUPPLY ROUTING CONSTRAINT</div><h2>供給経路を固定</h2></div><button type="button" class="icon-button" id="routingConstraintCloseButton">×</button></div>
-        <label>需要地<select id="routingConstraintDestination" required></select></label>
-        <div class="field-pair"><label>Owner kind<input id="routingConstraintOwnerKind" placeholder="project / founding / target_stock など"></label><label>Owner ID<input id="routingConstraintOwnerId" placeholder="空欄なら需要地全体"></label></div>
-        <label>Resource<select id="routingConstraintResource"><option value="">全Resource</option></select></label>
-        <label>固定供給元<select id="routingConstraintSource"><option value="">指定なし</option></select></label>
-        <label>必須経由Node<input id="routingConstraintViaNodes" placeholder="node.a, node.b（comma区切り）"></label>
-        <label>必須Transport Allocation<input id="routingConstraintAllocations" placeholder="allocation.a, allocation.b（comma区切り）"></label>
-        <div class="cell-sub">指定した条件は hard constraint です。満たす経路がない場合は別供給元・別経路へfallbackせず blocker になります。未指定部分だけ既存Network内で自動選択します。</div>
-        <div class="dialog-actions"><button type="button" class="secondary" id="routingConstraintCancelButton">取消</button><button type="submit" class="primary">Constraintを保存</button></div>
+        <div class="dialog-heading"><div><div class="eyebrow">ROUTE PREFERENCE</div><h2>供給経路の固定条件</h2></div><button type="button" class="icon-button" id="routingConstraintCloseButton">×</button></div>
+        <div id="routingConstraintScopeSummary" class="decision-context-summary"></div>
+        <label>固定供給元<select id="routingConstraintSource"><option value="">自動選択</option></select></label>
+        <div class="choice-section"><div class="choice-label">必須経由拠点</div><div id="routingConstraintViaChoices" class="choice-grid"></div></div>
+        <div class="choice-section"><div class="choice-label">必須輸送区間</div><div id="routingConstraintAllocationChoices" class="choice-grid"></div></div>
+        <div class="cell-sub">通常は既存Networkから自動選択します。特定の供給元・経由地・輸送区間を固定したい場合だけ条件を選択してください。固定条件を満たせない場合は自動で別経路へ切り替わりません。</div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="routingConstraintCancelButton">取消</button><button type="submit" class="primary">経路条件を保存</button></div>
       </form>
     </dialog>
 
     <dialog id="targetStockDialog" class="modal-dialog">
       <form method="dialog" id="targetStockForm">
-        <div class="dialog-heading"><div><div class="eyebrow">TARGET STOCK</div><h2>Target Stockを設定</h2></div><button type="button" class="icon-button" id="targetStockCloseButton">×</button></div>
-        <label>需要地<select id="targetStockDestination" required></select></label>
-        <label>資源<select id="targetStockResource" required></select></label>
-        <div class="field-pair"><label>目標在庫 (t)<input id="targetStockQuantity" type="number" min="0" step="0.01" value="1" required></label><label>活動優先度<select id="targetStockPriority" required><option value="1">1 最低</option><option value="2">2 低</option><option value="3" selected>3 標準</option><option value="4">4 高</option><option value="5">5 最高</option></select></label></div>
-        <div class="dialog-actions"><button type="button" class="secondary" id="targetStockCancelButton">取消</button><button type="submit" class="primary">Target Stockを保存</button></div>
+        <div class="dialog-heading"><div><div class="eyebrow">RESERVE STOCK</div><h2>追加備蓄を設定</h2></div><button type="button" class="icon-button" id="targetStockCloseButton">×</button></div>
+        <div class="field-pair"><label>需要地<select id="targetStockDestination" required></select></label><label>資源<select id="targetStockResource" required></select></label></div>
+        <div id="targetStockOptionSummary" class="decision-context-summary"><div class="cell-sub">需要地と資源を選択すると現在在庫・通常需要・Inboundを確認できます。</div></div>
+        <div class="direct-control">
+          <div class="direct-control-heading"><span>追加備蓄目標</span><strong id="targetStockQuantityValue">0 t</strong></div>
+          <input id="targetStockQuantityRange" type="range" min="0" max="1" step="0.01" value="0" aria-label="追加備蓄量">
+          <div id="targetStockPresets" class="preset-row"></div>
+        </div>
+        <details class="precision-input"><summary>数値を直接入力</summary><label>目標在庫 (t)<input id="targetStockQuantity" type="number" min="0" step="0.01" value="0" required></label></details>
+        <div class="choice-section"><div class="choice-label">活動優先度</div><input id="targetStockPriority" type="hidden" value="3"><div class="priority-segment" id="targetStockPriorityButtons" role="group" aria-label="追加備蓄優先度">
+          <button type="button" data-target-stock-priority="1">1 最低</button><button type="button" data-target-stock-priority="2">2 低</button><button type="button" class="is-selected" data-target-stock-priority="3">3 標準</button><button type="button" data-target-stock-priority="4">4 高</button><button type="button" data-target-stock-priority="5">5 最高</button>
+        </div></div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="targetStockCancelButton">取消</button><button type="submit" class="primary">追加備蓄を保存</button></div>
       </form>
     </dialog>
 

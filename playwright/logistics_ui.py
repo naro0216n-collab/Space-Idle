@@ -76,26 +76,33 @@ def run() -> None:
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
             page.locator('.primary-nav-button[data-section="logistics"]').click()
 
-            requirement_row = page.locator("#requirementTable tbody tr", has_text=project_id).first
-            requirement_row.wait_for(timeout=10000)
+            constraint_button = page.locator(
+                f'#requirementTable [data-requirement-constraint][data-owner-id="{project_id}"]'
+            ).first
+            constraint_button.wait_for(timeout=10000)
+            requirement_row = constraint_button.locator("xpath=ancestor::tr")
             assert "輸送能力阻害" in requirement_row.inner_text(), (
                 "Supply Requirement must remain visible while Transport Capacity is unavailable"
             )
             # Create and later clear a project-scoped Routing Constraint through the UI.
             requirement_row.locator("[data-requirement-constraint]").click()
             page.locator("#routingConstraintDialog").wait_for(state="visible", timeout=10000)
-            assert page.locator("#routingConstraintOwnerId").input_value() == project_id
-            assert page.locator("#routingConstraintDestination").input_value() == LEO
+            scope_text = page.locator("#routingConstraintScopeSummary").inner_text()
+            assert project_id not in scope_text
+            assert page.locator("#routingConstraintDialog").locator('input[type="text"]').count() == 0
             page.locator("#routingConstraintSource").select_option(EARTH)
-            page.get_by_role("button", name="Constraintを保存").click()
+            page.get_by_role("button", name="経路条件を保存").click()
             page.locator("#routingConstraintDialog").wait_for(state="hidden", timeout=10000)
             page.wait_for_function(
-                """projectId => [...document.querySelectorAll('#requirementTable tbody tr')]
-                  .some(row => row.innerText.includes(projectId) && row.innerText.includes('hard: source'))""",
+                """projectId => [...document.querySelectorAll('#requirementTable [data-requirement-constraint]')]
+                  .some(button => button.dataset.ownerId === projectId && button.closest('tr')?.innerText.includes('固定条件'))""",
                 arg=project_id,
                 timeout=10000,
             )
-            requirement_row = page.locator("#requirementTable tbody tr", has_text=project_id).first
+            requirement_row = page.locator(
+                f'#requirementTable [data-requirement-constraint][data-owner-id="{project_id}"]'
+            ).first.locator("xpath=ancestor::tr")
+            assert project_id not in requirement_row.inner_text()
             constraint_clear = page.locator('[data-routing-constraint-clear]').first
             constraint_clear.wait_for(timeout=10000)
 
@@ -149,13 +156,14 @@ def run() -> None:
             )
 
             # Target Stock is a persistent Supply Planning intent with Activity Priority.
-            page.get_by_role("button", name="Target Stockを設定").click()
+            page.get_by_role("button", name="追加備蓄を設定").click()
             page.locator("#targetStockDialog").wait_for(state="visible", timeout=10000)
             page.locator("#targetStockDestination").select_option(LEO)
             page.locator("#targetStockResource").select_option(PROPELLANT)
-            page.locator("#targetStockQuantity").fill("2")
-            page.locator("#targetStockPriority").select_option("4")
-            page.get_by_role("button", name="Target Stockを保存").click()
+            page.locator("#targetStockOptionSummary").get_by_text("通常需要", exact=False).wait_for(timeout=10000)
+            page.locator("#targetStockQuantityRange").fill("1")
+            page.locator('[data-target-stock-priority="4"]').click()
+            page.get_by_role("button", name="追加備蓄を保存").click()
             page.locator("#targetStockDialog").wait_for(state="hidden", timeout=10000)
             target_delete = page.locator(
                 f'[data-target-stock-delete="{LEO}"][data-resource-id="{PROPELLANT}"]'
@@ -163,7 +171,7 @@ def run() -> None:
             target_delete.wait_for(timeout=10000)
             target_row = target_delete.locator("xpath=ancestor::tr")
             target_text = target_row.inner_text()
-            assert "2" in target_text and "高" in target_text
+            assert "1" in target_text and "高" in target_text
             target_delete.click()
             target_delete.wait_for(state="detached", timeout=10000)
 

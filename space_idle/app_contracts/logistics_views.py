@@ -290,6 +290,27 @@ class TargetStockRow:
 
 
 @dataclass(frozen=True)
+class TargetStockPresetRow:
+    key: str
+    display_name: str
+    target_quantity_t: float
+    days_of_supply: float | None = None
+
+
+@dataclass(frozen=True)
+class TargetStockOptionsView:
+    destination_id: str
+    resource_id: str
+    current_stock_t: float
+    inbound_t: float
+    normal_demand_t_per_day: float
+    current_target_quantity_t: float
+    priority: ActivityPriority
+    suggested_max_t: float
+    presets: tuple[TargetStockPresetRow, ...]
+
+
+@dataclass(frozen=True)
 class LogisticsView:
     movement_plans: tuple[MovementPlanRow, ...]
     fleet_pools: tuple[FleetPoolRow, ...]
