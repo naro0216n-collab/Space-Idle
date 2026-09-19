@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from ..priority import ActivityPriority, ProvisioningPriority
 
 from .catalog_views import SiteRequirementsDefinitionRow
+from .ui_reports import ComparisonAxisRow, ComparisonValueRow
 
 
 @dataclass(frozen=True)
@@ -211,6 +212,7 @@ class SurveyProviderFleetRow:
 
 @dataclass(frozen=True)
 class SurveyCandidateRow:
+    comparison_key: str
     provider_operational_node_id: str
     provider_definition_id: str
     provider_source_kind: str
@@ -226,6 +228,7 @@ class SurveyCandidateRow:
     matches_constraints: bool
     viable: bool
     blockers: tuple[str, ...]
+    comparison_values: tuple[ComparisonValueRow, ...]
 
 
 @dataclass(frozen=True)
@@ -268,6 +271,7 @@ class SurveyCampaignRow:
     can_set_priority: bool
     targets: tuple[SurveyCampaignTargetRow, ...]
     candidates: tuple[SurveyCandidateRow, ...]
+    comparison_axes: tuple[ComparisonAxisRow, ...]
 
 
 @dataclass(frozen=True)

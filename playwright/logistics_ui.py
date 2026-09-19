@@ -185,9 +185,15 @@ def run() -> None:
             page.locator("#targetStockDialog").wait_for(state="visible", timeout=10000)
             page.locator("#targetStockDestination").select_option(LEO)
             page.locator("#targetStockResource").select_option(PROPELLANT)
-            summary_primary = page.locator("#targetStockOptionSummary .cell-sub").first
-            summary_primary.wait_for(timeout=10000)
-            assert "通常需要" in summary_primary.inner_text()
+            page.wait_for_function(
+                """() => {
+                  const text = document.querySelector('#targetStockOptionSummary')?.textContent || '';
+                  return text.includes('現在在庫') && text.includes('Inbound') && text.includes('通常需要');
+                }""",
+                timeout=10000,
+            )
+            summary_text = page.locator("#targetStockOptionSummary").inner_text()
+            assert "現在在庫" in summary_text and "Inbound" in summary_text and "通常需要" in summary_text
             page.locator("#targetStockQuantityRange").fill("1")
             page.locator('[data-target-stock-priority="4"]').click()
             page.get_by_role("button", name="追加備蓄を保存").click()

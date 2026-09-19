@@ -574,3 +574,19 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .network-line.is-context-related { stroke: #f2c26b; stroke-width: 5; opacity: 1; }
 .network-line.is-context-related.selected { stroke-width: 6; }
 .network-node.is-context-related { border-color: #f2c26b; box-shadow: 0 0 0 2px rgba(242,194,107,.16); }
+
+/* Strategic comparison keeps Application-selected axes aligned across 2-4 pinned options. */
+.comparison-empty { min-height: 64px; display: grid; gap: 5px; align-content: center; padding: 10px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); }
+.comparison-empty strong { color: var(--text); }
+.comparison-surface { display: grid; gap: 1px; overflow-x: auto; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--line-soft); }
+.comparison-heading-row, .comparison-axis-row { display: grid; grid-template-columns: minmax(128px,.75fr) repeat(var(--comparison-columns),minmax(150px,1fr)); gap: 1px; min-width: calc(128px + var(--comparison-columns) * 150px); }
+.comparison-axis-heading, .comparison-candidate-heading, .comparison-axis-row > strong, .comparison-axis-row > span, .comparison-blocker-cell { min-width: 0; padding: 9px; background: #09151e; }
+.comparison-axis-heading { color: var(--muted); font-size: 10px; font-weight: 700; }
+.comparison-candidate-heading { display: grid; gap: 3px; align-content: start; }
+.comparison-candidate-heading span, .comparison-candidate-heading small { color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+.comparison-candidate-heading button { margin-top: 4px; }
+.comparison-axis-row > strong { color: var(--muted); font-size: 10px; }
+.comparison-axis-row > span { color: var(--text); font-size: 11px; font-weight: 650; }
+.comparison-axis-row.is-different > strong, .comparison-axis-row.is-different > span { background: #122635; }
+.comparison-axis-row.is-different > strong::after { content: '差あり'; display: block; margin-top: 3px; color: #f2c26b; font-size: 8px; font-weight: 700; }
+.comparison-blocker-cell { display: grid; align-content: start; }

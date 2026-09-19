@@ -8,11 +8,17 @@ from pathlib import Path
 from threading import Thread
 import tempfile
 
-from space_idle import GetSurfaceMap, build_game_application
+from space_idle import (
+    GetSurfaceMap,
+    GetSurveys,
+    SetSurveyProviderFleetQuantity,
+    build_game_application,
+)
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
 from space_idle.simulation import OfflineProgressPolicy
+from space_idle.shared import DefinitionId, SpatialNodeId
 
 
 SUPPORTED_BROWSERS = {"chromium", "webkit"}
@@ -123,6 +129,28 @@ def run() -> dict[str, object]:
         )
         if option.can_plan
     )
+
+    # Comparison is a browser responsibility, while creating an otherwise absent
+    # spare spacecraft is fixture setup. Add one Fleet unit to the projected lunar
+    # Survey provider and commit it through the real Application command so the UI
+    # receives two strategically distinct candidates without hard-coding provider IDs.
+    survey_fleet_fixture = next(
+        row
+        for row in runtime._app.query(GetSurveys(str(ids.LUNAR_ORBIT))).provider_fleet
+        if row.operational_node_id == str(ids.LUNAR_ORBIT)
+    )
+    fixture_sim.transport.add_fleet_units(
+        DefinitionId(survey_fleet_fixture.vehicle_definition_id),
+        1,
+        SpatialNodeId(survey_fleet_fixture.operational_node_id),
+        day=fixture_sim.day,
+    )
+    runtime._app.execute(SetSurveyProviderFleetQuantity(
+        survey_fleet_fixture.provider_definition_id,
+        survey_fleet_fixture.operational_node_id,
+        survey_fleet_fixture.vehicle_definition_id,
+        1,
+    ))
 
     server = create_server(
         runtime,
@@ -553,8 +581,34 @@ def run() -> dict[str, object]:
             )
             campaign_text = page.locator('#inspectorContent').inner_text()
             _assert("範囲・目標の編集" in campaign_text, "Survey Campaign inspector must expose the selected scope and goal")
-            _assert("観測手段の候補差" in campaign_text, "Survey Campaign inspector must expose candidate differences at the decision point")
+            _assert("観測手段の候補" in campaign_text, "Survey Campaign inspector must expose Application-projected provider candidates")
+            _assert("候補比較" in campaign_text, "strategically distinct Survey candidates must expose Comparison")
             _assert("解決された観測手段" in campaign_text, "Survey Campaign inspector must expose the auto-resolved operational choice")
+            comparison_pin = page.locator('#inspectorContent [data-survey-compare-pin][aria-pressed="false"]')
+            _assert(comparison_pin.count() >= 2, "Survey Comparison must expose at least two Application-distinct candidates")
+            comparison_pin.first.click()
+            page.locator('#inspectorContent [data-survey-compare-pin][aria-pressed="false"]').first.click()
+            comparison_surface = page.locator('#inspectorContent .comparison-surface')
+            comparison_surface.wait_for(timeout=10000)
+            _assert(
+                comparison_surface.locator('.comparison-candidate-heading').count() == 2,
+                "Survey Comparison must pin two candidates on aligned axes",
+            )
+            _assert(
+                comparison_surface.locator('.comparison-axis-row.is-different').count() > 0,
+                "Survey Comparison must highlight Application-declared differences",
+            )
+            _assert(
+                "現在の制約" in comparison_surface.inner_text(),
+                "Survey Comparison must keep candidate blockers in the comparison surface",
+            )
+            comparison_surface.locator('[data-survey-candidate-detail]').first.click()
+            _assert_inspector_section_order(
+                page,
+                ["観測手段の状態", "現在の制約", "操作", "比較軸の詳細"],
+                "Comparison detail must preserve the canonical Inspector hierarchy",
+            )
+            page.locator('#inspectorContent [data-inspect="survey-campaign"]').click()
             _assert(_priority_group(page, '#surveyPriorityInput').locator('[data-priority-choice="5"]').is_enabled(), "active Survey Campaign must expose priority control")
             page.wait_for_function(
                 "() => !document.querySelector('[data-survey-update-intent-status]')?.textContent?.includes('可否確認中')",

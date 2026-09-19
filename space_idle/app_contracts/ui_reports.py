@@ -31,6 +31,26 @@ class IssueRow:
 
 
 @dataclass(frozen=True)
+class ComparisonAxisRow:
+    """Application-selected axis for comparing strategically distinct options."""
+
+    key: str
+    label: str
+    value_kind: str
+    unit: str | None = None
+    differs: bool = False
+
+
+@dataclass(frozen=True)
+class ComparisonValueRow:
+    """Candidate value for one comparison axis; no ranking semantics are attached."""
+
+    axis_key: str
+    number_value: float | None = None
+    text_value: str | None = None
+
+
+@dataclass(frozen=True)
 class ResourceFlowRow:
     resource_id: str
     display_name: str

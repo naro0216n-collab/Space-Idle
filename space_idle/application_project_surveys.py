@@ -9,6 +9,7 @@ from .application_views import (
     SurveyCampaignIntentPreviewView,
     SurveysView,
 )
+from .app_contracts.ui_reports import ComparisonAxisRow, ComparisonValueRow
 from .exploration_models import SurveyCampaignControlState, SurveyProviderSourceKind
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 
@@ -97,8 +98,37 @@ class SurveyProgressionProjectorMixin:
         projection = sim.survey.campaign_projection(campaign, day=sim.day)
         candidate = projection.resolved_candidate
         resolution_blockers = projection.resolution_blockers
-        candidates = tuple(
-            SurveyCandidateRow(
+        candidate_rows: list[SurveyCandidateRow] = []
+        for row in projection.candidates:
+            capacity_units_per_day = service_plan.summary(
+                row.provider_operational_node_id,
+                sim.survey.service_type_for_provider(row.provider_definition_id),
+            ).enabled_rate
+            comparison_values = (
+                ComparisonValueRow(axis_key="survey_rate", number_value=row.survey_rate),
+                ComparisonValueRow(
+                    axis_key="max_knowledge_level", number_value=float(row.max_knowledge_level)
+                ),
+                ComparisonValueRow(
+                    axis_key="estimate_uncertainty_fraction",
+                    number_value=row.estimate_uncertainty_fraction,
+                ),
+                ComparisonValueRow(
+                    axis_key="measurement_precision_fraction",
+                    number_value=row.measurement_precision_fraction,
+                ),
+                ComparisonValueRow(
+                    axis_key="minimum_source_units", number_value=float(row.minimum_source_units)
+                ),
+                ComparisonValueRow(
+                    axis_key="capacity_units_per_day", number_value=capacity_units_per_day
+                ),
+            )
+            candidate_rows.append(SurveyCandidateRow(
+                comparison_key=(
+                    f"{row.provider_operational_node_id}|{row.provider_definition_id}|"
+                    f"{row.observation_mode_id}"
+                ),
                 provider_operational_node_id=str(row.provider_operational_node_id),
                 provider_definition_id=str(row.provider_definition_id),
                 provider_source_kind=row.source_kind.value,
@@ -110,16 +140,44 @@ class SurveyProgressionProjectorMixin:
                 measurement_precision_fraction=row.measurement_precision_fraction,
                 minimum_source_units=row.minimum_source_units,
                 assigned_source_units=row.assigned_source_units,
-                capacity_units_per_day=service_plan.summary(
-                    row.provider_operational_node_id,
-                    sim.survey.service_type_for_provider(row.provider_definition_id),
-                ).enabled_rate,
+                capacity_units_per_day=capacity_units_per_day,
                 matches_constraints=sim.survey.candidate_matches_constraints(campaign, row),
                 viable=row.viable,
                 blockers=row.blockers,
-            )
-            for row in projection.candidates
+                comparison_values=comparison_values,
+            ))
+        candidates = tuple(candidate_rows)
+        axis_definitions = (
+            ("survey_rate", "調査速度", "number", "/日"),
+            ("max_knowledge_level", "到達可能な調査知識", "integer", None),
+            ("estimate_uncertainty_fraction", "推定の不確実性", "percent", None),
+            ("measurement_precision_fraction", "測定誤差", "percent", None),
+            ("minimum_source_units", "最低配備数", "integer", "機"),
+            ("capacity_units_per_day", "利用可能能力", "number", "/日"),
         )
+        comparison_axes: list[ComparisonAxisRow] = []
+        if len(candidates) >= 2:
+            values_by_candidate = [
+                {value.axis_key: value.number_value for value in row.comparison_values}
+                for row in candidates
+            ]
+            for key, label, value_kind, unit in axis_definitions:
+                values = [values.get(key) for values in values_by_candidate]
+                first = values[0]
+                differs = any(
+                    (value is None) != (first is None)
+                    or (
+                        value is not None
+                        and first is not None
+                        and abs(float(value) - float(first)) > 1e-9
+                    )
+                    for value in values[1:]
+                )
+                comparison_axes.append(ComparisonAxisRow(
+                    key=key, label=label, value_kind=value_kind, unit=unit, differs=differs
+                ))
+            if not any(axis.differs for axis in comparison_axes):
+                comparison_axes = []
         target_rows: list[SurveyCampaignTargetRow] = []
         remaining_progress = 0.0
         for cell_id, resource_id in campaign.target_pairs():
@@ -208,6 +266,7 @@ class SurveyProgressionProjectorMixin:
             can_set_priority=sim.survey.can_set_priority(campaign.id),
             targets=tuple(target_rows),
             candidates=candidates,
+            comparison_axes=tuple(comparison_axes),
         )
 
     def _surveys_view(self, provider_operational_node_id: SpatialNodeId | None) -> SurveysView:

@@ -185,6 +185,9 @@ def test_equivalent_candidates_auto_resolve_by_stable_key_independent_of_registr
         candidate, blockers = sim.survey.resolve_campaign_candidate(sim.survey.campaigns[cid], day=sim.day)
         assert blockers == ()
         assert candidate is not None
+        projected = next(c for c in app.query(GetSurveys(str(ids.LUNAR_ORBIT))).campaigns if c.id == cid)
+        assert len(projected.candidates) == 2
+        assert projected.comparison_axes == ()
         return candidate.provider_definition_id
 
     assert selected(False) == selected(True) == DefinitionId("test.provider.a")
@@ -211,8 +214,24 @@ def test_strategically_distinct_candidates_require_decision_and_do_not_arbitrari
 
     row = next(c for c in app.query(GetSurveys(str(ids.LUNAR_ORBIT))).campaigns if c.id == campaign_id)
     assert "survey_decision_required" in row.blockers
-    assert len([candidate for candidate in row.candidates if candidate.viable]) >= 2
-    assert {candidate.provider_source_kind for candidate in row.candidates if candidate.viable} >= {"facility", "fleet"}
+    viable = [candidate for candidate in row.candidates if candidate.viable]
+    assert len(viable) >= 2
+    assert {candidate.provider_source_kind for candidate in viable} >= {"facility", "fleet"}
+    assert len({candidate.comparison_key for candidate in viable}) == len(viable)
+    assert row.comparison_axes
+    assert any(axis.differs for axis in row.comparison_axes)
+    assert {axis.key for axis in row.comparison_axes} == {
+        "survey_rate",
+        "max_knowledge_level",
+        "estimate_uncertainty_fraction",
+        "measurement_precision_fraction",
+        "minimum_source_units",
+        "capacity_units_per_day",
+    }
+    for candidate in viable:
+        assert {value.axis_key for value in candidate.comparison_values} == {
+            axis.key for axis in row.comparison_axes
+        }
 
 
 def test_explicit_constraint_failure_never_falls_back_to_other_provider():

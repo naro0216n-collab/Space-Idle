@@ -33,6 +33,36 @@
   }
   let dependencyView='current';
   let surveyMapLayer='knowledge';
+  const surveyComparisonPins=new Map();
+  function surveyComparisonPinnedKeys(campaign){
+    const valid=new Set((campaign.candidates||[]).map((row)=>row.comparison_key));
+    const pins=(surveyComparisonPins.get(campaign.id)||[]).filter((key)=>valid.has(key)).slice(0,4);
+    surveyComparisonPins.set(campaign.id,pins);
+    return pins;
+  }
+  function surveyComparisonValue(row,axisKey){
+    return (row.comparison_values||[]).find((value)=>value.axis_key===axisKey)||null;
+  }
+  function surveyComparisonValueHtml(axis,value){
+    if(!value)return '—';
+    if(value.text_value!=null)return esc(value.text_value);
+    if(value.number_value==null)return '—';
+    const number=Number(value.number_value);
+    if(axis.value_kind==='percent')return pct(number);
+    if(axis.value_kind==='integer')return `${fmt(number,0)}${axis.unit?` ${esc(axis.unit)}`:''}`;
+    return `${fmt(number,2)}${axis.unit?` ${esc(axis.unit)}`:''}`;
+  }
+  function surveyComparisonHtml(campaign){
+    const axes=campaign.comparison_axes||[];
+    if(!axes.length)return '<div class="empty-state">現在の観測手段には、比較が必要な戦略差はありません。</div>';
+    const pins=surveyComparisonPinnedKeys(campaign);
+    if(pins.length<2)return `<div class="comparison-empty"><strong>${pins.length?`${pins.length}候補を選択中`:'比較候補を選択'}</strong><span>観測手段から2〜4候補を比較に追加すると、Applicationが提示した共通軸で差を確認できます。</span></div>`;
+    const candidates=pins.map((key)=>(campaign.candidates||[]).find((row)=>row.comparison_key===key)).filter(Boolean);
+    const headers=candidates.map((row)=>`<div class="comparison-candidate-heading"><strong>${esc(definitionName(row.provider_definition_id))}</strong><span>${esc(definitionName(row.observation_mode_id))}</span><small>${esc(locationName(row.provider_operational_node_id))}</small><button type="button" data-survey-candidate-detail="${esc(campaign.id)}" data-comparison-key="${esc(row.comparison_key)}">詳細</button></div>`).join('');
+    const rows=axes.map((axis)=>`<div class="comparison-axis-row ${axis.differs?'is-different':''}"><strong>${esc(axis.label)}</strong>${candidates.map((row)=>`<span>${surveyComparisonValueHtml(axis,surveyComparisonValue(row,axis.key))}</span>`).join('')}</div>`).join('');
+    const blockerRows=candidates.map((row)=>`<div class="comparison-blocker-cell">${(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">制約なし</span>'}</div>`).join('');
+    return `<div class="comparison-surface" style="--comparison-columns:${candidates.length}"><div class="comparison-heading-row"><div class="comparison-axis-heading">比較軸</div>${headers}</div>${rows}<div class="comparison-axis-row comparison-blocker-row"><strong>現在の制約</strong>${blockerRows}</div></div>`;
+  }
   const surveyIntentPreviewSerial=new Map();
   const surveyIntentPreviewCache=new Map();
   function surveyIntentDraft(campaignId=null){
@@ -732,7 +762,14 @@
     all.forEach((row)=>{cellMap.set(row.cell_id,row.cell_label);resourceMap.set(row.resource_id,row.resource_name);});
     const cellChecks=[...cellMap].map(([cellId,label])=>`<label class="check-row"><input type="checkbox" data-survey-campaign-cell data-draft-key="survey:${esc(c.id)}:cell:${esc(cellId)}" data-structured-draft data-draft-scope="survey:${esc(c.id)}" value="${esc(cellId)}" ${(c.target_cell_ids||[]).includes(cellId)?'checked':''}>${esc(label)}</label>`).join('');
     const resourceChecks=[...resourceMap].map(([resourceId,label])=>`<label class="check-row"><input type="checkbox" data-survey-campaign-resource data-draft-key="survey:${esc(c.id)}:resource:${esc(resourceId)}" data-structured-draft data-draft-scope="survey:${esc(c.id)}" value="${esc(resourceId)}" ${(c.resource_ids||[]).includes(resourceId)?'checked':''}>${esc(label)}</label>`).join('');
-    const candidates=(c.candidates||[]).map((row)=>`<div class="detail-card"><div class="mode-title"><span>${esc(definitionName(row.provider_definition_id))} / ${esc(definitionName(row.observation_mode_id))}</span><span class="badge ${row.viable?'ok':'warn'}">${row.viable?'利用可能':'利用不可'}</span></div><div class="cell-sub">${esc(locationName(row.provider_operational_node_id))} · ${esc(A.userFacingText(row.provider_source_kind))} · 調査速度 ${fmt(row.survey_rate,2)} · 到達可能 Lv ${fmt(row.max_knowledge_level,0)}</div><div class="cell-sub">配備 ${fmt(row.assigned_source_units,0)} / 最低 ${fmt(row.minimum_source_units,0)} · 能力 ${fmt(row.capacity_units_per_day,2)}/日</div><div class="cell-sub">推定精度 ±${pct(row.estimate_uncertainty_fraction)} / 測定精度 ±${pct(row.measurement_precision_fraction)}</div>${(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:''}<button type="button" data-survey-constrain-candidate="${esc(c.id)}" data-provider-definition-id="${esc(row.provider_definition_id)}" data-operational-node-id="${esc(row.provider_operational_node_id)}" data-observation-mode-id="${esc(row.observation_mode_id)}">この観測手段に固定</button></div>`).join('')||'<div class="empty-state">現在利用可能な観測手段はありません。</div>';
+    const comparisonAvailable=(c.comparison_axes||[]).length>0;
+    const pinnedComparisonKeys=new Set(surveyComparisonPinnedKeys(c));
+    const candidates=(c.candidates||[]).map((row)=>{
+      const pinned=pinnedComparisonKeys.has(row.comparison_key);
+      const pinDisabled=comparisonAvailable&&!pinned&&pinnedComparisonKeys.size>=4;
+      const compareAction=comparisonAvailable?`<button type="button" data-survey-compare-pin="${esc(c.id)}" data-comparison-key="${esc(row.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';
+      return `<div class="detail-card"><div class="mode-title"><span>${esc(definitionName(row.provider_definition_id))} / ${esc(definitionName(row.observation_mode_id))}</span><span class="badge ${row.viable?'ok':'warn'}">${row.viable?'利用可能':'利用不可'}</span></div><div class="cell-sub">${esc(locationName(row.provider_operational_node_id))} · ${esc(A.userFacingText(row.provider_source_kind))} · 調査速度 ${fmt(row.survey_rate,2)} · 到達可能 Lv ${fmt(row.max_knowledge_level,0)}</div><div class="cell-sub">配備 ${fmt(row.assigned_source_units,0)} / 最低 ${fmt(row.minimum_source_units,0)} · 能力 ${fmt(row.capacity_units_per_day,2)}/日</div><div class="cell-sub">推定精度 ±${pct(row.estimate_uncertainty_fraction)} / 測定精度 ±${pct(row.measurement_precision_fraction)}</div>${(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:''}<div class="action-row">${compareAction}<button type="button" data-survey-candidate-detail="${esc(c.id)}" data-comparison-key="${esc(row.comparison_key)}">詳細</button><button type="button" data-survey-constrain-candidate="${esc(c.id)}" data-provider-definition-id="${esc(row.provider_definition_id)}" data-operational-node-id="${esc(row.provider_operational_node_id)}" data-observation-mode-id="${esc(row.observation_mode_id)}">この観測手段に固定</button></div></div>`;
+    }).join('')||'<div class="empty-state">現在利用可能な観測手段はありません。</div>';
     const targetCards=(c.targets||[]).map((row)=>{
       const ratio=Number(row.target_threshold)>0?Math.max(0,Math.min(1,Number(row.progress||0)/Number(row.target_threshold))):(row.complete?1:0);
       return `<div class="survey-target-progress-card ${row.complete?'is-complete':''}"><div class="mode-title"><span>${esc(surfaceCellLabel(row.cell_id))} · ${esc(resourceName(row.resource_id))}</span><span class="badge ${row.complete?'ok':''}">${row.complete?'目標到達':'調査中'}</span></div><div class="cell-sub">調査知識 Lv ${fmt(row.current_knowledge_level,0)} → Lv ${fmt(row.goal_knowledge_level,0)}</div><div class="progress-track"><span class="progress-bar" style="width:${ratio*100}%"></span></div><div class="cell-sub">進捗 ${fmt(row.progress,2)} / ${fmt(row.target_threshold,2)}</div></div>`;
@@ -746,11 +783,30 @@
       section('操作',`<div class="action-stack">${actions}<div class="form-row">${priorityControl(c.priority??3,`id="surveyPriorityInput" data-priority-direct="survey" data-priority-id="${esc(c.id)}"`,'活動優先度',!c.can_set_priority)}</div></div>`)+
       section('範囲・目標の編集',`<div class="detail-grid"><div class="detail-card"><div class="mode-title"><span>対象地域</span></div>${cellChecks}</div><div class="detail-card"><div class="mode-title"><span>対象資源</span></div>${resourceChecks}</div></div><div class="form-row"><label>調査目標<select id="surveyCampaignGoal" data-draft-key="survey:${esc(c.id)}:goal" data-structured-draft data-draft-scope="survey:${esc(c.id)}"><option value="1" ${Number(c.goal_knowledge_level)===1?'selected':''}>1 存在確認</option><option value="2" ${Number(c.goal_knowledge_level)===2?'selected':''}>2 埋蔵量推定</option><option value="3" ${Number(c.goal_knowledge_level)===3?'selected':''}>3 精密測定</option></select></label><button type="button" data-update-survey-campaign="${esc(c.id)}" disabled>範囲・目標を適用</button></div><div data-survey-update-intent-status><span class="badge">可否確認中</span></div>`)+
       section('対象ごとの進捗',`<div class="survey-target-progress-grid">${targetCards||'<div class="empty-state">調査対象はありません。</div>'}</div>`)+
-      section('観測手段の候補差',candidates)+
+      section('観測手段の候補',candidates)+
+      (comparisonAvailable?section('候補比較',surveyComparisonHtml(c)):'')+
       section('観測手段の固定',`<div class="cell-sub">観測手段: ${esc(c.provider_constraint_definition_id?`${definitionName(c.provider_constraint_definition_id)} @ ${locationName(c.provider_constraint_operational_node_id)}`:'自動')} · 観測方式: ${esc(c.observation_mode_constraint?definitionName(c.observation_mode_constraint):'自動')}</div><button type="button" data-clear-survey-constraint="${esc(c.id)}">自動選択へ戻す</button>`)
     );return true;
   }
 
+
+  function renderSurveyCandidateInspector(id){
+    const split=id.indexOf('@@');if(split<0)return false;
+    const campaignId=id.slice(0,split),candidateKey=id.slice(split+2);
+    const c=state.surveys?.campaigns?.find((row)=>row.id===campaignId);if(!c)return false;
+    const row=(c.candidates||[]).find((candidate)=>candidate.comparison_key===candidateKey);if(!row)return false;
+    const axes=c.comparison_axes||[];
+    const details=axes.length?kv(axes.map((axis)=>[axis.label,surveyComparisonValueHtml(axis,surveyComparisonValue(row,axis.key))])):kv([['調査速度',fmt(row.survey_rate,2)],['到達可能な調査知識',fmt(row.max_knowledge_level,0)],['最低配備数',`${fmt(row.minimum_source_units,0)} 機`],['利用可能能力',`${fmt(row.capacity_units_per_day,2)} /日`]]);
+    const blockers=row.blockers||[];
+    const pinned=surveyComparisonPinnedKeys(c).includes(row.comparison_key);
+    setInspector(`${definitionName(row.provider_definition_id)} · ${definitionName(row.observation_mode_id)}`,
+      section('観測手段の状態',kv([['提供地点',esc(locationName(row.provider_operational_node_id))],['提供方式',esc(A.userFacingText(row.provider_source_kind))],['利用可否',row.viable?'利用可能':'利用不可'],['現在の固定条件に一致',row.matches_constraints?'一致':'不一致']]))+
+      section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">なし</span>')+
+      section('操作',`<div class="action-stack"><button type="button" data-survey-constrain-candidate="${esc(c.id)}" data-provider-definition-id="${esc(row.provider_definition_id)}" data-operational-node-id="${esc(row.provider_operational_node_id)}" data-observation-mode-id="${esc(row.observation_mode_id)}">この観測手段に固定</button>${(c.comparison_axes||[]).length?`<button type="button" data-survey-compare-pin="${esc(c.id)}" data-comparison-key="${esc(row.comparison_key)}" aria-pressed="${pinned?'true':'false'}">${pinned?'比較から外す':'比較に追加'}</button>`:''}<button type="button" data-inspect="survey-campaign" data-id="${esc(c.id)}">調査判断へ戻る</button></div>`)+
+      section('比較軸の詳細',details)
+    );
+    return true;
+  }
 
   function renderSurfaceCellInspector(id){
     const cell=surfaceCell(id);if(!cell)return false;
@@ -806,7 +862,7 @@
   function renderInspector(){
     if(!state.inspector){setInspector('選択項目','<div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div>');return;}
     const {type,id}=state.inspector;
-    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,'dependency-resource':renderDependencyResourceInspector,'dependency-service':renderDependencyServiceInspector,'extraction-resource':renderExtractionResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'survey-campaign':renderSurveyCampaignInspector,'surface-cell':renderSurfaceCellInspector};
+    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,'dependency-resource':renderDependencyResourceInspector,'dependency-service':renderDependencyServiceInspector,'extraction-resource':renderExtractionResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'survey-campaign':renderSurveyCampaignInspector,'survey-candidate':renderSurveyCandidateInspector,'surface-cell':renderSurfaceCellInspector};
     if(!handlers[type]?.(id)){state.inspector=null;setInspector('選択項目','<div class="empty-state">項目の状態が変化しました。再選択してください。</div>');}
   }
 
@@ -885,6 +941,8 @@
     const startSurvey=event.target.closest('[data-start-survey-campaign]');if(startSurvey){const target_cell_ids=$$('[data-survey-draft-cell]:checked').map((x)=>x.value),resource_ids=$$('[data-survey-draft-resource]:checked').map((x)=>x.value);if(!target_cell_ids.length||!resource_ids.length){banner('対象地域と資源を1つ以上選択してください','error');return;}try{const result=await command('StartSurvey',{target_cell_ids,resource_ids,goal_knowledge_level:Number($('#surveyDraftGoal')?.value??1),priority:Number($('#surveyDraftPriority')?.value??3),provider_constraint:null,observation_mode_constraint:null});await A.completeActiveDraft('survey:new');banner('地表調査を開始しました');}catch{}return;}
     const campaignAction=event.target.closest('[data-survey-campaign-action]');if(campaignAction){const map={pause:'PauseSurvey',resume:'ResumeSurvey'};try{await command(map[campaignAction.dataset.surveyCampaignAction],{campaign_id:campaignAction.dataset.id});}catch{}return;}
     const updateSurvey=event.target.closest('[data-update-survey-campaign]');if(updateSurvey){const c=(state.surveys?.campaigns||[]).find((row)=>row.id===updateSurvey.dataset.updateSurveyCampaign);if(!c)return;const target_cell_ids=$$('[data-survey-campaign-cell]:checked').map((x)=>x.value),resource_ids=$$('[data-survey-campaign-resource]:checked').map((x)=>x.value);try{await command('UpdateSurvey',{campaign_id:c.id,target_cell_ids,resource_ids,goal_knowledge_level:Number($('#surveyCampaignGoal')?.value??c.goal_knowledge_level),provider_constraint:c.provider_constraint_definition_id?{provider_definition_id:c.provider_constraint_definition_id,operational_node_id:c.provider_constraint_operational_node_id}:null,observation_mode_constraint:c.observation_mode_constraint});await A.completeActiveDraft(`survey:${c.id}`);}catch{}return;}
+    const candidateDetail=event.target.closest('[data-survey-candidate-detail]');if(candidateDetail){state.inspector={type:'survey-candidate',id:`${candidateDetail.dataset.surveyCandidateDetail}@@${candidateDetail.dataset.comparisonKey}`};renderInspector();return;}
+    const comparePin=event.target.closest('[data-survey-compare-pin]');if(comparePin){const campaignId=comparePin.dataset.surveyComparePin,key=comparePin.dataset.comparisonKey;const c=(state.surveys?.campaigns||[]).find((row)=>row.id===campaignId);if(!c)return;const pins=surveyComparisonPinnedKeys(c);const index=pins.indexOf(key);if(index>=0)pins.splice(index,1);else if(pins.length<4)pins.push(key);surveyComparisonPins.set(campaignId,pins);if(state.inspector?.type==='survey-candidate')renderInspector();else{state.inspector={type:'survey-campaign',id:campaignId};renderInspector();}return;}
     const constrainSurvey=event.target.closest('[data-survey-constrain-candidate]');if(constrainSurvey){const c=(state.surveys?.campaigns||[]).find((row)=>row.id===constrainSurvey.dataset.surveyConstrainCandidate);if(!c)return;try{await command('UpdateSurvey',{campaign_id:c.id,target_cell_ids:c.target_cell_ids,resource_ids:c.resource_ids,goal_knowledge_level:c.goal_knowledge_level,provider_constraint:{provider_definition_id:constrainSurvey.dataset.providerDefinitionId,operational_node_id:constrainSurvey.dataset.operationalNodeId},observation_mode_constraint:constrainSurvey.dataset.observationModeId});}catch{}return;}
     const clearSurvey=event.target.closest('[data-clear-survey-constraint]');if(clearSurvey){const c=(state.surveys?.campaigns||[]).find((row)=>row.id===clearSurvey.dataset.clearSurveyConstraint);if(!c)return;try{await command('UpdateSurvey',{campaign_id:c.id,target_cell_ids:c.target_cell_ids,resource_ids:c.resource_ids,goal_knowledge_level:c.goal_knowledge_level,provider_constraint:null,observation_mode_constraint:null});}catch{}return;}
   });
