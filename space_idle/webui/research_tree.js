@@ -102,7 +102,7 @@
       const levelLabel = provider.level == null ? `${fmt(provider.committed_units,0)} 機` : `Lv ${fmt(provider.level,0)}`;
       const admitted = Number(provider.admitted_generation_points_per_day || 0);
       const controls = isFleet ? `<div class="action-stack research-provider-actions">
-        <div class="form-row"><label>配備優先度<select data-research-provider-priority>${[5,4,3,2,1].map((v)=>`<option value="${v}" ${Number(provider.priority)===v?'selected':''}>${v}</option>`).join('')}</select></label><button type="button" data-research-provider-set-priority="${esc(provider.id)}">優先度を適用</button></div>
+        <div class="form-row">${app.prioritySegmentedHtml(provider.priority,{inputAttributes:`data-research-provider-priority data-priority-direct="research-provider" data-priority-id="${esc(provider.id)}"`,label:'配備優先度'})}</div>
         <div class="action-row"><button type="button" data-research-provider-pause="${esc(provider.id)}" ${provider.can_pause?'':'disabled'}>停止</button><button type="button" data-research-provider-resume="${esc(provider.id)}" ${provider.can_resume?'':'disabled'}>再開</button></div>
       </div>` : '';
       return `<div class="detail-card research-provider-card" data-research-provider-card="${esc(provider.id)}">

@@ -14,6 +14,20 @@ from space_idle.simulation import OfflineProgressPolicy
 from space_idle.version import VERSION
 
 
+def _priority_group(page, holder_selector: str):
+    holder = page.locator(holder_selector)
+    return holder.locator("xpath=ancestor::*[contains(@class,'priority-segment')][1]")
+
+
+def _choose_priority(page, holder_selector: str, level: int | str):
+    value = str(level)
+    group = _priority_group(page, holder_selector)
+    button = group.locator(f'[data-priority-choice="{value}"]')
+    button.click()
+    assert page.locator(holder_selector).input_value() == value
+    return button
+
+
 
 def run() -> None:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
@@ -79,43 +93,50 @@ def run() -> None:
             assert page.locator("#inspectorTitle").inner_text() == research_title
             assert page.locator("#researchTree .research-node.is-selected").count() == 1
 
-            # A live editable control must keep its unsaved value and focus while
-            # the authoritative clock refreshes the surrounding projection.
+            # A structured-decision draft must keep its unsaved priority and focus
+            # while the authoritative clock refreshes the surrounding projection.
             page.locator('.primary-nav-button[data-section="location"]').click()
-            page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
-            first_facility = page.locator('[data-inspect="facility"]').first
-            first_facility.click()
+            page.locator('[data-section-tab="location"][data-tab="construction"]').click()
+            build_option = page.locator('[data-inspect="build-option"]').first
+            build_option.wait_for(timeout=10000)
+            build_option.click()
             inspector_title = page.locator("#inspectorTitle").inner_text()
-            priority = page.locator("#facilityPriorityInput")
-            priority.wait_for(timeout=10000)
+            priority = page.locator("#buildPlanPriorityInput")
+            priority.wait_for(timeout=10000, state="attached")
             saved_priority = priority.input_value()
             draft_priority = "4" if saved_priority != "4" else "5"
-            priority.select_option(draft_priority)
-            priority.focus()
+            priority_button = _choose_priority(page, "#buildPlanPriorityInput", draft_priority)
+            priority_button.focus()
             start_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
             page.wait_for_function(
                 "d => Number(document.querySelector('#dayValue').textContent.replaceAll(',','')) >= d + 3",
                 arg=start_day,
                 timeout=10000,
             )
-            assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "facilities"
+            assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "construction"
             assert page.locator("#inspectorTitle").inner_text() == inspector_title
-            assert priority.is_visible()
+            assert _priority_group(page, "#buildPlanPriorityInput").is_visible()
             assert priority.input_value() == draft_priority
-            assert page.evaluate("() => document.activeElement?.id || ''") == "facilityPriorityInput"
+            assert page.evaluate("el => document.activeElement === el", priority_button.element_handle())
 
-            # Save/Load is a browser wiring contract: the UI action must persist the
-            # authoritative state and a later load must replace local/updated state.
+            # Save/Load must restore authoritative state after a direct priority action.
+            page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
+            first_facility = page.locator('[data-inspect="facility"]').first
+            first_facility.click()
+            facility_priority = page.locator("#facilityPriorityInput")
+            facility_priority.wait_for(timeout=10000, state="attached")
+            authoritative_priority = facility_priority.input_value()
+            changed_priority = "4" if authoritative_priority != "4" else "5"
             page.locator("#saveButton").click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            page.locator('[data-set-facility-activity-priority]').click()
+            _choose_priority(page, "#facilityPriorityInput", changed_priority)
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            assert priority.input_value() == draft_priority
+            assert page.locator("#facilityPriorityInput").input_value() == changed_priority
             page.locator("#loadButton").click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            priority = page.locator("#facilityPriorityInput")
-            priority.wait_for(timeout=10000)
-            assert priority.input_value() == saved_priority
+            facility_priority = page.locator("#facilityPriorityInput")
+            facility_priority.wait_for(timeout=10000, state="attached")
+            assert facility_priority.input_value() == authoritative_priority
     finally:
         server.shutdown()
         server.server_close()

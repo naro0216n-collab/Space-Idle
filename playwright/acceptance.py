@@ -30,6 +30,18 @@ def _visible_button_min_height(page) -> float:
     )
 
 
+def _priority_group(page, holder_selector: str):
+    holder = page.locator(holder_selector)
+    return holder.locator("xpath=ancestor::*[contains(@class,'priority-segment')][1]")
+
+
+def _choose_priority(page, holder_selector: str, level: int | str) -> None:
+    value = str(level)
+    group = _priority_group(page, holder_selector)
+    group.locator(f'[data-priority-choice="{value}"]').click()
+    _assert(page.locator(holder_selector).input_value() == value, f"priority {holder_selector} must select {value}")
+
+
 def _select_location(page, location_id: object) -> None:
     button = page.locator(f'[data-location-id="{location_id}"]')
     target_name = button.locator('.location-name').inner_text().strip()
@@ -217,9 +229,9 @@ def run() -> dict[str, object]:
             _assert(upgrade_button.is_enabled(), "unblocked facility upgrade action must be enabled")
             _assert("必要工数" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose construction work")
             _assert("必要資源" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose physical resource requirements")
-            _assert(page.locator("#upgradePlanPriorityInput").is_visible(), "upgrade planning must expose priority before project creation")
+            _assert(_priority_group(page, "#upgradePlanPriorityInput").is_visible(), "upgrade planning must expose priority before project creation")
             _assert(page.locator("#upgradePlanProcurementTimingPolicy").is_visible(), "upgrade planning must expose procurement timing policy before project creation")
-            page.locator("#upgradePlanPriorityInput").select_option("4")
+            _choose_priority(page, "#upgradePlanPriorityInput", 4)
             # The form is a multi-field draft. Moving focus to another control
             # must not let periodic synchronization overwrite the first edit.
             page.locator("#upgradePlanProcurementTimingPolicy").focus()
@@ -253,12 +265,12 @@ def run() -> dict[str, object]:
                 page.locator('#inspectorContent [data-project-routing-constraint]').count() > 0,
                 "project Supply Requirements must expose Routing Constraint actions at the decision point",
             )
-            _assert(page.locator("#projectPriorityInput").is_enabled(), "mutable project priority must stay visible and enabled")
+            _assert(_priority_group(page, "#projectPriorityInput").locator('[data-priority-choice="5"]').is_enabled(), "mutable project priority must stay visible and enabled")
             _assert(page.locator("#projectProcurementTimingPolicy").is_enabled(), "mutable procurement timing policy must stay visible and enabled")
-            page.locator("#projectPriorityInput").select_option("5")
-            page.locator('[data-set-project-priority]').click()
+            _choose_priority(page, "#projectPriorityInput", 5)
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            _assert(page.locator("#projectPriorityInput").input_value() == "5", "project priority command must round-trip through the UI")
+            _assert(page.locator("#projectPriorityInput").input_value() == "5", "project priority direct action must round-trip through the UI")
+            _assert(page.locator('[data-set-project-priority]').count() == 0, "project priority must not require a second Apply action")
             cancel_upgrade = page.locator('#inspectorContent [data-command="CancelBuild"]')
             _assert(cancel_upgrade.is_enabled(), "planned upgrade project must use ordinary construction cancellation")
             cancel_upgrade.click()
@@ -284,7 +296,7 @@ def run() -> dict[str, object]:
                     startable_research = control
                     break
             _assert(startable_research is not None, "at least one projected Research decision must be startable")
-            page.locator('#researchPriorityInput').select_option('4')
+            _choose_priority(page, '#researchPriorityInput', 4)
             startable_research.click()
             research_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="research"]')
             page.wait_for_function(
@@ -326,7 +338,7 @@ def run() -> dict[str, object]:
             exploration_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="exploration"]')
             _assert(exploration_lifecycle.count() == 1, "exploration must expose one lifecycle control")
             _assert(exploration_lifecycle.get_attribute('data-exploration-action') == 'start' and exploration_lifecycle.is_enabled(), "campaign lifecycle control must expose start when startable")
-            page.locator('#explorationPriorityInput').select_option('4')
+            _choose_priority(page, '#explorationPriorityInput', 4)
             exploration_lifecycle.click()
             assignable_fleet = page.locator('#inspectorContent [data-exploration-assign]:not([disabled])').first
             assignable_fleet.wait_for(timeout=10000)
@@ -449,7 +461,7 @@ def run() -> dict[str, object]:
                 page.locator('[data-survey-start-intent-status]').inner_text().strip() == "適用可能",
                 "Survey Campaign creation availability must come from Application preview",
             )
-            page.locator('#surveyDraftPriority').select_option("4")
+            _choose_priority(page, '#surveyDraftPriority', 4)
             page.locator('[data-start-survey-campaign]').click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             campaign_row = page.locator('[data-inspect="survey-campaign"]').first
@@ -462,7 +474,7 @@ def run() -> dict[str, object]:
             _assert("範囲・目標の編集" in campaign_text, "Survey Campaign inspector must expose the selected scope and goal")
             _assert("観測手段の候補差" in campaign_text, "Survey Campaign inspector must expose candidate differences at the decision point")
             _assert("解決された観測手段" in campaign_text, "Survey Campaign inspector must expose the auto-resolved operational choice")
-            _assert(page.locator('#inspectorContent [data-set-survey-priority]').is_enabled(), "active Survey Campaign must expose priority control")
+            _assert(_priority_group(page, '#surveyPriorityInput').locator('[data-priority-choice="5"]').is_enabled(), "active Survey Campaign must expose priority control")
             page.wait_for_function(
                 "() => !document.querySelector('[data-survey-update-intent-status]')?.textContent?.includes('可否確認中')",
                 timeout=10000,
@@ -474,11 +486,12 @@ def run() -> dict[str, object]:
             _assert(int(page.locator('#surveyPriorityInput').input_value()) == 4, "Survey Campaign start priority must round-trip through the UI")
             survey_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey-campaign"]')
             _assert(survey_lifecycle.get_attribute('data-survey-campaign-action') == 'pause' and survey_lifecycle.is_enabled(), "active Survey Campaign must expose pause on the stable lifecycle control")
-            page.locator('#surveyPriorityInput').select_option('5')
-            page.locator('#inspectorContent [data-set-survey-priority]').click()
+            _choose_priority(page, '#surveyPriorityInput', 5)
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             page.wait_for_function(
                 "() => document.querySelector('#surveyPriorityInput')?.value === '5'", timeout=10000
             )
+            _assert(page.locator('#inspectorContent [data-set-survey-priority]').count() == 0, "Survey priority must be a direct action without a second Apply button")
             survey_lifecycle.click()
             page.wait_for_function(
                 "() => document.querySelector('[data-lifecycle-control=survey-campaign]')?.dataset.surveyCampaignAction === 'resume'",
@@ -519,6 +532,10 @@ def run() -> dict[str, object]:
             founding_card.locator('[data-new-location-name]').fill("Browser Lunar Outpost")
             founding_button.click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            page.wait_for_function(
+                "() => document.querySelector('#inspectorContent')?.innerText.includes('案件進行中')",
+                timeout=10000,
+            )
             _assert("案件進行中" in page.locator('#inspectorContent').inner_text(), "Founding command must round-trip to an active project on the selected cell")
             _assert(founding_button.count() == 1, "Founding control must remain in the same place after project start")
             _assert(not founding_button.is_enabled(), "active Founding must keep the same action visible but unavailable")

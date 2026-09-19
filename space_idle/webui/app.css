@@ -232,8 +232,12 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .preset-row { display: flex; flex-wrap: wrap; gap: 7px; }
 .preset-row button { min-height: 38px; padding: 6px 10px; }
 .priority-segment { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
-.priority-segment button { min-width: 0; min-height: 42px; padding: 6px 4px; font-size: 11px; }
+.priority-segment button { min-width: 0; min-height: 44px; padding: 6px 4px; font-size: 11px; }
 .priority-segment button.is-selected { border-color: var(--accent); background: #16354a; color: #fff; box-shadow: inset 0 0 0 1px var(--accent); }
+.priority-field { display: grid; gap: 6px; min-width: min(100%, 310px); }
+.priority-field-label { color: var(--muted); font-size: 11px; font-weight: 650; }
+.priority-segment button span { display: block; margin-top: 2px; font-size: 9px; color: var(--muted); }
+.priority-segment button.is-selected span { color: inherit; }
 .precision-input { border-top: 1px solid var(--line-soft); padding-top: 8px; }
 .precision-input summary { cursor: pointer; color: var(--muted); font-size: 11px; }
 .precision-input[open] summary { margin-bottom: 8px; }

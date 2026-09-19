@@ -262,6 +262,13 @@
     }
     return `<div class="issue"><div class="issue-title">${esc(message)}</div>${meta?`<div class="issue-meta">${esc(meta)}</div>`:''}</div>`;
   }
+  const priorityLabels={1:'最低',2:'低',3:'標準',4:'高',5:'最高'};
+  function prioritySegmentedHtml(selected=3,{inputAttributes='',disabled=false,label='優先度'}={}){
+    const value=Math.min(5,Math.max(1,Number(selected)||3));
+    const disabledAttr=disabled?'disabled':'';
+    const buttons=[1,2,3,4,5].map((level)=>`<button type="button" data-priority-choice="${level}" class="${level===value?'is-selected':''}" aria-pressed="${level===value?'true':'false'}" ${disabledAttr}>${level}<span>${priorityLabels[level]}</span></button>`).join('');
+    return `<div class="priority-field"><span class="priority-field-label">${esc(label)}</span><div class="priority-segment" role="group" aria-label="${esc(label)}">${buttons}<input type="hidden" data-priority-value-holder value="${value}" ${inputAttributes}></div></div>`;
+  }
   const metricHtml=([label,value])=>`<div class="metric-chip"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
   const statHtml=(label,value)=>`<div class="stat-box"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
   const signed=(v)=>{const n=Number(v||0);return `${n>0?'+':''}${fmt(n,2)}`;};
@@ -505,11 +512,12 @@
 
   window.SpaceIdleApp={
     state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,operationName,
-    locationKindLabels,stateLabels,playerTerms,playerTerm,userFacingText,issueHtml,metricHtml,statHtml,signed,stableUiSignature,
+    locationKindLabels,stateLabels,playerTerms,playerTerm,userFacingText,issueHtml,metricHtml,statHtml,signed,stableUiSignature,prioritySegmentedHtml,
     api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveSection,setActiveView,openDecisionContext,
   };
 
   document.addEventListener('click',async(event)=>{
+    const priorityChoice=event.target.closest('[data-priority-choice]');if(priorityChoice){const group=priorityChoice.closest('.priority-segment');const holder=group?.querySelector('[data-priority-value-holder]');if(holder){holder.value=priorityChoice.dataset.priorityChoice;group.querySelectorAll('[data-priority-choice]').forEach((button)=>{const selected=button===priorityChoice;button.classList.toggle('is-selected',selected);button.setAttribute('aria-pressed',selected?'true':'false');});holder.dispatchEvent(new Event('change',{bubbles:true}));}return;}
     const inspectorToggle=event.target.closest('[data-toggle-inspector]');if(inspectorToggle){state.inspectorExpanded=!state.inspectorExpanded;renderInspectorWidth();return;}
     const sectionBtn=event.target.closest('[data-section]'); if(sectionBtn){setActiveSection(sectionBtn.dataset.section);return;}
     const openLocation=event.target.closest('[data-open-location]'); if(openLocation){await loadLocation(openLocation.dataset.openLocation);setActiveSection('location');return;}

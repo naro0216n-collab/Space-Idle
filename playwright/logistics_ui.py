@@ -20,6 +20,14 @@ PROPELLANT = str(ids.PROPELLANT)
 OWNED_LAUNCH_VEHICLE = str(ids.REUSABLE_LAUNCH_VEHICLE)
 
 
+def _choose_priority(root, holder_selector: str, level: int | str) -> None:
+    value = str(level)
+    holder = root.locator(holder_selector)
+    group = holder.locator("xpath=ancestor::*[contains(@class,'priority-segment')][1]")
+    group.locator(f'[data-priority-choice="{value}"]').click()
+    assert holder.input_value() == value
+
+
 def _build_logistics_test_application():
     app = build_game_application()
     app._simulation.technology.completed.update(  # noqa: SLF001 - deterministic E2E fixture setup
@@ -206,7 +214,7 @@ def run() -> None:
             market_order_id = market_order.get_attribute('data-market-order-row')
             assert market_order_id
             market_order.locator('[data-market-target]').fill('2')
-            market_order.locator('[data-market-priority]').select_option('4')
+            _choose_priority(market_order, '[data-market-priority]', 4)
             market_order.locator('[data-market-save]').click()
             page.wait_for_function(
                 "id => document.querySelector(`[data-market-order-row=\"${id}\"] [data-market-target]`)?.value === '2'",
