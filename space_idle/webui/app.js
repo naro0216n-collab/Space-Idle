@@ -265,6 +265,15 @@
   const metricHtml=([label,value])=>`<div class="metric-chip"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
   const statHtml=(label,value)=>`<div class="stat-box"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
   const signed=(v)=>{const n=Number(v||0);return `${n>0?'+':''}${fmt(n,2)}`;};
+  function stableUiSignature(value){
+    const text=JSON.stringify(value);
+    let hash=2166136261;
+    for(let index=0;index<text.length;index++){
+      hash^=text.charCodeAt(index);
+      hash=Math.imul(hash,16777619);
+    }
+    return (hash>>>0).toString(36);
+  }
 
   function renderHeader(){
     $('#dayValue').textContent=fmt(state.world?.day??state.session?.day,0);
@@ -496,7 +505,7 @@
 
   window.SpaceIdleApp={
     state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,operationName,
-    locationKindLabels,stateLabels,playerTerms,playerTerm,userFacingText,issueHtml,metricHtml,statHtml,signed,
+    locationKindLabels,stateLabels,playerTerms,playerTerm,userFacingText,issueHtml,metricHtml,statHtml,signed,stableUiSignature,
     api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveSection,setActiveView,openDecisionContext,
   };
 

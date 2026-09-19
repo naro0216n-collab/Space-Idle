@@ -354,7 +354,26 @@
     }
     const fallbackHtml=fallbackCells.map(([id,label])=>`<label class="survey-resource-choice"><input type="checkbox" data-survey-draft-cell data-draft-key="survey:new:cell:${esc(id)}" value="${esc(id)}"><span>${esc(label)}</span></label>`).join('');
     const resourceChoices=[...resourceMap].map(([id,label])=>`<label class="survey-resource-choice"><input type="checkbox" data-survey-draft-resource data-draft-key="survey:new:resource:${esc(id)}" value="${esc(id)}"><span>${esc(label)}</span></label>`).join('');
-    const createSection=`<section class="survey-decision-card"><div class="decision-card-heading"><div><span class="eyebrow">調査範囲</span><h3>調査範囲を地表から選択</h3></div><span class="badge">${cellMap.size} 地域 · ${resourceMap.size} 資源</span></div><div class="survey-decision-body"><div class="survey-map-column">${scopeMap||'<div class="empty-state">このContextに地表位置情報はありません。</div>'}${fallbackHtml?`<div class="survey-fallback-cells">${fallbackHtml}</div>`:''}</div><div class="survey-intent-column"><div><h4>対象資源</h4><div class="survey-resource-choices">${resourceChoices||'<div class="empty-state">対象資源なし</div>'}</div></div><div class="form-row survey-goal-row"><label>調査目標<select id="surveyDraftGoal" data-draft-key="survey:new:goal"><option value="1">1 存在確認</option><option value="2">2 埋蔵量推定</option><option value="3">3 精密測定</option></select></label><label>活動優先度<select id="surveyDraftPriority" data-draft-key="survey:new:priority">${priorityOptions(3)}</select></label></div><div data-survey-start-intent-status><span class="badge">可否確認中</span></div><button type="button" class="primary survey-start-button" data-start-survey-campaign disabled>この条件で地表調査を開始</button><div class="cell-sub">観測手段と観測方式はApplicationが解決し、戦略差がある場合だけ調査詳細で候補差を提示します。</div></div></div></section>`;
+    const draftSignature=A.stableUiSignature({
+      body_id:state.surfaceMap?.body_id||null,
+      cells:cells.map((cell)=>({
+        id:cell.id,
+        environment:(cell.environment||[]).map((row)=>[row.key,row.value]),
+        location_id:cell.location_id||null,
+        developed:Boolean(cell.developed),
+        is_location_core:Boolean(cell.is_location_core),
+        movement_accessible:cell.movement_accessible,
+        minimum_transit_days:cell.minimum_transit_days,
+      })),
+      knowledge:visibleKnowledge.map((row)=>({
+        cell_id:row.cell_id,
+        resource_id:row.resource_id,
+        knowledge_level:row.knowledge_level,
+        visible_potential:row.visible_potential,
+        visible_potential_precision_fraction:row.visible_potential_precision_fraction,
+      })),
+    });
+    const createSection=`<section class="survey-decision-card" data-survey-draft-surface data-survey-draft-signature="${esc(draftSignature)}"><div class="decision-card-heading"><div><span class="eyebrow">調査範囲</span><h3>調査範囲を地表から選択</h3></div><span class="badge">${cellMap.size} 地域 · ${resourceMap.size} 資源</span></div><div class="survey-decision-body"><div class="survey-map-column">${scopeMap||'<div class="empty-state">このContextに地表位置情報はありません。</div>'}${fallbackHtml?`<div class="survey-fallback-cells">${fallbackHtml}</div>`:''}</div><div class="survey-intent-column"><div><h4>対象資源</h4><div class="survey-resource-choices">${resourceChoices||'<div class="empty-state">対象資源なし</div>'}</div></div><div class="form-row survey-goal-row"><label>調査目標<select id="surveyDraftGoal" data-draft-key="survey:new:goal"><option value="1">1 存在確認</option><option value="2">2 埋蔵量推定</option><option value="3">3 精密測定</option></select></label><label>活動優先度<select id="surveyDraftPriority" data-draft-key="survey:new:priority">${priorityOptions(3)}</select></label></div><div data-survey-start-intent-status><span class="badge">可否確認中</span></div><button type="button" class="primary survey-start-button" data-start-survey-campaign disabled>この条件で地表調査を開始</button><div class="cell-sub">観測手段と観測方式はApplicationが解決し、戦略差がある場合だけ調査詳細で候補差を提示します。</div></div></div></section>`;
 
     const campaigns=(state.surveys?.campaigns||[]).map((c)=>{
       const provider=c.projected_provider_definition_id?`${definitionName(c.projected_provider_definition_id)} / ${definitionName(c.projected_observation_mode_id)||c.projected_observation_mode_id||'—'}`:'未解決';
@@ -408,13 +427,36 @@
     return `<div class="surface-layout"><section class="card surface-map-card"><div class="card-heading"><div><h3>${esc(map.display_name)} 地表</h3><div class="cell-sub">地域を選択してSurvey・開発・位置依存設備・新拠点設立を判断します。</div></div><span class="badge">${cells.length} 地域</span></div><div class="surface-map-stage"><svg class="surface-map-links" viewBox="0 0 1000 480" preserveAspectRatio="none" aria-hidden="true">${lines.join('')}</svg><div class="surface-map-nodes">${buttons}</div></div><div class="surface-map-legend"><span><i class="legend-dot core"></i>拠点中心</span><span><i class="legend-dot developed"></i>開発済み</span><span><i class="legend-dot undeveloped"></i>未開発</span></div></section><section class="card"><div class="card-heading"><h3>拠点領域</h3></div><div class="card-body">${locations||'<div class="empty-state">拠点なし</div>'}</div></section></div>`;
   }
 
+  function patchSurveyDecisionSurface(root,html){
+    const liveSurface=root.firstElementChild;
+    const liveDraft=liveSurface?.querySelector?.('[data-survey-draft-surface]');
+    if(!liveSurface?.classList?.contains('survey-decision-surface')||!liveDraft)return false;
+    const template=document.createElement('template');
+    template.innerHTML=html.trim();
+    const nextSurface=template.content.firstElementChild;
+    const nextDraft=nextSurface?.querySelector?.('[data-survey-draft-surface]');
+    if(!nextDraft||nextDraft.dataset.surveyDraftSignature!==liveDraft.dataset.surveyDraftSignature)return false;
+
+    // The draft controls are local intent, not authoritative state. Keep their DOM
+    // nodes mounted so a periodic snapshot cannot detach an in-progress tap/click.
+    // All sibling sections remain authoritative and are refreshed from the latest
+    // Application projection on every sync.
+    const nextChildren=[...nextSurface.children];
+    const draftIndex=nextChildren.indexOf(nextDraft);
+    const oldSiblings=[...liveSurface.children].filter((child)=>child!==liveDraft);
+    const before=nextChildren.slice(0,draftIndex);
+    const after=nextChildren.slice(draftIndex+1);
+    if(before.length)liveDraft.before(...before);
+    if(after.length)liveDraft.after(...after);
+    oldSiblings.forEach((child)=>child.remove());
+    return true;
+  }
+
   function renderActiveTab(){
     const renderers={overview:renderOverviewTab,facilities:renderFacilitiesTab,inventory:renderInventoryTab,construction:renderConstructionTab,research:renderResearchTab,'scientific-exploration':renderScientificExplorationTab,survey:renderSurveyTab,surface:renderSurfaceTab};
     const root=$('#operationsTabContent');
     const html=(renderers[state.activeTab]||renderOverviewTab)();
-    // Keep the current interaction surface mounted when the authoritative view is
-    // unchanged. Periodic synchronization must not detach a button while the user
-    // is clicking it or replace in-progress form controls with identical markup.
+    if(state.activeTab==='survey'&&patchSurveyDecisionSurface(root,html))return;
     if(root.innerHTML!==html)root.innerHTML=html;
   }
 
