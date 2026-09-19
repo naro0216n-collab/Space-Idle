@@ -629,23 +629,35 @@ def run(*, browser=None) -> dict[str, object]:
             )
 
             # Return/Abort are browser contracts; exact movement timing is not.
-            # Keep the global clock paused and prepare the outbound phase through
-            # Application commands so E2E does not spend wall time re-testing
-            # Domain progression. Then refresh and operate the real UI controls.
+            # Keep the global clock paused and prepare a stable ACTIVE phase through
+            # the public Application boundary so E2E does not spend wall time
+            # re-testing Domain progression. ACTIVE is deliberately used instead of
+            # an in-flight movement phase, avoiding settlement timing as an E2E
+            # precondition. Then wait for the authoritative refresh before operating
+            # the real UI controls.
             _advance_exploration_fixture_until(
                 runtime,
                 exploration_id,
-                lambda row: row.can_return,
+                lambda row: row.status == 'active'
+                and row.can_return
+                and row.termination_intent is None,
             )
-            page.locator('#refreshButton').click()
+            with page.expect_response(
+                lambda response: response.request.method == 'GET'
+                and '/api/v1/ui-state' in response.url,
+                timeout=10000,
+            ) as exploration_refresh:
+                page.locator('#refreshButton').click()
+            _assert(exploration_refresh.value.ok, "exploration refresh must succeed")
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             page.locator(
                 f'[data-inspect="scientific-exploration"][data-id="{exploration_id}"]'
             ).click()
             return_action = page.locator('#inspectorContent [data-exploration-return]')
+            return_action.wait_for(state='visible', timeout=3000)
             _assert(
-                return_action.count() == 1 and return_action.is_enabled(),
-                "outbound scientific exploration must expose an enabled Return action",
+                return_action.is_enabled(),
+                "active scientific exploration must expose an enabled Return action",
             )
             with page.expect_response(
                 lambda response: response.request.method == 'POST'
@@ -664,7 +676,7 @@ def run(*, browser=None) -> dict[str, object]:
             abort_action = page.locator('#inspectorContent [data-exploration-abort]')
             _assert(
                 abort_action.count() == 1 and abort_action.is_enabled(),
-                "outbound exploration with a return request must keep Abort available",
+                "returning exploration workflow must keep Abort available",
             )
             with page.expect_response(
                 lambda response: response.request.method == 'POST'
