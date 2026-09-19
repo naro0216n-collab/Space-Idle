@@ -636,8 +636,10 @@ def run() -> dict[str, object]:
             # exercise Return and Abort through the real command endpoint. This
             # avoids encoding the campaign's activity duration as an E2E timing
             # assumption while still testing the actual controls and refresh path.
-            page.locator('[data-time-speed="1"]').click()
-            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            speed_one = page.locator('[data-time-speed="1"]')
+            if speed_one.get_attribute('aria-pressed') != 'true':
+                speed_one.click()
+                page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             page.locator('#timePauseButton').click()
             page.wait_for_function(
                 """id => document.querySelector(`[data-inspect="scientific-exploration"][data-id="${id}"] .decision-card-title .badge`)?.textContent?.trim() === '往路移動中'""",
