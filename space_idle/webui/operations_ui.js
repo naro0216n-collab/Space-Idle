@@ -328,6 +328,11 @@
   }
 
   function renderSurveyTab(){
+    const locationSummary=(state.world?.operational_nodes||[]).find((row)=>row.id===state.operationalNodeId);
+    const expectedBodyId=locationSummary?.body_id||null;
+    if(expectedBodyId&&state.surfaceMap?.body_id!==expectedBodyId){
+      return `<section class="card survey-loading-card"><div class="card-heading"><div><h3>地表調査</h3><div class="cell-sub">${esc(locationSummary?.display_name||locationName(state.operationalNodeId))} に対応する地表情報を取得しています。</div></div><span class="badge">読込中</span></div><div class="empty-state">対象天体のSurface Mapが確定するまで調査範囲は編集できません。</div></section>`;
+    }
     const providerFleet=state.surveys?.provider_fleet||[];
     const knowledge=state.surveys?.items||[];
     const visibleKnowledge=state.surfaceMap?.body_id?knowledge.filter((row)=>row.body_id===state.surfaceMap.body_id):knowledge;
