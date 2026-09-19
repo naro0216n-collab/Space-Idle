@@ -3,6 +3,17 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class DecisionContextTarget:
+    """Semantic destination for continuing a player decision from an issue."""
+
+    decision_area: str
+    operational_node_id: str | None = None
+    subject_kind: str | None = None
+    subject_id: str | None = None
+    resource_id: str | None = None
+
+
+@dataclass(frozen=True)
 class IssueRow:
     """Normalized UI-facing explanation of a blocked or constrained state."""
 
@@ -15,6 +26,8 @@ class IssueRow:
     definition_id: str | None = None
     resource_id: str | None = None
     impact: str = "blocked"
+    attention_required: bool = False
+    navigation: DecisionContextTarget | None = None
 
 
 @dataclass(frozen=True)

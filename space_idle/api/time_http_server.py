@@ -4,6 +4,7 @@ import ssl
 from urllib.parse import parse_qs, urlsplit
 
 from ..application_commands import (
+    GetAttention,
     GetBottlenecks,
     GetBuildOptions,
     GetCargoFlows,
@@ -51,7 +52,7 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
 
         queries = {
             "world": GetWorld(),
-            "global_issues": GetBottlenecks(),
+            "global_issues": GetAttention(),
             "research": GetResearch(),
             "scientific_explorations": GetScientificExplorations(),
             "contracts": GetContracts(),

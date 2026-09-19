@@ -20,6 +20,8 @@ class GetDependencyAnalytics:
 @dataclass(frozen=True)
 class GetBottlenecks: operational_node_id: str | None = None
 @dataclass(frozen=True)
+class GetAttention: pass
+@dataclass(frozen=True)
 class GetProjects: operational_node_id: str | None = None
 @dataclass(frozen=True)
 class GetBuildOptions: operational_node_id: str

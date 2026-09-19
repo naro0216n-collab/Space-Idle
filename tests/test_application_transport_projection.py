@@ -6,6 +6,7 @@ from space_idle import (
     AdvanceTime,
     ApplicationError,
     CreateTransportAllocation,
+    GetAttention,
     GetBottlenecks,
     GetBuildOptions,
     GetCargoFlows,
@@ -219,12 +220,48 @@ def test_application_decision_queries_are_observational_and_reuse_projection_wit
         GetScientificExplorations(),
         GetResearch(),
         GetBottlenecks(),
+        GetAttention(),
         GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),)),
     ):
         app.query(query)
 
     assert capture_state(sim) == before
 
+
+
+
+def test_global_attention_filters_diagnostic_blockers_and_exposes_decision_context():
+    app = build_game_application()
+
+    bottlenecks = app.query(GetBottlenecks()).items
+    attention = app.query(GetAttention()).items
+
+    assert attention
+    assert all(row.attention_required for row in attention)
+    assert all(row.navigation is not None for row in attention)
+    assert len(attention) < len(bottlenecks)
+
+    # Locked future Research is still inspectable through Bottlenecks but does
+    # not flood the global Attention surface.
+    research_start = next(row for row in bottlenecks if row.source == "research_start")
+    assert research_start.attention_required is False
+    assert research_start.navigation is not None
+    assert research_start.navigation.decision_area == "research"
+    assert research_start.navigation.subject_kind == "research"
+    assert research_start.navigation.subject_id == research_start.definition_id
+
+    # Active facility/industry constraints lead directly to the affected
+    # Location and Facility without the UI parsing the blocker text.
+    facility_issue = next(row for row in attention if row.source == "industry")
+    assert facility_issue.navigation is not None
+    assert facility_issue.navigation.decision_area == "location"
+    assert facility_issue.navigation.operational_node_id == facility_issue.operational_node_id
+    assert facility_issue.navigation.subject_kind == "facility"
+    assert facility_issue.navigation.subject_id == facility_issue.entity_id
+
+    payload = to_jsonable(app.query(GetAttention()))
+    assert payload["items"][0]["attention_required"] is True
+    assert payload["items"][0]["navigation"]["decision_area"] == "location"
 
 def test_transport_allocation_projection_exposes_capacity_target_and_canonical_plan_requirements():
     app = build_game_application()
@@ -481,7 +518,7 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
     location_id = runtime.query(GetWorld()).data.operational_nodes[0].id
     now[0] = 3.2
     queries = {
-        "world": GetWorld(), "global_issues": GetBottlenecks(), "research": GetResearch(),
+        "world": GetWorld(), "global_issues": GetAttention(), "research": GetResearch(),
         "scientific_explorations": GetScientificExplorations(), "contracts": GetContracts(),
         "logistics_summary": GetLogisticsSummary(), "logistics": GetLogistics(),
         "movement_plans": GetMovementPlans(include_modes=True), "fleet": GetFleet(),
@@ -495,6 +532,7 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
     payload = to_jsonable(result.data)
     assert payload["session"]["day"] == payload["world"]["day"] == 3
     assert payload["operational_node"]["id"] == location_id
+    assert "items" in payload["global_issues"]
     assert "pools" in payload["fleet"]
     assert "items" in payload["transport_allocations"]
     assert "items" in payload["cargo_flows"]

@@ -4,7 +4,7 @@ from collections import defaultdict
 
 from .application_views import (
     BottlenecksView, CurrentDependencyMetricRow, DependencyAnalyticsView,
-    ForecastDependencyMetricRow, FlowReportView, IssueRow, ResourceFlowRow,
+    DecisionContextTarget, ForecastDependencyMetricRow, FlowReportView, IssueRow, ResourceFlowRow,
 )
 from .application_commands import GetDependencyAnalytics
 from .shared import CelestialBodyId, SpatialNodeId
@@ -347,7 +347,64 @@ class ApplicationReportProjectorMixin:
         return rows, group_rows, critical
 
     @staticmethod
+    def _issue_navigation(
+        *,
+        category: str,
+        source: str,
+        operational_node_id: str | None,
+        entity_id: str | None,
+        definition_id: str | None,
+        resource_id: str | None,
+    ) -> DecisionContextTarget | None:
+        if source in {"facility", "industry", "extraction"}:
+            return DecisionContextTarget(
+                "location", operational_node_id, "facility", entity_id, resource_id
+            )
+        if source == "project":
+            return DecisionContextTarget(
+                "location", operational_node_id, "project", entity_id, resource_id
+            )
+        if source == "storage":
+            return DecisionContextTarget(
+                "location", operational_node_id, "inventory", None, resource_id
+            )
+        if source == "power" or category == "capacity":
+            return DecisionContextTarget(
+                "location", operational_node_id, "location", operational_node_id, resource_id
+            )
+        if source == "movement_plan":
+            return DecisionContextTarget(
+                "logistics", operational_node_id, "movement_plan", entity_id, resource_id
+            )
+        if source in {"transport_allocation", "transport_capacity"}:
+            return DecisionContextTarget(
+                "logistics", operational_node_id, "transport_allocation", entity_id, resource_id
+            )
+        if source == "vehicle_production":
+            return DecisionContextTarget(
+                "logistics", operational_node_id, "vehicle_production", entity_id, resource_id
+            )
+        if source == "supply":
+            return DecisionContextTarget(
+                "logistics", operational_node_id, "supply_requirement", entity_id, resource_id
+            )
+        if category == "research":
+            return DecisionContextTarget(
+                "research", operational_node_id, "research", definition_id, resource_id
+            )
+        if source == "scientific_exploration":
+            return DecisionContextTarget(
+                "exploration", operational_node_id, "scientific_exploration", definition_id, resource_id
+            )
+        if source == "survey":
+            return DecisionContextTarget(
+                "exploration", operational_node_id, "survey_campaign", entity_id, resource_id
+            )
+        return None
+
+    @classmethod
     def _issue(
+        cls,
         code: str,
         message: str | None,
         *,
@@ -358,7 +415,16 @@ class ApplicationReportProjectorMixin:
         definition_id: str | None = None,
         resource_id: str | None = None,
         impact: str = "blocked",
+        attention_required: bool = True,
     ) -> IssueRow:
+        navigation = cls._issue_navigation(
+            category=category,
+            source=source,
+            operational_node_id=operational_node_id,
+            entity_id=entity_id,
+            definition_id=definition_id,
+            resource_id=resource_id,
+        )
         return IssueRow(
             code=str(code),
             message=str(message if message else code),
@@ -369,6 +435,8 @@ class ApplicationReportProjectorMixin:
             definition_id=definition_id,
             resource_id=resource_id,
             impact=impact,
+            attention_required=attention_required,
+            navigation=navigation,
         )
 
     def _operational_node_issues(self, location_id: SpatialNodeId) -> tuple[IssueRow, ...]:
@@ -416,10 +484,12 @@ class ApplicationReportProjectorMixin:
                 continue
             if snap.scale < 1.0 - 1e-9:
                 for factor in snap.limiting_factors:
+                    resource_id = factor.removeprefix("input:") if factor.startswith("input:") else None
                     issues.append(self._issue(
                         factor, factor, category="industry", source="industry",
                         operational_node_id=loc, entity_id=str(facility.id),
-                        definition_id=str(facility.definition_id), impact="limited",
+                        definition_id=str(facility.definition_id), resource_id=resource_id,
+                        impact="limited",
                     ))
 
         if sim.extraction is not None:
@@ -474,6 +544,7 @@ class ApplicationReportProjectorMixin:
                 issues.append(self._issue(
                     blocker, blocker, category="logistics", source="movement_plan",
                     operational_node_id=location_filter, entity_id=str(movement_plan.id),
+                    attention_required=False,
                 ))
 
         for allocation in self._transport_allocation_rows():
@@ -554,6 +625,7 @@ class ApplicationReportProjectorMixin:
                     issues.append(self._issue(
                         code, detail, category="research", source=source,
                         operational_node_id=selected_location, definition_id=row.id,
+                        attention_required=source != "research_start",
                     ))
 
         explorations = self._scientific_explorations_view()
@@ -597,7 +669,7 @@ class ApplicationReportProjectorMixin:
                     code, _, detail = blocker.partition(":")
                     issues.append(self._issue(
                         code, detail or blocker, category="contract", source="contract",
-                        entity_id=row.id, definition_id=row.template_id,
+                        entity_id=row.id, definition_id=row.template_id, attention_required=False,
                     ))
         return tuple(issues)
 
@@ -625,6 +697,14 @@ class ApplicationReportProjectorMixin:
             seen.add(key)
             unique.append(issue)
         return BottlenecksView(sim.day, location_filter, tuple(unique))
+
+    def _attention_view(self) -> BottlenecksView:
+        bottlenecks = self._bottlenecks_view(None)
+        return BottlenecksView(
+            bottlenecks.day,
+            None,
+            tuple(issue for issue in bottlenecks.items if issue.attention_required),
+        )
 
     def _flow_report_view(self, location_id: SpatialNodeId) -> FlowReportView:
         sim = self._simulation

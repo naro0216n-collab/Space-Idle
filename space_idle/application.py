@@ -3,7 +3,7 @@ from __future__ import annotations
 from .application_commands import (
     AcceptContract, AdvanceTime, ApplicationError, CancelBuild, ClearTransportMovementConstraint,
     CreateTransportAllocation, SetTransportMovementConstraint, DeclineContract,
-    DeleteTransportAllocation, SetResearchPriority, GetBottlenecks,
+    DeleteTransportAllocation, SetResearchPriority, GetAttention, GetBottlenecks,
     GetBuildOptions, GetCatalog, GetCargoFlows, GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics,
     GetOperationalNode, GetLogistics, GetLogisticsSummary, GetProjects,
     GetResearch, GetMovementPlans, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,

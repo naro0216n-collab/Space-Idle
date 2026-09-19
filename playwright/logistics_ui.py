@@ -74,7 +74,7 @@ def run() -> None:
         ) as context, monitored_page(context) as page:
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
-            page.locator('[data-section="logistics"]').click()
+            page.locator('.primary-nav-button[data-section="logistics"]').click()
 
             requirement_row = page.locator("#requirementTable tbody tr", has_text=project_id).first
             requirement_row.wait_for(timeout=10000)
@@ -183,7 +183,7 @@ def run() -> None:
 
             # Trade Order lifecycle belongs to the Economy decision canvas even
             # though it uses the same Application snapshot as logistics.
-            page.locator('[data-section="economy"]').click()
+            page.locator('.primary-nav-button[data-section="economy"]').click()
             market_new = page.locator('[data-new-market-order]')
             market_new.wait_for(timeout=10000)
             market_create = market_new.locator('[data-market-create]')

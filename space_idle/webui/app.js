@@ -6,7 +6,7 @@
     flow:null, dependencyAnalyticsCurrent:null, dependencyAnalyticsForecast:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
     fleet:null, transportAllocations:null, cargoFlows:null, market:null,
-    selectedMovementPlanId:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
+    selectedMovementPlanId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
     busy:false, syncInFlight:null,
   };
 
@@ -282,7 +282,7 @@
     const fleetTotal=Number(state.logisticsSummary?.fleet_units||0),fleetFree=Number(state.logisticsSummary?.free_fleet_units||0);
     $('#globalHeadlineMetrics').innerHTML=[['拠点',nodes.length],['要確認',issues.length],['研究中',activeResearch],['Fleet',`${fleetFree}/${fleetTotal} free`]].map(metricHtml).join('');
     const locationCards=nodes.map((loc)=>`<button type="button" class="global-location-card" data-open-location="${esc(loc.id)}"><span class="location-name">${esc(loc.display_name)}</span><span class="location-meta"><span>${esc(locationKindLabels[loc.kind]||loc.kind)}</span><span>設備 ${loc.facility_count}</span><span>建設 ${loc.active_project_count}</span></span></button>`).join('');
-    const attentionItems=issues.length?issues.slice(0,8).map((issue,index)=>`<button type="button" class="global-attention-item" data-attention-index="${index}">${issueHtml(issue)}</button>`).join(''):'<div class="empty-state">現在、Player判断を必要とする全体blockerはありません。</div>';
+    const attentionItems=issues.length?issues.slice(0,8).map((issue,index)=>issue.navigation?`<button type="button" class="global-attention-item" data-attention-index="${index}">${issueHtml(issue)}<span class="attention-open-hint">関連箇所を開く</span></button>`:`<div class="global-attention-item">${issueHtml(issue)}</div>`).join(''):'<div class="empty-state">現在、Player判断を必要とする全体blockerはありません。</div>';
     canvas.innerHTML=`<div class="global-summary-grid"><section class="card"><div class="card-heading"><h3>拠点</h3><span class="badge">${nodes.length}</span></div><div class="card-body"><div class="global-location-grid">${locationCards||'<div class="empty-state">拠点なし</div>'}</div></div></section><section class="card"><div class="card-heading"><h3>要確認</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length}</span></div><div class="card-body global-attention-list">${attentionItems}</div></section></div><div class="card-grid three global-activity-grid"><section class="card"><div class="card-heading"><h3>研究</h3></div><div class="card-body">${statHtml('進行中',activeResearch)}<button type="button" data-section="research">研究を開く</button></div></section><section class="card"><div class="card-heading"><h3>探査</h3></div><div class="card-body">${statHtml('科学探査 / Survey',`${activeExploration} / ${activeSurvey}`)}<button type="button" data-section="exploration">探査を開く</button></div></section><section class="card"><div class="card-heading"><h3>輸送</h3></div><div class="card-body">${statHtml('Fleet free',`${fleetFree} / ${fleetTotal}`)}<button type="button" data-section="logistics">輸送を開く</button></div></section></div>`;
     inspector.innerHTML=`<section class="inspector-section"><h3>組織全体</h3><div class="kv-grid"><dt>Research Point</dt><dd>${fmt(state.research?.stored_points,1)} / ${fmt(state.research?.storage_capacity_points,1)}</dd><dt>Operational Node</dt><dd>${nodes.length}</dd><dt>Fleet</dt><dd>${fleetFree} free / ${fleetTotal}</dd><dt>Transport Allocation</dt><dd>${state.logisticsSummary?.allocation_count??'—'}</dd></div></section><section class="inspector-section"><h3>判断の入口</h3><div class="section-context-note">要確認項目または拠点を選択すると、そのContextを保持したまま関連する作業領域へ移動します。</div></section>`;
   }
@@ -355,7 +355,42 @@
     if(section==='research')state.activeTab='research';
     if(section==='exploration'&&!['scientific-exploration','survey','surface'].includes(state.activeTab))state.activeTab='scientific-exploration';
     state.inspector=null;
+    state.decisionContext=null;
     renderAll();
+  }
+
+  function decisionContextTab(target){
+    if(target.decision_area==='location'){
+      if(target.subject_kind==='facility')return 'facilities';
+      if(target.subject_kind==='project')return 'construction';
+      if(target.subject_kind==='inventory')return 'inventory';
+      return 'overview';
+    }
+    if(target.decision_area==='research')return 'research';
+    if(target.decision_area==='exploration')return target.subject_kind==='survey_campaign'?'survey':'scientific-exploration';
+    return null;
+  }
+
+  async function openDecisionContext(target){
+    if(!target?.decision_area)return;
+    if(target.operational_node_id&&target.operational_node_id!==state.operationalNodeId){
+      await loadLocation(target.operational_node_id);
+    }
+    setActiveSection(target.decision_area);
+    state.decisionContext={...target};
+    const tab=decisionContextTab(target);
+    if(tab)state.activeTab=tab;
+    if(target.subject_kind==='facility'&&target.subject_id)state.inspector={type:'facility',id:target.subject_id};
+    else if(target.subject_kind==='project'&&target.subject_id)state.inspector={type:'project',id:target.subject_id};
+    else if(target.subject_kind==='research'&&target.subject_id)state.inspector={type:'research',id:target.subject_id};
+    else if(target.subject_kind==='scientific_exploration'&&target.subject_id)state.inspector={type:'scientific-exploration',id:target.subject_id};
+    else if(target.subject_kind==='survey_campaign'&&target.subject_id)state.inspector={type:'survey-campaign',id:target.subject_id};
+    if(target.subject_kind==='movement_plan'&&target.subject_id)state.selectedMovementPlanId=target.subject_id;
+    renderAll();
+    queueMicrotask(()=>{
+      const selected=document.querySelector('.is-context-target, tbody tr.is-selected, .movement-plan-button.is-selected');
+      selected?.scrollIntoView?.({block:'nearest',inline:'nearest'});
+    });
   }
   function setActiveView(view){setActiveSection(view==='logistics'?'logistics':'location');}
 
@@ -369,12 +404,14 @@
   window.SpaceIdleApp={
     state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,operationName,
     locationKindLabels,stateLabels,userFacingText,issueHtml,metricHtml,statHtml,signed,
-    api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveSection,setActiveView,
+    api,command,banner,setConnection,loadUiSnapshot,loadLocation,setActiveSection,setActiveView,openDecisionContext,
   };
 
   document.addEventListener('click',async(event)=>{
     const sectionBtn=event.target.closest('[data-section]'); if(sectionBtn){setActiveSection(sectionBtn.dataset.section);return;}
     const openLocation=event.target.closest('[data-open-location]'); if(openLocation){await loadLocation(openLocation.dataset.openLocation);setActiveSection('location');return;}
+    const attentionItem=event.target.closest('[data-attention-index]'); if(attentionItem){const issue=(state.globalIssues?.items||[])[Number(attentionItem.dataset.attentionIndex)];if(issue?.navigation)await openDecisionContext(issue.navigation);return;}
+    if(event.target.closest('#attentionButton')){setActiveSection('global');return;}
     const locBtn=event.target.closest('[data-location-id]'); if(locBtn){await loadLocation(locBtn.dataset.locationId);return;}
     if(event.target.closest('#timePauseButton')){try{await setTimeControl({paused:!Boolean(state.session?.time_paused)});}catch(e){banner(e.message,'error');}return;}
     const speed=event.target.closest('[data-time-speed]'); if(speed){try{await setTimeControl({speed_multiplier:Number(speed.dataset.timeSpeed)});}catch(e){banner(e.message,'error');}return;}

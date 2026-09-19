@@ -102,6 +102,8 @@ th { position: sticky; top: 0; background: #12202c; color: var(--muted); font-si
 th, td { padding: 9px 10px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
 tbody tr.selectable { cursor: pointer; }
 tbody tr.selectable:hover, tbody tr.is-selected { background: #13283a; }
+tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accent); outline-offset: -1px; }
+.attention-open-hint { display:block; margin-top:4px; color:var(--accent); font-size:11px; font-weight:700; }
 .cell-main { font-weight: 650; }
 .cell-sub { margin-top: 3px; color: var(--muted); font-size: 10px; }
 .badge { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 10px; }

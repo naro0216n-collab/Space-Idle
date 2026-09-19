@@ -34,7 +34,7 @@ from .app_contracts.progression_views import (
     ScientificExplorationRow, ScientificExplorationsView, SurveyProviderFleetRow, SurveyCandidateRow, SurveyCampaignTargetRow, SurveyCampaignRow, SurveyRow, SurveyCampaignIntentPreviewView, SurveysView,
     ContractRow, ContractsView,
 )
-from .app_contracts.ui_reports import IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView
+from .app_contracts.ui_reports import DecisionContextTarget, IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView
 from .app_contracts.analytics_views import CurrentDependencyMetricRow, ForecastDependencyMetricRow, DependencyAnalyticsView
 from .app_contracts.surface_views import (
     SurfaceCellDevelopmentOption, SurfaceCellFoundationOption, SurfaceCellRow, SurfaceFacilityPlacementOption,

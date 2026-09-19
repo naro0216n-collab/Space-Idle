@@ -7,7 +7,7 @@ from .application import (
     CreateTradeOrder, UpdateTradeOrder, CancelTradeOrder,
     ClearTransportMovementConstraint, CreateTransportAllocation, SetTransportMovementConstraint,
     DeclineContract, DeleteTransportAllocation,
-    SetResearchPriority, GameApplication, GetBottlenecks, GetBuildOptions, GetCatalog,
+    SetResearchPriority, GameApplication, GetAttention, GetBottlenecks, GetBuildOptions, GetCatalog,
     GetCargoFlows, GetContracts, GetDependencyAnalytics, GetMarket, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations, GetTransportAllocationOptions,

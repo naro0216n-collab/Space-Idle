@@ -184,7 +184,7 @@ def run() -> dict[str, object]:
             # Facility upgrades are ordinary construction projects. Verify the
             # decision surface and command path while the clock is paused so the
             # project cannot consume materials before we inspect it.
-            page.locator('[data-section="location"]').click()
+            page.locator('.primary-nav-button[data-section="location"]').click()
             _assert(page.locator("#operationsView").is_visible(), "location section must open the location decision canvas")
             _assert(page.locator(".location-button").count() > 0, "location context browser must expose spatial nodes")
             page.locator('[data-tab="facilities"]').click()
@@ -248,7 +248,7 @@ def run() -> dict[str, object]:
                 "() => !document.body.classList.contains('is-busy')",
                 timeout=10000,
             )
-            page.locator('[data-section="research"]').click()
+            page.locator('.primary-nav-button[data-section="research"]').click()
             research_rows = page.locator('#researchTree [data-inspect="research"]')
             _assert(research_rows.count() > 0, "research tree must expose research decisions")
             startable_research = None
@@ -285,7 +285,7 @@ def run() -> dict[str, object]:
                 "() => document.querySelector('[data-lifecycle-control=research]')?.dataset.researchAction === 'resume'",
                 timeout=10000,
             )
-            page.locator('[data-section="exploration"]').click()
+            page.locator('.primary-nav-button[data-section="exploration"]').click()
             page.locator('[data-tab="scientific-exploration"]').click()
             exploration_rows = page.locator('tr[data-inspect="scientific-exploration"]')
             _assert(exploration_rows.count() > 0, "scientific exploration campaign must be visible")
@@ -363,14 +363,14 @@ def run() -> dict[str, object]:
             _assert("既存Locationから開発" in surface_inspector, "undeveloped cell must expose location development options in-place")
             _assert("Location設立" in surface_inspector, "unowned cell must expose founding options in-place")
             _assert(page.locator('#inspectorContent [data-surface-develop]').count() > 0, "surface cell inspector must expose application-projected development commands")
-            page.locator('[data-section="location"]').click()
+            page.locator('.primary-nav-button[data-section="location"]').click()
             overview_text = page.locator('#operationsTabContent').inner_text()
             _assert("Surface Infrastructure" in overview_text, "location overview must expose aggregate surface infrastructure state")
             _assert("Resource Opportunity / Extraction" in overview_text, "location overview must expose aggregate extraction decision state")
             _assert("Current Environment" in overview_text, "location overview must expose current environment state")
 
             _select_location(page, ids.LUNAR_ORBIT)
-            page.locator('[data-section="exploration"]').click()
+            page.locator('.primary-nav-button[data-section="exploration"]').click()
             page.locator('[data-tab="survey"]').click()
             survey_rows = page.locator('tr[data-inspect="survey"]')
             survey_rows.first.wait_for(timeout=10000)
@@ -485,7 +485,7 @@ def run() -> dict[str, object]:
             _assert("案件進行中" in page.locator('#inspectorContent').inner_text(), "Founding command must round-trip to an active project on the selected cell")
             _assert(founding_button.count() == 1, "Founding control must remain in the same place after project start")
             _assert(not founding_button.is_enabled(), "active Founding must keep the same action visible but unavailable")
-            page.locator('[data-section="location"]').click()
+            page.locator('.primary-nav-button[data-section="location"]').click()
 
             page.locator('[data-time-speed="4"]').click()
             page.wait_for_function(
@@ -508,7 +508,7 @@ def run() -> dict[str, object]:
                 "1180px full-size iPad landscape must not horizontally overflow",
             )
 
-            page.locator('[data-section="logistics"]').click()
+            page.locator('.primary-nav-button[data-section="logistics"]').click()
             standard_logistics_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(
                 standard_logistics_metrics["scroll"] <= standard_logistics_metrics["w"],
@@ -537,7 +537,7 @@ def run() -> dict[str, object]:
 
             # Formal support is iPad landscape only. Verify the classic 1024px
             # landscape viewport without inventing a portrait fallback or page-wide scroll.
-            page.locator('[data-section="location"]').click()
+            page.locator('.primary-nav-button[data-section="location"]').click()
             page.set_viewport_size({"width": 1024, "height": 768})
             page.wait_for_timeout(100)
             compact_landscape = page.evaluate(
@@ -551,7 +551,7 @@ def run() -> dict[str, object]:
                 page.locator('.primary-nav-button[data-section="location"]').get_attribute("class").find("is-active") >= 0,
                 "top-level section selection must remain stable at compact landscape width",
             )
-            page.locator('[data-section="logistics"]').click()
+            page.locator('.primary-nav-button[data-section="logistics"]').click()
             compact_logistics = page.evaluate(
                 "() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})"
             )
