@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .application_comparison import project_comparison_axes
+from .app_contracts.ui_reports import ComparisonValueRow
 from .application_views import (
     SurfaceCellDevelopmentOption, SurfaceCellFoundationOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
     SurfaceLocationTerritoryRow,
@@ -30,6 +32,7 @@ class SurfaceProjectorMixin:
             )
         )
         rows: list[SurfaceCellRow] = []
+        founding_comparison_values: list[tuple[ComparisonValueRow, ...]] = []
         for cell in sim.graph.cells_for_body(body_id):
             owner = sim.graph.owner_of_cell(cell.id)
             owner_state = None if owner is None else sim.graph.locations[owner]
@@ -177,8 +180,42 @@ class SurfaceProjectorMixin:
                                     recipe.id, vehicle.id, staging_id, target_spec, day=sim.day
                                 )
                             except (KeyError, ValueError):
-                                transit_days = 0
+                                transit_days = None
                                 founding_resources = recipe.payload_resources
+                            comparison_values = (
+                                ComparisonValueRow(
+                                    axis_key="transit_days",
+                                    number_value=None if transit_days is None else float(transit_days),
+                                ),
+                                ComparisonValueRow(
+                                    axis_key="preparation_work", number_value=recipe.preparation_work
+                                ),
+                                ComparisonValueRow(
+                                    axis_key="required_units", number_value=float(recipe.required_units)
+                                ),
+                                ComparisonValueRow(axis_key="payload_t", number_value=recipe.payload_t),
+                                ComparisonValueRow(
+                                    axis_key="staging_resource_t",
+                                    number_value=(
+                                        None
+                                        if transit_days is None
+                                        else sum(req.amount_t for req in founding_resources)
+                                    ),
+                                ),
+                                ComparisonValueRow(
+                                    axis_key="terrain_factor", number_value=cell.terrain.terrain_factor
+                                ),
+                                ComparisonValueRow(
+                                    axis_key="bearing_capacity_factor",
+                                    number_value=cell.terrain.bearing_capacity_factor,
+                                ),
+                                ComparisonValueRow(
+                                    axis_key="dust_factor", number_value=cell.terrain.dust_factor
+                                ),
+                                ComparisonValueRow(
+                                    axis_key="slope_factor", number_value=cell.terrain.slope_factor
+                                ),
+                            )
                             foundation_rows.append(SurfaceCellFoundationOption(
                                 staging_node_id=str(staging_id),
                                 deployment_recipe_id=str(recipe.id),
@@ -196,7 +233,13 @@ class SurfaceProjectorMixin:
                                 blockers=tuple((failure.code, failure.detail) for failure in failures),
                                 can_plan=not failures,
                                 active_project_id=None if active_founding is None else str(active_founding.id),
+                                comparison_key=(
+                                    f"{cell.id}|{staging_id}|{recipe.id}|{vehicle.id}"
+                                ),
+                                comparison_values=comparison_values,
                             ))
+                            if owner is None:
+                                founding_comparison_values.append(comparison_values)
                 foundation_options = tuple(foundation_rows)
 
 
@@ -228,4 +271,20 @@ class SurfaceProjectorMixin:
                     minimum_transit_days,
                 )
             )
-        return SurfaceMapView(str(body.id), body.display_name, tuple(rows), locations)
+        founding_comparison_axes = project_comparison_axes(
+            (
+                ("transit_days", "移動時間", "integer", "日"),
+                ("preparation_work", "準備工数", "number", None),
+                ("required_units", "必要機数", "integer", "機"),
+                ("payload_t", "搭載量", "number", "t"),
+                ("staging_resource_t", "出発時資源量", "number", "t"),
+                ("terrain_factor", "地形係数", "number", None),
+                ("bearing_capacity_factor", "地盤支持力", "number", None),
+                ("dust_factor", "粉塵負荷", "number", None),
+                ("slope_factor", "斜面負荷", "number", None),
+            ),
+            founding_comparison_values,
+        )
+        return SurfaceMapView(
+            str(body.id), body.display_name, tuple(rows), locations, founding_comparison_axes
+        )

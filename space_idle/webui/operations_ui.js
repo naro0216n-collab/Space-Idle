@@ -33,17 +33,24 @@
   }
   let dependencyView='current';
   let surveyMapLayer='knowledge';
-  const surveyComparisonPins=new Map();
-  function surveyComparisonPinnedKeys(campaign){
-    const valid=new Set((campaign.candidates||[]).map((row)=>row.comparison_key));
-    const pins=(surveyComparisonPins.get(campaign.id)||[]).filter((key)=>valid.has(key)).slice(0,4);
-    surveyComparisonPins.set(campaign.id,pins);
+  const comparisonPins=new Map();
+  function comparisonPinnedKeys(scopeKey,candidates){
+    const valid=new Set((candidates||[]).map((row)=>row.comparison_key));
+    const pins=(comparisonPins.get(scopeKey)||[]).filter((key)=>valid.has(key)).slice(0,4);
+    comparisonPins.set(scopeKey,pins);
     return pins;
   }
-  function surveyComparisonValue(row,axisKey){
+  function toggleComparisonPin(scopeKey,candidates,key){
+    const pins=comparisonPinnedKeys(scopeKey,candidates);
+    const index=pins.indexOf(key);
+    if(index>=0)pins.splice(index,1);else if(pins.length<4)pins.push(key);
+    comparisonPins.set(scopeKey,pins);
+    return pins;
+  }
+  function comparisonValue(row,axisKey){
     return (row.comparison_values||[]).find((value)=>value.axis_key===axisKey)||null;
   }
-  function surveyComparisonValueHtml(axis,value){
+  function comparisonValueHtml(axis,value){
     if(!value)return '—';
     if(value.text_value!=null)return esc(value.text_value);
     if(value.number_value==null)return '—';
@@ -52,16 +59,76 @@
     if(axis.value_kind==='integer')return `${fmt(number,0)}${axis.unit?` ${esc(axis.unit)}`:''}`;
     return `${fmt(number,2)}${axis.unit?` ${esc(axis.unit)}`:''}`;
   }
+  function comparisonSurfaceHtml({scopeKey,axes,candidates,emptyText,promptText,headingHtml,detailButtonHtml,blockerHtml}){
+    if(!(axes||[]).length)return `<div class="empty-state">${esc(emptyText)}</div>`;
+    const pins=comparisonPinnedKeys(scopeKey,candidates);
+    if(pins.length<2)return `<div class="comparison-empty"><strong>${pins.length?`${pins.length}候補を選択中`:'比較候補を選択'}</strong><span>${esc(promptText)}</span></div>`;
+    const pinned=pins.map((key)=>(candidates||[]).find((row)=>row.comparison_key===key)).filter(Boolean);
+    const headers=pinned.map((row)=>`<div class="comparison-candidate-heading">${headingHtml(row)}${detailButtonHtml(row)}</div>`).join('');
+    const rows=(axes||[]).map((axis)=>`<div class="comparison-axis-row ${axis.differs?'is-different':''}"><strong>${esc(axis.label)}</strong>${pinned.map((row)=>`<span>${comparisonValueHtml(axis,comparisonValue(row,axis.key))}</span>`).join('')}</div>`).join('');
+    const blockerRows=pinned.map((row)=>`<div class="comparison-blocker-cell">${blockerHtml(row)}</div>`).join('');
+    return `<div class="comparison-surface" style="--comparison-columns:${pinned.length}"><div class="comparison-heading-row"><div class="comparison-axis-heading">比較軸</div>${headers}</div>${rows}<div class="comparison-axis-row comparison-blocker-row"><strong>現在の制約</strong>${blockerRows}</div></div>`;
+  }
+  function surveyComparisonScope(campaign){return `survey:${campaign.id}`;}
+  function surveyComparisonPinnedKeys(campaign){return comparisonPinnedKeys(surveyComparisonScope(campaign),campaign.candidates||[]);}
   function surveyComparisonHtml(campaign){
-    const axes=campaign.comparison_axes||[];
-    if(!axes.length)return '<div class="empty-state">現在の観測手段には、比較が必要な戦略差はありません。</div>';
-    const pins=surveyComparisonPinnedKeys(campaign);
-    if(pins.length<2)return `<div class="comparison-empty"><strong>${pins.length?`${pins.length}候補を選択中`:'比較候補を選択'}</strong><span>観測手段から2〜4候補を比較に追加すると、Applicationが提示した共通軸で差を確認できます。</span></div>`;
-    const candidates=pins.map((key)=>(campaign.candidates||[]).find((row)=>row.comparison_key===key)).filter(Boolean);
-    const headers=candidates.map((row)=>`<div class="comparison-candidate-heading"><strong>${esc(definitionName(row.provider_definition_id))}</strong><span>${esc(definitionName(row.observation_mode_id))}</span><small>${esc(locationName(row.provider_operational_node_id))}</small><button type="button" data-survey-candidate-detail="${esc(campaign.id)}" data-comparison-key="${esc(row.comparison_key)}">詳細</button></div>`).join('');
-    const rows=axes.map((axis)=>`<div class="comparison-axis-row ${axis.differs?'is-different':''}"><strong>${esc(axis.label)}</strong>${candidates.map((row)=>`<span>${surveyComparisonValueHtml(axis,surveyComparisonValue(row,axis.key))}</span>`).join('')}</div>`).join('');
-    const blockerRows=candidates.map((row)=>`<div class="comparison-blocker-cell">${(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">制約なし</span>'}</div>`).join('');
-    return `<div class="comparison-surface" style="--comparison-columns:${candidates.length}"><div class="comparison-heading-row"><div class="comparison-axis-heading">比較軸</div>${headers}</div>${rows}<div class="comparison-axis-row comparison-blocker-row"><strong>現在の制約</strong>${blockerRows}</div></div>`;
+    return comparisonSurfaceHtml({
+      scopeKey:surveyComparisonScope(campaign),
+      axes:campaign.comparison_axes||[],
+      candidates:campaign.candidates||[],
+      emptyText:'現在の観測手段には、比較が必要な戦略差はありません。',
+      promptText:'観測手段から2〜4候補を比較に追加すると、Applicationが提示した共通軸で差を確認できます。',
+      headingHtml:(row)=>`<strong>${esc(definitionName(row.provider_definition_id))}</strong><span>${esc(definitionName(row.observation_mode_id))}</span><small>${esc(locationName(row.provider_operational_node_id))}</small>`,
+      detailButtonHtml:(row)=>`<button type="button" data-survey-candidate-detail="${esc(campaign.id)}" data-comparison-key="${esc(row.comparison_key)}">詳細</button>`,
+      blockerHtml:(row)=>(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map((b)=>issueHtml(['survey',b])).join('')}</div>`:'<span class="badge ok">制約なし</span>',
+    });
+  }
+  function foundationComparisonScope(){return `founding:${state.surfaceMap?.body_id||''}`;}
+  function foundationComparisonCandidates(){
+    return (state.surfaceMap?.cells||[]).filter((cell)=>!cell.developed).flatMap((cell)=>(cell.foundation_options||[]).map((option)=>({
+      ...option,
+      target_cell_id:cell.id,
+      target_cell_name:surfaceCellLabel(cell.id),
+    })));
+  }
+  function foundationComparisonCandidate(key){return foundationComparisonCandidates().find((row)=>row.comparison_key===key)||null;}
+  function foundationComparisonPinnedKeys(){return comparisonPinnedKeys(foundationComparisonScope(),foundationComparisonCandidates());}
+  function foundationComparisonHtml(){
+    const candidates=foundationComparisonCandidates();
+    return comparisonSurfaceHtml({
+      scopeKey:foundationComparisonScope(),
+      axes:state.surfaceMap?.founding_comparison_axes||[],
+      candidates,
+      emptyText:'現在の設立候補には、比較が必要な戦略差はありません。',
+      promptText:'候補地点から2〜4候補を比較に追加すると、Applicationが提示した共通軸と制約を並べて確認できます。',
+      headingHtml:(row)=>`<strong>${esc(row.target_cell_name)}</strong><span>${esc(row.recipe_display_name)} · ${esc(row.vehicle_display_name)}</span><small>${esc(locationName(row.staging_node_id))} から出発</small>`,
+      detailButtonHtml:(row)=>`<button type="button" data-founding-candidate-detail="${esc(row.comparison_key)}">詳細</button>`,
+      blockerHtml:(row)=>(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">制約なし</span>',
+    });
+  }
+  function buildOptionPrimaryEnable(row){
+    const enables=[
+      ...(row.process_options||[]).map(([,name])=>name),
+      ...(row.capabilities||[]).map(capabilityName),
+      ...(row.service_capacity_supplies||[]).map(([service])=>serviceName(service)),
+    ];
+    return enables[0]||'拠点能力を追加';
+  }
+  function constructionComparisonScope(){return `construction:${state.buildOptions?.operational_node_id||state.operationalNodeId||''}`;}
+  function constructionComparisonCandidates(){return state.buildOptions?.items||[];}
+  function constructionComparisonPinnedKeys(){return comparisonPinnedKeys(constructionComparisonScope(),constructionComparisonCandidates());}
+  function constructionComparisonHtml(){
+    const candidates=constructionComparisonCandidates();
+    return comparisonSurfaceHtml({
+      scopeKey:constructionComparisonScope(),
+      axes:state.buildOptions?.comparison_axes||[],
+      candidates,
+      emptyText:'現在の建設候補には、比較が必要な戦略差はありません。',
+      promptText:'建設候補から2〜4候補を比較に追加すると、必要工数・資源負担・追加機能の規模を共通軸で確認できます。',
+      headingHtml:(row)=>`<strong>${esc(row.display_name)}</strong><span>${esc(buildOptionPrimaryEnable(row))}</span><small>${row.can_plan?'計画可能':'条件不足'}</small>`,
+      detailButtonHtml:(row)=>`<button type="button" data-inspect="build-option" data-id="${esc(row.facility_definition_id)}">詳細</button>`,
+      blockerHtml:(row)=>(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">制約なし</span>',
+    });
   }
   const surveyIntentPreviewSerial=new Map();
   const surveyIntentPreviewCache=new Map();
@@ -339,8 +406,7 @@
       const plan=planningOptionState(o,'建設可');
       const selected=state.inspector?.type==='build-option'&&state.inspector.id===o.facility_definition_id;
       const resources=(o.resources||[]).slice(0,3).map((r)=>`${resourceName(r.resource_id)} ${fmt(r.required_t,1)} t`).join(' · ');
-      const enables=[...(o.process_options||[]).map(([,name])=>name),...(o.capabilities||[]).map(capabilityName),...(o.service_capacity_supplies||[]).map(([service])=>capabilityName(service))];
-      const primaryEnable=enables[0]||'拠点能力を追加';
+      const primaryEnable=buildOptionPrimaryEnable(o);
       return `<button type="button" class="construction-option-card ${selected?'is-selected':''}" data-inspect="build-option" data-id="${esc(o.facility_definition_id)}" aria-pressed="${selected?'true':'false'}"><span class="decision-card-title"><span><strong>${esc(o.display_name)}</strong><small>利用可能になる機能: ${esc(primaryEnable)}</small></span><span class="badge ${plan.blockers.length?'warn':plan.canPlan?'ok':''}">${esc(plan.canPlan?'計画可能':'条件不足')}</span></span><span class="construction-option-metrics"><span><small>必要工数</small><strong>${fmt(o.construction_required,0)}</strong></span><span><small>必要資源</small><strong>${o.resources?.length||0} 種</strong></span><span><small>状態</small><strong>${esc(plan.label)}</strong></span></span><span class="decision-card-footer ${plan.blockers.length?'has-warning':''}">${plan.blockers.length?`制約: ${esc(A.userFacingText(plan.blockers[0]))}`:esc(resources||'追加建設資源なし')}</span></button>`;
     }).join('');
     return `<div class="construction-decision-surface">
@@ -656,11 +722,23 @@
     const planOptions=state.buildOptions||{};
     const planControls=constructionPlanControls('buildPlan',{draftScope:`facility-build:${o.facility_definition_id}`,policyOptions:planOptions.procurement_policy_options||[],disabled:plan.disabled});
     const capabilityCards=(o.capabilities||[]).map((id)=>`<div class="detail-card"><div class="mode-title"><span>能力</span><strong>${esc(capabilityName(id))}</strong></div></div>`).join('');
-    const serviceCards=(o.service_capacity_supplies||[]).map(([service,rate])=>`<div class="detail-card"><div class="mode-title"><span>Service</span><strong>${esc(capabilityName(service))}</strong></div><div class="cell-sub">基準供給 ${fmt(rate,2)}</div></div>`).join('');
+    const serviceCards=(o.service_capacity_supplies||[]).map(([service,rate])=>`<div class="detail-card"><div class="mode-title"><span>サービス</span><strong>${esc(serviceName(service))}</strong></div><div class="cell-sub">基準供給 ${fmt(rate,2)}</div></div>`).join('');
     const processCards=(o.process_options||[]).map(([,name])=>`<div class="detail-card"><div class="mode-title"><span>生産工程</span><strong>${esc(name)}</strong></div></div>`).join('');
     const enables=capabilityCards+serviceCards+processCards||'<div class="empty-state">追加される能力情報なし</div>';
     const placement=o.placement_scope==='SURFACE_CELL'?'地表地域':'拠点';
-    setInspector(o.display_name,section('建設',kv([['必要工数',fmt(o.construction_required,0)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],['計画可否',esc(plan.label)]]))+section('実行条件',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+section('操作',`${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button>`)+section('建設後に利用可能',enables)+section('必要資源',resourceCards(o.resources)));
+    const comparisonAvailable=(state.buildOptions?.comparison_axes||[]).length>0;
+    const pinnedKeys=new Set(constructionComparisonPinnedKeys());
+    const pinned=pinnedKeys.has(o.comparison_key);
+    const pinDisabled=comparisonAvailable&&!pinned&&pinnedKeys.size>=4;
+    const compareAction=comparisonAvailable?`<button type="button" data-construction-compare-pin="${esc(o.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';
+    setInspector(o.display_name,
+      section('建設',kv([['必要工数',fmt(o.construction_required,0)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],['計画可否',esc(plan.label)]]))+
+      section('実行条件',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+
+      section('操作',`<div class="action-stack">${compareAction}${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button></div>`)+
+      (comparisonAvailable?section('建設候補比較',constructionComparisonHtml()):'')+
+      section('建設後に利用可能',enables)+
+      section('必要資源',resourceCards(o.resources))
+    );
     return true;
   }
 
@@ -796,7 +874,7 @@
     const c=state.surveys?.campaigns?.find((row)=>row.id===campaignId);if(!c)return false;
     const row=(c.candidates||[]).find((candidate)=>candidate.comparison_key===candidateKey);if(!row)return false;
     const axes=c.comparison_axes||[];
-    const details=axes.length?kv(axes.map((axis)=>[axis.label,surveyComparisonValueHtml(axis,surveyComparisonValue(row,axis.key))])):kv([['調査速度',fmt(row.survey_rate,2)],['到達可能な調査知識',fmt(row.max_knowledge_level,0)],['最低配備数',`${fmt(row.minimum_source_units,0)} 機`],['利用可能能力',`${fmt(row.capacity_units_per_day,2)} /日`]]);
+    const details=axes.length?kv(axes.map((axis)=>[axis.label,comparisonValueHtml(axis,comparisonValue(row,axis.key))])):kv([['調査速度',fmt(row.survey_rate,2)],['到達可能な調査知識',fmt(row.max_knowledge_level,0)],['最低配備数',`${fmt(row.minimum_source_units,0)} 機`],['利用可能能力',`${fmt(row.capacity_units_per_day,2)} /日`]]);
     const blockers=row.blockers||[];
     const pinned=surveyComparisonPinnedKeys(c).includes(row.comparison_key);
     setInspector(`${definitionName(row.provider_definition_id)} · ${definitionName(row.observation_mode_id)}`,
@@ -808,17 +886,56 @@
     return true;
   }
 
+  function renderFoundingCandidateInspector(id){
+    const row=foundationComparisonCandidate(id);if(!row)return false;
+    const axes=state.surfaceMap?.founding_comparison_axes||[];
+    const blockers=row.blockers||[];
+    const foundingPins=foundationComparisonPinnedKeys();
+    const pinned=foundingPins.includes(row.comparison_key);
+    const pinDisabled=!pinned&&foundingPins.length>=4;
+    const details=axes.length
+      ?kv(axes.map((axis)=>[axis.label,comparisonValueHtml(axis,comparisonValue(row,axis.key))]))
+      :kv([
+          ['移動時間',row.transit_days==null?'到達不可':`${fmt(row.transit_days,0)} 日`],
+          ['準備工数',fmt(row.preparation_work,0)],
+          ['必要機数',`${fmt(row.required_units,0)} 機`],
+          ['搭載量',`${fmt(row.payload_t,2)} t`],
+        ]);
+    setInspector(`設立候補 · ${row.target_cell_name}`,
+      section('候補状態',kv([
+        ['出発拠点',esc(locationName(row.staging_node_id))],
+        ['展開方式',esc(row.recipe_display_name)],
+        ['使用機体',esc(row.vehicle_display_name)],
+        ['移動時間',row.transit_days==null?'到達不可':`${fmt(row.transit_days,0)} 日`],
+        ['設立可否',row.can_plan?'設立可能':'条件未達'],
+      ]))+
+      section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">なし</span>')+
+      section('操作',`<div class="action-stack">${axes.length?`<button type="button" data-founding-compare-pin="${esc(row.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:''}<button type="button" data-inspect="surface-cell" data-id="${esc(row.target_cell_id)}">候補地点へ戻る</button></div>`)+
+      section('比較軸の詳細',details)+
+      section(row.transit_days==null?'最低展開資材':'出発拠点で必要な資源',`<div class="surface-resource-list">${tupleResourcesHtml(row.resources)}</div>${row.transit_days==null?'<div class="cell-sub">移動経路が未成立のため、運用資源を含む出発時総量は未確定です。</div>':''}`)
+    );
+    return true;
+  }
+
   function renderSurfaceCellInspector(id){
     const cell=surfaceCell(id);if(!cell)return false;
     const terrain=Object.fromEntries(cell.terrain||[]);
     const owner=cell.location_id?locationName(cell.location_id):'未所属';
     const neighbors=(cell.neighbor_ids||[]).map((neighbor)=>`<span class="badge">${esc(surfaceCellLabel(neighbor))}</span>`).join(' ')||'<span class="badge">なし</span>';
+    const foundingComparisonAvailable=(state.surfaceMap?.founding_comparison_axes||[]).length>0;
+    const foundingPinnedKeys=new Set(foundationComparisonPinnedKeys());
 
     const foundation=(cell.foundation_options||[]).map((option)=>{
       const plan=planningOptionState(option,'設立可'),blockers=plan.blockers,active=option.active_project_id;
       const disabled=plan.disabled;
       const scope=`foundation:${cell.id}:${option.staging_node_id}:${option.deployment_recipe_id}:${option.vehicle_definition_id}`;
-      return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.staging_node_id))} · ${esc(option.recipe_display_name)} · ${esc(option.vehicle_display_name)}</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':esc(plan.label)}</span></div><div class="cell-sub">準備工数 ${fmt(option.preparation_work,0)} · 輸送 ${fmt(option.transit_days,0)}日 · 搭載量 ${fmt(option.payload_t,2)} t (${fmt(option.payload_t_per_unit,2)} t/機 × ${fmt(option.required_units,0)}機)</div><div class="cell-sub">出発拠点で必要な資源</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">進行中の案件あり</div>`:''}<div class="form-row"><label>拠点名<input type="text" data-new-location-name data-draft-key="${esc(scope)}:name" data-structured-draft data-draft-scope="${esc(scope)}" placeholder="新規地表拠点"></label></div>${foundingPlanControls(scope,option,disabled)}<button type="button" class="primary" data-surface-found data-staging-node-id="${esc(option.staging_node_id)}" data-recipe-id="${esc(option.deployment_recipe_id)}" data-vehicle-id="${esc(option.vehicle_definition_id)}" data-cell-id="${esc(cell.id)}" data-body-id="${esc(cell.body_id)}" ${disabled?'disabled':''}>この地点へ拠点設立を開始</button></div>`;
+      const pinned=foundingPinnedKeys.has(option.comparison_key);
+      const pinDisabled=foundingComparisonAvailable&&!pinned&&foundingPinnedKeys.size>=4;
+      const compareActions=foundingComparisonAvailable?`<div class="action-row"><button type="button" data-founding-compare-pin="${esc(option.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button><button type="button" data-founding-candidate-detail="${esc(option.comparison_key)}">詳細</button></div>`:'';
+      const transit=option.transit_days==null?'到達不可':`${fmt(option.transit_days,0)}日`;
+      const resourceHeading=option.transit_days==null?'最低展開資材':'出発拠点で必要な資源';
+      const unresolvedMovement=option.transit_days==null?'<div class="cell-sub">移動経路が未成立のため、運用資源を含む出発時総量は未確定です。</div>':'';
+      return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.staging_node_id))} · ${esc(option.recipe_display_name)} · ${esc(option.vehicle_display_name)}</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':esc(plan.label)}</span></div><div class="cell-sub">準備工数 ${fmt(option.preparation_work,0)} · 輸送 ${transit} · 搭載量 ${fmt(option.payload_t,2)} t (${fmt(option.payload_t_per_unit,2)} t/機 × ${fmt(option.required_units,0)}機)</div><div class="cell-sub">${resourceHeading}</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${unresolvedMovement}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">進行中の案件あり</div>`:''}${compareActions}<div class="form-row"><label>拠点名<input type="text" data-new-location-name data-draft-key="${esc(scope)}:name" data-structured-draft data-draft-scope="${esc(scope)}" placeholder="新規地表拠点"></label></div>${foundingPlanControls(scope,option,disabled)}<button type="button" class="primary" data-surface-found data-staging-node-id="${esc(option.staging_node_id)}" data-recipe-id="${esc(option.deployment_recipe_id)}" data-vehicle-id="${esc(option.vehicle_definition_id)}" data-cell-id="${esc(cell.id)}" data-body-id="${esc(cell.body_id)}" ${disabled?'disabled':''}>この地点へ拠点設立を開始</button></div>`;
     }).join('')||'<div class="empty-state">この地域へ利用可能な拠点設立候補がありません。</div>';
 
     const development=(cell.development_options||[]).map((option)=>{
@@ -835,6 +952,7 @@
     }).join('')||'<div class="empty-state">この地域へ配置可能な位置依存設備はありません。</div>';
 
     const foundationSection=cell.developed?'':section('新拠点設立',foundation);
+    const foundationComparisonSection=cell.developed||!foundingComparisonAvailable?'':section('設立候補比較',foundationComparisonHtml());
     const developmentSection=cell.developed?'':section('既存拠点から開発',development);
     const facilitySection=cell.developed?section('位置依存設備',facilities):'';
     setInspector(surfaceCellLabel(cell.id),
@@ -845,7 +963,7 @@
         ['緯度',`${fmt(cell.latitude_deg,2)}°`],
         ['経度',`${fmt(cell.longitude_deg,2)}°`],
       ]))+
-      foundationSection+developmentSection+facilitySection+
+      foundationSection+foundationComparisonSection+developmentSection+facilitySection+
       section('資源調査情報',surfaceResourcesHtml(cell.resources,cell.id))+
       section('現在の環境',environmentHtml(cell.environment))+
       section('地形',kv([
@@ -862,7 +980,7 @@
   function renderInspector(){
     if(!state.inspector){setInspector('選択項目','<div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div>');return;}
     const {type,id}=state.inspector;
-    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,'dependency-resource':renderDependencyResourceInspector,'dependency-service':renderDependencyServiceInspector,'extraction-resource':renderExtractionResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'survey-campaign':renderSurveyCampaignInspector,'survey-candidate':renderSurveyCandidateInspector,'surface-cell':renderSurfaceCellInspector};
+    const handlers={facility:renderFacilityInspector,resource:renderResourceInspector,'dependency-resource':renderDependencyResourceInspector,'dependency-service':renderDependencyServiceInspector,'extraction-resource':renderExtractionResourceInspector,project:renderProjectInspector,'build-option':renderBuildOptionInspector,research:renderResearchInspector,'scientific-exploration':renderScientificExplorationInspector,survey:renderSurveyInspector,'survey-campaign':renderSurveyCampaignInspector,'survey-candidate':renderSurveyCandidateInspector,'founding-candidate':renderFoundingCandidateInspector,'surface-cell':renderSurfaceCellInspector};
     if(!handlers[type]?.(id)){state.inspector=null;setInspector('選択項目','<div class="empty-state">項目の状態が変化しました。再選択してください。</div>');}
   }
 
@@ -917,6 +1035,9 @@
     const dependencyToggle=event.target.closest('[data-dependency-view]');if(dependencyToggle){dependencyView=dependencyToggle.dataset.dependencyView==='forecast'?'forecast':'current';renderActiveTab();renderInspector();return;}
     const tab=event.target.closest('[data-tab]');if(tab){state.activeTab=tab.dataset.tab;state.inspector=null;render();if(['surface','survey'].includes(state.activeTab)){try{await A.loadUiSnapshot({preserveInteraction:false});}catch(e){banner(e.message,'error');}}return;}
     const inspect=event.target.closest('[data-inspect]');if(inspect){state.inspector={type:inspect.dataset.inspect,id:inspect.dataset.id};if(inspect.dataset.inspect==='surface-cell')render();else{renderInspector();$$('#operationsTabContent [data-inspect]').forEach((target)=>{const selected=target.dataset.inspect===inspect.dataset.inspect&&target.dataset.id===inspect.dataset.id;target.classList.toggle('is-selected',selected);if(target.hasAttribute('aria-pressed'))target.setAttribute('aria-pressed',selected?'true':'false');});}return;}
+    const foundingCandidateDetail=event.target.closest('[data-founding-candidate-detail]');if(foundingCandidateDetail){state.inspector={type:'founding-candidate',id:foundingCandidateDetail.dataset.foundingCandidateDetail};renderInspector();return;}
+    const foundingComparePin=event.target.closest('[data-founding-compare-pin]');if(foundingComparePin){const candidates=foundationComparisonCandidates(),key=foundingComparePin.dataset.foundingComparePin;toggleComparisonPin(foundationComparisonScope(),candidates,key);renderInspector();return;}
+    const constructionComparePin=event.target.closest('[data-construction-compare-pin]');if(constructionComparePin){toggleComparisonPin(constructionComparisonScope(),constructionComparisonCandidates(),constructionComparePin.dataset.constructionComparePin);renderInspector();return;}
     const preserveSurfaceDecision=(cellId)=>{state.inspector={type:'surface-cell',id:cellId};render();};
     const surfaceBuild=event.target.closest('[data-surface-build]');if(surfaceBuild){const cellId=surfaceBuild.dataset.cellId,plan=surfacePlanPayload(surfaceBuild);try{await command('PlanBuild',{operational_node_id:surfaceBuild.dataset.locationId,facility_id:surfaceBuild.dataset.surfaceBuild,site_cell_id:cellId,...plan});await A.completeActiveDraft(`surface-build:${cellId}:${surfaceBuild.dataset.surfaceBuild}`);preserveSurfaceDecision(cellId);banner('地表設備の建設案件を作成しました');}catch{}return;}
     const surfaceDevelop=event.target.closest('[data-surface-develop]');if(surfaceDevelop){const cellId=surfaceDevelop.dataset.cellId,plan=surfacePlanPayload(surfaceDevelop);try{await command('DevelopSurfaceCell',{location_id:surfaceDevelop.dataset.surfaceDevelop,cell_id:cellId,...plan});await A.completeActiveDraft(`development:${cellId}:${surfaceDevelop.dataset.surfaceDevelop}`);preserveSurfaceDecision(cellId);banner('地表地域の開発案件を作成しました');}catch{}return;}
@@ -942,7 +1063,7 @@
     const campaignAction=event.target.closest('[data-survey-campaign-action]');if(campaignAction){const map={pause:'PauseSurvey',resume:'ResumeSurvey'};try{await command(map[campaignAction.dataset.surveyCampaignAction],{campaign_id:campaignAction.dataset.id});}catch{}return;}
     const updateSurvey=event.target.closest('[data-update-survey-campaign]');if(updateSurvey){const c=(state.surveys?.campaigns||[]).find((row)=>row.id===updateSurvey.dataset.updateSurveyCampaign);if(!c)return;const target_cell_ids=$$('[data-survey-campaign-cell]:checked').map((x)=>x.value),resource_ids=$$('[data-survey-campaign-resource]:checked').map((x)=>x.value);try{await command('UpdateSurvey',{campaign_id:c.id,target_cell_ids,resource_ids,goal_knowledge_level:Number($('#surveyCampaignGoal')?.value??c.goal_knowledge_level),provider_constraint:c.provider_constraint_definition_id?{provider_definition_id:c.provider_constraint_definition_id,operational_node_id:c.provider_constraint_operational_node_id}:null,observation_mode_constraint:c.observation_mode_constraint});await A.completeActiveDraft(`survey:${c.id}`);}catch{}return;}
     const candidateDetail=event.target.closest('[data-survey-candidate-detail]');if(candidateDetail){state.inspector={type:'survey-candidate',id:`${candidateDetail.dataset.surveyCandidateDetail}@@${candidateDetail.dataset.comparisonKey}`};renderInspector();return;}
-    const comparePin=event.target.closest('[data-survey-compare-pin]');if(comparePin){const campaignId=comparePin.dataset.surveyComparePin,key=comparePin.dataset.comparisonKey;const c=(state.surveys?.campaigns||[]).find((row)=>row.id===campaignId);if(!c)return;const pins=surveyComparisonPinnedKeys(c);const index=pins.indexOf(key);if(index>=0)pins.splice(index,1);else if(pins.length<4)pins.push(key);surveyComparisonPins.set(campaignId,pins);if(state.inspector?.type==='survey-candidate')renderInspector();else{state.inspector={type:'survey-campaign',id:campaignId};renderInspector();}return;}
+    const comparePin=event.target.closest('[data-survey-compare-pin]');if(comparePin){const campaignId=comparePin.dataset.surveyComparePin,key=comparePin.dataset.comparisonKey;const c=(state.surveys?.campaigns||[]).find((row)=>row.id===campaignId);if(!c)return;toggleComparisonPin(surveyComparisonScope(c),c.candidates||[],key);if(state.inspector?.type==='survey-candidate')renderInspector();else{state.inspector={type:'survey-campaign',id:campaignId};renderInspector();}return;}
     const constrainSurvey=event.target.closest('[data-survey-constrain-candidate]');if(constrainSurvey){const c=(state.surveys?.campaigns||[]).find((row)=>row.id===constrainSurvey.dataset.surveyConstrainCandidate);if(!c)return;try{await command('UpdateSurvey',{campaign_id:c.id,target_cell_ids:c.target_cell_ids,resource_ids:c.resource_ids,goal_knowledge_level:c.goal_knowledge_level,provider_constraint:{provider_definition_id:constrainSurvey.dataset.providerDefinitionId,operational_node_id:constrainSurvey.dataset.operationalNodeId},observation_mode_constraint:constrainSurvey.dataset.observationModeId});}catch{}return;}
     const clearSurvey=event.target.closest('[data-clear-survey-constraint]');if(clearSurvey){const c=(state.surveys?.campaigns||[]).find((row)=>row.id===clearSurvey.dataset.clearSurveyConstraint);if(!c)return;try{await command('UpdateSurvey',{campaign_id:c.id,target_cell_ids:c.target_cell_ids,resource_ids:c.resource_ids,goal_knowledge_level:c.goal_knowledge_level,provider_constraint:null,observation_mode_constraint:null});}catch{}return;}
   });

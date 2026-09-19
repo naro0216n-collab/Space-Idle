@@ -107,6 +107,24 @@ def test_surface_map_owns_surface_buildability_and_location_build_options_do_not
         for process in sorted(sim.industry.processes.values(), key=lambda row: str(row.id))
         if process.facility_def_id == definition.id
     )
+    assert build_options.comparison_axes
+    assert any(axis.differs for axis in build_options.comparison_axes)
+    assert {axis.key for axis in build_options.comparison_axes} == {
+        "construction_work",
+        "resource_total_t",
+        "resource_type_count",
+        "capability_count",
+        "service_type_count",
+        "process_count",
+        "self_deploying",
+    }
+    comparison_values = {value.axis_key: value for value in candidate.comparison_values}
+    assert candidate.comparison_key == candidate.facility_definition_id
+    assert set(comparison_values) == {axis.key for axis in build_options.comparison_axes}
+    assert comparison_values["resource_total_t"].number_value == pytest.approx(
+        sum(resource.required_t for resource in candidate.resources)
+    )
+    assert comparison_values["self_deploying"].text_value in {"自己展開", "通常施工"}
 
     surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
     industrial = next(row for row in surface.cells if row.id == str(ids.EARTH_CELL_INDUSTRIAL))

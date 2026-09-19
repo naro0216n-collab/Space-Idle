@@ -104,25 +104,41 @@ def run() -> dict[str, object]:
     # the current recipe's knowledge contract, then select the option projected
     # by the Application instead of preserving a historical UI selector tuple.
     founding_fixture_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    founding_comparison_cell = ids.MOON_CELL_EQUATORIAL_HIGHLANDS
     founding_recipe = fixture_sim.founding.deployment_recipes[
         ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE
     ]
-    for requirement in founding_recipe.knowledge_requirements:
-        target = fixture_sim.survey.targets[(
-            founding_fixture_cell, requirement.subject_resource_id
-        )]
-        fixture_sim.survey.knowledge_progress[(target.cell_id, target.resource_id)] = (
-            target.thresholds[int(requirement.minimum_level) - 1]
-        )
+    for target_cell_id in (founding_fixture_cell, founding_comparison_cell):
+        for requirement in founding_recipe.knowledge_requirements:
+            target = fixture_sim.survey.targets[(
+                target_cell_id, requirement.subject_resource_id
+            )]
+            fixture_sim.survey.knowledge_progress[(target.cell_id, target.resource_id)] = (
+                target.thresholds[int(requirement.minimum_level) - 1]
+            )
+    founding_surface_projection = runtime._app.query(GetSurfaceMap(str(ids.MOON)))
     founding_cell_projection = next(
-        cell
-        for cell in runtime._app.query(GetSurfaceMap(str(ids.MOON))).cells
+        cell for cell in founding_surface_projection.cells
         if cell.id == str(founding_fixture_cell)
+    )
+    founding_comparison_projection = next(
+        cell for cell in founding_surface_projection.cells
+        if cell.id == str(founding_comparison_cell)
     )
     founding_fixture_option = next(
         option
         for option in sorted(
             founding_cell_projection.foundation_options,
+            key=lambda row: (
+                row.staging_node_id, row.deployment_recipe_id, row.vehicle_definition_id
+            ),
+        )
+        if option.can_plan
+    )
+    founding_comparison_option = next(
+        option
+        for option in sorted(
+            founding_comparison_projection.foundation_options,
             key=lambda row: (
                 row.staging_node_id, row.deployment_recipe_id, row.vehicle_definition_id
             ),
@@ -353,6 +369,27 @@ def run() -> dict[str, object]:
             _assert("利用可能になる機能" in build_option.inner_text(), "construction candidate card must summarize what it enables")
             build_option.click()
             _assert("建設後に利用可能" in page.locator('#inspectorContent').inner_text(), "construction candidate inspector must expose Application-projected capabilities and services")
+            construction_candidates = page.locator('[data-inspect="build-option"]')
+            if page.evaluate("() => (window.SpaceIdleApp.state.buildOptions?.comparison_axes || []).length > 0"):
+                _assert(construction_candidates.count() >= 2, "strategic Construction comparison requires at least two projected candidates in this browser fixture")
+                first_construction_pin = page.locator('#inspectorContent [data-construction-compare-pin]')
+                _assert(first_construction_pin.count() == 1, "Construction candidate inspector must expose Comparison pin")
+                first_construction_pin.click()
+                construction_candidates.nth(1).click()
+                page.locator('#inspectorContent [data-construction-compare-pin]').click()
+                page.wait_for_function(
+                    "() => document.querySelectorAll('#inspectorContent .comparison-surface .comparison-candidate-heading').length === 2",
+                    timeout=10000,
+                )
+                construction_comparison = page.locator('#inspectorContent .comparison-surface')
+                _assert(
+                    construction_comparison.locator('.comparison-axis-row.is-different').count() > 0,
+                    "Construction Comparison must highlight Application-projected differences",
+                )
+                _assert(
+                    construction_comparison.locator('.comparison-blocker-cell').count() == 2,
+                    "Construction Comparison must keep blocker state beside each candidate",
+                )
 
             # Process selection is a Direct Action. A facility with a process
             # option keeps the choices visible and does not require a second Apply.
@@ -649,6 +686,51 @@ def run() -> dict[str, object]:
             page.locator('[data-section-tab="exploration"][data-tab="surface"]').click()
             founding_cell = page.locator(f'.surface-cell-button[data-id="{founding_fixture_cell}"]')
             founding_cell.wait_for(timeout=10000)
+            founding_cell.click()
+
+            # Founding site comparison must survive Cell switches and compare the
+            # Application-projected site/manifest axes rather than ranking sites in UI.
+            first_founding_pin = page.locator(
+                '#inspectorContent '
+                f'[data-founding-compare-pin="{founding_fixture_option.comparison_key}"]'
+            ).first
+            _assert(first_founding_pin.count() == 1, "Founding option must expose Comparison pin")
+            first_founding_pin.click()
+            comparison_cell = page.locator(
+                f'.surface-cell-button[data-id="{founding_comparison_cell}"]'
+            )
+            comparison_cell.click()
+            second_founding_pin = page.locator(
+                '#inspectorContent '
+                f'[data-founding-compare-pin="{founding_comparison_option.comparison_key}"]'
+            ).first
+            _assert(second_founding_pin.count() == 1, "second Founding Cell must expose Comparison pin")
+            second_founding_pin.click()
+            page.wait_for_function(
+                "() => document.querySelectorAll('#inspectorContent .comparison-surface .comparison-candidate-heading').length === 2",
+                timeout=10000,
+            )
+            founding_comparison = page.locator('#inspectorContent .comparison-surface')
+            _assert(
+                founding_comparison.locator('.comparison-axis-row.is-different').count() > 0,
+                "Founding Comparison must highlight Application-projected candidate differences",
+            )
+            _assert(
+                founding_comparison.locator('.comparison-blocker-cell').count() == 2,
+                "Founding Comparison must keep each candidate's blocker column",
+            )
+            founding_comparison.locator(
+                f'[data-founding-candidate-detail="{founding_comparison_option.comparison_key}"]'
+            ).click()
+            _assert(
+                page.locator('#inspectorTitle').inner_text().startswith('設立候補'),
+                "Founding Comparison detail must expand in Context Inspector",
+            )
+            page.locator(
+                f'#inspectorContent [data-inspect="surface-cell"][data-id="{founding_comparison_cell}"]'
+            ).click()
+
+            # Return to the original selected site and continue the real Founding command.
             founding_cell.click()
             founding_button = page.locator(
                 '#inspectorContent [data-surface-found]'

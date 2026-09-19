@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .application_comparison import project_comparison_axes
+from .app_contracts.ui_reports import ComparisonValueRow
 from .application_views import (
     BuildResourceOption,
     BuildOptionRow,
@@ -406,23 +408,65 @@ class ProjectProjectorMixin:
                 for process in sorted(sim.industry.processes.values(), key=lambda row: str(row.id))
                 if process.facility_def_id == recipe.facility_def_id
             )
+            build_resources = self._construction_resource_options(recipe)
+            capabilities = tuple(sorted(supply.id for supply in definition.capability_supplies))
+            service_capacity_supplies = tuple(
+                sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
+            )
+            comparison_values = (
+                ComparisonValueRow(axis_key="construction_work", number_value=recipe.construction_work),
+                ComparisonValueRow(
+                    axis_key="resource_total_t",
+                    number_value=sum(resource.required_t for resource in build_resources),
+                ),
+                ComparisonValueRow(
+                    axis_key="resource_type_count", number_value=float(len(build_resources))
+                ),
+                ComparisonValueRow(
+                    axis_key="capability_count", number_value=float(len(capabilities))
+                ),
+                ComparisonValueRow(
+                    axis_key="service_type_count",
+                    number_value=float(len(service_capacity_supplies)),
+                ),
+                ComparisonValueRow(
+                    axis_key="process_count", number_value=float(len(process_options))
+                ),
+                ComparisonValueRow(
+                    axis_key="self_deploying",
+                    text_value="自己展開" if recipe.self_deploying else "通常施工",
+                ),
+            )
             rows.append(BuildOptionRow(
                 facility_definition_id=str(recipe.facility_def_id),
                 display_name=definition.display_name,
                 construction_required=recipe.construction_work,
                 self_deploying=recipe.self_deploying,
-                resources=self._construction_resource_options(recipe),
+                resources=build_resources,
                 blockers=blockers,
                 can_plan=not plan_failures,
-                capabilities=tuple(sorted(supply.id for supply in definition.capability_supplies)),
-                service_capacity_supplies=tuple(
-                    sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
-                ),
+                capabilities=capabilities,
+                service_capacity_supplies=service_capacity_supplies,
                 process_options=process_options,
                 placement_scope=definition.placement_scope.value,
+                comparison_key=str(recipe.facility_def_id),
+                comparison_values=comparison_values,
             ))
+        comparison_axes = project_comparison_axes(
+            (
+                ("construction_work", "必要工数", "number", None),
+                ("resource_total_t", "必要資源量", "number", "t"),
+                ("resource_type_count", "必要資源種", "integer", "種"),
+                ("capability_count", "追加能力", "integer", "種"),
+                ("service_type_count", "追加サービス", "integer", "種"),
+                ("process_count", "利用可能工程", "integer", "種"),
+                ("self_deploying", "施工方式", "text", None),
+            ),
+            (row.comparison_values for row in rows),
+        )
         return BuildOptionsView(
             str(location_id),
             tuple(sim.projects.procurement_policy_options()),
             tuple(rows),
+            comparison_axes,
         )

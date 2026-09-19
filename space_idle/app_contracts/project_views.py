@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..priority import ActivityPriority, ProvisioningPriority
+from .ui_reports import ComparisonAxisRow, ComparisonValueRow
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,8 @@ class BuildOptionRow:
     service_capacity_supplies: tuple[tuple[str, float], ...] = ()
     process_options: tuple[tuple[str, str], ...] = ()
     placement_scope: str = "OPERATIONAL_NODE"
+    comparison_key: str = ""
+    comparison_values: tuple[ComparisonValueRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,7 @@ class BuildOptionsView:
     operational_node_id: str
     procurement_policy_options: tuple[str, ...]
     items: tuple[BuildOptionRow, ...]
+    comparison_axes: tuple[ComparisonAxisRow, ...] = ()
 
 
 @dataclass(frozen=True)

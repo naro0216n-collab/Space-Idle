@@ -465,6 +465,26 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     assert str(ids.PROPELLANT) in displayed_resources
     assert any(code == "knowledge_requirement" for code, _detail in option.blockers)
 
+    surface = app.query(GetSurfaceMap(str(ids.MOON)))
+    assert surface.founding_comparison_axes
+    assert any(axis.differs for axis in surface.founding_comparison_axes)
+    assert {axis.key for axis in surface.founding_comparison_axes} == {
+        "transit_days",
+        "preparation_work",
+        "required_units",
+        "payload_t",
+        "staging_resource_t",
+        "terrain_factor",
+        "bearing_capacity_factor",
+        "dust_factor",
+        "slope_factor",
+    }
+    option_values = {value.axis_key: value.number_value for value in option.comparison_values}
+    assert option.comparison_key.startswith(f"{cell.id}|")
+    assert set(option_values) == {axis.key for axis in surface.founding_comparison_axes}
+    assert option_values["terrain_factor"] == pytest.approx(dict(cell.terrain)["terrain_factor"])
+    assert option_values["staging_resource_t"] == pytest.approx(sum(displayed_resources.values()))
+
 
 def test_founding_persistence_preserves_payload_ownership_and_materializes_location_once(tmp_path):
     recipe_id = DefinitionId("test.founding.persisted_payload")

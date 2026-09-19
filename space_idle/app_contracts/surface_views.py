@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .location_views import EnvironmentFacetRow
+from .ui_reports import ComparisonAxisRow, ComparisonValueRow
 
 
 @dataclass(frozen=True)
@@ -38,7 +39,7 @@ class SurfaceCellFoundationOption:
     vehicle_definition_id: str
     vehicle_display_name: str
     preparation_work: float
-    transit_days: int
+    transit_days: int | None
     payload_t: float
     payload_t_per_unit: float
     required_units: int
@@ -46,6 +47,8 @@ class SurfaceCellFoundationOption:
     blockers: tuple[tuple[str, str], ...]
     can_plan: bool
     active_project_id: str | None = None
+    comparison_key: str = ""
+    comparison_values: tuple[ComparisonValueRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -100,3 +103,4 @@ class SurfaceMapView:
     display_name: str
     cells: tuple[SurfaceCellRow, ...]
     locations: tuple[SurfaceLocationTerritoryRow, ...]
+    founding_comparison_axes: tuple[ComparisonAxisRow, ...] = ()
