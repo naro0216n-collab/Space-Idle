@@ -72,11 +72,18 @@ def run() -> None:
             tree_scroll_after = page.evaluate("el => el.scrollLeft", page.locator("#researchTreeScroll").element_handle())
             assert tree_scroll_after >= initial_tree_scroll - 2
 
+            # Top-level navigation is a view change, not a reset of the current
+            # decision. Returning to research must restore its selected subject.
+            page.locator('.primary-nav-button[data-section="location"]').click()
+            page.locator('.primary-nav-button[data-section="research"]').click()
+            assert page.locator("#inspectorTitle").inner_text() == research_title
+            assert page.locator("#researchTree .research-node.is-selected").count() == 1
+
             # A live editable control must keep its unsaved value and focus while
             # the authoritative clock refreshes the surrounding projection.
             page.locator('.primary-nav-button[data-section="location"]').click()
             page.locator('[data-tab="facilities"]').click()
-            first_facility = page.locator('tr[data-inspect="facility"]').first
+            first_facility = page.locator('[data-inspect="facility"]').first
             first_facility.click()
             inspector_title = page.locator("#inspectorTitle").inner_text()
             priority = page.locator("#facilityPriorityInput")

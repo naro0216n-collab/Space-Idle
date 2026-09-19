@@ -58,7 +58,6 @@ select, input { width: 100%; border: 1px solid var(--line); border-radius: 7px; 
 .view-root { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .global-view, .operations-view, .logistics-view, .economy-view { display: grid; grid-template-columns: minmax(0, 1fr) var(--inspector-width); }
 .view-root[hidden] { display: none !important; }
-.decision-canvas-with-browser { min-width: 0; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 218px minmax(0, 1fr); }
 
 .panel { background: var(--panel); border-right: 1px solid var(--line); overflow: auto; min-height: 0; }
 .inspector-panel { border-right: 0; border-left: 1px solid var(--line); }
@@ -74,7 +73,6 @@ select, input { width: 100%; border: 1px solid var(--line); border-radius: 7px; 
 .location-name { display: block; font-weight: 650; }
 .location-meta { display: flex; gap: 10px; margin-top: 4px; color: var(--muted); font-size: 11px; }
 .panel-section { border-top: 1px solid var(--line-soft); padding: 14px; }
-.panel-section.compact { margin-top: 8px; }
 .section-title { margin-bottom: 9px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; }
 .workspace { overflow: auto; background: #09131c; min-height: 0; }
 .workspace-heading { min-height: 88px; background: linear-gradient(180deg, #0f1c28, #0b1721); }
@@ -133,8 +131,6 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .form-row label, dialog label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
 .progress-track { height: 7px; border-radius: 999px; background: #172635; overflow: hidden; }
 .progress-bar { height: 100%; background: var(--accent); }
-.logistics-list-panel .panel-heading { min-height: 70px; }
-.filter-row { display: grid; gap: 7px; padding: 9px; border-bottom: 1px solid var(--line-soft); }
 .movement-plan-list { padding: 8px; display: grid; gap: 6px; }
 .movement-plan-button { width: 100%; min-height: 66px; text-align: left; padding: 9px 10px; background: transparent; border-color: var(--line-soft); }
 .movement-plan-button.is-selected { background: #142a3b; border-color: #3a6e8d; }
@@ -213,7 +209,6 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
   .session-strip { gap: 8px; }
   .time-controls button, .session-actions button { padding-left: 7px; padding-right: 7px; }
   #timePauseButton { min-width: 78px; font-size: 12px; }
-  .decision-canvas-with-browser { grid-template-columns: 190px minmax(0, 1fr); }
   .panel-heading, .workspace-heading { padding: 12px; }
   .workspace-heading h1 { font-size: 19px; }
   .headline-metrics { gap: 5px; }
@@ -266,4 +261,89 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 @media (max-width: 1080px) and (orientation: landscape) {
   .global-decision-grid { grid-template-columns: minmax(0, 1fr) 230px; }
   .global-map-node { width: 122px; }
+}
+
+/* iPad landscape shell: preserve the three-region hierarchy and give the canvas priority. */
+.view-root.is-inspector-expanded { --inspector-width: min(420px, 42vw); }
+.operations-decision-canvas { min-width: 0; min-height: 0; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr); }
+.operations-workspace { min-width: 0; }
+.location-context-bar { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 8px; align-items: stretch; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); background: #0b1721; }
+.location-context-bar .location-list { padding: 0; display: flex; flex-wrap: wrap; gap: 7px; min-width: 0; }
+.location-context-bar .location-button { width: auto; min-width: 142px; min-height: 52px; flex: 1 1 150px; max-width: 230px; padding: 7px 10px; border: 1px solid var(--line-soft); background: #0a1620; }
+.location-context-bar .location-button.is-active { border-color: #39779b; background: #143047; box-shadow: inset 3px 0 0 var(--accent); }
+.location-context-bar .location-meta { gap: 7px; font-size: 10px; }
+.refresh-context-button { align-self: stretch; min-height: 52px; }
+.inspector-width-toggle { min-width: 54px; min-height: 44px; padding: 0 9px; font-size: 11px; color: var(--muted); }
+
+/* Location overview: decision categories first, raw tables remain in dedicated tabs. */
+.location-overview-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; align-items: start; }
+.decision-card { min-width: 0; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.decision-card-heading { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
+.decision-card-heading h3 { margin: 2px 0 0; font-size: 14px; }
+.small-action { min-width: 64px; min-height: 44px; padding: 0 10px; font-size: 11px; }
+.overview-issues { padding: 10px; }
+.compact-empty { min-height: 70px; padding: 12px; }
+.overview-resource-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 7px; padding: 10px; }
+.overview-resource { min-width: 0; min-height: 92px; display: grid; gap: 4px; align-content: start; text-align: left; padding: 9px 10px; background: #0a1620; border-color: var(--line-soft); }
+.overview-resource.has-warning { border-color: #745d2b; background: #191812; }
+.overview-resource-name { color: var(--muted); font-size: 11px; }
+.overview-resource strong { font-size: 16px; }
+.overview-resource > span:not(.overview-resource-name) { color: var(--muted); font-size: 10px; }
+.overview-capacity-list, .overview-project-list, .overview-dependency-list { display: grid; gap: 7px; padding: 10px; }
+.overview-capacity { display: grid; gap: 6px; padding: 9px 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: #0a1620; }
+.overview-capacity.has-warning { border-color: #745d2b; }
+.overview-capacity-heading { display: flex; justify-content: space-between; gap: 10px; align-items: center; font-size: 11px; }
+.overview-project, .overview-facility, .overview-dependency { width: 100%; min-height: 64px; display: grid; gap: 7px; text-align: left; padding: 9px 10px; background: #0a1620; border-color: var(--line-soft); }
+.overview-project.is-selected, .overview-facility.is-selected, .overview-dependency.is-selected { border-color: var(--accent); background: #123049; }
+.overview-project-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.overview-project-heading strong { min-width: 0; overflow-wrap: anywhere; }
+.overview-dependency { grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; }
+.overview-dependency > span { color: var(--muted); font-size: 10px; }
+.capacity-quad { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; padding: 10px; }
+.capacity-quad > div { padding: 8px; border: 1px solid var(--line-soft); border-radius: 7px; background: #0a1620; }
+.capacity-quad span { display: block; color: var(--muted); font-size: 10px; }
+.capacity-quad strong { display: block; margin-top: 3px; font-size: 15px; }
+.compact-issues { padding: 0 10px 10px; }
+
+/* Facility decision surface: touchable comparison cards instead of a desktop data table. */
+.facility-decision-surface { display: grid; gap: 12px; }
+.decision-surface-heading { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+.decision-surface-heading h2 { margin: 2px 0 0; font-size: 20px; }
+.decision-surface-heading p { max-width: 700px; margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.facility-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.facility-card { width: 100%; min-width: 0; min-height: 172px; display: grid; grid-template-rows: auto auto auto 1fr; gap: 10px; align-content: start; text-align: left; padding: 12px; background: #0b1721; border-color: var(--line-soft); }
+.facility-card.is-selected { border-color: var(--accent); background: #123049; box-shadow: inset 0 0 0 1px #64c6ff55; }
+.facility-card-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+.facility-card-heading > span:first-child { min-width: 0; }
+.facility-card-heading strong { display: block; overflow-wrap: anywhere; font-size: 14px; }
+.facility-card-heading small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.facility-utilization { display: grid; gap: 6px; }
+.facility-utilization > span:first-child { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }
+.facility-utilization strong { color: var(--text); font-size: 12px; }
+.facility-card-metrics { display: flex; flex-wrap: wrap; gap: 7px 12px; color: var(--muted); font-size: 10px; }
+.facility-card-blocker { align-self: end; min-height: 30px; display: flex; align-items: center; padding-top: 7px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 10px; }
+.facility-card-blocker.has-warning { color: var(--warn); }
+
+@media (max-width: 1080px) and (orientation: landscape) {
+  .view-root.is-inspector-expanded { --inspector-width: min(370px, 40vw); }
+  .location-context-bar { padding-left: 10px; padding-right: 10px; }
+  .location-context-bar .location-button { min-width: 124px; flex-basis: 130px; }
+  .location-context-bar .location-meta span:nth-child(3) { display: none; }
+  .facility-card-grid { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  .overview-dependency { grid-template-columns: minmax(0, 1fr) auto; }
+  .overview-dependency > span:last-child { grid-column: 1 / -1; }
+}
+
+/* Logistics uses the same three-region shell: route browsing belongs inside the decision canvas. */
+.logistics-decision-canvas { min-width: 0; min-height: 0; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr); }
+.logistics-route-context-bar { display: grid; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); background: #0b1721; }
+.route-filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.logistics-route-context-bar .movement-plan-list { padding: 0; display: flex; flex-wrap: wrap; gap: 7px; }
+.logistics-route-context-bar .movement-plan-button { width: auto; min-width: 190px; min-height: 58px; flex: 1 1 210px; max-width: 320px; padding: 8px 10px; background: #0a1620; }
+.logistics-route-context-bar .movement-plan-button.is-selected { background: #143047; border-color: #3a6e8d; box-shadow: inset 3px 0 0 var(--accent); }
+.network-stage { min-width: 0; }
+
+@media (max-width: 1080px) and (orientation: landscape) {
+  .logistics-route-context-bar .movement-plan-button { min-width: 160px; flex-basis: 180px; }
+  .logistics-bottom-grid { grid-template-columns: 1fr; }
 }

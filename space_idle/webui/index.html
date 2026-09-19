@@ -50,25 +50,24 @@
       <div class="section-host">
         <main id="globalView" class="view-root global-view">
           <section class="workspace global-workspace">
-            <div class="workspace-heading"><div><div class="eyebrow">MISSION CONTROL</div><h1>全体</h1></div><div id="globalHeadlineMetrics" class="headline-metrics"></div></div>
+            <div class="workspace-heading"><div><div class="eyebrow">全体コンテキスト</div><h1>全体</h1></div><div id="globalHeadlineMetrics" class="headline-metrics"></div></div>
             <div id="globalCanvasContent" class="global-canvas-content"></div>
           </section>
           <aside class="panel inspector-panel global-inspector">
-            <div class="panel-heading"><div><div class="eyebrow">CONTEXT</div><h2 id="globalInspectorTitle">全体状況</h2></div></div>
+            <div class="panel-heading"><div><div class="eyebrow">選択コンテキスト</div><h2 id="globalInspectorTitle">全体状況</h2></div><button type="button" class="inspector-width-toggle" data-toggle-inspector aria-label="詳細パネルを拡大" aria-pressed="false">拡大</button></div>
             <div id="globalInspectorContent" class="inspector-content"></div>
           </aside>
         </main>
 
         <main id="operationsView" class="view-root operations-view" hidden>
-          <div class="decision-canvas-with-browser operations-decision-canvas">
-            <aside class="panel location-panel">
-              <div class="panel-heading"><div><div class="eyebrow">OPERATIONAL NODES</div><h2>拠点</h2></div><button class="icon-button" id="refreshButton" type="button" aria-label="再読込">↻</button></div>
-              <div id="locationList" class="location-list"></div>
-              <div class="panel-section compact"><div class="section-title">全体ボトルネック</div><div id="globalIssues" class="issue-stack"></div></div>
-            </aside>
-
+          <div class="operations-decision-canvas">
             <section class="workspace operations-workspace">
-              <div class="workspace-heading"><div><div class="eyebrow" id="locationKind">OPERATIONAL NODE</div><h1 id="locationTitle">拠点を読み込み中</h1></div><div class="headline-metrics" id="headlineMetrics"></div></div>
+              <div class="workspace-heading operations-heading"><div><div class="eyebrow" id="locationKind">拠点コンテキスト</div><h1 id="locationTitle">拠点を読み込み中</h1></div><div class="headline-metrics" id="headlineMetrics"></div></div>
+              <div class="location-context-bar" aria-label="拠点コンテキスト">
+                <div id="locationList" class="location-list"></div>
+                <button class="icon-button refresh-context-button" id="refreshButton" type="button" aria-label="最新状態を取得">↻</button>
+              </div>
+              <div id="globalIssues" class="visually-hidden" aria-live="polite"></div>
               <div class="tabbar" role="tablist" aria-label="作業領域">
                 <button type="button" class="tab-button is-active" data-tab="overview" data-section-tab="location">概要</button>
                 <button type="button" class="tab-button" data-tab="facilities" data-section-tab="location">設備</button>
@@ -84,21 +83,19 @@
           </div>
 
           <aside class="panel inspector-panel">
-            <div class="panel-heading"><div><div class="eyebrow">INSPECTOR</div><h2 id="inspectorTitle">選択項目</h2></div></div>
+            <div class="panel-heading"><div><div class="eyebrow">詳細・操作</div><h2 id="inspectorTitle">選択項目</h2></div><button type="button" class="inspector-width-toggle" data-toggle-inspector aria-label="詳細パネルを拡大" aria-pressed="false">拡大</button></div>
             <div id="inspectorContent" class="inspector-content"><div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div></div>
           </aside>
         </main>
 
         <main id="logisticsView" class="view-root logistics-view" hidden>
-          <div class="decision-canvas-with-browser logistics-decision-canvas">
-            <aside class="panel logistics-list-panel">
-              <div class="panel-heading"><div><div class="eyebrow">ROUTES</div><h2>移動経路</h2></div></div>
-              <div class="filter-row"><select id="movementPlanOriginFilter" aria-label="出発地"></select><select id="movementPlanDestinationFilter" aria-label="到着地"></select></div>
-              <div id="movementPlanList" class="movement-plan-list"></div>
-            </aside>
-
+          <div class="logistics-decision-canvas">
             <section class="workspace logistics-workspace">
-              <div class="workspace-heading logistics-heading"><div><div class="eyebrow">LOGISTICS NETWORK</div><h1>輸送</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
+              <div class="workspace-heading logistics-heading"><div><div class="eyebrow">輸送ネットワーク</div><h1>輸送</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
+              <div class="logistics-route-context-bar" aria-label="移動経路コンテキスト">
+                <div class="route-filter-row"><select id="movementPlanOriginFilter" aria-label="出発地"></select><select id="movementPlanDestinationFilter" aria-label="到着地"></select></div>
+                <div id="movementPlanList" class="movement-plan-list"></div>
+              </div>
               <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
               <div class="logistics-bottom-grid">
                 <section class="card"><div class="card-heading"><h3>供給経路 / 追加備蓄</h3><span id="routingConstraintCountBadge" class="badge"></span></div><div id="routingConstraintTable" class="table-wrap"></div></section>
@@ -112,20 +109,20 @@
           </div>
 
           <aside class="panel inspector-panel logistics-inspector">
-            <div class="panel-heading"><div><div class="eyebrow">ROUTE CONTEXT</div><h2 id="movementPlanInspectorTitle">移動経路を選択</h2></div></div>
+            <div class="panel-heading"><div><div class="eyebrow">経路コンテキスト</div><h2 id="movementPlanInspectorTitle">移動経路を選択</h2></div><button type="button" class="inspector-width-toggle" data-toggle-inspector aria-label="詳細パネルを拡大" aria-pressed="false">拡大</button></div>
             <div id="movementPlanInspectorContent" class="inspector-content"><div class="empty-state">ネットワーク上の接続または移動経路を選択すると、結果・理由・制約を表示します。</div></div>
           </aside>
         </main>
 
         <main id="economyView" class="view-root economy-view" hidden>
           <section class="workspace economy-workspace">
-            <div class="workspace-heading"><div><div class="eyebrow">MARKET</div><h1>経済</h1></div><span id="marketFundsBadge" class="badge"></span></div>
+            <div class="workspace-heading"><div><div class="eyebrow">市場</div><h1>経済</h1></div><span id="marketFundsBadge" class="badge"></span></div>
             <div class="economy-canvas-content">
               <section class="card market-card"><div class="card-heading"><h3>外部資源市場 / 資金</h3></div><div id="marketPanel"></div></section>
             </div>
           </section>
           <aside class="panel inspector-panel economy-inspector">
-            <div class="panel-heading"><div><div class="eyebrow">MARKET CONTEXT</div><h2>市場と物流</h2></div></div>
+            <div class="panel-heading"><div><div class="eyebrow">市場コンテキスト</div><h2>市場と物流</h2></div><button type="button" class="inspector-width-toggle" data-toggle-inspector aria-label="詳細パネルを拡大" aria-pressed="false">拡大</button></div>
             <div id="economyInspectorContent" class="inspector-content"></div>
           </aside>
         </main>

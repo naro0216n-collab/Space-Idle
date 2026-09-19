@@ -7,6 +7,7 @@
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
     fleet:null, transportAllocations:null, cargoFlows:null, market:null,
     selectedMovementPlanId:null, selectedGlobalNodeId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
+    inspectorExpanded:false, sectionContexts:{location:null,research:null,exploration:null},
     busy:false, syncInFlight:null,
   };
 
@@ -271,7 +272,8 @@
     const timeState=$('#timeState'); if(timeState)timeState.textContent=state.session?.automatic_progress_enabled===false?'自動進行無効':paused?`停止中 · ${speed}×`:`自動進行 · ${speed}×`;
   }
   function renderLocations(){
-    $('#locationList').innerHTML=(state.world?.operational_nodes||[]).map((loc)=>`<button type="button" class="location-button ${loc.id===state.operationalNodeId?'is-active':''}" data-location-id="${esc(loc.id)}"><span class="location-name">${esc(loc.display_name)}</span><span class="location-meta"><span>${esc(locationKindLabels[loc.kind]||loc.kind)}</span><span>設備 ${loc.facility_count}</span><span>建設 ${loc.active_project_count}</span></span></button>`).join('');
+    const root=$('#locationList');if(!root)return;
+    root.innerHTML=(state.world?.operational_nodes||[]).map((loc)=>`<button type="button" class="location-button ${loc.id===state.operationalNodeId?'is-active':''}" data-location-id="${esc(loc.id)}" aria-pressed="${loc.id===state.operationalNodeId?'true':'false'}"><span class="location-name">${esc(loc.display_name)}</span><span class="location-meta"><span>${esc(locationKindLabels[loc.kind]||loc.kind)}</span><span>設備 ${loc.facility_count}</span><span>建設 ${loc.active_project_count}</span></span></button>`).join('');
   }
   function renderGlobalIssues(){
     const issues=state.globalIssues?.items||[];
@@ -341,7 +343,37 @@
     const market=state.market;
     root.innerHTML=market?`<section class="inspector-section"><h3>資金</h3><div class="kv-grid"><dt>総残高</dt><dd>$${fmt(market.funds_total_musd,2)}M</dd><dt>利用可能</dt><dd>$${fmt(market.funds_available_musd,2)}M</dd><dt>市場接続</dt><dd>${(market.interfaces||[]).length}</dd><dt>注文</dt><dd>${(market.orders||[]).length}</dd></div></section><section class="inspector-section"><h3>意味</h3><div class="section-context-note">資金は外部資源市場の決済専用です。建設・研究・輸送等の一般活動コストとしては使用しません。</div></section>`:'<div class="empty-state">Market状態を読み込み中です。</div>';
   }
+  const operationsSections=new Set(['location','research','exploration']);
+  function saveSectionContext(section=state.activeSection){
+    if(!operationsSections.has(section))return;
+    state.sectionContexts[section]={
+      activeTab:state.activeTab,
+      inspector:state.inspector?{...state.inspector}:null,
+      decisionContext:state.decisionContext?{...state.decisionContext}:null,
+    };
+  }
+  function defaultTabForSection(section){
+    if(section==='research')return 'research';
+    if(section==='exploration')return 'scientific-exploration';
+    return 'overview';
+  }
+  function restoreSectionContext(section){
+    const saved=state.sectionContexts[section];
+    state.activeTab=saved?.activeTab||defaultTabForSection(section);
+    state.inspector=saved?.inspector?{...saved.inspector}:null;
+    state.decisionContext=saved?.decisionContext?{...saved.decisionContext}:null;
+  }
+  function renderInspectorWidth(){
+    $$('.view-root').forEach((root)=>root.classList.toggle('is-inspector-expanded',state.inspectorExpanded));
+    $$('[data-toggle-inspector]').forEach((button)=>{
+      button.textContent=state.inspectorExpanded?'標準':'拡大';
+      button.setAttribute('aria-pressed',state.inspectorExpanded?'true':'false');
+      button.setAttribute('aria-label',state.inspectorExpanded?'詳細パネルを標準幅に戻す':'詳細パネルを拡大');
+    });
+  }
+
   function renderSectionChrome(){
+    renderInspectorWidth();
     $$('.primary-nav-button').forEach((button)=>button.classList.toggle('is-active',button.dataset.section===state.activeSection));
     $('#globalView').hidden=state.activeSection!=='global';
     $('#operationsView').hidden=!['location','research','exploration'].includes(state.activeSection);
@@ -358,7 +390,8 @@
 
   function clearLocationSnapshot(){
     state.operationalNode=null; state.flow=null; state.dependencyAnalyticsCurrent=null; state.dependencyAnalyticsForecast=null; state.bottlenecks=null; state.projects=null;
-    state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.inspector=null;
+    state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.inspector=null;state.decisionContext=null;
+    if(state.sectionContexts.location)state.sectionContexts.location={...state.sectionContexts.location,inspector:null,decisionContext:null};
   }
   async function loadUiSnapshot({preserveInteraction=true}={}){
     while(state.syncInFlight){
@@ -399,13 +432,12 @@
   }
   function setActiveSection(section){
     if(!['global','location','research','exploration','logistics','economy'].includes(section))return;
+    const previous=state.activeSection;
+    saveSectionContext(previous);
     state.activeSection=section;
     state.activeView=['logistics','economy'].includes(section)?'logistics':section==='global'?'global':'operations';
-    if(section==='location'&&!['overview','facilities','inventory','construction'].includes(state.activeTab))state.activeTab='overview';
-    if(section==='research')state.activeTab='research';
-    if(section==='exploration'&&!['scientific-exploration','survey','surface'].includes(state.activeTab))state.activeTab='scientific-exploration';
-    state.inspector=null;
-    state.decisionContext=null;
+    if(operationsSections.has(section))restoreSectionContext(section);
+    else{state.inspector=null;state.decisionContext=null;}
     renderAll();
   }
 
@@ -458,6 +490,7 @@
   };
 
   document.addEventListener('click',async(event)=>{
+    const inspectorToggle=event.target.closest('[data-toggle-inspector]');if(inspectorToggle){state.inspectorExpanded=!state.inspectorExpanded;renderInspectorWidth();return;}
     const sectionBtn=event.target.closest('[data-section]'); if(sectionBtn){setActiveSection(sectionBtn.dataset.section);return;}
     const openLocation=event.target.closest('[data-open-location]'); if(openLocation){await loadLocation(openLocation.dataset.openLocation);setActiveSection('location');return;}
     const globalNode=event.target.closest('[data-global-node-id]'); if(globalNode){state.selectedGlobalNodeId=globalNode.dataset.globalNodeId;renderGlobalView();return;}

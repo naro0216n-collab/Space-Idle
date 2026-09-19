@@ -155,6 +155,18 @@ def run() -> dict[str, object]:
             _assert(page.locator("#globalInspectorContent [data-open-location]").is_visible(), "selected map context must expose a direct location action")
             viewport_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(viewport_metrics["scroll"] <= viewport_metrics["w"], "1194px landscape must not horizontally overflow")
+            global_inspector = page.locator("#globalView .global-inspector")
+            inspector_width = global_inspector.bounding_box()["width"]
+            inspector_toggle = page.locator("#globalView [data-toggle-inspector]")
+            inspector_toggle.tap()
+            page.wait_for_timeout(100)
+            expanded_width = global_inspector.bounding_box()["width"]
+            _assert(expanded_width > inspector_width, "context inspector must support an expanded reading width")
+            expanded_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
+            _assert(expanded_metrics["scroll"] <= expanded_metrics["w"], "expanded inspector must not create page-wide horizontal overflow")
+            _assert(inspector_toggle.get_attribute("aria-pressed") == "true", "expanded inspector state must be exposed to assistive interaction")
+            inspector_toggle.tap()
+            page.wait_for_timeout(100)
             _assert(_visible_button_min_height(page) >= 44, "visible touch controls must be at least 44 CSS px high")
 
             _assert(page.locator("#timePauseButton").is_visible(), "automatic clock must expose pause control")
@@ -195,7 +207,7 @@ def run() -> dict[str, object]:
             _assert(page.locator(".location-button").count() > 0, "location context browser must expose spatial nodes")
             page.locator('[data-tab="facilities"]').click()
             upgrade_row = page.locator(
-                f'tr[data-inspect="facility"][data-id="{_fixture_facility.id}"]'
+                f'[data-inspect="facility"][data-id="{_fixture_facility.id}"]'
             )
             upgrade_row.wait_for(timeout=10000)
             upgrade_row.click()
@@ -371,9 +383,10 @@ def run() -> dict[str, object]:
             _assert(page.locator('#inspectorContent [data-surface-develop]').count() > 0, "surface cell inspector must expose application-projected development commands")
             page.locator('.primary-nav-button[data-section="location"]').click()
             overview_text = page.locator('#operationsTabContent').inner_text()
-            _assert("Surface Infrastructure" in overview_text, "location overview must expose aggregate surface infrastructure state")
-            _assert("Resource Opportunity / Extraction" in overview_text, "location overview must expose aggregate extraction decision state")
-            _assert("Current Environment" in overview_text, "location overview must expose current environment state")
+            _assert("地表インフラ" in overview_text, "location overview must expose aggregate surface infrastructure state")
+            _assert("在庫とフロー" in overview_text, "location overview must expose resource state at the decision point")
+            _assert("サービス能力" in overview_text, "location overview must expose service capacity constraints")
+            _assert("外部依存" in overview_text, "location overview must expose external dependency as a decision category")
 
             _select_location(page, ids.LUNAR_ORBIT)
             page.locator('.primary-nav-button[data-section="exploration"]').click()
