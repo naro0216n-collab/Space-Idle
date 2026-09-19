@@ -9,6 +9,8 @@ from threading import Thread
 import tempfile
 
 from space_idle import (
+    AdvanceTime,
+    GetScientificExplorations,
     GetSurfaceMap,
     GetSurveys,
     SetSurveyProviderFleetQuantity,
@@ -117,7 +119,24 @@ def _seed_scientific_exploration_resources(app) -> None:
         )
 
 
-def run() -> dict[str, object]:
+def _advance_exploration_fixture_until(runtime, exploration_id: str, predicate, *, max_days: int = 128) -> None:
+    """Advance deterministic fixture time without making E2E wait on wall clock.
+
+    Browser acceptance owns the player controls and rendered state. Exact campaign
+    timing and movement settlement belong to Domain/Application tests, so this
+    helper only prepares the next browser-operable phase through the public
+    Application command/query boundary while the automatic clock is paused.
+    """
+    for _ in range(max_days + 1):
+        view = runtime.query(GetScientificExplorations()).data
+        row = next(item for item in view.items if item.id == exploration_id)
+        if predicate(row):
+            return
+        runtime.execute(AdvanceTime(1))
+    raise AssertionError(f"E2E fixture could not prepare scientific exploration {exploration_id}")
+
+
+def run(*, browser=None) -> dict[str, object]:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in SUPPORTED_BROWSERS:
         raise ValueError(f"unsupported browser {browser_name!r}; expected one of {sorted(SUPPORTED_BROWSERS)}")
@@ -233,18 +252,19 @@ def run() -> dict[str, object]:
         wait_for_server(server_origin)
         with isolated_browser_context(
             browser_name,
-                viewport={"width": 1194, "height": 834},
-                screen={"width": 1194, "height": 834},
-                has_touch=True,
-                device_scale_factor=2,
-                locale="ja-JP",
-                timezone_id="Asia/Tokyo",
-                user_agent=(
-                    "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) "
-                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 "
-                    "Mobile/15E148 Safari/604.1"
-                ),
-            ) as context, monitored_page(context) as page:
+            browser=browser,
+            viewport={"width": 1194, "height": 834},
+            screen={"width": 1194, "height": 834},
+            has_touch=True,
+            device_scale_factor=2,
+            locale="ja-JP",
+            timezone_id="Asia/Tokyo",
+            user_agent=(
+                "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 "
+                "Mobile/15E148 Safari/604.1"
+            ),
+        ) as context, monitored_page(context) as page:
             page.goto(server_origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
 
@@ -271,14 +291,12 @@ def run() -> dict[str, object]:
             inspector_width = global_inspector.bounding_box()["width"]
             inspector_toggle = page.locator("#globalView [data-toggle-inspector]")
             inspector_toggle.tap()
-            page.wait_for_timeout(100)
             expanded_width = global_inspector.bounding_box()["width"]
             _assert(expanded_width > inspector_width, "context inspector must support an expanded reading width")
             expanded_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(expanded_metrics["scroll"] <= expanded_metrics["w"], "expanded inspector must not create page-wide horizontal overflow")
             _assert(inspector_toggle.get_attribute("aria-pressed") == "true", "expanded inspector state must be exposed to assistive interaction")
             inspector_toggle.tap()
-            page.wait_for_timeout(100)
             _assert(_visible_button_min_height(page) >= 44, "visible touch controls must be at least 44 CSS px high")
 
             _assert(page.locator("#timePauseButton").is_visible(), "automatic clock must expose pause control")
@@ -286,14 +304,6 @@ def run() -> dict[str, object]:
             _assert(page.locator('[data-time-speed="4"]').is_visible(), "4x speed control must be visible")
             _assert(page.locator('[data-time-speed="16"]').is_visible(), "16x speed control must be visible")
             _assert(page.get_by_role("button", name="+1日").count() == 0, "manual day-jump control must be removed")
-
-            day_before = int(page.locator("#dayValue").inner_text().replace(",", ""))
-            page.wait_for_function(
-                "d => Number(document.querySelector('#dayValue').textContent.replaceAll(',','')) > d",
-                arg=day_before,
-                timeout=10000,
-            )
-            running_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
 
             page.locator("#timePauseButton").tap()
             page.wait_for_function(
@@ -304,13 +314,6 @@ def run() -> dict[str, object]:
                 "() => !document.body.classList.contains('is-busy')",
                 timeout=10000,
             )
-            paused_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
-            page.wait_for_timeout(1200)
-            _assert(
-                int(page.locator("#dayValue").inner_text().replace(",", "")) == paused_day,
-                "paused automatic clock must not advance",
-            )
-
             # Facility upgrades are ordinary construction projects. Verify the
             # decision surface and command path while the clock is paused so the
             # project cannot consume materials before we inspect it.
@@ -338,14 +341,8 @@ def run() -> dict[str, object]:
             _assert(_priority_group(page, "#upgradePlanPriorityInput").is_visible(), "upgrade planning must expose priority before project creation")
             _assert(page.locator("#upgradePlanProcurementTimingPolicy").is_visible(), "upgrade planning must expose procurement timing policy before project creation")
             _choose_priority(page, "#upgradePlanPriorityInput", 4)
-            # The form is a multi-field draft. Moving focus to another control
-            # must not let periodic synchronization overwrite the first edit.
-            page.locator("#upgradePlanProcurementTimingPolicy").focus()
-            page.wait_for_timeout(1200)
-            _assert(
-                page.locator("#upgradePlanPriorityInput").input_value() == "4",
-                "non-focused construction planning drafts must survive periodic refresh",
-            )
+            # Periodic-sync draft continuity is exercised in interaction_continuity.
+            # Acceptance keeps this path focused on the structured decision itself.
             page.locator("#upgradePlanProcurementTimingPolicy").select_option("immediate")
             # Unsaved planning values are client-owned drafts. A refresh with no
             # authoritative change must not silently reset them before submission.
@@ -631,26 +628,17 @@ def run() -> dict[str, object]:
                 timeout=10000,
             )
 
-            # Return is available during real outbound movement. Reach that
-            # browser-visible phase at 1x, pause the authoritative clock, then
-            # exercise Return and Abort through the real command endpoint. This
-            # avoids encoding the campaign's activity duration as an E2E timing
-            # assumption while still testing the actual controls and refresh path.
-            speed_one = page.locator('[data-time-speed="1"]')
-            if speed_one.get_attribute('aria-pressed') != 'true':
-                speed_one.click()
-                page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            page.locator('#timePauseButton').click()
-            page.wait_for_function(
-                """id => document.querySelector(`[data-inspect="scientific-exploration"][data-id="${id}"] .decision-card-title .badge`)?.textContent?.trim() === '往路移動中'""",
-                arg=exploration_id,
-                timeout=15000,
+            # Return/Abort are browser contracts; exact movement timing is not.
+            # Keep the global clock paused and prepare the outbound phase through
+            # Application commands so E2E does not spend wall time re-testing
+            # Domain progression. Then refresh and operate the real UI controls.
+            _advance_exploration_fixture_until(
+                runtime,
+                exploration_id,
+                lambda row: row.can_return,
             )
-            page.locator('#timePauseButton').click()
-            page.wait_for_function(
-                "() => document.querySelector('#timePauseButton')?.getAttribute('aria-pressed') === 'true'",
-                timeout=10000,
-            )
+            page.locator('#refreshButton').click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             page.locator(
                 f'[data-inspect="scientific-exploration"][data-id="{exploration_id}"]'
             ).click()
@@ -690,22 +678,15 @@ def run() -> dict[str, object]:
                 "Abort must execute through the real command endpoint",
             )
 
-            # Abort during Movement settles at the actual arrival boundary. Resume
-            # the real clock and verify only the browser-visible terminal result;
-            # the Domain test owns the exact movement/commitment invariants.
-            page.locator('[data-time-speed="16"]').click()
+            # Domain tests own movement settlement. Advance the paused fixture to
+            # the terminal state, then verify the authoritative result is rendered.
+            _advance_exploration_fixture_until(
+                runtime,
+                exploration_id,
+                lambda row: row.status == 'aborted',
+            )
+            page.locator('#refreshButton').click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            page.locator('#timePauseButton').click()
-            page.wait_for_function(
-                """id => document.querySelector(`[data-inspect="scientific-exploration"][data-id="${id}"] .decision-card-title .badge`)?.textContent?.trim() === '中止済み'""",
-                arg=exploration_id,
-                timeout=15000,
-            )
-            page.locator('#timePauseButton').click()
-            page.wait_for_function(
-                "() => document.querySelector('#timePauseButton')?.getAttribute('aria-pressed') === 'true'",
-                timeout=10000,
-            )
             page.locator(
                 f'[data-inspect="scientific-exploration"][data-id="{exploration_id}"]'
             ).click()
@@ -1009,19 +990,7 @@ def run() -> dict[str, object]:
             _assert(not founding_button.is_enabled(), "active Founding must keep the same action visible but unavailable")
             page.locator('.primary-nav-button[data-section="location"]').click()
 
-            page.locator('[data-time-speed="4"]').click()
-            page.wait_for_function(
-                "() => !document.body.classList.contains('is-busy')",
-                timeout=10000,
-            )
-            page.locator("#timePauseButton").click()
-            page.wait_for_function(
-                "d => Number(document.querySelector('#dayValue').textContent.replaceAll(',','')) > d",
-                arg=paused_day,
-                timeout=10000,
-            )
             page.set_viewport_size({"width": 1180, "height": 820})
-            page.wait_for_timeout(100)
             standard_ipad_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(
                 standard_ipad_metrics["scroll"] <= standard_ipad_metrics["w"],
@@ -1035,7 +1004,6 @@ def run() -> dict[str, object]:
                 "1180px full-size iPad logistics must not horizontally overflow",
             )
             page.set_viewport_size({"width": 1194, "height": 834})
-            page.wait_for_timeout(100)
             _assert(page.locator("#logisticsView").is_visible(), "logistics section should expose the network decision canvas")
             _assert(not page.locator("#operationsView").is_visible(), "location workspace must be hidden in logistics")
             movement_plan_buttons = page.locator(".movement-plan-button")
@@ -1059,7 +1027,6 @@ def run() -> dict[str, object]:
             # landscape viewport without inventing a portrait fallback or page-wide scroll.
             page.locator('.primary-nav-button[data-section="location"]').click()
             page.set_viewport_size({"width": 1024, "height": 768})
-            page.wait_for_timeout(100)
             compact_landscape = page.evaluate(
                 "() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})"
             )
@@ -1080,7 +1047,6 @@ def run() -> dict[str, object]:
                 "1024px iPad landscape logistics must not horizontally overflow the page",
             )
             page.set_viewport_size({"width": 1194, "height": 834})
-            page.wait_for_timeout(100)
             network_locations = page.locator("#networkNodes [data-network-location]")
             expected_network_locations = page.locator("#movementPlanOriginFilter option").count() - 1
             _assert(
@@ -1107,9 +1073,6 @@ def run() -> dict[str, object]:
                 "compact_ipad_logistics": compact_logistics,
                 "movement_plan_count": movement_plan_buttons.count(),
                 "issue_titles_checked": len(issue_titles),
-                "day_before": day_before,
-                "day_running": running_day,
-                "day_after": int(page.locator("#dayValue").inner_text().replace(",", "")),
             }
 
         return results

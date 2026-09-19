@@ -58,10 +58,28 @@ def managed_browser(browser_name: str) -> Iterator[Any]:
 
 
 @contextmanager
-def isolated_browser_context(browser_name: str, **context_options: Any) -> Iterator[Any]:
-    """Create a fresh browser process and BrowserContext for one E2E scenario."""
-    with managed_browser(browser_name) as browser:
+def isolated_browser_context(
+    browser_name: str,
+    *,
+    browser: Any | None = None,
+    **context_options: Any,
+) -> Iterator[Any]:
+    """Create a fresh BrowserContext, reusing a suite browser when supplied.
+
+    Scenario state remains isolated at the BrowserContext and HTTP-runtime layers.
+    Standalone scenario execution still owns a browser process, while the suite
+    runner can avoid paying process startup once per scenario.
+    """
+    if browser is not None:
         context = browser.new_context(**context_options)
+        try:
+            yield context
+        finally:
+            context.close()
+        return
+
+    with managed_browser(browser_name) as owned_browser:
+        context = owned_browser.new_context(**context_options)
         try:
             yield context
         finally:

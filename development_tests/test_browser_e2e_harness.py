@@ -28,24 +28,33 @@ def test_suite_runner_accepts_scenario_modules_without_registry_changes(
     runner = _load_module("space_idle_e2e_suite_test", PLAYWRIGHT_DIR / "run_suite.py")
     runner.PLAYWRIGHT_DIR = tmp_path
     imported: list[str] = []
-    executed: list[str] = []
+    executed: list[tuple[str, object]] = []
+    opened: list[object] = []
 
     for name in ("acceptance", "future_browser_contract"):
-        (tmp_path / f"{name}.py").write_text("def run(): pass\n", encoding="utf-8")
+        (tmp_path / f"{name}.py").write_text("def run(*, browser=None): pass\n", encoding="utf-8")
 
     def fake_import(name: str):
         imported.append(name)
-        return SimpleNamespace(run=lambda: executed.append(name))
+        return SimpleNamespace(run=lambda *, browser=None: executed.append((name, browser)))
+
+    @contextmanager
+    def fake_managed_browser(_browser_name):
+        browser = object()
+        opened.append(browser)
+        yield browser
 
     monkeypatch.setattr(runner.importlib, "import_module", fake_import)
+    monkeypatch.setattr(runner, "managed_browser", fake_managed_browser)
     selected = ["acceptance", "future_browser_contract"]
     runner.run_scenarios(selected)
 
     assert imported == selected
-    assert executed == selected
+    assert len(opened) == 1
+    assert executed == [(name, opened[0]) for name in selected]
     output = capsys.readouterr().out
     assert "E2E suite bootstrap:" in output
-    assert "each scenario owns a fresh browser process" in output
+    assert "one browser process with a fresh context per scenario" in output
     assert "E2E suite complete: 2 scenario(s)" in output
 
 
@@ -83,7 +92,7 @@ def test_shared_chromium_launch_contract_prefers_explicit_runner_browser(monkeyp
     assert support.browser_launch_kwargs("webkit") == {"headless": True}
 
 
-def test_isolated_browser_context_always_owns_a_fresh_browser(monkeypatch) -> None:
+def test_isolated_browser_context_standalone_owns_a_fresh_browser(monkeypatch) -> None:
     support = _load_module("space_idle_e2e_support_context_test", PLAYWRIGHT_DIR / "e2e_support.py")
     opened: list[object] = []
 
@@ -116,6 +125,43 @@ def test_isolated_browser_context_always_owns_a_fresh_browser(monkeypatch) -> No
 
     assert first is not second
     assert len(opened) == 2
+    assert first.closed and second.closed
+
+
+def test_isolated_browser_context_reuses_suite_browser_without_relaunch(monkeypatch) -> None:
+    support = _load_module("space_idle_e2e_support_reuse_test", PLAYWRIGHT_DIR / "e2e_support.py")
+
+    class FakeContext:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FakeBrowser:
+        def __init__(self):
+            self.contexts: list[FakeContext] = []
+
+        def new_context(self, **_options):
+            context = FakeContext()
+            self.contexts.append(context)
+            return context
+
+    @contextmanager
+    def forbidden_managed_browser(_browser_name):
+        raise AssertionError("suite-owned browser must not relaunch per scenario")
+        yield
+
+    monkeypatch.setattr(support, "managed_browser", forbidden_managed_browser)
+    browser = FakeBrowser()
+
+    with support.isolated_browser_context("chromium", browser=browser, locale="ja-JP") as first:
+        pass
+    with support.isolated_browser_context("chromium", browser=browser, locale="ja-JP") as second:
+        pass
+
+    assert first is not second
+    assert browser.contexts == [first, second]
     assert first.closed and second.closed
 
 

@@ -36,7 +36,7 @@ def _build_logistics_test_application():
     return app
 
 
-def run() -> None:
+def run(*, browser=None) -> None:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in {"chromium", "webkit"}:
         raise ValueError(f"unsupported browser: {browser_name}")
@@ -70,6 +70,7 @@ def run() -> None:
         wait_for_server(origin)
         with isolated_browser_context(
             browser_name,
+            browser=browser,
             viewport={"width": 1194, "height": 834},
             has_touch=True,
             locale="ja-JP",

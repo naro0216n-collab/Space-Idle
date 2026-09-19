@@ -29,7 +29,7 @@ def _choose_priority(page, holder_selector: str, level: int | str):
 
 
 
-def run() -> None:
+def run(*, browser=None) -> None:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in {"chromium", "webkit"}:
         raise ValueError(f"unsupported browser: {browser_name}")
@@ -50,14 +50,15 @@ def run() -> None:
         wait_for_server(origin)
         with isolated_browser_context(
             browser_name,
+            browser=browser,
             viewport={"width": 1194, "height": 834},
         ) as context, monitored_page(context) as page:
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
             assert page.locator("#appVersion").inner_text() == f"v{VERSION}"
 
-            # Verify research-tree selection and navigation survive automatic
-            # snapshots without relying on the removed Theory allocation control.
+            # Verify research-tree selection and navigation survive an authoritative
+            # snapshot without relying on the removed Theory allocation control.
             page.locator('.primary-nav-button[data-section="research"]').click()
             tree = page.locator("#researchTree")
             tree.wait_for(timeout=10000)
@@ -74,11 +75,9 @@ def run() -> None:
             initial_tree_scroll = page.evaluate("el => el.scrollLeft", scroller.element_handle())
             assert initial_tree_scroll > 0
 
-            start_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
+            page.locator("#refreshButton").click()
             page.wait_for_function(
-                "d => Number(document.querySelector('#dayValue').textContent.replaceAll(',','')) >= d + 2",
-                arg=start_day,
-                timeout=10000,
+                "() => !document.body.classList.contains('is-busy')", timeout=10000
             )
             assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "research"
             assert page.locator("#inspectorTitle").inner_text() == research_title
@@ -107,11 +106,18 @@ def run() -> None:
             draft_priority = "4" if saved_priority != "4" else "5"
             priority_button = _choose_priority(page, "#buildPlanPriorityInput", draft_priority)
             priority_button.focus()
-            start_day = int(page.locator("#dayValue").inner_text().replace(",", ""))
+            with page.expect_response(
+                lambda response: response.request.method == "GET"
+                and "/api/v1/ui-state" in response.url,
+                timeout=4000,
+            ) as periodic_sync:
+                # Change authoritative state outside the browser. The next scheduled
+                # UI-state refresh must adopt it without replacing the active draft.
+                runtime.set_time_control(speed_multiplier=16.0)
+            assert periodic_sync.value.ok
             page.wait_for_function(
-                "d => Number(document.querySelector('#dayValue').textContent.replaceAll(',','')) >= d + 3",
-                arg=start_day,
-                timeout=10000,
+                "() => document.querySelector('[data-time-speed=\"16\"]')?.getAttribute('aria-pressed') === 'true'",
+                timeout=3000,
             )
             assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "construction"
             assert page.locator("#inspectorTitle").inner_text() == inspector_title
