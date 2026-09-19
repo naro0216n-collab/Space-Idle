@@ -190,10 +190,10 @@
         <div class="direct-control"><div class="direct-control-heading"><span>往路能力目標</span><strong id="allocationForwardValue">0 t/日</strong></div><input id="allocationForwardRange" type="range" min="0" max="1" step="0.01" value="0" aria-label="往路輸送能力"><div id="allocationForwardPresets" class="preset-row"></div></div>
         <div class="direct-control"><div class="direct-control-heading"><span>復路能力目標</span><strong id="allocationReverseValue">0 t/日</strong></div><input id="allocationReverseRange" type="range" min="0" max="1" step="0.01" value="0" aria-label="復路輸送能力"><div id="allocationReversePresets" class="preset-row"></div></div>
         <details class="precision-input"><summary>輸送能力を数値で直接入力</summary><div class="field-pair"><label>往路 (t/日)<input id="allocationForward" type="number" min="0" step="any" value="0" required></label><label>復路 (t/日)<input id="allocationReverse" type="number" min="0" step="any" value="0" required></label></div></details>
-        <div class="choice-section"><div class="choice-label">経路固定（必要時のみ）</div><div id="allocationMovementChoices" class="choice-grid"></div><div class="cell-sub">通常はApplicationが経路を自動選択します。特定経路を固定したい場合だけ候補を選択してください。</div></div>
+        <div class="choice-section"><div class="choice-label">経路固定（必要時のみ）</div><div id="allocationMovementChoices" class="choice-grid"></div><div class="cell-sub">通常は経路を自動選択します。特定経路を固定したい場合だけ候補を選択してください。</div></div>
         <div id="allocationPreview" class="inspector-section"><div class="cell-sub">能力目標を調整すると必要Fleetと成立見込みを表示します。</div></div>
         <div id="allocationServiceOptions" class="inspector-section"><div class="cell-sub">出発地と到着地から輸送手段候補を取得します。</div></div>
-        <div class="cell-sub">方向別の輸送能力目標が設定値です。必要機数は機体と輸送手段からApplicationが導出し、Fleet不足でも目標値は保持されます。</div>
+        <div class="cell-sub">方向別の輸送能力目標が設定値です。必要機数は機体と輸送手段から自動計算し、Fleet不足でも目標値は保持されます。</div>
         <div class="dialog-actions"><button type="button" class="secondary" id="allocationCancelButton">取消</button><button type="submit" class="primary">輸送設定を作成</button></div>
       </form>
     </dialog>

@@ -26,6 +26,7 @@ class SupplyPlanningOptions:
     selected_source_id: SpatialNodeId | None = None
     selected_service_ids: tuple[str, ...] = ()
     selected_movement_plan_ids: tuple[MovementPlanId, ...] = ()
+    selected_transport_allocation_ids: tuple[EntityId, ...] = ()
     projected_arrival_day: int | None = None
     selected_latency_days: float | None = None
     selected_propellant_t_per_t: float | None = None

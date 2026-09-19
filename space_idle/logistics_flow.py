@@ -1487,6 +1487,9 @@ class LogisticsFlowMixin:
             selected_movement_plan_ids=tuple(
                 plan_id for edge in selected_path for plan_id in edge.movement_plan_path
             ),
+            selected_transport_allocation_ids=tuple(
+                dict.fromkeys(edge.allocation_id for edge in selected_path)
+            ),
             projected_arrival_day=(
                 None if selected_latency is None else day + int(selected_latency)
             ),

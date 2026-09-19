@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .ui_reports import DecisionConstraintRow
+from .ui_reports import DecisionConstraintRow, DecisionContextTarget
 from dataclasses import dataclass
 
 
@@ -22,6 +22,7 @@ class CurrentDependencyMetricRow:
     unmet_demand_t: float
     dependency_source_node_ids: tuple[str, ...]
     limiting_factors: tuple[DecisionConstraintRow, ...]
+    navigation: DecisionContextTarget | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class ForecastDependencyMetricRow:
     earliest_requirement_day: int | None
     dependency_source_node_ids: tuple[str, ...]
     limiting_factors: tuple[DecisionConstraintRow, ...]
+    navigation: DecisionContextTarget | None = None
 
 
 @dataclass(frozen=True)

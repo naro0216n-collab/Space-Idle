@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import replace
 
 from .application_constraints import constraint_from_code, limiting_factors_from_codes
 from .application_views import (
@@ -42,6 +43,64 @@ class ApplicationReportProjectorMixin:
             return tuple(sorted(nodes, key=str))
         raise ValueError(f"unsupported analytics scope kind: {kind}")
 
+    def _dependency_resource_navigation(
+        self, nodes, row, basis: str, requirement_rows
+    ) -> DecisionContextTarget:
+        node_ids = {str(value) for value in nodes}
+        resource_ids = set(row.member_resource_ids)
+        relevant = []
+        for requirement in requirement_rows:
+            if requirement.destination_id not in node_ids or requirement.resource_id not in resource_ids:
+                continue
+            if basis == "CURRENT":
+                if requirement.owner_kind == "target_stock":
+                    continue
+                if (
+                    requirement.forecast_requirement_day is not None
+                    and requirement.forecast_requirement_day > self._simulation.day
+                ):
+                    continue
+            relevant.append(requirement)
+
+        operational_node_id = str(nodes[0]) if len(nodes) == 1 else None
+        if not relevant:
+            return DecisionContextTarget(
+                decision_area="location",
+                operational_node_id=operational_node_id,
+                subject_kind="resource",
+                subject_id=row.id if len(resource_ids) == 1 else None,
+                resource_id=row.id if len(resource_ids) == 1 else None,
+            )
+
+        requirement_ids = tuple(sorted({item.id for item in relevant}))
+        allocation_ids = tuple(sorted({
+            allocation_id
+            for item in relevant
+            for allocation_id in (
+                *item.selected_transport_allocation_ids,
+                *item.routing_constraint_transport_allocation_ids,
+            )
+        }))
+        movement_plan_ids = tuple(sorted({
+            plan_id
+            for item in relevant
+            for plan_id in (
+                *item.selected_movement_plan_ids,
+                *(plan_id for _source_id, path in item.path_candidates for plan_id in path),
+                *item.physical_movement_plan_ids,
+            )
+        }))
+        return DecisionContextTarget(
+            decision_area="logistics",
+            operational_node_id=operational_node_id,
+            subject_kind="dependency_resource",
+            subject_id=row.id,
+            resource_id=row.id if len(resource_ids) == 1 else None,
+            supply_requirement_ids=requirement_ids,
+            transport_allocation_ids=allocation_ids,
+            movement_plan_ids=movement_plan_ids,
+        )
+
     def _dependency_analytics_view(
         self, query: GetDependencyAnalytics
     ) -> DependencyAnalyticsView:
@@ -49,8 +108,18 @@ class ApplicationReportProjectorMixin:
         if basis not in {"CURRENT", "FORECAST"}:
             raise ValueError(f"unsupported dependency analytics time basis: {query.time_basis}")
         nodes = self._dependency_scope_nodes(query)
+        requirement_rows = self._requirement_rows()
         if basis == "CURRENT":
             rows, group_rows, critical = self._current_dependency_rows(nodes)
+            rows = [
+                replace(
+                    row,
+                    navigation=self._dependency_resource_navigation(
+                        nodes, row, basis, requirement_rows
+                    ),
+                )
+                for row in rows
+            ]
             service_rows, critical_services = self._current_service_dependency_rows(nodes)
             return DependencyAnalyticsView(
                 scope_kind=query.scope_kind,
@@ -65,6 +134,15 @@ class ApplicationReportProjectorMixin:
                 critical_dependency_service_types=tuple(critical_services),
             )
         rows, group_rows, critical = self._forecast_dependency_rows(nodes)
+        rows = [
+            replace(
+                row,
+                navigation=self._dependency_resource_navigation(
+                    nodes, row, basis, requirement_rows
+                ),
+            )
+            for row in rows
+        ]
         service_rows, critical_services = self._forecast_service_dependency_rows(nodes)
         return DependencyAnalyticsView(
             scope_kind=query.scope_kind,

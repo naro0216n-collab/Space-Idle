@@ -326,8 +326,12 @@ def test_auto_source_selection_and_hard_source_constraint_have_no_preference_fal
     assert {EARTH, LEO}.issubset(set(options.stocked_source_ids))
     assert {EARTH, LEO}.issubset(set(options.operational_source_ids))
     assert options.selected_source_id in {EARTH, LEO}
+    assert options.selected_transport_allocation_ids
     assert not options.blockers
     first = auto.logistics.plan_capacity_logistics(auto.day, (requirement,)).dispatches[0]
+    assert options.selected_transport_allocation_ids == tuple(
+        dict.fromkeys(edge.allocation_id for edge in first.path)
+    )
 
     reordered = build_game_application()._simulation
     reordered.transport.transport_allocations.clear()

@@ -11,6 +11,9 @@ class DecisionContextTarget:
     subject_kind: str | None = None
     subject_id: str | None = None
     resource_id: str | None = None
+    supply_requirement_ids: tuple[str, ...] = ()
+    transport_allocation_ids: tuple[str, ...] = ()
+    movement_plan_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

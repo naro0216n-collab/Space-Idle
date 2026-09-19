@@ -137,6 +137,9 @@ class SupplyPlanningProjectorMixin:
                     selected_movement_plan_ids=tuple(
                         str(value) for value in options.selected_movement_plan_ids
                     ),
+                    selected_transport_allocation_ids=tuple(
+                        str(value) for value in options.selected_transport_allocation_ids
+                    ),
                     projected_arrival_day=options.projected_arrival_day,
                     selected_latency_days=options.selected_latency_days,
                     selected_propellant_t_per_t=options.selected_propellant_t_per_t,

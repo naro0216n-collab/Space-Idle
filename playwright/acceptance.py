@@ -10,6 +10,7 @@ import tempfile
 
 from space_idle import (
     AdvanceTime,
+    GetResearch,
     GetScientificExplorations,
     GetSurfaceMap,
     GetSurveys,
@@ -795,6 +796,38 @@ def run(*, browser=None) -> dict[str, object]:
             dependency_text = page.locator('#operationsTabContent').inner_text()
             _assert("資源依存" in dependency_text, "dependency analytics must keep Resource dependency as its own projection")
             _assert("サービス依存" in dependency_text, "dependency analytics must expose Service dependency separately from Resources")
+            dependency_transport_found = False
+            resource_dependencies = page.locator('[data-inspect="dependency-resource"]')
+            for dependency_index in range(resource_dependencies.count()):
+                resource_dependencies.nth(dependency_index).click()
+                current_transport = page.locator('#inspectorContent [data-dependency-transport="current"]')
+                forecast_transport = page.locator('#inspectorContent [data-dependency-transport="forecast"]')
+                transport_link = current_transport if current_transport.count() else forecast_transport
+                if not transport_link.count():
+                    continue
+                transport_link.click()
+                page.locator('#logisticsView').wait_for(state='visible', timeout=10000)
+                _assert(
+                    page.locator('#networkDecisionContext').is_visible(),
+                    "external dependency navigation must preserve a visible Transport decision context",
+                )
+                _assert(
+                    page.locator('.supply-requirement-card.is-context-target').count() > 0,
+                    "external dependency navigation must select related Supply Requirements",
+                )
+                context_has_paths = page.evaluate(
+                    "() => (window.SpaceIdleApp?.state?.decisionContext?.movement_plan_ids || []).length > 0"
+                )
+                if context_has_paths:
+                    _assert(
+                        page.locator('#networkSvg .network-line.is-context-related').count() > 0,
+                        "external dependency navigation must highlight projected related movement paths when they exist",
+                    )
+                dependency_transport_found = True
+                page.locator('.primary-nav-button[data-section="location"]').click()
+                page.locator('[data-section-tab="location"][data-tab="inventory"]').click()
+                break
+            _assert(dependency_transport_found, "at least one projected external dependency must expose context-aware Transport navigation")
             service_dependency = page.locator('[data-inspect="dependency-service"]').first
             _assert(service_dependency.count() > 0, "current Location service demand must be selectable from dependency analytics")
             service_dependency.click()
@@ -830,8 +863,8 @@ def run(*, browser=None) -> dict[str, object]:
                 timeout=15000,
             )
             forecast_text = forecast_surface.inner_text()
-            for heading in ("Future Inventory", "Downstream impact", "Multi-hop Logistics impact"):
-                _assert(heading in forecast_text, f"Detailed Forecast result must render {heading}")
+            for heading in ("将来在庫", "波及影響", "広域物流への影響"):
+                _assert(heading in forecast_text, f"詳細予測結果に {heading} が必要です")
 
             _select_location(page, ids.LUNAR_ORBIT)
             page.locator('.primary-nav-button[data-section="exploration"]').click()

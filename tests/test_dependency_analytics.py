@@ -139,7 +139,7 @@ def test_current_authorized_transport_projects_boundary_flow_consumption_and_par
     sim.technology.completed.update(
         sim.projects.recipes[ids.ORBITAL_LOGISTICS_NODE].prerequisite_technologies
     )
-    sim.transport.create_transport_allocation(
+    allocation_id = sim.transport.create_transport_allocation(
         ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO,
         target_capacity=sim.transport.transport_capacity_for_units(
             ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, 1, day=sim.day
@@ -168,6 +168,13 @@ def test_current_authorized_transport_projects_boundary_flow_consumption_and_par
     )
     assert partial.imports_per_day > 0
     assert 0 < partial.unmet_demand_t < machinery.amount_t
+    assert partial.navigation is not None
+    assert partial.navigation.decision_area == "logistics"
+    assert partial.navigation.operational_node_id == str(LEO)
+    assert partial.navigation.resource_id == str(ids.MACHINERY)
+    assert partial.navigation.supply_requirement_ids
+    assert str(allocation_id) in partial.navigation.transport_allocation_ids
+    assert partial.navigation.movement_plan_ids
 
     sim.inventory.stock[(EARTH, machinery.resource_id)] = machinery.amount_t + 5.0
     leo = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),)))
@@ -220,6 +227,10 @@ def test_current_and_forecast_use_distinct_contracts_and_forecast_reads_active_p
         assert row.planned_requirement_t >= requirement.amount_t
         assert row.earliest_requirement_day is not None
         assert row.earliest_requirement_day > sim.day
+        assert row.navigation is not None
+        assert row.navigation.decision_area == "logistics"
+        assert row.navigation.operational_node_id == str(LEO)
+        assert row.navigation.supply_requirement_ids
 
     assert all(
         row.id not in {str(requirement.resource_id) for requirement in recipe.resources}

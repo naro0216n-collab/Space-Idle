@@ -141,7 +141,7 @@
         ['最大運用時の必要資源',esc(resources)],
       ])}${blockers}</div>`;
     }).join('');
-    root.innerHTML=`<h3>輸送手段候補</h3><div class="cell-sub">機体性能と正準移動評価からApplicationが導出した候補です。経路を固定する必要がある場合だけ候補経路を選択します。</div>${cards||'<div class="empty-state">候補なし</div>'}`;
+    root.innerHTML=`<h3>輸送手段候補</h3><div class="cell-sub">機体性能と移動条件から利用可能な候補を表示しています。経路を固定する必要がある場合だけ候補経路を選択します。</div>${cards||'<div class="empty-state">候補なし</div>'}`;
   }
 
   async function updateAllocationServiceOptions(){
@@ -192,35 +192,58 @@
   }
 
   function logistics(){return state.logistics||{};}
-  function isDecisionContext(kind,id){return state.decisionContext?.subject_kind===kind&&state.decisionContext?.subject_id===id;}
+  function decisionContextIds(field){
+    const target=state.decisionContext;
+    return new Set(target?.decision_area==='logistics'?(target[field]||[]):[]);
+  }
+  function isDecisionContext(kind,id){
+    const target=state.decisionContext;if(target?.decision_area!=='logistics')return false;
+    if(target.subject_kind===kind&&target.subject_id===id)return true;
+    if(kind==='supply_requirement')return decisionContextIds('supply_requirement_ids').has(id);
+    if(kind==='transport_allocation')return decisionContextIds('transport_allocation_ids').has(id);
+    if(kind==='movement_plan')return decisionContextIds('movement_plan_ids').has(id);
+    return false;
+  }
 
-  function contextSupplyRequirement(){
-    const target=state.decisionContext;if(target?.decision_area!=='logistics'||target.subject_kind!=='supply_requirement')return null;
-    return (logistics().requirements||[]).find((row)=>row.id===target.subject_id)||null;
+  function contextSupplyRequirements(){
+    const target=state.decisionContext;if(target?.decision_area!=='logistics')return [];
+    const ids=decisionContextIds('supply_requirement_ids');
+    if(target.subject_kind==='supply_requirement'&&target.subject_id)ids.add(target.subject_id);
+    return (logistics().requirements||[]).filter((row)=>ids.has(row.id));
   }
-  function contextTransportAllocation(){
-    const target=state.decisionContext;if(target?.decision_area!=='logistics'||target.subject_kind!=='transport_allocation')return null;
-    return (state.transportAllocations?.items||logistics().allocations||[]).find((row)=>row.id===target.subject_id)||null;
+  function contextSupplyRequirement(){return contextSupplyRequirements()[0]||null;}
+  function contextTransportAllocations(){
+    const target=state.decisionContext;if(target?.decision_area!=='logistics')return [];
+    const ids=decisionContextIds('transport_allocation_ids');
+    if(target.subject_kind==='transport_allocation'&&target.subject_id)ids.add(target.subject_id);
+    return (state.transportAllocations?.items||logistics().allocations||[]).filter((row)=>ids.has(row.id));
   }
+  function contextTransportAllocation(){return contextTransportAllocations()[0]||null;}
   function contextMovementPlanIds(){
     const target=state.decisionContext;if(target?.decision_area!=='logistics')return new Set();
-    if(target.subject_kind==='movement_plan'&&target.subject_id)return new Set([target.subject_id]);
-    if(target.subject_kind==='operational_node'&&target.subject_id)return new Set((state.movementPlans?.items||[]).filter((row)=>row.origin_id===target.subject_id||row.destination_id===target.subject_id).map((row)=>row.id));
-    const requirement=contextSupplyRequirement();if(requirement){
-      const selected=requirement.selected_movement_plan_ids||[];
-      if(selected.length)return new Set(selected);
-      const serviceCandidates=(requirement.path_candidates||[]).flatMap(([,planIds])=>planIds||[]);
-      if(serviceCandidates.length)return new Set(serviceCandidates);
-      return new Set(requirement.physical_movement_plan_ids||[]);
+    const ids=decisionContextIds('movement_plan_ids');
+    if(target.subject_kind==='movement_plan'&&target.subject_id)ids.add(target.subject_id);
+    if(target.subject_kind==='operational_node'&&target.subject_id){
+      for(const row of state.movementPlans?.items||[]){if(row.origin_id===target.subject_id||row.destination_id===target.subject_id)ids.add(row.id);}
     }
-    const allocation=contextTransportAllocation();if(allocation)return new Set([...(allocation.selected_forward_path||[]),...(allocation.selected_reverse_path||[])]);
-    return new Set();
+    for(const requirement of contextSupplyRequirements()){
+      const selected=requirement.selected_movement_plan_ids||[];
+      if(selected.length){selected.forEach((id)=>ids.add(id));continue;}
+      const serviceCandidates=(requirement.path_candidates||[]).flatMap(([,planIds])=>planIds||[]);
+      if(serviceCandidates.length){serviceCandidates.forEach((id)=>ids.add(id));continue;}
+      (requirement.physical_movement_plan_ids||[]).forEach((id)=>ids.add(id));
+    }
+    for(const allocation of contextTransportAllocations()){
+      [...(allocation.selected_forward_path||[]),...(allocation.selected_reverse_path||[])].forEach((id)=>ids.add(id));
+    }
+    return ids;
   }
   function contextNetworkNodeIds(planIds){
     const ids=new Set(),plans=state.movementPlans?.items||[];
     for(const plan of plans){if(planIds.has(plan.id)){ids.add(plan.origin_id);ids.add(plan.destination_id);}}
-    const requirement=contextSupplyRequirement();if(requirement){if(requirement.selected_source_id)ids.add(requirement.selected_source_id);if(requirement.destination_id)ids.add(requirement.destination_id);}
-    const allocation=contextTransportAllocation();if(allocation){ids.add(allocation.anchor_node_id);ids.add(allocation.destination_id);}
+    for(const requirement of contextSupplyRequirements()){if(requirement.selected_source_id)ids.add(requirement.selected_source_id);if(requirement.destination_id)ids.add(requirement.destination_id);}
+    for(const allocation of contextTransportAllocations()){ids.add(allocation.anchor_node_id);ids.add(allocation.destination_id);}
+    if(state.decisionContext?.operational_node_id)ids.add(state.decisionContext.operational_node_id);
     if(state.decisionContext?.subject_kind==='operational_node'&&state.decisionContext.subject_id)ids.add(state.decisionContext.subject_id);
     return ids;
   }
@@ -277,9 +300,15 @@
   function renderNetworkDecisionContext(){
     const box=$('#networkDecisionContext');if(!box)return;const target=state.decisionContext;
     if(target?.decision_area!=='logistics'){box.hidden=true;box.textContent='';return;}
-    const requirement=contextSupplyRequirement();
+    const requirements=contextSupplyRequirements();
+    const allocations=contextTransportAllocations();
+    if(target.subject_kind==='dependency_resource'&&target.resource_id){
+      const location=target.operational_node_id?` · ${locationName(target.operational_node_id)}`:'';
+      box.hidden=false;box.innerHTML=`<span class="eyebrow">外部依存から引き継ぎ</span><strong>${esc(resourceName(target.resource_id))}${esc(location)}</strong><span>関連する補給需要 ${requirements.length} 件 · 輸送能力設定 ${allocations.length} 件 · 経路を強調中</span>`;return;
+    }
+    const requirement=requirements[0];
     if(requirement){box.hidden=false;box.innerHTML=`<span class="eyebrow">選択中の判断</span><strong>${esc(resourceName(requirement.resource_id))} · ${esc(locationName(requirement.destination_id))}</strong><span>補給需要に関係する経路を強調中</span>`;return;}
-    const allocation=contextTransportAllocation();
+    const allocation=allocations[0];
     if(allocation){box.hidden=false;box.innerHTML=`<span class="eyebrow">選択中の判断</span><strong>${esc(allocation.display_name)}</strong><span>この輸送能力設定で利用する経路を強調中</span>`;return;}
     if(target.subject_kind==='movement_plan'&&target.subject_id){const plan=(state.movementPlans?.items||[]).find((row)=>row.id===target.subject_id);box.hidden=false;box.innerHTML=`<span class="eyebrow">選択中の判断</span><strong>${esc(plan?.display_name||playerTerm('movement_plan'))}</strong><span>選択した移動経路を強調中</span>`;return;}
     if(target.subject_kind==='operational_node'&&target.subject_id){box.hidden=false;box.innerHTML=`<span class="eyebrow">全体Mapから引き継ぎ</span><strong>${esc(locationName(target.subject_id))}</strong><span>この拠点に接続する輸送Networkを強調中</span>`;return;}
