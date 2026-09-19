@@ -631,13 +631,16 @@ def run() -> dict[str, object]:
                 timeout=10000,
             )
 
-            # Return only becomes meaningful after the campaign is active. Advance
-            # via the real time control instead of mutating Domain state from E2E.
-            page.locator('[data-time-speed="16"]').click()
+            # Return is available during real outbound movement. Reach that
+            # browser-visible phase at 1x, pause the authoritative clock, then
+            # exercise Return and Abort through the real command endpoint. This
+            # avoids encoding the campaign's activity duration as an E2E timing
+            # assumption while still testing the actual controls and refresh path.
+            page.locator('[data-time-speed="1"]').click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             page.locator('#timePauseButton').click()
             page.wait_for_function(
-                """id => document.querySelector(`[data-inspect="scientific-exploration"][data-id="${id}"] .decision-card-title .badge`)?.textContent?.trim() === '稼働'""",
+                """id => document.querySelector(`[data-inspect="scientific-exploration"][data-id="${id}"] .decision-card-title .badge`)?.textContent?.trim() === '往路移動中'""",
                 arg=exploration_id,
                 timeout=15000,
             )
@@ -652,18 +655,58 @@ def run() -> dict[str, object]:
             return_action = page.locator('#inspectorContent [data-exploration-return]')
             _assert(
                 return_action.count() == 1 and return_action.is_enabled(),
-                "active scientific exploration must expose an enabled Return action",
+                "outbound scientific exploration must expose an enabled Return action",
             )
-            return_action.click()
+            with page.expect_response(
+                lambda response: response.request.method == 'POST'
+                and response.url.endswith('/api/v1/commands')
+                and 'ReturnScientificExploration' in (response.request.post_data or ''),
+                timeout=10000,
+            ) as return_response:
+                return_action.click()
+            _assert(
+                return_response.value.ok,
+                "Return must execute through the real command endpoint",
+            )
             page.wait_for_function(
                 "() => !document.body.classList.contains('is-busy')", timeout=10000
             )
             abort_action = page.locator('#inspectorContent [data-exploration-abort]')
             _assert(
                 abort_action.count() == 1 and abort_action.is_enabled(),
-                "returning scientific exploration must keep Abort available",
+                "outbound exploration with a return request must keep Abort available",
             )
-            abort_action.click()
+            with page.expect_response(
+                lambda response: response.request.method == 'POST'
+                and response.url.endswith('/api/v1/commands')
+                and 'AbortScientificExploration' in (response.request.post_data or ''),
+                timeout=10000,
+            ) as abort_response:
+                abort_action.click()
+            _assert(
+                abort_response.value.ok,
+                "Abort must execute through the real command endpoint",
+            )
+
+            # Abort during Movement settles at the actual arrival boundary. Resume
+            # the real clock and verify only the browser-visible terminal result;
+            # the Domain test owns the exact movement/commitment invariants.
+            page.locator('[data-time-speed="16"]').click()
+            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
+            page.locator('#timePauseButton').click()
+            page.wait_for_function(
+                """id => document.querySelector(`[data-inspect="scientific-exploration"][data-id="${id}"] .decision-card-title .badge`)?.textContent?.trim() === '中止済み'""",
+                arg=exploration_id,
+                timeout=15000,
+            )
+            page.locator('#timePauseButton').click()
+            page.wait_for_function(
+                "() => document.querySelector('#timePauseButton')?.getAttribute('aria-pressed') === 'true'",
+                timeout=10000,
+            )
+            page.locator(
+                f'[data-inspect="scientific-exploration"][data-id="{exploration_id}"]'
+            ).click()
             page.wait_for_function(
                 "() => document.querySelector('[data-lifecycle-control=exploration]')?.textContent?.includes('探査中止済み')",
                 timeout=10000,
