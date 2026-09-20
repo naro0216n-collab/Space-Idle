@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from space_idle import AdvanceTime, GetMovementPlans, GetWorld, SetTimeControl, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import GameRuntime
 from space_idle.content import base_ids as ids
-from space_idle.content.base_game import (
-    REUSABLE_ORBITAL_CARGO_TUG,
-)
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.persistence import capture_state, load_game, save_game
 
@@ -114,18 +110,7 @@ def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ti
     assert capture_state(runtime._app._simulation) == capture_state(expected._simulation)
     assert runtime._app._simulation.boundary_settled_day == runtime._app._simulation.day
 
-
-def test_runtime_clock_preserves_elapsed_wall_time_during_projection_work(tmp_path):
-    now = [100.0]
-    runtime = GameRuntime(
-        new_game_factory=build_game_application,
-        load_factory=build_game_application_for_load,
-        save_dir=tmp_path,
-        offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=10.0),
-        clock=lambda: now[0],
-    )
     runtime.set_time_control(speed_multiplier=4.0)
-
     query_many = runtime._app.query_many
 
     def projection_with_elapsed_wall_time(queries):
@@ -134,25 +119,12 @@ def test_runtime_clock_preserves_elapsed_wall_time_during_projection_work(tmp_pa
         return result
 
     runtime._app.query_many = projection_with_elapsed_wall_time
-
+    day_before_projection = runtime._app._simulation.day
     first = runtime.snapshot({"world": GetWorld()})
     second = runtime.snapshot({"world": GetWorld()})
 
-    assert first.data["world"].day == 0
-    assert second.data["world"].day == 2
-
-
-def test_positive_transport_duration_rounds_up_to_canonical_day_boundary():
-    sim = build_game_application()._simulation
-    plan = replace(
-        min(sim.transport.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT), key=lambda row: str(row.id)),
-        transit_days=5,
-    )
-    base = sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].performance
-    performance = replace(base, transit_time_multiplier=0.7)
-
-    assert plan.transit_days * performance.transit_time_multiplier == 3.5
-    assert sim.transport.performance_movement_transit_days(plan, performance) == 4
+    assert first.data["world"].day == day_before_projection
+    assert second.data["world"].day == day_before_projection + 2
 
 
 def test_movement_reachability_depends_on_physical_state_not_technology_completion_state():

@@ -69,34 +69,6 @@ def _surface_vehicle(vehicle_id: str, *, speed_km_per_day: float, max_distance_k
     )
 
 
-def test_surface_gateway_identity_anchors_plan_while_current_cell_drives_geometry():
-    sim = build_game_application()._simulation
-    a, a_gateway = _location_with_gateway(sim, "a", ids.MOON_CELL_SOUTH_POLAR_RIDGE)
-    b, b_gateway = _location_with_gateway(sim, "b", ids.MOON_CELL_NEARSIDE_MARE)
-
-    before_plan = _plan_between(sim, a, b)
-    before = sim.transport.movement_geometry(before_plan.id)
-    assert before_plan.origin.surface_interface_id == a_gateway
-    assert before_plan.destination.surface_interface_id == b_gateway
-    assert before.origin.surface_cell_id == ids.MOON_CELL_SOUTH_POLAR_RIDGE
-    assert before.destination.surface_cell_id == ids.MOON_CELL_NEARSIDE_MARE
-    assert before.same_body_surface
-    assert before.distance_km is not None and before.distance_km > 0
-
-    sim.graph.develop_surface_cell(a, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
-    sim.graph.develop_surface_cell(a, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
-    sim.facilities.facilities[a_gateway].site_cell_id = ids.MOON_CELL_EQUATORIAL_HIGHLANDS
-    sim.transport.invalidate_movement_plans()
-
-    after_plan = _plan_between(sim, a, b)
-    after = sim.transport.movement_geometry(after_plan.id)
-    assert before.origin.node_id == after.origin.node_id == a
-    assert after.origin.surface_cell_id == ids.MOON_CELL_EQUATORIAL_HIGHLANDS
-    assert after.distance_km is not None and before.distance_km is not None
-    assert after.distance_km < before.distance_km
-    assert after_plan.id == before_plan.id
-
-
 def test_surface_transport_physics_derive_latency_and_range_blockers_from_endpoint_geometry():
     sim = build_game_application()._simulation
     a, _ = _location_with_gateway(sim, "a", ids.MOON_CELL_SOUTH_POLAR_RIDGE)
@@ -130,14 +102,18 @@ def test_surface_transport_physics_derive_latency_and_range_blockers_from_endpoi
         )
     )
 
-def test_player_founded_location_gets_orbit_movement_only_after_active_gateway_exists():
+def test_surface_endpoints_use_active_gateway_identity_current_cell_geometry_and_physical_targets():
     app = build_game_application()
     sim = app._simulation
     location_id = SpatialNodeId("test.location.farside")
-    sim.graph.found_location(location_id, "Farside", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS)
+    sim.graph.found_location(
+        location_id, "Farside", ids.MOON, ids.MOON_CELL_FARSIDE_HIGHLANDS
+    )
+    other_id, other_gateway = _location_with_gateway(
+        sim, "nearside", ids.MOON_CELL_NEARSIDE_MARE
+    )
     sim.transport.invalidate_movement_plans()
-    assert not sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, location_id)
-    assert not sim.transport.movement_plan_candidates(location_id, ids.LUNAR_ORBIT)
+    assert not sim.transport.movement_plan_candidates(location_id, other_id)
 
     gateway = sim.facilities.install(
         ids.SURFACE_DISTRIBUTION_HUB,
@@ -145,40 +121,59 @@ def test_player_founded_location_gets_orbit_movement_only_after_active_gateway_e
         site_cell_id=ids.MOON_CELL_FARSIDE_HIGHLANDS,
     )
     sim.transport.invalidate_movement_plans()
-    down = _plan_between(sim, ids.LUNAR_ORBIT, location_id)
-    up = _plan_between(sim, location_id, ids.LUNAR_ORBIT)
-    assert sim.transport.movement_geometry(down.id).destination.surface_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
-    assert sim.transport.movement_geometry(up.id).origin.surface_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
+    before_plan = _plan_between(sim, location_id, other_id)
+    before = sim.transport.movement_geometry(before_plan.id)
+    assert before_plan.origin.surface_interface_id == gateway
+    assert before_plan.destination.surface_interface_id == other_gateway
+    assert before.origin.surface_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
+    assert before.destination.surface_cell_id == ids.MOON_CELL_NEARSIDE_MARE
+    assert before.same_body_surface
+    assert before.distance_km is not None and before.distance_km > 0
 
-    row = app.query(GetMovementPlans(movement_plan_id=str(up.id), include_modes=False)).items[0]
+    row = app.query(
+        GetMovementPlans(movement_plan_id=str(before_plan.id), include_modes=False)
+    ).items[0]
     assert row.origin_endpoint.locator_kind == "surface_interface"
     assert row.origin_endpoint.locator_id == str(gateway)
     assert row.origin_endpoint.surface_cell_id == str(ids.MOON_CELL_FARSIDE_HIGHLANDS)
 
     sim.facilities.pause(gateway)
-    blocked = app.query(GetMovementPlans(movement_plan_id=str(up.id), include_modes=False)).items[0]
+    blocked = app.query(
+        GetMovementPlans(movement_plan_id=str(before_plan.id), include_modes=False)
+    ).items[0]
     assert not blocked.available
-    assert any(item.code.startswith("origin:interface:manual_pause:") for item in blocked.blockers)
+    assert any(
+        item.code.startswith("origin:interface:manual_pause:")
+        for item in blocked.blockers
+    )
+    sim.facilities.resume(gateway)
 
+    sim.graph.develop_surface_cell(location_id, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
+    sim.facilities.facilities[gateway].site_cell_id = ids.MOON_CELL_EQUATORIAL_HIGHLANDS
+    sim.transport.invalidate_movement_plans()
+    after_plan = _plan_between(sim, location_id, other_id)
+    after = sim.transport.movement_geometry(after_plan.id)
+    assert after_plan.id == before_plan.id
+    assert after.origin.node_id == before.origin.node_id == location_id
+    assert after.origin.surface_cell_id == ids.MOON_CELL_EQUATORIAL_HIGHLANDS
+    assert after.distance_km is not None and before.distance_km is not None
+    assert after.distance_km < before.distance_km
 
-def test_physical_target_endpoint_uses_surface_cell_without_operational_node():
-    sim = build_game_application()._simulation
-    endpoint = MovementEndpoint(physical_target_cell_id=ids.MOON_CELL_FARSIDE_HIGHLANDS)
-
+    physical_cell = ids.MOON_CELL_SOUTH_POLAR_PLAIN
+    endpoint = MovementEndpoint(physical_target_cell_id=physical_cell)
     resolved = resolve_movement_endpoint(endpoint, sim.facilities)
     plans = sim.transport.movement_plans_to_physical_target(
-        ids.LUNAR_ORBIT, ids.MOON_CELL_FARSIDE_HIGHLANDS
+        ids.LUNAR_ORBIT, physical_cell
     )
-
     assert resolved.node_id is None
     assert resolved.locator_kind == "physical_surface_target"
-    assert resolved.surface_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
-    assert resolved.environment_context_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
-    assert ids.MOON_CELL_FARSIDE_HIGHLANDS not in sim.graph.operational_node_states
+    assert resolved.surface_cell_id == physical_cell
+    assert resolved.environment_context_id == physical_cell
+    assert physical_cell not in sim.graph.operational_node_states
     plan = _select_plan(plans, operation_types=("landing",))
     assert plan.destination.operational_node_id is None
-    assert plan.destination.physical_target_cell_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
-    assert plan.relation.destination_context_id == ids.MOON_CELL_FARSIDE_HIGHLANDS
+    assert plan.destination.physical_target_cell_id == physical_cell
+    assert plan.relation.destination_context_id == physical_cell
     assert plan.relation.characteristic_distance_km == 0.0
     assert not sim.transport.movement_plan_failures(plan.id, sim.day)
 

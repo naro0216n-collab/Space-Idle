@@ -8,7 +8,7 @@ from space_idle.construction import BuildResourceRequirement, ConstructionRecipe
 from space_idle.facilities import FacilityDef
 from space_idle.research import ResearchDefinition, ResearchTheoryStageSpec
 from space_idle.shared import DefinitionId
-from space_idle.validation import validate_runtime_state
+from space_idle.validation import validate_runtime_state, validate_simulation_configuration
 
 
 def _project(sim):
@@ -69,10 +69,13 @@ def test_planned_project_with_unmet_technology_does_not_claim_inventory():
         (
             BuildResourceRequirement(ids.STRUCTURAL_COMPONENTS, 1.0),
             BuildResourceRequirement(ids.MACHINERY, 0.5),
+            BuildResourceRequirement(ids.PRECISION_ELECTRONICS, 0.25),
+            BuildResourceRequirement(ids.BULK_STRUCTURE, 0.75),
         ),
         construction_work=1.0,
         prerequisite_technologies=frozenset({technology_id}),
     )
+    validate_simulation_configuration(sim)
     app.execute(
         PlanBuild(str(ids.EARTH), str(facility_id), procurement_policy="extended_wait")
     )

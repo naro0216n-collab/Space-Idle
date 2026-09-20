@@ -9,11 +9,16 @@ from space_idle.inventory import DEFAULT_STORAGE_POOL_KEY, InventoryBook
 from space_idle.shared import DefinitionId, SpatialNodeId
 
 
-def test_inventory_admission_preserves_stock_when_usable_capacity_falls_and_recovers():
+def test_inventory_admission_preserves_stock_and_enforces_resource_pool_compatibility():
     node = SpatialNodeId("node.test")
     a = DefinitionId("resource.a")
     b = DefinitionId("resource.b")
-    inventory = InventoryBook({a: ResourceDef(a, "A"), b: ResourceDef(b, "B")})
+    special = DefinitionId("resource.special")
+    inventory = InventoryBook({
+        a: ResourceDef(a, "A"),
+        b: ResourceDef(b, "B"),
+        special: ResourceDef(special, "Special", storage_pool_key="cryogenic"),
+    })
     no_storage_node = SpatialNodeId("node.no-storage")
     assert inventory.admission_state(no_storage_node, a).admission_capacity_t == pytest.approx(0.0)
     assert inventory.admit(no_storage_node, a, 1.0).admitted_t == pytest.approx(0.0)
@@ -45,22 +50,6 @@ def test_inventory_admission_preserves_stock_when_usable_capacity_falls_and_reco
     assert recovered.fully_admitted
     assert inventory.stored_in_pool(node, pool) == pytest.approx(10.0)
 
-
-
-def test_special_resource_requires_its_explicit_compatible_pool():
-    node = SpatialNodeId("node.special")
-    ordinary = DefinitionId("resource.ordinary")
-    special = DefinitionId("resource.special")
-    inventory = InventoryBook({
-        ordinary: ResourceDef(ordinary, "Ordinary"),
-        special: ResourceDef(special, "Special", storage_pool_key="cryogenic"),
-    })
-    inventory.set_capacity_snapshot(
-        {(node, DEFAULT_STORAGE_POOL_KEY): 10.0},
-        {(node, DEFAULT_STORAGE_POOL_KEY): 10.0},
-    )
-
-    assert inventory.admit(node, ordinary, 1.0).fully_admitted
     special_state = inventory.admission_state(node, special)
     assert special_state.storage_pool_key == "cryogenic"
     assert special_state.physical_capacity_t == pytest.approx(0.0)

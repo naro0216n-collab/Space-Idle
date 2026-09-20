@@ -56,7 +56,7 @@ def _cell(cell_id: str, body_id: CelestialBodyId, neighbors: tuple[str, ...]) ->
     )
 
 
-def test_surface_topology_supports_variable_cell_counts_and_non_hex_neighbors():
+def test_surface_topology_supports_variable_graphs_and_connected_single_owner_territory():
     graph = SpatialGraph()
     body_a = CelestialBodyId("body.a")
     body_b = CelestialBodyId("body.b")
@@ -64,36 +64,27 @@ def test_surface_topology_supports_variable_cell_counts_and_non_hex_neighbors():
     _body(graph, body_a, "A", system, 0.0)
     _body(graph, body_b, "B", system, 10.0)
     graph.add_surface_cell(_cell("a.1", body_a, ("a.2",)))
-    graph.add_surface_cell(_cell("a.2", body_a, ("a.1",)))
-    graph.add_surface_cell(_cell("b.1", body_b, ("b.2", "b.3")))
+    graph.add_surface_cell(_cell("a.2", body_a, ("a.1", "a.3")))
+    graph.add_surface_cell(_cell("a.3", body_a, ("a.2",)))
+    graph.add_surface_cell(_cell("b.1", body_b, ("b.2",)))
     graph.add_surface_cell(_cell("b.2", body_b, ("b.1",)))
-    graph.add_surface_cell(_cell("b.3", body_b, ("b.1",)))
 
-    assert len(graph.cells_for_body(body_a)) == 2
-    assert len(graph.cells_for_body(body_b)) == 3
-    assert max(len(cell.neighbor_ids) for cell in graph.cells_for_body(body_b)) == 2
+    assert len(graph.cells_for_body(body_a)) == 3
+    assert len(graph.cells_for_body(body_b)) == 2
+    assert max(len(cell.neighbor_ids) for cell in graph.cells_for_body(body_a)) == 2
 
-
-def test_location_territory_owns_cells_once_and_expands_only_to_adjacent_cells():
-    graph = SpatialGraph()
-    body = CelestialBodyId("body")
-    system = _add_system(graph)
-    _body(graph, body, "Body", system)
-    graph.add_surface_cell(_cell("c1", body, ("c2",)))
-    graph.add_surface_cell(_cell("c2", body, ("c1", "c3")))
-    graph.add_surface_cell(_cell("c3", body, ("c2",)))
     location = SpatialNodeId("location.one")
-    graph.found_location(location, "One", body, SurfaceCellId("c1"))
+    graph.found_location(location, "One", body_a, SurfaceCellId("a.1"))
 
-    assert graph.surface_cell_development_failures(location, SurfaceCellId("c3"))[0][0] == "not_adjacent"
-    graph.develop_surface_cell(location, SurfaceCellId("c2"))
-    graph.develop_surface_cell(location, SurfaceCellId("c3"))
+    assert graph.surface_cell_development_failures(location, SurfaceCellId("a.3"))[0][0] == "not_adjacent"
+    graph.develop_surface_cell(location, SurfaceCellId("a.2"))
+    graph.develop_surface_cell(location, SurfaceCellId("a.3"))
     assert graph.locations[location].developed_cell_ids == {
-        SurfaceCellId("c1"), SurfaceCellId("c2"), SurfaceCellId("c3")
+        SurfaceCellId("a.1"), SurfaceCellId("a.2"), SurfaceCellId("a.3")
     }
 
     with pytest.raises(ValueError, match="already belongs"):
-        graph.found_location(SpatialNodeId("location.two"), "Two", body, SurfaceCellId("c2"))
+        graph.found_location(SpatialNodeId("location.two"), "Two", body_a, SurfaceCellId("a.2"))
 
 
 def test_base_surface_map_exposes_affiliation_without_creating_cell_inventory_nodes():

@@ -121,23 +121,6 @@ def _remove_research_site_service(sim):
     return definition
 
 
-def test_explicit_empty_prototype_stage_progresses_automatically_after_site_selection():
-    app = build_game_application()
-    sim = app._simulation
-    research_id = DefinitionId("test.research.explicit_empty_prototype")
-    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Explicit Prototype", (ResearchPrototypeStageSpec("prototype", {}),), prerequisites=frozenset())
-
-    sim.research.start(research_id, day=sim.day)
-    assert sim.research.active[research_id].current_stage_id == "prototype"
-    assert tuple((stage.stage_id, stage.stage_type) for stage in _research_row(app, research_id).stages) == (("prototype", "prototype"),)
-    sim.research.set_prototype_site(research_id, "prototype", EARTH, sim.day)
-
-    sim.advance_days(1)
-
-    assert research_id in sim.research.completed
-    assert research_id not in sim.research.active
-
-
 def test_typed_research_site_selection_separates_structural_eligibility_from_runtime_capacity():
     app = build_game_application()
     sim = app._simulation
@@ -399,6 +382,10 @@ def test_research_stage_identity_is_explicit_unique_and_stable_across_repeated_s
     ) != sim.research.prototype_reservation_requirement_id(
         research_id, "prototype-b", resource_id
     )
+
+    app.execute(AdvanceTime(1))
+    assert research_id in sim.research.completed
+    assert research_id not in sim.research.active
 
 
 def test_research_execution_context_projects_strategic_comparison_axes_from_application_state():

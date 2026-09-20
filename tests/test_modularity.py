@@ -104,6 +104,8 @@ def test_domain_authoritative_state_is_not_read_directly_across_domain_boundarie
 
 def test_layer_dependency_direction_is_enforced():
     """Core/domain code cannot acquire inward dependencies on outer layers."""
+    from space_idle.content import base_ids
+
     forbidden_outer = (
         "space_idle.application", "space_idle.app_contracts", "space_idle.content",
         "space_idle.composition", "space_idle.bootstrap", "space_idle.persistence", "space_idle.api",
@@ -160,6 +162,32 @@ def test_layer_dependency_direction_is_enforced():
         )
         assert not offenders, f"{path.relative_to(PACKAGE)} imports concrete composition/content: {offenders}"
 
+    core_files = [
+        path for path in PACKAGE.rglob("*.py")
+        if path.name != "__init__.py"
+        and not any(part in {"content", "composition", "app_contracts"} for part in path.parts)
+        and path.name not in {"bootstrap.py", "persistence.py"}
+        and not path.name.startswith("application")
+    ]
+    current_content_ids = {
+        value
+        for name, value in vars(base_ids).items()
+        if name.isupper() and isinstance(value, str) and value.startswith("base.")
+    }
+    assert current_content_ids
+    for path in core_files:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        embedded = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value in current_content_ids
+        }
+        assert not embedded, (
+            f"{path.relative_to(PACKAGE)} embeds concrete Content IDs: {sorted(embedded)}"
+        )
+
 
 def test_peer_extensions_join_generic_registries_without_central_enum_or_simulation_switches():
     from space_idle import build_game_application
@@ -169,6 +197,11 @@ def test_peer_extensions_join_generic_registries_without_central_enum_or_simulat
     from space_idle.priority import DEFAULT_ACTIVITY_PRIORITY
     from space_idle.service_capacity import ServiceCapacityRequest
     from space_idle.shared import EntityId
+    from space_idle.spatial import (
+        CharacteristicTransportGeometry, EnvironmentFieldScope, EnvironmentResolver,
+        SpatialFacet, SpatialGraph, SpatialNodeDef, StarSystemDef, StaticFacetStore,
+    )
+    from space_idle.shared import SpatialNodeId, StarSystemId
     from space_idle.transport.models import TransportOperationRequirement
     from space_idle.transport.operations import OperationEvaluationContext, OperationEvaluatorRegistry
 
@@ -178,6 +211,22 @@ def test_peer_extensions_join_generic_registries_without_central_enum_or_simulat
         operation_type: str = "test.custom_operation"
 
     registry = OperationEvaluatorRegistry()
+
+    @dataclass(frozen=True)
+    class TestEnvironmentField(SpatialFacet):
+        facet_key = "test_environment_field"
+        environment_scope = EnvironmentFieldScope.CONTEXT_LOCAL
+        value: float
+
+    graph = SpatialGraph()
+    system = StarSystemId("test.system.facets")
+    geometry = CharacteristicTransportGeometry((0.0,), (0.0,))
+    graph.add_star_system(StarSystemDef(system, "Facet System", geometry))
+    node = SpatialNodeId("test.node")
+    graph.add(SpatialNodeDef(node, "Test Node", system, geometry))
+    store = StaticFacetStore()
+    store.set(node, TestEnvironmentField(9.2))
+    assert EnvironmentResolver(graph, store).require(node, TestEnvironmentField).value == 9.2
 
     def evaluator(requirement, capability, context):
         assert context.transit_days == 7

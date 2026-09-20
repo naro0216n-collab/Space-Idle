@@ -1,21 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from space_idle import build_game_application
-from space_idle.content import base_ids
-from space_idle.construction import BuildResourceRequirement, ConstructionRecipe
-from space_idle.facilities import FacilityDef
-from space_idle.validation import validate_simulation_configuration
 from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId, StarSystemId, SurfaceCellId
 from space_idle.spatial import (
     AtmosphereField,
     CelestialBodyDef,
     CharacteristicTransportGeometry,
-    EnvironmentFieldScope,
     EnvironmentResolver,
     IlluminationField,
-    SpatialFacet,
     SpatialGraph,
     SpatialNodeDef,
     SpatialNodeKind,
@@ -27,26 +18,6 @@ from space_idle.spatial import (
     ThermalField,
 )
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
-
-
-def test_environment_facets_accept_peer_extensions_without_core_registration():
-    @dataclass(frozen=True)
-    class TestEnvironmentField(SpatialFacet):
-        facet_key = "test_environment_field"
-        environment_scope = EnvironmentFieldScope.CONTEXT_LOCAL
-        value: float
-
-    graph = SpatialGraph()
-    system = StarSystemId("test.system.facets")
-    geometry = CharacteristicTransportGeometry((0.0,), (0.0,))
-    graph.add_star_system(StarSystemDef(system, "Facet System", geometry))
-    node = SpatialNodeId("test.node")
-    graph.add(SpatialNodeDef(node, "Test Node", system, geometry))
-    store = StaticFacetStore()
-    store.set(node, TestEnvironmentField(9.2))
-    env = EnvironmentResolver(graph, store)
-
-    assert env.require(node, TestEnvironmentField).value == 9.2
 
 
 def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and_is_stateful():
@@ -106,56 +77,3 @@ def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and
 
     env.restore_overlay_state(saved_overlay)
     assert env.require(site_a, AtmosphereField).pressure_pa == 610.0
-
-
-def test_generic_core_does_not_embed_current_content_ids():
-    import ast
-    from pathlib import Path
-
-    package = Path(__file__).parents[1] / "space_idle"
-    outer_layers = {"content", "composition", "app_contracts"}
-    files = [
-        path for path in package.rglob("*.py")
-        if path.name != "__init__.py"
-        and not any(part in outer_layers for part in path.parts)
-        and path.name not in {"bootstrap.py", "persistence.py"}
-        and not path.name.startswith("application")
-    ]
-    current_content_ids = {
-        value
-        for name, value in vars(base_ids).items()
-        if name.isupper() and isinstance(value, str) and value.startswith("base.")
-    }
-    assert current_content_ids
-
-    for path in files:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        embedded = {
-            node.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and node.value in current_content_ids
-        }
-        assert not embedded, (
-            f"{path.relative_to(package)} embeds concrete Content IDs: "
-            f"{sorted(embedded)}"
-        )
-
-    app = build_game_application()
-    sim = app._simulation
-    facility_id = DefinitionId("test.facility.four_resource_recipe")
-    sim.facilities.definitions[facility_id] = FacilityDef(
-        facility_id, "Four-resource construction fixture"
-    )
-    sim.projects.recipes[facility_id] = ConstructionRecipe(
-        facility_id,
-        (
-            BuildResourceRequirement(base_ids.STRUCTURAL_COMPONENTS, 1.0),
-            BuildResourceRequirement(base_ids.MACHINERY, 1.0),
-            BuildResourceRequirement(base_ids.PRECISION_ELECTRONICS, 1.0),
-            BuildResourceRequirement(base_ids.BULK_STRUCTURE, 1.0),
-        ),
-        construction_work=1.0,
-    )
-    validate_simulation_configuration(sim)
