@@ -71,6 +71,75 @@ def test_execution_bundle_settlement_uses_one_rate_and_requires_explicit_capacit
         allocate_execution_requirements([missing], {})
 
 
+
+def test_boundary_settlement_resources_feed_the_next_physical_snapshot_allocation():
+    from space_idle import build_game_application
+    from space_idle.content import base_ids as ids
+    from space_idle.facilities import FacilityDef
+
+    app = build_game_application()
+    sim = app._simulation
+
+    # Maintenance is only a generic Resource consumer here. The contract is
+    # Simulation ordering: Cargo that matures at the boundary is admitted before
+    # the next Physical snapshot and therefore participates in normal allocation.
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    definition_id = DefinitionId("test.facility.boundary_consumer")
+    sim.facilities.definitions[definition_id] = FacilityDef(
+        definition_id,
+        "Boundary consumer",
+        maintenance_fraction_per_year=365.0,
+    )
+    facility_id = sim.facilities.install(
+        definition_id,
+        ids.LEO,
+        invested_resources={ids.STRUCTURAL_COMPONENTS: 1.0},
+    )
+    sim.refresh_storage()
+    sim.inventory.stock[(ids.LEO, ids.STRUCTURAL_COMPONENTS)] = 0.0
+    sim.inventory.add(ids.EARTH, ids.STRUCTURAL_COMPONENTS, 100.0)
+
+    target_capacity = sim.transport.transport_capacity_for_units(
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1, day=sim.day
+    )
+    sim.transport.create_transport_allocation(
+        ids.REUSABLE_LAUNCH_VEHICLE,
+        ids.EARTH,
+        ids.LEO,
+        target_capacity=target_capacity,
+        day=sim.day,
+    )
+
+    initial = sim.tick_decision_projection().allocations.execution
+    maintenance_bundle = next(
+        row
+        for row in initial.bundles
+        if row.owner_kind == "facility_maintenance" and row.owner_id == facility_id
+    )
+    assert initial.fulfillment(maintenance_bundle.id) == pytest.approx(0.0)
+
+    sim.advance_days(1)
+    flow = next(
+        row
+        for row in sim.logistics.cargo_flows.values()
+        if row.owner_id == facility_id
+        and row.resource_id == ids.STRUCTURAL_COMPONENTS
+    )
+    ready_day = flow.first_arrival_day
+    assert ready_day > sim.day
+
+    sim.advance_to_day(ready_day)
+    assert sim.boundary_settled_day == sim.day == ready_day
+    assert sim.inventory.available(ids.LEO, ids.STRUCTURAL_COMPONENTS) > 0.0
+
+    next_allocation = sim.tick_decision_projection().allocations.execution
+    maintenance_bundle = next(
+        row
+        for row in next_allocation.bundles
+        if row.owner_kind == "facility_maintenance" and row.owner_id == facility_id
+    )
+    assert next_allocation.fulfillment(maintenance_bundle.id) > 0.0
+
 def test_shared_allocators_preserve_priority_progressive_fairness_and_registration_independence():
     assert tuple(int(level) for level in PriorityLevel) == (1, 2, 3, 4, 5)
     assert DEFAULT_PRIORITY_LEVEL is PriorityLevel.NORMAL

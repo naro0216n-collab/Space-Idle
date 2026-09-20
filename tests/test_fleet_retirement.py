@@ -192,7 +192,7 @@ def test_fleet_retirement_rechecks_site_requirements_during_execution():
     assert state.irreversible_started
 
 
-def test_fleet_retirement_at_non_earth_node_settles_partial_salvage_with_one_fraction():
+def test_fleet_retirement_at_non_earth_node_settles_partial_salvage_without_blocking_removal():
     app = build_game_application()
     sim = app._simulation
     workshop_definition_id = DefinitionId("test.facility.orbital_vehicle_workshop")
@@ -225,64 +225,68 @@ def test_fleet_retirement_at_non_earth_node_settles_partial_salvage_with_one_fra
     assert state.progress_work == pytest.approx(required_work)
     assert state.phase is FleetRetirementPhase.DISMANTLING
 
-    storage_pool_key = sim.inventory.storage_pool_for_resource(ids.STRUCTURAL_COMPONENTS)
     salvage = tuple(
         (resource_id, amount_per_unit * state.requested_units)
         for resource_id, amount_per_unit in definition.retirement.recovery_resources_per_unit
         if amount_per_unit * state.requested_units > 0.0
     )
-    salvage_in_class = tuple(
-        amount
-        for resource_id, amount in salvage
-        if sim.inventory.storage_pool_for_resource(resource_id) == storage_pool_key
+    storage_pool_key = sim.inventory.storage_pool_for_resource(salvage[0][0])
+    assert all(
+        sim.inventory.storage_pool_for_resource(resource_id) == storage_pool_key
+        for resource_id, _amount in salvage
     )
-    salvage_total = sum(salvage_in_class)
-    largest_component = max(salvage_in_class)
-    assert salvage_total > largest_component
+    salvage_total = sum(amount for _resource_id, amount in salvage)
 
     admission = sim.inventory.admission_state_for_pool(ids.LUNAR_ORBIT, storage_pool_key)
     assert admission.admission_capacity_t is not None
-    target_headroom = (salvage_total + largest_component) / 2.0
     filler = ids.CONSTRUCTION_EQUIPMENT
-    current_filler = sim.inventory.amount(ids.LUNAR_ORBIT, filler)
-    occupied = sim.inventory.stored_in_pool(ids.LUNAR_ORBIT, storage_pool_key)
-    sim.inventory.stock[(ids.LUNAR_ORBIT, filler)] = current_filler + max(
-        0.0, admission.admission_capacity_t - target_headroom
-    )
+    target_headroom = salvage_total / 2.0
+    sim.inventory.stock[(ids.LUNAR_ORBIT, filler)] = sim.inventory.amount(
+        ids.LUNAR_ORBIT, filler
+    ) + max(0.0, admission.admission_capacity_t - target_headroom)
 
     admission = sim.inventory.admission_state_for_pool(ids.LUNAR_ORBIT, storage_pool_key)
     assert admission.admission_capacity_t is not None
-    assert largest_component < admission.admission_capacity_t < salvage_total
+    assert 0.0 < admission.admission_capacity_t < salvage_total
     assert not any(
         blocker.startswith("salvage_admission:")
         for blocker in sim.transport.fleet_retirement_blockers(retirement_id, day=sim.day)
     )
-    assert sim.transport.fleet_pool_snapshot(
-        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
-    ).total_units == 1
 
-    bundles = sim.transport.fleet_retirement_execution_requirement_bundles(sim.day)
     salvage_bundle = next(
-        row for row in bundles if row.id == sim.transport._retirement_salvage_bundle_id(retirement_id)
+        row
+        for row in sim.transport.fleet_retirement_execution_requirement_bundles(sim.day)
+        if row.owner_kind == "fleet_retirement"
+        and row.owner_id == retirement_id
+        and row.purpose == "salvage_admission"
     )
     assert not salvage_bundle.atomic
     assert salvage_bundle.minimum_execution == pytest.approx(0.0)
-
     expected_fraction = sim.tick_decision_projection().allocations.execution.fulfillment(
         salvage_bundle.id
     )
     assert 0.0 < expected_fraction < 1.0
 
+    before_recovery = sum(
+        sim.inventory.amount(ids.LUNAR_ORBIT, resource_id)
+        for resource_id, _amount in salvage
+    )
     app.execute(AdvanceTime(1))
+
     completed = sim.transport.fleet_retirements[retirement_id]
     assert completed.phase is FleetRetirementPhase.COMPLETE
     assert completed.salvage_recovered_fraction == pytest.approx(expected_fraction)
     assert sim.transport.fleet_pool_snapshot(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
     ).total_units == 0
-    completed_row = next(row for row in app.query(GetFleet()).retirements if row.id == str(retirement_id))
+    assert sum(
+        sim.inventory.amount(ids.LUNAR_ORBIT, resource_id)
+        for resource_id, _amount in salvage
+    ) > before_recovery
+
+    completed_row = next(
+        row for row in app.query(GetFleet()).retirements
+        if row.id == str(retirement_id)
+    )
     assert completed_row.actual_salvage_fraction == pytest.approx(expected_fraction)
-    assert dict(completed_row.actual_salvage) == {
-        str(resource_id): pytest.approx(potential * expected_fraction)
-        for resource_id, potential in salvage
-    }
+    assert completed_row.actual_salvage

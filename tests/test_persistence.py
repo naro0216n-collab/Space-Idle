@@ -14,7 +14,6 @@ from space_idle import (
     GetDependencyAnalytics,
     GetOperationalNode,
     GetResearch,
-    GetSurveys,
     GetWorld,
     PauseBuild,
     PauseFacility,
@@ -421,6 +420,16 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
         ids.EARTH,
         site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
     )
+    survey_campaign_id = app.execute(StartSurvey(
+        target_cell_ids=(str(ids.MOON_CELL_FARSIDE_HIGHLANDS),),
+        resource_ids=(str(ids.REGOLITH),),
+        goal_knowledge_level=1,
+        provider_constraint=SurveyProviderConstraintInput(
+            str(ids.LUNAR_RESOURCE_SURVEY_ORBITER), str(ids.LUNAR_ORBIT)
+        ),
+        observation_mode_constraint="remote_orbital_spectrometry",
+    )).created_id
+    assert survey_campaign_id is not None
     before = capture_state(sim)
 
     decision = sim.tick_decision_projection()
@@ -449,6 +458,17 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
 
     path = tmp_path / "derived-projections.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    saved_campaign = next(
+        row
+        for row in raw["state"]["survey"]["campaigns"]
+        if row["id"] == survey_campaign_id
+    )
+    assert "fleet_commitment_ref" not in saved_campaign
+    assert "resolved_provider_definition_id" not in saved_campaign
+    assert "resolved_observation_mode_id" not in saved_campaign
+    assert "unfinished_targets" not in saved_campaign
+
     loaded, _ = load_game(path, build_game_application_for_load)
     assert capture_state(loaded._simulation) == before
     assert loaded.query(
@@ -603,19 +623,6 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
         str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1
     )).created_id
     assert survey_assignment_id is not None
-    cells = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE)
-    resources = (ids.REGOLITH, ids.WATER)
-    campaign_id = survey_app.execute(StartSurvey(
-        target_cell_ids=tuple(map(str, cells)),
-        resource_ids=tuple(map(str, resources)),
-        goal_knowledge_level=1,
-        provider_constraint=SurveyProviderConstraintInput(
-            str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT)
-        ),
-        observation_mode_constraint="fleet_remote_mapping",
-    )).created_id
-    assert campaign_id is not None
-
     survey_assignment = next(iter(survey_sim.survey.provider_assignments.values()))
     survey_raw, loaded_survey, loaded_survey_assignment, loaded_survey_commitment = (
         _roundtrip_fleet_backed_assignment(
@@ -627,28 +634,11 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
             load_factory=build_game_application_for_load,
         )
     )
-    saved_campaign = survey_raw["state"]["survey"]["campaigns"][0]
-    assert saved_campaign["id"] == campaign_id
-    assert saved_campaign["target_cell_ids"] == sorted(map(str, cells))
-    assert saved_campaign["resource_ids"] == sorted(map(str, resources))
-    assert saved_campaign["goal_knowledge_level"] == 1
-    assert saved_campaign["provider_constraint"] == {
-        "provider_definition_id": str(ids.LUNAR_FLEET_SURVEY_PROVIDER),
-        "operational_node_id": str(ids.LUNAR_ORBIT),
-    }
-    assert saved_campaign["observation_mode_constraint"] == "fleet_remote_mapping"
-    assert "fleet_commitment_ref" not in saved_campaign
-    assert "resolved_provider_definition_id" not in saved_campaign
-    assert "resolved_observation_mode_id" not in saved_campaign
-    assert "unfinished_targets" not in saved_campaign
 
     loaded_survey_sim = loaded_survey._simulation
     assert capture_state(loaded_survey_sim)["survey"] == capture_state(survey_sim)["survey"]
     assert loaded_survey_assignment.id == survey_assignment.id
     assert loaded_survey_commitment.owner_activity_ref.activity_type == "survey_provider_assignment"
-    assert loaded_survey.query(GetSurveys(str(ids.LUNAR_ORBIT))) == survey_app.query(
-        GetSurveys(str(ids.LUNAR_ORBIT))
-    )
 
     # Future behavior must remain equivalent after restoring either domain-owned
     # assignment while the physical Fleet quantity continues to be owned only by
