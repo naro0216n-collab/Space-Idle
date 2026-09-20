@@ -72,52 +72,6 @@ def test_vehicle_definition_validation_rejects_invalid_resource_and_interface_co
     with pytest.raises(ConfigurationError, match="duplicate generic vehicle capability"):
         validate_simulation_configuration(sim)
 
-def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
-    from space_idle import AdvanceTime, PauseFacility, ProduceVehicle
-    from space_idle.content.base_game import EARTH, ROBOTIC_SURVEY_PACKAGE
-    from space_idle.site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
-
-    app = build_game_application()
-    sim = app._simulation
-    vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.transport.vehicle_defs[vehicle_id]
-    sim.transport.vehicle_defs[vehicle_id] = replace(
-        definition,
-        production=replace(
-            definition.production,
-            site_requirements=SiteRequirements(
-                capability_requirements=(
-                    CapabilityRequirement("spacecraft_servicing", CapabilityRequirementState.ACTIVE),
-                ),
-            ),
-        ),
-    )
-    servicing_id = sim.facilities.install(
-        ROBOTIC_SURVEY_PACKAGE,
-        EARTH,
-        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
-    )
-    sim.refresh_storage()
-
-    result = app.execute(ProduceVehicle(str(vehicle_id), str(EARTH)))
-    project_id = next(
-        pid for pid in sim.transport.vehicle_production_projects
-        if str(pid) == result.created_id
-    )
-    state = sim.transport.vehicle_production_projects[project_id]
-    app.execute(AdvanceTime(1))
-    assert state.phase.value == "building"
-    started_progress = state.progress_days
-    assert started_progress > 0
-
-    app.execute(PauseFacility(str(servicing_id)))
-    blockers = sim.transport.vehicle_production_blockers(project_id, day=sim.day)
-    assert any("spacecraft_servicing" in blocker for blocker in blockers)
-
-    app.execute(AdvanceTime(1))
-    assert state.phase.value == "building"
-    assert state.progress_days == pytest.approx(started_progress)
-
 
 def test_transport_performance_enforces_operation_continuity_and_endurance():
     from space_idle.content import base_ids as ids

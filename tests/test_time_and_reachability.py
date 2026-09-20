@@ -64,6 +64,15 @@ def test_time_control_persists_and_drives_direct_and_runtime_offline_progress(tm
     assert session["day"] == 6
     assert runtime_result.data["offline_progress"]["advanced_days"] == 6
 
+    # Fractional wall time is accumulated by the same canonical-day policy;
+    # splitting resume intervals must not change the resulting simulation state.
+    fractional_a = build_game_application()
+    fractional_b = build_game_application()
+    fractional_a._simulation.advance_offline(6.0, policy)
+    fractional_a._simulation.advance_offline(6.0, policy)
+    fractional_b._simulation.advance_offline(12.0, policy)
+    assert capture_state(fractional_a._simulation) == capture_state(fractional_b._simulation)
+
 
 def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ticks(tmp_path):
     now = [100.0]

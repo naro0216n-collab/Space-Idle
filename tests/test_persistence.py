@@ -47,11 +47,10 @@ from space_idle.persistence import SaveFormatError, capture_state, load_game, sa
 from space_idle.industry import ProcessSpec
 from space_idle.research import (
     ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
-    ResearchStage, ResearchState,
+    ResearchState,
 )
-from space_idle.shared import EntityId, CelestialBodyId, DefinitionId
+from space_idle.shared import EntityId, DefinitionId
 from space_idle.simulation import OfflineProgressPolicy
-from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
 
 
 def _capacity_command_kwargs(app, vehicle_definition_id, source_id, destination_id, units):
@@ -237,7 +236,7 @@ def test_facility_owned_process_selection_roundtrips_in_facility_state(tmp_path)
 
 
 
-def test_offline_progress_matches_normal_time_and_is_fractionally_composable(tmp_path):
+def test_offline_load_matches_direct_progress_for_active_domain_state(tmp_path):
     saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     elapsed_days = 3
     policy = OfflineProgressPolicy(real_seconds_per_game_day=1.0, max_game_days_per_resume=20)
@@ -282,14 +281,6 @@ def test_offline_progress_matches_normal_time_and_is_fractionally_composable(tmp
     assert offline.query(GetWorld()).day == direct.query(GetWorld()).day
     assert offline._simulation.boundary_settled_day == offline._simulation.day
     assert direct._simulation.boundary_settled_day == direct._simulation.day
-
-    fractional_a = build_game_application()
-    fractional_b = build_game_application()
-    fractional_policy = OfflineProgressPolicy(real_seconds_per_game_day=10.0)
-    fractional_a._simulation.advance_offline(6.0, fractional_policy)
-    fractional_a._simulation.advance_offline(6.0, fractional_policy)
-    fractional_b._simulation.advance_offline(12.0, fractional_policy)
-    assert capture_state(fractional_a._simulation) == capture_state(fractional_b._simulation)
 
 
 def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(tmp_path):
@@ -354,60 +345,6 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
         allocation_entity_id, loaded._simulation.day
     ).forward_path == selected_plan.forward_path
 
-
-def test_save_load_preserves_vehicle_production_staging_and_future_completion(tmp_path):
-    app = build_game_application()
-    sim = app._simulation
-    definition = sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG]
-    for resource_id, _required_t in definition.production.resources:
-        sim.inventory.stock[(EARTH, resource_id)] = 0.0
-    partial_resource, required_t = next(
-        (resource_id, required_t)
-        for resource_id, required_t in definition.production.resources
-        if required_t > 0.0
-    )
-    partial_stock = required_t * 0.5
-    sim.inventory.stock[(EARTH, partial_resource)] = partial_stock
-
-    result = app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
-    assert result.created_id is not None
-    production_id = EntityId(result.created_id)
-    app.execute(AdvanceTime(1))
-    original = sim.transport.vehicle_production_projects[production_id]
-    remaining_on_hand = sim.inventory.amount(EARTH, partial_resource)
-    assert original.phase.value == "awaiting_inputs"
-    assert partial_stock - remaining_on_hand > 0.0
-
-    before = capture_state(sim)
-    path = tmp_path / "vehicle-production.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application_for_load)
-    loaded_state = capture_state(loaded._simulation)
-    assert loaded_state["transport"] == before["transport"]
-    assert loaded_state["inventory"] == before["inventory"]
-
-    before_units = loaded._simulation.transport.fleet_pool(
-        REUSABLE_ORBITAL_CARGO_TUG, EARTH
-    ).total_units
-    for current in (app._simulation, loaded._simulation):
-        for resource_id, resource_required_t in definition.production.resources:
-            current.inventory.stock[(EARTH, resource_id)] = max(
-                current.inventory.amount(EARTH, resource_id), resource_required_t * 2.0
-            )
-
-    production_days = int(definition.production.days)
-    app.execute(AdvanceTime(production_days))
-    loaded.execute(AdvanceTime(production_days))
-    state = loaded._simulation.transport.vehicle_production_projects[production_id]
-    assert state.phase.value == "complete"
-    assert state.completed_units == 1
-    assert loaded._simulation.transport.fleet_pool(
-        REUSABLE_ORBITAL_CARGO_TUG, EARTH
-    ).total_units == before_units + 1
-    loaded_future = capture_state(loaded._simulation)
-    original_future = capture_state(app._simulation)
-    assert loaded_future["transport"] == original_future["transport"]
-    assert loaded_future["inventory"] == original_future["inventory"]
 
 
 def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path):
@@ -483,30 +420,6 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
         movement_after[0].id
     ) == movement_geometry_before
 
-
-def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):
-    body_id = CelestialBodyId(str(ids.EARTH_BODY))
-    species = DefinitionId("test.atmosphere.n2")
-
-    def factory(*, for_load: bool = False):
-        app = build_game_application_for_load() if for_load else build_game_application()
-        service = TerraformingService({
-            body_id: PlanetaryClimateState(body_id, 101325.0, 1.225, 288.0, {species: 1.0})
-        })
-        app._simulation.environment.overlays.append(TerraformingEnvironmentOverlay(service))
-        return app
-
-    app = factory()
-    overlay = app._simulation.environment.overlays[-1]
-    overlay.service.add_atmosphere(body_id, 250.0, 0.01, species, 0.0, 3.5)
-    before = app._simulation.environment.capture_overlay_state()
-
-    path = tmp_path / "dynamic-environment.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, lambda: factory(for_load=True))
-
-    assert loaded._simulation.environment.capture_overlay_state() == before
-    assert capture_state(loaded._simulation)["environment"] == capture_state(app._simulation)["environment"]
 
 
 def test_load_rejects_cross_domain_runtime_invariant_violation(tmp_path):

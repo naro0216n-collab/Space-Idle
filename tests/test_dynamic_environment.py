@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+from space_idle import build_game_application
+from space_idle.bootstrap import build_game_application_for_load
+from space_idle.content import base_ids as ids
+from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId, StarSystemId, SurfaceCellId
 from space_idle.spatial import (
     AtmosphereField,
@@ -77,3 +83,29 @@ def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and
 
     env.restore_overlay_state(saved_overlay)
     assert env.require(site_a, AtmosphereField).pressure_pa == 610.0
+
+def test_dynamic_environment_overlay_roundtrips_through_game_save(tmp_path):
+    body_id = CelestialBodyId(str(ids.EARTH_BODY))
+    species = DefinitionId("test.atmosphere.n2")
+
+    def factory(*, for_load: bool = False):
+        app = build_game_application_for_load() if for_load else build_game_application()
+        service = TerraformingService({
+            body_id: PlanetaryClimateState(body_id, 101325.0, 1.225, 288.0, {species: 1.0})
+        })
+        app._simulation.environment.overlays.append(TerraformingEnvironmentOverlay(service))
+        return app
+
+    app = factory()
+    overlay = app._simulation.environment.overlays[-1]
+    overlay.service.add_atmosphere(body_id, 250.0, 0.01, species, 0.0, 3.5)
+    before = app._simulation.environment.capture_overlay_state()
+
+    path = tmp_path / "dynamic-environment.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, lambda: factory(for_load=True))
+
+    assert loaded._simulation.environment.capture_overlay_state() == before
+    assert capture_state(loaded._simulation)["environment"] == capture_state(app._simulation)["environment"]
+
+
