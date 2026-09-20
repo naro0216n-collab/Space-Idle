@@ -231,3 +231,24 @@ def test_generic_spaceflight_plan_derivation_uses_spatial_geometry_without_pairw
     assert new_body_plan.relation.characteristic_delta_v_km_s == 6.0
     assert tuple(op.operation_type for op in new_body_plan.operations) == ("spaceflight",)
     assert new_body_plan.operations[0].delta_v_km_s == 6.0
+
+
+def test_movement_reachability_depends_on_physical_state_not_technology_completion_state():
+    app = build_game_application()
+    sim = app._simulation
+    plan = min(sim.transport.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT), key=lambda row: str(row.id))
+
+    prior_technology_state = set(sim.technology.completed)
+    sim.technology.replace(set())
+    without_completed_research = sim.transport.movement_plan_failures(plan.id, sim.day)
+
+    sim.technology.replace(set(sim.research.definitions))
+    with_all_research_completed = sim.transport.movement_plan_failures(plan.id, sim.day)
+    assert with_all_research_completed == without_completed_research
+
+    movement_plan = app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=True)).items[0]
+    assert movement_plan.available
+    assert movement_plan.service_feasible_now
+    assert movement_plan.modes
+    assert any(mode.service_feasible for mode in movement_plan.modes)
+    sim.technology.replace(prior_technology_state)

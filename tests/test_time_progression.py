@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from space_idle import AdvanceTime, GetMovementPlans, GetWorld, SetTimeControl, build_game_application
+from space_idle import AdvanceTime, GetWorld, SetTimeControl, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import GameRuntime
-from space_idle.content import base_ids as ids
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.persistence import capture_state, load_game, save_game
 
@@ -134,24 +133,3 @@ def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ti
 
     assert first.data["world"].day == day_before_projection
     assert second.data["world"].day == day_before_projection + 2
-
-
-def test_movement_reachability_depends_on_physical_state_not_technology_completion_state():
-    app = build_game_application()
-    sim = app._simulation
-    plan = min(sim.transport.movement_plan_candidates(ids.LEO, ids.LUNAR_ORBIT), key=lambda row: str(row.id))
-
-    prior_technology_state = set(sim.technology.completed)
-    sim.technology.replace(set())
-    without_completed_research = sim.transport.movement_plan_failures(plan.id, sim.day)
-
-    sim.technology.replace(set(sim.research.definitions))
-    with_all_research_completed = sim.transport.movement_plan_failures(plan.id, sim.day)
-    assert with_all_research_completed == without_completed_research
-
-    movement_plan = app.query(GetMovementPlans(movement_plan_id=str(plan.id), include_modes=True)).items[0]
-    assert movement_plan.available
-    assert movement_plan.service_feasible_now
-    assert movement_plan.modes
-    assert any(mode.service_feasible for mode in movement_plan.modes)
-    sim.technology.replace(prior_technology_state)
