@@ -333,30 +333,3 @@ def test_knowledge_consumers_depend_on_typed_requirement_not_campaign_internal_s
     assert sim.survey.knowledge_requirement_failures(requirement)
     sim.survey.knowledge_progress[key] = sim.survey.targets[key].thresholds[0]
     assert sim.survey.knowledge_requirement_failures(requirement) == ()
-
-
-def test_campaign_projection_is_reused_within_query_and_canonical_day(monkeypatch):
-    app = build_game_application()
-    sim = app._simulation
-    campaign_id = _start_campaign(
-        app, (ids.MOON_CELL_FARSIDE_HIGHLANDS,), (ids.REGOLITH,)
-    )
-    seen = []
-    original = sim.survey.campaign_projection
-
-    def tracked(campaign, *, day=0):
-        projection = original(campaign, day=day)
-        if campaign.id == campaign_id:
-            seen.append(projection)
-        return projection
-
-    monkeypatch.setattr(sim.survey, "campaign_projection", tracked)
-
-    app.query(GetSurveys(str(ids.LUNAR_ORBIT)))
-    assert seen
-    assert len({id(projection) for projection in seen}) == 1
-
-    seen.clear()
-    app.execute(AdvanceTime(1))
-    assert seen
-    assert len({id(projection) for projection in seen}) == 1

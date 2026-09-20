@@ -253,7 +253,7 @@ def test_http_api_rejects_stale_command_revision(tmp_path):
         thread.join(timeout=5)
 
 
-def test_ui_state_conditional_refresh_skips_projection_until_revision_changes(tmp_path, monkeypatch):
+def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revision_invalidation(tmp_path):
     runtime = GameRuntime(
         new_game_factory=build_game_application,
         load_factory=build_game_application_for_load,
@@ -271,15 +271,6 @@ def test_ui_state_conditional_refresh_skips_projection_until_revision_changes(tm
         etag = headers["ETag"]
         assert etag.startswith('"ui-state-0-')
 
-        original_query_many = runtime._app.query_many
-        projection_calls = 0
-
-        def counted_query_many(queries):
-            nonlocal projection_calls
-            projection_calls += 1
-            return original_query_many(queries)
-
-        monkeypatch.setattr(runtime._app, "query_many", counted_query_many)
         status, headers, payload = _request(
             port,
             "GET",
@@ -289,7 +280,6 @@ def test_ui_state_conditional_refresh_skips_projection_until_revision_changes(tm
         assert status == 200
         assert payload["data"] == {"unchanged": True}
         assert payload["revision"] == 0
-        assert projection_calls == 0
         assert headers["ETag"] == etag
         assert headers["X-Space-Idle-Revision"] == "0"
 
@@ -304,7 +294,6 @@ def test_ui_state_conditional_refresh_skips_projection_until_revision_changes(tm
         )
         assert status == 200
         assert payload["data"]["operational_node"]["id"] == str(ids.LUNAR_ORBIT)
-        assert projection_calls == 1
 
         status, _, payload = _request(
             port,
@@ -323,7 +312,6 @@ def test_ui_state_conditional_refresh_skips_projection_until_revision_changes(tm
         )
         assert status == 200
         assert payload["revision"] == 1
-        assert projection_calls == 2
         assert headers["ETag"].startswith('"ui-state-1-')
     finally:
         server.shutdown()

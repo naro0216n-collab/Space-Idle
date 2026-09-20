@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle import GetDependencyAnalytics, build_game_application
+from space_idle import (
+    GetDependencyAnalytics,
+    GetDetailedForecast,
+    GetFlowReport,
+    build_game_application,
+)
 from space_idle.app_contracts.common import ApplicationError
 from space_idle.catalog import ResourceGroupDef
+from space_idle.facilities import FacilityDef
 from space_idle.content import base_ids as ids
 from space_idle.content.base_game import EARTH, LEO
 from space_idle.shared import DefinitionId, EntityId
@@ -275,3 +281,70 @@ def test_service_dependency_projection_distinguishes_execution_blockers_and_fore
     assert row.outside_scope_enabled_rate > 0
     assert any(factor.code == "no_local_service_capacity" for factor in row.limiting_factors)
     assert "construction_work" in forecast.critical_dependency_service_types
+
+
+def test_detailed_forecast_advances_isolated_snapshot_and_projects_future_inventory():
+    app = build_game_application()
+    sim = app._simulation
+    base_day = sim.day
+    base_stock = dict(sim.inventory.stock)
+
+    view = app.query(GetDetailedForecast(
+        "operational_nodes",
+        node_ids=(str(ids.EARTH),),
+        horizon="SHORT_TERM",
+        period_days=5,
+    ))
+
+    assert view.base_day == base_day
+    assert view.projected_day == base_day + 5
+    assert view.period_days == 5
+    assert view.horizon == "SHORT_TERM"
+    assert view.node_ids == (str(ids.EARTH),)
+    assert view.inventory
+    assert sim.day == base_day
+    assert sim.inventory.stock == base_stock
+    assert all(
+        row.steady_state in {"stable", "accumulating", "depleting"}
+        for row in view.inventory
+    )
+
+    with pytest.raises(ApplicationError, match="unsupported detailed forecast horizon"):
+        app.query(GetDetailedForecast(horizon="UNKNOWN", period_days=1))
+    with pytest.raises(ApplicationError, match="period_days"):
+        app.query(GetDetailedForecast(period_days=0))
+
+
+def test_flow_report_includes_current_facility_maintenance_consumption():
+    app = build_game_application()
+    sim = app._simulation
+    before = {
+        row.resource_id: row
+        for row in app.query(GetFlowReport(str(ids.EARTH))).resources
+    }
+
+    definition_id = DefinitionId("test.facility.analytics_maintenance")
+    sim.facilities.definitions[definition_id] = FacilityDef(
+        definition_id,
+        "Analytics maintenance fixture",
+        maintenance_fraction_per_year=365.0,
+    )
+    sim.inventory.add(ids.EARTH, ids.WATER, 10.0)
+    sim.facilities.install(
+        definition_id,
+        ids.EARTH,
+        invested_resources={ids.WATER: 2.0},
+    )
+
+    after = {
+        row.resource_id: row
+        for row in app.query(GetFlowReport(str(ids.EARTH))).resources
+    }
+    water_before = before[str(ids.WATER)]
+    water_after = after[str(ids.WATER)]
+    assert (
+        water_after.local_consumption_per_day - water_before.local_consumption_per_day
+    ) == pytest.approx(2.0)
+    assert water_after.local_net_per_day == pytest.approx(
+        water_after.local_production_per_day - water_after.local_consumption_per_day
+    )

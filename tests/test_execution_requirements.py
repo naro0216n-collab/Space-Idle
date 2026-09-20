@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from space_idle.catalog import ResourceDef
+from space_idle.disposal import salvage_admission_requirements, settle_salvage_recovery
 from space_idle.execution_requirements import (
     ExecutionRequirementBundle,
     PoolRequirement,
@@ -15,6 +17,7 @@ from space_idle.execution_requirements import (
     resource_constraint,
     service_constraint,
 )
+from space_idle.inventory import DEFAULT_STORAGE_POOL_KEY, InventoryBook
 from space_idle.priority import (
     ActivityPriority,
     DEFAULT_ACTIVITY_PRIORITY,
@@ -372,3 +375,88 @@ def test_canonical_tick_routes_domain_requirements_through_common_execution_allo
         0.0 <= plan.fulfillment(row.id) <= 1.0
         for row in industry_rows + extraction_rows + construction_rows
     )
+
+
+def test_multi_pool_admission_uses_one_fraction_and_is_order_independent():
+    default_admission = StockOrPoolAdmissionRequirement("default", 10.0)
+    cryogenic_admission = StockOrPoolAdmissionRequirement("cryogenic", 6.0)
+    multi_pool = bundle(
+        "multi_pool",
+        1.0,
+        default_admission,
+        cryogenic_admission,
+    )
+    concurrent = bundle(
+        "concurrent_admission",
+        1.0,
+        StockOrPoolAdmissionRequirement("default", 2.0),
+        priority=5,
+    )
+    capacities = {
+        admission_constraint(NODE, "default"): 8.0,
+        admission_constraint(NODE, "cryogenic"): 6.0,
+    }
+
+    forward = allocate_execution_requirements((multi_pool, concurrent), capacities)
+    reverse = allocate_execution_requirements((concurrent, multi_pool), capacities)
+    requirements_reversed = bundle(
+        "multi_pool_reversed",
+        1.0,
+        cryogenic_admission,
+        default_admission,
+    )
+    reversed_requirements = allocate_execution_requirements(
+        (requirements_reversed, concurrent), capacities
+    )
+
+    assert forward.fulfillment(concurrent.id) == pytest.approx(1.0)
+    assert forward.fulfillment(multi_pool.id) == pytest.approx(0.6)
+    assert reverse.fulfillment(multi_pool.id) == pytest.approx(0.6)
+    assert reversed_requirements.fulfillment(requirements_reversed.id) == pytest.approx(0.6)
+    assert forward.used_by_constraint[admission_constraint(NODE, "default")] == pytest.approx(8.0)
+    assert forward.used_by_constraint[admission_constraint(NODE, "cryogenic")] == pytest.approx(3.6)
+
+
+def test_shared_recovery_settlement_applies_allocated_fraction_independent_of_resource_order():
+    default_salvage = DefinitionId("test.resource.salvage.default")
+    cryogenic_salvage = DefinitionId("test.resource.salvage.cryogenic")
+    inventory = InventoryBook(
+        {
+            default_salvage: ResourceDef(default_salvage, "Default salvage"),
+            cryogenic_salvage: ResourceDef(
+                cryogenic_salvage,
+                "Cryogenic salvage",
+                storage_pool_key="cryogenic",
+            ),
+        }
+    )
+    inventory.set_capacity_snapshot(
+        {
+            (NODE, DEFAULT_STORAGE_POOL_KEY): 10.0,
+            (NODE, "cryogenic"): 6.0,
+        },
+        {
+            (NODE, DEFAULT_STORAGE_POOL_KEY): 10.0,
+            (NODE, "cryogenic"): 6.0,
+        },
+    )
+    potential = ((default_salvage, 10.0), (cryogenic_salvage, 6.0))
+
+    assert salvage_admission_requirements(inventory, potential) == salvage_admission_requirements(
+        inventory, reversed(potential)
+    )
+    recovered = dict(
+        settle_salvage_recovery(
+            inventory,
+            NODE,
+            reversed(potential),
+            0.6,
+        )
+    )
+
+    assert recovered == {
+        default_salvage: pytest.approx(6.0),
+        cryogenic_salvage: pytest.approx(3.6),
+    }
+    assert inventory.amount(NODE, default_salvage) == pytest.approx(6.0)
+    assert inventory.amount(NODE, cryogenic_salvage) == pytest.approx(3.6)
