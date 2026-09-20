@@ -44,50 +44,39 @@ def _install_maintenance_facility(
     return sim.facilities.facilities[facility_id]
 
 
-def test_facility_maintenance_priority_is_player_visible_and_command_driven():
-    app = build_game_application()
-    sim = app._simulation
-    facility = _install_maintenance_facility(
-        sim, ids.EARTH,
-        definition_suffix="priority",
-        resource_id=DefinitionId("test.resource.maintenance_priority"),
-    )
-
-    app.execute(SetMaintenancePriority(str(facility.id), 5))
-    app.execute(SetFacilityActivityPriority(str(facility.id), 4))
-    app.execute(PauseFacility(str(facility.id)))
-    row = next(
-        item for item in app.query(GetOperationalNode(str(ids.EARTH))).facilities
-        if item.id == str(facility.id)
-    )
-
-    assert facility.maintenance_priority == 5
-    assert facility.activity_priority == 4
-    assert facility.paused is True
-    assert row.maintenance_priority == 5
-
-    app.execute(ResumeFacility(str(facility.id)))
-    assert facility.paused is False
-    assert facility.maintenance_priority == 5
-    assert facility.activity_priority == 4
-
-
-def test_maintenance_shortage_can_starve_lower_priority_facility_without_auto_rescue():
+def test_maintenance_priority_is_player_controlled_and_drives_resource_allocation():
     app = build_game_application()
     sim = app._simulation
     common = DefinitionId("test.resource.maintenance_shared")
     high = _install_maintenance_facility(
-        sim, ids.EARTH, definition_suffix="shared", resource_id=common
+        sim, ids.EARTH, definition_suffix="priority", resource_id=common
     )
     low_id = sim.facilities.install(
         high.definition_id, ids.EARTH, invested_resources={common: 1.0}
     )
     low = sim.facilities.facilities[low_id]
     sim.facilities.facilities = {high.id: high, low.id: low}
-    high.maintenance_priority = 4
-    low.maintenance_priority = 1
-    sim.inventory.stock[(ids.EARTH, common)] = 1.0
 
+    app.execute(SetMaintenancePriority(str(high.id), 5))
+    app.execute(SetMaintenancePriority(str(low.id), 1))
+    app.execute(SetFacilityActivityPriority(str(high.id), 4))
+    app.execute(PauseFacility(str(high.id)))
+    row = next(
+        item for item in app.query(GetOperationalNode(str(ids.EARTH))).facilities
+        if item.id == str(high.id)
+    )
+    assert high.maintenance_priority == 5
+    assert low.maintenance_priority == 1
+    assert high.activity_priority == 4
+    assert high.paused is True
+    assert row.maintenance_priority == 5
+
+    app.execute(ResumeFacility(str(high.id)))
+    assert high.paused is False
+    assert high.maintenance_priority == 5
+    assert high.activity_priority == 4
+
+    sim.inventory.stock[(ids.EARTH, common)] = 1.0
     bundles = sim.maintenance.execution_requirement_bundles(sim.day)
     capacities = {
         resource_constraint(ids.EARTH, common): sim.inventory.available(ids.EARTH, common)
@@ -179,8 +168,6 @@ def test_current_tick_maintenance_allocation_controls_power_and_service_capacity
     assert row.maintenance_satisfaction == pytest.approx(0.0)
     assert service.nominal_rate > 0.0
     assert service.enabled_rate == pytest.approx(0.0)
-
-
 
 
 def test_flow_report_includes_current_facility_maintenance_consumption():

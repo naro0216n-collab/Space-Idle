@@ -62,47 +62,61 @@ def _update_transport_units(transport, allocation_id, units, *, day=0, **kwargs)
 
 
 
-def test_fleet_commitment_ownership_conservation_and_query_projection():
+def test_fleet_commitment_ownership_conservation_and_application_projection():
     app = build_game_application()
     sim = app._simulation
     lg = sim.transport
-    lg.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO).total_units = 5
+    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
+    node_id = ids.LEO
+    lg.fleet_pool(vehicle_id, node_id).total_units = 9
 
-    special_commitment_id = EntityId("commitment.special")
-    special_owner = FleetActivityRef("test_mission", EntityId("mission.special"))
-    lg.commit_fleet_units(
-        special_commitment_id,
-        special_owner,
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
-        1,
+    commitments = (
+        ("research_provider_assignment", "research.assignment.test", 2, "research"),
+        ("survey_provider_assignment", "survey.assignment.test", 1, "survey"),
+        ("scientific_exploration", "exploration.test", 1, "scientific_exploration"),
+        ("founding", "founding.test", 1, "founding"),
+        ("test_activity", "other.test", 1, "other"),
     )
+    commitment_ids = {}
+    for index, (activity_type, activity_id, quantity, _usage_kind) in enumerate(
+        commitments, start=1
+    ):
+        commitment_id = EntityId(f"commitment.cross-domain.{index}")
+        lg.commit_fleet_units(
+            commitment_id,
+            FleetActivityRef(activity_type, EntityId(activity_id)),
+            vehicle_id,
+            node_id,
+            quantity,
+        )
+        commitment_ids[activity_type] = commitment_id
+
     allocation_id = _create_transport_for_units(
-        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 3,
-        day=sim.day,
+        lg, vehicle_id, node_id, ids.LUNAR_ORBIT, 2, day=sim.day,
     )
-
     allocation = lg.transport_allocations[allocation_id]
     transport_commitment = next(
         row for row in lg.fleet_commitment_snapshots()
         if row.owner_activity_ref == FleetActivityRef("transport_allocation", allocation_id)
     )
-    assert transport_commitment.quantity == 3
+    assert transport_commitment.quantity == 2
     assert transport_commitment.vehicle_definition_id == allocation.vehicle_definition_id
     assert transport_commitment.operational_node_id == allocation.anchor_node_id
-    assert lg.transport_active_units(allocation_id) == 3
-    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 1
+    assert lg.transport_active_units(allocation_id) == 2
+    assert lg.fleet_free_units(vehicle_id, node_id) == 1
 
     view = app.query(GetFleet())
     pool = next(
         item for item in view.pools
-        if item.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
-        and item.operational_node_id == str(ids.LEO)
+        if item.vehicle_definition_id == str(vehicle_id)
+        and item.operational_node_id == str(node_id)
     )
-    commitment = next(item for item in view.commitments if item.id == str(special_commitment_id))
-    assert commitment.owner_activity_type == "test_mission"
-    assert commitment.usage_kind == "other"
-    assert commitment.quantity == 1
+    assert pool.free_units == 1
+    assert pool.transport_units == 2
+    assert pool.research_units == 2
+    assert pool.survey_units == 1
+    assert pool.exploration_units == 1
+    assert pool.founding_units == 1
     assert pool.other_committed_units == 1
     assert (
         pool.free_units
@@ -118,68 +132,33 @@ def test_fleet_commitment_ownership_conservation_and_query_projection():
         == pool.total_units
     )
 
+    usage_by_owner = {row.owner_activity_type: row.usage_kind for row in view.commitments}
+    for activity_type, _activity_id, _quantity, usage_kind in commitments:
+        assert usage_by_owner[activity_type] == usage_kind
+    other = next(
+        row for row in view.commitments
+        if row.id == str(commitment_ids["test_activity"])
+    )
+    assert other.quantity == 1
+
     final_commitment_id = EntityId("commitment.final-free-unit")
     lg.commit_fleet_units(
         final_commitment_id,
         FleetActivityRef("test_activity", EntityId("final-free-unit")),
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
-        ids.LEO,
+        vehicle_id,
+        node_id,
         1,
     )
     with pytest.raises(ValueError, match="insufficient free fleet units"):
         lg.commit_fleet_units(
             EntityId("commitment.overcommit"),
             FleetActivityRef("test_activity", EntityId("overcommit")),
-            ids.REUSABLE_ORBITAL_CARGO_TUG,
-            ids.LEO,
-            1,
-        )
-    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 0
-
-
-def test_fleet_application_projection_separates_cross_domain_commitments():
-    app = build_game_application()
-    sim = app._simulation
-    lg = sim.transport
-    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
-    node_id = ids.LEO
-    lg.fleet_pool(vehicle_id, node_id).total_units = 8
-
-    commitments = (
-        ("research_provider_assignment", "research.assignment.test", 2),
-        ("survey_provider_assignment", "survey.assignment.test", 1),
-        ("scientific_exploration", "exploration.test", 1),
-        ("founding", "founding.test", 1),
-        ("test_activity", "other.test", 1),
-    )
-    for index, (activity_type, activity_id, quantity) in enumerate(commitments, start=1):
-        lg.commit_fleet_units(
-            EntityId(f"commitment.cross-domain.{index}"),
-            FleetActivityRef(activity_type, EntityId(activity_id)),
             vehicle_id,
             node_id,
-            quantity,
+            1,
         )
+    assert lg.fleet_free_units(vehicle_id, node_id) == 0
 
-    view = app.query(GetFleet())
-    pool = next(
-        item for item in view.pools
-        if item.vehicle_definition_id == str(vehicle_id)
-        and item.operational_node_id == str(node_id)
-    )
-    assert pool.free_units == 2
-    assert pool.research_units == 2
-    assert pool.survey_units == 1
-    assert pool.exploration_units == 1
-    assert pool.founding_units == 1
-    assert pool.other_committed_units == 1
-
-    usage_by_owner = {row.owner_activity_type: row.usage_kind for row in view.commitments}
-    assert usage_by_owner["research_provider_assignment"] == "research"
-    assert usage_by_owner["survey_provider_assignment"] == "survey"
-    assert usage_by_owner["scientific_exploration"] == "scientific_exploration"
-    assert usage_by_owner["founding"] == "founding"
-    assert usage_by_owner["test_activity"] == "other"
 
 
 def test_runtime_validation_enforces_fleet_commitment_owner_and_location_integrity():

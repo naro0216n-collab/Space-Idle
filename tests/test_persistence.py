@@ -117,18 +117,18 @@ def _make_nontrivial_state():
 
     target_id = app.execute(SetTargetStock(str(LEO), str(ids.MACHINERY), 1.0, priority=4)).created_id
     assert target_id is not None
-    app.execute(SetSupplyRoutingConstraint(
-        destination_id=str(LEO), owner_kind="target_stock", owner_id=target_id,
-        resource_id=str(ids.MACHINERY), source_node_id=str(EARTH),
-    ))
     allocation_id = app.execute(
         CreateTransportAllocation(
             str(REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
             **_capacity_command_kwargs(app, REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, 1),
         )
     ).created_id
-
     assert project_id is not None and allocation_id is not None
+    app.execute(SetSupplyRoutingConstraint(
+        destination_id=str(LEO), owner_kind="target_stock", owner_id=target_id,
+        resource_id=str(ids.MACHINERY), source_node_id=str(EARTH),
+        required_transport_allocation_ids=(allocation_id,),
+    ))
     app.execute(PauseBuild(project_id))
     app.execute(AdvanceTime(1))
     app.execute(PauseFacility(str(surface_facility_id)))
@@ -154,53 +154,6 @@ def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
 
 
 
-def test_supply_routing_constraint_roundtrips_and_preserves_future_resolution(tmp_path):
-    app = build_game_application()
-    target_id = app.execute(
-        SetTargetStock(str(LEO), str(ids.MACHINERY), 2.0, priority=4)
-    ).created_id
-    assert target_id is not None
-    allocation_id = app.execute(
-        CreateTransportAllocation(
-            str(REUSABLE_LAUNCH_VEHICLE), str(EARTH), str(LEO),
-            **_capacity_command_kwargs(app, REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, 1),
-        )
-    ).created_id
-    assert allocation_id is not None
-    app.execute(SetSupplyRoutingConstraint(
-        destination_id=str(LEO),
-        owner_kind="target_stock",
-        owner_id=target_id,
-        resource_id=str(ids.MACHINERY),
-        source_node_id=str(EARTH),
-        required_transport_allocation_ids=(allocation_id,),
-    ))
-
-    path = tmp_path / "supply-routing-constraint.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, offline = load_game(path, build_game_application_for_load)
-    assert offline is None
-
-    from space_idle import GetLogistics
-    view = loaded.query(GetLogistics())
-    constraint = next(
-        item for item in view.routing_constraints
-        if item.owner_kind == "target_stock" and item.owner_id == target_id
-    )
-    assert constraint.destination_id == str(LEO)
-    assert constraint.resource_id == str(ids.MACHINERY)
-    assert constraint.source_node_id == str(EARTH)
-    assert constraint.required_transport_allocation_ids == (allocation_id,)
-    requirement = next(
-        item for item in view.requirements
-        if item.owner_kind == "target_stock" and item.owner_id == target_id
-    )
-    assert requirement.routing_constraint_source_id == str(EARTH)
-    assert requirement.routing_constraint_transport_allocation_ids == (allocation_id,)
-
-    app.execute(AdvanceTime(1))
-    loaded.execute(AdvanceTime(1))
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
 
 def test_facility_owned_process_selection_roundtrips_in_facility_state(tmp_path):
@@ -688,52 +641,41 @@ def test_survey_provider_assignment_roundtrips_as_fleet_owned_capacity(tmp_path)
 
 
 @pytest.mark.parametrize(
-    ("domain_key", "field"),
+    ("case", "error_pattern"),
     (
-        ("storage", "infrastructure_capacity"),
-        ("logistics", "routing_constraints"),
-        ("survey", "campaigns"),
+        (("missing", "storage", "infrastructure_capacity"), "save domain section has invalid fields"),
+        (("missing", "logistics", "routing_constraints"), "save domain section has invalid fields"),
+        (("missing", "survey", "campaigns"), "save domain section has invalid fields"),
+        (("unexpected", "envelope"), "save file has invalid fields"),
+        (("unexpected", "transport_allocation"), "transport allocation has invalid fields"),
+        (("unexpected", "survey_campaign"), "survey campaign has invalid fields"),
+        (("unexpected", "construction_project"), "construction project has invalid fields"),
+        (("identity", "world_definition_id"), "save world definition mismatch"),
+        (("identity", "scenario_id"), "save scenario mismatch"),
     ),
 )
-def test_current_schema_rejects_missing_authoritative_domain_fields(
-    tmp_path, domain_key, field
-):
+def test_save_envelope_and_persisted_boundaries_reject_invalid_contracts(tmp_path, case, error_pattern):
     app = _make_nontrivial_state()
-    path = tmp_path / f"missing-{domain_key}-{field}.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    del payload["state"][domain_key][field]
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(SaveFormatError, match="save domain section has invalid fields"):
-        load_game(path, build_game_application_for_load)
-
-
-@pytest.mark.parametrize(
-    ("boundary", "error_pattern"),
-    (
-        ("envelope", "save file has invalid fields"),
-        ("transport_allocation", "transport allocation has invalid fields"),
-        ("survey_campaign", "survey campaign has invalid fields"),
-        ("construction_project", "construction project has invalid fields"),
-    ),
-)
-def test_current_save_schema_rejects_unexpected_fields_at_persisted_boundaries(
-    tmp_path, boundary, error_pattern
-):
-    app = _make_nontrivial_state()
-    path = tmp_path / f"unexpected-{boundary}.json"
+    path = tmp_path / ("schema-" + "-".join(case) + ".json")
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     payload = json.loads(path.read_text(encoding="utf-8"))
 
-    targets = {
-        "envelope": payload,
-        "transport_allocation": payload["state"]["transport"]["transport_allocations"][0],
-        "survey_campaign": payload["state"]["survey"]["campaigns"][0],
-        "construction_project": payload["state"]["projects"]["items"][0],
-    }
-    targets[boundary]["unexpected_field"] = None
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    if case[0] == "missing":
+        _kind, domain_key, field = case
+        del payload["state"][domain_key][field]
+    elif case[0] == "unexpected":
+        _kind, boundary = case
+        targets = {
+            "envelope": payload,
+            "transport_allocation": payload["state"]["transport"]["transport_allocations"][0],
+            "survey_campaign": payload["state"]["survey"]["campaigns"][0],
+            "construction_project": payload["state"]["projects"]["items"][0],
+        }
+        targets[boundary]["unexpected_field"] = None
+    else:
+        _kind, field = case
+        payload[field] = "test.mismatched.definition"
 
+    path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(SaveFormatError, match=error_pattern):
         load_game(path, build_game_application_for_load)

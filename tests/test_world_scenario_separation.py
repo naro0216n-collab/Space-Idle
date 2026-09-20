@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-import json
-
 import pytest
 
 from space_idle import build_game_application
@@ -10,10 +7,9 @@ from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.content.base_scenario import STANDARD_SCENARIO_ID, build_standard_scenario_definition
 from space_idle.content.base_spatial import BASE_WORLD_DEFINITION_ID, build_world_definition
-from space_idle.persistence import SaveFormatError, load_game, save_game
 
 
-def test_world_scenario_and_load_boundaries_keep_static_definition_runtime_state_and_identity_separate(tmp_path):
+def test_world_and_scenario_bootstrap_keep_static_definition_and_runtime_state_separate():
     graph, _environment = build_world_definition()
     assert graph.operational_node_states == {}
     assert graph.locations == {}
@@ -57,26 +53,3 @@ def test_world_scenario_and_load_boundaries_keep_static_definition_runtime_state
 
     with pytest.raises(ValueError, match="initial runtime state has already been established"):
         build_standard_scenario_definition().apply(sim)
-
-
-    app = build_game_application()
-    assert app._simulation.logistics.routing_constraints == {}
-
-    path = tmp_path / "identity.json"
-    save_game(
-        app,
-        path,
-        saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    )
-    loaded, offline = load_game(path, build_game_application_for_load)
-    assert offline is None
-    assert loaded._simulation.logistics.routing_constraints == {}
-
-    original = json.loads(path.read_text(encoding="utf-8"))
-
-    for field in ("world_definition_id", "scenario_id"):
-        payload = dict(original)
-        payload[field] = "test.mismatched.definition"
-        path.write_text(json.dumps(payload), encoding="utf-8")
-        with pytest.raises(SaveFormatError, match="mismatch"):
-            load_game(path, build_game_application_for_load)

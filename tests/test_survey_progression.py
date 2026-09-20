@@ -138,11 +138,17 @@ def test_completed_targets_leave_demand_and_capacity_reallocates_without_oversho
     assert sim.survey.knowledge_level(*second) == KnowledgeLevel.PRESENCE_PROBABILITY
 
 
-def test_campaign_completes_only_when_all_targets_reach_goal_and_retains_identity():
+def test_campaign_completes_on_unowned_remote_cell_and_retains_identity():
     app = build_game_application()
     sim = app._simulation
     key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
+    assert sim.graph.owner_of_cell(key[0]) is None
     campaign_id = _start_campaign(app, (key[0],), (key[1],))
+    candidate, blockers = sim.survey.resolve_campaign_candidate(
+        sim.survey.campaigns[campaign_id], day=sim.day
+    )
+    assert blockers == ()
+    assert candidate is not None
     app.execute(AdvanceTime(3))
     campaign = sim.survey.campaigns[campaign_id]
     assert campaign.control_state is SurveyCampaignControlState.COMPLETED
@@ -292,17 +298,6 @@ def test_pause_suspends_campaign_demand_without_releasing_provider_fleet_commitm
     assert sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH) > before
 
 
-def test_remote_survey_does_not_require_surface_location():
-    app = build_game_application()
-    sim = app._simulation
-    cell_id = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    assert sim.graph.owner_of_cell(cell_id) is None
-    campaign_id = _start_campaign(app, (cell_id,), (ids.REGOLITH,))
-    candidate, blockers = sim.survey.resolve_campaign_candidate(sim.survey.campaigns[campaign_id], day=sim.day)
-    assert blockers == ()
-    assert candidate is not None
-    app.execute(AdvanceTime(1))
-    assert sim.survey.progress(cell_id, ids.REGOLITH) > 0
 
 
 def test_campaign_update_replaces_scope_goal_and_constraints():

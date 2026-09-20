@@ -175,7 +175,7 @@ def test_recurring_supply_uses_latency_coverage_without_turning_pipeline_into_a_
     dispatch = next(row for row in plan.dispatches if row.requirement.id == requirement.id)
     assert dispatch.amount_t == pytest.approx(2.0 * service.latency_days)
 
-def test_supply_projection_exposes_transport_blockers_only_when_external_transport_is_needed():
+def test_construction_supply_constraint_exposes_transport_blocker_and_recovers_with_owned_capacity():
     app = build_game_application()
     sim = app._simulation
     sim.technology.completed.update(
@@ -195,76 +195,6 @@ def test_supply_projection_exposes_transport_blockers_only_when_external_transpo
         source_node_id=str(EARTH),
     ))
 
-    sim.advance_days(1)
-    rows = [
-        row for row in app.query(GetLogistics()).requirements
-        if row.owner_id == project_id
-    ]
-
-    assert rows
-    assert all(row.candidate_source_count == 1 for row in rows)
-    assert all(row.stocked_source_count == 1 for row in rows)
-    assert all(row.operational_source_count == 0 for row in rows)
-    assert all(row.supply_state == "transport_blocked" for row in rows)
-    assert all(any(blocker.code == "no_transport_capacity" for blocker in row.blockers) for row in rows)
-    assert all(row.physical_movement_plan_ids for row in rows)
-    for row in rows:
-        plans = [sim.transport.require_movement_plan(plan_id) for plan_id in row.physical_movement_plan_ids]
-        assert all(plan.origin_id == EARTH and plan.destination_id == LEO for plan in plans)
-
-    covered = [
-        row for row in app.query(GetLogistics()).requirements
-        if row.supply_state == "local_covered"
-    ]
-    assert covered
-    assert all(not row.blockers for row in covered)
-
-
-def test_future_high_priority_requirement_does_not_preempt_current_requirement_before_lead_time():
-    sim = build_game_application()._simulation
-    allocation_id = _owned_earth_leo_capacity(sim)
-    sim.inventory.add(EARTH, MACHINERY, 10.0)
-    current = _requirement(1.0, requirement_id="supply.current", priority=2)
-    future = _requirement(
-        1.0,
-        requirement_id="supply.future",
-        priority=5,
-        forecast_requirement_day=100,
-    )
-
-    plan = sim.logistics.plan_capacity_logistics(sim.day, (future, current))
-    planned_ids = {row.requirement.id for row in plan.dispatches}
-    assert current.id in planned_ids
-    assert future.id not in planned_ids
-
-    latency = sim.transport.derive_transport_service_plan(
-        allocation_id, sim.day
-    ).forward_latency_days
-    due_day = future.forecast_requirement_day - latency
-    due = sim.logistics.plan_capacity_logistics(due_day, (future,))
-    assert any(row.requirement.id == future.id for row in due.dispatches)
-
-
-def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_exists():
-    app = build_game_application()
-    sim = app._simulation
-    sim.technology.completed.update(
-        sim.projects.recipes[ORBITAL_LOGISTICS_NODE].prerequisite_technologies
-    )
-    project_id = app.execute(
-        PlanBuild(
-            str(LEO),
-            str(ORBITAL_LOGISTICS_NODE),
-            priority=3,
-            procurement_policy="immediate",
-        )
-    ).created_id
-    assert project_id is not None
-    app.execute(SetSupplyRoutingConstraint(
-        destination_id=str(LEO), owner_kind="project", owner_id=project_id,
-        source_node_id=str(EARTH),
-    ))
-
     requirements = tuple(
         row for row in sim.projects.supplys(sim.day)
         if str(row.owner_id) == project_id
@@ -274,12 +204,39 @@ def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_
         sim.logistics.routing_constraint_for(row).source_node_id == EARTH
         for row in requirements
     )
+
+    sim.advance_days(1)
+    blocked_rows = [
+        row for row in app.query(GetLogistics()).requirements
+        if row.owner_id == project_id
+    ]
+    assert blocked_rows
+    assert all(row.candidate_source_count == 1 for row in blocked_rows)
+    assert all(row.stocked_source_count == 1 for row in blocked_rows)
+    assert all(row.operational_source_count == 0 for row in blocked_rows)
+    assert all(row.supply_state == "transport_blocked" for row in blocked_rows)
+    assert all(
+        any(blocker.code == "no_transport_capacity" for blocker in row.blockers)
+        for row in blocked_rows
+    )
+    assert all(row.physical_movement_plan_ids for row in blocked_rows)
+    for row in blocked_rows:
+        plans = [
+            sim.transport.require_movement_plan(plan_id)
+            for plan_id in row.physical_movement_plan_ids
+        ]
+        assert all(plan.origin_id == EARTH and plan.destination_id == LEO for plan in plans)
     project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
-    assert any(blocker.code in {"logistics_source", "import_source", "import_transport_blocked"} for blocker in project.blockers)
+    assert any(
+        blocker.code in {"logistics_source", "import_source", "import_transport_blocked"}
+        for blocker in project.blockers
+    )
 
     allocation_id = _owned_earth_leo_capacity(sim)
     for row in requirements:
-        sim.inventory.add(EARTH, row.resource_id, row.amount_t)
+        current = sim.inventory.amount(EARTH, row.resource_id)
+        if current + 1e-9 < row.amount_t:
+            sim.inventory.add(EARTH, row.resource_id, row.amount_t - current)
 
     app.execute(PauseTransportAllocation(str(allocation_id)))
     sim.advance_days(1)
@@ -309,6 +266,31 @@ def test_construction_source_constraint_is_visible_and_dispatches_when_capacity_
         if row.id == str(allocation_id)
     )
     assert not allocation.paused and allocation.used.forward_t_per_day > 0.0
+
+
+def test_future_high_priority_requirement_does_not_preempt_current_requirement_before_lead_time():
+    sim = build_game_application()._simulation
+    allocation_id = _owned_earth_leo_capacity(sim)
+    sim.inventory.add(EARTH, MACHINERY, 10.0)
+    current = _requirement(1.0, requirement_id="supply.current", priority=2)
+    future = _requirement(
+        1.0,
+        requirement_id="supply.future",
+        priority=5,
+        forecast_requirement_day=100,
+    )
+
+    plan = sim.logistics.plan_capacity_logistics(sim.day, (future, current))
+    planned_ids = {row.requirement.id for row in plan.dispatches}
+    assert current.id in planned_ids
+    assert future.id not in planned_ids
+
+    latency = sim.transport.derive_transport_service_plan(
+        allocation_id, sim.day
+    ).forward_latency_days
+    due_day = future.forecast_requirement_day - latency
+    due = sim.logistics.plan_capacity_logistics(due_day, (future,))
+    assert any(row.requirement.id == future.id for row in due.dispatches)
 
 
 def test_auto_source_selection_and_hard_source_constraint_have_no_preference_fallback():

@@ -13,7 +13,6 @@ from space_idle import (
     AssignExplorationFleet,
     ReturnScientificExploration,
     SetScientificExplorationCompletionDisposition,
-    SetResearchProviderFleetQuantity,
     CreateTransportAllocation,
     GetFleet,
     GetResearch,
@@ -454,38 +453,27 @@ def test_rp_admission_blocks_only_active_science_and_resumes_after_headroom_reco
     assert state.phase.value == "complete"
 
 
-def test_scientific_exploration_and_research_providers_share_rp_pool_admission():
+def test_scientific_exploration_participates_in_shared_rp_pool_admission():
     app = build_game_application()
     sim = app._simulation
     exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
     definition = sim.scientific_exploration.definitions[exploration_id]
 
     facility_definition_id = DefinitionId("test.facility.exploration_shared_rp")
-    facility_provider_id = DefinitionId("test.research_provider.facility.exploration_shared_rp")
-    fleet_provider_id = DefinitionId("test.research_provider.fleet.exploration_shared_rp")
+    provider_id = DefinitionId("test.research_provider.facility.exploration_shared_rp")
     sim.facilities.definitions[facility_definition_id] = FacilityDef(
         facility_definition_id, "Exploration shared RP fixture"
     )
     sim.research.providers = {
-        facility_provider_id: ResearchProviderSpec(
-            facility_provider_id,
+        provider_id: ResearchProviderSpec(
+            provider_id,
             ResearchProviderSourceKind.FACILITY,
             facility_definition_id,
             tier=1,
             levels=(ResearchProviderLevelSpec(1, 4.0, 100.0, 0.0),),
-        ),
-        fleet_provider_id: ResearchProviderSpec(
-            fleet_provider_id,
-            ResearchProviderSourceKind.FLEET,
-            ids.REUSABLE_LAUNCH_VEHICLE,
-            tier=1,
-            levels=(ResearchProviderLevelSpec(1, 4.0, 0.0, 0.0),),
-        ),
+        )
     }
     sim.facilities.install(facility_definition_id, ids.EARTH)
-    app.execute(SetResearchProviderFleetQuantity(
-        str(fleet_provider_id), str(ids.EARTH), str(ids.REUSABLE_LAUNCH_VEHICLE), 1
-    ))
 
     for resource_id, amount_t in definition.consumable_resources:
         sim.inventory.add(definition.origin_id, resource_id, amount_t)
@@ -501,17 +489,15 @@ def test_scientific_exploration_and_research_providers_share_rp_pool_admission()
     assert state.phase.value == "active"
 
     capacity = sim.research.storage_capacity(day=sim.day)
-    headroom = 4.0
+    headroom = 2.0
     sim.research.stored_points = capacity - headroom
-    research = app.query(GetResearch())
+    provider = app.query(GetResearch()).providers[0]
     exploration = _row(app)
-    provider_admitted = [row.admitted_generation_points_per_day for row in research.providers]
 
-    assert len(provider_admitted) == 2
-    assert provider_admitted[0] == pytest.approx(provider_admitted[1])
+    assert provider.admitted_generation_points_per_day > 0.0
     assert exploration.rp_admitted_today > 0.0
     assert exploration.rp_admitted_today < exploration.rp_requested_today
-    assert sum(provider_admitted) + exploration.rp_admitted_today == pytest.approx(headroom)
+    assert provider.admitted_generation_points_per_day + exploration.rp_admitted_today == pytest.approx(headroom)
 
     before_awarded = state.research_points_awarded
     app.execute(AdvanceTime(1))
@@ -519,7 +505,6 @@ def test_scientific_exploration_and_research_providers_share_rp_pool_admission()
     assert state.research_points_awarded - before_awarded == pytest.approx(
         exploration.rp_admitted_today
     )
-
 
 def test_started_exploration_movement_keeps_frozen_latency_after_vehicle_definition_change():
     app = build_game_application()

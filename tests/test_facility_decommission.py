@@ -106,7 +106,7 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
     assert loaded._simulation.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(before_stock + 5.0)
 
 
-def test_decommission_storage_provider_projects_post_removal_headroom_and_settles_partial_salvage(tmp_path):
+def test_decommission_storage_provider_projects_post_removal_headroom_and_settles_partial_salvage():
     app = _build_decommission_fixture_application()
     sim = app._simulation
     facility_id = sim.facilities.install(
@@ -180,14 +180,10 @@ def test_decommission_storage_provider_projects_post_removal_headroom_and_settle
         stock_before + 4.0 * expected_fraction
     )
 
-    path = tmp_path / "partial-decommission-complete.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
-    loaded, offline = load_game(path, lambda: _build_decommission_fixture_application(for_load=True))
-    assert offline is None
-    stock_after = loaded._simulation.inventory.amount(ids.EARTH, SALVAGE_RESOURCE)
-    loaded.execute(AdvanceTime(1))
-    assert loaded._simulation.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(stock_after)
-    assert facility_id not in loaded._simulation.facilities.facilities
+    stock_after = sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE)
+    app.execute(AdvanceTime(1))
+    assert sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(stock_after)
+    assert facility_id not in sim.facilities.facilities
 
 
 def test_decommission_storage_provider_blocks_only_when_existing_stock_cannot_survive_removal():

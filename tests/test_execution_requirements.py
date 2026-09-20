@@ -23,6 +23,7 @@ from space_idle.priority import (
     PriorityLevel,
     ProvisioningPriority,
 )
+from space_idle.service_capacity import ServiceCapacityRequest, allocate_service_capacity
 from space_idle.shared import DefinitionId, EntityId, SpatialNodeId
 
 
@@ -70,7 +71,7 @@ def test_execution_bundle_settlement_uses_one_rate_and_requires_explicit_capacit
         allocate_execution_requirements([missing], {})
 
 
-def test_allocator_preserves_priority_progressive_fairness_and_registration_independence():
+def test_shared_allocators_preserve_priority_progressive_fairness_and_registration_independence():
     assert tuple(int(level) for level in PriorityLevel) == (1, 2, 3, 4, 5)
     assert DEFAULT_PRIORITY_LEVEL is PriorityLevel.NORMAL
     assert int(DEFAULT_ACTIVITY_PRIORITY) == 3
@@ -120,6 +121,43 @@ def test_allocator_preserves_priority_progressive_fairness_and_registration_inde
         r.bundle_id: r.allocated_execution for r in reverse.allocations
     }
 
+    # Root Service Capacity demand is a separate request surface, but it obeys
+    # the same Activity Priority and same-band proportional fairness contract.
+    def service_request(name: str, requested: float, priority: int = 3):
+        return ServiceCapacityRequest(
+            EntityId(f"service.{name}"),
+            NODE,
+            "test_service",
+            requested,
+            ActivityPriority(priority),
+            "test",
+            EntityId(name),
+            "work",
+        )
+
+    first = service_request("first", 6.0)
+    second = service_request("second", 3.0)
+    service_supply = {(NODE, "test_service"): 3.0}
+    forward_service = allocate_service_capacity(
+        (first, second), nominal_supply=service_supply
+    )
+    reverse_service = allocate_service_capacity(
+        (second, first), nominal_supply=service_supply
+    )
+    assert forward_service.allocated(first.id) == pytest.approx(2.0)
+    assert forward_service.allocated(second.id) == pytest.approx(1.0)
+    assert reverse_service.allocated(first.id) == pytest.approx(2.0)
+    assert reverse_service.allocated(second.id) == pytest.approx(1.0)
+
+    high_service = service_request("high", 3.0, 5)
+    low_service = service_request("low", 3.0, 1)
+    prioritized_service = allocate_service_capacity(
+        (low_service, high_service),
+        nominal_supply={(NODE, "test_service"): 4.0},
+    )
+    assert prioritized_service.allocated(high_service.id) == pytest.approx(3.0)
+    assert prioritized_service.allocated(low_service.id) == pytest.approx(1.0)
+
 
 def test_atomic_admission_requires_persistent_age_and_uses_age_then_stable_key():
     with pytest.raises(ValueError, match="wait_started_day"):
@@ -163,7 +201,7 @@ def test_common_allocator_handles_reservation_acquisition_and_shared_owner_pools
     assert pool_plan.allocated(shared_pool.id) == pytest.approx(4)
 
 
-def test_canonical_tick_shares_resource_constraint_across_maintenance_and_industry_priority():
+def test_canonical_tick_routes_domain_requirements_through_common_execution_allocation():
     from space_idle import build_game_application
     from space_idle.content import base_ids as ids
 
@@ -209,38 +247,28 @@ def test_canonical_tick_shares_resource_constraint_across_maintenance_and_indust
     )
     industry_rows = tuple(
         row for row in plan.bundles
-        if row.owner_kind == "industry_process"
-        and row.operational_node_id == ids.EARTH
-        and any(key == structural_key for key, _coefficient in row.coefficients())
+        if row.owner_kind == "industry_process" and row.operational_node_id == ids.EARTH
+    )
+    extraction_rows = tuple(
+        row for row in plan.bundles
+        if row.owner_kind == "extraction" and row.operational_node_id == ids.EARTH
     )
 
-    assert maintenance_rows and industry_rows
+    assert maintenance_rows and industry_rows and extraction_rows
     assert all(plan.fulfillment(row.id) == pytest.approx(1.0) for row in maintenance_rows)
-    assert all(plan.fulfillment(row.id) == pytest.approx(0.0) for row in industry_rows)
+    structural_industry = tuple(
+        row for row in industry_rows
+        if any(key == structural_key for key, _coefficient in row.coefficients())
+    )
+    assert structural_industry
+    assert all(plan.fulfillment(row.id) == pytest.approx(0.0) for row in structural_industry)
     assert plan.used_by_constraint[structural_key] == pytest.approx(maintenance_need)
-
-def test_real_industry_and_extraction_requirements_are_settled_by_execution_plan():
-    from space_idle import build_game_application
-    from space_idle.content import base_ids as ids
-
-    sim = build_game_application()._simulation
-    decision = sim.tick_decision_projection()
-    plan = decision.allocations.execution
-    industry = tuple(
-        bundle for bundle in plan.bundles
-        if bundle.owner_kind == "industry_process" and bundle.operational_node_id == ids.EARTH
-    )
-    extraction = tuple(
-        bundle for bundle in plan.bundles
-        if bundle.owner_kind == "extraction" and bundle.operational_node_id == ids.EARTH
-    )
-    assert industry and extraction
     assert all(
         any(key.kind == "service" and key.name.startswith("process:") for key, _ in row.coefficients())
-        for row in industry
+        for row in industry_rows
     )
     assert all(
         any(key.kind == "service" and key.name.startswith("extraction:") for key, _ in row.coefficients())
-        for row in extraction
+        for row in extraction_rows
     )
-    assert all(0.0 <= plan.fulfillment(row.id) <= 1.0 for row in industry + extraction)
+    assert all(0.0 <= plan.fulfillment(row.id) <= 1.0 for row in industry_rows + extraction_rows)
