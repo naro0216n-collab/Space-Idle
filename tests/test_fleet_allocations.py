@@ -508,7 +508,7 @@ def test_relocation_plan_is_the_execution_contract_for_eligibility_allocation_ti
         )
 
 
-def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
+def test_boundary_settlement_exposes_arrived_inventory_before_activity_allocation():
     sim = _fleet_sim(1)
     lg = sim.transport
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
@@ -551,6 +551,20 @@ def test_tick_boundary_cargo_arrival_can_fund_relocation_before_allocation():
     sim.advance_to_day(ready_day)
     assert relocation.movement_execution_id is None
     assert sim.inventory.available(ids.LEO, ids.PROPELLANT) == pytest.approx(required)
+
+    # This is a Simulation phase-order contract, not a relocation-specific
+    # regression: a resource admitted by Boundary settlement must be visible to
+    # the same physical snapshot used to allocate every activity on that day.
+    boundary_decision = sim.tick_decision_projection()
+    relocation_bundles = tuple(
+        row for row in boundary_decision.allocations.execution.bundles
+        if row.owner_kind == "fleet_relocation" and row.owner_id == relocation_id
+    )
+    assert relocation_bundles
+    assert all(
+        boundary_decision.allocations.execution.fulfillment(row.id) == pytest.approx(1.0)
+        for row in relocation_bundles
+    )
 
     for _ in range(8):
         sim.advance_days(1)
@@ -602,47 +616,6 @@ def test_resource_support_uses_definition_capability_instead_of_magic_refueling_
 
     assert snapshot.available.forward_t_per_day > 0
     assert not any("vehicle_refueling" in value for value in snapshot.limiting_factors)
-
-
-def test_service_plan_blocker_zeroes_available_capacity_consistently_with_execution():
-    sim = _fleet_sim(1)
-    lg = sim.transport
-    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
-    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
-    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
-
-    lg.spaceflight_movement_rules = tuple(
-        replace(
-            row,
-            origin_requirements=SiteRequirements(
-                row.origin_requirements.environment,
-                (CapabilityRequirement("research_lab", CapabilityRequirementState.ACTIVE),),
-            ),
-        )
-        if row.operation_type == "spaceflight"
-        else row
-        for row in lg.spaceflight_movement_rules
-    )
-    lg.invalidate_movement_plans()
-    allocation_id = _create_transport_for_units(
-        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 1,
-        day=sim.day,
-    )
-
-    plan = lg.derive_transport_service_plan(allocation_id, sim.day)
-    snapshot = lg.transport_capacity_snapshot(allocation_id, day=sim.day)
-
-    assert plan.nominal_per_unit.forward_t_per_day > 0
-    assert lg.allocation_required_units(allocation_id, sim.day) == 1
-    assert any("research_lab" in blocker for blocker in plan.blockers)
-    assert snapshot.nominal.forward_t_per_day > 0
-    assert snapshot.available.forward_t_per_day == 0
-    assert snapshot.available.reverse_t_per_day == 0
-    constrained = sim.logistics.current_transport_capacity_snapshot(
-        allocation_id, day=sim.day
-    )
-    assert constrained.available.forward_t_per_day == 0
 
 
 def test_multileg_operation_support_is_checked_at_actual_leg_endpoint():
@@ -802,7 +775,7 @@ def test_fleet_query_exposes_and_scopes_transitional_state():
     assert not lg.fleet_releases
 
 
-def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_utilization():
+def test_available_transport_capacity_reflects_execution_constraints_without_changing_nominal_capacity():
     sim = _fleet_sim(1)
     lg = sim.transport
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
@@ -891,3 +864,40 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
         (loc, rid): amount
         for loc, rid, amount in full_snapshot.operational_supply
     } == pytest.approx(forward_full)
+
+    # A structurally unavailable movement service is another instance of the
+    # same capacity contract: physical/nominal capacity remains derivable while
+    # executable capacity is zeroed by the current operational constraint.
+    blocked_sim = _fleet_sim(1)
+    blocked_transport = blocked_sim.transport
+    blocked_sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    blocked_sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
+    blocked_sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
+    blocked_sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
+    blocked_transport.spaceflight_movement_rules = tuple(
+        replace(
+            row,
+            origin_requirements=SiteRequirements(
+                row.origin_requirements.environment,
+                (CapabilityRequirement("research_lab", CapabilityRequirementState.ACTIVE),),
+            ),
+        )
+        if row.operation_type == "spaceflight"
+        else row
+        for row in blocked_transport.spaceflight_movement_rules
+    )
+    blocked_transport.invalidate_movement_plans()
+    blocked_allocation_id = _create_transport_for_units(
+        blocked_transport, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 1,
+        day=blocked_sim.day,
+    )
+    blocked_plan = blocked_transport.derive_transport_service_plan(
+        blocked_allocation_id, blocked_sim.day
+    )
+    blocked_snapshot = blocked_sim.logistics.current_transport_capacity_snapshot(
+        blocked_allocation_id, day=blocked_sim.day
+    )
+    assert blocked_plan.nominal_per_unit.forward_t_per_day > 0
+    assert any("research_lab" in blocker for blocker in blocked_plan.blockers)
+    assert blocked_snapshot.nominal.forward_t_per_day > 0
+    assert blocked_snapshot.available == DirectionalCapacity()

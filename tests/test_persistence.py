@@ -504,10 +504,42 @@ def test_load_rejects_cross_domain_runtime_invariant_violation(tmp_path):
         load_game(path, build_game_application_for_load)
 
 
-def test_research_authoritative_state_roundtrips_without_quantity_duplication(tmp_path):
+def _roundtrip_fleet_backed_assignment(
+    tmp_path,
+    *,
+    name: str,
+    app,
+    domain_key: str,
+    assignment,
+    load_factory,
+):
+    sim = app._simulation
+    commitment = sim.transport.fleet_commitment_snapshot(assignment.fleet_commitment_ref)
+    assert commitment is not None and commitment.quantity == 1
+
+    path = tmp_path / f"{name}-fleet-backed-provider.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    saved_assignment = raw["state"][domain_key]["provider_assignments"][0]
+    assert saved_assignment["fleet_commitment_ref"] == str(assignment.fleet_commitment_ref)
+    assert "quantity" not in saved_assignment
+
+    loaded, offline = load_game(path, load_factory)
+    assert offline is None
+    loaded_sim = loaded._simulation
+    loaded_domain = getattr(loaded_sim, domain_key)
+    loaded_assignment = next(iter(loaded_domain.provider_assignments.values()))
+    loaded_commitment = loaded_sim.transport.fleet_commitment_snapshot(
+        loaded_assignment.fleet_commitment_ref
+    )
+    assert loaded_commitment is not None and loaded_commitment.quantity == 1
+    return raw, loaded, loaded_assignment, loaded_commitment
+
+
+def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_fleet_commitment(tmp_path):
     provider_id = DefinitionId("test.research_provider.persistence_fleet")
 
-    def factory(*, for_load: bool):
+    def research_factory(*, for_load: bool):
         app = build_game_application_for_load() if for_load else build_game_application()
         app._simulation.research.providers[provider_id] = ResearchProviderSpec(
             provider_id,
@@ -518,76 +550,62 @@ def test_research_authoritative_state_roundtrips_without_quantity_duplication(tm
         )
         return app
 
-    app = factory(for_load=False)
-    sim = app._simulation
+    research_app = research_factory(for_load=False)
+    research_sim = research_app._simulation
     research_id = ids.TECH_ORBITAL_OPERATIONS
-    sim.research.active[research_id] = ResearchState(
+    research_sim.research.active[research_id] = ResearchState(
         research_id,
         "prototype",
         stage_progress=0.0,
-        stage_started_day=sim.day,
+        stage_started_day=research_sim.day,
     )
-    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
-    execution_context = sim.research.active[research_id].execution_context
+    research_app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
+    execution_context = research_sim.research.active[research_id].execution_context
     assert execution_context is not None
 
-    result = app.execute(SetResearchProviderFleetQuantity(
+    result = research_app.execute(SetResearchProviderFleetQuantity(
         str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1
     ))
-    assignment_id = result.created_id
-    assert assignment_id is not None
-    app.execute(SetResearchProviderAssignmentPriority(assignment_id, 4))
-    assignment = next(iter(sim.research.provider_assignments.values()))
-    before_commitment = sim.transport.fleet_commitment_snapshot(
-        assignment.fleet_commitment_ref
+    research_assignment_id = result.created_id
+    assert research_assignment_id is not None
+    research_app.execute(SetResearchProviderAssignmentPriority(research_assignment_id, 4))
+    research_assignment = next(iter(research_sim.research.provider_assignments.values()))
+    research_raw, loaded_research, loaded_research_assignment, loaded_research_commitment = (
+        _roundtrip_fleet_backed_assignment(
+            tmp_path,
+            name="research",
+            app=research_app,
+            domain_key="research",
+            assignment=research_assignment,
+            load_factory=lambda: research_factory(for_load=True),
+        )
     )
-    assert before_commitment is not None and before_commitment.quantity == 1
-
-    path = tmp_path / "research-authoritative-state.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    saved_assignment = raw["state"]["research"]["provider_assignments"][0]
-    assert saved_assignment["fleet_commitment_ref"] == str(assignment.fleet_commitment_ref)
-    assert "quantity" not in saved_assignment
-    assert saved_assignment["vehicle_definition_id"] == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
-
-    loaded, offline = load_game(path, lambda: factory(for_load=True))
-    assert offline is None
-    loaded_sim = loaded._simulation
-    assert loaded_sim.research.active[research_id].execution_context == execution_context
-    assert capture_state(loaded_sim)["research"] == capture_state(sim)["research"]
-    assert loaded.query(GetResearch()) == app.query(GetResearch())
-
-    loaded_assignment = next(iter(loaded_sim.research.provider_assignments.values()))
-    assert str(loaded_assignment.id) == assignment_id
-    assert loaded_assignment.provider_definition_id == provider_id
-    assert loaded_assignment.priority == 4
-    loaded_commitment = loaded_sim.transport.fleet_commitment_snapshot(
-        loaded_assignment.fleet_commitment_ref
+    saved_research_assignment = research_raw["state"]["research"]["provider_assignments"][0]
+    assert saved_research_assignment["vehicle_definition_id"] == str(
+        ids.REUSABLE_ORBITAL_CARGO_TUG
     )
-    assert loaded_commitment is not None
-    assert loaded_commitment.quantity == 1
-    assert loaded_commitment.owner_activity_ref.activity_id == loaded_assignment.id
+    loaded_research_sim = loaded_research._simulation
+    assert loaded_research_sim.research.active[research_id].execution_context == execution_context
+    assert capture_state(loaded_research_sim)["research"] == capture_state(research_sim)["research"]
+    assert loaded_research.query(GetResearch()) == research_app.query(GetResearch())
+    assert str(loaded_research_assignment.id) == research_assignment_id
+    assert loaded_research_assignment.provider_definition_id == provider_id
+    assert loaded_research_assignment.priority == 4
+    assert loaded_research_commitment.owner_activity_ref.activity_id == loaded_research_assignment.id
 
-    app.execute(AdvanceTime(1))
-    loaded.execute(AdvanceTime(1))
-    assert capture_state(loaded_sim) == capture_state(sim)
-
-
-def test_survey_provider_assignment_roundtrips_as_fleet_owned_capacity(tmp_path):
-    app = build_game_application()
-    sim = app._simulation
-    sim.transport.add_fleet_units(
-        ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=sim.day
+    survey_app = build_game_application()
+    survey_sim = survey_app._simulation
+    survey_sim.transport.add_fleet_units(
+        ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=survey_sim.day
     )
-    assignment_id = app.execute(SetSurveyProviderFleetQuantity(
+    survey_assignment_id = survey_app.execute(SetSurveyProviderFleetQuantity(
         str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT),
         str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1
     )).created_id
-    assert assignment_id is not None
+    assert survey_assignment_id is not None
     cells = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE)
     resources = (ids.REGOLITH, ids.WATER)
-    campaign_id = app.execute(StartSurvey(
+    campaign_id = survey_app.execute(StartSurvey(
         target_cell_ids=tuple(map(str, cells)),
         resource_ids=tuple(map(str, resources)),
         goal_knowledge_level=1,
@@ -598,16 +616,18 @@ def test_survey_provider_assignment_roundtrips_as_fleet_owned_capacity(tmp_path)
     )).created_id
     assert campaign_id is not None
 
-    assignment = next(iter(sim.survey.provider_assignments.values()))
-    commitment = sim.transport.fleet_commitment_snapshot(assignment.fleet_commitment_ref)
-    assert commitment is not None and commitment.quantity == 1
-    path = tmp_path / "survey-provider-assignment.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    saved_assignment = raw["state"]["survey"]["provider_assignments"][0]
-    assert saved_assignment["fleet_commitment_ref"] == str(assignment.fleet_commitment_ref)
-    assert "quantity" not in saved_assignment
-    saved_campaign = raw["state"]["survey"]["campaigns"][0]
+    survey_assignment = next(iter(survey_sim.survey.provider_assignments.values()))
+    survey_raw, loaded_survey, loaded_survey_assignment, loaded_survey_commitment = (
+        _roundtrip_fleet_backed_assignment(
+            tmp_path,
+            name="survey",
+            app=survey_app,
+            domain_key="survey",
+            assignment=survey_assignment,
+            load_factory=build_game_application_for_load,
+        )
+    )
+    saved_campaign = survey_raw["state"]["survey"]["campaigns"][0]
     assert saved_campaign["id"] == campaign_id
     assert saved_campaign["target_cell_ids"] == sorted(map(str, cells))
     assert saved_campaign["resource_ids"] == sorted(map(str, resources))
@@ -622,22 +642,23 @@ def test_survey_provider_assignment_roundtrips_as_fleet_owned_capacity(tmp_path)
     assert "resolved_observation_mode_id" not in saved_campaign
     assert "unfinished_targets" not in saved_campaign
 
-    loaded, offline = load_game(path, build_game_application_for_load)
-    assert offline is None
-    loaded_sim = loaded._simulation
-    assert capture_state(loaded_sim)["survey"] == capture_state(sim)["survey"]
-    loaded_assignment = next(iter(loaded_sim.survey.provider_assignments.values()))
-    loaded_commitment = loaded_sim.transport.fleet_commitment_snapshot(
-        loaded_assignment.fleet_commitment_ref
+    loaded_survey_sim = loaded_survey._simulation
+    assert capture_state(loaded_survey_sim)["survey"] == capture_state(survey_sim)["survey"]
+    assert loaded_survey_assignment.id == survey_assignment.id
+    assert loaded_survey_commitment.owner_activity_ref.activity_type == "survey_provider_assignment"
+    assert loaded_survey.query(GetSurveys(str(ids.LUNAR_ORBIT))) == survey_app.query(
+        GetSurveys(str(ids.LUNAR_ORBIT))
     )
-    assert loaded_commitment is not None
-    assert loaded_commitment.quantity == 1
-    assert loaded_commitment.owner_activity_ref.activity_type == "survey_provider_assignment"
-    assert loaded.query(GetSurveys(str(ids.LUNAR_ORBIT))) == app.query(GetSurveys(str(ids.LUNAR_ORBIT)))
 
-    app.execute(AdvanceTime(1))
-    loaded.execute(AdvanceTime(1))
-    assert capture_state(loaded_sim) == capture_state(sim)
+    # Future behavior must remain equivalent after restoring either domain-owned
+    # assignment while the physical Fleet quantity continues to be owned only by
+    # the Transport Fleet Commitment.
+    research_app.execute(AdvanceTime(1))
+    loaded_research.execute(AdvanceTime(1))
+    assert capture_state(loaded_research_sim) == capture_state(research_sim)
+    survey_app.execute(AdvanceTime(1))
+    loaded_survey.execute(AdvanceTime(1))
+    assert capture_state(loaded_survey_sim) == capture_state(survey_sim)
 
 
 @pytest.mark.parametrize(
