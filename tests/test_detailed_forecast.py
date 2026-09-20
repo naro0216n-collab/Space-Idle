@@ -28,11 +28,11 @@ def test_detailed_forecast_advances_isolated_snapshot_and_projects_future_invent
     assert view.inventory
     assert sim.day == base_day
     assert sim.inventory.stock == base_stock
-    assert all(row.steady_state in {"stable", "accumulating", "depleting"} for row in view.inventory)
+    assert all(
+        row.steady_state in {"stable", "accumulating", "depleting"}
+        for row in view.inventory
+    )
 
-
-def test_detailed_forecast_validates_semantic_horizon_and_application_period_filter():
-    app = build_game_application()
     with pytest.raises(ApplicationError, match="unsupported detailed forecast horizon"):
         app.query(GetDetailedForecast(horizon="UNKNOWN", period_days=1))
     with pytest.raises(ApplicationError, match="period_days"):

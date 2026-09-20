@@ -106,7 +106,7 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
     assert loaded._simulation.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(before_stock + 5.0)
 
 
-def test_decommission_storage_provider_projects_post_removal_headroom_and_settles_partial_salvage():
+def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settles_partial_salvage():
     app = _build_decommission_fixture_application()
     sim = app._simulation
     facility_id = sim.facilities.install(
@@ -116,33 +116,64 @@ def test_decommission_storage_provider_projects_post_removal_headroom_and_settle
     )
     sim.refresh_storage()
 
-    # Decision support must exclude the target Facility's own 10 t capacity.
     pool = sim.inventory.storage_pool_for_resource(SALVAGE_RESOURCE)
     physical_with_target = sim.inventory.physical_storage_capacity_t[(ids.EARTH, pool)]
     remaining_physical = physical_with_target - 10.0
     filler = ids.CONSTRUCTION_EQUIPMENT
     original_filler = sim.inventory.amount(ids.EARTH, filler)
     occupied = sim.inventory.stored_in_pool(ids.EARTH, pool)
+
+    # Existing Player-owned stock that cannot survive removal is the hard blocker.
+    sim.inventory.add(
+        ids.EARTH, filler, remaining_physical + 1.0 - occupied
+    )
+    failures = sim.projects.decommission_plan_failures(facility_id)
+    assert [row.code for row in failures] == ["storage_stock"]
+    blocked_row = next(
+        row for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
+        if row.id == str(facility_id)
+    )
+    assert any(blocker.code == "storage_stock" for blocker in blocked_row.decommission_blockers)
+    with pytest.raises(ApplicationError, match="storage_stock"):
+        app.execute(
+            PlanFacilityDecommission(
+                str(facility_id), priority=5, procurement_policy="extended_wait"
+            )
+        )
+    assert sim.facilities.facilities[facility_id].lifecycle is FacilityLifecycle.NORMAL
+
+    # Salvage potential itself is soft: projected headroom reduces the recoverable
+    # fraction rather than preventing the decommission from being planned.
+    sim.inventory.stock[(ids.EARTH, filler)] = original_filler
+    occupied = sim.inventory.stored_in_pool(ids.EARTH, pool)
     sim.inventory.add(ids.EARTH, filler, remaining_physical - 2.0 - occupied)
     facility_row = next(
         row for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
         if row.id == str(facility_id)
     )
-    assert dict(facility_row.expected_salvage) == {str(SALVAGE_RESOURCE): pytest.approx(4.0)}
+    assert dict(facility_row.expected_salvage) == {
+        str(SALVAGE_RESOURCE): pytest.approx(4.0)
+    }
     assert facility_row.projected_salvage_fraction == pytest.approx(0.5)
-    assert dict(facility_row.projected_salvage) == {str(SALVAGE_RESOURCE): pytest.approx(2.0)}
+    assert dict(facility_row.projected_salvage) == {
+        str(SALVAGE_RESOURCE): pytest.approx(2.0)
+    }
     sim.inventory.stock[(ids.EARTH, filler)] = original_filler
 
     project_id = app.execute(
-        PlanFacilityDecommission(str(facility_id), priority=5, procurement_policy="extended_wait")
+        PlanFacilityDecommission(
+            str(facility_id), priority=5, procurement_policy="extended_wait"
+        )
     ).created_id
     assert project_id is not None
 
-    # Drive the real lifecycle until work is finished but salvage has not yet settled.
     for _ in range(20):
         project = sim.projects.projects[EntityId(project_id)]
         recipe = sim.projects.decommission_recipes[STORAGE_DECOMMISSION_TARGET]
-        if project.irreversible_started and project.construction_done + 1e-9 >= recipe.construction_work:
+        if (
+            project.irreversible_started
+            and project.construction_done + 1e-9 >= recipe.construction_work
+        ):
             break
         app.execute(AdvanceTime(1))
     else:
@@ -184,36 +215,6 @@ def test_decommission_storage_provider_projects_post_removal_headroom_and_settle
     app.execute(AdvanceTime(1))
     assert sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(stock_after)
     assert facility_id not in sim.facilities.facilities
-
-
-def test_decommission_storage_provider_blocks_only_when_existing_stock_cannot_survive_removal():
-    app = _build_decommission_fixture_application()
-    sim = app._simulation
-    facility_id = sim.facilities.install(STORAGE_DECOMMISSION_TARGET, ids.EARTH)
-    sim.refresh_storage()
-
-    pool = "default"
-    physical_with_target = sim.inventory.physical_storage_capacity_t[(ids.EARTH, pool)]
-    remaining_physical = physical_with_target - 10.0
-    occupied = sim.inventory.stored_in_pool(ids.EARTH, pool)
-    sim.inventory.add(
-        ids.EARTH,
-        ids.CONSTRUCTION_EQUIPMENT,
-        remaining_physical + 1.0 - occupied,
-    )
-
-    failures = sim.projects.decommission_plan_failures(facility_id)
-    assert [row.code for row in failures] == ["storage_stock"]
-    facility_row = next(
-        row for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
-        if row.id == str(facility_id)
-    )
-    assert any(blocker.code == "storage_stock" for blocker in facility_row.decommission_blockers)
-    with pytest.raises(ApplicationError, match="storage_stock"):
-        app.execute(
-            PlanFacilityDecommission(str(facility_id), priority=5, procurement_policy="extended_wait")
-        )
-    assert sim.facilities.facilities[facility_id].lifecycle is FacilityLifecycle.NORMAL
 
 
 class _ToggleLifecycleBlocker:

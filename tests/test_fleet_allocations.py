@@ -752,28 +752,6 @@ def test_relocation_keeps_units_exclusive_until_arrival():
     ).total_units == destination_before + 2
 
 
-def test_releasing_uses_remaining_cycle_time_not_a_new_full_cycle():
-    sim = _fleet_sim(2)
-    lg = sim.transport
-    allocation_id = _create_transport_for_units(
-        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 2, day=0,
-    )
-    allocation = lg.transport_allocations[allocation_id]
-    cycle_days = int(math.ceil(lg.derive_transport_service_plan(allocation_id, 0).cycle_days))
-    allocation.last_operated_day = 2
-    _update_transport_units(lg, allocation_id, 1, day=3)
-    release = next(iter(lg.fleet_releases.values()))
-    assert release.release_day == 2 + cycle_days
-
-    # If the last operated cycle has already completed, reducing the target
-    # frees the unit immediately instead of starting an artificial new cycle.
-    lg.advance_fleet_state(release.release_day)
-    allocation.last_operated_day = 2
-    _update_transport_units(lg, allocation_id, 0, day=release.release_day)
-    assert not lg.fleet_releases
-    assert lg.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 2
-
-
 def test_fleet_query_exposes_and_scopes_transitional_state():
     app = build_game_application()
     sim = app._simulation
@@ -788,9 +766,13 @@ def test_fleet_query_exposes_and_scopes_transitional_state():
     allocation_id = _create_transport_for_units(
         lg, vehicle_id, ids.LEO, ids.LUNAR_ORBIT, 2, day=0
     )
-    lg.transport_allocations[allocation_id].last_operated_day = 2
+    allocation = lg.transport_allocations[allocation_id]
+    cycle_days = int(math.ceil(lg.derive_transport_service_plan(allocation_id, 0).cycle_days))
+    allocation.last_operated_day = 2
     sim.day = 3
     _update_transport_units(lg, allocation_id, 1, day=sim.day)
+    pending_release = next(iter(lg.fleet_releases.values()))
+    assert pending_release.release_day == 2 + cycle_days
     relocation_id = lg.relocate_fleet(
         vehicle_id, 1, ids.LEO, ids.LUNAR_ORBIT, day=sim.day
     )
@@ -814,34 +796,10 @@ def test_fleet_query_exposes_and_scopes_transitional_state():
     assert earth.relocations == ()
     assert earth.releases == ()
 
-
-def test_bidirectional_service_resource_use_counts_empty_return_not_loaded_return():
-    sim = _fleet_sim(1)
-    lg = sim.transport
-    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
-    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
-    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
-    allocation_id = _create_transport_for_units(
-        lg, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 1, day=0,
-    )
-    plan = lg.derive_transport_service_plan(allocation_id, 0)
-    nominal = lg.transport_capacity_snapshot(allocation_id, day=0).nominal
-    used = DirectionalCapacity(nominal.forward_t_per_day, 0.0)
-    snapshot = lg.transport_capacity_snapshot(allocation_id, day=0, used=used)
-
-    empty = {(loc, rid): amount for loc, rid, amount in plan.resource_t_per_empty_cycle_day}
-    forward_increment = {
-        (loc, rid): amount
-        for loc, rid, amount in plan.resource_t_per_forward_payload_increment_day
-    }
-    expected = {
-        key: empty.get(key, 0.0) + forward_increment.get(key, 0.0)
-        for key in set(empty) | set(forward_increment)
-    }
-    actual = {(loc, rid): amount for loc, rid, amount in snapshot.operational_supply}
-    assert actual == pytest.approx(expected)
-    assert snapshot.utilization == pytest.approx(1.0)
+    lg.advance_fleet_state(pending_release.release_day)
+    allocation.last_operated_day = 2
+    _update_transport_units(lg, allocation_id, 0, day=pending_release.release_day)
+    assert not lg.fleet_releases
 
 
 def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_utilization():
@@ -922,3 +880,14 @@ def test_resource_limited_available_capacity_uses_shared_allocation_and_nominal_
     assert actual == pytest.approx(
         {key: amount / 2.0 for key, amount in forward_full.items()}
     )
+
+    full_snapshot = lg.transport_capacity_snapshot(
+        allocation_id,
+        day=0,
+        used=DirectionalCapacity(available.nominal.forward_t_per_day, 0.0),
+    )
+    assert full_snapshot.utilization == pytest.approx(1.0)
+    assert {
+        (loc, rid): amount
+        for loc, rid, amount in full_snapshot.operational_supply
+    } == pytest.approx(forward_full)

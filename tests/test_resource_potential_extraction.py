@@ -41,13 +41,25 @@ def _resource_snapshot(sim, resource_id):
     )
 
 
-def test_extraction_does_not_consume_static_resource_potential():
+def test_extraction_physical_potential_is_static_and_independent_of_knowledge_or_unlocks():
     app = build_game_application()
     sim = app._simulation
+    key = (ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE)
     before_potential = {
         cell_id: dict(cell.resource_potential_by_resource)
         for cell_id, cell in sim.graph.surface_cells.items()
     }
+
+    sim.survey.knowledge_progress[key] = 0.0
+    unknown = _resource_snapshot(sim, ids.METAL_ORE)
+    sim.survey.initialize_known(*key)
+    known = _resource_snapshot(sim, ids.METAL_ORE)
+    assert known == unknown
+
+    sim.technology.unlock(ids.TECH_REGOLITH_EXCAVATION)
+    after_research = _resource_snapshot(sim, ids.METAL_ORE)
+    assert after_research == known
+
     decision = sim.tick_decision_projection()
     power = decision.allocations.power_by_location[ids.EARTH]
     before_stock = sim.inventory.amount(ids.EARTH, ids.AGGREGATE)
@@ -55,15 +67,14 @@ def test_extraction_does_not_consume_static_resource_potential():
     assert aggregate.output_t_per_day > 0.0
 
     sim.extraction.advance_day(
-        ids.EARTH, sim.facilities, sim.inventory, power, sim.day, decision.allocations.execution
+        ids.EARTH, sim.facilities, sim.inventory, power, sim.day,
+        decision.allocations.execution,
     )
-
     assert sim.inventory.amount(ids.EARTH, ids.AGGREGATE) > before_stock
     assert {
         cell_id: dict(cell.resource_potential_by_resource)
         for cell_id, cell in sim.graph.surface_cells.items()
     } == before_potential
-
 
 def test_soft_saturation_response_is_monotonic_diminishing_and_opportunity_sensitive():
     opportunity = 10.0
@@ -141,22 +152,6 @@ def test_extraction_throughput_derives_from_installed_capacity_and_operational_f
     )
     assert expanded_a.output_t_per_day > one.output_t_per_day
     assert expanded_a == expanded_b
-
-def test_survey_knowledge_and_research_unlocks_do_not_change_physical_throughput():
-    app = build_game_application()
-    sim = app._simulation
-    key = (ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE)
-
-    sim.survey.knowledge_progress[key] = 0.0
-    unknown = _resource_snapshot(sim, ids.METAL_ORE)
-    sim.survey.initialize_known(*key)
-    known = _resource_snapshot(sim, ids.METAL_ORE)
-    assert known == unknown
-
-    sim.technology.unlock(ids.TECH_REGOLITH_EXCAVATION)
-    after_research = _resource_snapshot(sim, ids.METAL_ORE)
-    assert after_research == known
-
 
 def test_application_queries_expose_surface_knowledge_and_extraction_decision_state():
     app = build_game_application()

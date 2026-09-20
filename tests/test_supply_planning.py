@@ -293,7 +293,7 @@ def test_future_high_priority_requirement_does_not_preempt_current_requirement_b
     assert any(row.requirement.id == future.id for row in due.dispatches)
 
 
-def test_auto_source_selection_and_hard_source_constraint_have_no_preference_fallback():
+def test_auto_source_selection_is_deterministic_and_routing_constraints_are_hard_limits():
     auto = build_game_application()._simulation
     auto.transport.transport_allocations.clear()
     _owned_multistage_capacity(auto)
@@ -330,38 +330,32 @@ def test_auto_source_selection_and_hard_source_constraint_have_no_preference_fal
 
     constrained = build_game_application()._simulation
     constrained.transport.transport_allocations.clear()
-    if not any(
-        facility.definition_id == ORBITAL_LOGISTICS_NODE
-        and facility.operational_node_id == LEO
-        for facility in constrained.facilities.facilities.values()
-    ):
-        constrained.facilities.install(ORBITAL_LOGISTICS_NODE, LEO)
-    if not any(
-        facility.definition_id == ORBITAL_LOGISTICS_NODE
-        and facility.operational_node_id == LUNAR_ORBIT
-        for facility in constrained.facilities.facilities.values()
-    ):
-        constrained.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
-    constrained.refresh_storage()
-    constrained.inventory.add(LEO, PROPELLANT, 10.0)
-    constrained.transport.create_transport_allocation(
-        REUSABLE_ORBITAL_CARGO_TUG, LEO, LUNAR_ORBIT,
-        target_capacity=_capacity_for_units(
-            constrained, REUSABLE_ORBITAL_CARGO_TUG, LEO, LUNAR_ORBIT, 1
-        ),
-        day=constrained.day,
-    )
-    constrained.inventory.add(EARTH, MACHINERY, 1.0)
-    constrained.inventory.add(LEO, MACHINERY, 1.0)
+    launch, tug = _owned_multistage_capacity(constrained)
+    constrained.inventory.add(EARTH, MACHINERY, 2.0)
+    constrained.inventory.add(LEO, MACHINERY, 2.0)
     hard = _requirement(
-        1.0, requirement_id="supply.hard-source-no-fallback",
+        1.0, requirement_id="supply.hard-route",
         destination=LUNAR_ORBIT, resource=MACHINERY,
     )
+    scope = SupplyRoutingConstraintScope(
+        destination_id=LUNAR_ORBIT, resource_id=MACHINERY
+    )
     constrained.logistics.set_supply_routing_constraint(
-        SupplyRoutingConstraintScope(destination_id=LUNAR_ORBIT, resource_id=MACHINERY),
+        scope,
         source_node_id=EARTH,
+        required_via_node_ids=(LEO,),
+        required_transport_allocation_ids=(launch, tug),
     )
 
+    initial_path = constrained.logistics.supply_service_path(hard, EARTH, constrained.day)
+    assert len(initial_path) == 2
+    assert initial_path[0].destination_id == LEO
+    assert {edge.allocation_id for edge in initial_path} == {launch, tug}
+    hard_options = constrained.logistics.supply_planning_options(hard, constrained.day)
+    assert hard_options.candidate_source_ids == (EARTH,)
+    assert hard_options.operational_source_ids == (EARTH,)
+
+    constrained.transport.update_transport_allocation(tug, paused=True, day=constrained.day)
     blocked = constrained.logistics.supply_planning_options(hard, constrained.day)
     assert blocked.candidate_source_ids == (EARTH,)
     assert not blocked.operational_source_ids
@@ -369,6 +363,13 @@ def test_auto_source_selection_and_hard_source_constraint_have_no_preference_fal
     assert not constrained.logistics.plan_capacity_logistics(
         constrained.day, (hard,)
     ).dispatches
+
+    constrained.transport.update_transport_allocation(tug, paused=False, day=constrained.day)
+    restored = constrained.logistics.supply_planning_options(hard, constrained.day)
+    assert restored.operational_source_ids == (EARTH,)
+    dispatch = constrained.logistics.plan_capacity_logistics(constrained.day, (hard,)).dispatches[0]
+    assert dispatch.source_id == EARTH
+    assert tuple(edge.key for edge in dispatch.path) == tuple(edge.key for edge in initial_path)
 
 
 def test_multistage_cargo_lifecycle_freezes_service_conditions_and_preserves_ownership_until_final_arrival():
@@ -632,44 +633,6 @@ def test_arrival_waiting_exposes_admission_blocker_and_backpressures_transport_u
         baseline.available.forward_t_per_day
     )
     assert "arrival_backpressure" not in restored.limiting_factors
-
-
-def test_routing_via_and_transport_allocation_constraints_are_hard_limits():
-    sim = build_game_application()._simulation
-    sim.transport.transport_allocations.clear()
-    launch, tug = _owned_multistage_capacity(sim)
-    sim.inventory.add(EARTH, MACHINERY, 2.0)
-    requirement = _requirement(
-        1.0, requirement_id="supply.hard-route",
-        destination=LUNAR_ORBIT, resource=MACHINERY,
-    )
-    scope = SupplyRoutingConstraintScope(
-        destination_id=LUNAR_ORBIT, resource_id=MACHINERY
-    )
-    sim.logistics.set_supply_routing_constraint(
-        scope, source_node_id=EARTH, required_via_node_ids=(LEO,),
-        required_transport_allocation_ids=(launch, tug),
-    )
-
-    initial_path = sim.logistics.supply_service_path(requirement, EARTH, sim.day)
-    assert len(initial_path) == 2
-    assert initial_path[0].destination_id == LEO
-    assert {edge.allocation_id for edge in initial_path} == {launch, tug}
-    options = sim.logistics.supply_planning_options(requirement, sim.day)
-    assert options.operational_source_ids == (EARTH,)
-
-    sim.transport.update_transport_allocation(tug, paused=True, day=sim.day)
-    blocked = sim.logistics.supply_planning_options(requirement, sim.day)
-    assert not blocked.operational_source_ids
-    assert "routing_constraint:path_unavailable" in blocked.blockers
-    assert not sim.logistics.plan_capacity_logistics(sim.day, (requirement,)).dispatches
-
-    sim.transport.update_transport_allocation(tug, paused=False, day=sim.day)
-    restored = sim.logistics.supply_planning_options(requirement, sim.day)
-    assert restored.operational_source_ids == (EARTH,)
-    dispatch = sim.logistics.plan_capacity_logistics(sim.day, (requirement,)).dispatches[0]
-    assert dispatch.source_id == EARTH
-    assert tuple(edge.key for edge in dispatch.path) == tuple(edge.key for edge in initial_path)
 
 
 def test_supply_dispatch_requires_player_owned_transport_capacity_without_spending_market_funds():

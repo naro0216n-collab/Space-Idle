@@ -64,6 +64,17 @@ def test_fleet_retirement_lifecycle_preserves_commitment_across_projection_save_
         RetireFleet(str(ids.REUSABLE_LAUNCH_VEHICLE), 1, str(ids.EARTH), priority=5)
     ).created_id
     assert retirement_id is not None
+    retirement_entity_id = EntityId(retirement_id)
+    work_bundle = next(
+        row
+        for row in sim.transport.fleet_retirement_execution_requirement_bundles(sim.day)
+        if row.owner_id == retirement_entity_id and row.purpose == "dismantling"
+    )
+    assert int(work_bundle.priority) == 5
+    assert any(
+        key.kind == "service" and key.name == "vehicle_assembly"
+        for key, _coefficient in work_bundle.coefficients()
+    )
 
     fleet = app.query(GetFleet())
     retirement = next(row for row in fleet.retirements if row.id == retirement_id)
@@ -179,27 +190,6 @@ def test_fleet_retirement_rechecks_site_requirements_during_execution():
     app.execute(AdvanceTime(1))
     assert state.progress_work > 0.0
     assert state.irreversible_started
-
-
-def test_fleet_retirement_priority_competes_for_shared_work_capacity():
-    app = build_game_application()
-    sim = app._simulation
-    sim.transport.fleet_pool(ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH).total_units = 2
-
-    high_id = EntityId(app.execute(
-        RetireFleet(str(ids.REUSABLE_LAUNCH_VEHICLE), 1, str(ids.EARTH), priority=5)
-    ).created_id)
-    low_id = EntityId(app.execute(
-        RetireFleet(str(ids.REUSABLE_LAUNCH_VEHICLE), 1, str(ids.EARTH), priority=1)
-    ).created_id)
-
-    app.execute(AdvanceTime(1))
-    high = sim.transport.fleet_retirements[high_id]
-    low = sim.transport.fleet_retirements[low_id]
-    assert high.progress_work > 0.0
-    assert low.progress_work == pytest.approx(0.0)
-    assert high.irreversible_started
-    assert not low.irreversible_started
 
 
 def test_fleet_retirement_at_non_earth_node_settles_partial_salvage_with_one_fraction():

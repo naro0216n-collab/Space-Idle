@@ -79,57 +79,6 @@ def test_research_point_storage_limits_generation_without_discarding_overcapacit
     assert resumed.generation_points_per_day > 0
     assert resumed.stored_points == paused.stored_points
 
-def test_global_research_points_are_progressively_allocated_without_upfront_or_storage_cap_requirement():
-    app = build_game_application()
-    sim = app._simulation
-    provider_definition_id = DefinitionId("test.facility.research_execution_provider")
-    sim.facilities.definitions[provider_definition_id] = FacilityDef(
-        provider_definition_id, "Research execution provider fixture"
-    )
-    sim.research.providers = {
-        provider_definition_id: ResearchProviderSpec(
-            provider_definition_id,
-            ResearchProviderSourceKind.FACILITY,
-            provider_definition_id,
-            tier=1,
-            levels=(ResearchProviderLevelSpec(1, 0.0, 10.0, 1.0),),
-        )
-    }
-    sim.facilities.install(provider_definition_id, ids.EARTH)
-    capacity = app.query(GetResearch()).storage_capacity_points
-    assert capacity == 10.0
-
-    research_id = DefinitionId("test.research.progressive_global_points")
-    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Progressive global RP fixture", (ResearchTheoryStageSpec("theory", capacity * 2.0),), prerequisites=frozenset())
-    sim.research.stored_points = capacity
-
-    available = _research_row(app, research_id)
-    assert available.can_start
-    assert not any(
-        code in {"research_points", "rp_storage_capacity"}
-        for code, _detail in available.start_blockers
-    )
-    before = app.query(GetResearch()).stored_points
-    app.execute(StartResearch(str(research_id), priority=4))
-
-    started = _research_row(app, research_id)
-    assert app.query(GetResearch()).stored_points == before
-    assert started.status == "theory"
-    assert started.priority == 4
-    assert started.rp_remaining == started.total_theory_research_point_cost
-    assert started.total_theory_research_point_cost > capacity
-    assert started.execution_allocated > 0.0
-    assert started.rp_allocated > 0.0
-
-    expected_consumption = started.rp_allocated
-    app.execute(AdvanceTime(1))
-    progressed = _research_row(app, research_id)
-    after = app.query(GetResearch())
-    assert progressed.stage_progress == expected_consumption
-    assert progressed.rp_remaining == progressed.total_theory_research_point_cost - expected_consumption
-    assert isclose(after.stored_points, before - expected_consumption, abs_tol=1e-9)
-
-
 def _install_fleet_research_provider(sim, provider_id: DefinitionId) -> None:
     sim.research.providers[provider_id] = ResearchProviderSpec(
         provider_id,
@@ -217,58 +166,7 @@ def test_fleet_research_provider_assignment_owns_intent_while_fleet_owns_quantit
     assert sim.research.provider_assignments == {}
     assert sim.transport.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 2
 
-
-def _provider_admission_projection(installation_order: tuple[str, str]):
-    app = build_game_application()
-    sim = app._simulation
-    sim.research.providers = {}
-    definitions = {
-        "a": DefinitionId("test.facility.rp_provider.a"),
-        "b": DefinitionId("test.facility.rp_provider.b"),
-    }
-    for key in installation_order:
-        definition_id = definitions[key]
-        sim.facilities.definitions[definition_id] = FacilityDef(definition_id, str(definition_id))
-        sim.research.providers[definition_id] = ResearchProviderSpec(
-            definition_id, ResearchProviderSourceKind.FACILITY, definition_id, tier=1,
-            levels=(ResearchProviderLevelSpec(1, 4.0, 10.0, 0.0),),
-        )
-        sim.facilities.install(definition_id, ids.EARTH)
-    sim.research.stored_points = 18.0
-    view = app.query(GetResearch())
-    admitted = {row.provider_definition_id: row.admitted_generation_points_per_day for row in view.providers}
-    return app, definitions, admitted
-
-
-def test_research_provider_generation_competes_for_common_pool_admission_independent_of_registration_order():
-    first, definitions, admitted_first = _provider_admission_projection(("a", "b"))
-    second, _definitions, admitted_second = _provider_admission_projection(("b", "a"))
-
-    assert admitted_first == admitted_second
-    assert isclose(sum(admitted_first.values()), 2.0, abs_tol=1e-9)
-    assert all(isclose(value, 1.0, abs_tol=1e-9) for value in admitted_first.values())
-
-    before = first.query(GetResearch())
-    assert before.generation_points_per_day == 8.0
-    assert before.admitted_generation_points_per_day == 2.0
-    first.execute(AdvanceTime(1))
-    after = first.query(GetResearch())
-    assert after.stored_points == 20.0
-    assert after.storage_capacity_points == 20.0
-
-    high_definition = definitions["a"]
-    high_facility = next(
-        facility for facility in first._simulation.facilities.facilities.values()
-        if facility.definition_id == high_definition
-    )
-    first._simulation.research.stored_points = 18.0
-    first.execute(SetFacilityActivityPriority(str(high_facility.id), 5))
-    prioritized = {row.provider_definition_id: row.admitted_generation_points_per_day for row in first.query(GetResearch()).providers}
-    assert prioritized[str(high_definition)] == 2.0
-    assert sum(prioritized.values()) == 2.0
-
-
-def test_facility_and_fleet_research_providers_share_pool_admission_headroom():
+def _mixed_provider_admission_projection(provider_order: tuple[str, str]):
     app = build_game_application()
     sim = app._simulation
     sim.research.providers = {}
@@ -279,29 +177,59 @@ def test_facility_and_fleet_research_providers_share_pool_admission_headroom():
     sim.facilities.definitions[facility_definition_id] = FacilityDef(
         facility_definition_id, "Mixed admission facility"
     )
-    sim.research.providers[facility_provider_id] = ResearchProviderSpec(
-        facility_provider_id, ResearchProviderSourceKind.FACILITY,
-        facility_definition_id, tier=1,
-        levels=(ResearchProviderLevelSpec(1, 4.0, 10.0, 0.0),),
-    )
-    sim.research.providers[fleet_provider_id] = ResearchProviderSpec(
-        fleet_provider_id, ResearchProviderSourceKind.FLEET,
-        ids.REUSABLE_ORBITAL_CARGO_TUG, tier=1,
-        levels=(ResearchProviderLevelSpec(1, 4.0, 10.0, 0.0),),
-    )
+    providers = {
+        "facility": ResearchProviderSpec(
+            facility_provider_id, ResearchProviderSourceKind.FACILITY,
+            facility_definition_id, tier=1,
+            levels=(ResearchProviderLevelSpec(1, 4.0, 10.0, 0.0),),
+        ),
+        "fleet": ResearchProviderSpec(
+            fleet_provider_id, ResearchProviderSourceKind.FLEET,
+            ids.REUSABLE_ORBITAL_CARGO_TUG, tier=1,
+            levels=(ResearchProviderLevelSpec(1, 4.0, 10.0, 0.0),),
+        ),
+    }
+    for key in provider_order:
+        provider = providers[key]
+        sim.research.providers[provider.id] = provider
+
     sim.facilities.install(facility_definition_id, ids.EARTH)
     app.execute(SetResearchProviderFleetQuantity(
         str(fleet_provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1
     ))
     sim.research.stored_points = 18.0
-
-    providers = app.query(GetResearch()).providers
     admitted = {
         row.source_kind: row.admitted_generation_points_per_day
-        for row in providers
+        for row in app.query(GetResearch()).providers
     }
-    assert admitted == {"facility": 1.0, "fleet": 1.0}
-    assert sum(admitted.values()) == 2.0
+    return app, facility_definition_id, admitted
 
-    app.execute(AdvanceTime(1))
-    assert app.query(GetResearch()).stored_points == 20.0
+
+def test_research_providers_share_pool_admission_by_priority_independent_of_registration_order():
+    first, facility_definition_id, admitted_first = _mixed_provider_admission_projection(
+        ("facility", "fleet")
+    )
+    _second, _definition, admitted_second = _mixed_provider_admission_projection(
+        ("fleet", "facility")
+    )
+
+    assert admitted_first == admitted_second == {"facility": 1.0, "fleet": 1.0}
+    assert sum(admitted_first.values()) == pytest.approx(2.0)
+
+    before = first.query(GetResearch())
+    assert before.generation_points_per_day == pytest.approx(8.0)
+    assert before.admitted_generation_points_per_day == pytest.approx(2.0)
+    first.execute(AdvanceTime(1))
+    assert first.query(GetResearch()).stored_points == pytest.approx(20.0)
+
+    high_facility = next(
+        facility for facility in first._simulation.facilities.facilities.values()
+        if facility.definition_id == facility_definition_id
+    )
+    first._simulation.research.stored_points = 18.0
+    first.execute(SetFacilityActivityPriority(str(high_facility.id), 5))
+    prioritized = {
+        row.source_kind: row.admitted_generation_points_per_day
+        for row in first.query(GetResearch()).providers
+    }
+    assert prioritized == {"facility": 2.0, "fleet": 0.0}

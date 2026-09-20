@@ -110,10 +110,10 @@ def _project(app, project_id):
     return next(row for row in app.query(GetProjects()).items if row.id == project_id)
 
 
-def test_upgrade_query_owns_plan_eligibility_and_single_active_project_contract():
+def test_upgrade_planning_roundtrip_and_completion_apply_resources_and_level_once(tmp_path):
     app = _build_upgrade_fixture_application()
     before_row, facility = _upgrade_target(app)
-    _unlock_next_upgrade(app, facility)
+    recipe = _unlock_next_upgrade(app, facility)
     option = before_row.next_upgrade
     assert option is not None
     assert option.can_plan
@@ -127,26 +127,6 @@ def test_upgrade_query_owns_plan_eligibility_and_single_active_project_contract(
     assert differences["研究RP貯蔵Capacity"].target_value == pytest.approx(25.0)
     assert differences["研究実行Service供給"].current_value == pytest.approx(0.5)
     assert differences["研究実行Service供給"].target_value == pytest.approx(1.0)
-
-    first = app.execute(
-        PlanFacilityUpgrade(before_row.id, priority=3, procurement_policy="extended_wait")
-    )
-    assert first.created_id is not None
-
-    after_row, _ = _upgrade_target(app)
-    active = after_row.next_upgrade
-    assert active is not None
-    assert not active.can_plan
-    assert active.active_project_id == first.created_id
-    assert any(blocker.code == "active_upgrade_project" and blocker.subject_id == first.created_id for blocker in active.blockers)
-    with pytest.raises(ApplicationError):
-        app.execute(PlanFacilityUpgrade(before_row.id, procurement_policy="extended_wait"))
-
-
-def test_upgrade_target_roundtrips_then_applies_resources_and_level_once(tmp_path):
-    app = _build_upgrade_fixture_application()
-    before_row, facility = _upgrade_target(app)
-    recipe = _unlock_next_upgrade(app, facility)
     _seed_upgrade_materials(app, facility, recipe)
 
     provider = app._simulation.research.providers[facility.definition_id]
@@ -160,6 +140,18 @@ def test_upgrade_target_roundtrips_then_applies_resources_and_level_once(tmp_pat
     )
     assert result.created_id is not None
     project_id = result.created_id
+
+    active_row, _ = _upgrade_target(app)
+    active = active_row.next_upgrade
+    assert active is not None
+    assert not active.can_plan
+    assert active.active_project_id == project_id
+    assert any(
+        blocker.code == "active_upgrade_project" and blocker.subject_id == project_id
+        for blocker in active.blockers
+    )
+    with pytest.raises(ApplicationError):
+        app.execute(PlanFacilityUpgrade(before_row.id, procurement_policy="extended_wait"))
 
     # The first canonical boundary acquires the inputs; level application belongs
     # to the following construction boundary. Persist between those boundaries so

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from math import isclose
 
-from space_idle import GetResearch, SetResearchPriority, StartResearch, build_game_application
+from space_idle import AdvanceTime, GetResearch, SetResearchPriority, StartResearch, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.facilities import FacilityDef
 from space_idle.knowledge import ExperienceContributionRule
@@ -66,6 +66,14 @@ def test_research_shared_allocation_respects_priority_fairness_and_registration_
 
         first_rows = {rid: _research_row(first, rid) for rid in (a, b)}
         second_rows = {rid: _research_row(second, rid) for rid in (a, b)}
+        if suffix == "rp":
+            research_state = second.query(GetResearch())
+            assert research_state.storage_capacity_points == 0.0
+            assert research_state.stored_points == stored_points
+            assert all(
+                row.total_theory_research_point_cost > research_state.storage_capacity_points
+                for row in second_rows.values()
+            )
         for rid in (a, b):
             row = first_rows[rid]
             assert row.execution_requested == 10.0
@@ -75,6 +83,13 @@ def test_research_shared_allocation_respects_priority_fairness_and_registration_
             assert second_rows[rid].execution_allocated == row.execution_allocated
             assert second_rows[rid].rp_allocated == row.rp_allocated
             assert any(blocker.code == blocker_code for blocker in row.current_blockers)
+
+        if suffix == "rp":
+            before_points = second.query(GetResearch()).stored_points
+            second.execute(AdvanceTime(1))
+            progressed = {rid: _research_row(second, rid) for rid in (a, b)}
+            assert all(row.stage_progress == 0.5 for row in progressed.values())
+            assert second.query(GetResearch()).stored_points == before_points - 1.0
 
         first.execute(SetResearchPriority(str(a), 5))
         first.execute(SetResearchPriority(str(b), 1))

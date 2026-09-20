@@ -202,10 +202,25 @@ def test_common_allocator_handles_reservation_acquisition_and_shared_owner_pools
 
 
 def test_canonical_tick_routes_domain_requirements_through_common_execution_allocation():
-    from space_idle import build_game_application
+    from space_idle import AdvanceTime, PlanBuild, build_game_application
     from space_idle.content import base_ids as ids
 
-    sim = build_game_application()._simulation
+    app = build_game_application()
+    sim = app._simulation
+    project_id = app.execute(PlanBuild(
+        str(ids.EARTH), str(ids.WATER_STORAGE), priority=3,
+        procurement_policy="extended_wait",
+    )).created_id
+    project = next(row for row in sim.projects.projects.values() if str(row.id) == project_id)
+    recipe = sim.projects.recipe_for_project(project)
+    for requirement in recipe.resources:
+        current = sim.inventory.amount(ids.EARTH, requirement.resource_id)
+        if current + 1e-9 < requirement.amount_t:
+            sim.inventory.add(
+                ids.EARTH, requirement.resource_id, requirement.amount_t - current
+            )
+    app.execute(AdvanceTime(1))
+
     structural_key = resource_constraint(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
     maintenance = tuple(
         row for row in sim.maintenance.execution_requirement_bundles(sim.day)
@@ -236,7 +251,12 @@ def test_canonical_tick_routes_domain_requirements_through_common_execution_allo
         for key, coefficient in row.coefficients()
         if key == structural_key
     )
-    sim.inventory.stock[(ids.EARTH, ids.STRUCTURAL_COMPONENTS)] = maintenance_need
+    construction_reserved = sim.projects.reserved_resource_t(
+        project, ids.STRUCTURAL_COMPONENTS
+    )
+    sim.inventory.stock[(ids.EARTH, ids.STRUCTURAL_COMPONENTS)] = (
+        maintenance_need + construction_reserved
+    )
 
     plan = sim.tick_decision_projection().allocations.execution
     maintenance_rows = tuple(
@@ -253,8 +273,12 @@ def test_canonical_tick_routes_domain_requirements_through_common_execution_allo
         row for row in plan.bundles
         if row.owner_kind == "extraction" and row.operational_node_id == ids.EARTH
     )
+    construction_rows = tuple(
+        row for row in plan.bundles
+        if row.owner_kind == "construction" and str(row.owner_id) == project_id
+    )
 
-    assert maintenance_rows and industry_rows and extraction_rows
+    assert maintenance_rows and industry_rows and extraction_rows and construction_rows
     assert all(plan.fulfillment(row.id) == pytest.approx(1.0) for row in maintenance_rows)
     structural_industry = tuple(
         row for row in industry_rows
@@ -271,4 +295,11 @@ def test_canonical_tick_routes_domain_requirements_through_common_execution_allo
         any(key.kind == "service" and key.name.startswith("extraction:") for key, _ in row.coefficients())
         for row in extraction_rows
     )
-    assert all(0.0 <= plan.fulfillment(row.id) <= 1.0 for row in industry_rows + extraction_rows)
+    assert all(
+        any(key.kind == "service" and key.name == "construction_work" for key, _ in row.coefficients())
+        for row in construction_rows
+    )
+    assert all(
+        0.0 <= plan.fulfillment(row.id) <= 1.0
+        for row in industry_rows + extraction_rows + construction_rows
+    )

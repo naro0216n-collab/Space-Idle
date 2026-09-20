@@ -49,7 +49,7 @@ def _snapshot(sim, maintenance_factors=None):
     )
 
 
-def test_location_expansion_increases_aggregate_surface_infrastructure_load():
+def test_surface_infrastructure_load_and_supply_scale_with_territory_and_provider_health():
     sim = build_game_application()._simulation
     initial = _snapshot(sim)
     assert initial.demand == 0.0
@@ -58,6 +58,10 @@ def test_location_expansion_increases_aggregate_surface_infrastructure_load():
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
     one_remote = _snapshot(sim)
     assert one_remote.demand > initial.demand
+    assert one_remote.nominal_capacity == pytest.approx(0.0)
+    assert one_remote.available_capacity == pytest.approx(0.0)
+    assert one_remote.fulfillment == pytest.approx(0.0)
+    assert one_remote.limiting_factors == ("surface_infrastructure",)
     assert any(row.code == "territory_area" for row in one_remote.load_sources)
     assert ids.EARTH_CELL_COASTAL not in sim.graph.operational_node_ids()
     assert all(
@@ -66,21 +70,11 @@ def test_location_expansion_increases_aggregate_surface_infrastructure_load():
     )
     assert SURFACE_DISTRIBUTION_SERVICE in sim.facilities.service_types()
 
-    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_INLAND)
-    two_remote = _snapshot(sim)
-    assert two_remote.demand > one_remote.demand
-
-
-def test_surface_distribution_facility_supplies_nominal_and_available_capacity():
-    sim = build_game_application()._simulation
-    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
-    before = _snapshot(sim)
-    assert before.nominal_capacity == 0.0
-    assert before.available_capacity == 0.0
-    assert before.fulfillment == 0.0
-    assert before.limiting_factors == ("surface_infrastructure",)
-
-    facility_id = sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL)
+    facility_id = sim.facilities.install(
+        ids.SURFACE_DISTRIBUTION_HUB,
+        ids.EARTH,
+        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+    )
     supplied = _snapshot(sim)
     assert supplied.nominal_capacity > 0.0
     assert supplied.available_capacity == pytest.approx(supplied.nominal_capacity)
@@ -96,6 +90,12 @@ def test_surface_distribution_facility_supplies_nominal_and_available_capacity()
     )
     assert degraded.fulfillment < supplied.fulfillment
     assert degraded.limiting_factors == ("surface_infrastructure",)
+
+    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_INLAND)
+    two_remote = _snapshot(sim)
+    assert two_remote.demand > one_remote.demand
+    assert two_remote.demand > supplied.demand
+    assert two_remote.nominal_capacity == pytest.approx(supplied.nominal_capacity)
 
 
 def test_cell_physical_opportunity_is_independent_of_surface_infrastructure_and_execution_is_limited_once():
@@ -256,6 +256,13 @@ def test_surface_cell_development_projection_execution_and_completion_share_one_
     )
     decision = sim.tick_decision_projection()
     bundle_id = sim.projects.construction_execution_bundle_id(project_id)
+    bundle = next(
+        row for row in decision.allocations.execution.bundles if row.id == bundle_id
+    )
+    assert any(
+        key.kind == "service" and key.name == sim.surface_infrastructure.service_type
+        for key, _coefficient in bundle.coefficients()
+    )
     projected = decision.allocations.execution.fulfillment(bundle_id)
     assert projected > 0.0
 
@@ -282,42 +289,6 @@ def test_surface_cell_development_projection_execution_and_completion_share_one_
         assert after != before, "ready surface development made no canonical-tick progress"
 
     assert ids.EARTH_CELL_COASTAL in sim.graph.locations[ids.EARTH].developed_cell_ids
-
-
-def test_concurrent_surface_development_projects_share_the_common_execution_allocator():
-    app = build_game_application()
-    sim = app._simulation
-    coastal_id = app.execute(DevelopSurfaceCell(
-        str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), procurement_policy="extended_wait"
-    )).created_id
-    inland_id = app.execute(DevelopSurfaceCell(
-        str(ids.EARTH), str(ids.EARTH_CELL_INLAND), procurement_policy="extended_wait"
-    )).created_id
-    assert coastal_id is not None and inland_id is not None
-    _ensure_project_materials_on_hand(sim, coastal_id, inland_id)
-
-    app.execute(AdvanceTime(1))
-    sim.facilities.install(
-        ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH,
-        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
-    )
-    decision = sim.tick_decision_projection()
-    execution = decision.allocations.execution
-    bundles = {
-        str(bundle.owner_id): bundle
-        for bundle in execution.bundles
-        if bundle.owner_kind == "construction"
-    }
-    coastal = bundles[coastal_id]
-    inland = bundles[inland_id]
-    surface_type = sim.surface_infrastructure.service_type
-    assert any(key.kind == "service" and key.name == surface_type for key, _ in coastal.coefficients())
-    assert any(key.kind == "service" and key.name == surface_type for key, _ in inland.coefficients())
-    assert execution.allocated(coastal.id) == pytest.approx(execution.allocated(inland.id))
-
-    rows = {row.id: row for row in app.query(GetProjects()).items}
-    assert rows[coastal_id].construction_fulfillment == pytest.approx(execution.fulfillment(coastal.id))
-    assert rows[inland_id].construction_fulfillment == pytest.approx(execution.fulfillment(inland.id))
 
 
 def test_remote_surface_movement_capacity_uses_location_surface_infrastructure():

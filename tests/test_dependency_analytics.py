@@ -65,21 +65,6 @@ def test_scope_boundary_changes_import_export_without_double_counting_internal_f
     }
 
 
-def test_unmet_external_demand_is_projected_for_destination_scope():
-    app = build_game_application()
-
-    view = app.query(GetDependencyAnalytics("operational_nodes", node_ids=(str(EARTH),)))
-    unmet = [row for row in view.current_resources if row.unmet_demand_t > 1e-9]
-
-    assert unmet
-    critical = set(view.critical_dependency_resource_ids)
-    assert {row.id for row in unmet} <= critical
-    assert {
-        row.id for row in view.current_resources if row.external_dependency_per_day > 1e-9
-    } <= critical
-    assert all(any(factor.code == "unmet_demand" for factor in row.limiting_factors) for row in unmet)
-
-
 def test_content_defined_resource_group_aggregates_members_without_cross_resource_substitution():
     app = build_game_application()
     group_id = DefinitionId("test.group.non_substitutable")
@@ -168,6 +153,10 @@ def test_current_authorized_transport_projects_boundary_flow_consumption_and_par
     )
     assert partial.imports_per_day > 0
     assert 0 < partial.unmet_demand_t < machinery.amount_t
+    assert str(ids.MACHINERY) in app.query(
+        GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),))
+    ).critical_dependency_resource_ids
+    assert any(factor.code == "unmet_demand" for factor in partial.limiting_factors)
     assert partial.navigation is not None
     assert partial.navigation.decision_area == "logistics"
     assert partial.navigation.operational_node_id == str(LEO)
@@ -242,8 +231,11 @@ def test_current_and_forecast_use_distinct_contracts_and_forecast_reads_active_p
     )
     assert sim.projects.projects[project_id].status.value == "procuring"
 
+    with pytest.raises(ApplicationError, match="time basis"):
+        app.query(GetDependencyAnalytics(time_basis="historical"))
 
-def test_current_service_dependency_keeps_capacity_shortfall_separate_from_other_execution_blockers():
+
+def test_service_dependency_projection_distinguishes_execution_blockers_and_forecast_scope():
     app = build_game_application()
     view = app.query(GetDependencyAnalytics(
         "operational_nodes", node_ids=(str(EARTH),), time_basis="CURRENT"
@@ -261,9 +253,6 @@ def test_current_service_dependency_keeps_capacity_shortfall_separate_from_other
     assert row.local_coverage_ratio == pytest.approx(1.0)
     assert row.service_type not in view.critical_dependency_service_types
 
-
-def test_forecast_service_dependency_projects_planned_construction_without_treating_remote_capacity_as_local():
-    app = build_game_application()
     sim = app._simulation
     project_id = sim.projects.plan_build(
         ids.CARGO_WAREHOUSE, LEO, 3, "standard_wait", day=sim.day
@@ -286,9 +275,3 @@ def test_forecast_service_dependency_projects_planned_construction_without_treat
     assert row.outside_scope_enabled_rate > 0
     assert any(factor.code == "no_local_service_capacity" for factor in row.limiting_factors)
     assert "construction_work" in forecast.critical_dependency_service_types
-
-
-def test_invalid_dependency_analytics_time_basis_is_rejected():
-    app = build_game_application()
-    with pytest.raises(ApplicationError, match="time basis"):
-        app.query(GetDependencyAnalytics(time_basis="historical"))

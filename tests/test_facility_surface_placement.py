@@ -15,72 +15,60 @@ from space_idle.facilities import FacilityBook, FacilityPlacementScope
 from space_idle.shared import SpatialNodeId
 
 
-def test_facility_placement_scope_controls_surface_cell_requirement():
+def test_facility_placement_scope_controls_cell_ownership_and_environment_context():
     sim = build_game_application()._simulation
 
-    # Operational-node facilities neither require nor accept a surface cell.
     project_id = sim.projects.plan_build(
-        ids.WATER_STORAGE,
-        ids.EARTH,
-        3,
-        "standard_wait",
+        ids.WATER_STORAGE, ids.EARTH, 3, "standard_wait"
     )
     assert sim.projects.projects[project_id].site_cell_id is None
     with pytest.raises(ValueError, match="must not specify"):
         sim.projects.plan_build(
-            ids.WATER_STORAGE,
-            ids.EARTH,
-            3,
-            "standard_wait",
+            ids.WATER_STORAGE, ids.EARTH, 3, "standard_wait",
             site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
         )
 
-    # Surface-cell facilities require a developed cell owned by the location.
     definition = sim.facilities.definitions[ids.ROBOTIC_GEOLOGY_STATION]
     assert definition.placement_scope is FacilityPlacementScope.SURFACE_CELL
     with pytest.raises(ValueError, match="requires a surface cell"):
         sim.projects.plan_build(
-            ids.ROBOTIC_GEOLOGY_STATION,
-            ids.EARTH,
-            3,
-            "standard_wait",
+            ids.ROBOTIC_GEOLOGY_STATION, ids.EARTH, 3, "standard_wait"
         )
     with pytest.raises(ValueError, match="not developed"):
         sim.projects.plan_build(
-            ids.ROBOTIC_GEOLOGY_STATION,
-            ids.EARTH,
-            3,
-            "standard_wait",
+            ids.ROBOTIC_GEOLOGY_STATION, ids.EARTH, 3, "standard_wait",
             site_cell_id=ids.EARTH_CELL_COASTAL,
         )
 
     project_id = sim.projects.plan_build(
-        ids.ROBOTIC_GEOLOGY_STATION,
-        ids.EARTH,
-        3,
-        "standard_wait",
+        ids.ROBOTIC_GEOLOGY_STATION, ids.EARTH, 3, "standard_wait",
         site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
     )
     assert sim.projects.projects[project_id].site_cell_id == ids.EARTH_CELL_INDUSTRIAL
 
-def test_surface_cell_facility_uses_site_environment_while_remaining_location_owned():
-    base = build_game_application()._simulation
     location_id = SpatialNodeId("test.location.surface_environment")
-    base.graph.found_location(location_id, "Test", ids.MOON, ids.MOON_CELL_SOUTH_POLAR_RIDGE)
-    base.graph.develop_surface_cell(location_id, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
+    sim.graph.found_location(
+        location_id, "Test", ids.MOON, ids.MOON_CELL_SOUTH_POLAR_RIDGE
+    )
+    sim.graph.develop_surface_cell(location_id, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
     definitions = build_facility_definitions()
 
-    ridge = FacilityBook(definitions, base.facilities.environment)
-    ridge_id = ridge.install(ids.ROBOTIC_GEOLOGY_STATION, location_id, site_cell_id=ids.MOON_CELL_SOUTH_POLAR_RIDGE)
-    plain = FacilityBook(definitions, base.facilities.environment)
-    plain_id = plain.install(ids.ROBOTIC_GEOLOGY_STATION, location_id, site_cell_id=ids.MOON_CELL_SOUTH_POLAR_PLAIN)
-    ridge_power = base.power.snapshot(location_id, ridge, base.day)
-    plain_power = base.power.snapshot(location_id, plain, base.day)
+    ridge = FacilityBook(definitions, sim.facilities.environment)
+    ridge_id = ridge.install(
+        ids.ROBOTIC_GEOLOGY_STATION, location_id,
+        site_cell_id=ids.MOON_CELL_SOUTH_POLAR_RIDGE,
+    )
+    plain = FacilityBook(definitions, sim.facilities.environment)
+    plain_id = plain.install(
+        ids.ROBOTIC_GEOLOGY_STATION, location_id,
+        site_cell_id=ids.MOON_CELL_SOUTH_POLAR_PLAIN,
+    )
+    ridge_power = sim.power.snapshot(location_id, ridge, sim.day)
+    plain_power = sim.power.snapshot(location_id, plain, sim.day)
 
     assert ridge.facilities[ridge_id].operational_node_id == location_id
     assert plain.facilities[plain_id].operational_node_id == location_id
     assert ridge_power.generation_mw > plain_power.generation_mw
-
 
 def test_surface_map_owns_surface_buildability_and_location_build_options_do_not_request_cells():
     app = build_game_application()

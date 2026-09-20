@@ -138,26 +138,53 @@ def test_explicit_empty_prototype_stage_progresses_automatically_after_site_sele
     assert research_id not in sim.research.active
 
 
-def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structural_mismatch():
+def test_typed_research_site_selection_separates_structural_eligibility_from_runtime_capacity():
     app = build_game_application()
     sim = app._simulation
-    research_id = DefinitionId("test.research.prototype_site_contract")
-    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Prototype Site Contract", (ResearchPrototypeStageSpec("prototype",
-            {},
-            SiteRequirements(
-                spatial_classification_requirements=req.SURFACE_CLASSIFICATION,
+    research_id = DefinitionId("test.research.site_runtime_contract")
+    sim.research.definitions[research_id] = ResearchDefinition(
+        research_id,
+        "Typed Research Site Runtime Contract",
+        (
+            ResearchPrototypeStageSpec(
+                "prototype",
+                {},
+                SiteRequirements(
+                    spatial_classification_requirements=req.SURFACE_CLASSIFICATION,
+                ),
+                (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
             ),
-            (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
-        ),), prerequisites=frozenset())
+            ResearchDemonstrationStageSpec(
+                "demonstration",
+                2,
+                SiteRequirements(
+                    capability_requirements=(
+                        CapabilityRequirement(
+                            TEST_RESEARCH_SITE_CAPABILITY,
+                            CapabilityRequirementState.ACTIVE,
+                        ),
+                    ),
+                ),
+                (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
+            ),
+        ),
+        prerequisites=frozenset(),
+    )
+
     original = _remove_research_site_service(sim)
     app.execute(StartResearch(str(research_id)))
 
-    row = _research_row(app, research_id)
-    earth = next(site for site in row.execution_context_options if site.operational_node_id == str(EARTH))
+    prototype = _research_row(app, research_id)
+    earth = next(
+        site for site in prototype.execution_context_options
+        if site.operational_node_id == str(EARTH)
+    )
     assert not any(blocker.code.startswith("service") for blocker in earth.blockers)
     assert earth.can_select
-
-    leo = next(site for site in row.execution_context_options if site.operational_node_id == str(LEO))
+    leo = next(
+        site for site in prototype.execution_context_options
+        if site.operational_node_id == str(LEO)
+    )
     assert leo.blockers
     assert not leo.can_select
     with pytest.raises(ApplicationError, match="prototype site requirements not met"):
@@ -168,16 +195,44 @@ def test_prototype_site_selection_ignores_transient_capacity_but_rejects_structu
     assert selected.execution_context is not None
     assert selected.execution_context.operational_node_id == str(EARTH)
     assert selected.execution_context.surface_cell_id is None
-    assert any(
-        blocker.code == "service:allocation"
-        for blocker in selected.current_blockers
-    )
+    assert any(blocker.code == "service:allocation" for blocker in selected.current_blockers)
     app.execute(AdvanceTime(1))
     assert _research_row(app, research_id).status == "prototype"
 
     sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
     app.execute(AdvanceTime(1))
-    assert _research_row(app, research_id).status == "complete"
+    demonstration = _research_row(app, research_id)
+    assert demonstration.status == "demonstration"
+
+    site = _research_site_fixture(sim)
+    app.execute(PauseFacility(str(site.id)))
+    demonstration = _research_row(app, research_id)
+    earth = next(
+        candidate for candidate in demonstration.execution_context_options
+        if candidate.operational_node_id == str(EARTH)
+    )
+    assert any(blocker.code == "capability:active" for blocker in earth.blockers)
+    assert earth.can_select
+    app.execute(
+        SetResearchDemonstrationSite(
+            str(research_id), "demonstration", str(EARTH)
+        )
+    )
+    selected = _research_row(app, research_id)
+    assert selected.execution_context is not None
+    assert selected.execution_context.operational_node_id == str(EARTH)
+    assert any(blocker.code == "capability:active" for blocker in selected.current_blockers)
+
+    app.execute(ResumeFacility(str(site.id)))
+    original = _remove_research_site_service(sim)
+    app.execute(AdvanceTime(1))
+    blocked = _research_row(app, research_id)
+    assert any(blocker.code == "service:allocation" for blocker in blocked.current_blockers)
+    assert sim.research.active[research_id].stage_progress == 0.0
+
+    sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
+    app.execute(AdvanceTime(1))
+    assert sim.research.active[research_id].stage_progress > 0.0
 
 
 def test_cell_local_research_site_requires_and_persists_explicit_developed_cell():
@@ -285,52 +340,6 @@ def test_prototype_resource_staging_is_site_owned_durable_and_completes_when_run
     app.execute(AdvanceTime(1))
     assert _research_row(app, research_id).status == "complete"
 
-
-def test_demonstration_site_selection_tolerates_transient_blockers_but_progress_requires_runtime_service():
-    app = build_game_application()
-    sim = app._simulation
-    research_id = DefinitionId("test.research.demonstration_runtime_contract")
-    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Demonstration Runtime Contract", (ResearchDemonstrationStageSpec("demonstration",
-            2,
-            SiteRequirements(
-                capability_requirements=(
-                    CapabilityRequirement(
-                        TEST_RESEARCH_SITE_CAPABILITY,
-                        CapabilityRequirementState.ACTIVE,
-                    ),
-                ),
-            ),
-            (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
-        ),), prerequisites=frozenset())
-    site = _research_site_fixture(sim)
-    app.execute(PauseFacility(str(site.id)))
-    app.execute(StartResearch(str(research_id)))
-
-    row = _research_row(app, research_id)
-    earth = next(
-        candidate
-        for candidate in row.execution_context_options
-        if candidate.operational_node_id == str(EARTH)
-    )
-    assert any(blocker.code == "capability:active" for blocker in earth.blockers)
-    assert earth.can_select
-    app.execute(SetResearchDemonstrationSite(str(research_id), "demonstration", str(EARTH)))
-    selected = _research_row(app, research_id)
-    assert selected.execution_context is not None
-    assert selected.execution_context.operational_node_id == str(EARTH)
-    assert selected.execution_context.surface_cell_id is None
-    assert any(blocker.code == "capability:active" for blocker in selected.current_blockers)
-
-    app.execute(ResumeFacility(str(site.id)))
-    original = _remove_research_site_service(sim)
-    app.execute(AdvanceTime(1))
-    blocked = _research_row(app, research_id)
-    assert any(blocker.code == "service:allocation" for blocker in blocked.current_blockers)
-    assert sim.research.active[research_id].stage_progress == 0.0
-
-    sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
-    app.execute(AdvanceTime(1))
-    assert sim.research.active[research_id].stage_progress > 0.0
 
 def test_research_stage_identity_is_explicit_unique_and_stable_across_repeated_stage_types():
     invalid_id = DefinitionId("test.research.invalid_stage_contract")
