@@ -22,6 +22,29 @@ def validate_environment_condition(condition: object, owner: str) -> None:
         dataclass_fields = getattr(condition.facet_type, "__dataclass_fields__", {})
         require(condition.attribute in dataclass_fields, f"site requirement references unknown facet attribute: {owner}/{code}/{condition.attribute}")
 
+
+
+def validate_generated_id_counter(
+    counter: object,
+    entity_ids: object,
+    prefix: str,
+    owner: str,
+) -> None:
+    """Validate a monotonic generated-id counter against live authoritative ids."""
+    require(
+        isinstance(counter, int) and not isinstance(counter, bool) and counter >= 0,
+        f"{owner} counter must be a non-negative integer",
+    )
+    maximum = 0
+    for entity_id in entity_ids:
+        text = str(entity_id)
+        if not text.startswith(prefix):
+            continue
+        suffix = text[len(prefix):]
+        if suffix.isdigit():
+            maximum = max(maximum, int(suffix))
+    require(counter >= maximum, f"{owner} counter trails existing generated id: {maximum}")
+
 def validate_site_requirements(
     requirements: SiteRequirements,
     known_capabilities: set[str],

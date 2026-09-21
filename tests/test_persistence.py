@@ -529,6 +529,9 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
 
 
 def _corrupt_saved_snapshot(path, case: str) -> None:
+    if case == "invalid_utf8":
+        path.write_bytes(b"\xff\xfe\x00not-json")
+        return
     if case == "duplicate_json_key":
         text = path.read_text(encoding="utf-8")
         marker = f'"schema_version": {SAVE_SCHEMA_VERSION},'
@@ -558,6 +561,12 @@ def _corrupt_saved_snapshot(path, case: str) -> None:
         state["projects"]["items"][0]["operational_node_id"] = 1
     elif case == "duplicate_entity_id":
         state["facilities"]["items"].append(dict(state["facilities"]["items"][0]))
+    elif case == "stale_generated_id_counter":
+        state["facilities"]["counter"] = 0
+    elif case == "missing_provider_fleet_commitment":
+        state["survey"]["provider_assignments"][0][
+            "fleet_commitment_ref"
+        ] = "missing.commitment"
     elif case == "invalid_nested_collection_type":
         state["transport"]["transport_allocations"][0][
             "movement_hard_constraint"
@@ -568,6 +577,8 @@ def _corrupt_saved_snapshot(path, case: str) -> None:
         provider = state["market"]["provider_states"][0]
         resource_id = next(iter(provider["supply_available_t"]))
         provider["supply_available_t"][resource_id] = 1.0e12
+    elif case == "post_rebuild_capacity_violation":
+        state["inventory"]["stock"][0]["amount"] = 1.0e12
     elif case == "non_finite_number":
         state["core"]["pending_offline_game_days"] = float("nan")
     else:
@@ -577,6 +588,14 @@ def _corrupt_saved_snapshot(path, case: str) -> None:
 
 def test_load_boundary_rejects_noncanonical_or_invalid_snapshots(tmp_path):
     app = _make_nontrivial_state()
+    sim = app._simulation
+    sim.transport.add_fleet_units(
+        ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=sim.day
+    )
+    app.execute(SetSurveyProviderFleetQuantity(
+        str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT),
+        str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1,
+    ))
     baseline_path = tmp_path / "baseline.json"
     save_game(app, baseline_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     baseline = baseline_path.read_bytes()
@@ -591,10 +610,14 @@ def test_load_boundary_rejects_noncanonical_or_invalid_snapshots(tmp_path):
         "wrong_integer_type",
         "wrong_identifier_type",
         "duplicate_entity_id",
+        "stale_generated_id_counter",
+        "missing_provider_fleet_commitment",
         "invalid_nested_collection_type",
         "noncanonical_domain_order",
         "cross_domain_runtime_violation",
+        "post_rebuild_capacity_violation",
         "duplicate_json_key",
+        "invalid_utf8",
         "non_finite_number",
     )
     for case in cases:

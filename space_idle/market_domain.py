@@ -13,7 +13,7 @@ from .market import (
 )
 from .priority import ActivityPriority
 from .shared import DefinitionId, EntityId, SpatialNodeId
-from .validation_support import require as _require
+from .validation_support import require as _require, validate_generated_id_counter as _validate_counter
 
 
 def capture_market(sim: Any) -> dict[str, Any]:
@@ -187,6 +187,11 @@ def validate_configuration(sim: Any, _ctx) -> None:
 
 def validate_runtime(sim: Any) -> None:
     market = sim.market
+    _validate_counter(market._order_counter, market.orders, "trade.order.", "market order")
+    _validate_counter(
+        market._commitment_counter, market.buy_commitments, "buy.commitment.",
+        "market buy commitment",
+    )
     _require(isfinite(market.funds.balance) and market.funds.balance >= -1e-9, "invalid market Funds")
     for interface_id, interface in market.interfaces.items():
         _require(interface_id == interface.id, f"market interface key mismatch: {interface_id}")

@@ -72,7 +72,6 @@ def restore_state(sim, data: dict[str, Any]) -> None:
             )
     sim.mark_runtime_state_initialized()
     sim.transport.invalidate_movement_plans()
-    sim.refresh_storage()
 
 
 def _application_state(app: GameApplication) -> dict[str, Any]:
@@ -159,26 +158,6 @@ def save_game(
 
 
 
-def _validate_persisted_identity_rows(value: Any, path: str = "state") -> None:
-    if isinstance(value, dict):
-        for key, child in value.items():
-            _validate_persisted_identity_rows(child, f"{path}.{key}")
-        return
-    if not isinstance(value, list):
-        return
-    if value and all(isinstance(row, dict) and "id" in row for row in value):
-        ids: set[str] = set()
-        for index, row in enumerate(value):
-            row_id = row["id"]
-            if not isinstance(row_id, str):
-                raise SaveFormatError(f"{path}[{index}].id must be a string")
-            if row_id in ids:
-                raise SaveFormatError(f"duplicate persisted entity id at {path}: {row_id}")
-            ids.add(row_id)
-    for index, child in enumerate(value):
-        _validate_persisted_identity_rows(child, f"{path}[{index}]")
-
-
 def _reject_duplicate_object_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -201,7 +180,7 @@ def _read_envelope(path: str | Path) -> SaveEnvelope:
         )
     except SaveFormatError:
         raise
-    except (OSError, json.JSONDecodeError) as exc:
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise SaveFormatError(f"invalid save file: {exc}") from exc
     if not isinstance(raw, dict):
         raise SaveFormatError("save root must be an object")
@@ -227,7 +206,6 @@ def _read_envelope(path: str | Path) -> SaveEnvelope:
         )
     if not isinstance(raw["state"], dict):
         raise SaveFormatError("save state must be an object")
-    _validate_persisted_identity_rows(raw["state"])
     saved_at = raw["saved_at"]
     if not isinstance(saved_at, str):
         raise SaveFormatError("saved_at must be a string")
@@ -288,9 +266,11 @@ def load_game(
         restore_state(app._simulation, envelope.state)
         _restore_application_state(app, envelope.state)
         validate_runtime_state(app._simulation)
+        app._simulation.refresh_storage()
+        validate_runtime_state(app._simulation)
     except SaveFormatError:
         raise
-    except (ConfigurationError, KeyError, TypeError, ValueError) as exc:
+    except (ConfigurationError, KeyError, RuntimeError, TypeError, ValueError) as exc:
         raise SaveFormatError(f"invalid saved runtime state: {exc}") from exc
     offline_result = None
     if now is not None and offline_policy is not None and not app.time_paused:

@@ -6,7 +6,12 @@ from .domain import (
     DomainExtension, StateCodec, decode_bool, decode_dict, decode_float, decode_int,
     decode_list, decode_str, require_fields,
 )
-from .validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
+from .validation_support import (
+    ValidationContext,
+    require as _require,
+    validate_generated_id_counter as _validate_counter,
+    validate_site_requirements as _validate_site_requirements,
+)
 from .facilities import FacilityLifecycle, FacilityPlacementScope, FacilityState
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 
@@ -131,6 +136,9 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 
 
 def validate_runtime(sim: Any) -> None:
+    _validate_counter(
+        sim.facilities._counter, sim.facilities.facilities, "facility.", "facility"
+    )
     for facility_id, facility in sim.facilities.facilities.items():
         _require(facility_id == facility.id, f"facility state key mismatch: {facility_id}")
         _require(facility.definition_id in sim.facilities.definitions, f"facility state has unknown definition: {facility_id}")

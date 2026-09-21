@@ -8,6 +8,7 @@ from .shared import ContractId, DefinitionId
 from .validation_support import (
     ValidationContext,
     require as _require,
+    validate_generated_id_counter as _validate_counter,
     validate_site_requirements as _validate_site_requirements,
 )
 
@@ -76,6 +77,9 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 def validate_runtime(sim: Any) -> None:
     if sim.contracts is None:
         return
+    _validate_counter(
+        sim.contracts._counter, sim.contracts.contracts, "contract.", "contract"
+    )
     for contract_id, state in sim.contracts.contracts.items():
         _require(contract_id == state.id, f"contract state key mismatch: {contract_id}")
         _require(

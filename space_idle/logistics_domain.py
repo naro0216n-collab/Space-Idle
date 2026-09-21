@@ -15,7 +15,7 @@ from .shared import DefinitionId, EntityId, SpatialNodeId
 from .supply import (
     SupplyRoutingConstraintScope, SupplyRoutingConstraintState, TargetStockPolicy,
 )
-from .validation_support import require as _require
+from .validation_support import require as _require, validate_generated_id_counter as _validate_counter
 
 
 def _capture_leg(leg: CargoServiceLeg) -> dict[str, Any]:
@@ -274,6 +274,13 @@ def _validate_leg(sim: Any, owner_label: str, leg: CargoServiceLeg) -> None:
 
 def validate_logistics_runtime(sim: Any) -> None:
     lg = sim.logistics
+    _validate_counter(
+        lg._cargo_flow_counter, lg.cargo_flows, "cargo.segment.", "cargo flow"
+    )
+    _validate_counter(
+        lg._arrival_waiting_counter, lg.arrival_waiting, "cargo.waiting.",
+        "cargo arrival waiting",
+    )
     for flow_id, flow in lg.cargo_flows.items():
         _require(flow_id == flow.id, f"cargo flow key mismatch: {flow_id}")
         _require(flow.amount_t > 0, f"cargo flow has non-positive amount: {flow_id}")

@@ -17,7 +17,12 @@ from ..version import VERSION
 from .codec import to_jsonable
 
 
-_SLOT_RE = re.compile(r"^[^/\\\x00-\x1f]{1,64}$")
+_SLOT_RE = re.compile(r'^[^<>:"/\\|?*\x00-\x1f]{1,64}$')
+_WINDOWS_RESERVED_SLOT_STEMS = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 def _utc_now() -> datetime:
@@ -219,11 +224,12 @@ class GameRuntime:
             return RuntimeResult(self._revision, self._metadata_locked())
 
     def _slot_path(self, slot: str) -> Path:
-        if (
-            not isinstance(slot, str)
-            or not _SLOT_RE.fullmatch(slot)
-            or slot in {".", ".."}
-        ):
+        if not isinstance(slot, str) or not _SLOT_RE.fullmatch(slot):
+            raise ValueError("invalid save slot")
+        if slot in {".", ".."} or slot.endswith((".", " ")):
+            raise ValueError("invalid save slot")
+        stem = slot.split(".", 1)[0].upper()
+        if stem in _WINDOWS_RESERVED_SLOT_STEMS:
             raise ValueError("invalid save slot")
         return self._save_dir / f"{slot}.json"
 

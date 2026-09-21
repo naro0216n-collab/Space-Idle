@@ -219,6 +219,22 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert status == 200 and payload["data"]["loaded"] is True
         status, _, payload = _request(port, "GET", "/api/v1/world")
         assert status == 200 and payload["data"]["day"] == 2
+
+        # Save slots are portable filenames across supported hosts, including Windows.
+        for invalid_slot in ("CON", "bad:name", "trailing."):
+            status, _, payload = _request(
+                port, "POST", "/api/v1/session/save", {"slot": invalid_slot}
+            )
+            assert status == 400
+            assert payload["error"]["code"] == "invalid_request"
+
+        (tmp_path / "broken.json").write_bytes(b"\xff\xfe\x00not-json")
+        status, _, payload = _request(
+            port, "POST", "/api/v1/session/load",
+            {"slot": "broken", "apply_offline": False},
+        )
+        assert status == 400
+        assert payload["error"]["code"] == "invalid_save"
     finally:
         server.shutdown()
         server.server_close()

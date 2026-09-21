@@ -9,6 +9,7 @@ from ..domain import (
 from ..validation_support import (
     ValidationContext,
     require as _require,
+    validate_generated_id_counter as _validate_counter,
     validate_site_requirements as _validate_site_requirements,
 )
 from ..shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
@@ -846,6 +847,26 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             _validate_site_requirements(vehicle.production.site_requirements, known_capabilities, f"vehicle_production:{vehicle_id}")
 def validate_transport_runtime(sim: Any) -> None:
     tr = sim.transport
+    _validate_counter(
+        tr._transport_allocation_counter, tr.transport_allocations,
+        "transport.allocation.", "transport allocation",
+    )
+    _validate_counter(
+        tr._fleet_relocation_counter, tr.fleet_relocations,
+        "fleet.relocation.", "fleet relocation",
+    )
+    _validate_counter(
+        tr._fleet_release_counter, tr.fleet_releases,
+        "fleet.release.", "fleet release",
+    )
+    _validate_counter(
+        tr._fleet_retirement_counter, tr.fleet_retirements,
+        "fleet_retirement:", "fleet retirement",
+    )
+    _validate_counter(
+        tr._vehicle_production_counter, tr.vehicle_production_projects,
+        "vehicle_production.", "vehicle production",
+    )
 
     for (vehicle_definition_id, location_id), pool in tr.fleet_pools.items():
         _require(

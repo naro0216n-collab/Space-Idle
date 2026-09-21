@@ -17,7 +17,12 @@ from .shared import (
     CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId,
 )
 from .transport.models import FleetActivityRef, MovementExecutionKind
-from .validation_support import ValidationContext, require as _require, validate_site_requirements
+from .validation_support import (
+    ValidationContext,
+    require as _require,
+    validate_generated_id_counter as _validate_counter,
+    validate_site_requirements,
+)
 
 
 def _capture_target_spec(target_spec) -> dict[str, Any]:
@@ -203,6 +208,7 @@ def validate_runtime(sim: Any) -> None:
     service = sim.founding
     if service is None:
         return
+    _validate_counter(service._counter, service.projects, "founding.", "founding")
     active_cells: set[SurfaceCellId] = set()
     active_target_nodes: set[SpatialNodeId] = set()
     for project_id, p in service.projects.items():

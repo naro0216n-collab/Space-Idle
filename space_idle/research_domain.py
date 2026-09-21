@@ -7,7 +7,12 @@ from .domain import (
     decode_list, decode_str, require_fields,
 )
 from .execution_requirements import ServiceCapacityRequirement
-from .validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
+from .validation_support import (
+    ValidationContext,
+    require as _require,
+    validate_generated_id_counter as _validate_counter,
+    validate_site_requirements as _validate_site_requirements,
+)
 from .research_models import (
     ResearchExecutionSite,
     ResearchTheoryStageSpec,
@@ -251,6 +256,10 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 def validate_runtime(sim: Any) -> None:
     if sim.research is None:
         return
+    _validate_counter(
+        sim.research._provider_assignment_counter, sim.research.provider_assignments,
+        "research.provider_assignment.", "research provider assignment",
+    )
     _require(sim.research.stored_points >= -1e-9, "negative stored research points")
     for category, value in sim.research.knowledge_state.experience_by_category.items():
         _require(category != "", "empty knowledge category")

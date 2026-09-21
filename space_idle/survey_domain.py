@@ -7,7 +7,8 @@ from .domain import (
     require_fields,
 )
 from .validation_support import (
-    ValidationContext, require as _require, validate_site_requirements,
+    ValidationContext, require as _require,
+    validate_generated_id_counter as _validate_counter, validate_site_requirements,
 )
 from .exploration_models import (
     KnowledgeLevel, SurveyCampaign, SurveyCampaignControlState, SurveyProviderConstraint,
@@ -282,6 +283,14 @@ def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
 def validate_survey_runtime(sim: Any) -> None:
     if sim.survey is None:
         return
+    _validate_counter(
+        sim.survey._campaign_counter, sim.survey.campaigns,
+        "survey.campaign.", "survey campaign",
+    )
+    _validate_counter(
+        sim.survey._provider_assignment_counter, sim.survey.provider_assignments,
+        "survey.provider_assignment.", "survey provider assignment",
+    )
     for key, progress in sim.survey.knowledge_progress.items():
         _require(key in sim.survey.targets, f"knowledge references unknown survey target: {key}")
         _require(progress >= -1e-9, f"negative survey knowledge progress: {key}")
