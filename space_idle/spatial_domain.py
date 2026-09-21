@@ -44,10 +44,10 @@ def restore(sim: Any, data: dict[str, Any]) -> None:
             raise ValueError("spatial location row must be an object")
         locations.append(
             SurfaceLocationState(
-                SpatialNodeId(str(row["operational_node_id"])),
-                str(row["display_name"]),
-                CelestialBodyId(str(row["body_id"])),
-                SurfaceCellId(str(row["core_cell_id"])),
+                SpatialNodeId(row["operational_node_id"]),
+                row["display_name"],
+                CelestialBodyId(row["body_id"]),
+                SurfaceCellId(row["core_cell_id"]),
                 {SurfaceCellId(str(value)) for value in row["developed_cell_ids"]},
             )
         )

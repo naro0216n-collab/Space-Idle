@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
 from .validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
 from .facilities import FacilityLifecycle, FacilityPlacementScope, FacilityState
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
@@ -39,19 +39,19 @@ def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
             definition_id=DefinitionId(row["definition_id"]),
             operational_node_id=SpatialNodeId(row["operational_node_id"]),
             site_cell_id=None if row["site_cell_id"] is None else SurfaceCellId(row["site_cell_id"]),
-            paused=bool(row["paused"]),
+            paused=decode_bool(row["paused"], "facility paused"),
             activity_priority=row["activity_priority"],
             maintenance_priority=row["maintenance_priority"],
-            level=int(row["level"]),
+            level=decode_int(row["level"], "facility level"),
             lifecycle=FacilityLifecycle(row["lifecycle"]),
             selected_process_id=(
                 None
                 if row["selected_process_id"] is None
                 else DefinitionId(row["selected_process_id"])
             ),
-            invested_resources={DefinitionId(key): float(value) for key, value in row["invested_resources"].items()},
+            invested_resources={DefinitionId(key): decode_float(value, "facility invested resource") for key, value in row["invested_resources"].items()},
         )
-    sim.facilities._counter = int(data["counter"])
+    sim.facilities._counter = decode_int(data["counter"], "facility counter")
 
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:

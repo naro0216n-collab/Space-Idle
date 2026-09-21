@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_float, decode_int
 from .validation_support import (
     ValidationContext, require as _require, validate_site_requirements,
 )
@@ -75,21 +75,21 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
     if sim.survey is None:
         return
     sim.survey.knowledge_progress = {
-        (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): float(r["progress"])
+        (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): decode_float(r["progress"], "survey progress")
         for r in data["knowledge_progress"]
     }
     sim.survey.knowledge_precision_fraction = {
-        (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): float(r["precision_fraction"])
+        (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): decode_float(r["precision_fraction"], "survey precision_fraction")
         for r in data["knowledge_precision_fraction"]
     }
     sim.survey.estimated_potential = {
-        (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): float(r["estimated_potential"])
+        (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): decode_float(r["estimated_potential"], "survey estimated_potential")
         for r in data["estimated_potential"]
     }
     sim.survey.campaigns.clear()
     sim.survey.provider_assignments.clear()
-    sim.survey._campaign_counter = int(data["campaign_counter"])
-    sim.survey._provider_assignment_counter = int(data["provider_assignment_counter"])
+    sim.survey._campaign_counter = decode_int(data["campaign_counter"], "survey campaign_counter")
+    sim.survey._provider_assignment_counter = decode_int(data["provider_assignment_counter"], "survey provider_assignment_counter")
     assignment_fields = {
         "id", "provider_definition_id", "vehicle_definition_id",
         "operational_node_id", "fleet_commitment_ref",
@@ -123,10 +123,10 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
             campaign_id,
             tuple(SurfaceCellId(value) for value in r["target_cell_ids"]),
             tuple(DefinitionId(value) for value in r["resource_ids"]),
-            KnowledgeLevel(int(r["goal_knowledge_level"])),
+            KnowledgeLevel(decode_int(r["goal_knowledge_level"], "survey goal_knowledge_level")),
             provider_constraint,
             r["observation_mode_constraint"],
-            priority=int(r["priority"]),
+            priority=decode_int(r["priority"], "survey priority"),
             control_state=SurveyCampaignControlState(r["control_state"]),
         )
 
@@ -146,7 +146,7 @@ def extraction_referenced_resources(sim: Any) -> set[DefinitionId]:
     return result
 
 
-SURVEY_STATE_CODEC = StateCodec("survey", capture_survey, restore_survey, True)
+SURVEY_STATE_CODEC = StateCodec("survey", capture_survey, restore_survey)
 
 
 def validate_survey_configuration(sim: Any, ctx: ValidationContext) -> None:

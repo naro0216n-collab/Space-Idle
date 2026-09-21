@@ -3,7 +3,7 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
 from .market import (
     BuyCommitment, FundsState, MarketInterfaceState, MarketProviderState,
     TradeControlMode, TradeDirection, TradeOrderState,
@@ -69,43 +69,43 @@ def capture_market(sim: Any) -> dict[str, Any]:
 
 def restore_market(sim: Any, data: dict[str, Any]) -> None:
     market = sim.market
-    market.funds = FundsState(float(data["funds_balance_musd"]))
-    market._order_counter = int(data["order_counter"])
-    market._commitment_counter = int(data["commitment_counter"])
+    market.funds = FundsState(decode_float(data["funds_balance_musd"], "market funds balance"))
+    market._order_counter = decode_int(data["order_counter"], "market order_counter")
+    market._commitment_counter = decode_int(data["commitment_counter"], "market commitment_counter")
     market.provider_states = {}
     for raw in data["provider_states"]:
         row = MarketProviderState(
             DefinitionId(raw["provider_id"]),
-            {DefinitionId(key): float(value) for key, value in raw["supply_available_t"].items()},
-            {DefinitionId(key): float(value) for key, value in raw["demand_available_t"].items()},
-            int(raw["last_replenished_day"]),
+            {DefinitionId(key): decode_float(value, "market supply availability") for key, value in raw["supply_available_t"].items()},
+            {DefinitionId(key): decode_float(value, "market demand availability") for key, value in raw["demand_available_t"].items()},
+            decode_int(raw["last_replenished_day"], "market last_replenished_day"),
         )
         market.provider_states[row.provider_id] = row
     market.interfaces = {}
     for raw in data["interfaces"]:
         row = MarketInterfaceState(
             EntityId(raw["id"]), DefinitionId(raw["provider_id"]),
-            SpatialNodeId(raw["operational_node_id"]), bool(raw["enabled"]),
+            SpatialNodeId(raw["operational_node_id"]), decode_bool(raw["enabled"], "market interface enabled"),
         )
         market.interfaces[row.id] = row
     market.orders = {}
     for raw in data["orders"]:
         row = TradeOrderState(
             EntityId(raw["id"]), TradeDirection(raw["direction"]), DefinitionId(raw["resource_id"]),
-            EntityId(raw["market_interface_id"]), ActivityPriority(int(raw["priority"])),
+            EntityId(raw["market_interface_id"]), ActivityPriority(decode_int(raw["priority"], "trade order priority")),
             TradeControlMode(raw["control_mode"]),
-            None if raw["quantity_target_t"] is None else float(raw["quantity_target_t"]),
-            None if raw["rate_target_t_per_day"] is None else float(raw["rate_target_t_per_day"]),
-            None if raw["price_limit_musd_per_t"] is None else float(raw["price_limit_musd_per_t"]),
-            float(raw["settled_quantity_t"]),
+            None if raw["quantity_target_t"] is None else decode_float(raw["quantity_target_t"], "trade order quantity_target_t"),
+            None if raw["rate_target_t_per_day"] is None else decode_float(raw["rate_target_t_per_day"], "trade order rate_target_t_per_day"),
+            None if raw["price_limit_musd_per_t"] is None else decode_float(raw["price_limit_musd_per_t"], "trade order price_limit_musd_per_t"),
+            decode_float(raw["settled_quantity_t"], "trade order settled_quantity_t"),
         )
         market.orders[row.id] = row
     market.buy_commitments = {}
     for raw in data["buy_commitments"]:
         row = BuyCommitment(
             EntityId(raw["id"]), EntityId(raw["order_id"]), DefinitionId(raw["resource_id"]),
-            float(raw["remaining_quantity_t"]), float(raw["committed_price_musd_per_t"]),
-            int(raw["created_day"]), int(raw["maturity_day"]),
+            decode_float(raw["remaining_quantity_t"], "buy commitment remaining_quantity_t"), decode_float(raw["committed_price_musd_per_t"], "buy commitment price"),
+            decode_int(raw["created_day"], "buy commitment created_day"), decode_int(raw["maturity_day"], "buy commitment maturity_day"),
         )
         market.buy_commitments[row.id] = row
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_float
 from .shared import SpatialNodeId
 from .validation_support import ValidationContext, require as _require
 
@@ -24,7 +24,7 @@ def restore_storage(sim: Any, data: dict[str, Any]) -> None:
     if any(set(row) != expected_fields for row in rows):
         raise ValueError("storage infrastructure capacity has invalid fields")
     sim.storage.infrastructure_capacity_t = {
-        (SpatialNodeId(row["operational_node_id"]), str(row["storage_pool_key"])): float(row["amount"])
+        (SpatialNodeId(row["operational_node_id"]), row["storage_pool_key"]): decode_float(row["amount"], "storage amount")
         for row in rows
     }
 

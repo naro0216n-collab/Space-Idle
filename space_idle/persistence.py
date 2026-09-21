@@ -3,19 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any, Callable
 
 from .application import GameApplication
 from .application_commands import ApplicationError, SetTimeControl
 from .domain import validate_extension_registry
-from .execution_requirements import AllocationConstraintKey
 from .simulation import OfflineProgressPolicy, OfflineProgressResult
 from .validation import validate_runtime_state
 from .validation_support import ConfigurationError
 
 
-SAVE_SCHEMA_VERSION = 64
+SAVE_SCHEMA_VERSION = 65
 
 
 class SaveFormatError(ValueError):
@@ -38,14 +39,7 @@ def _extensions(sim):
 
 
 def capture_state(sim) -> dict[str, Any]:
-    data: dict[str, Any] = {
-        "day": sim.day,
-        "pending_offline_game_days": sim.pending_offline_game_days,
-        "boundary_used_by_constraint": [
-            {"kind": key.kind, "scope_id": key.scope_id, "name": key.name, "amount": amount}
-            for key, amount in sim.boundary_capacity_usage_snapshot()
-        ],
-    }
+    data: dict[str, Any] = {}
     for extension in _extensions(sim):
         codec = extension.state_codec
         if codec is not None:
@@ -54,20 +48,6 @@ def capture_state(sim) -> dict[str, Any]:
 
 
 def restore_state(sim, data: dict[str, Any]) -> None:
-    sim.day = int(data["day"])
-    sim.restore_boundary_settled_day(sim.day)
-    sim.pending_offline_game_days = float(data["pending_offline_game_days"])
-    try:
-        boundary_usage = tuple(
-            (
-                AllocationConstraintKey(str(row["kind"]), str(row["scope_id"]), str(row["name"])),
-                float(row["amount"]),
-            )
-            for row in data["boundary_used_by_constraint"]
-        )
-        sim.restore_boundary_capacity_usage(boundary_usage)
-    except (KeyError, TypeError, ValueError) as exc:
-        raise SaveFormatError(f"invalid boundary capacity usage: {exc}") from exc
     for extension in _extensions(sim):
         codec = extension.state_codec
         if codec is None:
@@ -104,11 +84,17 @@ def _restore_application_state(app: GameApplication, state: dict[str, Any]) -> N
         raise SaveFormatError("save state is missing application section")
     if set(data) != {"time_paused", "time_speed_multiplier"}:
         raise SaveFormatError("save application state has invalid fields")
+    paused = data["time_paused"]
+    speed = data["time_speed_multiplier"]
+    if not isinstance(paused, bool):
+        raise SaveFormatError("application time_paused must be boolean")
+    if isinstance(speed, bool) or not isinstance(speed, (int, float)):
+        raise SaveFormatError("application time_speed_multiplier must be numeric")
     try:
         app.execute(
             SetTimeControl(
-                paused=data["time_paused"],
-                speed_multiplier=data["time_speed_multiplier"],
+                paused=paused,
+                speed_multiplier=float(speed),
             )
         )
     except (ApplicationError, TypeError, ValueError) as exc:
@@ -124,6 +110,7 @@ def save_game(
     timestamp = saved_at or datetime.now(timezone.utc)
     if timestamp.tzinfo is None:
         raise ValueError("saved_at must be timezone-aware")
+    validate_runtime_state(app._simulation)
     state = capture_state(app._simulation)
     state["application"] = _application_state(app)
     envelope = SaveEnvelope(
@@ -144,8 +131,48 @@ def save_game(
     }
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=target.parent,
+            prefix=f".{target.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, target)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
     return envelope
+
+
+
+
+def _validate_persisted_identity_rows(value: Any, path: str = "state") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _validate_persisted_identity_rows(child, f"{path}.{key}")
+        return
+    if not isinstance(value, list):
+        return
+    if value and all(isinstance(row, dict) and "id" in row for row in value):
+        ids: set[str] = set()
+        for index, row in enumerate(value):
+            row_id = row["id"]
+            if not isinstance(row_id, str):
+                raise SaveFormatError(f"{path}[{index}].id must be a string")
+            if row_id in ids:
+                raise SaveFormatError(f"duplicate persisted entity id at {path}: {row_id}")
+            ids.add(row_id)
+    for index, child in enumerate(value):
+        _validate_persisted_identity_rows(child, f"{path}[{index}]")
 
 
 def _read_envelope(path: str | Path) -> SaveEnvelope:
@@ -166,18 +193,33 @@ def _read_envelope(path: str | Path) -> SaveEnvelope:
             "save file has invalid fields; "
             f"missing={missing}; unexpected={unexpected}"
         )
+    if isinstance(raw["schema_version"], bool) or not isinstance(raw["schema_version"], int):
+        raise SaveFormatError("schema_version must be an integer")
+    for identity_field in ("content_id", "world_definition_id", "scenario_id"):
+        if not isinstance(raw[identity_field], str):
+            raise SaveFormatError(f"{identity_field} must be a string")
     if raw["schema_version"] != SAVE_SCHEMA_VERSION:
         raise SaveFormatError(
             f"unsupported save schema: {raw['schema_version']} (expected {SAVE_SCHEMA_VERSION})"
         )
     if not isinstance(raw["state"], dict):
         raise SaveFormatError("save state must be an object")
+    _validate_persisted_identity_rows(raw["state"])
+    saved_at = raw["saved_at"]
+    if not isinstance(saved_at, str):
+        raise SaveFormatError("saved_at must be a string")
+    try:
+        parsed_saved_at = datetime.fromisoformat(saved_at)
+    except ValueError as exc:
+        raise SaveFormatError("saved_at is not a valid ISO timestamp") from exc
+    if parsed_saved_at.tzinfo is None:
+        raise SaveFormatError("saved_at must include timezone")
     return SaveEnvelope(
-        schema_version=int(raw["schema_version"]),
-        content_id=str(raw["content_id"]),
-        world_definition_id=str(raw["world_definition_id"]),
-        scenario_id=str(raw["scenario_id"]),
-        saved_at=str(raw["saved_at"]),
+        schema_version=raw["schema_version"],
+        content_id=raw["content_id"],
+        world_definition_id=raw["world_definition_id"],
+        scenario_id=raw["scenario_id"],
+        saved_at=parsed_saved_at.astimezone(timezone.utc).isoformat(),
         state=raw["state"],
     )
 
@@ -205,7 +247,7 @@ def load_game(
             f"save scenario mismatch: {envelope.scenario_id} != {app.scenario_id}"
         )
     expected_state_fields = {
-        "day", "pending_offline_game_days", "boundary_used_by_constraint", "application",
+        "application",
         *(
             extension.state_codec.key
             for extension in _extensions(app._simulation)
@@ -232,12 +274,7 @@ def load_game(
         current = now
         if current.tzinfo is None:
             raise ValueError("now must be timezone-aware")
-        try:
-            saved = datetime.fromisoformat(envelope.saved_at)
-        except ValueError as exc:
-            raise SaveFormatError("saved_at is not a valid ISO timestamp") from exc
-        if saved.tzinfo is None:
-            raise SaveFormatError("saved_at must include timezone")
+        saved = datetime.fromisoformat(envelope.saved_at)
         elapsed = max(
             0.0,
             (

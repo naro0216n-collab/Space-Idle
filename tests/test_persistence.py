@@ -51,6 +51,7 @@ from space_idle.research import (
 )
 from space_idle.shared import EntityId, DefinitionId
 from space_idle.simulation import OfflineProgressPolicy
+from space_idle.validation_support import ConfigurationError
 
 
 def _capacity_command_kwargs(app, vehicle_definition_id, source_id, destination_id, units):
@@ -601,5 +602,90 @@ def test_save_envelope_and_persisted_boundaries_reject_invalid_contracts(tmp_pat
         payload[field] = "test.mismatched.definition"
 
     path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(SaveFormatError, match=error_pattern):
+        load_game(path, build_game_application_for_load)
+
+
+def test_save_uses_domain_owned_core_state_and_not_central_boundary_fields(tmp_path):
+    app = _make_nontrivial_state()
+    path = tmp_path / "core-state.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    state = payload["state"]
+    assert "day" not in state
+    assert "pending_offline_game_days" not in state
+    assert "boundary_used_by_constraint" not in state
+    assert set(state["core"]) == {
+        "day", "pending_offline_game_days", "boundary_service_usage",
+    }
+
+
+def test_save_rejects_invalid_runtime_without_replacing_existing_snapshot(tmp_path):
+    app = build_game_application()
+    path = tmp_path / "protected.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    original = path.read_bytes()
+
+    provider = next(iter(app._simulation.market.provider_states.values()))
+    resource_id = next(iter(provider.supply_available_t))
+    provider.supply_available_t[resource_id] = 1.0e12
+
+    with pytest.raises(ConfigurationError):
+        save_game(app, path, saved_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
+    assert path.read_bytes() == original
+
+
+def test_atomic_save_failure_preserves_previous_snapshot(tmp_path, monkeypatch):
+    app = build_game_application()
+    path = tmp_path / "atomic.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    original = path.read_bytes()
+
+    def fail_replace(_source, _target):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("space_idle.persistence.os.replace", fail_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        save_game(app, path, saved_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
+    assert path.read_bytes() == original
+    assert not tuple(tmp_path.glob(".atomic.json.*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "mutate,error_pattern",
+    (
+        (
+            lambda payload: payload.__setitem__("saved_at", "not-a-date"),
+            "saved_at is not a valid ISO timestamp",
+        ),
+        (
+            lambda payload: payload["state"]["facilities"]["items"][0].__setitem__(
+                "paused", "false"
+            ),
+            "paused must be boolean",
+        ),
+        (
+            lambda payload: payload["state"]["facilities"]["items"][0].__setitem__(
+                "level", "1"
+            ),
+            "facility level must be an integer",
+        ),
+        (
+            lambda payload: payload["state"]["facilities"]["items"].append(
+                dict(payload["state"]["facilities"]["items"][0])
+            ),
+            "duplicate persisted entity id",
+        ),
+    ),
+)
+def test_load_rejects_ambiguous_or_lossy_serialized_state(tmp_path, mutate, error_pattern):
+    app = build_game_application()
+    path = tmp_path / "strict.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    mutate(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
     with pytest.raises(SaveFormatError, match=error_pattern):
         load_game(path, build_game_application_for_load)

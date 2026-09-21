@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
 from .execution_requirements import ServiceCapacityRequirement
 from .validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
 from .research_models import (
@@ -73,13 +73,13 @@ def capture_research(sim: Any) -> dict[str, Any]:
 def restore_research(sim: Any, data: dict[str, Any]) -> None:
     if sim.research is None:
         return
-    sim.research.stored_points = float(data["stored_points"])
+    sim.research.stored_points = decode_float(data["stored_points"], "research stored_points")
     sim.research.knowledge_state.experience_by_category = {
-        str(category): float(value) for category, value in data["knowledge"].items()
+        str(category): decode_float(value, "research knowledge value") for category, value in data["knowledge"].items()
     }
     sim.research.active.clear()
     sim.research.provider_assignments.clear()
-    sim.research._provider_assignment_counter = int(data["provider_assignment_counter"])
+    sim.research._provider_assignment_counter = decode_int(data["provider_assignment_counter"], "research provider_assignment_counter")
     sim.research.last_point_allocations.clear()
     sim.research.last_point_requests.clear()
     sim.research.last_execution_allocations.clear()
@@ -88,12 +88,12 @@ def restore_research(sim: Any, data: dict[str, Any]) -> None:
         rid = DefinitionId(row["definition_id"])
         sim.research.active[rid] = ResearchState(
             definition_id=rid,
-            current_stage_id=str(row["current_stage_id"]),
-            stage_progress=None if row["stage_progress"] is None else float(row["stage_progress"]),
+            current_stage_id=row["current_stage_id"],
+            stage_progress=None if row["stage_progress"] is None else decode_float(row["stage_progress"], "research stage_progress"),
             priority=row["priority"],
-            paused=bool(row["paused"]),
+            paused=decode_bool(row["paused"], "research paused"),
             execution_context=_restore_execution_site(row["execution_context"]),
-            stage_started_day=int(row["stage_started_day"]),
+            stage_started_day=decode_int(row["stage_started_day"], "research stage_started_day"),
         )
     from .research import ResearchProviderAssignmentState
     assignment_fields = {
@@ -110,7 +110,7 @@ def restore_research(sim: Any, data: dict[str, Any]) -> None:
             vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
             operational_node_id=SpatialNodeId(row["operational_node_id"]),
             priority=row["priority"],
-            paused=bool(row["paused"]),
+            paused=decode_bool(row["paused"], "research paused"),
             fleet_commitment_ref=EntityId(row["fleet_commitment_ref"]),
         )
 
@@ -126,7 +126,7 @@ def referenced_resources(sim: Any) -> set[DefinitionId]:
     return result
 
 
-STATE_CODEC = StateCodec("research", capture_research, restore_research, True)
+STATE_CODEC = StateCodec("research", capture_research, restore_research)
 
 
 def _validate_execution_requirements(requirements, research_id, stage_id, ctx):

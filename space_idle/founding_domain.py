@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
 from .founding import (
     FoundingResourceRequirement,
     FoundingStatus,
@@ -78,28 +78,28 @@ def restore_founding(sim: Any, data: dict[str, Any]) -> None:
     service = sim.founding
     if service is None:
         return
-    service._counter = int(data["counter"])
+    service._counter = decode_int(data["counter"], "founding counter")
     service.projects = {}
     for row in data["projects"]:
         p = OperationalNodeFoundingProject(
             id=ProjectId(row["id"]),
             staging_node_id=SpatialNodeId(row["staging_node_id"]),
-            display_name=str(row["display_name"]),
+            display_name=row["display_name"],
             target_spec=_restore_target_spec(row["target_spec"]),
             deployment_recipe_id=DefinitionId(row["deployment_recipe_id"]),
             vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
             resource_requirements=tuple(
-                FoundingResourceRequirement(DefinitionId(req["resource_id"]), float(req["amount_t"]))
+                FoundingResourceRequirement(DefinitionId(req["resource_id"]), decode_float(req["amount_t"], "founding resource amount_t"))
                 for req in row["resource_requirements"]
             ),
             priority=row["priority"],
             fleet_commitment_id=None if row["fleet_commitment_id"] is None else EntityId(row["fleet_commitment_id"]),
             status=FoundingStatus(row["status"]),
-            preparation_done=float(row["preparation_done"]),
-            inputs_consumed=bool(row["inputs_consumed"]),
-            paused=bool(row["paused"]),
+            preparation_done=decode_float(row["preparation_done"], "founding preparation_done"),
+            inputs_consumed=decode_bool(row["inputs_consumed"], "founding inputs_consumed"),
+            paused=decode_bool(row["paused"], "founding paused"),
             movement_execution_id=None if row["movement_execution_id"] is None else EntityId(row["movement_execution_id"]),
-            completed_day=None if row["completed_day"] is None else int(row["completed_day"]),
+            completed_day=None if row["completed_day"] is None else decode_int(row["completed_day"], "founding completed_day"),
         )
         service.projects[p.id] = p
 
@@ -251,7 +251,7 @@ def validate_runtime(sim: Any) -> None:
             _require(p.completed_day is not None, f"completed founding lacks completion day: {project_id}")
 
 
-STATE_CODEC = StateCodec("founding", capture_founding, restore_founding, True)
+STATE_CODEC = StateCodec("founding", capture_founding, restore_founding)
 DOMAIN_EXTENSION = DomainExtension(
     "founding",
     state_codec=STATE_CODEC,

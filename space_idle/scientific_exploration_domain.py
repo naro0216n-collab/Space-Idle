@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
 from .scientific_exploration import (ScientificExplorationCompletionDisposition, ScientificExplorationPhase, ScientificExplorationState, ScientificExplorationTerminationIntent)
 from .shared import DefinitionId, EntityId
 from .transport.models import FleetActivityRef, MovementExecutionKind
@@ -49,11 +49,11 @@ def restore_scientific_exploration(sim: Any, data: dict[str, Any]) -> None:
                 None if row["fleet_commitment_id"] is None
                 else EntityId(row["fleet_commitment_id"])
             ),
-            progress_days=float(row["progress_days"]),
-            research_points_awarded=float(row["research_points_awarded"]),
-            inputs_consumed=bool(row["inputs_consumed"]),
-            paused=bool(row["paused"]),
-            created_day=int(row["created_day"]),
+            progress_days=decode_float(row["progress_days"], "scientific exploration progress_days"),
+            research_points_awarded=decode_float(row["research_points_awarded"], "scientific exploration research_points_awarded"),
+            inputs_consumed=decode_bool(row["inputs_consumed"], "scientific exploration inputs_consumed"),
+            paused=decode_bool(row["paused"], "scientific exploration paused"),
+            created_day=decode_int(row["created_day"], "scientific exploration created_day"),
             priority=row["priority"],
             movement_execution_id=(
                 None if row["movement_execution_id"] is None

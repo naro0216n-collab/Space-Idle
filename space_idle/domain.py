@@ -20,7 +20,6 @@ class StateCodec:
     key: str
     capture: CaptureFn
     restore: RestoreFn
-    optional: bool = False
 
 
 @dataclass(frozen=True)
@@ -40,6 +39,25 @@ class DomainExtension:
     service_capacity_provider: ServiceCapacityProviderFactory | None = None
     service_capacity_request_provider: ServiceCapacityRequestProviderFactory | None = None
     allocation_pool_provider: AllocationPoolProviderFactory | None = None
+
+
+def decode_bool(value: Any, field: str) -> bool:
+    """Decode a persisted boolean without Python truthiness coercion."""
+    if not isinstance(value, bool):
+        raise ValueError(f"{field} must be boolean")
+    return value
+
+
+def decode_int(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field} must be an integer")
+    return value
+
+
+def decode_float(value: Any, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field} must be numeric")
+    return float(value)
 
 
 def validate_extension_registry(extensions: tuple[DomainExtension, ...]) -> None:

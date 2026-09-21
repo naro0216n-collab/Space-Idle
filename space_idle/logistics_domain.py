@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_float, decode_int
 from .logistics_models import (
     CargoArrivalWaiting,
     CargoFlowSegment,
@@ -32,8 +32,8 @@ def _restore_leg(row: dict[str, Any]) -> CargoServiceLeg:
         service_identity=row["service_identity"],
         source_id=SpatialNodeId(row["source_id"]),
         destination_id=SpatialNodeId(row["destination_id"]),
-        latency_days=int(row["latency_days"]),
-        cycle_days=float(row["cycle_days"]),
+        latency_days=decode_int(row["latency_days"], "cargo leg latency_days"),
+        cycle_days=decode_float(row["cycle_days"], "cargo leg cycle_days"),
         allocation_id=EntityId(row["allocation_id"]),
         direction=row["direction"],
     )
@@ -109,24 +109,24 @@ def capture_logistics(sim: Any) -> dict[str, Any]:
 
 def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
     lg = sim.logistics
-    lg._cargo_flow_counter = int(data["cargo_flow_counter"])
-    lg._arrival_waiting_counter = int(data["arrival_waiting_counter"])
+    lg._cargo_flow_counter = decode_int(data["cargo_flow_counter"], "cargo_flow_counter")
+    lg._arrival_waiting_counter = decode_int(data["arrival_waiting_counter"], "arrival_waiting_counter")
     lg.cargo_flows = {
         EntityId(row["id"]): CargoFlowSegment(
             id=EntityId(row["id"]),
             resource_id=DefinitionId(row["resource_id"]),
-            amount_t=float(row["amount_t"]),
+            amount_t=decode_float(row["amount_t"], "cargo amount_t"),
             source_id=SpatialNodeId(row["source_id"]),
             final_destination_id=SpatialNodeId(row["final_destination_id"]),
             requirement_id=None if row["requirement_id"] is None else EntityId(row["requirement_id"]),
             owner_kind=row["owner_kind"],
             owner_id=EntityId(row["owner_id"]),
-            priority=int(row["priority"]),
+            priority=decode_int(row["priority"], "logistics priority"),
             leg=_restore_leg(row["leg"]),
             remaining_legs=tuple(_restore_leg(leg) for leg in row["remaining_legs"]),
-            dispatch_start_day=int(row["dispatch_start_day"]),
-            dispatch_end_day=int(row["dispatch_end_day"]),
-            dispatch_rate_t_per_day=float(row["dispatch_rate_t_per_day"]),
+            dispatch_start_day=decode_int(row["dispatch_start_day"], "cargo dispatch_start_day"),
+            dispatch_end_day=decode_int(row["dispatch_end_day"], "cargo dispatch_end_day"),
+            dispatch_rate_t_per_day=decode_float(row["dispatch_rate_t_per_day"], "cargo dispatch_rate_t_per_day"),
         )
         for row in data["cargo_flows"]
     }
@@ -134,16 +134,16 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
         EntityId(row["id"]): CargoArrivalWaiting(
             id=EntityId(row["id"]),
             resource_id=DefinitionId(row["resource_id"]),
-            amount_t=float(row["amount_t"]),
+            amount_t=decode_float(row["amount_t"], "cargo amount_t"),
             node_id=SpatialNodeId(row["node_id"]),
             final_destination_id=SpatialNodeId(row["final_destination_id"]),
             requirement_id=None if row["requirement_id"] is None else EntityId(row["requirement_id"]),
             owner_kind=row["owner_kind"],
             owner_id=EntityId(row["owner_id"]),
-            priority=int(row["priority"]),
+            priority=decode_int(row["priority"], "logistics priority"),
             arrival_leg=_restore_leg(row["arrival_leg"]),
             remaining_legs=tuple(_restore_leg(leg) for leg in row["remaining_legs"]),
-            arrived_day=int(row["arrived_day"]),
+            arrived_day=decode_int(row["arrived_day"], "cargo arrived_day"),
         )
         for row in data["arrival_waiting"]
     }
@@ -152,8 +152,8 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
             EntityId(row["id"]),
             SpatialNodeId(row["destination_id"]),
             DefinitionId(row["resource_id"]),
-            float(row["target_quantity_t"]),
-            int(row["priority"]),
+            decode_float(row["target_quantity_t"], "target stock quantity"),
+            decode_int(row["priority"], "logistics priority"),
         )
         for row in data["target_stocks"]
     }

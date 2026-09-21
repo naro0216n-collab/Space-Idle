@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain import DomainExtension, StateCodec
+from ..domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
 from ..validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
 from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .models import (
@@ -35,7 +35,7 @@ def _restore_target(data: dict[str, Any]):
     if kind == "new_facility":
         return NewFacilityTarget(DefinitionId(data["facility_def_id"]))
     if kind == "facility_upgrade":
-        return FacilityUpgradeTarget(EntityId(data["facility_id"]), int(data["target_level"]))
+        return FacilityUpgradeTarget(EntityId(data["facility_id"]), decode_int(data["target_level"], "construction target_level"))
     if kind == "facility_decommission":
         return FacilityDecommissionTarget(
             EntityId(data["facility_id"]), DefinitionId(data["facility_definition_id"])
@@ -80,7 +80,7 @@ def capture_projects(sim: Any) -> dict[str, Any]:
 
 
 def restore_projects(sim: Any, data: dict[str, Any]) -> None:
-    sim.projects._counter = int(data["counter"])
+    sim.projects._counter = decode_int(data["counter"], "construction counter")
     sim.projects.projects.clear()
     project_fields = {
         "id", "target", "operational_node_id", "site_cell_id", "priority",
@@ -95,7 +95,7 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
         project_id = ProjectId(row["id"])
         resources = {
             DefinitionId(item["resource_id"]): ProjectResourceState(
-                committed_t=float(item["committed_t"]),
+                committed_t=decode_float(item["committed_t"], "construction committed_t"),
             )
             for item in row["resources"]
         }
@@ -104,24 +104,24 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
             target=_restore_target(row["target"]),
             operational_node_id=SpatialNodeId(row["operational_node_id"]),
             site_cell_id=None if row["site_cell_id"] is None else SurfaceCellId(row["site_cell_id"]),
-            priority=int(row["priority"]),
+            priority=decode_int(row["priority"], "construction priority"),
             procurement_policy=row["procurement_policy"],
             status=ProjectStatus(row["status"]),
             procurement_started_day=row["procurement_started_day"],
-            construction_done=float(row["construction_done"]),
-            paused=bool(row["paused"]),
-            pause_started_day=None if row["pause_started_day"] is None else int(row["pause_started_day"]),
+            construction_done=decode_float(row["construction_done"], "construction_done"),
+            paused=decode_bool(row["paused"], "construction paused"),
+            pause_started_day=None if row["pause_started_day"] is None else decode_int(row["pause_started_day"], "construction pause_started_day"),
             resources=resources,
-            materials_committed=bool(row["materials_committed"]),
+            materials_committed=decode_bool(row["materials_committed"], "construction materials_committed"),
             completed_facility_id=None if row["completed_facility_id"] is None else EntityId(row["completed_facility_id"]),
-            irreversible_started=bool(row["irreversible_started"]),
+            irreversible_started=decode_bool(row["irreversible_started"], "construction irreversible_started"),
             salvage_recovered_fraction=(
                 None
                 if row["salvage_recovered_fraction"] is None
-                else float(row["salvage_recovered_fraction"])
+                else decode_float(row["salvage_recovered_fraction"], "construction salvage_recovered_fraction")
             ),
             salvage_recovered={
-                DefinitionId(item["resource_id"]): float(item["amount_t"])
+                DefinitionId(item["resource_id"]): decode_float(item["amount_t"], "construction salvage amount_t")
                 for item in row["salvage_recovered"]
             },
         )

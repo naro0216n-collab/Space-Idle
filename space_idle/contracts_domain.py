@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .contracts import ContractState, ContractStatus
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_int
 from .shared import ContractId, DefinitionId
 from .validation_support import (
     ValidationContext,
@@ -35,13 +35,13 @@ def capture_contracts(sim: Any) -> dict[str, Any]:
 def restore_contracts(sim: Any, data: dict[str, Any]) -> None:
     if sim.contracts is None:
         return
-    sim.contracts._counter = int(data["counter"])
+    sim.contracts._counter = decode_int(data["counter"], "contract counter")
     sim.contracts.contracts = {
         ContractId(row["id"]): ContractState(
             ContractId(row["id"]),
             DefinitionId(row["template_id"]),
-            int(row["offered_day"]),
-            int(row["deadline_day"]),
+            decode_int(row["offered_day"], "contract offered_day"),
+            decode_int(row["deadline_day"], "contract deadline_day"),
             ContractStatus(row["status"]),
         )
         for row in data["items"]
@@ -83,7 +83,7 @@ def validate_runtime(sim: Any) -> None:
         )
 
 
-STATE_CODEC = StateCodec("contracts", capture_contracts, restore_contracts, True)
+STATE_CODEC = StateCodec("contracts", capture_contracts, restore_contracts)
 DOMAIN_EXTENSION = DomainExtension(
     "contracts",
     state_codec=STATE_CODEC,

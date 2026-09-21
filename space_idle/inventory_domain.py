@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_float
 from .validation_support import ValidationContext, require as _require
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
@@ -26,15 +26,15 @@ def capture_inventory(sim: Any) -> dict[str, Any]:
 
 def restore_inventory(sim: Any, data: dict[str, Any]) -> None:
     sim.inventory.stock = {
-        (SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): float(r["amount"])
+        (SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): decode_float(r["amount"], "inventory amount")
         for r in data["stock"]
     }
     sim.inventory.reserved = {
-        (EntityId(r["owner_id"]), SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): float(r["amount"])
+        (EntityId(r["owner_id"]), SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): decode_float(r["amount"], "inventory amount")
         for r in data["reserved"]
     }
     sim.inventory.external_occupancy = {
-        (EntityId(r["owner_id"]), SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): float(r["amount"])
+        (EntityId(r["owner_id"]), SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): decode_float(r["amount"], "inventory amount")
         for r in data["external_occupancy"]
     }
 

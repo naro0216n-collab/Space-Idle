@@ -158,7 +158,7 @@ class Simulation:
     scenario_id: str = "unconfigured"
     pending_offline_game_days: float = 0.0
     domain_extensions: tuple[DomainExtension, ...] = ()
-    _boundary_used_by_constraint: dict[AllocationConstraintKey, float] = field(default_factory=dict, init=False, repr=False)
+    _boundary_service_usage: dict[AllocationConstraintKey, float] = field(default_factory=dict, init=False, repr=False)
     _initial_state_initialized: bool = field(default=False, init=False, repr=False)
     _boundary_settled_day: int = field(init=False, repr=False)
 
@@ -190,16 +190,16 @@ class Simulation:
             raise ValueError("saved canonical boundary does not match simulation day")
         self._boundary_settled_day = day
 
-    def boundary_capacity_usage_snapshot(self) -> tuple[tuple[AllocationConstraintKey, float], ...]:
+    def boundary_service_usage_snapshot(self) -> tuple[tuple[AllocationConstraintKey, float], ...]:
         """Authoritative same-day capacity already consumed at Boundary settlement."""
         return tuple(
             sorted(
-                ((key, amount) for key, amount in self._boundary_used_by_constraint.items() if amount > 1e-12),
+                ((key, amount) for key, amount in self._boundary_service_usage.items() if amount > 1e-12),
                 key=lambda row: (row[0].kind, row[0].scope_id, row[0].name),
             )
         )
 
-    def restore_boundary_capacity_usage(
+    def restore_boundary_service_usage(
         self, rows: tuple[tuple[AllocationConstraintKey, float], ...]
     ) -> None:
         restored: dict[AllocationConstraintKey, float] = {}
@@ -212,7 +212,7 @@ class Simulation:
                 raise ValueError("duplicate boundary capacity usage constraint")
             if amount > 1e-12:
                 restored[key] = amount
-        self._boundary_used_by_constraint = restored
+        self._boundary_service_usage = restored
 
     def _ensure_current_boundary_settled(self) -> None:
         if self._boundary_settled_day == self.day:
@@ -590,7 +590,7 @@ class Simulation:
 
     def _settle_tick_boundary(self) -> None:
         """Settle prior physical obligations through the common finite constraints."""
-        self._boundary_used_by_constraint = {}
+        self._boundary_service_usage = {}
         self.market.replenish_to_day(self.day)
         self.transport.advance_fleet_state(self.day)
         if self.scientific_exploration is not None:
@@ -625,7 +625,7 @@ class Simulation:
             service_supply = self._allocate_tick_services(power_by_location, requests=())
             capacities = self._constraint_capacities(bundles, service_supply=service_supply)
             boundary_execution = allocate_execution_requirements(bundles, capacities)
-            self._boundary_used_by_constraint = {
+            self._boundary_service_usage = {
                 key: amount for key, amount in boundary_execution.used_by_constraint.items()
                 if key.kind in {"service", "service_pool"} and amount > 1e-12
             }
@@ -764,7 +764,7 @@ class Simulation:
                             capacities[key] = max(
                                 0.0,
                                 service_supply.summary(node_id, requirement.service_type).spare_rate
-                                - self._boundary_used_by_constraint.get(key, 0.0),
+                                - self._boundary_service_usage.get(key, 0.0),
                             )
                             continue
                         if (
@@ -780,7 +780,7 @@ class Simulation:
                                 max(0.0, service_supply.summary(node_id, requirement.service_type).spare_rate)
                                 for node_id, service_type in service_supply.supply_enabled
                                 if service_type == requirement.service_type
-                            ) - self._boundary_used_by_constraint.get(key, 0.0),
+                            ) - self._boundary_service_usage.get(key, 0.0),
                         )
                     continue
 
