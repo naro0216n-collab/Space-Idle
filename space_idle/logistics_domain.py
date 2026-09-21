@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec, decode_float, decode_int
+from .domain import (
+    DomainExtension, StateCodec, decode_float, decode_int, decode_list, decode_str,
+    require_fields,
+)
 from .logistics_models import (
     CargoArrivalWaiting,
     CargoFlowSegment,
@@ -27,15 +30,25 @@ def _capture_leg(leg: CargoServiceLeg) -> dict[str, Any]:
     }
 
 
-def _restore_leg(row: dict[str, Any]) -> CargoServiceLeg:
+def _restore_leg(value: Any, field: str = "cargo leg") -> CargoServiceLeg:
+    row = require_fields(
+        value,
+        {
+            "service_identity", "source_id", "destination_id", "latency_days",
+            "cycle_days", "allocation_id", "direction",
+        },
+        field,
+    )
     return CargoServiceLeg(
-        service_identity=row["service_identity"],
-        source_id=SpatialNodeId(row["source_id"]),
-        destination_id=SpatialNodeId(row["destination_id"]),
-        latency_days=decode_int(row["latency_days"], "cargo leg latency_days"),
-        cycle_days=decode_float(row["cycle_days"], "cargo leg cycle_days"),
-        allocation_id=EntityId(row["allocation_id"]),
-        direction=row["direction"],
+        service_identity=decode_str(row["service_identity"], f"{field} service_identity"),
+        source_id=SpatialNodeId(decode_str(row["source_id"], f"{field} source_id")),
+        destination_id=SpatialNodeId(
+            decode_str(row["destination_id"], f"{field} destination_id")
+        ),
+        latency_days=decode_int(row["latency_days"], f"{field} latency_days"),
+        cycle_days=decode_float(row["cycle_days"], f"{field} cycle_days"),
+        allocation_id=EntityId(decode_str(row["allocation_id"], f"{field} allocation_id")),
+        direction=decode_str(row["direction"], f"{field} direction"),
     )
 
 
@@ -111,82 +124,141 @@ def restore_logistics(sim: Any, data: dict[str, Any]) -> None:
     lg = sim.logistics
     lg._cargo_flow_counter = decode_int(data["cargo_flow_counter"], "cargo_flow_counter")
     lg._arrival_waiting_counter = decode_int(data["arrival_waiting_counter"], "arrival_waiting_counter")
-    lg.cargo_flows = {
-        EntityId(row["id"]): CargoFlowSegment(
-            id=EntityId(row["id"]),
-            resource_id=DefinitionId(row["resource_id"]),
+
+    flow_fields = {
+        "id", "resource_id", "amount_t", "source_id", "final_destination_id",
+        "requirement_id", "owner_kind", "owner_id", "priority", "leg",
+        "remaining_legs", "dispatch_start_day", "dispatch_end_day",
+        "dispatch_rate_t_per_day",
+    }
+    lg.cargo_flows = {}
+    for index, raw in enumerate(decode_list(data["cargo_flows"], "cargo_flows")):
+        row = require_fields(raw, flow_fields, f"cargo flow[{index}]")
+        flow_id = EntityId(decode_str(row["id"], "cargo flow id"))
+        if flow_id in lg.cargo_flows:
+            raise ValueError(f"duplicate cargo flow: {flow_id}")
+        lg.cargo_flows[flow_id] = CargoFlowSegment(
+            id=flow_id,
+            resource_id=DefinitionId(decode_str(row["resource_id"], "cargo resource_id")),
             amount_t=decode_float(row["amount_t"], "cargo amount_t"),
-            source_id=SpatialNodeId(row["source_id"]),
-            final_destination_id=SpatialNodeId(row["final_destination_id"]),
-            requirement_id=None if row["requirement_id"] is None else EntityId(row["requirement_id"]),
-            owner_kind=row["owner_kind"],
-            owner_id=EntityId(row["owner_id"]),
+            source_id=SpatialNodeId(decode_str(row["source_id"], "cargo source_id")),
+            final_destination_id=SpatialNodeId(
+                decode_str(row["final_destination_id"], "cargo final_destination_id")
+            ),
+            requirement_id=(
+                None if row["requirement_id"] is None
+                else EntityId(decode_str(row["requirement_id"], "cargo requirement_id"))
+            ),
+            owner_kind=decode_str(row["owner_kind"], "cargo owner_kind"),
+            owner_id=EntityId(decode_str(row["owner_id"], "cargo owner_id")),
             priority=decode_int(row["priority"], "logistics priority"),
-            leg=_restore_leg(row["leg"]),
-            remaining_legs=tuple(_restore_leg(leg) for leg in row["remaining_legs"]),
+            leg=_restore_leg(row["leg"], f"cargo flow[{index}] leg"),
+            remaining_legs=tuple(
+                _restore_leg(leg, f"cargo flow[{index}] remaining_leg[{leg_index}]")
+                for leg_index, leg in enumerate(
+                    decode_list(row["remaining_legs"], "cargo remaining_legs")
+                )
+            ),
             dispatch_start_day=decode_int(row["dispatch_start_day"], "cargo dispatch_start_day"),
             dispatch_end_day=decode_int(row["dispatch_end_day"], "cargo dispatch_end_day"),
-            dispatch_rate_t_per_day=decode_float(row["dispatch_rate_t_per_day"], "cargo dispatch_rate_t_per_day"),
+            dispatch_rate_t_per_day=decode_float(
+                row["dispatch_rate_t_per_day"], "cargo dispatch_rate_t_per_day"
+            ),
         )
-        for row in data["cargo_flows"]
+
+    waiting_fields = {
+        "id", "resource_id", "amount_t", "node_id", "final_destination_id",
+        "requirement_id", "owner_kind", "owner_id", "priority", "arrival_leg",
+        "remaining_legs", "arrived_day",
     }
-    lg.arrival_waiting = {
-        EntityId(row["id"]): CargoArrivalWaiting(
-            id=EntityId(row["id"]),
-            resource_id=DefinitionId(row["resource_id"]),
+    lg.arrival_waiting = {}
+    for index, raw in enumerate(decode_list(data["arrival_waiting"], "arrival_waiting")):
+        row = require_fields(raw, waiting_fields, f"arrival waiting[{index}]")
+        waiting_id = EntityId(decode_str(row["id"], "arrival waiting id"))
+        if waiting_id in lg.arrival_waiting:
+            raise ValueError(f"duplicate arrival waiting: {waiting_id}")
+        lg.arrival_waiting[waiting_id] = CargoArrivalWaiting(
+            id=waiting_id,
+            resource_id=DefinitionId(decode_str(row["resource_id"], "cargo resource_id")),
             amount_t=decode_float(row["amount_t"], "cargo amount_t"),
-            node_id=SpatialNodeId(row["node_id"]),
-            final_destination_id=SpatialNodeId(row["final_destination_id"]),
-            requirement_id=None if row["requirement_id"] is None else EntityId(row["requirement_id"]),
-            owner_kind=row["owner_kind"],
-            owner_id=EntityId(row["owner_id"]),
+            node_id=SpatialNodeId(decode_str(row["node_id"], "cargo node_id")),
+            final_destination_id=SpatialNodeId(
+                decode_str(row["final_destination_id"], "cargo final_destination_id")
+            ),
+            requirement_id=(
+                None if row["requirement_id"] is None
+                else EntityId(decode_str(row["requirement_id"], "cargo requirement_id"))
+            ),
+            owner_kind=decode_str(row["owner_kind"], "cargo owner_kind"),
+            owner_id=EntityId(decode_str(row["owner_id"], "cargo owner_id")),
             priority=decode_int(row["priority"], "logistics priority"),
-            arrival_leg=_restore_leg(row["arrival_leg"]),
-            remaining_legs=tuple(_restore_leg(leg) for leg in row["remaining_legs"]),
+            arrival_leg=_restore_leg(row["arrival_leg"], f"arrival waiting[{index}] leg"),
+            remaining_legs=tuple(
+                _restore_leg(leg, f"arrival waiting[{index}] remaining_leg[{leg_index}]")
+                for leg_index, leg in enumerate(
+                    decode_list(row["remaining_legs"], "arrival waiting remaining_legs")
+                )
+            ),
             arrived_day=decode_int(row["arrived_day"], "cargo arrived_day"),
         )
-        for row in data["arrival_waiting"]
-    }
-    lg.target_stocks = {
-        EntityId(row["id"]): TargetStockPolicy(
-            EntityId(row["id"]),
-            SpatialNodeId(row["destination_id"]),
-            DefinitionId(row["resource_id"]),
+
+    target_fields = {"id", "destination_id", "resource_id", "target_quantity_t", "priority"}
+    lg.target_stocks = {}
+    for index, raw in enumerate(decode_list(data["target_stocks"], "target_stocks")):
+        row = require_fields(raw, target_fields, f"target stock[{index}]")
+        policy_id = EntityId(decode_str(row["id"], "target stock id"))
+        if policy_id in lg.target_stocks:
+            raise ValueError(f"duplicate target stock: {policy_id}")
+        lg.target_stocks[policy_id] = TargetStockPolicy(
+            policy_id,
+            SpatialNodeId(decode_str(row["destination_id"], "target stock destination_id")),
+            DefinitionId(decode_str(row["resource_id"], "target stock resource_id")),
             decode_float(row["target_quantity_t"], "target stock quantity"),
             decode_int(row["priority"], "logistics priority"),
         )
-        for row in data["target_stocks"]
-    }
+
     lg.routing_constraints = {}
     routing_fields = {
         "destination_id", "owner_kind", "owner_id", "resource_id",
         "source_node_id", "required_via_node_ids",
         "required_transport_allocation_ids",
     }
-    for row in data["routing_constraints"]:
-        if set(row) != routing_fields:
-            raise ValueError("routing constraint has invalid fields")
+    for index, raw in enumerate(
+        decode_list(data["routing_constraints"], "routing_constraints")
+    ):
+        row = require_fields(raw, routing_fields, f"routing constraint[{index}]")
         scope = SupplyRoutingConstraintScope(
-            destination_id=SpatialNodeId(row["destination_id"]),
-            owner_kind=row["owner_kind"],
-            owner_id=None if row["owner_id"] is None else EntityId(row["owner_id"]),
+            destination_id=SpatialNodeId(
+                decode_str(row["destination_id"], "routing destination_id")
+            ),
+            owner_kind=decode_str(row["owner_kind"], "routing owner_kind"),
+            owner_id=(
+                None if row["owner_id"] is None
+                else EntityId(decode_str(row["owner_id"], "routing owner_id"))
+            ),
             resource_id=(
-                None if row["resource_id"] is None else DefinitionId(row["resource_id"])
+                None if row["resource_id"] is None
+                else DefinitionId(decode_str(row["resource_id"], "routing resource_id"))
             ),
         )
+        if scope in lg.routing_constraints:
+            raise ValueError(f"duplicate routing constraint: {scope}")
         lg.routing_constraints[scope] = SupplyRoutingConstraintState(
             scope=scope,
             source_node_id=(
-                None
-                if row["source_node_id"] is None
-                else SpatialNodeId(row["source_node_id"])
+                None if row["source_node_id"] is None
+                else SpatialNodeId(decode_str(row["source_node_id"], "routing source_node_id"))
             ),
             required_via_node_ids=tuple(
-                SpatialNodeId(value) for value in row["required_via_node_ids"]
+                SpatialNodeId(decode_str(value, "routing required_via_node_id"))
+                for value in decode_list(row["required_via_node_ids"], "routing required_via_node_ids")
             ),
             required_transport_allocation_ids=tuple(
-                EntityId(value)
-                for value in row["required_transport_allocation_ids"]
+                EntityId(decode_str(value, "routing required_transport_allocation_id"))
+                for value in decode_list(
+                    row["required_transport_allocation_ids"],
+                    "routing required_transport_allocation_ids",
+                )
             ),
         )
 

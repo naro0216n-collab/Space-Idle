@@ -574,9 +574,9 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
         (("missing", "logistics", "routing_constraints"), "save domain section has invalid fields"),
         (("missing", "survey", "campaigns"), "save domain section has invalid fields"),
         (("unexpected", "envelope"), "save file has invalid fields"),
-        (("unexpected", "transport_allocation"), "transport allocation has invalid fields"),
+        (("unexpected", "transport_allocation"), "invalid fields"),
         (("unexpected", "survey_campaign"), "invalid fields"),
-        (("unexpected", "construction_project"), "construction project has invalid fields"),
+        (("unexpected", "construction_project"), "invalid fields"),
         (("identity", "world_definition_id"), "save world definition mismatch"),
         (("identity", "scenario_id"), "save scenario mismatch"),
     ),
@@ -683,16 +683,16 @@ def test_load_rejects_non_finite_json_numbers(tmp_path):
 
 
 def test_load_requires_each_domain_section_to_roundtrip_canonically(tmp_path):
-    app = build_game_application()
+    app = _make_nontrivial_state()
     path = tmp_path / "noncanonical-domain.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     payload = json.loads(path.read_text(encoding="utf-8"))
-    provider_states = payload["state"]["market"]["provider_states"]
-    assert provider_states
-    provider_states[0]["unexpected_field"] = None
+    facilities = payload["state"]["facilities"]["items"]
+    assert len(facilities) > 1
+    facilities.reverse()
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(SaveFormatError, match="canonical serialized form: market"):
+    with pytest.raises(SaveFormatError, match="canonical serialized form: facilities"):
         load_game(path, build_game_application_for_load)
 
 
@@ -721,10 +721,40 @@ def test_load_requires_each_domain_section_to_roundtrip_canonically(tmp_path):
             ),
             "duplicate persisted entity id",
         ),
+        (
+            lambda payload: payload["state"]["projects"]["items"][0].__setitem__(
+                "operational_node_id", 1
+            ),
+            "operational_node_id must be a string",
+        ),
+        (
+            lambda payload: payload["state"]["logistics"]["cargo_flows"][0].__setitem__(
+                "resource_id", 1
+            ),
+            "resource_id must be a string",
+        ),
+        (
+            lambda payload: payload["state"]["market"]["interfaces"][0].__setitem__(
+                "provider_id", 1
+            ),
+            "provider_id must be a string",
+        ),
+        (
+            lambda payload: payload["state"]["transport"]["fleet_pools"][0].__setitem__(
+                "vehicle_definition_id", 1
+            ),
+            "vehicle_definition_id must be a string",
+        ),
+        (
+            lambda payload: payload["state"]["transport"]["transport_allocations"][0].__setitem__(
+                "movement_hard_constraint", "movement.plan.not-a-list"
+            ),
+            "movement_hard_constraint must be a list",
+        ),
     ),
 )
 def test_load_rejects_ambiguous_or_lossy_serialized_state(tmp_path, mutate, error_pattern):
-    app = build_game_application()
+    app = _make_nontrivial_state()
     path = tmp_path / "strict.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     payload = json.loads(path.read_text(encoding="utf-8"))

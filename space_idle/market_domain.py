@@ -3,7 +3,10 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any
 
-from .domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
+from .domain import (
+    DomainExtension, StateCodec, decode_bool, decode_dict, decode_float, decode_int,
+    decode_list, decode_str, require_fields,
+)
 from .market import (
     BuyCommitment, FundsState, MarketInterfaceState, MarketProviderState,
     TradeControlMode, TradeDirection, TradeOrderState,
@@ -72,42 +75,108 @@ def restore_market(sim: Any, data: dict[str, Any]) -> None:
     market.funds = FundsState(decode_float(data["funds_balance_musd"], "market funds balance"))
     market._order_counter = decode_int(data["order_counter"], "market order_counter")
     market._commitment_counter = decode_int(data["commitment_counter"], "market commitment_counter")
+
+    provider_fields = {
+        "provider_id", "supply_available_t", "demand_available_t",
+        "last_replenished_day",
+    }
     market.provider_states = {}
-    for raw in data["provider_states"]:
+    for index, raw in enumerate(decode_list(data["provider_states"], "market provider_states")):
+        item = require_fields(raw, provider_fields, f"market provider_state[{index}]")
+        provider_id = DefinitionId(decode_str(item["provider_id"], "market provider_id"))
+        if provider_id in market.provider_states:
+            raise ValueError(f"duplicate market provider state: {provider_id}")
+        supply = decode_dict(item["supply_available_t"], "market supply_available_t")
+        demand = decode_dict(item["demand_available_t"], "market demand_available_t")
         row = MarketProviderState(
-            DefinitionId(raw["provider_id"]),
-            {DefinitionId(key): decode_float(value, "market supply availability") for key, value in raw["supply_available_t"].items()},
-            {DefinitionId(key): decode_float(value, "market demand availability") for key, value in raw["demand_available_t"].items()},
-            decode_int(raw["last_replenished_day"], "market last_replenished_day"),
+            provider_id,
+            {
+                DefinitionId(key): decode_float(value, "market supply availability")
+                for key, value in supply.items()
+            },
+            {
+                DefinitionId(key): decode_float(value, "market demand availability")
+                for key, value in demand.items()
+            },
+            decode_int(item["last_replenished_day"], "market last_replenished_day"),
         )
-        market.provider_states[row.provider_id] = row
+        market.provider_states[provider_id] = row
+
+    interface_fields = {"id", "provider_id", "operational_node_id", "enabled"}
     market.interfaces = {}
-    for raw in data["interfaces"]:
+    for index, raw in enumerate(decode_list(data["interfaces"], "market interfaces")):
+        item = require_fields(raw, interface_fields, f"market interface[{index}]")
+        interface_id = EntityId(decode_str(item["id"], "market interface id"))
+        if interface_id in market.interfaces:
+            raise ValueError(f"duplicate market interface: {interface_id}")
         row = MarketInterfaceState(
-            EntityId(raw["id"]), DefinitionId(raw["provider_id"]),
-            SpatialNodeId(raw["operational_node_id"]), decode_bool(raw["enabled"], "market interface enabled"),
+            interface_id,
+            DefinitionId(decode_str(item["provider_id"], "market interface provider_id")),
+            SpatialNodeId(
+                decode_str(item["operational_node_id"], "market interface operational_node_id")
+            ),
+            decode_bool(item["enabled"], "market interface enabled"),
         )
-        market.interfaces[row.id] = row
+        market.interfaces[interface_id] = row
+
+    order_fields = {
+        "id", "direction", "resource_id", "market_interface_id", "priority",
+        "control_mode", "quantity_target_t", "rate_target_t_per_day",
+        "price_limit_musd_per_t", "settled_quantity_t",
+    }
     market.orders = {}
-    for raw in data["orders"]:
+    for index, raw in enumerate(decode_list(data["orders"], "market orders")):
+        item = require_fields(raw, order_fields, f"market order[{index}]")
+        order_id = EntityId(decode_str(item["id"], "market order id"))
+        if order_id in market.orders:
+            raise ValueError(f"duplicate market order: {order_id}")
         row = TradeOrderState(
-            EntityId(raw["id"]), TradeDirection(raw["direction"]), DefinitionId(raw["resource_id"]),
-            EntityId(raw["market_interface_id"]), ActivityPriority(decode_int(raw["priority"], "trade order priority")),
-            TradeControlMode(raw["control_mode"]),
-            None if raw["quantity_target_t"] is None else decode_float(raw["quantity_target_t"], "trade order quantity_target_t"),
-            None if raw["rate_target_t_per_day"] is None else decode_float(raw["rate_target_t_per_day"], "trade order rate_target_t_per_day"),
-            None if raw["price_limit_musd_per_t"] is None else decode_float(raw["price_limit_musd_per_t"], "trade order price_limit_musd_per_t"),
-            decode_float(raw["settled_quantity_t"], "trade order settled_quantity_t"),
+            order_id,
+            TradeDirection(decode_str(item["direction"], "market order direction")),
+            DefinitionId(decode_str(item["resource_id"], "market order resource_id")),
+            EntityId(
+                decode_str(item["market_interface_id"], "market order market_interface_id")
+            ),
+            ActivityPriority(decode_int(item["priority"], "trade order priority")),
+            TradeControlMode(decode_str(item["control_mode"], "market order control_mode")),
+            (
+                None if item["quantity_target_t"] is None
+                else decode_float(item["quantity_target_t"], "trade order quantity_target_t")
+            ),
+            (
+                None if item["rate_target_t_per_day"] is None
+                else decode_float(item["rate_target_t_per_day"], "trade order rate_target_t_per_day")
+            ),
+            (
+                None if item["price_limit_musd_per_t"] is None
+                else decode_float(item["price_limit_musd_per_t"], "trade order price_limit_musd_per_t")
+            ),
+            decode_float(item["settled_quantity_t"], "trade order settled_quantity_t"),
         )
-        market.orders[row.id] = row
+        market.orders[order_id] = row
+
+    commitment_fields = {
+        "id", "order_id", "resource_id", "remaining_quantity_t",
+        "committed_price_musd_per_t", "created_day", "maturity_day",
+    }
     market.buy_commitments = {}
-    for raw in data["buy_commitments"]:
+    for index, raw in enumerate(
+        decode_list(data["buy_commitments"], "market buy_commitments")
+    ):
+        item = require_fields(raw, commitment_fields, f"market buy_commitment[{index}]")
+        commitment_id = EntityId(decode_str(item["id"], "buy commitment id"))
+        if commitment_id in market.buy_commitments:
+            raise ValueError(f"duplicate buy commitment: {commitment_id}")
         row = BuyCommitment(
-            EntityId(raw["id"]), EntityId(raw["order_id"]), DefinitionId(raw["resource_id"]),
-            decode_float(raw["remaining_quantity_t"], "buy commitment remaining_quantity_t"), decode_float(raw["committed_price_musd_per_t"], "buy commitment price"),
-            decode_int(raw["created_day"], "buy commitment created_day"), decode_int(raw["maturity_day"], "buy commitment maturity_day"),
+            commitment_id,
+            EntityId(decode_str(item["order_id"], "buy commitment order_id")),
+            DefinitionId(decode_str(item["resource_id"], "buy commitment resource_id")),
+            decode_float(item["remaining_quantity_t"], "buy commitment remaining_quantity_t"),
+            decode_float(item["committed_price_musd_per_t"], "buy commitment price"),
+            decode_int(item["created_day"], "buy commitment created_day"),
+            decode_int(item["maturity_day"], "buy commitment maturity_day"),
         )
-        market.buy_commitments[row.id] = row
+        market.buy_commitments[commitment_id] = row
 
 
 def validate_configuration(sim: Any, _ctx) -> None:

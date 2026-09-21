@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
+from ..domain import (
+    DomainExtension, StateCodec, decode_bool, decode_dict, decode_float, decode_int,
+    decode_list, decode_str, require_fields,
+)
 from ..validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
 from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .models import (
@@ -31,17 +34,35 @@ def _capture_target(target) -> dict[str, Any]:
 
 
 def _restore_target(data: dict[str, Any]):
-    kind = data["kind"]
+    data = decode_dict(data, "construction target")
+    kind = decode_str(data["kind"], "construction target kind")
     if kind == "new_facility":
-        return NewFacilityTarget(DefinitionId(data["facility_def_id"]))
+        row = require_fields(data, {"kind", "facility_def_id"}, "construction new facility target")
+        return NewFacilityTarget(DefinitionId(decode_str(row["facility_def_id"], "construction facility_def_id")))
     if kind == "facility_upgrade":
-        return FacilityUpgradeTarget(EntityId(data["facility_id"]), decode_int(data["target_level"], "construction target_level"))
+        row = require_fields(data, {"kind", "facility_id", "target_level"}, "construction facility upgrade target")
+        return FacilityUpgradeTarget(
+            EntityId(decode_str(row["facility_id"], "construction facility_id")),
+            decode_int(row["target_level"], "construction target_level"),
+        )
     if kind == "facility_decommission":
+        row = require_fields(
+            data, {"kind", "facility_id", "facility_definition_id"},
+            "construction facility decommission target",
+        )
         return FacilityDecommissionTarget(
-            EntityId(data["facility_id"]), DefinitionId(data["facility_definition_id"])
+            EntityId(decode_str(row["facility_id"], "construction facility_id")),
+            DefinitionId(decode_str(row["facility_definition_id"], "construction facility_definition_id")),
         )
     if kind == "surface_cell_development":
-        return SurfaceCellDevelopmentTarget(DefinitionId(data["recipe_id"]), SurfaceCellId(data["cell_id"]))
+        row = require_fields(
+            data, {"kind", "recipe_id", "cell_id"},
+            "construction surface cell development target",
+        )
+        return SurfaceCellDevelopmentTarget(
+            DefinitionId(decode_str(row["recipe_id"], "construction recipe_id")),
+            SurfaceCellId(decode_str(row["cell_id"], "construction cell_id")),
+        )
     raise ValueError(f"unknown construction target kind: {kind}")
 
 
@@ -89,41 +110,85 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
         "irreversible_started", "salvage_recovered_fraction", "salvage_recovered",
         "resources",
     }
-    for row in data["items"]:
-        if set(row) != project_fields:
-            raise ValueError("construction project has invalid fields")
-        project_id = ProjectId(row["id"])
-        resources = {
-            DefinitionId(item["resource_id"]): ProjectResourceState(
-                committed_t=decode_float(item["committed_t"], "construction committed_t"),
+    for index, raw in enumerate(decode_list(data["items"], "construction items")):
+        row = require_fields(raw, project_fields, f"construction project[{index}]")
+        project_id = ProjectId(decode_str(row["id"], "construction project id"))
+
+        resources: dict[DefinitionId, ProjectResourceState] = {}
+        for resource_index, raw_resource in enumerate(
+            decode_list(row["resources"], "construction resources")
+        ):
+            resource = require_fields(
+                raw_resource, {"resource_id", "committed_t"},
+                f"construction resource[{resource_index}]",
             )
-            for item in row["resources"]
-        }
+            resource_id = DefinitionId(
+                decode_str(resource["resource_id"], "construction resource_id")
+            )
+            if resource_id in resources:
+                raise ValueError(f"duplicate construction resource: {resource_id}")
+            resources[resource_id] = ProjectResourceState(
+                committed_t=decode_float(resource["committed_t"], "construction committed_t")
+            )
+
+        salvage_recovered: dict[DefinitionId, float] = {}
+        for salvage_index, raw_salvage in enumerate(
+            decode_list(row["salvage_recovered"], "construction salvage_recovered")
+        ):
+            salvage = require_fields(
+                raw_salvage, {"resource_id", "amount_t"},
+                f"construction salvage[{salvage_index}]",
+            )
+            resource_id = DefinitionId(
+                decode_str(salvage["resource_id"], "construction salvage resource_id")
+            )
+            if resource_id in salvage_recovered:
+                raise ValueError(f"duplicate construction salvage resource: {resource_id}")
+            salvage_recovered[resource_id] = decode_float(
+                salvage["amount_t"], "construction salvage amount_t"
+            )
+
+        procurement_policy = decode_str(
+            row["procurement_policy"], "construction procurement_policy"
+        )
+        if procurement_policy not in {"immediate", "standard_wait", "extended_wait"}:
+            raise ValueError("invalid construction procurement_policy")
+
         sim.projects.projects[project_id] = ConstructionProject(
             id=project_id,
             target=_restore_target(row["target"]),
-            operational_node_id=SpatialNodeId(row["operational_node_id"]),
-            site_cell_id=None if row["site_cell_id"] is None else SurfaceCellId(row["site_cell_id"]),
+            operational_node_id=SpatialNodeId(
+                decode_str(row["operational_node_id"], "construction operational_node_id")
+            ),
+            site_cell_id=(
+                None if row["site_cell_id"] is None
+                else SurfaceCellId(decode_str(row["site_cell_id"], "construction site_cell_id"))
+            ),
             priority=decode_int(row["priority"], "construction priority"),
-            procurement_policy=row["procurement_policy"],
-            status=ProjectStatus(row["status"]),
-            procurement_started_day=row["procurement_started_day"],
+            procurement_policy=procurement_policy,
+            status=ProjectStatus(decode_str(row["status"], "construction status")),
+            procurement_started_day=(
+                None if row["procurement_started_day"] is None
+                else decode_int(row["procurement_started_day"], "construction procurement_started_day")
+            ),
             construction_done=decode_float(row["construction_done"], "construction_done"),
             paused=decode_bool(row["paused"], "construction paused"),
-            pause_started_day=None if row["pause_started_day"] is None else decode_int(row["pause_started_day"], "construction pause_started_day"),
+            pause_started_day=(
+                None if row["pause_started_day"] is None
+                else decode_int(row["pause_started_day"], "construction pause_started_day")
+            ),
             resources=resources,
             materials_committed=decode_bool(row["materials_committed"], "construction materials_committed"),
-            completed_facility_id=None if row["completed_facility_id"] is None else EntityId(row["completed_facility_id"]),
+            completed_facility_id=(
+                None if row["completed_facility_id"] is None
+                else EntityId(decode_str(row["completed_facility_id"], "construction completed_facility_id"))
+            ),
             irreversible_started=decode_bool(row["irreversible_started"], "construction irreversible_started"),
             salvage_recovered_fraction=(
-                None
-                if row["salvage_recovered_fraction"] is None
+                None if row["salvage_recovered_fraction"] is None
                 else decode_float(row["salvage_recovered_fraction"], "construction salvage_recovered_fraction")
             ),
-            salvage_recovered={
-                DefinitionId(item["resource_id"]): decode_float(item["amount_t"], "construction salvage amount_t")
-                for item in row["salvage_recovered"]
-            },
+            salvage_recovered=salvage_recovered,
         )
 
 

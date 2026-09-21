@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
+from ..domain import (
+    DomainExtension, StateCodec, decode_bool, decode_float, decode_int, decode_list,
+    decode_str, require_fields,
+)
 from ..validation_support import (
     ValidationContext,
     require as _require,
@@ -43,14 +46,49 @@ def _capture_movement_endpoint(endpoint: MovementEndpoint) -> dict[str, Any]:
     }
 
 
-def _restore_movement_endpoint(data: dict[str, Any]) -> MovementEndpoint:
+def _restore_movement_endpoint(value: Any, field: str) -> MovementEndpoint:
+    data = require_fields(
+        value,
+        {
+            "operational_node_id", "surface_interface_id", "access_cell_id",
+            "non_surface_interface", "physical_target_cell_id",
+            "physical_target_node_id",
+        },
+        field,
+    )
     return MovementEndpoint(
-        operational_node_id=None if data["operational_node_id"] is None else SpatialNodeId(data["operational_node_id"]),
-        surface_interface_id=None if data["surface_interface_id"] is None else EntityId(data["surface_interface_id"]),
-        access_cell_id=None if data["access_cell_id"] is None else SurfaceCellId(data["access_cell_id"]),
-        non_surface_interface=data["non_surface_interface"],
-        physical_target_cell_id=None if data["physical_target_cell_id"] is None else SurfaceCellId(data["physical_target_cell_id"]),
-        physical_target_node_id=None if data["physical_target_node_id"] is None else SpatialNodeId(data["physical_target_node_id"]),
+        operational_node_id=(
+            None if data["operational_node_id"] is None
+            else SpatialNodeId(
+                decode_str(data["operational_node_id"], f"{field} operational_node_id")
+            )
+        ),
+        surface_interface_id=(
+            None if data["surface_interface_id"] is None
+            else EntityId(
+                decode_str(data["surface_interface_id"], f"{field} surface_interface_id")
+            )
+        ),
+        access_cell_id=(
+            None if data["access_cell_id"] is None
+            else SurfaceCellId(decode_str(data["access_cell_id"], f"{field} access_cell_id"))
+        ),
+        non_surface_interface=(
+            None if data["non_surface_interface"] is None
+            else decode_str(data["non_surface_interface"], f"{field} non_surface_interface")
+        ),
+        physical_target_cell_id=(
+            None if data["physical_target_cell_id"] is None
+            else SurfaceCellId(
+                decode_str(data["physical_target_cell_id"], f"{field} physical_target_cell_id")
+            )
+        ),
+        physical_target_node_id=(
+            None if data["physical_target_node_id"] is None
+            else SpatialNodeId(
+                decode_str(data["physical_target_node_id"], f"{field} physical_target_node_id")
+            )
+        ),
     )
 
 
@@ -94,48 +132,114 @@ def _capture_movement_execution(row: MovementExecution) -> dict[str, Any]:
     }
 
 
-def _restore_movement_execution(data: dict[str, Any]) -> MovementExecution:
-    return MovementExecution(
-        id=EntityId(data["id"]),
-        owner_id=EntityId(data["owner_id"]),
-        kind=MovementExecutionKind(data["kind"]),
-        fleet_commitment_id=EntityId(data["fleet_commitment_id"]),
-        legs=tuple(
+def _restore_movement_execution(value: Any, field: str) -> MovementExecution:
+    data = require_fields(
+        value,
+        {
+            "id", "owner_id", "kind", "fleet_commitment_id", "payload_t_per_unit",
+            "started_day", "completion_day", "payload_resources", "legs",
+        },
+        field,
+    )
+    legs: list[MovementExecutionLeg] = []
+    leg_fields = {
+        "movement_plan_id", "origin", "destination", "operations", "latency_days",
+        "payload_capacity_t", "propellant_t_per_unit", "asset_disposition",
+        "resource_requirements",
+    }
+    operation_fields = {"operation_type", "delta_v_km_s"}
+    requirement_fields = {"operational_node_id", "resource_id", "required_t"}
+    for leg_index, raw_leg in enumerate(decode_list(data["legs"], f"{field} legs")):
+        leg_field = f"{field} leg[{leg_index}]"
+        leg = require_fields(raw_leg, leg_fields, leg_field)
+        operations: list[TransportOperationRequirement] = []
+        for operation_index, raw_operation in enumerate(
+            decode_list(leg["operations"], f"{leg_field} operations")
+        ):
+            operation_field = f"{leg_field} operation[{operation_index}]"
+            operation = require_fields(raw_operation, operation_fields, operation_field)
+            operations.append(
+                TransportOperationRequirement(
+                    decode_str(operation["operation_type"], f"{operation_field} operation_type"),
+                    decode_float(operation["delta_v_km_s"], f"{operation_field} delta_v_km_s"),
+                )
+            )
+        requirements: list[MovementExecutionResourceRequirement] = []
+        for requirement_index, raw_requirement in enumerate(
+            decode_list(leg["resource_requirements"], f"{leg_field} resource_requirements")
+        ):
+            requirement_field = f"{leg_field} resource_requirement[{requirement_index}]"
+            requirement = require_fields(
+                raw_requirement, requirement_fields, requirement_field
+            )
+            requirements.append(
+                MovementExecutionResourceRequirement(
+                    SpatialNodeId(
+                        decode_str(
+                            requirement["operational_node_id"],
+                            f"{requirement_field} operational_node_id",
+                        )
+                    ),
+                    DefinitionId(
+                        decode_str(
+                            requirement["resource_id"], f"{requirement_field} resource_id"
+                        )
+                    ),
+                    decode_float(requirement["required_t"], f"{requirement_field} required_t"),
+                )
+            )
+        legs.append(
             MovementExecutionLeg(
-                movement_plan_id=MovementPlanId(leg["movement_plan_id"]),
-                origin=_restore_movement_endpoint(leg["origin"]),
-                destination=_restore_movement_endpoint(leg["destination"]),
-                operations=tuple(
-                    TransportOperationRequirement(
-                        operation["operation_type"], decode_float(operation["delta_v_km_s"], "movement operation delta_v_km_s")
-                    )
-                    for operation in leg["operations"]
+                movement_plan_id=MovementPlanId(
+                    decode_str(leg["movement_plan_id"], f"{leg_field} movement_plan_id")
                 ),
-                latency_days=decode_int(leg["latency_days"], "movement leg latency_days"),
-                payload_capacity_t=decode_float(leg["payload_capacity_t"], "movement leg payload_capacity_t"),
-                propellant_t_per_unit=decode_float(leg["propellant_t_per_unit"], "movement leg propellant_t_per_unit"),
-                asset_disposition=OperationAssetDisposition(leg["asset_disposition"]),
-                resource_requirements=tuple(
-                    MovementExecutionResourceRequirement(
-                        SpatialNodeId(requirement["operational_node_id"]),
-                        DefinitionId(requirement["resource_id"]),
-                        decode_float(requirement["required_t"], "movement resource required_t"),
-                    )
-                    for requirement in leg["resource_requirements"]
+                origin=_restore_movement_endpoint(leg["origin"], f"{leg_field} origin"),
+                destination=_restore_movement_endpoint(
+                    leg["destination"], f"{leg_field} destination"
                 ),
+                operations=tuple(operations),
+                latency_days=decode_int(leg["latency_days"], f"{leg_field} latency_days"),
+                payload_capacity_t=decode_float(
+                    leg["payload_capacity_t"], f"{leg_field} payload_capacity_t"
+                ),
+                propellant_t_per_unit=decode_float(
+                    leg["propellant_t_per_unit"], f"{leg_field} propellant_t_per_unit"
+                ),
+                asset_disposition=OperationAssetDisposition(
+                    decode_str(leg["asset_disposition"], f"{leg_field} asset_disposition")
+                ),
+                resource_requirements=tuple(requirements),
             )
-            for leg in data["legs"]
-        ),
-        payload_t_per_unit=decode_float(data["payload_t_per_unit"], "movement payload_t_per_unit"),
-        started_day=decode_int(data["started_day"], "movement started_day"),
-        completion_day=decode_int(data["completion_day"], "movement completion_day"),
-        payload_resources=tuple(
+        )
+
+    payload_resources: list[MovementExecutionPayloadResource] = []
+    payload_fields = {"resource_id", "amount_t"}
+    for payload_index, raw_payload in enumerate(
+        decode_list(data["payload_resources"], f"{field} payload_resources")
+    ):
+        payload_field = f"{field} payload_resource[{payload_index}]"
+        payload = require_fields(raw_payload, payload_fields, payload_field)
+        payload_resources.append(
             MovementExecutionPayloadResource(
-                DefinitionId(payload["resource_id"]),
-                decode_float(payload["amount_t"], "movement payload amount_t"),
+                DefinitionId(decode_str(payload["resource_id"], f"{payload_field} resource_id")),
+                decode_float(payload["amount_t"], f"{payload_field} amount_t"),
             )
-            for payload in data["payload_resources"]
+        )
+
+    return MovementExecution(
+        id=EntityId(decode_str(data["id"], f"{field} id")),
+        owner_id=EntityId(decode_str(data["owner_id"], f"{field} owner_id")),
+        kind=MovementExecutionKind(decode_str(data["kind"], f"{field} kind")),
+        fleet_commitment_id=EntityId(
+            decode_str(data["fleet_commitment_id"], f"{field} fleet_commitment_id")
         ),
+        legs=tuple(legs),
+        payload_t_per_unit=decode_float(
+            data["payload_t_per_unit"], f"{field} payload_t_per_unit"
+        ),
+        started_day=decode_int(data["started_day"], f"{field} started_day"),
+        completion_day=decode_int(data["completion_day"], f"{field} completion_day"),
+        payload_resources=tuple(payload_resources),
     )
 
 
@@ -258,132 +362,321 @@ def capture_transport(sim: Any) -> dict[str, Any]:
 
 def restore_transport(sim: Any, data: dict[str, Any]) -> None:
     tr = sim.transport
-    tr._transport_allocation_counter = decode_int(data["transport_allocation_counter"], "transport allocation counter")
-    tr._fleet_relocation_counter = decode_int(data["fleet_relocation_counter"], "fleet relocation counter")
-    tr._fleet_release_counter = decode_int(data["fleet_release_counter"], "fleet release counter")
-    tr._fleet_retirement_counter = decode_int(data["fleet_retirement_counter"], "fleet retirement counter")
-    tr.fleet_pools = {
-        (DefinitionId(row["vehicle_definition_id"]), SpatialNodeId(row["operational_node_id"])): FleetPool(
-            DefinitionId(row["vehicle_definition_id"]), SpatialNodeId(row["operational_node_id"]), decode_int(row["total_units"], "fleet total_units")
+    tr._transport_allocation_counter = decode_int(
+        data["transport_allocation_counter"], "transport allocation counter"
+    )
+    tr._fleet_relocation_counter = decode_int(
+        data["fleet_relocation_counter"], "fleet relocation counter"
+    )
+    tr._fleet_release_counter = decode_int(
+        data["fleet_release_counter"], "fleet release counter"
+    )
+    tr._fleet_retirement_counter = decode_int(
+        data["fleet_retirement_counter"], "fleet retirement counter"
+    )
+
+    tr.fleet_pools = {}
+    fleet_pool_fields = {"vehicle_definition_id", "operational_node_id", "total_units"}
+    for index, raw in enumerate(decode_list(data["fleet_pools"], "transport fleet_pools")):
+        row = require_fields(raw, fleet_pool_fields, f"transport fleet_pool[{index}]")
+        vehicle_definition_id = DefinitionId(
+            decode_str(row["vehicle_definition_id"], "transport vehicle_definition_id")
         )
-        for row in data["fleet_pools"]
+        operational_node_id = SpatialNodeId(
+            decode_str(row["operational_node_id"], "transport operational_node_id")
+        )
+        key = (vehicle_definition_id, operational_node_id)
+        if key in tr.fleet_pools:
+            raise ValueError(
+                f"duplicate transport fleet pool: {vehicle_definition_id}/{operational_node_id}"
+            )
+        tr.fleet_pools[key] = FleetPool(
+            vehicle_definition_id,
+            operational_node_id,
+            decode_int(row["total_units"], "fleet total_units"),
+        )
+
+    tr.fleet_commitments = {}
+    commitment_fields = {
+        "id", "owner_activity_type", "owner_activity_id", "vehicle_definition_id",
+        "quantity", "operational_node_id", "movement_execution_id",
     }
-    tr.fleet_commitments = {
-        EntityId(row["id"]): FleetCommitmentState(
-            id=EntityId(row["id"]),
+    for index, raw in enumerate(
+        decode_list(data["fleet_commitments"], "transport fleet_commitments")
+    ):
+        row = require_fields(raw, commitment_fields, f"transport fleet_commitment[{index}]")
+        commitment_id = EntityId(decode_str(row["id"], "transport commitment id"))
+        if commitment_id in tr.fleet_commitments:
+            raise ValueError(f"duplicate fleet commitment: {commitment_id}")
+        tr.fleet_commitments[commitment_id] = FleetCommitmentState(
+            id=commitment_id,
             owner_activity_ref=FleetActivityRef(
-                str(row["owner_activity_type"]), EntityId(row["owner_activity_id"])
+                decode_str(row["owner_activity_type"], "fleet owner_activity_type"),
+                EntityId(
+                    decode_str(row["owner_activity_id"], "transport owner_activity_id")
+                ),
             ),
-            vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
+            vehicle_definition_id=DefinitionId(
+                decode_str(row["vehicle_definition_id"], "transport vehicle_definition_id")
+            ),
             quantity=decode_int(row["quantity"], "fleet commitment quantity"),
             operational_node_id=(
                 None if row["operational_node_id"] is None
-                else SpatialNodeId(row["operational_node_id"])
+                else SpatialNodeId(
+                    decode_str(
+                        row["operational_node_id"], "transport operational_node_id"
+                    )
+                )
             ),
             movement_execution_id=(
                 None if row["movement_execution_id"] is None
-                else EntityId(row["movement_execution_id"])
+                else EntityId(
+                    decode_str(
+                        row["movement_execution_id"], "transport movement_execution_id"
+                    )
+                )
             ),
         )
-        for row in data["fleet_commitments"]
-    }
+
     tr.transport_allocations = {}
     allocation_fields = {
         "id", "vehicle_definition_id", "anchor_node_id", "destination_id",
         "provisioning_priority", "target_capacity", "movement_hard_constraint",
         "paused", "last_operated_day",
     }
-    for row in data["transport_allocations"]:
-        if set(row) != allocation_fields:
-            raise ValueError("transport allocation has invalid fields")
-        target = row["target_capacity"]
-        if set(target) != {"forward_t_per_day", "reverse_t_per_day"}:
-            raise ValueError("transport allocation target capacity has invalid fields")
-        allocation = TransportAllocation(
-            id=EntityId(row["id"]), vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
-            anchor_node_id=SpatialNodeId(row["anchor_node_id"]), destination_id=SpatialNodeId(row["destination_id"]),
-            provisioning_priority=decode_int(row["provisioning_priority"], "transport provisioning_priority"),
-            target_capacity=DirectionalCapacity(
-                decode_float(target["forward_t_per_day"], "transport target forward_t_per_day"),
-                decode_float(target["reverse_t_per_day"], "transport target reverse_t_per_day"),
-            ),
-            movement_hard_constraint=(
-                None
-                if row["movement_hard_constraint"] is None
-                else tuple(MovementPlanId(value) for value in row["movement_hard_constraint"])
-            ),
-            paused=decode_bool(row["paused"], "transport paused"),
-            last_operated_day=None if row["last_operated_day"] is None else decode_int(row["last_operated_day"], "transport last_operated_day"),
+    for index, raw in enumerate(
+        decode_list(data["transport_allocations"], "transport allocations")
+    ):
+        row = require_fields(raw, allocation_fields, f"transport allocation[{index}]")
+        target = require_fields(
+            row["target_capacity"],
+            {"forward_t_per_day", "reverse_t_per_day"},
+            f"transport allocation[{index}] target_capacity",
         )
+        movement_hard_constraint = row["movement_hard_constraint"]
+        if movement_hard_constraint is not None:
+            movement_hard_constraint = tuple(
+                MovementPlanId(decode_str(value, "transport movement_hard_constraint id"))
+                for value in decode_list(
+                    movement_hard_constraint,
+                    f"transport allocation[{index}] movement_hard_constraint",
+                )
+            )
+        allocation = TransportAllocation(
+            id=EntityId(decode_str(row["id"], "transport allocation id")),
+            vehicle_definition_id=DefinitionId(
+                decode_str(row["vehicle_definition_id"], "transport vehicle_definition_id")
+            ),
+            anchor_node_id=SpatialNodeId(
+                decode_str(row["anchor_node_id"], "transport anchor_node_id")
+            ),
+            destination_id=SpatialNodeId(
+                decode_str(row["destination_id"], "transport destination_id")
+            ),
+            provisioning_priority=decode_int(
+                row["provisioning_priority"], "transport provisioning_priority"
+            ),
+            target_capacity=DirectionalCapacity(
+                decode_float(
+                    target["forward_t_per_day"], "transport target forward_t_per_day"
+                ),
+                decode_float(
+                    target["reverse_t_per_day"], "transport target reverse_t_per_day"
+                ),
+            ),
+            movement_hard_constraint=movement_hard_constraint,
+            paused=decode_bool(row["paused"], "transport paused"),
+            last_operated_day=(
+                None if row["last_operated_day"] is None
+                else decode_int(row["last_operated_day"], "transport last_operated_day")
+            ),
+        )
+        if allocation.id in tr.transport_allocations:
+            raise ValueError(f"duplicate transport allocation: {allocation.id}")
         tr.transport_allocations[allocation.id] = allocation
-    tr.fleet_relocations = {
-        EntityId(row["id"]): FleetRelocation(
-            id=EntityId(row["id"]),
-            vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
-            requested_units=decode_int(row["requested_units"], "fleet requested_units"),
-            fleet_commitment_id=EntityId(row["fleet_commitment_id"]),
-            source_id=SpatialNodeId(row["source_id"]),
-            destination_id=SpatialNodeId(row["destination_id"]),
-            requested_day=decode_int(row["requested_day"], "fleet requested_day"),
-            path=tuple(MovementPlanId(value) for value in row["path"]),
-            resource_needs=tuple(
+
+    tr.fleet_relocations = {}
+    relocation_fields = {
+        "id", "vehicle_definition_id", "requested_units", "fleet_commitment_id",
+        "source_id", "destination_id", "requested_day", "path", "priority",
+        "movement_execution_id", "resource_needs",
+    }
+    resource_need_fields = {"operational_node_id", "resource_id", "required_t"}
+    for index, raw in enumerate(
+        decode_list(data["fleet_relocations"], "transport fleet_relocations")
+    ):
+        row = require_fields(raw, relocation_fields, f"transport fleet_relocation[{index}]")
+        resource_needs: list[FleetRelocationResourceNeed] = []
+        for need_index, raw_need in enumerate(
+            decode_list(row["resource_needs"], f"transport fleet_relocation[{index}] resource_needs")
+        ):
+            need = require_fields(
+                raw_need,
+                resource_need_fields,
+                f"transport fleet_relocation[{index}] resource_need[{need_index}]",
+            )
+            resource_needs.append(
                 FleetRelocationResourceNeed(
-                    SpatialNodeId(need["operational_node_id"]),
-                    DefinitionId(need["resource_id"]),
+                    SpatialNodeId(
+                        decode_str(
+                            need["operational_node_id"], "transport operational_node_id"
+                        )
+                    ),
+                    DefinitionId(
+                        decode_str(need["resource_id"], "transport resource_id")
+                    ),
                     decode_float(need["required_t"], "fleet relocation required_t"),
                 )
-                for need in row["resource_needs"]
+            )
+        relocation = FleetRelocation(
+            id=EntityId(decode_str(row["id"], "transport fleet_relocation id")),
+            vehicle_definition_id=DefinitionId(
+                decode_str(row["vehicle_definition_id"], "transport vehicle_definition_id")
             ),
-            priority=decode_int(row["priority"], "transport priority"),
-            movement_execution_id=None if row["movement_execution_id"] is None else EntityId(row["movement_execution_id"]),
-        )
-        for row in data["fleet_relocations"]
-    }
-    tr.movement_executions = {
-        execution.id: execution
-        for execution in (
-            _restore_movement_execution(row) for row in data["movement_executions"]
-        )
-    }
-    tr.fleet_releases = {
-        EntityId(row["id"]): FleetRelease(
-            EntityId(row["id"]), EntityId(row["allocation_id"]),
-            EntityId(row["fleet_commitment_id"]), decode_int(row["release_day"], "fleet release_day")
-        )
-        for row in data["fleet_releases"]
-    }
-    tr.fleet_retirements = {
-        EntityId(row["id"]): FleetRetirementState(
-            id=EntityId(row["id"]),
-            vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
-            operational_node_id=SpatialNodeId(row["operational_node_id"]),
             requested_units=decode_int(row["requested_units"], "fleet requested_units"),
-            fleet_commitment_id=EntityId(row["fleet_commitment_id"]),
+            fleet_commitment_id=EntityId(
+                decode_str(row["fleet_commitment_id"], "transport fleet_commitment_id")
+            ),
+            source_id=SpatialNodeId(decode_str(row["source_id"], "transport source_id")),
+            destination_id=SpatialNodeId(
+                decode_str(row["destination_id"], "transport destination_id")
+            ),
+            requested_day=decode_int(row["requested_day"], "fleet requested_day"),
+            path=tuple(
+                MovementPlanId(decode_str(value, "fleet relocation path id"))
+                for value in decode_list(row["path"], f"transport fleet_relocation[{index}] path")
+            ),
+            resource_needs=tuple(resource_needs),
+            priority=decode_int(row["priority"], "transport priority"),
+            movement_execution_id=(
+                None if row["movement_execution_id"] is None
+                else EntityId(
+                    decode_str(
+                        row["movement_execution_id"], "transport movement_execution_id"
+                    )
+                )
+            ),
+        )
+        if relocation.id in tr.fleet_relocations:
+            raise ValueError(f"duplicate fleet relocation: {relocation.id}")
+        tr.fleet_relocations[relocation.id] = relocation
+
+    tr.movement_executions = {}
+    for index, raw in enumerate(
+        decode_list(data["movement_executions"], "transport movement_executions")
+    ):
+        execution = _restore_movement_execution(
+            raw, f"transport movement_execution[{index}]"
+        )
+        if execution.id in tr.movement_executions:
+            raise ValueError(f"duplicate movement execution: {execution.id}")
+        tr.movement_executions[execution.id] = execution
+
+    tr.fleet_releases = {}
+    release_fields = {"id", "allocation_id", "fleet_commitment_id", "release_day"}
+    for index, raw in enumerate(
+        decode_list(data["fleet_releases"], "transport fleet_releases")
+    ):
+        row = require_fields(raw, release_fields, f"transport fleet_release[{index}]")
+        release = FleetRelease(
+            EntityId(decode_str(row["id"], "transport fleet_release id")),
+            EntityId(decode_str(row["allocation_id"], "transport allocation_id")),
+            EntityId(
+                decode_str(row["fleet_commitment_id"], "transport fleet_commitment_id")
+            ),
+            decode_int(row["release_day"], "fleet release_day"),
+        )
+        if release.id in tr.fleet_releases:
+            raise ValueError(f"duplicate fleet release: {release.id}")
+        tr.fleet_releases[release.id] = release
+
+    tr.fleet_retirements = {}
+    retirement_fields = {
+        "id", "vehicle_definition_id", "operational_node_id", "requested_units",
+        "fleet_commitment_id", "priority", "progress_work", "phase",
+        "irreversible_started", "created_day", "salvage_recovered_fraction",
+    }
+    for index, raw in enumerate(
+        decode_list(data["fleet_retirements"], "transport fleet_retirements")
+    ):
+        row = require_fields(raw, retirement_fields, f"transport fleet_retirement[{index}]")
+        state = FleetRetirementState(
+            id=EntityId(decode_str(row["id"], "transport fleet_retirement id")),
+            vehicle_definition_id=DefinitionId(
+                decode_str(row["vehicle_definition_id"], "transport vehicle_definition_id")
+            ),
+            operational_node_id=SpatialNodeId(
+                decode_str(row["operational_node_id"], "transport operational_node_id")
+            ),
+            requested_units=decode_int(row["requested_units"], "fleet requested_units"),
+            fleet_commitment_id=EntityId(
+                decode_str(row["fleet_commitment_id"], "transport fleet_commitment_id")
+            ),
             priority=decode_int(row["priority"], "transport priority"),
             progress_work=decode_float(row["progress_work"], "fleet retirement progress_work"),
-            phase=FleetRetirementPhase(row["phase"]),
-            irreversible_started=decode_bool(row["irreversible_started"], "fleet retirement irreversible_started"),
+            phase=FleetRetirementPhase(
+                decode_str(row["phase"], "fleet retirement phase")
+            ),
+            irreversible_started=decode_bool(
+                row["irreversible_started"], "fleet retirement irreversible_started"
+            ),
             created_day=decode_int(row["created_day"], "transport created_day"),
             salvage_recovered_fraction=(
-                None
-                if row["salvage_recovered_fraction"] is None
-                else decode_float(row["salvage_recovered_fraction"], "fleet retirement salvage_recovered_fraction")
+                None if row["salvage_recovered_fraction"] is None
+                else decode_float(
+                    row["salvage_recovered_fraction"],
+                    "fleet retirement salvage_recovered_fraction",
+                )
             ),
         )
-        for row in data["fleet_retirements"]
+        if state.id in tr.fleet_retirements:
+            raise ValueError(f"duplicate fleet retirement: {state.id}")
+        tr.fleet_retirements[state.id] = state
+
+    production_data = require_fields(
+        data["vehicle_production"], {"counter", "projects"}, "vehicle production"
+    )
+    tr._vehicle_production_counter = decode_int(
+        production_data["counter"], "vehicle production counter"
+    )
+    tr.vehicle_production_projects = {}
+    production_fields = {
+        "id", "vehicle_definition_id", "operational_node_id", "priority",
+        "progress_days", "phase", "paused", "completed_units", "created_day",
     }
-    production_data = data["vehicle_production"]
-    tr._vehicle_production_counter = decode_int(production_data["counter"], "vehicle production counter")
-    tr.vehicle_production_projects = {
-        EntityId(row["id"]): VehicleProductionState(
-            id=EntityId(row["id"]), vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
-            operational_node_id=SpatialNodeId(row["operational_node_id"]), priority=decode_int(row["priority"], "transport priority"),
-            progress_days=decode_float(row["progress_days"], "vehicle production progress_days"),
-            phase=VehicleProductionPhase(row["phase"]), paused=decode_bool(row["paused"], "transport paused"),
-            completed_units=decode_int(row["completed_units"], "vehicle production completed_units"), created_day=decode_int(row["created_day"], "transport created_day"),
+    for index, raw in enumerate(
+        decode_list(production_data["projects"], "vehicle production projects")
+    ):
+        row = require_fields(raw, production_fields, f"vehicle production project[{index}]")
+        state = VehicleProductionState(
+            id=EntityId(decode_str(row["id"], "vehicle production id")),
+            vehicle_definition_id=DefinitionId(
+                decode_str(
+                    row["vehicle_definition_id"], "vehicle production vehicle_definition_id"
+                )
+            ),
+            operational_node_id=SpatialNodeId(
+                decode_str(
+                    row["operational_node_id"], "vehicle production operational_node_id"
+                )
+            ),
+            priority=decode_int(row["priority"], "vehicle production priority"),
+            progress_days=decode_float(
+                row["progress_days"], "vehicle production progress_days"
+            ),
+            phase=VehicleProductionPhase(
+                decode_str(row["phase"], "vehicle production phase")
+            ),
+            paused=decode_bool(row["paused"], "vehicle production paused"),
+            completed_units=decode_int(
+                row["completed_units"], "vehicle production completed_units"
+            ),
+            created_day=decode_int(row["created_day"], "vehicle production created_day"),
         )
-        for row in production_data["projects"]
-    }
+        if state.id in tr.vehicle_production_projects:
+            raise ValueError(f"duplicate vehicle production project: {state.id}")
+        tr.vehicle_production_projects[state.id] = state
+
     tr.reconcile_fleet_allocations(sim.day)
 
 

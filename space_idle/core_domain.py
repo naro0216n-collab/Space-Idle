@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
+from .domain import (
+    DomainExtension, StateCodec, decode_float, decode_int, decode_list, decode_str,
+    require_fields,
+)
 from .execution_requirements import AllocationConstraintKey
 from .validation_support import ValidationContext, require as _require
 
@@ -25,39 +28,35 @@ def capture_core_state(sim: Any) -> dict[str, Any]:
 
 
 def restore_core_state(sim: Any, data: dict[str, Any]) -> None:
-    fields = {"day", "pending_offline_game_days", "boundary_service_usage"}
-    if set(data) != fields:
-        raise ValueError("core state has invalid fields")
-
-    day = data["day"]
-    if isinstance(day, bool) or not isinstance(day, int):
-        raise ValueError("core day must be an integer")
-    pending = data["pending_offline_game_days"]
-    if isinstance(pending, bool) or not isinstance(pending, (int, float)):
-        raise ValueError("pending offline game days must be numeric")
-    usage_rows = data["boundary_service_usage"]
-    if not isinstance(usage_rows, list):
-        raise ValueError("boundary service usage must be a list")
+    row = require_fields(
+        data, {"day", "pending_offline_game_days", "boundary_service_usage"},
+        "core state",
+    )
+    day = decode_int(row["day"], "core day")
+    pending = decode_float(row["pending_offline_game_days"], "pending offline game days")
 
     restored_usage: list[tuple[AllocationConstraintKey, float]] = []
-    for row in usage_rows:
-        if not isinstance(row, dict) or set(row) != {"kind", "scope_id", "name", "amount"}:
-            raise ValueError("boundary service usage row has invalid fields")
-        if not all(isinstance(row[key], str) for key in ("kind", "scope_id", "name")):
-            raise ValueError("boundary service usage identity fields must be strings")
-        amount = row["amount"]
-        if isinstance(amount, bool) or not isinstance(amount, (int, float)):
-            raise ValueError("boundary service usage amount must be numeric")
+    for index, raw_usage in enumerate(
+        decode_list(row["boundary_service_usage"], "boundary service usage")
+    ):
+        usage = require_fields(
+            raw_usage, {"kind", "scope_id", "name", "amount"},
+            f"boundary service usage[{index}]",
+        )
         restored_usage.append(
             (
-                AllocationConstraintKey(row["kind"], row["scope_id"], row["name"]),
-                float(amount),
+                AllocationConstraintKey(
+                    decode_str(usage["kind"], "boundary service usage kind"),
+                    decode_str(usage["scope_id"], "boundary service usage scope_id"),
+                    decode_str(usage["name"], "boundary service usage name"),
+                ),
+                decode_float(usage["amount"], "boundary service usage amount"),
             )
         )
 
     sim.day = day
     sim.restore_boundary_settled_day(day)
-    sim.pending_offline_game_days = float(pending)
+    sim.pending_offline_game_days = pending
     sim.restore_boundary_service_usage(tuple(restored_usage))
 
 
