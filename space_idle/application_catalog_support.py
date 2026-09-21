@@ -46,8 +46,12 @@ def condition_definition_row(condition: object) -> RequirementConditionRow:
 
 def site_requirements_definition(requirements: SiteRequirements) -> SiteRequirementsDefinitionRow:
     return SiteRequirementsDefinitionRow(
-        tuple(condition_definition_row(condition) for condition in requirements.environment),
-        tuple(CapabilityRequirementRow(req.capability_id, req.minimum_capacity, req.mode) for req in requirements.capability_requirements),
+        environment=tuple(condition_definition_row(condition) for condition in requirements.environment),
+        capabilities=tuple(CapabilityRequirementRow(req.capability_id, req.required_state.value) for req in requirements.capability_requirements),
+        spatial_classifications=tuple(
+            condition_definition_row(requirement)
+            for requirement in requirements.spatial_classification_requirements
+        ),
     )
 
 

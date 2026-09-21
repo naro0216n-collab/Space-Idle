@@ -12,9 +12,9 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
-    GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetLocation, GetLogisticsLanes,
-    GetLogisticsSummary, GetProjects, GetResearch, GetRoutes, GetSurveys,
-    GetTransportAllocationOptions, GetTransportAllocations, GetWorld,
+    GetContracts, GetDependencyAnalytics, GetDetailedForecast, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
+    GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys, GetSurveyCampaignIntentPreview,
+    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
 )
 from ..persistence import SaveFormatError
 from .codec import ApiPayloadError, command_schema, decode_command, to_jsonable
@@ -261,33 +261,57 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/world":
             self._query_result(GetWorld())
             return
+        surface_prefix = "/api/v1/surfaces/"
+        if path.startswith(surface_prefix):
+            body_id = unquote(path[len(surface_prefix):])
+            if not body_id:
+                raise ApiPayloadError("body id is required")
+            self._query_result(GetSurfaceMap(body_id))
+            return
+        if path == "/api/v1/dependency-analytics":
+            scope_kind = _one(params, "scope_kind") or "player"
+            scope_id = _one(params, "scope_id")
+            node_ids = tuple(params.get("node_id", ()))
+            self._query_result(GetDependencyAnalytics(scope_kind, scope_id, node_ids, (_one(params, "time_basis") or "CURRENT")))
+            return
+        if path == "/api/v1/detailed-forecast":
+            scope_kind = _one(params, "scope_kind") or "player"
+            scope_id = _one(params, "scope_id")
+            node_ids = tuple(params.get("node_id", ()))
+            period_raw = _one(params, "period_days")
+            period_days = None if period_raw is None else int(period_raw)
+            self._query_result(GetDetailedForecast(
+                scope_kind, scope_id, node_ids, (_one(params, "horizon") or "SHORT_TERM"), period_days
+            ))
+            return
         if path == "/api/v1/bottlenecks":
-            self._query_result(GetBottlenecks(_one(params, "location_id")))
+            self._query_result(GetBottlenecks(_one(params, "operational_node_id")))
             return
         if path == "/api/v1/projects":
-            self._query_result(GetProjects(_one(params, "location_id")))
+            self._query_result(GetProjects(_one(params, "operational_node_id")))
             return
         if path == "/api/v1/logistics/summary":
             self._query_result(GetLogisticsSummary())
             return
-        if path == "/api/v1/logistics/routes":
-            self._query_result(GetRoutes(
+        if path == "/api/v1/logistics/movement-plans":
+            self._query_result(GetMovementPlans(
                 origin_id=_one(params, "origin_id"),
                 destination_id=_one(params, "destination_id"),
-                route_id=_one(params, "route_id"),
+                movement_plan_id=_one(params, "movement_plan_id"),
                 include_modes=_bool(params, "include_modes", False),
+                vehicle_definition_id=_one(params, "vehicle_definition_id"),
             ))
             return
-        route_prefix = "/api/v1/logistics/routes/"
-        if path.startswith(route_prefix):
-            route_id = unquote(path[len(route_prefix):])
-            if not route_id:
-                raise ApiPayloadError("route id is required")
-            self._query_result(GetRoutes(route_id=route_id, include_modes=True))
+        movement_plan_prefix = "/api/v1/logistics/movement-plans/"
+        if path.startswith(movement_plan_prefix):
+            movement_plan_id = unquote(path[len(movement_plan_prefix):])
+            if not movement_plan_id:
+                raise ApiPayloadError("movement plan id is required")
+            self._query_result(GetMovementPlans(movement_plan_id=movement_plan_id, include_modes=True))
             return
         if path == "/api/v1/logistics/fleet":
             self._query_result(GetFleet(
-                location_id=_one(params, "location_id"),
+                operational_node_id=_one(params, "operational_node_id"),
                 vehicle_definition_id=_one(params, "vehicle_definition_id"),
             ))
             return
@@ -297,7 +321,11 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
                 units=int(_required(params, "units")),
                 source_id=_required(params, "source_id"),
                 destination_id=_required(params, "destination_id"),
-                path_policy=_one(params, "path_policy") or "fastest",
+                movement_hard_constraint=(
+                    None
+                    if not params.get("movement_plan_id")
+                    else tuple(params["movement_plan_id"])
+                ),
             ))
             return
         if path == "/api/v1/logistics/transport-allocations":
@@ -306,42 +334,67 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/logistics/cargo-flows":
             self._query_result(GetCargoFlows())
             return
-        if path == "/api/v1/logistics/lanes":
-            self._query_result(GetLogisticsLanes())
-            return
         if path == "/api/v1/transport-allocation-options":
             source_id = _required(params, "source_id")
             destination_id = _required(params, "destination_id")
             self._query_result(GetTransportAllocationOptions(source_id, destination_id))
             return
+        if path == "/api/v1/transport-allocation-preview":
+            self._query_result(GetTransportAllocationPreview(
+                vehicle_definition_id=_required(params, "vehicle_definition_id"),
+                source_id=_required(params, "source_id"),
+                destination_id=_required(params, "destination_id"),
+                target_forward_t_per_day=float(_required(params, "target_forward_t_per_day")),
+                target_reverse_t_per_day=float(_required(params, "target_reverse_t_per_day")),
+                movement_hard_constraint=(
+                    None if not params.get("movement_plan_id")
+                    else tuple(params["movement_plan_id"])
+                ),
+                allocation_id=_one(params, "allocation_id"),
+            ))
+            return
+        if path == "/api/v1/target-stock-options":
+            self._query_result(GetTargetStockOptions(
+                destination_id=_required(params, "destination_id"),
+                resource_id=_required(params, "resource_id"),
+            ))
+            return
         if path == "/api/v1/research":
             self._query_result(GetResearch())
             return
         if path == "/api/v1/surveys":
-            self._query_result(GetSurveys(_one(params, "location_id")))
+            self._query_result(GetSurveys(_one(params, "provider_operational_node_id")))
+            return
+        if path == "/api/v1/survey-campaign-intent-preview":
+            self._query_result(GetSurveyCampaignIntentPreview(
+                target_cell_ids=tuple(params.get("target_cell_id", ())),
+                resource_ids=tuple(params.get("resource_id", ())),
+                goal_knowledge_level=int(_required(params, "goal_knowledge_level")),
+                campaign_id=_one(params, "campaign_id"),
+            ))
             return
         if path == "/api/v1/contracts":
             self._query_result(GetContracts())
             return
 
-        prefix = "/api/v1/locations/"
+        prefix = "/api/v1/operational-nodes/"
         if path.startswith(prefix):
             rest = path[len(prefix):]
             if rest.endswith("/flow"):
-                location_id = unquote(rest[:-5].rstrip("/"))
-                if not location_id:
-                    raise ApiPayloadError("location id is required")
-                self._query_result(GetFlowReport(location_id))
+                operational_node_id = unquote(rest[:-5].rstrip("/"))
+                if not operational_node_id:
+                    raise ApiPayloadError("operational node id is required")
+                self._query_result(GetFlowReport(operational_node_id))
                 return
             if rest.endswith("/build-options"):
-                location_id = unquote(rest[:-14].rstrip("/"))
-                if not location_id:
-                    raise ApiPayloadError("location id is required")
-                self._query_result(GetBuildOptions(location_id))
+                operational_node_id = unquote(rest[:-14].rstrip("/"))
+                if not operational_node_id:
+                    raise ApiPayloadError("operational node id is required")
+                self._query_result(GetBuildOptions(operational_node_id))
                 return
-            location_id = unquote(rest)
-            if location_id:
-                self._query_result(GetLocation(location_id))
+            operational_node_id = unquote(rest)
+            if operational_node_id:
+                self._query_result(GetOperationalNode(operational_node_id))
                 return
 
         self._error(HTTPStatus.NOT_FOUND, "not_found", "endpoint not found")

@@ -3,6 +3,43 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class DecisionContextTarget:
+    """Semantic destination for continuing a player decision from an issue."""
+
+    decision_area: str
+    operational_node_id: str | None = None
+    subject_kind: str | None = None
+    subject_id: str | None = None
+    resource_id: str | None = None
+    supply_requirement_ids: tuple[str, ...] = ()
+    transport_allocation_ids: tuple[str, ...] = ()
+    movement_plan_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DecisionConstraintRow:
+    """Structured Application-facing blocker or limiting factor.
+
+    Domain-specific codes are retained for diagnostics, while UI decisions use the
+    structured fields and never need to split or interpret the code string.
+    """
+
+    code: str
+    kind: str
+    subject_kind: str | None = None
+    subject_id: str | None = None
+    current: float | str | None = None
+    required: float | str | None = None
+    unit: str | None = None
+    severity: str = "blocking"
+    affected_action: str | None = None
+    related_entity_kind: str | None = None
+    related_entity_id: str | None = None
+    message: str | None = None
+    navigation: DecisionContextTarget | None = None
+
+
+@dataclass(frozen=True)
 class IssueRow:
     """Normalized UI-facing explanation of a blocked or constrained state."""
 
@@ -10,11 +47,43 @@ class IssueRow:
     message: str
     category: str
     source: str
-    location_id: str | None = None
+    kind: str | None = None
+    subject_kind: str | None = None
+    subject_id: str | None = None
+    current: float | str | None = None
+    required: float | str | None = None
+    unit: str | None = None
+    severity: str = "blocking"
+    affected_action: str | None = None
+    related_entity_kind: str | None = None
+    related_entity_id: str | None = None
+    operational_node_id: str | None = None
     entity_id: str | None = None
     definition_id: str | None = None
     resource_id: str | None = None
     impact: str = "blocked"
+    attention_required: bool = False
+    navigation: DecisionContextTarget | None = None
+
+
+@dataclass(frozen=True)
+class ComparisonAxisRow:
+    """Application-selected axis for comparing strategically distinct options."""
+
+    key: str
+    label: str
+    value_kind: str
+    unit: str | None = None
+    differs: bool = False
+
+
+@dataclass(frozen=True)
+class ComparisonValueRow:
+    """Candidate value for one comparison axis; no ranking semantics are attached."""
+
+    axis_key: str
+    number_value: float | None = None
+    text_value: str | None = None
 
 
 @dataclass(frozen=True)
@@ -37,7 +106,7 @@ class ResourceFlowRow:
 
 @dataclass(frozen=True)
 class FlowReportView:
-    location_id: str
+    operational_node_id: str
     day: int
     power_generation_mw: float
     power_demand_mw: float
@@ -51,5 +120,5 @@ class FlowReportView:
 @dataclass(frozen=True)
 class BottlenecksView:
     day: int
-    location_id: str | None
+    operational_node_id: str | None
     items: tuple[IssueRow, ...]

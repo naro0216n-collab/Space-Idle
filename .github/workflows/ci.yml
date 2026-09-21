@@ -27,12 +27,18 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/source"
           branch="${GITHUB_REF_NAME}"
+          publish_commit="$(git rev-parse refs/remotes/origin/publish)"
+          publish_tree="$(git rev-parse "${publish_commit}^{tree}")"
           git update-ref "refs/heads/${branch}" "${GITHUB_SHA}"
-          git bundle create "${RUNNER_TEMP}/source/repository.bundle" "refs/heads/${branch}"
+          git update-ref refs/space-idle/publish-base "${publish_commit}"
+          git bundle create "${RUNNER_TEMP}/source/repository.bundle" \
+            "refs/heads/${branch}" refs/space-idle/publish-base
           git bundle verify "${RUNNER_TEMP}/source/repository.bundle"
           printf '%s\n' "${GITHUB_SHA}" > "${RUNNER_TEMP}/source/.source-commit"
           git rev-parse "${GITHUB_SHA}^{tree}" > "${RUNNER_TEMP}/source/.source-tree"
           printf '%s\n' "${branch}" > "${RUNNER_TEMP}/source/.source-branch"
+          printf '%s\n' "${publish_commit}" > "${RUNNER_TEMP}/source/.source-publish-commit"
+          printf '%s\n' "${publish_tree}" > "${RUNNER_TEMP}/source/.source-publish-tree"
       - name: Upload source bundle
         uses: actions/upload-artifact@v4
         with:
@@ -100,22 +106,21 @@ jobs:
       - name: Run direct browser-to-server smoke
         env:
           SPACE_IDLE_BROWSER: chromium
-          SPACE_IDLE_E2E_TRANSPORT: direct
           NO_PROXY: 127.0.0.1,localhost
-        run: |
-          python playwright/acceptance.py
-          python playwright/lane_ui.py
+        run: python playwright/run_suite.py acceptance interaction_continuity logistics_ui
 
-  report-status:
-    name: Report Fast CI status
-    if: always()
+  status-rollup:
+    name: Fast CI status
+    if: ${{ always() }}
     needs: [source-artifact, unit, package-smoke, chromium-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Publish aggregate commit status
+      - name: Publish final commit status
         env:
           GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SOURCE_RESULT: ${{ needs.source-artifact.result }}
           UNIT_RESULT: ${{ needs.unit.result }}
           PACKAGE_RESULT: ${{ needs.package-smoke.result }}
@@ -125,8 +130,8 @@ jobs:
           set -euo pipefail
           state=success
           description='Fast CI passed'
-          for result in "${SOURCE_RESULT}" "${UNIT_RESULT}" "${PACKAGE_RESULT}" "${CHROMIUM_RESULT}"; do
-            if [ "${result}" != 'success' ]; then
+          for result in "$SOURCE_RESULT" "$UNIT_RESULT" "$PACKAGE_RESULT" "$CHROMIUM_RESULT"; do
+            if [ "$result" != success ]; then
               state=failure
               description='Fast CI failed'
               break
@@ -134,8 +139,9 @@ jobs:
           done
           gh api \
             --method POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
-            -f state="${state}" \
+            "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}" \
+            -f state="$state" \
             -f context='Fast CI' \
-            -f description="${description}" \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            -f description="$description" \
+            -f target_url="$RUN_URL"
+          [ "$state" = success ]

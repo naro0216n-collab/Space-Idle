@@ -1,20 +1,49 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, TYPE_CHECKING
+from enum import Enum
+from typing import Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .facilities import FacilityBook
-    from .power import PowerSnapshot
 from .shared import SpatialNodeId
-from .spatial import EnvironmentResolver, SpatialFacet
+from .spatial import EnvironmentFieldScope, EnvironmentResolver, SpatialContextId, SpatialFacet, SpatialNodeKind
+
+
+
+
+class SpatialClassification(str, Enum):
+    SURFACE = "SURFACE"
+    ORBITAL = "ORBITAL"
+    NON_SURFACE = "NON_SURFACE"
+
+
+@dataclass(frozen=True)
+class SpatialClassificationRequirement:
+    classification: SpatialClassification
+    code: str
+    description: str
+
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId) -> bool:
+        graph = environment.graph
+        if context_id in graph.locations or context_id in graph.surface_cells:
+            actual = SpatialClassification.SURFACE
+        elif context_id in graph.nodes:
+            actual = (
+                SpatialClassification.ORBITAL
+                if graph.nodes[context_id].kind is SpatialNodeKind.ORBITAL
+                else SpatialClassification.NON_SURFACE
+            )
+        else:
+            raise KeyError(context_id)
+        return actual is self.classification
 
 
 class EnvironmentCondition(Protocol):
     code: str
     description: str
 
-    def matches(self, environment: EnvironmentResolver, location_id: SpatialNodeId, day: int) -> bool: ...
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId, day: int) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -23,8 +52,8 @@ class RequiresFacet:
     code: str
     description: str
 
-    def matches(self, environment: EnvironmentResolver, location_id: SpatialNodeId, day: int) -> bool:
-        return environment.get(location_id, self.facet_type, day) is not None
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId, day: int) -> bool:
+        return environment.get(context_id, self.facet_type, day) is not None
 
 
 @dataclass(frozen=True)
@@ -40,8 +69,8 @@ class FacetValueRange:
         if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
             raise ValueError("facet minimum cannot exceed maximum")
 
-    def matches(self, environment: EnvironmentResolver, location_id: SpatialNodeId, day: int) -> bool:
-        facet = environment.get(location_id, self.facet_type, day)
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId, day: int) -> bool:
+        facet = environment.get(context_id, self.facet_type, day)
         if facet is None:
             return False
         value = getattr(facet, self.attribute)
@@ -52,28 +81,47 @@ class FacetValueRange:
         return True
 
 
-CapabilityMode = Literal["infrastructure", "available"]
+class CapabilityRequirementState(str, Enum):
+    INSTALLED = "INSTALLED"
+    ACTIVE = "ACTIVE"
 
 
 @dataclass(frozen=True)
 class CapabilityRequirement:
     capability_id: str
-    minimum_capacity: float = 1.0
-    mode: CapabilityMode = "infrastructure"
+    required_state: CapabilityRequirementState = CapabilityRequirementState.INSTALLED
 
     def __post_init__(self) -> None:
         if not self.capability_id:
             raise ValueError("capability id must not be empty")
-        if self.minimum_capacity <= 0:
-            raise ValueError("minimum capability capacity must be positive")
-        if self.mode not in {"infrastructure", "available"}:
-            raise ValueError(f"unknown capability requirement mode: {self.mode}")
+        if not isinstance(self.required_state, CapabilityRequirementState):
+            raise ValueError("capability required state must be INSTALLED or ACTIVE")
 
 
 @dataclass(frozen=True)
 class SiteRequirements:
     environment: tuple[EnvironmentCondition, ...] = ()
     capability_requirements: tuple[CapabilityRequirement, ...] = ()
+    spatial_classification_requirements: tuple[SpatialClassificationRequirement, ...] = ()
+
+
+def requires_surface_cell_context(requirements: SiteRequirements) -> bool:
+    """Whether a surface execution site must name a concrete developed Cell.
+
+    Body-global fields do not choose a Cell. Cell-local fields and fields with
+    Cell overlays do, because evaluating them at the Location would discard the
+    local component that gives the placement its meaning.
+    """
+
+    for condition in requirements.environment:
+        facet_type = getattr(condition, "facet_type", None)
+        scope = getattr(facet_type, "environment_scope", None)
+        if scope in {
+            EnvironmentFieldScope.SURFACE_CELL_LOCAL,
+            EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY,
+        }:
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -82,29 +130,45 @@ class SiteRequirementFailure:
     detail: str
 
 
+def evaluate_physical_site_requirements(
+    requirements: SiteRequirements,
+    context_id: SpatialContextId,
+    day: int,
+    environment: EnvironmentResolver,
+) -> tuple[SiteRequirementFailure, ...]:
+    failures = [
+        SiteRequirementFailure(requirement.code, requirement.description)
+        for requirement in requirements.spatial_classification_requirements
+        if not requirement.matches(environment, context_id)
+    ]
+    failures.extend(
+        SiteRequirementFailure(condition.code, condition.description)
+        for condition in requirements.environment
+        if not condition.matches(environment, context_id, day)
+    )
+    return tuple(failures)
+
+
 def evaluate_site_requirements(
     requirements: SiteRequirements,
     location_id: SpatialNodeId,
     day: int,
     environment: EnvironmentResolver,
     facilities: "FacilityBook",
-    power: "PowerSnapshot | None" = None,
+    *,
+    environment_context_id: SpatialContextId | None = None,
 ) -> tuple[SiteRequirementFailure, ...]:
-    failures: list[SiteRequirementFailure] = []
-    for condition in requirements.environment:
-        if not condition.matches(environment, location_id, day):
-            failures.append(SiteRequirementFailure(condition.code, condition.description))
+    context_id = location_id if environment_context_id is None else environment_context_id
+    failures = list(evaluate_physical_site_requirements(requirements, context_id, day, environment))
 
     for requirement in requirements.capability_requirements:
-        if requirement.mode == "infrastructure":
-            actual = facilities.infrastructure_capability_capacity_at(location_id, requirement.capability_id, day)
+        if requirement.required_state is CapabilityRequirementState.INSTALLED:
+            satisfied = facilities.installed_capability_at(location_id, requirement.capability_id)
         else:
-            actual = 0.0 if power is None else facilities.available_capability_capacity_at(
-                location_id, requirement.capability_id, power, day
-            )
-        if actual + 1e-9 < requirement.minimum_capacity:
+            satisfied = facilities.active_capability_at(location_id, requirement.capability_id, day)
+        if not satisfied:
             failures.append(SiteRequirementFailure(
-                f"capability:{requirement.mode}",
-                f"{requirement.capability_id}:{actual:g}/{requirement.minimum_capacity:g}",
+                f"capability:{requirement.required_state.value.lower()}",
+                requirement.capability_id,
             ))
     return tuple(failures)

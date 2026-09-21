@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from .application_catalog_support import site_requirements_definition
+from .application_constraints import constraint_from_code, constraints_from_codes
+from .execution_requirements import pool_admission_constraint
 from .application_views import (
     ScientificExplorationFleetOptionRow,
     ScientificExplorationRow,
@@ -14,6 +16,16 @@ class ScientificExplorationProjectorMixin:
         service = sim.scientific_exploration
         if service is None:
             return ScientificExplorationsView(())
+        projection = self._tick_decision_projection()
+        power_by_location = projection.allocations.power_by_location
+        execution = projection.allocations.execution
+        rp_admission_key = pool_admission_constraint(
+            sim.research.RESEARCH_POINT_POOL, scope_id="organization"
+        )
+        rp_admission_headroom = execution.capacity_by_constraint.get(
+            rp_admission_key,
+            max(0.0, sim.research.storage_capacity(power_by_location, sim.day) - sim.research.stored_points),
+        )
         rows: list[ScientificExplorationRow] = []
         for definition in sorted(service.definitions.values(), key=lambda row: str(row.id)):
             state = service.campaigns.get(definition.id)
@@ -23,8 +35,11 @@ class ScientificExplorationProjectorMixin:
                 progress_days = 0.0
                 awarded = 0.0
                 assigned_vehicle_definition_id = None
-                reserved_units = 0
+                fleet_commitment_id = None
+                committed_units = 0
                 blockers: tuple[str, ...] = ()
+                priority = 3
+                can_set_priority = False
             else:
                 status = state.phase.value
                 paused = state.paused
@@ -33,32 +48,163 @@ class ScientificExplorationProjectorMixin:
                 assigned_vehicle_definition_id = (
                     None if state.vehicle_definition_id is None else str(state.vehicle_definition_id)
                 )
-                reserved_units = state.reserved_units
-                blockers = service.blockers(definition.id, day=sim.day)
+                commitment = (
+                    None if state.fleet_commitment_id is None
+                    else sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
+                )
+                fleet_commitment_id = (
+                    None if state.fleet_commitment_id is None else str(state.fleet_commitment_id)
+                )
+                committed_units = 0 if commitment is None else commitment.quantity
+                priority = state.priority
+                can_set_priority = state.phase.value not in {"complete", "aborted"}
+                blockers = service.blockers(
+                    definition.id,
+                    day=sim.day,
+                    power_by_location=power_by_location,
+                )
+
+            rp_requested_today = 0.0
+            rp_admitted_today = 0.0
+            rp_admission_blocker = None
+            if state is not None and state.phase.value == "active" and not state.paused:
+                try:
+                    allocation = execution.allocation(service.execution_bundle_id(definition.id))
+                except KeyError:
+                    allocation = None
+                if allocation is not None:
+                    rp_requested_today = allocation.requested_execution * definition.points_per_day
+                    rp_admitted_today = allocation.allocated_execution * definition.points_per_day
+                    if (
+                        allocation.unmet_execution > 1e-12
+                        and rp_admission_key in allocation.limiting_constraints
+                    ):
+                        rp_admission_blocker = constraint_from_code(
+                            "research_point_pool_headroom",
+                            affected_action="progress_scientific_exploration",
+                            related_entity_kind="scientific_exploration",
+                            related_entity_id=str(definition.id),
+                        )
+                        blockers = blockers + ("research_point_pool_headroom",)
+
+            movement_operations: tuple[tuple[str, float], ...] = ()
+            outbound_latency_days: int | None = None
+            return_latency_days: int | None = None
+            movement_execution = (
+                None
+                if state is None or state.movement_execution_id is None
+                else sim.transport.movement_execution_snapshot(state.movement_execution_id)
+            )
+            if movement_execution is not None:
+                # A started one-shot Movement is authoritative.  Query output must
+                # not drift when current Vehicle/Infrastructure definitions change.
+                movement_operations = tuple(
+                    (operation.operation_type, operation.delta_v_km_s)
+                    for leg in movement_execution.legs
+                    for operation in leg.operations
+                )
+                if state.phase.value == "outbound":
+                    outbound_latency_days = movement_execution.latency_days
+                elif state.phase.value == "returning":
+                    return_latency_days = movement_execution.latency_days
+
+            requires_return = service.completion_disposition(definition.id) == "return_to_origin_then_release"
+
+            if assigned_vehicle_definition_id is not None:
+                vehicle_id = state.vehicle_definition_id
+                assert vehicle_id is not None
+                try:
+                    vehicle = sim.transport.vehicle_definition(vehicle_id)
+                    assert vehicle is not None
+                    if outbound_latency_days is None:
+                        outbound_plans = service.movement_path(
+                            definition, vehicle_id, sim.day
+                        )
+                        outbound_latency_days = sum(
+                            sim.transport.performance_movement_transit_days(
+                                plan, vehicle.performance
+                            )
+                            for plan in outbound_plans
+                        )
+                        if movement_execution is None:
+                            movement_operations = tuple(
+                                (operation.operation_type, operation.delta_v_km_s)
+                                for plan in outbound_plans
+                                for operation in plan.operations
+                            )
+                    if requires_return and return_latency_days is None:
+                        return_plans = service.movement_path(
+                            definition, vehicle_id, sim.day, reverse=True
+                        )
+                        return_latency_days = sum(
+                            sim.transport.performance_movement_transit_days(
+                                plan, vehicle.performance
+                            )
+                            for plan in return_plans
+                        )
+                except ValueError:
+                    # A future/unstarted leg may cease to be feasible.  The active
+                    # MovementExecution, when present, remains visible above.
+                    pass
 
             fleet_options: list[ScientificExplorationFleetOptionRow] = []
-            for vehicle_definition in sorted(
-                sim.logistics.vehicle_defs.values(), key=lambda row: str(row.id)
-            ):
-                fleet = sim.logistics.fleet_pool_snapshot(
+            for vehicle_definition in sim.transport.vehicle_definitions():
+                fleet = sim.transport.fleet_pool_snapshot(
                     vehicle_definition.id, definition.origin_id
                 )
                 option_blockers = service.fleet_failures(
-                    definition.id, vehicle_definition.id, day=sim.day
+                    definition.id,
+                    vehicle_definition.id,
+                    day=sim.day,
+                    power_by_location=power_by_location,
                 )
                 if state is not None and state.vehicle_definition_id == vehicle_definition.id:
                     option_blockers = ()
+                option_outbound_latency: int | None = None
+                option_return_latency: int | None = None
+                try:
+                    option_outbound = service.movement_path(
+                        definition, vehicle_definition.id, sim.day
+                    )
+                    option_outbound_latency = sum(
+                        sim.transport.performance_movement_transit_days(
+                            plan, vehicle_definition.performance
+                        )
+                        for plan in option_outbound
+                    )
+                    if requires_return:
+                        option_return = service.movement_path(
+                            definition, vehicle_definition.id, sim.day, reverse=True
+                        )
+                        option_return_latency = sum(
+                            sim.transport.performance_movement_transit_days(
+                                plan, vehicle_definition.performance
+                            )
+                            for plan in option_return
+                        )
+                except ValueError:
+                    pass
                 fleet_options.append(
                     ScientificExplorationFleetOptionRow(
                         vehicle_definition_id=str(vehicle_definition.id),
                         display_name=vehicle_definition.display_name,
-                        location_id=str(definition.origin_id),
+                        operational_node_id=str(definition.origin_id),
                         total_units=fleet.total_units,
                         free_units=fleet.free_units,
                         required_units=definition.required_units,
-                        blockers=option_blockers,
+                        blockers=constraints_from_codes(
+                            option_blockers,
+                            affected_action="assign_scientific_exploration_fleet",
+                            related_entity_kind="scientific_exploration",
+                            related_entity_id=str(definition.id),
+                        ),
+                        outbound_latency_days=option_outbound_latency,
+                        return_latency_days=option_return_latency,
                         can_assign=service.can_assign_fleet(
-                            definition.id, vehicle_definition.id, day=sim.day
+                            definition.id,
+                            vehicle_definition.id,
+                            day=sim.day,
+                            power_by_location=power_by_location,
                         ),
                     )
                 )
@@ -68,13 +214,13 @@ class ScientificExplorationProjectorMixin:
                     display_name=definition.display_name,
                     status=status,
                     paused=paused,
+                    priority=priority,
+                    can_set_priority=can_set_priority,
                     origin_id=str(definition.origin_id),
                     destination_id=str(definition.destination_id),
-                    operations=tuple(
-                        (operation.operation_type, operation.delta_v_km_s)
-                        for operation in definition.operations
-                    ),
-                    mission_duration_days=definition.mission_duration_days,
+                    movement_operations=movement_operations,
+                    outbound_latency_days=outbound_latency_days,
+                    return_latency_days=return_latency_days,
                     origin_requirements=site_requirements_definition(definition.origin_requirements),
                     destination_requirements=site_requirements_definition(definition.destination_requirements),
                     duration_days=definition.duration_days,
@@ -82,6 +228,10 @@ class ScientificExplorationProjectorMixin:
                     research_points_total=definition.research_points_total,
                     research_points_per_day=definition.points_per_day,
                     research_points_awarded=awarded,
+                    rp_admission_headroom=rp_admission_headroom,
+                    rp_requested_today=rp_requested_today,
+                    rp_admitted_today=rp_admitted_today,
+                    rp_admission_blocker=rp_admission_blocker,
                     consumable_resources=tuple(
                         (str(resource_id), amount)
                         for resource_id, amount in definition.consumable_resources
@@ -90,11 +240,23 @@ class ScientificExplorationProjectorMixin:
                     minimum_payload_t=definition.minimum_payload_t,
                     required_vehicle_capabilities=definition.required_vehicle_capabilities,
                     assigned_vehicle_definition_id=assigned_vehicle_definition_id,
-                    reserved_units=reserved_units,
-                    blockers=blockers,
+                    fleet_commitment_id=fleet_commitment_id,
+                    committed_units=committed_units,
+                    completion_disposition=service.completion_disposition(definition.id),
+                    transition_options=service.transition_options(definition.id),
+                    termination_intent=(None if state is None or state.termination_intent is None else state.termination_intent.value),
+                    blockers=constraints_from_codes(
+                        blockers,
+                        affected_action="progress_scientific_exploration",
+                        related_entity_kind="scientific_exploration",
+                        related_entity_id=str(definition.id),
+                    ),
                     can_start=service.can_start(definition.id),
                     can_pause=service.can_pause(definition.id),
                     can_resume=service.can_resume(definition.id),
+                    can_abort=service.can_abort(definition.id),
+                    can_return=service.can_return(definition.id),
+                    can_set_completion_disposition=(state is not None and state.phase.value in {"awaiting_fleet", "preparing", "outbound", "active"}),
                     can_unassign=service.can_unassign_fleet(definition.id),
                     fleet_options=tuple(fleet_options),
                 )

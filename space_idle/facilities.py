@@ -1,27 +1,55 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
+from enum import Enum
+import math
 from typing import TYPE_CHECKING, Mapping
 
-from .shared import DefinitionId, EntityId, SpatialNodeId
-from .site import EnvironmentCondition
-from .spatial import EnvironmentResolver
+from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
+from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from .service_capacity import ServiceCapacityScope
+from .site import SiteRequirements, evaluate_physical_site_requirements
+from .spatial import EnvironmentResolver, SpatialContextId
 
 if TYPE_CHECKING:
     from .power import PowerSnapshot
 
 
+class FacilityPlacementScope(str, Enum):
+    OPERATIONAL_NODE = "OPERATIONAL_NODE"
+    SURFACE_CELL = "SURFACE_CELL"
+
+
+class FacilityLifecycle(str, Enum):
+    NORMAL = "NORMAL"
+    DECOMMISSIONING = "DECOMMISSIONING"
+
+
 @dataclass(frozen=True)
 class CapabilitySupply:
-    """A facility-provided qualitative service with a rated capacity."""
+    """Categorical function/interface supplied by a facility."""
     id: str
-    rated_capacity: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("capability id must not be empty")
-        if self.rated_capacity <= 0:
-            raise ValueError("capability rated capacity must be positive")
+
+
+@dataclass(frozen=True)
+class ServiceCapacitySupply:
+    """Finite per-tick flow supplied by a physically located facility."""
+    service_type: str
+    nominal_rate: float
+    scope: ServiceCapacityScope = ServiceCapacityScope.OPERATIONAL_NODE
+
+    def __post_init__(self) -> None:
+        if not self.service_type:
+            raise ValueError("service type must not be empty")
+        if self.nominal_rate <= 0:
+            raise ValueError("service capacity nominal rate must be positive")
+        if not isinstance(self.scope, ServiceCapacityScope):
+            raise ValueError("service capacity scope must be a ServiceCapacityScope")
 
 
 @dataclass(frozen=True)
@@ -29,36 +57,47 @@ class FacilityDef:
     id: DefinitionId
     display_name: str
     capability_supplies: tuple[CapabilitySupply, ...] = ()
-    installation_environment: tuple[EnvironmentCondition, ...] = ()
-    operating_environment: tuple[EnvironmentCondition, ...] = ()
+    installation_requirements: SiteRequirements = SiteRequirements()
+    operating_requirements: SiteRequirements = SiteRequirements()
     # Fraction of cumulative construction/upgrade resource investment required
     # per game year. The value is content balance; Core only supplies the rule.
     maintenance_fraction_per_year: float = 0.0
+    placement_scope: FacilityPlacementScope = FacilityPlacementScope.OPERATIONAL_NODE
+    service_capacity_supplies: tuple[ServiceCapacitySupply, ...] = ()
+    decommission_recovery_fraction: float = 0.0
 
     def __post_init__(self) -> None:
         if self.maintenance_fraction_per_year < 0:
             raise ValueError("facility maintenance fraction must be non-negative")
+        if not isinstance(self.placement_scope, FacilityPlacementScope):
+            raise ValueError("facility placement scope must be a FacilityPlacementScope")
+        if not 0.0 <= self.decommission_recovery_fraction <= 1.0:
+            raise ValueError("facility decommission recovery fraction must be within 0..1")
 
 
 @dataclass
 class FacilityState:
     id: EntityId
     definition_id: DefinitionId
-    location_id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     paused: bool = False
-    power_priority: int | None = None
-    maintenance_priority: int = 50
+    activity_priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+    maintenance_priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     level: int = 1
     invested_resources: dict[DefinitionId, float] = field(default_factory=dict)
-    maintenance_satisfaction: float = 1.0
+    site_cell_id: SurfaceCellId | None = None
+    lifecycle: FacilityLifecycle = FacilityLifecycle.NORMAL
+    selected_process_id: DefinitionId | None = None
 
     def __post_init__(self) -> None:
+        self.activity_priority = ActivityPriority(self.activity_priority)
+        self.maintenance_priority = ActivityPriority(self.maintenance_priority)
         if self.level < 1:
             raise ValueError("facility level must be positive")
         if any(amount < 0 for amount in self.invested_resources.values()):
             raise ValueError("facility invested resources must be non-negative")
-        if not 0.0 <= self.maintenance_satisfaction <= 1.0:
-            raise ValueError("facility maintenance satisfaction must be in 0..1")
+        if not isinstance(self.lifecycle, FacilityLifecycle):
+            self.lifecycle = FacilityLifecycle(self.lifecycle)
 
 
 @dataclass
@@ -68,20 +107,84 @@ class FacilityBook:
     facilities: dict[EntityId, FacilityState] = field(default_factory=dict)
     _counter: int = 0
 
+    def copy_for_environment(self, environment: EnvironmentResolver) -> "FacilityBook":
+        """Create an isolated mutable facility snapshot bound to another environment.
+
+        Planning/preflight code can evaluate normal Facility placement and Site
+        contracts without depending on FacilityBook's internal identity counter.
+        """
+
+        return FacilityBook(
+            self.definitions, environment, deepcopy(self.facilities), self._counter
+        )
+
+    def placement_failures(
+        self,
+        definition_id: DefinitionId,
+        operational_node_id: SpatialNodeId,
+        site_cell_id: SurfaceCellId | None = None,
+    ) -> tuple[tuple[str, str], ...]:
+        if definition_id not in self.definitions:
+            return (("unknown_facility_definition", f"unknown facility definition: {definition_id}"),)
+        if not self.environment.graph.has_operational_node(operational_node_id):
+            return (("unknown_location", f"unknown operational node: {operational_node_id}"),)
+        definition = self.definitions[definition_id]
+        if definition.placement_scope is FacilityPlacementScope.OPERATIONAL_NODE:
+            if site_cell_id is not None:
+                return (("site_cell_not_allowed", "OPERATIONAL_NODE facility must not specify a surface cell"),)
+            return ()
+        if site_cell_id is None:
+            return (("site_cell_required", "SURFACE_CELL facility requires a surface cell"),)
+        location = self.environment.graph.locations.get(operational_node_id)
+        if location is None:
+            return (("surface_location_required", "SURFACE_CELL facility requires a surface Location"),)
+        cell = self.environment.graph.surface_cells.get(site_cell_id)
+        if cell is None:
+            return (("unknown_site_cell", f"unknown surface cell: {site_cell_id}"),)
+        if cell.body_id != location.body_id:
+            return (("site_cell_body_mismatch", "surface cell belongs to another celestial body"),)
+        if site_cell_id not in location.developed_cell_ids:
+            return (("site_cell_not_developed", "surface cell is not developed by the facility Location"),)
+        return ()
+
+    def placement_context(
+        self,
+        definition_id: DefinitionId,
+        operational_node_id: SpatialNodeId,
+        site_cell_id: SurfaceCellId | None = None,
+    ) -> SpatialContextId:
+        failures = self.placement_failures(definition_id, operational_node_id, site_cell_id)
+        if failures:
+            raise ValueError("; ".join(detail for _code, detail in failures))
+        definition = self.definitions[definition_id]
+        if definition.placement_scope is FacilityPlacementScope.OPERATIONAL_NODE:
+            return operational_node_id
+        assert site_cell_id is not None
+        return site_cell_id
+
+    def facility_environment_context(self, facility: FacilityState) -> SpatialContextId:
+        return self.placement_context(facility.definition_id, facility.operational_node_id, facility.site_cell_id)
+
     def install(
         self,
         definition_id: DefinitionId,
-        location_id: SpatialNodeId,
+        operational_node_id: SpatialNodeId,
         *,
-        power_priority: int | None = None,
-        maintenance_priority: int = 50,
+        site_cell_id: SurfaceCellId | None = None,
+        activity_priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
+        maintenance_priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
         level: int = 1,
         invested_resources: Mapping[DefinitionId, float] | None = None,
     ) -> EntityId:
         if definition_id not in self.definitions:
             raise KeyError(definition_id)
-        if location_id not in self.environment.graph.nodes:
-            raise KeyError(location_id)
+        if not self.environment.graph.has_operational_node(operational_node_id):
+            raise KeyError(operational_node_id)
+        placement_failures = self.placement_failures(definition_id, operational_node_id, site_cell_id)
+        if placement_failures:
+            if placement_failures[0][0] == "unknown_site_cell":
+                raise KeyError(site_cell_id)
+            raise ValueError("; ".join(detail for _code, detail in placement_failures))
         if level < 1:
             raise ValueError("facility level must be positive")
         investment = dict(invested_resources or {})
@@ -92,13 +195,13 @@ class FacilityBook:
         self.facilities[entity_id] = FacilityState(
             id=entity_id,
             definition_id=definition_id,
-            location_id=location_id,
+            operational_node_id=operational_node_id,
             paused=False,
-            power_priority=power_priority,
+            activity_priority=activity_priority,
             maintenance_priority=maintenance_priority,
             level=level,
             invested_resources=investment,
-            maintenance_satisfaction=1.0,
+            site_cell_id=site_cell_id,
         )
         return entity_id
 
@@ -122,46 +225,81 @@ class FacilityBook:
         facility.level = target_level
 
     def pause(self, facility_id: EntityId) -> None:
+        if self.facilities[facility_id].lifecycle is FacilityLifecycle.DECOMMISSIONING:
+            raise ValueError("decommissioning facility cannot change normal operation state")
         self.facilities[facility_id].paused = True
 
     def resume(self, facility_id: EntityId) -> None:
+        if self.facilities[facility_id].lifecycle is FacilityLifecycle.DECOMMISSIONING:
+            raise ValueError("decommissioning facility cannot resume normal operation")
         self.facilities[facility_id].paused = False
 
-    def set_power_priority(self, facility_id: EntityId, priority: int | None) -> None:
-        self.facilities[facility_id].power_priority = priority
+    def begin_decommission(self, facility_id: EntityId) -> None:
+        facility = self.facilities[facility_id]
+        if facility.lifecycle is not FacilityLifecycle.NORMAL:
+            raise ValueError("facility is already decommissioning")
+        facility.lifecycle = FacilityLifecycle.DECOMMISSIONING
+        facility.paused = False
 
-    def set_maintenance_priority(self, facility_id: EntityId, priority: int) -> None:
-        self.facilities[facility_id].maintenance_priority = priority
+    def decommission_salvage(self, facility_id: EntityId) -> dict[DefinitionId, float]:
+        facility = self.facilities[facility_id]
+        fraction = self.definitions[facility.definition_id].decommission_recovery_fraction
+        if fraction <= 1e-12:
+            return {}
+        return {
+            resource_id: amount * fraction
+            for resource_id, amount in facility.invested_resources.items()
+            if amount * fraction > 1e-12
+        }
 
-    def all_at(self, location_id: SpatialNodeId) -> list[FacilityState]:
-        return [f for f in self.facilities.values() if f.location_id == location_id]
+    def finalize_decommission(self, facility_id: EntityId) -> FacilityState:
+        facility = self.facilities[facility_id]
+        if facility.lifecycle is not FacilityLifecycle.DECOMMISSIONING:
+            raise ValueError("facility is not decommissioning")
+        return self.facilities.pop(facility_id)
 
-    def active_at(self, location_id: SpatialNodeId) -> list[FacilityState]:
-        return [f for f in self.all_at(location_id) if not f.paused]
+    def set_activity_priority(self, facility_id: EntityId, priority: ActivityPriority) -> None:
+        self.facilities[facility_id].activity_priority = ActivityPriority(priority)
 
-    def environment_failures(self, facility: FacilityState, day: int) -> tuple[tuple[str, str], ...]:
+    def set_maintenance_priority(self, facility_id: EntityId, priority: ActivityPriority) -> None:
+        self.facilities[facility_id].maintenance_priority = ActivityPriority(priority)
+
+    def all_at(self, operational_node_id: SpatialNodeId) -> list[FacilityState]:
+        return [f for f in self.facilities.values() if f.operational_node_id == operational_node_id]
+
+    def active_at(self, operational_node_id: SpatialNodeId) -> list[FacilityState]:
+        return [
+            f for f in self.all_at(operational_node_id)
+            if not f.paused and f.lifecycle is FacilityLifecycle.NORMAL
+        ]
+
+    def operating_site_failures(self, facility: FacilityState, day: int) -> tuple[tuple[str, str], ...]:
         definition = self.definitions[facility.definition_id]
-        failures: list[tuple[str, str]] = []
-        for condition in definition.operating_environment:
-            if not condition.matches(self.environment, facility.location_id, day):
-                failures.append((condition.code, condition.description))
-        return tuple(failures)
+        context_id = self.facility_environment_context(facility)
+        return tuple(
+            (failure.code, failure.detail)
+            for failure in evaluate_physical_site_requirements(
+                definition.operating_requirements, context_id, day, self.environment
+            )
+        )
 
     def is_environmentally_compatible(self, facility: FacilityState, day: int) -> bool:
-        return not self.environment_failures(facility, day)
+        return not self.operating_site_failures(facility, day)
 
     def activation_failures(self, facility: FacilityState, day: int) -> tuple[tuple[str, str], ...]:
         failures: list[tuple[str, str]] = []
+        if facility.lifecycle is FacilityLifecycle.DECOMMISSIONING:
+            failures.append(("decommissioning", "設備は解体中"))
         if facility.paused:
             failures.append(("manual_pause", "設備が手動停止中"))
-        failures.extend(self.environment_failures(facility, day))
+        failures.extend(self.operating_site_failures(facility, day))
         return tuple(failures)
 
     def is_active_and_compatible(self, facility: FacilityState, day: int) -> bool:
         return not self.activation_failures(facility, day)
 
-    def active_compatible_at(self, location_id: SpatialNodeId, day: int) -> list[FacilityState]:
-        return [f for f in self.all_at(location_id) if self.is_active_and_compatible(f, day)]
+    def active_compatible_at(self, operational_node_id: SpatialNodeId, day: int) -> list[FacilityState]:
+        return [f for f in self.all_at(operational_node_id) if self.is_active_and_compatible(f, day)]
 
     def maintenance_requirements_per_day(self, facility_id: EntityId) -> dict[DefinitionId, float]:
         facility = self.facilities[facility_id]
@@ -174,37 +312,152 @@ class FacilityBook:
             if amount > 1e-12
         }
 
-    def maintenance_factor(self, facility_id: EntityId) -> float:
-        return max(0.0, min(1.0, self.facilities[facility_id].maintenance_satisfaction))
+    @staticmethod
+    def _definition_has_capability(definition: FacilityDef, capability_id: str) -> bool:
+        return any(supply.id == capability_id for supply in definition.capability_supplies)
 
-    def _capacity_from_facilities(self, facilities: list[FacilityState], capability_id: str, *, maintenance: bool = False) -> float:
-        total = 0.0
-        for facility in facilities:
-            definition = self.definitions[facility.definition_id]
-            factor = self.maintenance_factor(facility.id) if maintenance else 1.0
-            total += sum(supply.rated_capacity * factor for supply in definition.capability_supplies if supply.id == capability_id)
-        return total
+    def installed_capability_at(self, operational_node_id: SpatialNodeId, capability_id: str) -> bool:
+        """Whether the physical function/interface exists at the node.
 
-    def infrastructure_capability_capacity_at(self, location_id: SpatialNodeId, capability_id: str, day: int = 0) -> float:
-        facilities = [f for f in self.all_at(location_id) if self.is_environmentally_compatible(f, day)]
-        return self._capacity_from_facilities(facilities, capability_id)
+        Installed capability is categorical and does not disappear because a
+        facility is paused, unpowered, or temporarily environment-incompatible.
+        """
+        return any(
+            self._definition_has_capability(self.definitions[facility.definition_id], capability_id)
+            for facility in self.all_at(operational_node_id)
+            if facility.lifecycle is FacilityLifecycle.NORMAL
+        )
 
-    def active_capability_capacity_at(self, location_id: SpatialNodeId, capability_id: str, day: int = 0) -> float:
-        # Active is rated capacity before transient power/maintenance allocation.
-        return self._capacity_from_facilities(self.active_compatible_at(location_id, day), capability_id)
+    def active_capability_at(self, operational_node_id: SpatialNodeId, capability_id: str, day: int = 0) -> bool:
+        """Whether an installed function is currently active as a category."""
+        return any(
+            self._definition_has_capability(self.definitions[facility.definition_id], capability_id)
+            for facility in self.active_compatible_at(operational_node_id, day)
+        )
 
-    def available_capability_capacity_at(self, location_id: SpatialNodeId, capability_id: str, power: PowerSnapshot, day: int = 0) -> float:
-        total = 0.0
-        for facility in self.active_compatible_at(location_id, day):
-            definition = self.definitions[facility.definition_id]
-            utilization = max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
-            factor = utilization * power.maintenance_factor_by_facility.get(
-                facility.id, self.maintenance_factor(facility.id)
+    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope:
+        scopes = {
+            supply.scope
+            for definition in self.definitions.values()
+            for supply in definition.service_capacity_supplies
+            if supply.service_type == service_type
+        }
+        if not scopes:
+            return ServiceCapacityScope.OPERATIONAL_NODE
+        if len(scopes) != 1:
+            raise ValueError(f"mixed service capacity scopes for {service_type}: {sorted(scope.value for scope in scopes)}")
+        return next(iter(scopes))
+
+    def service_capacity_types(self) -> tuple[str, ...]:
+        """Finite service types supplied directly by Facility definitions."""
+        return tuple(sorted(self.service_types()))
+
+    def service_capacity_provider_definition_ids(
+        self, service_type: str
+    ) -> frozenset[DefinitionId]:
+        return frozenset(
+            definition.id
+            for definition in self.definitions.values()
+            if any(
+                supply.service_type == service_type
+                for supply in definition.service_capacity_supplies
             )
-            for supply in definition.capability_supplies:
-                if supply.id == capability_id:
-                    total += supply.rated_capacity * factor
-        return total
+        )
+
+    def service_capacity_upstream_services(
+        self, service_type: str
+    ) -> frozenset[str]:
+        if service_type not in self.service_types():
+            raise KeyError(service_type)
+        return frozenset()
+
+    def service_capacity_supply_at(
+        self,
+        operational_node_id: SpatialNodeId,
+        service_type: str,
+        facilities: "FacilityBook",
+        power: "PowerSnapshot | None",
+        day: int = 0,
+        *,
+        provider_factors: Mapping[EntityId, float] | None = None,
+    ) -> tuple[float, float]:
+        if facilities is not self:
+            raise ValueError("facility service provider requires its owning FacilityBook")
+        nominal = self.nominal_service_capacity_at(operational_node_id, service_type, day)
+        if power is None:
+            return (nominal, nominal)
+        return (
+            nominal,
+            self.enabled_service_capacity_at(
+                operational_node_id, service_type, power, day,
+                provider_factors=provider_factors,
+            ),
+        )
+
+    def nominal_service_capacity_at(
+        self, operational_node_id: SpatialNodeId, service_type: str, day: int = 0
+    ) -> float:
+        contributions: list[float] = []
+        for facility in sorted(
+            self.active_compatible_at(operational_node_id, day), key=lambda row: str(row.id)
+        ):
+            definition = self.definitions[facility.definition_id]
+            contributions.extend(
+                supply.nominal_rate
+                for supply in definition.service_capacity_supplies
+                if supply.service_type == service_type
+            )
+        return math.fsum(contributions)
+
+    def enabled_service_capacity_at(
+        self,
+        operational_node_id: SpatialNodeId,
+        service_type: str,
+        power: "PowerSnapshot",
+        day: int = 0,
+        *,
+        provider_factors: Mapping[EntityId, float] | None = None,
+    ) -> float:
+        """Provider flow enabled by already-resolved upstream dependencies.
+
+        Upstream service fulfillment is supplied explicitly by the Simulation
+        allocation graph. FacilityBook never resolves another Service allocation
+        internally. Consumers must still submit ServiceCapacityRequest.
+        """
+        contributions: list[float] = []
+        service_factors = {} if provider_factors is None else provider_factors
+        for facility in sorted(
+            self.active_compatible_at(operational_node_id, day), key=lambda row: str(row.id)
+        ):
+            definition = self.definitions[facility.definition_id]
+            utilization = max(
+                0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0))
+            )
+            maintenance = max(
+                0.0,
+                min(
+                    1.0,
+                    power.maintenance_factor_by_facility.get(facility.id, 1.0),
+                ),
+            )
+            upstream = max(0.0, min(1.0, service_factors.get(facility.id, 1.0)))
+            for supply in definition.service_capacity_supplies:
+                if supply.service_type == service_type:
+                    contributions.append(
+                        supply.nominal_rate * utilization * maintenance * upstream
+                    )
+        return math.fsum(contributions)
 
     def capability_ids(self) -> set[str]:
-        return {supply.id for definition in self.definitions.values() for supply in definition.capability_supplies}
+        return {
+            supply.id
+            for definition in self.definitions.values()
+            for supply in definition.capability_supplies
+        }
+
+    def service_types(self) -> set[str]:
+        return {
+            supply.service_type
+            for definition in self.definitions.values()
+            for supply in definition.service_capacity_supplies
+        }

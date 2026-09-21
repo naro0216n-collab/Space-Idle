@@ -62,7 +62,7 @@
 
 特定Location、特定Vehicle、特定Facility、特定fixtureだけに必要な条件が現れた場合は、まず一般モデルの不足か、Contentで表現すべき差か、Domain境界の誤りかを調べる。
 
-既存概念が新設計と重複・矛盾する場合は、旧概念を残したまま新概念を並設せず、State、Command、Query、Persistence、UIを含めて旧経路を撤去する。
+既存概念が新設計と重複・矛盾する場合は、変更後の責務を一つのState、Command、Query、Persistence、UI経路へ統合し、同じ責務を持つ複数経路を残さない。
 
 ### 3.4 縦方向に実装する
 
@@ -79,14 +79,24 @@ Domain model
 
 各層で同じルールを再実装せず、判断は所有Domainへ集約し、外側は契約を利用する。
 
-### 3.5 実装後に広域監査する
+### 3.5 計算量と導出範囲をArchitecture契約として扱う
+
+Generic Coreが将来増加するEntityや関係を扱う場合、正しさだけでなく、どの集合に対して何回導出するかを実装前に確認する。Operational Node、Movement Plan、Facility、Resource、Project等の件数が増えたとき、局所Queryや1回のtickが無関係な全世界集合の再列挙へ暗黙に拡大しない構造を選ぶ。
+
+特に、同じauthoritative Stateから同一の派生結果を複数箇所が参照する場合は、一度導出して索引・snapshotとして再利用する。個別ID参照やorigin / destination等で範囲が指定されたQueryは、その要求範囲に応じた導出を使い、各行の評価から全候補生成を繰り返さない。派生索引のinvalidationは、その入力となるauthoritative Stateを変更する責務側で行い、read Queryが安全確認のために毎回破棄する構造へしない。
+
+この再利用は派生状態の保存正本化を意味しない。索引・cache・projectionはSave対象にせず、入力State変更後に再導出可能であることを保つ。性能問題への対処として、wall-clockとgame timeの対応、canonical tick、Domain invariant、Queryの意味論を変更して処理コストを見えなくすることは行わない。まず重複導出、探索範囲、責務境界、データアクセス経路を修正する。
+
+検証は不安定な実時間閾値だけに依存せず、「同一physical stateで全候補導出が一度だけである」「絞り込みQueryが全世界候補を要求しない」等、計算量増大の原因となる契約を直接確認する。
+
+### 3.6 実装後に広域監査する
 
 機能が動作した時点で終えず、変更範囲の周辺を含めて監査する。
 
 確認対象：
 
 - 同じ概念を複数Domainが所有していないか
-- 旧概念・互換wrapper・一時的な変換層が残っていないか
+- 同じ責務を持つ複数経路・変換層が残っていないか
 - 登録順、呼出順、ID名、Location名への隠れた依存がないか
 - Queryと実行系が同じ判定を使っているか
 - Save / Loadで派生状態を二重管理していないか
@@ -136,15 +146,76 @@ Domain model
 
 ## 6. 検証・テスト・CIの位置づけ
 
-検証は、設計と実装が一致しているかを確認するための証拠収集であり、開発の目的や正準仕様ではない。
+### 6.1 テストが表すもの
 
-設計とDomain契約を先に定め、その契約に必要な検証を後から選ぶ。既存テスト、fixture、CI構成は、その検証対象が変われば更新・統廃合する。
+テストは、現在の正準仕様から導出される契約を実行可能な形で検証するためのものとする。過去の実装手順、修正履歴、削除済み設計、ある時点の内部構造を保存する記録にはしない。
 
-GreenなCIは全体設計の妥当性を保証しない。Redなテストも、直ちに実装が誤っていることを意味しない。失敗した場合は、現在の設計に対して実装・Content・検証方法・環境のどこが不一致なのかを確認する。
+恒久テストを置くかどうかは、「このテストが失敗したとき、現在の `design.md` / `architecture.md` が要求する不変条件、状態遷移、Domain境界、Application契約のどれが破られたと言えるか」で判断する。対応する現行契約を説明できない検証は、恒久suiteへ残す根拠を持たない。
 
-テストを増やすこと自体を品質向上とみなさない。長期的に守るDomain invariant、状態遷移、会計、境界、保存復元、決定論等を中心に検証し、開発中の数値や一攻略例を固定する検証は、その実験目的がなくなれば廃棄する。
+不具合修正や構造変更を契機に検証を追加する場合も、個別事象の再現形状ではなく、その事象が示した一般的な契約へ検証対象を引き上げる。State ownership、Application境界、登録順非依存、保存則など、現在の設計から説明できる契約を直接検証する。
 
-Gameplay evaluation、性能分析、Domain invariant、Content validation、Browser / Integration validationは目的が異なるため分離する。Gameplayの停止はゲーム上のボトルネックであり得る一方、Simulation計算量の増大は性能問題である。両者を同じScenarioの合否だけで判断しない。
+### 6.2 優先して検証する契約
+
+テストsuiteは、現在のゲームとArchitectureを長期的に守る契約へ集中させる。特に次を優先する。
+
+- Domain invariantと状態遷移
+- State ownershipとDomain間境界
+- Resource / Funds / Cargo等の保存と二重計上防止
+- Allocation、Service Capacity、Inventory、Logistics等のDomain間整合性
+- Save / Loadでauthoritative Stateが保存され、派生Stateが正しく再導出されること
+- Offline Progressと通常Simulationの意味論的一致
+- Entity登録順、Domain登録順、同順位処理順に依存しない決定論
+- Application Command / QueryがDomain契約を正しく公開し、UIの意思決定に必要なstate、blocker、必要条件、limiting factorを返すこと
+- Content追加がGeneric Coreの特定ID例外を要求しないこと
+
+Gameplay検証は実Application APIと実際の状態遷移を使い、複数Domainを通した契約が成立することを確認する。ただし一つの攻略順、特定Facility数、暫定初期在庫、特定の成功日数等を正準仕様へ昇格させない。
+
+### 6.3 仕様変更時のテスト再構成
+
+仕様・Architectureが変わった場合は、既存テストを新仕様へ機械的に追従させるのではなく、各テストが現在も有効な契約を表しているかを再評価する。
+
+変更後の契約に対して、既存テストは次のいずれかとして扱う。
+
+- 現在も同じ契約を検証するなら維持する。
+- 契約の表現が変わったなら、新しいpublic / Domain契約へ書き換える。
+- より上位の不変条件テストへ包含できるなら統合する。
+- 現在の契約を表さず、暫定Content値や特定の内部表現だけを固定する場合は削除する。
+
+「過去に一度壊れたから」という理由だけで個別回帰テストを永久に積み上げない。過去の不具合が恒久的な設計契約を示している場合だけ、その契約を最小限のテストで保持する。
+
+テスト削除は品質低下とはみなさない。不要なテストを残して現行設計と矛盾する契約を固定する方が回帰リスクになる。削除・統合時は、そのテストが表していた現行契約が別の検証で十分に覆われているか、または契約自体が廃止済みであることを確認する。
+
+### 6.4 重複と実装詳細への依存を避ける
+
+同じDomain ruleを複数layerで同じ内容のまま繰り返し検証しない。各layerではそのlayer固有の契約を確認する。
+
+- Domain test: invariant、state transition、allocation、保存則等のルール
+- Architecture test: dependency方向、State ownership、Domain越境を含む境界契約
+- Application / integration test: Command / Queryと複数Domain接続
+- Gameplay / browser test: 実際の意思決定に必要な状態が一連の操作で利用可能か
+- Development infrastructure test: publish、CI、package、launcher等の開発基盤契約
+
+private helper、内部call順、現在のmodule分割、temporary adapter等は、それ自体がArchitecture契約でない限りテストの正本にしない。内部構造を変更しただけで大量のテスト修正が必要になる場合は、テストがpublic / Domain契約ではなく実装を写していないかを先に確認する。
+
+新しいテストを追加する前に、同じ不変条件を既存テストが既に検証していないかを確認する。既存テストへ自然に統合できる場合は、個別ケースを別ファイル・別testとして増やすより契約中心に統合する。
+
+### 6.5 Fixture・Content・Scenario
+
+fixtureは検証したい状態を構築する入力であり、それ自体を仕様としない。テストの意味に不要な初期Scenario全体、暫定Content、ID一覧、登録数、balance値を複製しない。
+
+数値そのものが正準契約でない場合は、特定値より関係を検証する。例えば「施設が3個ある」よりState ownership、「100日で完成する」より必要Resourceとworkに応じて進行すること、「Moonだけ到達可能」よりSpatial / Vehicle requirementから可否が導出されることを検証する。
+
+Content固有のvalidationが必要な場合は、Generic Coreの不変条件と分離してContent validationとして扱う。Gameplay ScenarioもContent評価とCore契約検証を混同しない。
+
+### 6.6 CIと検証範囲
+
+GreenなCIは設計妥当性の証明ではなく、選択された検証が通ったという証拠である。Redなテストも直ちに実装誤りとは限らず、正準仕様の変更に対してテスト契約が古くなっていないかを含めて原因を確認する。
+
+変更単位では、その責務に直接関係する最小の検証から開始し、Domain横断、Persistence、Offline、Application等の影響範囲に応じて必要な検証を広げる。変更と無関係な長時間検証を毎回機械的に実行することを品質基準にはしない一方、ローカル実行不能を理由に必要な実環境検証を変更単位から除外しない。
+
+実ブラウザ、clean package install、OS差等はGitHub CIで検証し、高速に再現できるDomain / architecture / integration検証はローカルで優先する。Gameplay evaluation、性能分析、Domain invariant、Content validation、Browser / Integration validationは目的を分け、それぞれの結果を別の契約の証明として流用しない。
+
+テストsuiteは現在の正準仕様を効率よく検証する構成として継続的に統廃合する。テスト数、ファイル数、過去ケースの保存量そのものを品質指標にしない。
 
 ---
 
@@ -155,7 +226,7 @@ Gameplay evaluation、性能分析、Domain invariant、Content validation、Bro
 少なくとも以下を満たした時点で、検証可能な実装単位として扱う。
 
 - 変更後のDomain責務とState所有が明確である
-- 旧設計との重複経路・不要な互換層が整理されている
+- 同じ責務を持つ重複経路や不要な変換層が存在しない
 - Simulation、Application、Persistence、Content、UIが同じ契約で接続されている
 - 一般モデルに特定Content由来の特殊分岐を持ち込んでいない
 - 変更後のボトルネックと状態遷移をApplicationから説明できる
@@ -169,20 +240,15 @@ CI通過や特定Gameplay Scenarioの完走だけを完了判定には使わな�
 
 ## 8. GitHubへの反映
 
-独立作業は原則ローカルで行い、全体整合性を確認した差分を検証可能な単位で `develop` へ反映する。
+独立作業はローカルrepoで行い、責務としてまとまり、その時点で既知の不整合がないcheckpointを `develop` へ反映する。反映単位はファイル数やテスト実行単位ではなく、Domainから必要なApplication・Persistence・Content・UI境界まで一貫して成立した責務変更とする。
 
-`develop` への反映単位は「テストが通ったファイル群」ではなく、「一つの責務変更がDomainから外部境界まで一貫して成立した変更」とする。複数の成立済みlocal commitが未反映でも、publish都合でrebase・reset・squashして作り直さず、責務境界ごとに順次反映してよい。
+publish対象はcommit済みtarget treeとし、publish transportの都合をゲーム実装の構造、commit境界、State ownershipへ持ち込まない。成立済みlocal commitは履歴整理やtransport都合で作り直さず、責務境界に沿ったcheckpointとして保持する。
 
-GitHubへのtransport方式はゲーム実装の構造やcommit境界を決める根拠にしない。publish対象はcommitted target treeであり、その後にworking treeで別作業を続けていても対象commitへ未commit内容を混入させない。
+通常publishの操作手順、Publish Gatewayのtransport protocol、source-snapshotの復元方法、workflow maintenance、失敗時のrecoveryは `DEVELOPMENT.md` と各helperの生成手順を運用上の正本とする。開発原則はそれらの具体的なpacket形式、chunkサイズ、Connector実装、GitHub API呼出順へ依存しない。
 
-認証済みnative Gitを利用できる環境では、記録済みremote HEAD/treeを基点としてlocal target treeを指すcommitを生成し、non-force push後にremote ref/treeを再検証する経路を優先する。
+branchの役割は次の通りとする。
 
-native Git transportが利用できない環境では、記録済みremote commitを親、local target treeをtreeに持つ決定論的commitをGit bundleへ格納し、Publish Gatewayへ渡す。publish直前のChatGPT側確認は対象branch HEADの一度だけとし、それ以外のSHA整合性確認はhelperとGatewayへ移す。bundle payloadはサイズにかかわらず独立Git blobとしてmaterializeし、Connector actionへ渡す実引数bytesを基準に、必要な場合だけ最少数へ自動分割して並列送信する。execution bridgeがpacketを忠実に引き渡せない場合も、ChatGPTがpayloadを再構成するのではなく、helperのcall budgetを狭めて同じprotocolをより小さいpacketへ再計画する。helperは各blob OIDと、それらを順序付きで参照するpayload root tree OIDを事前計算し、root tree作成packetと最終request packetを同時に生成する。payload materializationとroot bindingは別actionとし、content転送が変化して期待blob OIDがmaterializeされなければroot作成が失敗してrequest送信前に停止する構造を保つ。各blob uploadとroot tree作成の返却SHAは後続stepへ渡さず、返却SHAの手動比較を整合性条件にしない。payloadをrequest本文へ直接埋め込むinline経路は設けない。
-
-Gatewayはrequestを受けたら、payload root tree OID、各Git blob OID、payload SHA-256、bundle、publish commit、parent/base、target tree、直前remote HEADを機械検証する。すべて一致した場合だけ対象branchへexact commitをnon-force publishし、remote ref/treeを再確認してreceiptを記録し、Fast CIを起動する。不一致時は対象branchを更新しない。ChatGPT側の正常系に個別blob再取得、SHA目視比較、blob/root tree返却SHAの中継、手動commit/ref更新を置かない。ローカルのpublish state更新もreceiptとmanifestを照合して行い、manifestが保持するlocal target commitを正本とする。receipt待ちの間にlocal HEADが進んでも、過去checkpointのSHAを人手で引き渡さない。
-
-`temp` は標準publishの中継やpromotion元にはしない。ユーザー指定時、またはGateway / workflow経路そのものを隔離検証する場合だけ使用する。その検証成果物を通常の `develop` publish入力として再利用しない。
-
-旧transportや既存テストを通すためのcompatibility pathは維持しない。標準経路が成立したら、旧patch方式、手動record fallback、段階的Connector helper等の同責務経路を撤去する。
-
-`main` への統合とゲーム本体version変更はユーザーの明示的承認後のみ行う。
+- `develop`: 通常開発中の共有正本。検証済みcheckpointを通常publishで反映する。
+- `publish`: Publish Gateway専用のtransport control branch。game/sourceの開発履歴とは分離する。
+- `temp`: ユーザー指定、またはworkflow・publish経路そのものを隔離検証する場合に使用する。
+- `main`: ユーザー承認済みの正準branch。`develop` からの統合とゲーム本体version変更はユーザーの明示的承認後に行う。

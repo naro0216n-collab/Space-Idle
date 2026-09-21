@@ -1,39 +1,43 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from .ui_reports import ComparisonAxisRow, DecisionConstraintRow
 from .logistics_views import (
-    CargoFlowRow, FleetPoolRow, FleetRelocationResourceRequirementRow,
-    FleetRelocationRow, FleetReleaseRow, InfrastructureRequirementRow,
-    LogisticsLaneRow, ResourceDemandRow, RouteRow, TransportAllocationRow,
+    CargoFlowRow, FleetPoolRow, FleetCommitmentRow, FleetRelocationResourceRequirementRow,
+    FleetRelocationRow, FleetReleaseRow, FleetRetirementRow, InfrastructureRequirementRow,
+    SupplyRequirementRow, MovementPlanRow, TransportAllocationRow,
 )
 
 
 @dataclass(frozen=True)
 class LogisticsSummaryView:
-    route_count: int
-    usable_route_count: int
+    movement_plan_count: int
+    usable_movement_plan_count: int
     fleet_units: int
     free_fleet_units: int
     allocation_count: int
     unfilled_allocation_units: int
     cargo_flow_count: int
-    lane_count: int
-    paused_lane_count: int
-    demand_count: int
-    queued_demand_t: float
+    routing_constraint_count: int
+    target_stock_count: int
+    requirement_count: int
+    queued_supply_t: float
     in_transit_t: float
     arrival_waiting_t: float
 
 
 @dataclass(frozen=True)
-class RoutesView:
-    items: tuple[RouteRow, ...]
+class MovementPlansView:
+    items: tuple[MovementPlanRow, ...]
+    comparison_axes: tuple[ComparisonAxisRow, ...] = ()
 
 
 @dataclass(frozen=True)
 class FleetView:
     pools: tuple[FleetPoolRow, ...]
+    commitments: tuple[FleetCommitmentRow, ...]
     relocations: tuple[FleetRelocationRow, ...]
     releases: tuple[FleetReleaseRow, ...]
+    retirements: tuple[FleetRetirementRow, ...]
 
 
 @dataclass(frozen=True)
@@ -43,7 +47,7 @@ class FleetRelocationPreviewView:
     units: int
     source_id: str
     destination_id: str
-    path_policy: str
+    movement_hard_constraint: tuple[str, ...] | None
     path: tuple[str, ...]
     travel_days: int
     departure_day: int
@@ -51,7 +55,7 @@ class FleetRelocationPreviewView:
     resource_requirements: tuple[FleetRelocationResourceRequirementRow, ...]
     infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
     feasible: bool
-    blockers: tuple[str, ...]
+    blockers: tuple[DecisionConstraintRow, ...]
 
 
 @dataclass(frozen=True)
@@ -62,9 +66,3 @@ class TransportAllocationsView:
 @dataclass(frozen=True)
 class CargoFlowsView:
     items: tuple[CargoFlowRow, ...]
-
-
-@dataclass(frozen=True)
-class LogisticsLanesView:
-    items: tuple[LogisticsLaneRow, ...]
-    demands: tuple[ResourceDemandRow, ...]

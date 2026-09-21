@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .application_constraints import constraints_from_codes, constraints_from_pairs
 from .application_views import ContractRow, ContractsView
 from .site import evaluate_site_requirements
 
@@ -14,27 +15,27 @@ class ContractProgressionProjectorMixin:
             sim.contracts.contracts.values(), key=lambda row: str(row.id)
         ):
             template = sim.contracts.templates[state.template_id]
-            target_location_id = (
+            target_operational_node_id = (
                 None
-                if template.target_location_id is None
-                else str(template.target_location_id)
+                if template.target_operational_node_id is None
+                else str(template.target_operational_node_id)
             )
-            if template.target_location_id is not None:
+            if template.target_operational_node_id is not None:
                 failures = evaluate_site_requirements(
                     template.site_requirements,
-                    template.target_location_id,
+                    template.target_operational_node_id,
                     sim.day,
                     sim.environment,
                     sim.facilities,
-                    sim.power.snapshot(
-                        template.target_location_id, sim.facilities, sim.day
-                    ),
                 )
-                blockers = tuple(
-                    f"{failure.code}:{failure.detail}" for failure in failures
+                blockers = constraints_from_pairs(
+                    tuple((failure.code, failure.detail) for failure in failures),
+                    affected_action="accept_contract",
+                    related_entity_kind="contract",
+                    related_entity_id=str(state.id),
                 )
             else:
-                blockers = (
+                blocker_codes = (
                     ()
                     if any(
                         not evaluate_site_requirements(
@@ -43,11 +44,16 @@ class ContractProgressionProjectorMixin:
                             sim.day,
                             sim.environment,
                             sim.facilities,
-                            sim.power.snapshot(node.id, sim.facilities, sim.day),
                         )
-                        for node in sim.graph.nodes.values()
+                        for node in sim.graph.operational_nodes()
                     )
                     else ("site_requirements",)
+                )
+                blockers = constraints_from_codes(
+                    blocker_codes,
+                    affected_action="accept_contract",
+                    related_entity_kind="contract",
+                    related_entity_id=str(state.id),
                 )
             rows.append(
                 ContractRow(
@@ -56,8 +62,7 @@ class ContractProgressionProjectorMixin:
                     template.display_name,
                     state.status.value,
                     state.deadline_day,
-                    template.reward_musd,
-                    target_location_id,
+                    target_operational_node_id,
                     blockers,
                 )
             )

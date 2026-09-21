@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from .application_catalog_support import condition_definition_row, site_requirements_definition
+from .application_catalog_support import site_requirements_definition
 from .application_views import (
-    CelestialBodyDefinitionRow, FacilityDefinitionRow, LocationDefinitionRow,
-    ProcessDefinitionRow, ResearchDefinitionRow, ResourceDefinitionRow,
+    CelestialBodyDefinitionRow, FacilityDefinitionRow, OperationalNodeDefinitionRow,
+    ProcessDefinitionRow, ResearchDefinitionRow, ResearchStageDefinitionRow, ResourceDefinitionRow,
 )
 from .site import SiteRequirements
 
@@ -13,7 +13,7 @@ def project_resources(projector):
     return tuple(
         ResourceDefinitionRow(
             str(definition.id), definition.display_name, definition.unit, definition.category,
-            sim.inventory.resource_storage_class.get(definition.id),
+            sim.inventory.storage_pool_for_resource(definition.id),
         )
         for definition in sorted(projector._catalog.resources.values(), key=lambda d: str(d.id))
     )
@@ -22,11 +22,16 @@ def project_resources(projector):
 def project_facilities(projector):
     return tuple(
         FacilityDefinitionRow(
-            str(definition.id), definition.display_name,
-            tuple(sorted((supply.id, supply.rated_capacity) for supply in definition.capability_supplies)),
-            tuple(condition_definition_row(condition) for condition in definition.installation_environment),
-            tuple(condition_definition_row(condition) for condition in definition.operating_environment),
-            definition.maintenance_fraction_per_year,
+            id=str(definition.id),
+            display_name=definition.display_name,
+            capabilities=tuple(sorted(supply.id for supply in definition.capability_supplies)),
+            service_capacity_supplies=tuple(
+                sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
+            ),
+            installation_requirements=site_requirements_definition(definition.installation_requirements),
+            operating_requirements=site_requirements_definition(definition.operating_requirements),
+            maintenance_fraction_per_year=definition.maintenance_fraction_per_year,
+            placement_scope=definition.placement_scope.value,
         )
         for definition in sorted(projector._simulation.facilities.definitions.values(), key=lambda d: str(d.id))
     )
@@ -44,26 +49,43 @@ def project_processes(projector):
 
 
 def project_research(projector):
+    from .research_models import (
+        ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
+        ResearchDemonstrationStageSpec, ResearchOperationalExperienceStageSpec,
+    )
     sim = projector._simulation
     if sim.research is None:
         return ()
-    empty_site = SiteRequirements()
     rows = []
     for definition in sorted(sim.research.definitions.values(), key=lambda row: str(row.id)):
-        prototype = definition.prototype
-        demonstration = definition.demonstration
+        stage_rows = []
+        for spec in definition.stage_specs:
+            required = None
+            resources = ()
+            site = SiteRequirements()
+            experience = ()
+            if isinstance(spec, ResearchTheoryStageSpec):
+                required = spec.research_point_cost
+            elif isinstance(spec, ResearchPrototypeStageSpec):
+                required = spec.required_work
+                resources = tuple(
+                    (str(resource_id), amount)
+                    for resource_id, amount in sorted(spec.resources.items(), key=lambda item: str(item[0]))
+                )
+                site = spec.site_requirements
+            elif isinstance(spec, ResearchDemonstrationStageSpec):
+                required = spec.required_work
+                site = spec.site_requirements
+            elif isinstance(spec, ResearchOperationalExperienceStageSpec):
+                experience = tuple(sorted(spec.requirements.items()))
+            stage_rows.append(ResearchStageDefinitionRow(
+                spec.stage_id, spec.stage_type.value, required, resources,
+                site_requirements_definition(site), experience,
+            ))
         rows.append(ResearchDefinitionRow(
-            str(definition.id),
-            definition.display_name,
-            definition.research_point_cost,
+            str(definition.id), definition.display_name,
             tuple(sorted(str(item) for item in definition.prerequisites)),
-            () if prototype is None else tuple(
-                (str(resource_id), amount)
-                for resource_id, amount in sorted(prototype.resources.items(), key=lambda item: str(item[0]))
-            ),
-            site_requirements_definition(empty_site if prototype is None else prototype.site_requirements),
-            0 if demonstration is None else demonstration.days,
-            site_requirements_definition(empty_site if demonstration is None else demonstration.site_requirements),
+            tuple(stage_rows),
         ))
     return tuple(rows)
 
@@ -75,12 +97,12 @@ def project_celestial_bodies(projector):
     )
 
 
-def project_locations(projector):
+def project_operational_nodes(projector):
     return tuple(
-        LocationDefinitionRow(
+        OperationalNodeDefinitionRow(
             str(node.id), node.display_name,
             None if node.parent_id is None else str(node.parent_id),
             None if node.body_id is None else str(node.body_id), node.kind.value,
         )
-        for node in sorted(projector._simulation.graph.nodes.values(), key=lambda n: str(n.id))
+        for node in projector._simulation.graph.operational_nodes()
     )

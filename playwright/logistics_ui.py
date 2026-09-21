@@ -1,42 +1,31 @@
 from __future__ import annotations
 
+from e2e_support import isolated_browser_context, monitored_page, wait_for_server
+
 import os
 from pathlib import Path
-import shutil
 from threading import Thread
 import tempfile
-import time
 
 from space_idle import AdvanceTime, PlanBuild, build_game_application
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
 from space_idle.simulation import OfflineProgressPolicy
 
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError as exc:  # pragma: no cover
-    raise SystemExit("Playwright is required for logistics UI E2E") from exc
-
 
 EARTH = str(ids.EARTH)
 LEO = str(ids.LEO)
+PROPELLANT = str(ids.PROPELLANT)
 OWNED_LAUNCH_VEHICLE = str(ids.REUSABLE_LAUNCH_VEHICLE)
 
 
-def _wait_for_server(origin: str, timeout: float = 10.0) -> None:
-    import urllib.request
-
-    deadline = time.monotonic() + timeout
-    last_error: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen(f"{origin}/api/v1/health", timeout=1.0) as response:
-                if response.status == 200:
-                    return
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-        time.sleep(0.1)
-    raise RuntimeError(f"server did not become ready: {last_error}")
+def _choose_priority(root, holder_selector: str, level: int | str) -> None:
+    value = str(level)
+    holder = root.locator(holder_selector)
+    group = holder.locator("xpath=ancestor::*[contains(@class,'priority-segment')][1]")
+    group.locator(f'[data-priority-choice="{value}"]').click()
+    assert holder.input_value() == value
 
 
 def _build_logistics_test_application():
@@ -47,14 +36,15 @@ def _build_logistics_test_application():
     return app
 
 
-def run() -> None:
+def run(*, browser=None) -> None:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in {"chromium", "webkit"}:
         raise ValueError(f"unsupported browser: {browser_name}")
 
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-logistics-ui-")
     runtime = GameRuntime(
-        factory=_build_logistics_test_application,
+        new_game_factory=_build_logistics_test_application,
+        load_factory=build_game_application_for_load,
         save_dir=Path(temp_dir.name) / "saves",
         offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0),
     )
@@ -63,157 +53,232 @@ def run() -> None:
         PlanBuild(
             LEO,
             str(ids.ORBITAL_LOGISTICS_NODE),
-            priority=100,
-            sourcing_policy="import_now",
-            import_source_id=EARTH,
+            priority=5,
+            procurement_policy="immediate",
         )
     ).data.created_id
     assert project_id is not None
-    # Establish source-constrained Resource Demand before the UI configures the
-    # Fleet Allocation and Lane that will satisfy it.
+    # Establish a real project-owned Supply Requirement so browser controls can
+    # exercise sparse routing intent against an Application-projected decision row.
     runtime.execute(AdvanceTime(1))
-
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     origin = f"http://127.0.0.1:{int(server.server_address[1])}"
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
     try:
-        _wait_for_server(origin)
-        with sync_playwright() as p:
-            browser_type = getattr(p, browser_name)
-            launch_kwargs: dict[str, object] = {"headless": True}
-            if browser_name == "chromium":
-                executable = (
-                    os.environ.get("SPACE_IDLE_CHROMIUM")
-                    or shutil.which("google-chrome")
-                    or shutil.which("chromium")
-                )
-                if executable:
-                    launch_kwargs["executable_path"] = executable
-                launch_kwargs["args"] = ["--no-sandbox", "--disable-dev-shm-usage"]
-            browser = browser_type.launch(**launch_kwargs)
-            context = browser.new_context(
-                viewport={"width": 1194, "height": 834},
-                has_touch=True,
-                locale="ja-JP",
-                timezone_id="Asia/Tokyo",
-            )
-            page = context.new_page()
+        wait_for_server(origin)
+        with isolated_browser_context(
+            browser_name,
+            browser=browser,
+            viewport={"width": 1194, "height": 834},
+            has_touch=True,
+            locale="ja-JP",
+            timezone_id="Asia/Tokyo",
+        ) as context, monitored_page(context) as page:
             page.goto(origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
-            page.get_by_role("button", name="物流ネットワーク").click()
+            page.locator('.primary-nav-button[data-section="logistics"]').click()
 
-            demand_row = page.locator("#demandTable tbody tr", has_text=project_id).first
-            demand_row.wait_for(timeout=10000)
-            assert "Lane未設定" in demand_row.inner_text(), (
-                "project demand must remain visible before a Lane is configured"
+            fleet_pool = page.locator('#vehicleTable [data-fleet-pool-row]').first
+            fleet_pool.wait_for(timeout=10000)
+            fleet_text = fleet_pool.inner_text()
+            for usage_label in ("輸送", "研究", "地表調査", "科学探査", "拠点設立", "移動中", "回収中", "退役中"):
+                assert usage_label in fleet_text, f"Fleet pool must expose {usage_label} commitment state"
+
+            constraint_button = page.locator(
+                f'#requirementTable [data-requirement-constraint][data-owner-id="{project_id}"]'
+            ).first
+            constraint_button.wait_for(timeout=10000)
+            requirement_row = constraint_button.locator("xpath=ancestor::*[contains(@class,'supply-requirement-card')][1]")
+            assert "輸送能力阻害" in requirement_row.inner_text(), (
+                "Supply Requirement must remain visible while Transport Capacity is unavailable"
             )
+            requirement_id = requirement_row.get_attribute("data-requirement-id")
+            assert requirement_id
+            decision_item = page.locator(
+                f'#logisticsDecisionLane [data-logistics-decision-kind="supply_requirement"]'
+                f'[data-logistics-decision-id="{requirement_id}"]'
+            )
+            decision_item.wait_for(timeout=10000)
+            decision_text = decision_item.inner_text()
+            assert "輸送能力阻害" in decision_text, (
+                "Transport Decision Lane must preserve the Application supply-state classification"
+            )
+            assert "輸送能力不足" in decision_text, (
+                "Transport Decision Lane must surface the concrete Application-projected blocker"
+            )
+            decision_item.click()
+            page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
+            assert "補給需要" in page.locator("#networkDecisionContext").inner_text()
+            assert page.locator("#networkSvg .network-line.is-context-related").count() > 0
+            # Create and later clear a project-scoped Routing Constraint through the UI.
+            requirement_row.locator("[data-requirement-constraint]").click()
+            page.locator("#routingConstraintDialog").wait_for(state="visible", timeout=10000)
+            scope_text = page.locator("#routingConstraintScopeSummary").inner_text()
+            assert project_id not in scope_text
+            assert page.locator("#routingConstraintDialog").locator('input[type="text"]').count() == 0
+            page.locator("#routingConstraintSource").select_option(EARTH)
+            page.get_by_role("button", name="経路条件を保存").click()
+            page.locator("#routingConstraintDialog").wait_for(state="hidden", timeout=10000)
+            page.wait_for_function(
+                """projectId => [...document.querySelectorAll('#requirementTable [data-requirement-constraint]')]
+                  .some(button => button.dataset.ownerId === projectId && button.closest('.supply-requirement-card')?.innerText.includes('固定:'))""",
+                arg=project_id,
+                timeout=10000,
+            )
+            requirement_row = page.locator(
+                f'#requirementTable [data-requirement-constraint][data-owner-id="{project_id}"]'
+            ).first.locator("xpath=ancestor::*[contains(@class,'supply-requirement-card')][1]")
+            assert project_id not in requirement_row.inner_text()
+            constraint_clear = page.locator('[data-routing-constraint-clear]').first
+            constraint_clear.wait_for(timeout=10000)
 
-            # Player Fleet investment is explicit: create an authoritative UNITS
-            # allocation and verify target, fulfillment, and sustained capacity.
-            page.get_by_role("button", name="Transport Allocationを作成").click()
+            # Create, edit, pause, resume, and delete Transport Allocation using only
+            # browser controls. Domain allocation invariants are covered below E2E.
+            page.get_by_role("button", name="輸送能力を設定").click()
             page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
             page.locator("#allocationVehicle").select_option(OWNED_LAUNCH_VEHICLE)
             page.locator("#allocationSource").select_option(EARTH)
             page.locator("#allocationDestination").select_option(LEO)
-            page.locator("#allocationMode").select_option("units")
-            page.locator("#allocationUnits").fill("1")
-            page.locator("#allocationPriority").fill("100")
-            page.get_by_role("button", name="Allocation作成").click()
+            movement_card = page.locator("#allocationMovementChoices [data-allocation-movement-card]").first
+            movement_card.wait_for(timeout=10000)
+            movement_text = movement_card.inner_text()
+            for label in ("所要時間", "必要Δv", "運行周期", "1機あたり往路能力", "満載時運用資源"):
+                assert label in movement_text, f"Movement candidate must expose {label} before hard-constraint selection"
+            movement_control = movement_card.locator("[data-allocation-movement]")
+            assert movement_control.get_attribute("aria-pressed") == "false"
+            page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).wait_for(timeout=10000)
+            page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).click()
+            assert float(page.locator("#allocationForward").input_value()) > 0
+            assert page.locator("#allocationForward").evaluate("input => input.checkValidity()"), (
+                "Application-derived capacity presets must remain valid precision inputs"
+            )
+            page.locator("#allocationPreview").get_by_text("必要Fleet", exact=True).wait_for(timeout=10000)
+            assert "機" in page.locator("#allocationPreview").inner_text()
+            page.locator('[data-allocation-priority="5"]').click()
+            page.get_by_role("button", name="輸送設定を作成").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
 
             allocation_row = page.locator("#allocationTable [data-allocation-row]").first
             allocation_row.wait_for(timeout=10000)
+            allocation_id = allocation_row.get_attribute("data-allocation-row")
+            assert allocation_id
             allocation_text = allocation_row.inner_text()
-            assert "UNITS" in allocation_text and "1 unit" in allocation_text
-            assert "1 / 1" in allocation_text and "unfilled 0" in allocation_text
-            nominal_text = allocation_row.locator("td").nth(3).inner_text()
-            available_text = allocation_row.locator("td").nth(4).inner_text()
-            assert "t/日" in nominal_text and not nominal_text.startswith("0 / 0"), (
-                "Fleet allocation must expose positive derived nominal sustained capacity"
-            )
-            assert "t/日" in available_text and not available_text.startswith("0 / 0"), (
-                "operable Fleet allocation must expose available sustained capacity"
-            )
+            for label in ("目標", "必要機体", "利用可能", "使用中", "余力", "周期"):
+                assert label in allocation_text, f"Transport Allocation card must expose {label}"
 
-            # Lane is only the capacity consumer. Creating it must not change the
-            # Fleet target; the existing project demand becomes serviceable.
-            page.get_by_role("button", name="Laneを作成").click()
-            page.locator("#laneDialog").wait_for(state="visible", timeout=10000)
-            page.locator("#laneSource").select_option(EARTH)
-            page.locator("#laneDestination").select_option(LEO)
-            page.locator("#laneCapacity").fill("20")
-            page.locator("#lanePriority").fill("100")
-            page.get_by_role("button", name="Lane作成").click()
-            page.locator("#laneDialog").wait_for(state="hidden", timeout=10000)
-            lane_row = page.locator("#laneTable tbody tr", has_text="地球地表").first
-            lane_row.wait_for(timeout=10000)
-            assert "20 t/日" in lane_row.inner_text()
-            assert "稼働" in lane_row.inner_text()
-            assert "1 unit" in allocation_row.inner_text(), (
-                "Lane demand must not resize the authoritative Fleet allocation"
-            )
+            allocation_row.locator("[data-allocation-network]").click()
+            page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
+            assert "輸送能力設定" in page.locator("#networkDecisionContext").inner_text()
+            context_line = page.locator("#networkSvg .network-line.is-context-related").first
+            context_line.wait_for(state="attached", timeout=10000)
+            assert context_line.evaluate("el => parseFloat(getComputedStyle(el).strokeWidth) >= 5 && Number(getComputedStyle(el).opacity) === 1")
+            assert page.locator("#networkNodes .network-node.is-context-related").count() >= 2
 
+            allocation_row.locator('[data-allocation-edit]').click()
+            page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
+            page.locator('[data-allocation-priority="4"]').click()
+            page.get_by_role("button", name="設定を更新").click()
+            page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
+            allocation_row = page.locator(f'[data-allocation-row="{allocation_id}"]')
+            allocation_row.wait_for(timeout=10000)
+            allocation_row.locator('[data-allocation-edit]').click()
+            page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
+            assert page.locator("#allocationPriority").input_value() == "4"
+            page.locator("#allocationCancelButton").click()
+            page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
+
+            allocation_toggle = allocation_row.locator('[data-allocation-toggle]')
+            assert allocation_toggle.inner_text() == "停止"
+            allocation_toggle.click()
             page.wait_for_function(
-                """projectId => {
-                  const row=[...document.querySelectorAll('#demandTable tbody tr')]
-                    .find(row=>row.innerText.includes(projectId));
-                  return row?.innerText.includes('Lane 1/1');
-                }""",
-                arg=project_id,
+                "id => document.querySelector(`[data-allocation-row=\"${id}\"] [data-allocation-toggle]`)?.dataset.paused === '1'",
+                arg=allocation_id,
+                timeout=10000,
+            )
+            allocation_toggle = page.locator(f'[data-allocation-row="{allocation_id}"] [data-allocation-toggle]')
+            assert allocation_toggle.inner_text() == "再開"
+            allocation_toggle.click()
+            page.wait_for_function(
+                "id => document.querySelector(`[data-allocation-row=\"${id}\"] [data-allocation-toggle]`)?.dataset.paused === '0'",
+                arg=allocation_id,
                 timeout=10000,
             )
 
-            # Advance the authoritative application one tick. The browser must
-            # then expose Cargo Flow using owned Fleet-derived capacity, rather
-            # than any individual-vehicle mission path.
-            runtime.execute(AdvanceTime(1))
+            # Target Stock is a persistent Supply Planning intent with Activity Priority.
+            page.get_by_role("button", name="追加備蓄を設定").click()
+            page.locator("#targetStockDialog").wait_for(state="visible", timeout=10000)
+            page.locator("#targetStockDestination").select_option(LEO)
+            page.locator("#targetStockResource").select_option(PROPELLANT)
             page.wait_for_function(
-                """projectId => [...document.querySelectorAll('#cargoTable tbody tr')]
-                  .some(row => row.innerText.includes(projectId)
-                    && row.innerText.includes('allocation:transport.allocation.'))""",
-                arg=project_id,
+                """() => ['current','inbound','demand'].every(
+                  key => document.querySelector(`#targetStockOptionSummary [data-stock-summary="${key}"]`)
+                )""",
                 timeout=10000,
             )
-            cargo_text = page.locator("#cargoTable").inner_text()
-            assert "in_transit" in cargo_text
-            assert "allocation:transport.allocation." in cargo_text
+            summary = page.locator("#targetStockOptionSummary")
+            assert summary.locator('[data-stock-summary="current"]').count() == 1
+            assert summary.locator('[data-stock-summary="inbound"]').count() == 1
+            assert summary.locator('[data-stock-summary="demand"]').count() == 1
+            page.locator("#targetStockQuantityRange").fill("1")
+            page.locator('[data-target-stock-priority="4"]').click()
+            page.get_by_role("button", name="追加備蓄を保存").click()
+            page.locator("#targetStockDialog").wait_for(state="hidden", timeout=10000)
+            target_delete = page.locator(
+                f'[data-target-stock-delete="{LEO}"][data-resource-id="{PROPELLANT}"]'
+            )
+            target_delete.wait_for(timeout=10000)
+            target_row = target_delete.locator("xpath=ancestor::*[@data-target-stock-row]")
+            target_text = target_row.inner_text()
+            assert "1" in target_text and "高" in target_text
+            target_delete.click()
+            target_delete.wait_for(state="detached", timeout=10000)
 
-            page.wait_for_function(
-                """() => {
-                  const row=document.querySelector('#allocationTable [data-allocation-row]');
-                  if(!row)return false;
-                  const cells=row.querySelectorAll('td');
-                  return cells.length >= 6 && !cells[5].innerText.startsWith('0 / 0');
-                }""",
-                timeout=10000,
+            constraint_clear = page.locator('[data-routing-constraint-clear]').first
+            constraint_clear.click()
+            constraint_clear.wait_for(state="detached", timeout=10000)
+
+            allocation_delete = page.locator(
+                f'[data-allocation-row="{allocation_id}"] [data-allocation-delete]'
             )
+            allocation_delete.click()
             page.wait_for_function(
-                """() => {
-                  const row=[...document.querySelectorAll('#laneTable tbody tr')]
-                    .find(row=>row.innerText.includes('地球地表'));
-                  if(!row)return false;
-                  const cells=row.querySelectorAll('td');
-                  return cells.length >= 5 && parseFloat(cells[4].innerText) > 0;
-                }""",
+                "id => !document.querySelector(`[data-allocation-row=\"${id}\"]`)",
+                arg=allocation_id,
                 timeout=10000,
             )
 
-            # Preserve transport latency: flows remain in transit until their
-            # arrival tick, then leave the Cargo Flow table after inventory
-            # admission while the Fleet allocation itself remains configured.
-            runtime.execute(AdvanceTime(2))
+            # Trade Order lifecycle belongs to the Economy decision canvas even
+            # though it uses the same Application snapshot as logistics.
+            page.locator('.primary-nav-button[data-section="economy"]').click()
+            market_new = page.locator('[data-new-market-order]')
+            market_new.wait_for(timeout=10000)
+            market_create = market_new.locator('[data-market-create]')
+            assert market_create.is_enabled()
+            market_new.locator('[data-market-target]').fill('1')
+            market_create.click()
+            market_order = page.locator('[data-market-order-row]').first
+            market_order.wait_for(timeout=10000)
+            market_order_id = market_order.get_attribute('data-market-order-row')
+            assert market_order_id
+            market_order.locator('[data-market-target]').fill('2')
+            _choose_priority(market_order, '[data-market-priority]', 4)
+            market_order.locator('[data-market-save]').click()
             page.wait_for_function(
-                """projectId => ![...document.querySelectorAll('#cargoTable tbody tr')]
-                  .some(row => row.innerText.includes(projectId))""",
-                arg=project_id,
+                "id => document.querySelector(`[data-market-order-row=\"${id}\"] [data-market-target]`)?.value === '2'",
+                arg=market_order_id,
                 timeout=10000,
             )
-            assert "1 unit" in allocation_row.inner_text()
+            page.locator(
+                f'[data-market-order-row="{market_order_id}"] [data-market-cancel]'
+            ).click()
+            page.wait_for_function(
+                "id => !document.querySelector(`[data-market-order-row=\"${id}\"]`)",
+                arg=market_order_id,
+                timeout=10000,
+            )
 
-            context.close()
-            browser.close()
     finally:
         server.shutdown()
         server.server_close()

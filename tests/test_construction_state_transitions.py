@@ -2,69 +2,82 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle import AdvanceTime, PlanBuild, SetConstructionWeight, build_game_application
+from space_idle import AdvanceTime, CancelBuild, PauseBuild, PlanBuild, build_game_application
 from space_idle.content import base_ids as ids
-from space_idle.construction import ProjectStatus
-from space_idle.validation import validate_runtime_state
+from space_idle.construction import BuildResourceRequirement, ConstructionRecipe, ProjectStatus
+from space_idle.facilities import FacilityDef
+from space_idle.research import ResearchDefinition, ResearchTheoryStageSpec
+from space_idle.shared import DefinitionId
+from space_idle.validation import validate_runtime_state, validate_simulation_configuration
 
 
 def _project(sim):
     return next(iter(sim.projects.projects.values()))
 
 
-def test_ready_project_keeps_materials_reserved_until_construction_starts():
+
+def test_partial_construction_procurement_is_project_owned_until_cancelled():
     app = build_game_application()
     sim = app._simulation
     result = app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.SURFACE_POWER_GRID), sourcing_policy="local_priority")
+        PlanBuild(
+            str(ids.EARTH),
+            str(ids.SURFACE_POWER_GRID),
+            procurement_policy="extended_wait",
+            site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
+        )
     )
-    app.execute(SetConstructionWeight(result.created_id, 0.0))
-
     project = _project(sim)
-    for _ in range(5):
-        app.execute(AdvanceTime(1))
-        if project.status is ProjectStatus.READY:
-            break
-
     recipe = sim.projects.recipe_for_project(project)
-    assert project.status is ProjectStatus.READY
-    assert project.materials_committed is False
-    assert project.construction_done == pytest.approx(0.0)
-    assert all(state.committed_t == pytest.approx(0.0) for state in project.resources.values())
-    assert all(
-        sim.projects.reserved_resource_t(project, requirement.resource_id)
-        == pytest.approx(requirement.amount_t)
-        for requirement in recipe.resources
-    )
-    assert "construction_allocation" in {
-        blocker.code for blocker in sim.projects.blockers(project.id, sim.day)
-    }
-    validate_runtime_state(sim)
+    for requirement in recipe.resources:
+        available = sim.inventory.available(ids.EARTH, requirement.resource_id)
+        if available > 1e-12:
+            sim.inventory.consume_allocated(ids.EARTH, requirement.resource_id, available)
+    partial_requirement = recipe.resources[0]
+    partial_amount = partial_requirement.amount_t / 2.0
+    sim.inventory.add(ids.EARTH, partial_requirement.resource_id, partial_amount)
 
-    app.execute(SetConstructionWeight(result.created_id, 1.0))
     app.execute(AdvanceTime(1))
+    staged = sim.projects.reserved_resource_t(project, partial_requirement.resource_id)
+    assert staged > 0.0
+    assert sim.projects.reserved_resource_t(project, partial_requirement.resource_id) >= staged
+    assert project.resources[partial_requirement.resource_id].committed_t == pytest.approx(0.0)
 
-    assert project.status is ProjectStatus.BUILDING
-    assert project.materials_committed is True
-    assert project.construction_done > 0
-    assert all(
-        state.committed_t == pytest.approx(requirement.amount_t)
-        for requirement in recipe.resources
-        for state in (project.resources[requirement.resource_id],)
-    )
-    assert all(
-        sim.projects.reserved_resource_t(project, requirement.resource_id)
-        == pytest.approx(0.0)
-        for requirement in recipe.resources
+    app.execute(PauseBuild(result.created_id))
+    app.execute(AdvanceTime(1))
+    assert sim.projects.reserved_resource_t(project, partial_requirement.resource_id) == pytest.approx(staged)
+    stock_before_cancel = sim.inventory.amount(ids.EARTH, partial_requirement.resource_id)
+    available_before_cancel = sim.inventory.available(ids.EARTH, partial_requirement.resource_id)
+    app.execute(CancelBuild(result.created_id))
+    assert sim.inventory.amount(ids.EARTH, partial_requirement.resource_id) == pytest.approx(stock_before_cancel)
+    assert sim.inventory.available(ids.EARTH, partial_requirement.resource_id) == pytest.approx(
+        available_before_cancel + staged
     )
     validate_runtime_state(sim)
-
 
 def test_planned_project_with_unmet_technology_does_not_claim_inventory():
     app = build_game_application()
     sim = app._simulation
+    facility_id = DefinitionId("test.facility.technology_locked")
+    technology_id = DefinitionId("test.technology.required")
+    sim.facilities.definitions[facility_id] = FacilityDef(
+        facility_id, "Technology-locked fixture"
+    )
+    sim.research.definitions[technology_id] = ResearchDefinition(technology_id, "Required technology fixture", (ResearchTheoryStageSpec("theory", 1.0),), prerequisites=frozenset())
+    sim.projects.recipes[facility_id] = ConstructionRecipe(
+        facility_id,
+        (
+            BuildResourceRequirement(ids.STRUCTURAL_COMPONENTS, 1.0),
+            BuildResourceRequirement(ids.MACHINERY, 0.5),
+            BuildResourceRequirement(ids.PRECISION_ELECTRONICS, 0.25),
+            BuildResourceRequirement(ids.BULK_STRUCTURE, 0.75),
+        ),
+        construction_work=1.0,
+        prerequisite_technologies=frozenset({technology_id}),
+    )
+    validate_simulation_configuration(sim)
     app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.VOLATILE_EXTRACTOR), sourcing_policy="import_now")
+        PlanBuild(str(ids.EARTH), str(facility_id), procurement_policy="extended_wait")
     )
 
     app.execute(AdvanceTime(1))
@@ -72,36 +85,13 @@ def test_planned_project_with_unmet_technology_does_not_claim_inventory():
     project = _project(sim)
     recipe = sim.projects.recipe_for_project(project)
     assert project.status is ProjectStatus.PLANNED
-    assert "technology" in {blocker.code for blocker in sim.projects.blockers(project.id, sim.day)}
+    assert ("technology", str(technology_id)) in {
+        (blocker.code, blocker.detail) for blocker in sim.projects.blockers(project.id, sim.day)
+    }
     assert all(
         sim.projects.reserved_resource_t(project, requirement.resource_id)
         == pytest.approx(0.0)
         for requirement in recipe.resources
     )
-    assert sim.projects.resource_demands(sim.day) == ()
+    assert sim.projects.supplys(sim.day) == ()
     validate_runtime_state(sim)
-
-
-def test_parallel_projects_share_construction_capacity_by_weight():
-    app = build_game_application()
-    first = app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.WATER_STORAGE), priority=100, sourcing_policy="local_priority")
-    ).created_id
-    second = app.execute(
-        PlanBuild(str(ids.EARTH), str(ids.BULK_STORAGE), priority=100, sourcing_policy="local_priority")
-    ).created_id
-    assert first is not None and second is not None
-
-    app.execute(SetConstructionWeight(first, 3.0))
-    app.execute(SetConstructionWeight(second, 1.0))
-    projects = {str(project.id): project for project in app._simulation.projects.projects.values()}
-    for _ in range(5):
-        app.execute(AdvanceTime(1))
-        if all(project.status is ProjectStatus.BUILDING for project in projects.values()):
-            break
-
-    assert projects[first].status is ProjectStatus.BUILDING
-    assert projects[second].status is ProjectStatus.BUILDING
-    assert projects[first].construction_done == pytest.approx(
-        projects[second].construction_done * 3.0
-    )

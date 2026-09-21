@@ -30,7 +30,7 @@ READMEは実装状況の要約です。仕様判断では上記`docs`を優先�
 - Allocationから決定論的に導出するTransport Service Plan、cycle、latency、resource / infrastructure requirements
 - Fleet数とService Planから導出するTarget / Nominal / Available / Used / Spare Transport Capacity
 - 往復cycleの方向別capacity、空荷return、resource / servicing制約
-- Logistics Laneによる共有Transport Capacityの需要配分
+- Supply Requirement / Target StockとSupply Policyから導出する共有Transport Capacityの需要配分
 - 複数Transport ServiceをhandoffするEnd-to-End pathとCargo Flow
 - Cargo Flowの輸送遅延、到着時Storage admission、arrival waiting
 - Fleet relocation / releasingの有限状態遷移
@@ -44,7 +44,7 @@ READMEは実装状況の要約です。仕様判断では上記`docs`を優先�
 
 - `FleetPool.total_units`を資産数量の正本とし、free unitsは排他的拘束から導出する。
 - Transport Allocationのtargetと実際に拘束できたactive unitsを分離し、Fleet不足でもtargetを保持する。
-- Allocation priorityはFleet配分、Lane priorityは得られたcapacityの物流需要配分にだけ使う。
+- Provisioning PriorityはFleet配分、Activity Priorityは得られたTransport Capacityを競合利用するSupply Requirementの配分に使う。
 - CAPACITY modeの必要Fleet数はNominal capacityから求め、一時的な燃料・整備不足で自動増員しない。
 - Transport Service PlanとNominal / Available / Spare capacityは保存せず、Definitionと可変Stateから再導出する。
 - operational resource需要はAllocation量ではなく実際のService utilizationから生じる。
@@ -54,7 +54,7 @@ READMEは実装状況の要約です。仕様判断では上記`docs`を優先�
 
 ## UI / Application
 
-Fleet / Logistics UIはApplication Queryから、Fleet総数・free・用途別拘束、Allocation target / active / unfilled、Service feasibility、Target / Nominal / Available / Used / Spare capacity、resource / infrastructure requirements、blocker / limiting factor、Lane requested / actual flow、Cargo Flow、relocation / releasingを取得します。
+Fleet / Logistics UIはApplication Queryから、Fleet総数・free・用途別拘束、Allocation target / active / unfilled、Service feasibility、Target / Nominal / Available / Used / Spare capacity、resource / infrastructure requirements、Supply Requirement / Target Stock / Supply Policy、blocker / limiting factor、Cargo Flow、relocation / releasingを取得します。
 
 UIはRoute適合、必要Fleet数、capacity、燃料不足などのDomainルールを再計算しません。操作不能状態でも必要条件とblockerを表示し、定期同期時は編集中の入力を不用意に上書きしません。
 

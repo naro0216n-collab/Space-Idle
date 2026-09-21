@@ -6,7 +6,7 @@ from .application_commands import (
     PauseFacility,
     ResumeFacility,
     SetFacilityProcess,
-    SetPowerPriority,
+    SetFacilityActivityPriority,
     SetMaintenancePriority,
     SetTimeControl,
 )
@@ -28,8 +28,8 @@ class OperationsCommandHandlerMixin:
             facility = sim.facilities.facilities[EntityId(command.facility_id)]
             sim.industry.set_process(facility, DefinitionId(command.process_id))
             return CommandResult()
-        if isinstance(command, SetPowerPriority):
-            sim.facilities.set_power_priority(
+        if isinstance(command, SetFacilityActivityPriority):
+            sim.facilities.set_activity_priority(
                 EntityId(command.facility_id), command.priority
             )
             sim.refresh_storage()

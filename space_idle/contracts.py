@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .facilities import FacilityBook
-from .logistics import LogisticsService
-from .power import PowerService
-from .shared import AccountState, ContractId, DefinitionId, SpatialNodeId
+from .power import PowerService, PowerSnapshot
+from .service_capacity import ServiceCapacityRegistry
+from .shared import ContractId, DefinitionId, SpatialNodeId
 from .site import SiteRequirements, evaluate_site_requirements
 
 
@@ -16,8 +16,7 @@ class CapabilityContractTemplate:
     display_name: str
     site_requirements: SiteRequirements
     duration_days: int
-    reward_musd: float
-    target_location_id: SpatialNodeId | None = None
+    target_operational_node_id: SpatialNodeId | None = None
 
 
 ContractTemplate = CapabilityContractTemplate
@@ -44,9 +43,8 @@ class ContractState:
 class ContractService:
     templates: dict[DefinitionId, ContractTemplate]
     facilities: FacilityBook
-    logistics: LogisticsService
     power: PowerService
-    account: AccountState
+    service_capacity_registry: ServiceCapacityRegistry
     contracts: dict[ContractId, ContractState] = field(default_factory=dict)
     _counter: int = 0
 
@@ -76,12 +74,14 @@ class ContractService:
         state.status = ContractStatus.DECLINED
 
     def _capability_contract_complete(
-        self, template: CapabilityContractTemplate, day: int
+        self,
+        template: CapabilityContractTemplate,
+        day: int,
     ) -> bool:
         locations = (
-            (template.target_location_id,)
-            if template.target_location_id is not None
-            else tuple(self.facilities.environment.graph.nodes)
+            (template.target_operational_node_id,)
+            if template.target_operational_node_id is not None
+            else self.facilities.environment.graph.operational_node_ids()
         )
         return any(
             not evaluate_site_requirements(
@@ -90,12 +90,15 @@ class ContractService:
                 day,
                 self.facilities.environment,
                 self.facilities,
-                self.power.snapshot(location_id, self.facilities, day),
             )
             for location_id in locations
         )
 
-    def advance_day(self, day: int) -> None:
+    def advance_day(
+        self,
+        day: int,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+    ) -> None:
         for state in self.contracts.values():
             if state.status not in {ContractStatus.OFFERED, ContractStatus.ACCEPTED}:
                 continue
@@ -104,7 +107,6 @@ class ContractService:
                 template, day
             ):
                 state.status = ContractStatus.COMPLETED
-                self.account.earn(template.reward_musd)
                 continue
             if day > state.deadline_day:
                 state.status = ContractStatus.FAILED

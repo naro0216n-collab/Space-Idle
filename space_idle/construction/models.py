@@ -4,13 +4,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, TypeAlias
 
-from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId
+from ..priority import ActivityPriority
+from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
+from ..exploration_models import KnowledgeRequirementSpec
+
+CONSTRUCTION_SERVICE_TYPE = "construction_work"
 
 # Procurement policy controls how long a project waits for inventory already at
-# the destination before declaring an import demand. It does not change the
+# the destination before declaring an off-site Supply Requirement. It does not change the
 # recipe or substitute one material for another.
-SourcingPolicy = Literal["import_now", "mixed", "local_priority"]
+ProcurementTimingPolicy = Literal["immediate", "standard_wait", "extended_wait"]
 
 
 class ProjectStatus(str, Enum):
@@ -65,7 +69,47 @@ class FacilityUpgradeRecipe:
             raise ValueError("facility upgrades cannot self-deploy")
 
 
-ProjectRecipe: TypeAlias = ConstructionRecipe | FacilityUpgradeRecipe
+@dataclass(frozen=True)
+class FacilityDecommissionRecipe:
+    """Physical work/resources needed to dismantle an installed facility."""
+
+    facility_def_id: DefinitionId
+    resources: tuple[BuildResourceRequirement, ...] = ()
+    construction_work: float = 0.0
+    site_requirements: SiteRequirements = SiteRequirements()
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
+    self_deploying: bool = False
+
+    def __post_init__(self) -> None:
+        if self.construction_work <= 0:
+            raise ValueError("facility decommission work must be positive")
+        if self.self_deploying:
+            raise ValueError("facility decommission cannot self-deploy")
+
+
+@dataclass(frozen=True)
+class SpatialDevelopmentRecipe:
+    """Physical inputs and work for expanding an established surface Location."""
+
+    id: DefinitionId
+    display_name: str
+    resources: tuple[BuildResourceRequirement, ...]
+    construction_work: float
+    site_requirements: SiteRequirements = SiteRequirements()
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
+    self_deploying: bool = False
+    knowledge_requirements: tuple[KnowledgeRequirementSpec, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.display_name:
+            raise ValueError("spatial development recipe display name must not be empty")
+        if self.self_deploying:
+            raise ValueError("location development must consume construction capacity")
+
+
+ProjectRecipe: TypeAlias = (
+    ConstructionRecipe | FacilityUpgradeRecipe | FacilityDecommissionRecipe | SpatialDevelopmentRecipe
+)
 
 
 @dataclass(frozen=True)
@@ -83,7 +127,21 @@ class FacilityUpgradeTarget:
             raise ValueError("facility upgrade target level must be at least 2")
 
 
-ConstructionTarget: TypeAlias = NewFacilityTarget | FacilityUpgradeTarget
+@dataclass(frozen=True)
+class FacilityDecommissionTarget:
+    facility_id: EntityId
+    facility_definition_id: DefinitionId
+
+
+@dataclass(frozen=True)
+class SurfaceCellDevelopmentTarget:
+    recipe_id: DefinitionId
+    cell_id: SurfaceCellId
+
+
+ConstructionTarget: TypeAlias = (
+    NewFacilityTarget | FacilityUpgradeTarget | FacilityDecommissionTarget | SurfaceCellDevelopmentTarget
+)
 
 
 @dataclass(frozen=True)
@@ -100,31 +158,42 @@ class ConstructionResourceProviderSpec:
 
 @dataclass
 class ProjectResourceState:
-    """Mutable accounting for a recipe resource at the build destination."""
+    """Mutable accounting for a recipe resource at the build host Operational Node."""
 
     committed_t: float = 0.0
-    # None while the project is still waiting for destination inventory. Once
-    # set, logistics may satisfy the remaining physical shortage from lanes.
-    import_committed_t: float | None = None
 
 
 @dataclass
 class ConstructionProject:
     id: ProjectId
     target: ConstructionTarget
-    location_id: SpatialNodeId
-    priority: int
-    sourcing_policy: SourcingPolicy
-    import_source_id: SpatialNodeId | None
+    # Existing operational Location/Node that owns procurement and supplies
+    # construction flow. For surface-cell development this is the Location being
+    # expanded; for founding it is the explicit staging/provider Operational Node.
+    operational_node_id: SpatialNodeId
+    priority: ActivityPriority
+    procurement_policy: ProcurementTimingPolicy
     status: ProjectStatus = ProjectStatus.PLANNED
     procurement_started_day: int | None = None
     construction_done: float = 0.0
-    construction_weight: float = 1.0
     paused: bool = False
     pause_started_day: int | None = None
     resources: dict[DefinitionId, ProjectResourceState] = field(default_factory=dict)
     materials_committed: bool = False
     completed_facility_id: EntityId | None = None
+    irreversible_started: bool = False
+    salvage_recovered_fraction: float | None = None
+    salvage_recovered: dict[DefinitionId, float] = field(default_factory=dict)
+    # Facility placement state only. Geographic project target cells live on
+    # their target type so one cell never has two authoritative fields.
+    site_cell_id: SurfaceCellId | None = None
+
+    def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
+        if self.salvage_recovered_fraction is not None and not 0.0 <= self.salvage_recovered_fraction <= 1.0:
+            raise ValueError("salvage recovered fraction must be within 0..1")
+        if any(amount < 0.0 for amount in self.salvage_recovered.values()):
+            raise ValueError("salvage recovered amount must be non-negative")
 
 
 @dataclass(frozen=True)

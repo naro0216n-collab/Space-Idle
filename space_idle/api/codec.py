@@ -104,6 +104,26 @@ def _coerce(value: Any, annotation: Any, path: str) -> Any:
             for index, item in enumerate(value)
         )
 
+    if isinstance(annotation, type) and is_dataclass(annotation):
+        if not isinstance(value, dict):
+            raise ApiPayloadError(f"{path}: expected object")
+        field_map = {field.name: field for field in fields(annotation)}
+        unknown = sorted(set(value) - set(field_map))
+        if unknown:
+            raise ApiPayloadError(f"{path}: unknown fields: {', '.join(unknown)}")
+        hints = get_type_hints(annotation)
+        values: dict[str, Any] = {}
+        for name, field in field_map.items():
+            if name not in value:
+                if field.default is MISSING and field.default_factory is MISSING:
+                    raise ApiPayloadError(f"{path}: missing field: {name}")
+                continue
+            values[name] = _coerce(value[name], hints.get(name, field.type), f"{path}.{name}")
+        try:
+            return annotation(**values)
+        except (TypeError, ValueError) as exc:
+            raise ApiPayloadError(f"{path}: {exc}") from exc
+
     if annotation is str:
         if not isinstance(value, str):
             raise ApiPayloadError(f"{path}: expected string")
@@ -116,6 +136,13 @@ def _coerce(value: Any, annotation: Any, path: str) -> Any:
         if isinstance(value, bool) or not isinstance(value, int):
             raise ApiPayloadError(f"{path}: expected integer")
         return value
+    if isinstance(annotation, type) and issubclass(annotation, int) and annotation is not bool:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ApiPayloadError(f"{path}: expected integer")
+        try:
+            return annotation(value)
+        except ValueError as exc:
+            raise ApiPayloadError(f"{path}: {exc}") from exc
     if annotation is float:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ApiPayloadError(f"{path}: expected number")

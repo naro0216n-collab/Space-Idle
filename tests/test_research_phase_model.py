@@ -1,44 +1,265 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from space_idle import (
-    FundResearchPrototype, GetResearch, PauseFacility, SetResearchDemonstrationSite,
-    SetResearchPrototypeSite, StartResearch, build_game_application,
+    AdvanceTime,
+    ApplicationError,
+    GetResearch,
+    PauseFacility,
+    PauseResearch,
+    ResumeFacility,
+    ResumeResearch,
+    SetResearchDemonstrationSite,
+    SetResearchPrototypeSite,
+    StartResearch,
+    build_game_application,
 )
+from space_idle.content import base_ids as ids, base_requirements as req
+from space_idle.content.base_game import EARTH, LEO
 from space_idle.research import (
-    ResearchDefinition, ResearchDemonstrationSpec, ResearchPhase, ResearchPrototypeSpec,
+    ResearchDefinition,
+    ResearchTheoryStageSpec,
+    ResearchDemonstrationStageSpec,
+    ResearchPrototypeStageSpec,
+    ResearchStage,
 )
-from space_idle.shared import DefinitionId, EntityId
-from space_idle.site import CapabilityRequirement, SiteRequirements
-from space_idle.content import base_ids as ids
-from space_idle.content.base_game import EARTH
-
-
-def test_explicit_empty_prototype_spec_still_creates_prototype_phase():
-    app = build_game_application()
-    sim = app._simulation
-    research_id = DefinitionId("test.research.explicit_empty_prototype")
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Explicit Prototype",
-        research_point_cost=0.0,
-        prototype=ResearchPrototypeSpec({}),
-    )
-
-    sim.research.start(research_id, day=sim.day)
-
-    state = sim.research.active[research_id]
-    assert state.status is ResearchPhase.PROTOTYPE
-    sim.research.set_prototype_site(research_id, EARTH, sim.day)
-    sim.research.fund_prototype(research_id, sim.day)
-    assert research_id in sim.research.completed
-    assert research_id not in sim.research.active
+from space_idle.construction.models import ConstructionRecipe
+from space_idle.execution_requirements import ServiceCapacityRequirement
+from space_idle.facilities import CapabilitySupply, FacilityDef, ServiceCapacitySupply
+from space_idle.shared import DefinitionId
+from space_idle.site import (
+    CapabilityRequirement,
+    CapabilityRequirementState,
+    FacetValueRange,
+    SiteRequirements,
+)
+from space_idle.spatial import ThermalField
 
 
 def _research_row(app, research_id):
     return next(row for row in app.query(GetResearch()).items if row.id == str(research_id))
 
 
-def test_prototype_funding_eligibility_uses_owned_reservation_not_unreserved_stock():
+TEST_RESEARCH_SITE_CAPABILITY = "test.research_site_capability"
+TEST_RESEARCH_SITE_SERVICE = "test.research_site_service"
+TEST_RESEARCH_SITE_FACILITY = DefinitionId("test.facility.research_site")
+
+
+def _research_site_fixture(sim):
+    existing = next(
+        (facility for facility in sim.facilities.facilities.values()
+         if facility.definition_id == TEST_RESEARCH_SITE_FACILITY),
+        None,
+    )
+    if existing is not None:
+        return existing
+    sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = FacilityDef(
+        TEST_RESEARCH_SITE_FACILITY,
+        "Research site fixture",
+        capability_supplies=(CapabilitySupply(TEST_RESEARCH_SITE_CAPABILITY),),
+        service_capacity_supplies=(ServiceCapacitySupply(TEST_RESEARCH_SITE_SERVICE, 1.0),),
+    )
+    facility_id = sim.facilities.install(TEST_RESEARCH_SITE_FACILITY, EARTH)
+    return sim.facilities.facilities[facility_id]
+
+
+def test_research_projection_exposes_player_facing_unlocks_without_hiding_other_prerequisites():
+    app = build_game_application()
+    sim = app._simulation
+    unlock_source = DefinitionId("test.research.unlock_source")
+    other_prerequisite = DefinitionId("test.research.unlock_other")
+    immediate_child = DefinitionId("test.research.unlock_immediate")
+    compound_child = DefinitionId("test.research.unlock_compound")
+    facility_id = DefinitionId("test.facility.unlock_projection")
+    for research_id, name, prerequisites in (
+        (unlock_source, "Unlock Source", frozenset()),
+        (other_prerequisite, "Other Prerequisite", frozenset()),
+        (immediate_child, "Immediate Child", frozenset({unlock_source})),
+        (compound_child, "Compound Child", frozenset({unlock_source, other_prerequisite})),
+    ):
+        sim.research.definitions[research_id] = ResearchDefinition(
+            research_id,
+            name,
+            (ResearchTheoryStageSpec("theory", 1.0),),
+            prerequisites=prerequisites,
+        )
+    sim.facilities.definitions[facility_id] = FacilityDef(facility_id, "Unlocked Facility")
+    sim.projects.recipes[facility_id] = ConstructionRecipe(
+        facility_id,
+        (),
+        1.0,
+        prerequisite_technologies=frozenset({unlock_source}),
+    )
+
+    row = _research_row(app, unlock_source)
+    unlocks = {(unlock.kind, unlock.id): unlock for unlock in row.unlocks}
+
+    immediate = unlocks[("research", str(immediate_child))]
+    assert immediate.display_name == "Immediate Child"
+    assert immediate.remaining_prerequisite_ids == ()
+
+    compound = unlocks[("research", str(compound_child))]
+    assert compound.display_name == "Compound Child"
+    assert compound.remaining_prerequisite_ids == (
+        str(other_prerequisite),
+    )
+
+    facility = unlocks[("facility", str(facility_id))]
+    assert facility.display_name == "Unlocked Facility"
+    assert facility.remaining_prerequisite_ids == ()
+
+
+def _remove_research_site_service(sim):
+    facility = _research_site_fixture(sim)
+    definition = sim.facilities.definitions[facility.definition_id]
+    sim.facilities.definitions[facility.definition_id] = replace(
+        definition, service_capacity_supplies=()
+    )
+    return definition
+
+
+def test_typed_research_site_selection_separates_structural_eligibility_from_runtime_capacity():
+    app = build_game_application()
+    sim = app._simulation
+    research_id = DefinitionId("test.research.site_runtime_contract")
+    sim.research.definitions[research_id] = ResearchDefinition(
+        research_id,
+        "Typed Research Site Runtime Contract",
+        (
+            ResearchPrototypeStageSpec(
+                "prototype",
+                {},
+                SiteRequirements(
+                    spatial_classification_requirements=req.SURFACE_CLASSIFICATION,
+                ),
+                (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
+            ),
+            ResearchDemonstrationStageSpec(
+                "demonstration",
+                2,
+                SiteRequirements(
+                    capability_requirements=(
+                        CapabilityRequirement(
+                            TEST_RESEARCH_SITE_CAPABILITY,
+                            CapabilityRequirementState.ACTIVE,
+                        ),
+                    ),
+                ),
+                (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
+            ),
+        ),
+        prerequisites=frozenset(),
+    )
+
+    original = _remove_research_site_service(sim)
+    app.execute(StartResearch(str(research_id)))
+
+    prototype = _research_row(app, research_id)
+    earth = next(
+        site for site in prototype.execution_context_options
+        if site.operational_node_id == str(EARTH)
+    )
+    assert not any(blocker.code.startswith("service") for blocker in earth.blockers)
+    assert earth.can_select
+    leo = next(
+        site for site in prototype.execution_context_options
+        if site.operational_node_id == str(LEO)
+    )
+    assert leo.blockers
+    assert not leo.can_select
+    with pytest.raises(ApplicationError, match="prototype site requirements not met"):
+        app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(LEO)))
+
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
+    selected = _research_row(app, research_id)
+    assert selected.execution_context is not None
+    assert selected.execution_context.operational_node_id == str(EARTH)
+    assert selected.execution_context.surface_cell_id is None
+    assert any(blocker.code == "service:allocation" for blocker in selected.current_blockers)
+    app.execute(AdvanceTime(1))
+    assert _research_row(app, research_id).status == "prototype"
+
+    sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
+    app.execute(AdvanceTime(1))
+    demonstration = _research_row(app, research_id)
+    assert demonstration.status == "demonstration"
+
+    site = _research_site_fixture(sim)
+    app.execute(PauseFacility(str(site.id)))
+    demonstration = _research_row(app, research_id)
+    earth = next(
+        candidate for candidate in demonstration.execution_context_options
+        if candidate.operational_node_id == str(EARTH)
+    )
+    assert any(blocker.code == "capability:active" for blocker in earth.blockers)
+    assert earth.can_select
+    app.execute(
+        SetResearchDemonstrationSite(
+            str(research_id), "demonstration", str(EARTH)
+        )
+    )
+    selected = _research_row(app, research_id)
+    assert selected.execution_context is not None
+    assert selected.execution_context.operational_node_id == str(EARTH)
+    assert any(blocker.code == "capability:active" for blocker in selected.current_blockers)
+
+    app.execute(ResumeFacility(str(site.id)))
+    original = _remove_research_site_service(sim)
+    app.execute(AdvanceTime(1))
+    blocked = _research_row(app, research_id)
+    assert any(blocker.code == "service:allocation" for blocker in blocked.current_blockers)
+    assert sim.research.active[research_id].stage_progress == 0.0
+
+    sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
+    app.execute(AdvanceTime(1))
+    assert sim.research.active[research_id].stage_progress > 0.0
+
+
+def test_cell_local_research_site_requires_and_persists_explicit_developed_cell():
+    app = build_game_application()
+    sim = app._simulation
+    research_id = DefinitionId("test.research.cell_local_site")
+    sim.research.definitions[research_id] = ResearchDefinition(research_id, "Cell-local Site", (ResearchPrototypeStageSpec("prototype",
+            {},
+            SiteRequirements(
+                environment=(
+                    FacetValueRange(
+                        ThermalField,
+                        "nominal_temperature_k",
+                        "environment:any_thermal",
+                        "cell-local thermal context required",
+                        minimum=0.0,
+                    ),
+                ),
+                spatial_classification_requirements=req.SURFACE_CLASSIFICATION,
+            ),
+        ),), prerequisites=frozenset())
+    app.execute(StartResearch(str(research_id)))
+
+    row = _research_row(app, research_id)
+    earth_options = [
+        candidate
+        for candidate in row.execution_context_options
+        if candidate.operational_node_id == str(EARTH)
+    ]
+    assert [candidate.surface_cell_id for candidate in earth_options] == [
+        str(ids.EARTH_CELL_INDUSTRIAL)
+    ]
+    with pytest.raises(ApplicationError, match="prototype site requirements not met"):
+        app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
+
+    app.execute(SetResearchPrototypeSite(
+        str(research_id), "prototype", str(EARTH), str(ids.EARTH_CELL_INDUSTRIAL)
+    ))
+    selected = _research_row(app, research_id).execution_context
+    assert selected is not None
+    assert selected.operational_node_id == str(EARTH)
+    assert selected.surface_cell_id == str(ids.EARTH_CELL_INDUSTRIAL)
+
+def test_prototype_resource_staging_is_site_owned_durable_and_completes_when_runtime_service_recovers():
     app = build_game_application()
     sim = app._simulation
     research_id = DefinitionId("test.research.reserved_prototype")
@@ -46,57 +267,167 @@ def test_prototype_funding_eligibility_uses_owned_reservation_not_unreserved_sto
     sim.research.definitions[research_id] = ResearchDefinition(
         research_id,
         "Reserved Prototype",
-        research_point_cost=0.0,
-        prototype=ResearchPrototypeSpec({resource_id: 1.0}),
+        (
+            ResearchPrototypeStageSpec(
+                "prototype",
+                {resource_id: 1.0},
+                SiteRequirements(),
+                (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
+            ),
+        ),
+        prerequisites=frozenset(),
     )
-    sim.inventory.add(EARTH, resource_id, 1.0)
+    sim.inventory.add(EARTH, resource_id, 0.25)
 
     app.execute(StartResearch(str(research_id)))
-    app.execute(SetResearchPrototypeSite(str(research_id), str(EARTH)))
-    sim.refresh_resource_claims()
-
-    demand_id = EntityId(f"demand.research:{research_id}:{resource_id}")
-    assert sim.inventory.reserved_for(demand_id, EARTH, resource_id) == 1.0
-    assert sim.inventory.available(EARTH, resource_id) == 0.0
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
+    original = _remove_research_site_service(sim)
+    app.execute(AdvanceTime(1))
 
     row = _research_row(app, research_id)
-    assert row.can_fund_prototype
-    assert not any(code == "prototype_resource" for code, _detail in row.current_blockers)
+    assert row.status == "prototype"
+    resource = row.stage_resources[0]
+    assert resource.reserved_t == pytest.approx(0.25)
+    assert resource.requested_t == pytest.approx(0.75)
+    assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.0)
 
-    app.execute(FundResearchPrototype(str(research_id)))
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(LEO)))
+    assert sim.research.prototype_reserved_t(
+        research_id, "prototype", EARTH, resource_id
+    ) == pytest.approx(0.0)
+    assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.25)
+    assert sim.research.prototype_reserved_t(
+        research_id, "prototype", LEO, resource_id
+    ) == pytest.approx(0.0)
+
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
+    sim.inventory.add(EARTH, resource_id, 0.75)
+    app.execute(AdvanceTime(1))
+    row = _research_row(app, research_id)
+    resource = row.stage_resources[0]
+    assert resource.reserved_t == pytest.approx(1.0)
+    assert resource.requested_t == pytest.approx(0.0)
+    assert not any(blocker.code == "prototype_resource" for blocker in row.current_blockers)
+
+    app.execute(PauseResearch(str(research_id)))
+    paused_reserved = sim.research.prototype_reserved_t(
+        research_id, "prototype", EARTH, resource_id
+    )
+    app.execute(AdvanceTime(1))
+    assert sim.research.prototype_reserved_t(
+        research_id, "prototype", EARTH, resource_id
+    ) == paused_reserved == pytest.approx(1.0)
+    app.execute(ResumeResearch(str(research_id)))
+
+    sim.facilities.definitions[TEST_RESEARCH_SITE_FACILITY] = original
+    app.execute(AdvanceTime(1))
     assert _research_row(app, research_id).status == "complete"
 
 
-def test_demonstration_site_can_be_selected_despite_transient_available_capability_blocker():
+def test_research_stage_identity_is_explicit_unique_and_stable_across_repeated_stage_types():
+    invalid_id = DefinitionId("test.research.invalid_stage_contract")
+    with pytest.raises(ValueError, match="explicitly define its stages"):
+        ResearchDefinition(invalid_id, "Implicit Stage Forbidden", (), prerequisites=frozenset())
+    with pytest.raises(ValueError, match="stage ids must be unique"):
+        ResearchDefinition(
+            invalid_id,
+            "Duplicate Stage ID",
+            (
+                ResearchPrototypeStageSpec("same", {}),
+                ResearchPrototypeStageSpec("same", {}),
+            ),
+        )
+
     app = build_game_application()
     sim = app._simulation
-    research_id = DefinitionId("test.research.available_capability_demo")
+    research_id = DefinitionId("test.research.repeated_prototype")
     sim.research.definitions[research_id] = ResearchDefinition(
         research_id,
-        "Available Capability Demonstration",
-        research_point_cost=0.0,
-        demonstration=ResearchDemonstrationSpec(
-            2,
-            SiteRequirements(capability_requirements=(
-                CapabilityRequirement("research_lab", 0.01, "available"),
-            )),
+        "Repeated Prototype",
+        (
+            ResearchPrototypeStageSpec("prototype-a", {}),
+            ResearchPrototypeStageSpec("prototype-b", {}),
         ),
     )
-    lab = next(
-        facility for facility in sim.facilities.facilities.values()
-        if facility.definition_id == ids.EARTH_RESEARCH_LAB
-    )
-    app.execute(PauseFacility(str(lab.id)))
+
     app.execute(StartResearch(str(research_id)))
-
     row = _research_row(app, research_id)
-    earth = next(site for site in row.demonstration_sites if site.location_id == str(EARTH))
-    assert any(code == "capability:available" for code, _detail in earth.blockers)
-    assert earth.can_select
+    assert tuple((stage.stage_id, stage.stage_type) for stage in row.stages) == (
+        ("prototype-a", "prototype"), ("prototype-b", "prototype")
+    )
+    assert sim.research.active[research_id].current_stage_id == "prototype-a"
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype-a", str(EARTH)))
+    first_bundle = sim.research.execution_requirement_bundles(sim.day)[0]
+    assert ":prototype-a:" in str(first_bundle.id)
 
-    app.execute(SetResearchDemonstrationSite(str(research_id), str(EARTH)))
-    selected = _research_row(app, research_id)
-    assert selected.demonstration_location_id == str(EARTH)
-    assert any(code == "capability:available" for code, _detail in selected.current_blockers)
-    assert selected.can_pause
-    assert not selected.can_resume
+    app.execute(AdvanceTime(1))
+    state = sim.research.active[research_id]
+    assert state.current_stage_id == "prototype-b"
+    assert state.execution_context is None
+    with pytest.raises(ApplicationError, match="stage changed"):
+        app.execute(SetResearchPrototypeSite(str(research_id), "prototype-a", str(EARTH)))
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype-b", str(EARTH)))
+    second_bundle = sim.research.execution_requirement_bundles(sim.day)[0]
+    assert ":prototype-b:" in str(second_bundle.id)
+    assert second_bundle.id != first_bundle.id
+
+    resource_id = DefinitionId("test.resource.repeated_stage_identity")
+    assert sim.research.prototype_requirement_id(
+        research_id, "prototype-a", resource_id
+    ) != sim.research.prototype_requirement_id(
+        research_id, "prototype-b", resource_id
+    )
+    assert sim.research.prototype_reservation_requirement_id(
+        research_id, "prototype-a", resource_id
+    ) != sim.research.prototype_reservation_requirement_id(
+        research_id, "prototype-b", resource_id
+    )
+
+    app.execute(AdvanceTime(1))
+    assert research_id in sim.research.completed
+    assert research_id not in sim.research.active
+
+
+def test_research_execution_context_projects_strategic_comparison_axes_from_application_state():
+    app = build_game_application()
+    sim = app._simulation
+    research_id = DefinitionId("test.research.execution_context_comparison")
+    resource_id = DefinitionId("test.resource.context_comparison")
+    _research_site_fixture(sim)
+    sim.inventory.add(EARTH, resource_id, 2.0)
+    sim.research.definitions[research_id] = ResearchDefinition(
+        research_id,
+        "Execution Context Comparison",
+        (
+            ResearchPrototypeStageSpec(
+                "prototype",
+                {resource_id: 2.0},
+                SiteRequirements(),
+                (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
+                required_work=2.0,
+            ),
+        ),
+        prerequisites=frozenset(),
+    )
+
+    app.execute(StartResearch(str(research_id)))
+    row = _research_row(app, research_id)
+
+    axis_keys = {axis.key for axis in row.execution_context_comparison_axes}
+    assert "location" in axis_keys
+    assert "resource_available_t" in axis_keys
+    assert "service_work_capacity" in axis_keys
+    assert "estimated_days" in axis_keys
+    resource_required_axis = next(axis for axis in row.execution_context_comparison_axes if axis.key == "resource_required_t")
+    assert not resource_required_axis.differs  # shared demand remains visible but is not highlighted as a strategic difference
+
+    earth = next(site for site in row.execution_context_options if site.operational_node_id == str(EARTH))
+    leo = next(site for site in row.execution_context_options if site.operational_node_id == str(LEO))
+    earth_values = {value.axis_key: value for value in earth.comparison_values}
+    leo_values = {value.axis_key: value for value in leo.comparison_values}
+    assert earth_values["resource_available_t"].number_value == pytest.approx(2.0)
+    assert leo_values["resource_available_t"].number_value == pytest.approx(0.0)
+    assert earth_values["service_work_capacity"].number_value == pytest.approx(1.0)
+    assert leo_values["service_work_capacity"].number_value == pytest.approx(0.0)
+    assert earth_values["estimated_days"].number_value == pytest.approx(2.0)
+    assert leo_values["estimated_days"].number_value is None

@@ -17,7 +17,12 @@ from ..version import VERSION
 from .codec import to_jsonable
 
 
-_SLOT_RE = re.compile(r"^[^/\\\x00-\x1f]{1,64}$")
+_SLOT_RE = re.compile(r'^[^<>:"/\\|?*\x00-\x1f]{1,64}$')
+_WINDOWS_RESERVED_SLOT_STEMS = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 def _utc_now() -> datetime:
@@ -50,19 +55,21 @@ class GameRuntime:
     def __init__(
         self,
         *,
-        factory: Callable[[], GameApplication],
+        new_game_factory: Callable[[], GameApplication],
+        load_factory: Callable[[], GameApplication],
         save_dir: str | Path = "saves",
         offline_policy: OfflineProgressPolicy | None = None,
         clock: Callable[[], float] = monotonic,
         utcnow: Callable[[], datetime] = _utc_now,
     ) -> None:
-        self._factory = factory
+        self._new_game_factory = new_game_factory
+        self._load_factory = load_factory
         self._save_dir = Path(save_dir)
         self._offline_policy = offline_policy
         self._clock = clock
         self._utcnow = utcnow
         self._lock = RLock()
-        self._app = factory()
+        self._app = new_game_factory()
         self._revision = 0
         self._last_explicit_mutation_revision = 0
         self._last_clock = clock()
@@ -101,6 +108,8 @@ class GameRuntime:
             "revision": self._revision,
             "app_version": VERSION,
             "content_id": self._app.content_id,
+            "world_definition_id": self._app.world_definition_id,
+            "scenario_id": self._app.scenario_id,
             "day": world.day,
             "automatic_progress_enabled": self._offline_policy is not None,
             "offline_progress_enabled": self._offline_policy is not None,
@@ -129,9 +138,30 @@ class GameRuntime:
         with self._lock:
             self._sync_clock_locked()
             data: dict[str, object] = {"session": self._metadata_locked()}
-            data.update(
-                {name: self._app.query(query) for name, query in queries.items()}
-            )
+            data.update(self._app.query_many(queries))
+            return RuntimeResult(self._revision, data)
+
+    def snapshot_if_changed(
+        self,
+        queries: Mapping[str, Query],
+        *,
+        known_revision: int | None,
+    ) -> RuntimeResult | None:
+        """Return a coherent snapshot only when authoritative state changed.
+
+        Periodic UI synchronization frequently asks for the same projection while
+        the game is paused or before the next canonical state transition.  Sync the
+        runtime clock first, then skip all Application projection work when the
+        caller already has the current revision.  The caller is responsible for
+        binding ``known_revision`` to the same representation scope (for example,
+        the same operational node and surface body).
+        """
+        with self._lock:
+            self._sync_clock_locked()
+            if known_revision is not None and known_revision == self._revision:
+                return None
+            data: dict[str, object] = {"session": self._metadata_locked()}
+            data.update(self._app.query_many(queries))
             return RuntimeResult(self._revision, data)
 
     def set_time_control(
@@ -187,18 +217,19 @@ class GameRuntime:
 
     def new_game(self) -> RuntimeResult:
         with self._lock:
-            self._app = self._factory()
+            self._app = self._new_game_factory()
             self._last_clock = self._clock()
             self._revision += 1
             self._last_explicit_mutation_revision = self._revision
             return RuntimeResult(self._revision, self._metadata_locked())
 
     def _slot_path(self, slot: str) -> Path:
-        if (
-            not isinstance(slot, str)
-            or not _SLOT_RE.fullmatch(slot)
-            or slot in {".", ".."}
-        ):
+        if not isinstance(slot, str) or not _SLOT_RE.fullmatch(slot):
+            raise ValueError("invalid save slot")
+        if slot in {".", ".."} or slot.endswith((".", " ")):
+            raise ValueError("invalid save slot")
+        stem = slot.split(".", 1)[0].upper()
+        if stem in _WINDOWS_RESERVED_SLOT_STEMS:
             raise ValueError("invalid save slot")
         return self._save_dir / f"{slot}.json"
 
@@ -225,7 +256,7 @@ class GameRuntime:
             policy = self._offline_policy if apply_offline else None
             app, offline_result = load_game(
                 path,
-                self._factory,
+                self._load_factory,
                 now=self._utcnow(),
                 offline_policy=policy,
             )

@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from ..shared import RouteId
-from ..logistics import (
-    ExternalTransportServiceDef,
+from ..shared import DefinitionId
+from ..transport import (
     LandingCapability,
-    LogisticsService,
     OperationSupportLocation,
     OperationSupportRequirement,
     ResourceSupportRequirement,
     PoweredAscentCapability,
-    RouteDef,
     SpaceflightCapability,
+    SurfaceTransportCapability,
     TransportOperationKind,
     TransportOperationRequirement,
     TransportPerformanceProfile,
@@ -18,114 +16,76 @@ from ..logistics import (
     OperationAssetDisposition,
     VehicleMaintenanceSpec,
     VehicleProductionSpec,
+    VehicleRetirementSpec,
 )
+from ..transport.movement import SpaceflightMovementRule, SurfaceAccessMovementRule, SurfaceTransportMovementRule
 from . import base_ids as ids
 from . import base_requirements as req
 
+def build_surface_movement_rules() -> tuple[SurfaceTransportMovementRule, ...]:
+    return (
+        SurfaceTransportMovementRule(
+            id=DefinitionId("base.movement.surface_transport"),
+            display_name="地表輸送",
+            operation=TransportOperationRequirement(TransportOperationKind.SURFACE_TRANSPORT, 0.0),
+            gateway_capability_id="surface_distribution",
+            transit_days=1,
+        ),
+    )
 
-def build_route_definitions() -> dict:
-    routes = {
-        RouteId("base.route.earth_leo"): RouteDef(
-            id=RouteId("base.route.earth_leo"), origin_id=ids.EARTH, destination_id=ids.LEO, transit_days=2,
-            operations=(TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 9.4),),
-            display_name="地球地表→低軌道", origin_requirements=req.SURFACE_SITE, destination_requirements=req.ORBIT_SITE,
-        ),
-        RouteId("base.route.leo_lunar_orbit"): RouteDef(
-            id=RouteId("base.route.leo_lunar_orbit"), origin_id=ids.LEO, destination_id=ids.LUNAR_ORBIT, transit_days=5,
-            operations=(TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),),
-            display_name="低軌道→月周回軌道",
-            origin_requirements=req.ORBIT_SITE, destination_requirements=req.ORBIT_SITE,
-        ),
-        RouteId("base.route.lunar_orbit_leo"): RouteDef(
-            id=RouteId("base.route.lunar_orbit_leo"), origin_id=ids.LUNAR_ORBIT, destination_id=ids.LEO, transit_days=5,
-            operations=(TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),),
-            display_name="月周回軌道→低軌道",
-            origin_requirements=req.ORBIT_SITE, destination_requirements=req.ORBIT_SITE,
-        ),
-    }
-    for suffix, surface, label in (
-        ("ridge", ids.SOUTH_POLAR_RIDGE, "南極高地"),
-        ("cold_trap", ids.POLAR_COLD_TRAP, "極域永久影"),
-        ("nearside", ids.NEARSIDE_MARE, "表側海地域"),
-    ):
-        routes[RouteId(f"base.route.lunar_orbit_{suffix}")] = RouteDef(
-            id=RouteId(f"base.route.lunar_orbit_{suffix}"), origin_id=ids.LUNAR_ORBIT, destination_id=surface, transit_days=3,
-            operations=(TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),),
-            display_name=f"月周回軌道→{label}",
-            origin_requirements=req.ORBIT_SITE, destination_requirements=req.SURFACE_SITE,
-        )
-        routes[RouteId(f"base.route.{suffix}_lunar_orbit")] = RouteDef(
-            id=RouteId(f"base.route.{suffix}_lunar_orbit"), origin_id=surface, destination_id=ids.LUNAR_ORBIT, transit_days=3,
-            operations=(TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 1.9),),
-            display_name=f"{label}→月周回軌道",
-            origin_requirements=req.SURFACE_SITE, destination_requirements=req.ORBIT_SITE,
-        )
-        routes[RouteId(f"base.route.leo_{suffix}")] = RouteDef(
-            id=RouteId(f"base.route.leo_{suffix}"), origin_id=ids.LEO, destination_id=surface, transit_days=7,
-            operations=(
-                TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),
-                TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),
+
+def build_surface_access_movement_rules() -> tuple[SurfaceAccessMovementRule, ...]:
+    return (
+        SurfaceAccessMovementRule(
+            id=DefinitionId("base.movement.earth_surface_access"),
+            display_name="地球地表アクセス",
+            body_id=ids.EARTH_BODY,
+            descent_operations=(
+                TransportOperationRequirement(TransportOperationKind.ATMOSPHERIC_ENTRY, 0.0),
             ),
-            display_name=f"低軌道→{label}直行",
-            origin_requirements=req.ORBIT_SITE, destination_requirements=req.SURFACE_SITE,
-        )
-        routes[RouteId(f"base.route.{suffix}_leo")] = RouteDef(
-            id=RouteId(f"base.route.{suffix}_leo"), origin_id=surface, destination_id=ids.LEO, transit_days=7,
-            operations=(
-                TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 1.9),
-                TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 4.1),
-            ),
-            display_name=f"{label}→低軌道直行",
-            origin_requirements=req.SURFACE_SITE, destination_requirements=req.ORBIT_SITE,
-        )
-        routes[RouteId(f"base.route.earth_{suffix}_direct")] = RouteDef(
-            id=RouteId(f"base.route.earth_{suffix}_direct"), origin_id=ids.EARTH, destination_id=surface, transit_days=8,
-            operations=(
+            ascent_operations=(
                 TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 9.4),
-                TransportOperationRequirement(TransportOperationKind.SPACEFLIGHT, 3.2),
+            ),
+            transit_days=2,
+            gateway_capability_id="launch_operations",
+            space_requirements=req.ORBIT_SITE,
+            surface_requirements=req.ATMOSPHERIC_SURFACE_SITE,
+        ),
+        SurfaceAccessMovementRule(
+            id=DefinitionId("base.movement.lunar_surface_access"),
+            display_name="月面アクセス",
+            body_id=ids.MOON,
+            descent_operations=(
                 TransportOperationRequirement(TransportOperationKind.LANDING, 1.9),
             ),
-            display_name=f"地球地表→{label}直行ミッション",
-            origin_requirements=req.SURFACE_SITE, destination_requirements=req.SURFACE_SITE,
-        )
-    return routes
+            ascent_operations=(
+                TransportOperationRequirement(TransportOperationKind.POWERED_ASCENT, 1.9),
+            ),
+            transit_days=3,
+            gateway_capability_id="surface_distribution",
+            space_requirements=req.ORBIT_SITE,
+            surface_requirements=req.SURFACE_SITE,
+        ),
+    )
 
 
-def build_external_transport_services() -> dict:
-    launch = TransportPerformanceProfile(
-        dry_mass_t=100.0, payload_t=30.0,
-        operation_capabilities=(PoweredAscentCapability(10.2, 11.0, 120000.0),),
+def build_spaceflight_movement_rules() -> tuple[SpaceflightMovementRule, ...]:
+    # 384,400 km / 76,880 km/day = 5 characteristic days for the baseline
+    # Earth-Moon anchors. New bodies reuse this profile from their own Spatial
+    # transport geometry rather than adding OD-specific definitions.
+    return (
+        SpaceflightMovementRule(
+            id=DefinitionId("base.movement.spaceflight"),
+            display_name="宇宙航行",
+            operation_type=TransportOperationKind.SPACEFLIGHT,
+            characteristic_speed_km_per_day=76_880.0,
+            minimum_transit_days=1,
+        ),
     )
-    orbital = TransportPerformanceProfile(
-        dry_mass_t=12.0, payload_t=20.0,
-        operation_capabilities=(SpaceflightCapability(6.0),),
-        endurance_days=120.0,
-    )
-    lander = TransportPerformanceProfile(
-        dry_mass_t=7.0, payload_t=8.0,
-        operation_capabilities=(PoweredAscentCapability(2.5, 2.5, 2000.0), LandingCapability(2.5, 2.5, 2000.0)),
-    )
-    direct = TransportPerformanceProfile(
-        dry_mass_t=120.0, payload_t=18.0,
-        operation_capabilities=(PoweredAscentCapability(10.2, 11.0, 120000.0), SpaceflightCapability(5.0), LandingCapability(2.5, 2.5, 2000.0)),
-        endurance_days=30.0,
-    )
-    return {
-        ids.EARTH_LEO_LAUNCH_SERVICE: ExternalTransportServiceDef(ids.EARTH_LEO_LAUNCH_SERVICE, "商業地表打上げ", 1.6, 4.0, launch, origin_requirements=req.ATMOSPHERIC_SURFACE_SITE, destination_requirements=req.ORBIT_SITE),
-        ids.LEO_LUNAR_SERVICE: ExternalTransportServiceDef(ids.LEO_LUNAR_SERVICE, "商業軌道間輸送", 0.25, 5.0, orbital, origin_requirements=req.ORBIT_SITE, destination_requirements=req.ORBIT_SITE),
-        ids.LUNAR_LANDING_SERVICE: ExternalTransportServiceDef(ids.LUNAR_LANDING_SERVICE, "商業真空地表着陸輸送", 0.20, 3.5, lander, origin_requirements=req.ORBIT_SITE, destination_requirements=req.VACUUM_SURFACE_SITE),
-        ids.DIRECT_LUNAR_SERVICE: ExternalTransportServiceDef(ids.DIRECT_LUNAR_SERVICE, "商業地球―真空地表直行輸送", 0.12, 11.0, direct, origin_requirements=req.ATMOSPHERIC_SURFACE_SITE, destination_requirements=req.VACUUM_SURFACE_SITE),
-    }
 
 
 def build_vehicle_definitions() -> dict:
-    """Owned base-game fleets are physical assets, not recurring money sinks.
-
-    Their operation is constrained by vehicle performance, propellant, support
-    infrastructure, turnaround time, production capacity, and material inputs.
-    Monetary settlement remains on ExternalTransportServiceDef for commercial
-    services and may still be used by other optional content.
-    """
+    """Owned base-game fleets are constrained only by physical requirements."""
     return {
         ids.REUSABLE_LAUNCH_VEHICLE: VehicleDef(
             id=ids.REUSABLE_LAUNCH_VEHICLE,
@@ -141,10 +101,14 @@ def build_vehicle_definitions() -> dict:
                 generic_capabilities=("refueling_interface",),
             ),
             production=VehicleProductionSpec(
-                capability_id="vehicle_assembly", days=10.0,
+                service_type="vehicle_assembly", days=10.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 20.0), (ids.MACHINERY, 8.0), (ids.PRECISION_ELECTRONICS, 2.0)),
             ),
-            maintenance=VehicleMaintenanceSpec(capability_id="launch_vehicle_servicing", turnaround_days=5.0),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=5.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 10.0), (ids.MACHINERY, 4.0), (ids.PRECISION_ELECTRONICS, 1.0)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="launch_vehicle_servicing", turnaround_days=5.0),
         ),
         ids.REUSABLE_ORBITAL_CARGO_TUG: VehicleDef(
             id=ids.REUSABLE_ORBITAL_CARGO_TUG,
@@ -159,10 +123,54 @@ def build_vehicle_definitions() -> dict:
                 generic_capabilities=("refueling_interface", "docking_interface"),
             ),
             production=VehicleProductionSpec(
-                capability_id="vehicle_assembly", days=4.0,
+                service_type="vehicle_assembly", days=4.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 4.0), (ids.MACHINERY, 2.0), (ids.PRECISION_ELECTRONICS, 1.0)),
             ),
-            maintenance=VehicleMaintenanceSpec(capability_id="spacecraft_servicing", turnaround_days=1.0),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=2.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 2.0), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.5)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
+        ),
+        ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT: VehicleDef(
+            id=ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT,
+            display_name="月周回資源観測宇宙機",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=2.5, payload_t=0.5,
+                propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=1.0,
+                propellant_t_per_total_t_per_km_s=0.018,
+                operation_capabilities=(SpaceflightCapability(5.0),),
+                resource_support_requirements=(ResourceSupportRequirement(ids.PROPELLANT, "vehicle_refueling", "refueling_interface"),),
+                endurance_days=180.0,
+                generic_capabilities=("survey_sensor", "docking_interface", "refueling_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=3.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 1.2), (ids.MACHINERY, 0.8), (ids.PRECISION_ELECTRONICS, 1.5)),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=1.5,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 0.6), (ids.MACHINERY, 0.4), (ids.PRECISION_ELECTRONICS, 0.75)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
+        ),
+        ids.SURFACE_CARGO_HAULER: VehicleDef(
+            id=ids.SURFACE_CARGO_HAULER,
+            display_name="地表貨物輸送車",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=4.0, payload_t=12.0,
+                operation_capabilities=(SurfaceTransportCapability(180.0),),
+                endurance_days=120.0,
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=2.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 1.5), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.25)),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=1.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 0.75), (ids.MACHINERY, 0.5), (ids.PRECISION_ELECTRONICS, 0.125)),
+            ),
+            maintenance=VehicleMaintenanceSpec(turnaround_days=0.25),
         ),
         ids.REUSABLE_SURFACE_CARGO_LANDER: VehicleDef(
             id=ids.REUSABLE_SURFACE_CARGO_LANDER,
@@ -177,17 +185,13 @@ def build_vehicle_definitions() -> dict:
                 generic_capabilities=("refueling_interface", "docking_interface"),
             ),
             production=VehicleProductionSpec(
-                capability_id="vehicle_assembly", days=3.0,
+                service_type="vehicle_assembly", days=3.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 2.5), (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 0.8)),
             ),
-            maintenance=VehicleMaintenanceSpec(capability_id="spacecraft_servicing", turnaround_days=1.0),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=1.5,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 1.25), (ids.MACHINERY, 0.75), (ids.PRECISION_ELECTRONICS, 0.4)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
         ),
     }
-
-
-def initial_vehicle_deployments() -> tuple[tuple, ...]:
-    return (
-        (ids.REUSABLE_LAUNCH_VEHICLE, 1, ids.EARTH),
-        (ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO),
-        (ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LEO),
-    )

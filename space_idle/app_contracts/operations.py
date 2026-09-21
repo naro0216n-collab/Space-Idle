@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import isfinite
 
+from ..priority import ActivityPriority
+
 
 @dataclass(frozen=True)
 class PauseFacility:
@@ -21,15 +23,15 @@ class SetFacilityProcess:
 
 
 @dataclass(frozen=True)
-class SetPowerPriority:
+class SetFacilityActivityPriority:
     facility_id: str
-    priority: int | None
+    priority: ActivityPriority
 
 
 @dataclass(frozen=True)
 class SetMaintenancePriority:
     facility_id: str
-    priority: int
+    priority: ActivityPriority
 
 
 @dataclass(frozen=True)

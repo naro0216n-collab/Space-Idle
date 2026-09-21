@@ -5,8 +5,12 @@ from ..projects import (
     ConstructionRecipe,
     ConstructionResourceProviderSpec,
     FacilityUpgradeRecipe,
+    FacilityDecommissionRecipe,
+    SpatialDevelopmentRecipe,
+    BuildResourceRequirement,
 )
 from ..site import SiteRequirements
+from ..survey import KnowledgeLevel, KnowledgeRequirementSpec
 from . import base_ids as ids
 from . import base_requirements as req
 
@@ -84,6 +88,9 @@ def build_construction_recipes() -> dict:
         ids.CRYOGENIC_STORAGE: req._surface_recipe(ids.CRYOGENIC_STORAGE, 3, 2, 0.8, 22),
         ids.BULK_STORAGE: req._surface_recipe(ids.BULK_STORAGE, 2, 1, 0.1, 10),
         ids.CARGO_WAREHOUSE: req._surface_recipe(ids.CARGO_WAREHOUSE, 3, 1, 0.2, 14),
+        ids.SURFACE_DISTRIBUTION_HUB: req._surface_recipe(
+            ids.SURFACE_DISTRIBUTION_HUB, 5, 4, 1, 28
+        ),
         ids.ELECTROLYSIS_PLANT: req._surface_recipe(
             ids.ELECTROLYSIS_PLANT, 3, 3, 1.2, 28,
             technologies=frozenset({ids.TECH_INDUSTRIAL_ELECTROLYSIS}),
@@ -164,6 +171,21 @@ def build_facility_upgrade_recipes() -> dict:
     return {(recipe.facility_def_id, recipe.target_level): recipe for recipe in recipes}
 
 
+def build_facility_decommission_recipes(facility_definition_ids) -> dict:
+    """Base content uses the common construction-work service for dismantling.
+
+    The exact work value is balance content.  No Facility identity receives a
+    special Core path; newly added Facility definitions can opt in by inclusion.
+    """
+    return {
+        facility_definition_id: FacilityDecommissionRecipe(
+            facility_def_id=facility_definition_id,
+            construction_work=12.0,
+        )
+        for facility_definition_id in facility_definition_ids
+    }
+
+
 def build_construction_providers() -> dict:
     return {
         ids.ROBOTIC_SURVEY_PACKAGE: ConstructionProviderSpec(ids.ROBOTIC_SURVEY_PACKAGE, 0.35),
@@ -176,5 +198,24 @@ def build_construction_resource_providers() -> dict:
     return {ids.CONSTRUCTION_EQUIPMENT: ConstructionResourceProviderSpec(ids.CONSTRUCTION_EQUIPMENT, 0.05)}
 
 
-def sourcing_wait_days() -> dict[str, int]:
-    return {"import_now": 0, "mixed": 45, "local_priority": 120}
+def procurement_wait_days() -> dict[str, int]:
+    return {"immediate": 0, "standard_wait": 45, "extended_wait": 120}
+
+
+def build_spatial_development_recipes() -> dict:
+    surface_site = req.SURFACE_SITE
+    recipes = (
+        SpatialDevelopmentRecipe(
+            ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
+            "Surface Territory Development",
+            (
+                BuildResourceRequirement(ids.STRUCTURAL_COMPONENTS, 5.0),
+                BuildResourceRequirement(ids.MACHINERY, 3.0),
+                BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 2.0),
+            ),
+            36.0,
+            surface_site,
+            knowledge_requirements=(KnowledgeRequirementSpec(ids.WATER, KnowledgeLevel.PRESENCE_PROBABILITY),),
+        ),
+    )
+    return {recipe.id: recipe for recipe in recipes}
