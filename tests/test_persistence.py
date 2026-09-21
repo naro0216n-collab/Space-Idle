@@ -50,8 +50,10 @@ from space_idle.research import (
     ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
     ResearchState,
 )
-from space_idle.shared import EntityId, DefinitionId
+from space_idle.shared import EntityId, DefinitionId, SpatialNodeId
 from space_idle.simulation import OfflineProgressPolicy
+from space_idle.spatial import SpatialNodeDef, SpatialNodeKind
+from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
 from space_idle.validation_support import ConfigurationError
 
 
@@ -147,6 +149,25 @@ def _make_nontrivial_state():
 
 def test_authoritative_snapshot_roundtrip_preserves_domain_ownership_and_future_behavior(tmp_path):
     app = _make_nontrivial_state()
+    body_id = ids.EARTH_BODY
+    species = DefinitionId("test.atmosphere.n2")
+    climate = PlanetaryClimateState(body_id, 101325.0, 1.225, 288.0, {species: 1.0})
+    app._simulation.environment.overlays.append(
+        TerraformingEnvironmentOverlay(TerraformingService({body_id: climate}))
+    )
+    overlay = app._simulation.environment.overlays[-1]
+    overlay.service.add_atmosphere(body_id, 250.0, 0.01, species, 0.0, 3.5)
+
+    def load_factory():
+        loaded_app = build_game_application_for_load()
+        loaded_climate = PlanetaryClimateState(
+            body_id, 101325.0, 1.225, 288.0, {species: 1.0}
+        )
+        loaded_app._simulation.environment.overlays.append(
+            TerraformingEnvironmentOverlay(TerraformingService({body_id: loaded_climate}))
+        )
+        return loaded_app
+
     path = tmp_path / "game.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
 
@@ -164,7 +185,7 @@ def test_authoritative_snapshot_roundtrip_preserves_domain_ownership_and_future_
         for row in state["facilities"]["items"]
     )
 
-    loaded, offline = load_game(path, build_game_application_for_load)
+    loaded, offline = load_game(path, load_factory)
     assert offline is None
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
@@ -288,6 +309,21 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
     app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     sim = app._simulation
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
+    dormant = SpatialNodeId("test.node.context_only")
+    sim.graph.add(
+        SpatialNodeDef(
+            dormant,
+            "Context only",
+            ids.SOL_SYSTEM,
+            sim.graph.bodies[ids.MOON].system_local_transport_geometry,
+            body_id=ids.MOON,
+            kind=SpatialNodeKind.ORBITAL,
+            inherits_parent_environment=False,
+        )
+    )
+    before_operational = set(sim.graph.operational_node_ids())
+    before_locations = set(sim.graph.locations)
+    assert dormant not in before_operational
     sim.facilities.install(
         ids.SURFACE_DISTRIBUTION_HUB,
         ids.EARTH,
@@ -332,6 +368,8 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
     path = tmp_path / "derived-projections.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     raw = json.loads(path.read_text(encoding="utf-8"))
+    assert "developed_cell_ids" in raw["state"]["environment"]["locations"][0]
+    assert "owner_location_id" not in json.dumps(raw["state"]["environment"])
     saved_campaign = next(
         row
         for row in raw["state"]["survey"]["campaigns"]
@@ -344,6 +382,11 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
 
     loaded, _ = load_game(path, build_game_application_for_load)
     assert capture_state(loaded._simulation) == before
+    loaded_graph = loaded._simulation.graph
+    assert loaded_graph.owner_of_cell(ids.EARTH_CELL_COASTAL) == ids.EARTH
+    assert set(loaded_graph.operational_node_ids()) == before_operational
+    assert set(loaded_graph.locations) == before_locations
+    assert dormant not in loaded_graph.nodes
     assert loaded.query(
         GetOperationalNode(str(ids.EARTH))
     ).surface_infrastructure == infrastructure_before

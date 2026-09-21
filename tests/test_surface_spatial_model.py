@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from space_idle import GetSurfaceMap, build_game_application
-from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
-from space_idle.persistence import load_game, save_game
 from space_idle.shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId, StarSystemId, SurfaceCellId
 from space_idle.supply import SupplyRoutingConstraintScope
 from space_idle.spatial import (
@@ -101,44 +97,6 @@ def test_base_surface_map_exposes_affiliation_without_creating_cell_inventory_no
     assert all(cell.id not in {str(value) for value in sim.graph.operational_node_ids()} for cell in sim.graph.surface_cells.values())
     assert {location_id for location_id, _resource_id in sim.inventory.stock} == before_inventory_locations
 
-
-def test_spatial_persistence_saves_authoritative_territory_not_derived_or_static_context(tmp_path: Path):
-    app = build_game_application()
-    sim = app._simulation
-    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
-    dormant = SpatialNodeId("test.node.context_only")
-    sim.graph.add(
-        SpatialNodeDef(
-            dormant,
-            "Context only",
-            ids.SOL_SYSTEM,
-            sim.graph.bodies[ids.MOON].system_local_transport_geometry,
-            body_id=ids.MOON,
-            kind=SpatialNodeKind.ORBITAL,
-            inherits_parent_environment=False,
-        )
-    )
-    before_operational = set(sim.graph.operational_node_ids())
-    before_locations = set(sim.graph.locations)
-    assert dormant not in before_operational
-    validate_runtime_state(sim)
-
-    path = tmp_path / "save.json"
-    save_game(app, path)
-    raw = path.read_text(encoding="utf-8")
-    assert "developed_cell_ids" in raw
-    assert "owner_location_id" not in raw
-
-    loaded, _ = load_game(path, build_game_application_for_load)
-    loaded_graph = loaded._simulation.graph
-    assert loaded_graph.locations[ids.EARTH].developed_cell_ids == {
-        ids.EARTH_CELL_INDUSTRIAL,
-        ids.EARTH_CELL_COASTAL,
-    }
-    assert loaded_graph.owner_of_cell(ids.EARTH_CELL_COASTAL) == ids.EARTH
-    assert set(loaded_graph.operational_node_ids()) == before_operational
-    assert set(loaded_graph.locations) == before_locations
-    assert dormant not in loaded_graph.nodes  # runtime-added static Content is rebuilt, not Save state
 
 
 def test_operational_node_ownership_is_explicit_and_uniform_across_spatial_kinds():
