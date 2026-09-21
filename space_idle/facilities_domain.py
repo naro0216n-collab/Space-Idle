@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
+from .domain import (
+    DomainExtension, StateCodec, decode_bool, decode_dict, decode_float, decode_int,
+    decode_list, decode_str, require_fields,
+)
 from .validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
 from .facilities import FacilityLifecycle, FacilityPlacementScope, FacilityState
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
@@ -32,24 +35,44 @@ def capture_facilities(sim: Any) -> dict[str, Any]:
 
 def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
     sim.facilities.facilities.clear()
-    for row in data["items"]:
-        fid = EntityId(row["id"])
+    fields = {
+        "id", "definition_id", "operational_node_id", "site_cell_id", "paused",
+        "activity_priority", "maintenance_priority", "level", "lifecycle",
+        "selected_process_id", "invested_resources",
+    }
+    for index, raw in enumerate(decode_list(data["items"], "facility items")):
+        row = require_fields(raw, fields, f"facility[{index}]")
+        fid = EntityId(decode_str(row["id"], "facility id"))
+        if fid in sim.facilities.facilities:
+            raise ValueError(f"duplicate facility: {fid}")
+        site_cell_id = row["site_cell_id"]
+        selected_process_id = row["selected_process_id"]
+        invested_resources = decode_dict(row["invested_resources"], "facility invested_resources")
         sim.facilities.facilities[fid] = FacilityState(
             id=fid,
-            definition_id=DefinitionId(row["definition_id"]),
-            operational_node_id=SpatialNodeId(row["operational_node_id"]),
-            site_cell_id=None if row["site_cell_id"] is None else SurfaceCellId(row["site_cell_id"]),
-            paused=decode_bool(row["paused"], "facility paused"),
-            activity_priority=row["activity_priority"],
-            maintenance_priority=row["maintenance_priority"],
-            level=decode_int(row["level"], "facility level"),
-            lifecycle=FacilityLifecycle(row["lifecycle"]),
-            selected_process_id=(
-                None
-                if row["selected_process_id"] is None
-                else DefinitionId(row["selected_process_id"])
+            definition_id=DefinitionId(decode_str(row["definition_id"], "facility definition_id")),
+            operational_node_id=SpatialNodeId(
+                decode_str(row["operational_node_id"], "facility operational_node_id")
             ),
-            invested_resources={DefinitionId(key): decode_float(value, "facility invested resource") for key, value in row["invested_resources"].items()},
+            site_cell_id=(
+                None if site_cell_id is None
+                else SurfaceCellId(decode_str(site_cell_id, "facility site_cell_id"))
+            ),
+            paused=decode_bool(row["paused"], "facility paused"),
+            activity_priority=decode_int(row["activity_priority"], "facility activity_priority"),
+            maintenance_priority=decode_int(
+                row["maintenance_priority"], "facility maintenance_priority"
+            ),
+            level=decode_int(row["level"], "facility level"),
+            lifecycle=FacilityLifecycle(decode_str(row["lifecycle"], "facility lifecycle")),
+            selected_process_id=(
+                None if selected_process_id is None
+                else DefinitionId(decode_str(selected_process_id, "facility selected_process_id"))
+            ),
+            invested_resources={
+                DefinitionId(key): decode_float(value, "facility invested resource")
+                for key, value in invested_resources.items()
+            },
         )
     sim.facilities._counter = decode_int(data["counter"], "facility counter")
 

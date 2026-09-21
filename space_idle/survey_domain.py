@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec, decode_float, decode_int
+from .domain import (
+    DomainExtension, StateCodec, decode_float, decode_int, decode_list, decode_str,
+    require_fields,
+)
 from .validation_support import (
     ValidationContext, require as _require, validate_site_requirements,
 )
@@ -71,63 +74,112 @@ def capture_survey(sim: Any) -> dict[str, Any]:
     }
 
 
+def _restore_knowledge_map(
+    value: Any, metric_field: str, metric_label: str
+) -> dict[tuple[SurfaceCellId, DefinitionId], float]:
+    fields = {"cell_id", "resource_id", metric_field}
+    restored: dict[tuple[SurfaceCellId, DefinitionId], float] = {}
+    for index, raw in enumerate(decode_list(value, f"survey {metric_label}")):
+        row = require_fields(raw, fields, f"survey {metric_label}[{index}]")
+        key = (
+            SurfaceCellId(decode_str(row["cell_id"], "survey cell_id")),
+            DefinitionId(decode_str(row["resource_id"], "survey resource_id")),
+        )
+        if key in restored:
+            raise ValueError(f"duplicate survey {metric_label} key: {key}")
+        restored[key] = decode_float(row[metric_field], f"survey {metric_label}")
+    return restored
+
+
 def restore_survey(sim: Any, data: dict[str, Any]) -> None:
     if sim.survey is None:
         return
-    sim.survey.knowledge_progress = {
-        (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): decode_float(r["progress"], "survey progress")
-        for r in data["knowledge_progress"]
-    }
-    sim.survey.knowledge_precision_fraction = {
-        (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): decode_float(r["precision_fraction"], "survey precision_fraction")
-        for r in data["knowledge_precision_fraction"]
-    }
-    sim.survey.estimated_potential = {
-        (SurfaceCellId(r["cell_id"]), DefinitionId(r["resource_id"])): decode_float(r["estimated_potential"], "survey estimated_potential")
-        for r in data["estimated_potential"]
-    }
+    sim.survey.knowledge_progress = _restore_knowledge_map(
+        data["knowledge_progress"], "progress", "progress"
+    )
+    sim.survey.knowledge_precision_fraction = _restore_knowledge_map(
+        data["knowledge_precision_fraction"], "precision_fraction", "precision_fraction"
+    )
+    sim.survey.estimated_potential = _restore_knowledge_map(
+        data["estimated_potential"], "estimated_potential", "estimated_potential"
+    )
     sim.survey.campaigns.clear()
     sim.survey.provider_assignments.clear()
     sim.survey._campaign_counter = decode_int(data["campaign_counter"], "survey campaign_counter")
-    sim.survey._provider_assignment_counter = decode_int(data["provider_assignment_counter"], "survey provider_assignment_counter")
+    sim.survey._provider_assignment_counter = decode_int(
+        data["provider_assignment_counter"], "survey provider_assignment_counter"
+    )
     assignment_fields = {
         "id", "provider_definition_id", "vehicle_definition_id",
         "operational_node_id", "fleet_commitment_ref",
     }
-    for r in data["provider_assignments"]:
-        if set(r) != assignment_fields:
-            raise ValueError("survey provider assignment has invalid fields")
-        assignment_id = EntityId(r["id"])
+    for index, raw in enumerate(
+        decode_list(data["provider_assignments"], "survey provider_assignments")
+    ):
+        r = require_fields(raw, assignment_fields, f"survey provider_assignment[{index}]")
+        assignment_id = EntityId(decode_str(r["id"], "survey provider assignment id"))
+        if assignment_id in sim.survey.provider_assignments:
+            raise ValueError(f"duplicate survey provider assignment: {assignment_id}")
         sim.survey.provider_assignments[assignment_id] = SurveyProviderAssignmentState(
             assignment_id,
-            DefinitionId(r["provider_definition_id"]),
-            DefinitionId(r["vehicle_definition_id"]),
-            SpatialNodeId(r["operational_node_id"]),
-            EntityId(r["fleet_commitment_ref"]),
+            DefinitionId(decode_str(r["provider_definition_id"], "survey provider_definition_id")),
+            DefinitionId(decode_str(r["vehicle_definition_id"], "survey vehicle_definition_id")),
+            SpatialNodeId(decode_str(r["operational_node_id"], "survey operational_node_id")),
+            EntityId(decode_str(r["fleet_commitment_ref"], "survey fleet_commitment_ref")),
         )
     campaign_fields = {
         "id", "target_cell_ids", "resource_ids", "goal_knowledge_level",
         "provider_constraint", "observation_mode_constraint", "priority",
         "control_state",
     }
-    for r in data["campaigns"]:
-        if set(r) != campaign_fields:
-            raise ValueError("survey campaign has invalid fields")
-        campaign_id = EntityId(r["id"])
+    for index, raw in enumerate(decode_list(data["campaigns"], "survey campaigns")):
+        r = require_fields(raw, campaign_fields, f"survey campaign[{index}]")
+        campaign_id = EntityId(decode_str(r["id"], "survey campaign id"))
+        if campaign_id in sim.survey.campaigns:
+            raise ValueError(f"duplicate survey campaign: {campaign_id}")
         constraint_data = r["provider_constraint"]
-        provider_constraint = None if constraint_data is None else SurveyProviderConstraint(
-            DefinitionId(constraint_data["provider_definition_id"]),
-            SpatialNodeId(constraint_data["operational_node_id"]),
+        if constraint_data is None:
+            provider_constraint = None
+        else:
+            constraint = require_fields(
+                constraint_data,
+                {"provider_definition_id", "operational_node_id"},
+                "survey provider_constraint",
+            )
+            provider_constraint = SurveyProviderConstraint(
+                DefinitionId(
+                    decode_str(constraint["provider_definition_id"], "survey provider_definition_id")
+                ),
+                SpatialNodeId(
+                    decode_str(constraint["operational_node_id"], "survey operational_node_id")
+                ),
+            )
+        target_cell_ids = tuple(
+            SurfaceCellId(decode_str(value, "survey target_cell_id"))
+            for value in decode_list(r["target_cell_ids"], "survey target_cell_ids")
         )
+        resource_ids = tuple(
+            DefinitionId(decode_str(value, "survey resource_id"))
+            for value in decode_list(r["resource_ids"], "survey resource_ids")
+        )
+        if len(target_cell_ids) != len(set(target_cell_ids)):
+            raise ValueError(f"duplicate survey target cell: {campaign_id}")
+        if len(resource_ids) != len(set(resource_ids)):
+            raise ValueError(f"duplicate survey resource: {campaign_id}")
+        observation_mode = r["observation_mode_constraint"]
+        if observation_mode is not None:
+            observation_mode = decode_str(observation_mode, "survey observation_mode_constraint")
         sim.survey.campaigns[campaign_id] = SurveyCampaign(
             campaign_id,
-            tuple(SurfaceCellId(value) for value in r["target_cell_ids"]),
-            tuple(DefinitionId(value) for value in r["resource_ids"]),
+            target_cell_ids,
+            resource_ids,
             KnowledgeLevel(decode_int(r["goal_knowledge_level"], "survey goal_knowledge_level")),
             provider_constraint,
-            r["observation_mode_constraint"],
+            observation_mode,
             priority=decode_int(r["priority"], "survey priority"),
-            control_state=SurveyCampaignControlState(r["control_state"]),
+            control_state=SurveyCampaignControlState(
+                decode_str(r["control_state"], "survey control_state")
+            ),
         )
 
 

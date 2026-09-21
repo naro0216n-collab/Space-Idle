@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .contracts import ContractState, ContractStatus
-from .domain import DomainExtension, StateCodec, decode_int
+from .domain import DomainExtension, StateCodec, decode_int, decode_list, decode_str, require_fields
 from .shared import ContractId, DefinitionId
 from .validation_support import (
     ValidationContext,
@@ -36,16 +36,21 @@ def restore_contracts(sim: Any, data: dict[str, Any]) -> None:
     if sim.contracts is None:
         return
     sim.contracts._counter = decode_int(data["counter"], "contract counter")
-    sim.contracts.contracts = {
-        ContractId(row["id"]): ContractState(
-            ContractId(row["id"]),
-            DefinitionId(row["template_id"]),
+    fields = {"id", "template_id", "offered_day", "deadline_day", "status"}
+    restored: dict[ContractId, ContractState] = {}
+    for index, raw in enumerate(decode_list(data["items"], "contracts items")):
+        row = require_fields(raw, fields, f"contract[{index}]")
+        contract_id = ContractId(decode_str(row["id"], "contract id"))
+        if contract_id in restored:
+            raise ValueError(f"duplicate contract: {contract_id}")
+        restored[contract_id] = ContractState(
+            contract_id,
+            DefinitionId(decode_str(row["template_id"], "contract template_id")),
             decode_int(row["offered_day"], "contract offered_day"),
             decode_int(row["deadline_day"], "contract deadline_day"),
-            ContractStatus(row["status"]),
+            ContractStatus(decode_str(row["status"], "contract status")),
         )
-        for row in data["items"]
-    }
+    sim.contracts.contracts = restored
 
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:

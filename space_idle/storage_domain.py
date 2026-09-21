@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec, decode_float
+from .domain import DomainExtension, StateCodec, decode_float, decode_list, decode_str, require_fields
 from .shared import SpatialNodeId
 from .validation_support import ValidationContext, require as _require
 
@@ -19,14 +19,19 @@ def capture_storage(sim: Any) -> dict[str, Any]:
 
 
 def restore_storage(sim: Any, data: dict[str, Any]) -> None:
-    rows = data["infrastructure_capacity"]
+    rows = decode_list(data["infrastructure_capacity"], "storage infrastructure_capacity")
     expected_fields = {"operational_node_id", "storage_pool_key", "amount"}
-    if any(set(row) != expected_fields for row in rows):
-        raise ValueError("storage infrastructure capacity has invalid fields")
-    sim.storage.infrastructure_capacity_t = {
-        (SpatialNodeId(row["operational_node_id"]), row["storage_pool_key"]): decode_float(row["amount"], "storage amount")
-        for row in rows
-    }
+    restored: dict[tuple[SpatialNodeId, str], float] = {}
+    for index, raw in enumerate(rows):
+        row = require_fields(raw, expected_fields, f"storage infrastructure_capacity[{index}]")
+        key = (
+            SpatialNodeId(decode_str(row["operational_node_id"], "storage operational_node_id")),
+            decode_str(row["storage_pool_key"], "storage storage_pool_key"),
+        )
+        if key in restored:
+            raise ValueError(f"duplicate storage infrastructure capacity key: {key}")
+        restored[key] = decode_float(row["amount"], "storage amount")
+    sim.storage.infrastructure_capacity_t = restored
 
 
 STATE_CODEC = StateCodec("storage", capture_storage, restore_storage)

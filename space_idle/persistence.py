@@ -66,6 +66,10 @@ def restore_state(sim, data: dict[str, Any]) -> None:
                 f"missing={missing}; unexpected={unexpected}"
             )
         codec.restore(sim, section)
+        if codec.capture(sim) != section:
+            raise SaveFormatError(
+                f"save domain section is not in canonical serialized form: {codec.key}"
+            )
     sim.mark_runtime_state_initialized()
     sim.transport.invalidate_movement_plans()
     sim.refresh_storage()
@@ -131,7 +135,7 @@ def save_game(
     }
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False)
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -175,9 +179,28 @@ def _validate_persisted_identity_rows(value: Any, path: str = "state") -> None:
         _validate_persisted_identity_rows(child, f"{path}[{index}]")
 
 
+def _reject_duplicate_object_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise SaveFormatError(f"duplicate JSON object key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_non_finite_constant(value: str) -> None:
+    raise SaveFormatError(f"non-finite JSON number is not allowed: {value}")
+
+
 def _read_envelope(path: str | Path) -> SaveEnvelope:
     try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        raw = json.loads(
+            Path(path).read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_object_keys,
+            parse_constant=_reject_non_finite_constant,
+        )
+    except SaveFormatError:
+        raise
     except (OSError, json.JSONDecodeError) as exc:
         raise SaveFormatError(f"invalid save file: {exc}") from exc
     if not isinstance(raw, dict):

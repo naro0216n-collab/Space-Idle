@@ -43,7 +43,9 @@ from space_idle.content.base_game import (
     REUSABLE_ORBITAL_CARGO_TUG,
 )
 from space_idle.content import base_ids as ids
-from space_idle.persistence import SaveFormatError, capture_state, load_game, save_game
+from space_idle.persistence import (
+    SAVE_SCHEMA_VERSION, SaveFormatError, capture_state, load_game, save_game,
+)
 from space_idle.industry import ProcessSpec
 from space_idle.research import (
     ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
@@ -573,7 +575,7 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
         (("missing", "survey", "campaigns"), "save domain section has invalid fields"),
         (("unexpected", "envelope"), "save file has invalid fields"),
         (("unexpected", "transport_allocation"), "transport allocation has invalid fields"),
-        (("unexpected", "survey_campaign"), "survey campaign has invalid fields"),
+        (("unexpected", "survey_campaign"), "invalid fields"),
         (("unexpected", "construction_project"), "construction project has invalid fields"),
         (("identity", "world_definition_id"), "save world definition mismatch"),
         (("identity", "scenario_id"), "save scenario mismatch"),
@@ -650,6 +652,48 @@ def test_atomic_save_failure_preserves_previous_snapshot(tmp_path, monkeypatch):
         save_game(app, path, saved_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
     assert path.read_bytes() == original
     assert not tuple(tmp_path.glob(".atomic.json.*.tmp"))
+
+
+def test_load_rejects_duplicate_json_object_keys(tmp_path):
+    app = build_game_application()
+    path = tmp_path / "duplicate-key.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    text = path.read_text(encoding="utf-8")
+    text = text.replace(
+        f'"schema_version": {SAVE_SCHEMA_VERSION},',
+        f'"schema_version": {SAVE_SCHEMA_VERSION},\n  "schema_version": {SAVE_SCHEMA_VERSION},',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(SaveFormatError, match="duplicate JSON object key"):
+        load_game(path, build_game_application_for_load)
+
+
+def test_load_rejects_non_finite_json_numbers(tmp_path):
+    app = build_game_application()
+    path = tmp_path / "non-finite.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["state"]["core"]["pending_offline_game_days"] = float("nan")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SaveFormatError, match="non-finite JSON number"):
+        load_game(path, build_game_application_for_load)
+
+
+def test_load_requires_each_domain_section_to_roundtrip_canonically(tmp_path):
+    app = build_game_application()
+    path = tmp_path / "noncanonical-domain.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    provider_states = payload["state"]["market"]["provider_states"]
+    assert provider_states
+    provider_states[0]["unexpected_field"] = None
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SaveFormatError, match="canonical serialized form: market"):
+        load_game(path, build_game_application_for_load)
 
 
 @pytest.mark.parametrize(

@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
-from .scientific_exploration import (ScientificExplorationCompletionDisposition, ScientificExplorationPhase, ScientificExplorationState, ScientificExplorationTerminationIntent)
+from .domain import (
+    DomainExtension, StateCodec, decode_bool, decode_float, decode_int, decode_list,
+    decode_str, require_fields,
+)
+from .scientific_exploration import (
+    ScientificExplorationCompletionDisposition, ScientificExplorationPhase,
+    ScientificExplorationState, ScientificExplorationTerminationIntent,
+)
 from .shared import DefinitionId, EntityId
 from .transport.models import FleetActivityRef, MovementExecutionKind
 from .validation_support import ValidationContext, require as _require, validate_site_requirements
@@ -37,36 +43,50 @@ def capture_scientific_exploration(sim: Any) -> dict[str, Any]:
 
 def restore_scientific_exploration(sim: Any, data: dict[str, Any]) -> None:
     service = sim.scientific_exploration
-    service.campaigns = {
-        DefinitionId(row["definition_id"]): ScientificExplorationState(
-            definition_id=DefinitionId(row["definition_id"]),
-            phase=ScientificExplorationPhase(row["phase"]),
+    fields = {
+        "definition_id", "phase", "vehicle_definition_id", "fleet_commitment_id",
+        "progress_days", "research_points_awarded", "inputs_consumed", "paused",
+        "created_day", "priority", "movement_execution_id", "completion_disposition",
+        "termination_intent",
+    }
+    campaigns: dict[DefinitionId, ScientificExplorationState] = {}
+    for index, raw in enumerate(decode_list(data["campaigns"], "scientific exploration campaigns")):
+        row = require_fields(raw, fields, f"scientific exploration campaign[{index}]")
+        definition_id = DefinitionId(decode_str(row["definition_id"], "scientific exploration definition_id"))
+        if definition_id in campaigns:
+            raise ValueError(f"duplicate scientific exploration campaign: {definition_id}")
+        campaigns[definition_id] = ScientificExplorationState(
+            definition_id=definition_id,
+            phase=ScientificExplorationPhase(decode_str(row["phase"], "scientific exploration phase")),
             vehicle_definition_id=(
                 None if row["vehicle_definition_id"] is None
-                else DefinitionId(row["vehicle_definition_id"])
+                else DefinitionId(decode_str(row["vehicle_definition_id"], "scientific exploration vehicle_definition_id"))
             ),
             fleet_commitment_id=(
                 None if row["fleet_commitment_id"] is None
-                else EntityId(row["fleet_commitment_id"])
+                else EntityId(decode_str(row["fleet_commitment_id"], "scientific exploration fleet_commitment_id"))
             ),
             progress_days=decode_float(row["progress_days"], "scientific exploration progress_days"),
             research_points_awarded=decode_float(row["research_points_awarded"], "scientific exploration research_points_awarded"),
             inputs_consumed=decode_bool(row["inputs_consumed"], "scientific exploration inputs_consumed"),
             paused=decode_bool(row["paused"], "scientific exploration paused"),
             created_day=decode_int(row["created_day"], "scientific exploration created_day"),
-            priority=row["priority"],
+            priority=decode_int(row["priority"], "scientific exploration priority"),
             movement_execution_id=(
                 None if row["movement_execution_id"] is None
-                else EntityId(row["movement_execution_id"])
+                else EntityId(decode_str(row["movement_execution_id"], "scientific exploration movement_execution_id"))
             ),
             completion_disposition=ScientificExplorationCompletionDisposition(
-                row.get("completion_disposition",
-                    "return_to_origin" if service.definitions[DefinitionId(row["definition_id"])].return_to_origin else "release_at_destination")
+                decode_str(row["completion_disposition"], "scientific exploration completion_disposition")
             ),
-            termination_intent=(None if row.get("termination_intent") is None else ScientificExplorationTerminationIntent(row["termination_intent"])),
+            termination_intent=(
+                None if row["termination_intent"] is None
+                else ScientificExplorationTerminationIntent(
+                    decode_str(row["termination_intent"], "scientific exploration termination_intent")
+                )
+            ),
         )
-        for row in data["campaigns"]
-    }
+    service.campaigns = campaigns
 
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:

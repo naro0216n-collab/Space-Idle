@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec, decode_float
+from .domain import DomainExtension, StateCodec, decode_float, decode_list, decode_str, require_fields
 from .validation_support import ValidationContext, require as _require
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
@@ -24,19 +24,47 @@ def capture_inventory(sim: Any) -> dict[str, Any]:
     }
 
 
+def _restore_inventory_rows(
+    value: Any, fields: set[str], label: str, key_fields: tuple[str, ...]
+) -> dict[tuple[Any, ...], float]:
+    restored: dict[tuple[Any, ...], float] = {}
+    for index, raw in enumerate(decode_list(value, f"inventory {label}")):
+        row = require_fields(raw, fields, f"inventory {label}[{index}]")
+        key_parts: list[Any] = []
+        for field in key_fields:
+            decoded = decode_str(row[field], f"inventory {label} {field}")
+            if field == "resource_id":
+                key_parts.append(DefinitionId(decoded))
+            elif field == "operational_node_id":
+                key_parts.append(SpatialNodeId(decoded))
+            else:
+                key_parts.append(EntityId(decoded))
+        key = tuple(key_parts)
+        if key in restored:
+            raise ValueError(f"duplicate inventory {label} key: {key}")
+        restored[key] = decode_float(row["amount"], f"inventory {label} amount")
+    return restored
+
+
 def restore_inventory(sim: Any, data: dict[str, Any]) -> None:
-    sim.inventory.stock = {
-        (SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): decode_float(r["amount"], "inventory amount")
-        for r in data["stock"]
-    }
-    sim.inventory.reserved = {
-        (EntityId(r["owner_id"]), SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): decode_float(r["amount"], "inventory amount")
-        for r in data["reserved"]
-    }
-    sim.inventory.external_occupancy = {
-        (EntityId(r["owner_id"]), SpatialNodeId(r["operational_node_id"]), DefinitionId(r["resource_id"])): decode_float(r["amount"], "inventory amount")
-        for r in data["external_occupancy"]
-    }
+    sim.inventory.stock = _restore_inventory_rows(
+        data["stock"],
+        {"operational_node_id", "resource_id", "amount"},
+        "stock",
+        ("operational_node_id", "resource_id"),
+    )
+    sim.inventory.reserved = _restore_inventory_rows(
+        data["reserved"],
+        {"owner_id", "operational_node_id", "resource_id", "amount"},
+        "reserved",
+        ("owner_id", "operational_node_id", "resource_id"),
+    )
+    sim.inventory.external_occupancy = _restore_inventory_rows(
+        data["external_occupancy"],
+        {"owner_id", "operational_node_id", "resource_id", "amount"},
+        "external_occupancy",
+        ("owner_id", "operational_node_id", "resource_id"),
+    )
 
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:

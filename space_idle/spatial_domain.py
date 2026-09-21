@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_list, decode_str, require_fields
 from .shared import CelestialBodyId, DefinitionId, SpatialNodeId, SurfaceCellId
 from .spatial import OperationalNodeState, SurfaceLocationState
 from .validation_support import ValidationContext, require as _require
@@ -32,30 +32,48 @@ def capture(sim: Any) -> dict[str, Any]:
 
 
 def restore(sim: Any, data: dict[str, Any]) -> None:
-    rows = data["locations"]
-    operational_rows = data["operational_nodes"]
-    if not isinstance(rows, list):
-        raise ValueError("spatial state is missing locations")
-    if not isinstance(operational_rows, list):
-        raise ValueError("spatial state is missing operational_nodes")
+    rows = decode_list(data["locations"], "spatial locations")
+    operational_rows = decode_list(data["operational_nodes"], "spatial operational_nodes")
+    location_fields = {
+        "operational_node_id", "display_name", "body_id", "core_cell_id",
+        "developed_cell_ids",
+    }
     locations: list[SurfaceLocationState] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            raise ValueError("spatial location row must be an object")
+    location_ids: set[SpatialNodeId] = set()
+    for index, raw in enumerate(rows):
+        row = require_fields(raw, location_fields, f"spatial location[{index}]")
+        operational_node_id = SpatialNodeId(
+            decode_str(row["operational_node_id"], "spatial operational_node_id")
+        )
+        if operational_node_id in location_ids:
+            raise ValueError(f"duplicate spatial location: {operational_node_id}")
+        location_ids.add(operational_node_id)
+        developed = tuple(
+            SurfaceCellId(decode_str(value, "spatial developed_cell_id"))
+            for value in decode_list(row["developed_cell_ids"], "spatial developed_cell_ids")
+        )
+        if len(developed) != len(set(developed)):
+            raise ValueError(f"duplicate developed surface cell: {operational_node_id}")
         locations.append(
             SurfaceLocationState(
-                SpatialNodeId(row["operational_node_id"]),
-                row["display_name"],
-                CelestialBodyId(row["body_id"]),
-                SurfaceCellId(row["core_cell_id"]),
-                {SurfaceCellId(str(value)) for value in row["developed_cell_ids"]},
+                operational_node_id,
+                decode_str(row["display_name"], "spatial display_name"),
+                CelestialBodyId(decode_str(row["body_id"], "spatial body_id")),
+                SurfaceCellId(decode_str(row["core_cell_id"], "spatial core_cell_id")),
+                set(developed),
             )
         )
-    operational_nodes = tuple(
-        OperationalNodeState(SpatialNodeId(str(value))) for value in operational_rows
+    operational_node_ids = tuple(
+        SpatialNodeId(decode_str(value, "spatial operational_node"))
+        for value in operational_rows
     )
+    if len(operational_node_ids) != len(set(operational_node_ids)):
+        raise ValueError("duplicate spatial operational node")
+    operational_nodes = tuple(OperationalNodeState(node_id) for node_id in operational_node_ids)
     sim.graph.replace_dynamic_state(tuple(locations), operational_nodes)
-    sim.environment.restore_overlay_state(data["overlays"])
+    sim.environment.restore_overlay_state(
+        decode_list(data["overlays"], "environment overlays")
+    )
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:

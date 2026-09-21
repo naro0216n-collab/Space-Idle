@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
+from .domain import (
+    DomainExtension, StateCodec, decode_bool, decode_float, decode_int, decode_list,
+    decode_str, require_fields,
+)
 from .founding import (
     FoundingResourceRequirement,
     FoundingStatus,
@@ -10,7 +13,9 @@ from .founding import (
     OperationalNodeFoundingProject,
     SurfaceLocationTargetSpec,
 )
-from .shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId, CelestialBodyId
+from .shared import (
+    CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId,
+)
 from .transport.models import FleetActivityRef, MovementExecutionKind
 from .validation_support import ValidationContext, require as _require, validate_site_requirements
 
@@ -29,16 +34,30 @@ def _capture_target_spec(target_spec) -> dict[str, Any]:
     }
 
 
-def _restore_target_spec(row: dict[str, Any]):
-    target_type = row["type"]
+def _restore_target_spec(value: Any):
+    if not isinstance(value, dict):
+        raise ValueError("founding target must be an object")
+    target_type = decode_str(value.get("type"), "founding target type")
     if target_type == "surface_location":
+        row = require_fields(
+            value,
+            {"type", "body_id", "core_cell_id", "operational_node_id"},
+            "founding surface target",
+        )
         return SurfaceLocationTargetSpec(
-            CelestialBodyId(row["body_id"]),
-            SurfaceCellId(row["core_cell_id"]),
-            SpatialNodeId(row["operational_node_id"]),
+            CelestialBodyId(decode_str(row["body_id"], "founding body_id")),
+            SurfaceCellId(decode_str(row["core_cell_id"], "founding core_cell_id")),
+            SpatialNodeId(
+                decode_str(row["operational_node_id"], "founding operational_node_id")
+            ),
         )
     if target_type == "non_surface_operational_node":
-        return NonSurfaceOperationalNodeTargetSpec(SpatialNodeId(row["spatial_node_id"]))
+        row = require_fields(
+            value, {"type", "spatial_node_id"}, "founding non-surface target"
+        )
+        return NonSurfaceOperationalNodeTargetSpec(
+            SpatialNodeId(decode_str(row["spatial_node_id"], "founding spatial_node_id"))
+        )
     raise ValueError(f"unknown founding target type: {target_type}")
 
 
@@ -80,26 +99,66 @@ def restore_founding(sim: Any, data: dict[str, Any]) -> None:
         return
     service._counter = decode_int(data["counter"], "founding counter")
     service.projects = {}
-    for row in data["projects"]:
+    fields = {
+        "id", "staging_node_id", "display_name", "target_spec",
+        "deployment_recipe_id", "vehicle_definition_id", "resource_requirements",
+        "priority", "fleet_commitment_id", "status", "preparation_done",
+        "inputs_consumed", "paused", "movement_execution_id", "completed_day",
+    }
+    requirement_fields = {"resource_id", "amount_t"}
+    for index, raw in enumerate(decode_list(data["projects"], "founding projects")):
+        row = require_fields(raw, fields, f"founding project[{index}]")
+        project_id = ProjectId(decode_str(row["id"], "founding project id"))
+        if project_id in service.projects:
+            raise ValueError(f"duplicate founding project: {project_id}")
+        requirements: list[FoundingResourceRequirement] = []
+        seen_resources: set[DefinitionId] = set()
+        for req_index, raw_req in enumerate(
+            decode_list(row["resource_requirements"], "founding resource_requirements")
+        ):
+            req = require_fields(
+                raw_req, requirement_fields, f"founding resource_requirement[{req_index}]"
+            )
+            resource_id = DefinitionId(decode_str(req["resource_id"], "founding resource_id"))
+            if resource_id in seen_resources:
+                raise ValueError(f"duplicate founding resource requirement: {resource_id}")
+            seen_resources.add(resource_id)
+            requirements.append(
+                FoundingResourceRequirement(
+                    resource_id, decode_float(req["amount_t"], "founding resource amount_t")
+                )
+            )
         p = OperationalNodeFoundingProject(
-            id=ProjectId(row["id"]),
-            staging_node_id=SpatialNodeId(row["staging_node_id"]),
-            display_name=row["display_name"],
-            target_spec=_restore_target_spec(row["target_spec"]),
-            deployment_recipe_id=DefinitionId(row["deployment_recipe_id"]),
-            vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
-            resource_requirements=tuple(
-                FoundingResourceRequirement(DefinitionId(req["resource_id"]), decode_float(req["amount_t"], "founding resource amount_t"))
-                for req in row["resource_requirements"]
+            id=project_id,
+            staging_node_id=SpatialNodeId(
+                decode_str(row["staging_node_id"], "founding staging_node_id")
             ),
-            priority=row["priority"],
-            fleet_commitment_id=None if row["fleet_commitment_id"] is None else EntityId(row["fleet_commitment_id"]),
-            status=FoundingStatus(row["status"]),
+            display_name=decode_str(row["display_name"], "founding display_name"),
+            target_spec=_restore_target_spec(row["target_spec"]),
+            deployment_recipe_id=DefinitionId(
+                decode_str(row["deployment_recipe_id"], "founding deployment_recipe_id")
+            ),
+            vehicle_definition_id=DefinitionId(
+                decode_str(row["vehicle_definition_id"], "founding vehicle_definition_id")
+            ),
+            resource_requirements=tuple(requirements),
+            priority=decode_int(row["priority"], "founding priority"),
+            fleet_commitment_id=(
+                None if row["fleet_commitment_id"] is None
+                else EntityId(decode_str(row["fleet_commitment_id"], "founding fleet_commitment_id"))
+            ),
+            status=FoundingStatus(decode_str(row["status"], "founding status")),
             preparation_done=decode_float(row["preparation_done"], "founding preparation_done"),
             inputs_consumed=decode_bool(row["inputs_consumed"], "founding inputs_consumed"),
             paused=decode_bool(row["paused"], "founding paused"),
-            movement_execution_id=None if row["movement_execution_id"] is None else EntityId(row["movement_execution_id"]),
-            completed_day=None if row["completed_day"] is None else decode_int(row["completed_day"], "founding completed_day"),
+            movement_execution_id=(
+                None if row["movement_execution_id"] is None
+                else EntityId(decode_str(row["movement_execution_id"], "founding movement_execution_id"))
+            ),
+            completed_day=(
+                None if row["completed_day"] is None
+                else decode_int(row["completed_day"], "founding completed_day")
+            ),
         )
         service.projects[p.id] = p
 

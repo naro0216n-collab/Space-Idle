@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec, decode_bool, decode_float, decode_int
+from .domain import (
+    DomainExtension, StateCodec, decode_bool, decode_dict, decode_float, decode_int,
+    decode_list, decode_str, require_fields,
+)
 from .execution_requirements import ServiceCapacityRequirement
 from .validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
 from .research_models import (
@@ -30,9 +33,16 @@ def _capture_execution_site(site: ResearchExecutionSite | None) -> dict[str, str
 def _restore_execution_site(data: dict[str, Any] | None) -> ResearchExecutionSite | None:
     if data is None:
         return None
+    row = require_fields(
+        data, {"operational_node_id", "surface_cell_id"}, "research execution_context"
+    )
     return ResearchExecutionSite(
-        SpatialNodeId(data["operational_node_id"]),
-        None if data["surface_cell_id"] is None else SurfaceCellId(data["surface_cell_id"]),
+        SpatialNodeId(decode_str(row["operational_node_id"], "research operational_node_id")),
+        (
+            None
+            if row["surface_cell_id"] is None
+            else SurfaceCellId(decode_str(row["surface_cell_id"], "research surface_cell_id"))
+        ),
     )
 
 
@@ -74,44 +84,74 @@ def restore_research(sim: Any, data: dict[str, Any]) -> None:
     if sim.research is None:
         return
     sim.research.stored_points = decode_float(data["stored_points"], "research stored_points")
+    knowledge = decode_dict(data["knowledge"], "research knowledge")
     sim.research.knowledge_state.experience_by_category = {
-        str(category): decode_float(value, "research knowledge value") for category, value in data["knowledge"].items()
+        category: decode_float(value, "research knowledge value")
+        for category, value in knowledge.items()
     }
     sim.research.active.clear()
     sim.research.provider_assignments.clear()
-    sim.research._provider_assignment_counter = decode_int(data["provider_assignment_counter"], "research provider_assignment_counter")
+    sim.research._provider_assignment_counter = decode_int(
+        data["provider_assignment_counter"], "research provider_assignment_counter"
+    )
     sim.research.last_point_allocations.clear()
     sim.research.last_point_requests.clear()
     sim.research.last_execution_allocations.clear()
     sim.research.last_execution_requests.clear()
-    for row in data["active"]:
-        rid = DefinitionId(row["definition_id"])
+
+    active_fields = {
+        "definition_id", "current_stage_id", "stage_progress", "priority", "paused",
+        "execution_context", "stage_started_day",
+    }
+    for index, raw in enumerate(decode_list(data["active"], "research active")):
+        row = require_fields(raw, active_fields, f"research active[{index}]")
+        rid = DefinitionId(decode_str(row["definition_id"], "research definition_id"))
+        if rid in sim.research.active:
+            raise ValueError(f"duplicate active research: {rid}")
         sim.research.active[rid] = ResearchState(
             definition_id=rid,
-            current_stage_id=row["current_stage_id"],
-            stage_progress=None if row["stage_progress"] is None else decode_float(row["stage_progress"], "research stage_progress"),
-            priority=row["priority"],
+            current_stage_id=decode_str(row["current_stage_id"], "research current_stage_id"),
+            stage_progress=(
+                None
+                if row["stage_progress"] is None
+                else decode_float(row["stage_progress"], "research stage_progress")
+            ),
+            priority=decode_int(row["priority"], "research priority"),
             paused=decode_bool(row["paused"], "research paused"),
             execution_context=_restore_execution_site(row["execution_context"]),
             stage_started_day=decode_int(row["stage_started_day"], "research stage_started_day"),
         )
+
     from .research import ResearchProviderAssignmentState
     assignment_fields = {
         "id", "provider_definition_id", "vehicle_definition_id",
         "operational_node_id", "priority", "paused", "fleet_commitment_ref",
     }
-    for row in data["provider_assignments"]:
-        if set(row) != assignment_fields:
-            raise ValueError("research provider assignment has invalid fields")
-        assignment_id = EntityId(row["id"])
+    for index, raw in enumerate(
+        decode_list(data["provider_assignments"], "research provider_assignments")
+    ):
+        row = require_fields(
+            raw, assignment_fields, f"research provider_assignment[{index}]"
+        )
+        assignment_id = EntityId(decode_str(row["id"], "research assignment id"))
+        if assignment_id in sim.research.provider_assignments:
+            raise ValueError(f"duplicate research provider assignment: {assignment_id}")
         sim.research.provider_assignments[assignment_id] = ResearchProviderAssignmentState(
             id=assignment_id,
-            provider_definition_id=DefinitionId(row["provider_definition_id"]),
-            vehicle_definition_id=DefinitionId(row["vehicle_definition_id"]),
-            operational_node_id=SpatialNodeId(row["operational_node_id"]),
-            priority=row["priority"],
-            paused=decode_bool(row["paused"], "research paused"),
-            fleet_commitment_ref=EntityId(row["fleet_commitment_ref"]),
+            provider_definition_id=DefinitionId(
+                decode_str(row["provider_definition_id"], "research provider_definition_id")
+            ),
+            vehicle_definition_id=DefinitionId(
+                decode_str(row["vehicle_definition_id"], "research vehicle_definition_id")
+            ),
+            operational_node_id=SpatialNodeId(
+                decode_str(row["operational_node_id"], "research operational_node_id")
+            ),
+            priority=decode_int(row["priority"], "research provider priority"),
+            paused=decode_bool(row["paused"], "research provider paused"),
+            fleet_commitment_ref=EntityId(
+                decode_str(row["fleet_commitment_ref"], "research fleet_commitment_ref")
+            ),
         )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypeVar, cast
 
+from .domain import decode_dict, decode_float, decode_list, decode_str, require_fields
 from .shared import CelestialBodyId, DefinitionId
 from .spatial import AtmosphereField, EnvironmentOverlay, SpatialContextId, SpatialFacet, SpatialGraph, ThermalField
 
@@ -82,25 +83,33 @@ class TerraformingEnvironmentOverlay(EnvironmentOverlay):
         ]
 
     def restore_state(self, state: object) -> None:
-        if not isinstance(state, list):
-            raise ValueError("terraforming state must be a list")
         restored: dict[CelestialBodyId, PlanetaryClimateState] = {}
-        for raw in state:
-            if not isinstance(raw, dict):
-                raise ValueError("terraforming climate row must be an object")
-            body_id = CelestialBodyId(str(raw["body_id"]))
-            composition_raw = raw["composition"]
-            if not isinstance(composition_raw, dict):
-                raise ValueError("terraforming composition must be an object")
+        fields = {
+            "body_id", "pressure_pa", "density_kg_m3", "mean_temperature_k",
+            "reference_temperature_k", "composition",
+        }
+        for index, raw in enumerate(decode_list(state, "terraforming state")):
+            row = require_fields(raw, fields, f"terraforming climate[{index}]")
+            body_id = CelestialBodyId(decode_str(row["body_id"], "terraforming body_id"))
+            if body_id in restored:
+                raise ValueError(f"duplicate terraforming climate: {body_id}")
+            composition_raw = decode_dict(row["composition"], "terraforming composition")
             restored[body_id] = PlanetaryClimateState(
                 body_id,
-                float(raw["pressure_pa"]),
-                float(raw["density_kg_m3"]),
-                float(raw["mean_temperature_k"]),
-                {DefinitionId(str(k)): float(v) for k, v in composition_raw.items()},
-                float(raw["reference_temperature_k"]),
+                decode_float(row["pressure_pa"], "terraforming pressure_pa"),
+                decode_float(row["density_kg_m3"], "terraforming density_kg_m3"),
+                decode_float(row["mean_temperature_k"], "terraforming mean_temperature_k"),
+                {
+                    DefinitionId(key): decode_float(value, "terraforming composition value")
+                    for key, value in composition_raw.items()
+                },
+                decode_float(
+                    row["reference_temperature_k"],
+                    "terraforming reference_temperature_k",
+                ),
             )
         self.service.climates = restored
+
 
     def apply(
         self,
