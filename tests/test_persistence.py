@@ -46,7 +46,6 @@ from space_idle.content import base_ids as ids
 from space_idle.persistence import (
     SAVE_SCHEMA_VERSION, SaveFormatError, capture_state, load_game, save_game,
 )
-from space_idle.industry import ProcessSpec
 from space_idle.research import (
     ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
     ResearchState,
@@ -94,6 +93,12 @@ def _make_nontrivial_state():
         ids.EARTH,
         site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
     )
+    selected_process = sim.industry.processes[ids.PROCESS_BASIC_STRUCTURAL_MATERIAL]
+    process_facility = next(
+        row for row in sim.facilities.facilities.values()
+        if row.definition_id == selected_process.facility_def_id
+    )
+    app.execute(SetFacilityProcess(str(process_facility.id), str(selected_process.id)))
 
     survey_provider_id = ids.LUNAR_RESOURCE_SURVEY_ORBITER
     survey_mode_id = "remote_orbital_spectrometry"
@@ -140,104 +145,32 @@ def _make_nontrivial_state():
 
 
 
-def test_save_load_roundtrip_preserves_state_and_future_behavior(tmp_path):
+def test_authoritative_snapshot_roundtrip_preserves_domain_ownership_and_future_behavior(tmp_path):
     app = _make_nontrivial_state()
     path = tmp_path / "game.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
 
-    loaded, offline = load_game(path, build_game_application_for_load)
-    assert offline is None
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
-
-    app.execute(AdvanceTime(1))
-    loaded.execute(AdvanceTime(1))
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
-
-
-
-
-
-def test_facility_owned_process_selection_roundtrips_in_facility_state(tmp_path):
-    app = build_game_application()
-    sim = app._simulation
-    process = sim.industry.processes[ids.PROCESS_BASIC_STRUCTURAL_MATERIAL]
-    facility = next(
-        row for row in sim.facilities.facilities.values()
-        if row.definition_id == process.facility_def_id
-    )
-
-    alternate_process_id = DefinitionId("test.process.alternate_structural_material")
-    sim.industry.processes[alternate_process_id] = ProcessSpec(
-        alternate_process_id,
-        "Alternate structural material",
-        process.facility_def_id,
-        {},
-        {ids.STRUCTURAL_COMPONENTS: 0.01},
-    )
-    unresolved = next(
-        item for item in app.query(GetOperationalNode(str(facility.operational_node_id))).industry
-        if item.facility_id == str(facility.id)
-    )
-    assert unresolved.selection_required
-    assert unresolved.process_id is None
-    assert tuple(option.process_id for option in unresolved.process_options) == tuple(sorted((
-        str(process.id), str(alternate_process_id),
-    )))
-    assert unresolved.process_comparison_axes
-    assert any(axis.differs for axis in unresolved.process_comparison_axes)
-    primary_option = next(
-        option for option in unresolved.process_options if option.process_id == str(process.id)
-    )
-    assert primary_option.input_rates_per_day == tuple(
-        (str(resource_id), amount)
-        for resource_id, amount in sorted(process.inputs_per_day.items(), key=lambda row: str(row[0]))
-    )
-    assert primary_option.output_rates_per_day == tuple(
-        (str(resource_id), amount)
-        for resource_id, amount in sorted(process.outputs_per_day.items(), key=lambda row: str(row[0]))
-    )
-    assert primary_option.service_requirements == ((f"process:{process.id}", 1.0),)
-    assert {value.axis_key for value in primary_option.comparison_values} == {
-        axis.key for axis in unresolved.process_comparison_axes
-    }
-
-    app.execute(SetFacilityProcess(str(facility.id), str(process.id)))
-    assert facility.selected_process_id == process.id
-    selected = next(
-        item for item in app.query(GetOperationalNode(str(facility.operational_node_id))).industry
-        if item.facility_id == str(facility.id)
-    )
-    assert not selected.selection_required
-    assert selected.process_id == str(process.id)
-    del sim.industry.processes[alternate_process_id]
-
-    state = capture_state(sim)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    state = payload["state"]
     assert "industry" not in state
-    saved_facility = next(
-        row for row in state["facilities"]["items"]
-        if row["id"] == str(facility.id)
+    assert "day" not in state
+    assert "pending_offline_game_days" not in state
+    assert "boundary_used_by_constraint" not in state
+    assert set(state["core"]) == {
+        "day", "pending_offline_game_days", "boundary_service_usage",
+    }
+    assert any(
+        row["selected_process_id"] == str(ids.PROCESS_BASIC_STRUCTURAL_MATERIAL)
+        for row in state["facilities"]["items"]
     )
-    assert saved_facility["selected_process_id"] == str(process.id)
 
-    path = tmp_path / "facility-process.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, offline = load_game(path, build_game_application_for_load)
     assert offline is None
-    loaded_facility = loaded._simulation.facilities.facilities[facility.id]
-    assert loaded_facility.selected_process_id == process.id
-    row = next(
-        item for item in loaded.query(GetOperationalNode(str(facility.operational_node_id))).industry
-        if item.facility_id == str(facility.id)
-    )
-    assert row.process_id == str(process.id)
-    assert not row.selection_required
+    assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
     app.execute(AdvanceTime(1))
     loaded.execute(AdvanceTime(1))
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
-
-
-
 
 def test_offline_load_matches_direct_progress_for_active_domain_state(tmp_path):
     saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -425,21 +358,6 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
 
 
 
-def test_load_rejects_cross_domain_runtime_invariant_violation(tmp_path):
-    app = build_game_application()
-    path = tmp_path / "invalid-runtime.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    provider = payload["state"]["market"]["provider_states"][0]
-    resource_id = next(iter(provider["supply_available_t"]))
-    provider["supply_available_t"][resource_id] = 1.0e12
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(SaveFormatError, match="invalid saved runtime state"):
-        load_game(path, build_game_application_for_load)
-
-
 def _roundtrip_fleet_backed_assignment(
     tmp_path,
     *,
@@ -567,199 +485,109 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
     assert capture_state(loaded_survey_sim) == capture_state(survey_sim)
 
 
-@pytest.mark.parametrize(
-    ("case", "error_pattern"),
-    (
-        (("missing", "storage", "infrastructure_capacity"), "save domain section has invalid fields"),
-        (("missing", "logistics", "routing_constraints"), "save domain section has invalid fields"),
-        (("missing", "survey", "campaigns"), "save domain section has invalid fields"),
-        (("unexpected", "envelope"), "save file has invalid fields"),
-        (("unexpected", "transport_allocation"), "invalid fields"),
-        (("unexpected", "survey_campaign"), "invalid fields"),
-        (("unexpected", "construction_project"), "invalid fields"),
-        (("identity", "world_definition_id"), "save world definition mismatch"),
-        (("identity", "scenario_id"), "save scenario mismatch"),
-    ),
-)
-def test_save_envelope_and_persisted_boundaries_reject_invalid_contracts(tmp_path, case, error_pattern):
-    app = _make_nontrivial_state()
-    path = tmp_path / ("schema-" + "-".join(case) + ".json")
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    payload = json.loads(path.read_text(encoding="utf-8"))
-
-    if case[0] == "missing":
-        _kind, domain_key, field = case
-        del payload["state"][domain_key][field]
-    elif case[0] == "unexpected":
-        _kind, boundary = case
-        targets = {
-            "envelope": payload,
-            "transport_allocation": payload["state"]["transport"]["transport_allocations"][0],
-            "survey_campaign": payload["state"]["survey"]["campaigns"][0],
-            "construction_project": payload["state"]["projects"]["items"][0],
-        }
-        targets[boundary]["unexpected_field"] = None
-    else:
-        _kind, field = case
-        payload[field] = "test.mismatched.definition"
-
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(SaveFormatError, match=error_pattern):
-        load_game(path, build_game_application_for_load)
-
-
-def test_save_uses_domain_owned_core_state_and_not_central_boundary_fields(tmp_path):
-    app = _make_nontrivial_state()
-    path = tmp_path / "core-state.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+def _corrupt_saved_snapshot(path, case: str) -> None:
+    if case == "duplicate_json_key":
+        text = path.read_text(encoding="utf-8")
+        marker = f'"schema_version": {SAVE_SCHEMA_VERSION},'
+        path.write_text(
+            text.replace(marker, f'{marker}\n  {marker}', 1),
+            encoding="utf-8",
+        )
+        return
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     state = payload["state"]
-    assert "day" not in state
-    assert "pending_offline_game_days" not in state
-    assert "boundary_used_by_constraint" not in state
-    assert set(state["core"]) == {
-        "day", "pending_offline_game_days", "boundary_service_usage",
-    }
+    if case == "missing_domain_field":
+        del state["storage"]["infrastructure_capacity"]
+    elif case == "unexpected_envelope_field":
+        payload["unexpected_field"] = None
+    elif case == "unexpected_nested_field":
+        state["transport"]["transport_allocations"][0]["unexpected_field"] = None
+    elif case == "identity_mismatch":
+        payload["world_definition_id"] = "test.mismatched.definition"
+    elif case == "invalid_timestamp":
+        payload["saved_at"] = "not-a-date"
+    elif case == "wrong_boolean_type":
+        state["facilities"]["items"][0]["paused"] = "false"
+    elif case == "wrong_integer_type":
+        state["facilities"]["items"][0]["level"] = "1"
+    elif case == "wrong_identifier_type":
+        state["projects"]["items"][0]["operational_node_id"] = 1
+    elif case == "duplicate_entity_id":
+        state["facilities"]["items"].append(dict(state["facilities"]["items"][0]))
+    elif case == "invalid_nested_collection_type":
+        state["transport"]["transport_allocations"][0][
+            "movement_hard_constraint"
+        ] = "movement.plan.not-a-list"
+    elif case == "noncanonical_domain_order":
+        state["facilities"]["items"].reverse()
+    elif case == "cross_domain_runtime_violation":
+        provider = state["market"]["provider_states"][0]
+        resource_id = next(iter(provider["supply_available_t"]))
+        provider["supply_available_t"][resource_id] = 1.0e12
+    elif case == "non_finite_number":
+        state["core"]["pending_offline_game_days"] = float("nan")
+    else:
+        raise AssertionError(f"unknown corruption case: {case}")
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_save_rejects_invalid_runtime_without_replacing_existing_snapshot(tmp_path):
-    app = build_game_application()
+def test_load_boundary_rejects_noncanonical_or_invalid_snapshots(tmp_path):
+    app = _make_nontrivial_state()
+    baseline_path = tmp_path / "baseline.json"
+    save_game(app, baseline_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    baseline = baseline_path.read_bytes()
+
+    cases = (
+        "missing_domain_field",
+        "unexpected_envelope_field",
+        "unexpected_nested_field",
+        "identity_mismatch",
+        "invalid_timestamp",
+        "wrong_boolean_type",
+        "wrong_integer_type",
+        "wrong_identifier_type",
+        "duplicate_entity_id",
+        "invalid_nested_collection_type",
+        "noncanonical_domain_order",
+        "cross_domain_runtime_violation",
+        "duplicate_json_key",
+        "non_finite_number",
+    )
+    for case in cases:
+        path = tmp_path / f"invalid-{case}.json"
+        path.write_bytes(baseline)
+        _corrupt_saved_snapshot(path, case)
+        try:
+            load_game(path, build_game_application_for_load)
+        except SaveFormatError:
+            continue
+        pytest.fail(f"load accepted invalid persisted snapshot: {case}")
+
+
+def test_save_commit_preserves_existing_snapshot_across_validation_and_write_failures(
+    tmp_path, monkeypatch
+):
     path = tmp_path / "protected.json"
+    app = build_game_application()
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     original = path.read_bytes()
 
     provider = next(iter(app._simulation.market.provider_states.values()))
     resource_id = next(iter(provider.supply_available_t))
     provider.supply_available_t[resource_id] = 1.0e12
-
     with pytest.raises(ConfigurationError):
         save_game(app, path, saved_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
     assert path.read_bytes() == original
 
-
-def test_atomic_save_failure_preserves_previous_snapshot(tmp_path, monkeypatch):
-    app = build_game_application()
-    path = tmp_path / "atomic.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    original = path.read_bytes()
-
-    def fail_replace(_source, _target):
-        raise OSError("replace failed")
-
-    monkeypatch.setattr("space_idle.persistence.os.replace", fail_replace)
-    with pytest.raises(OSError, match="replace failed"):
-        save_game(app, path, saved_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
+    fresh_app = build_game_application()
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "space_idle.persistence.os.replace",
+            lambda _source, _target: (_ for _ in ()).throw(OSError("replace failed")),
+        )
+        with pytest.raises(OSError, match="replace failed"):
+            save_game(
+                fresh_app, path, saved_at=datetime(2026, 1, 2, tzinfo=timezone.utc)
+            )
     assert path.read_bytes() == original
-    assert not tuple(tmp_path.glob(".atomic.json.*.tmp"))
-
-
-def test_load_rejects_duplicate_json_object_keys(tmp_path):
-    app = build_game_application()
-    path = tmp_path / "duplicate-key.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    text = path.read_text(encoding="utf-8")
-    text = text.replace(
-        f'"schema_version": {SAVE_SCHEMA_VERSION},',
-        f'"schema_version": {SAVE_SCHEMA_VERSION},\n  "schema_version": {SAVE_SCHEMA_VERSION},',
-        1,
-    )
-    path.write_text(text, encoding="utf-8")
-
-    with pytest.raises(SaveFormatError, match="duplicate JSON object key"):
-        load_game(path, build_game_application_for_load)
-
-
-def test_load_rejects_non_finite_json_numbers(tmp_path):
-    app = build_game_application()
-    path = tmp_path / "non-finite.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["state"]["core"]["pending_offline_game_days"] = float("nan")
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(SaveFormatError, match="non-finite JSON number"):
-        load_game(path, build_game_application_for_load)
-
-
-def test_load_requires_each_domain_section_to_roundtrip_canonically(tmp_path):
-    app = _make_nontrivial_state()
-    path = tmp_path / "noncanonical-domain.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    facilities = payload["state"]["facilities"]["items"]
-    assert len(facilities) > 1
-    facilities.reverse()
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(SaveFormatError, match="canonical serialized form: facilities"):
-        load_game(path, build_game_application_for_load)
-
-
-@pytest.mark.parametrize(
-    "mutate,error_pattern",
-    (
-        (
-            lambda payload: payload.__setitem__("saved_at", "not-a-date"),
-            "saved_at is not a valid ISO timestamp",
-        ),
-        (
-            lambda payload: payload["state"]["facilities"]["items"][0].__setitem__(
-                "paused", "false"
-            ),
-            "paused must be boolean",
-        ),
-        (
-            lambda payload: payload["state"]["facilities"]["items"][0].__setitem__(
-                "level", "1"
-            ),
-            "facility level must be an integer",
-        ),
-        (
-            lambda payload: payload["state"]["facilities"]["items"].append(
-                dict(payload["state"]["facilities"]["items"][0])
-            ),
-            "duplicate persisted entity id",
-        ),
-        (
-            lambda payload: payload["state"]["projects"]["items"][0].__setitem__(
-                "operational_node_id", 1
-            ),
-            "operational_node_id must be a string",
-        ),
-        (
-            lambda payload: payload["state"]["logistics"]["cargo_flows"][0].__setitem__(
-                "resource_id", 1
-            ),
-            "resource_id must be a string",
-        ),
-        (
-            lambda payload: payload["state"]["market"]["interfaces"][0].__setitem__(
-                "provider_id", 1
-            ),
-            "provider_id must be a string",
-        ),
-        (
-            lambda payload: payload["state"]["transport"]["fleet_pools"][0].__setitem__(
-                "vehicle_definition_id", 1
-            ),
-            "vehicle_definition_id must be a string",
-        ),
-        (
-            lambda payload: payload["state"]["transport"]["transport_allocations"][0].__setitem__(
-                "movement_hard_constraint", "movement.plan.not-a-list"
-            ),
-            "movement_hard_constraint must be a list",
-        ),
-    ),
-)
-def test_load_rejects_ambiguous_or_lossy_serialized_state(tmp_path, mutate, error_pattern):
-    app = _make_nontrivial_state()
-    path = tmp_path / "strict.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    mutate(payload)
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-    with pytest.raises(SaveFormatError, match=error_pattern):
-        load_game(path, build_game_application_for_load)

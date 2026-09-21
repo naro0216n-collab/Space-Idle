@@ -6,13 +6,16 @@ from space_idle import (
     CreateTransportAllocation,
     GetBuildOptions,
     GetCatalog,
+    GetOperationalNode,
     GetSurfaceMap,
+    SetFacilityProcess,
     build_game_application,
 )
 from space_idle.content import base_ids as ids
 from space_idle.content.base_facilities import build_facility_definitions
 from space_idle.facilities import FacilityBook, FacilityPlacementScope
-from space_idle.shared import SpatialNodeId
+from space_idle.industry import ProcessSpec
+from space_idle.shared import DefinitionId, SpatialNodeId
 
 
 def test_facility_placement_scope_controls_cell_ownership_and_environment_context():
@@ -70,7 +73,7 @@ def test_facility_placement_scope_controls_cell_ownership_and_environment_contex
     assert plain.facilities[plain_id].operational_node_id == location_id
     assert ridge_power.generation_mw > plain_power.generation_mw
 
-def test_surface_map_owns_surface_buildability_and_location_build_options_do_not_request_cells():
+def test_facility_decision_projection_exposes_buildability_process_choices_and_material_readiness():
     app = build_game_application()
     sim = app._simulation
 
@@ -122,6 +125,55 @@ def test_surface_map_owns_surface_buildability_and_location_build_options_do_not
         assert resource.available_t >= resource.required_t
         assert resource.projected_arrival_day == sim.day
         assert resource.projected_source_id is None
+
+    process = sim.industry.processes[ids.PROCESS_BASIC_STRUCTURAL_MATERIAL]
+    facility = next(
+        row for row in sim.facilities.facilities.values()
+        if row.definition_id == process.facility_def_id
+    )
+    alternate_process_id = DefinitionId("test.process.alternate_structural_material")
+    sim.industry.processes[alternate_process_id] = ProcessSpec(
+        alternate_process_id,
+        "Alternate structural material",
+        process.facility_def_id,
+        {},
+        {ids.STRUCTURAL_COMPONENTS: 0.01},
+    )
+    unresolved = next(
+        row for row in app.query(GetOperationalNode(str(facility.operational_node_id))).industry
+        if row.facility_id == str(facility.id)
+    )
+    assert unresolved.selection_required
+    assert unresolved.process_id is None
+    assert tuple(option.process_id for option in unresolved.process_options) == tuple(sorted((
+        str(process.id), str(alternate_process_id),
+    )))
+    assert unresolved.process_comparison_axes
+    assert any(axis.differs for axis in unresolved.process_comparison_axes)
+    primary_option = next(
+        option for option in unresolved.process_options if option.process_id == str(process.id)
+    )
+    assert primary_option.input_rates_per_day == tuple(
+        (str(resource_id), amount)
+        for resource_id, amount in sorted(process.inputs_per_day.items(), key=lambda row: str(row[0]))
+    )
+    assert primary_option.output_rates_per_day == tuple(
+        (str(resource_id), amount)
+        for resource_id, amount in sorted(process.outputs_per_day.items(), key=lambda row: str(row[0]))
+    )
+    assert primary_option.service_requirements == ((f"process:{process.id}", 1.0),)
+    assert {value.axis_key for value in primary_option.comparison_values} == {
+        axis.key for axis in unresolved.process_comparison_axes
+    }
+
+    app.execute(SetFacilityProcess(str(facility.id), str(process.id)))
+    selected = next(
+        row for row in app.query(GetOperationalNode(str(facility.operational_node_id))).industry
+        if row.facility_id == str(facility.id)
+    )
+    assert selected.process_id == str(process.id)
+    assert not selected.selection_required
+    del sim.industry.processes[alternate_process_id]
 
     capacity = sim.transport.transport_capacity_for_units(
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1, day=sim.day
