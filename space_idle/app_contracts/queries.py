@@ -6,28 +6,46 @@ class GetCatalog: pass
 @dataclass(frozen=True)
 class GetWorld: pass
 @dataclass(frozen=True)
-class GetLocation: location_id: str
+class GetSurfaceMap: body_id: str
 @dataclass(frozen=True)
-class GetFlowReport: location_id: str
+class GetOperationalNode: operational_node_id: str
 @dataclass(frozen=True)
-class GetBottlenecks: location_id: str | None = None
+class GetFlowReport: operational_node_id: str
 @dataclass(frozen=True)
-class GetProjects: location_id: str | None = None
+class GetDependencyAnalytics:
+    scope_kind: str = "player"
+    scope_id: str | None = None
+    node_ids: tuple[str, ...] = ()
+    time_basis: str = "CURRENT"
 @dataclass(frozen=True)
-class GetBuildOptions: location_id: str
+class GetDetailedForecast:
+    scope_kind: str = "player"
+    scope_id: str | None = None
+    node_ids: tuple[str, ...] = ()
+    horizon: str = "SHORT_TERM"
+    period_days: int | None = None
+@dataclass(frozen=True)
+class GetBottlenecks: operational_node_id: str | None = None
+@dataclass(frozen=True)
+class GetAttention: pass
+@dataclass(frozen=True)
+class GetProjects: operational_node_id: str | None = None
+@dataclass(frozen=True)
+class GetBuildOptions: operational_node_id: str
 @dataclass(frozen=True)
 class GetLogistics: pass
 @dataclass(frozen=True)
 class GetLogisticsSummary: pass
 @dataclass(frozen=True)
-class GetRoutes:
+class GetMovementPlans:
     origin_id: str | None = None
     destination_id: str | None = None
-    route_id: str | None = None
+    movement_plan_id: str | None = None
     include_modes: bool = True
+    vehicle_definition_id: str | None = None
 @dataclass(frozen=True)
 class GetFleet:
-    location_id: str | None = None
+    operational_node_id: str | None = None
     vehicle_definition_id: str | None = None
 @dataclass(frozen=True)
 class GetFleetRelocationPreview:
@@ -35,22 +53,41 @@ class GetFleetRelocationPreview:
     units: int
     source_id: str
     destination_id: str
-    path_policy: str = "fastest"
+    movement_hard_constraint: tuple[str, ...] | None = None
 @dataclass(frozen=True)
 class GetTransportAllocations: pass
 @dataclass(frozen=True)
 class GetCargoFlows: pass
 @dataclass(frozen=True)
-class GetLogisticsLanes: pass
-@dataclass(frozen=True)
 class GetTransportAllocationOptions:
     source_id: str
     destination_id: str
+@dataclass(frozen=True)
+class GetTransportAllocationPreview:
+    vehicle_definition_id: str
+    source_id: str
+    destination_id: str
+    target_forward_t_per_day: float
+    target_reverse_t_per_day: float
+    movement_hard_constraint: tuple[str, ...] | None = None
+    allocation_id: str | None = None
+@dataclass(frozen=True)
+class GetTargetStockOptions:
+    destination_id: str
+    resource_id: str
 @dataclass(frozen=True)
 class GetResearch: pass
 @dataclass(frozen=True)
 class GetScientificExplorations: pass
 @dataclass(frozen=True)
-class GetSurveys: location_id: str | None = None
+class GetSurveys: provider_operational_node_id: str | None = None
+@dataclass(frozen=True)
+class GetSurveyCampaignIntentPreview:
+    target_cell_ids: tuple[str, ...]
+    resource_ids: tuple[str, ...]
+    goal_knowledge_level: int
+    campaign_id: str | None = None
 @dataclass(frozen=True)
 class GetContracts: pass
+@dataclass(frozen=True)
+class GetMarket: pass

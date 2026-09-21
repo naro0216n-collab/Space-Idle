@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
-from .validation_support import ValidationContext, require as _require, validate_environment_condition as _validate_environment_condition
-from .facilities import FacilityState
-from .shared import DefinitionId, EntityId, SpatialNodeId
+from .domain import (
+    DomainExtension, StateCodec, decode_bool, decode_dict, decode_float, decode_int,
+    decode_list, decode_str, require_fields,
+)
+from .validation_support import (
+    ValidationContext,
+    require as _require,
+    validate_generated_id_counter as _validate_counter,
+    validate_site_requirements as _validate_site_requirements,
+)
+from .facilities import FacilityLifecycle, FacilityPlacementScope, FacilityState
+from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 
 
 def capture_facilities(sim: Any) -> dict[str, Any]:
@@ -15,13 +23,15 @@ def capture_facilities(sim: Any) -> dict[str, Any]:
             {
                 "id": str(f.id),
                 "definition_id": str(f.definition_id),
-                "location_id": str(f.location_id),
+                "operational_node_id": str(f.operational_node_id),
+                "site_cell_id": None if f.site_cell_id is None else str(f.site_cell_id),
                 "paused": f.paused,
-                "power_priority": f.power_priority,
+                "activity_priority": int(f.activity_priority),
                 "maintenance_priority": f.maintenance_priority,
                 "level": f.level,
+                "lifecycle": f.lifecycle.value,
+                "selected_process_id": None if f.selected_process_id is None else str(f.selected_process_id),
                 "invested_resources": {str(resource_id): amount for resource_id, amount in sorted(f.invested_resources.items(), key=lambda row: str(row[0]))},
-                "maintenance_satisfaction": f.maintenance_satisfaction,
             }
             for f in sorted(sim.facilities.facilities.values(), key=lambda row: str(row.id))
         ],
@@ -30,20 +40,46 @@ def capture_facilities(sim: Any) -> dict[str, Any]:
 
 def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
     sim.facilities.facilities.clear()
-    for row in data["items"]:
-        fid = EntityId(row["id"])
+    fields = {
+        "id", "definition_id", "operational_node_id", "site_cell_id", "paused",
+        "activity_priority", "maintenance_priority", "level", "lifecycle",
+        "selected_process_id", "invested_resources",
+    }
+    for index, raw in enumerate(decode_list(data["items"], "facility items")):
+        row = require_fields(raw, fields, f"facility[{index}]")
+        fid = EntityId(decode_str(row["id"], "facility id"))
+        if fid in sim.facilities.facilities:
+            raise ValueError(f"duplicate facility: {fid}")
+        site_cell_id = row["site_cell_id"]
+        selected_process_id = row["selected_process_id"]
+        invested_resources = decode_dict(row["invested_resources"], "facility invested_resources")
         sim.facilities.facilities[fid] = FacilityState(
             id=fid,
-            definition_id=DefinitionId(row["definition_id"]),
-            location_id=SpatialNodeId(row["location_id"]),
-            paused=bool(row["paused"]),
-            power_priority=row["power_priority"],
-            maintenance_priority=int(row["maintenance_priority"]),
-            level=int(row["level"]),
-            invested_resources={DefinitionId(key): float(value) for key, value in row["invested_resources"].items()},
-            maintenance_satisfaction=float(row["maintenance_satisfaction"]),
+            definition_id=DefinitionId(decode_str(row["definition_id"], "facility definition_id")),
+            operational_node_id=SpatialNodeId(
+                decode_str(row["operational_node_id"], "facility operational_node_id")
+            ),
+            site_cell_id=(
+                None if site_cell_id is None
+                else SurfaceCellId(decode_str(site_cell_id, "facility site_cell_id"))
+            ),
+            paused=decode_bool(row["paused"], "facility paused"),
+            activity_priority=decode_int(row["activity_priority"], "facility activity_priority"),
+            maintenance_priority=decode_int(
+                row["maintenance_priority"], "facility maintenance_priority"
+            ),
+            level=decode_int(row["level"], "facility level"),
+            lifecycle=FacilityLifecycle(decode_str(row["lifecycle"], "facility lifecycle")),
+            selected_process_id=(
+                None if selected_process_id is None
+                else DefinitionId(decode_str(selected_process_id, "facility selected_process_id"))
+            ),
+            invested_resources={
+                DefinitionId(key): decode_float(value, "facility invested resource")
+                for key, value in invested_resources.items()
+            },
         )
-    sim.facilities._counter = int(data["counter"])
+    sim.facilities._counter = decode_int(data["counter"], "facility counter")
 
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:
@@ -58,26 +94,33 @@ STATE_CODEC = StateCodec("facilities", capture_facilities, restore_facilities)
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
-    nodes = ctx.nodes
+    nodes = ctx.operational_nodes
     facility_defs = ctx.facility_defs
     for key, definition in facility_defs.items():
         _require(key == definition.id, f"facility definition key mismatch: {key}")
         _require(definition.maintenance_fraction_per_year >= 0, f"negative maintenance fraction: {definition.id}")
+        _require(0 <= definition.decommission_recovery_fraction <= 1, f"invalid decommission recovery fraction: {definition.id}")
+        _require(isinstance(definition.placement_scope, FacilityPlacementScope), f"invalid facility placement scope: {definition.id}")
         seen_caps: set[str] = set()
         for supply in definition.capability_supplies:
             _require(supply.id not in seen_caps, f"duplicate capability {supply.id} on {definition.id}")
             seen_caps.add(supply.id)
-        for phase, conditions in (("installation", definition.installation_environment), ("operating", definition.operating_environment)):
-            seen_condition_codes: set[str] = set()
-            for condition in conditions:
-                _validate_environment_condition(condition, f"facility:{definition.id}:{phase}")
-                code = getattr(condition, "code", "")
-                _require(code not in seen_condition_codes, f"duplicate facility {phase} condition: {definition.id}/{code}")
-                seen_condition_codes.add(code)
+        _validate_site_requirements(
+            definition.installation_requirements,
+            ctx.known_capabilities,
+            f"facility:{definition.id}:installation",
+        )
+        _validate_site_requirements(
+            definition.operating_requirements,
+            ctx.known_capabilities,
+            f"facility:{definition.id}:operating",
+        )
     for facility in sim.facilities.facilities.values():
         _require(facility.definition_id in facility_defs, f"facility references unknown definition: {facility.id}")
-        _require(facility.location_id in nodes, f"facility references unknown location: {facility.id}")
+        _require(facility.operational_node_id in nodes, f"facility references unknown operational node: {facility.id}")
+        _require(not sim.facilities.placement_failures(facility.definition_id, facility.operational_node_id, facility.site_cell_id), f"facility has invalid placement: {facility.id}")
         _require(facility.level >= 1, f"facility has invalid level: {facility.id}")
+        _require(isinstance(facility.lifecycle, FacilityLifecycle), f"facility has invalid lifecycle: {facility.id}")
     for definition_id, spec in sim.power.specs.items():
         _require(definition_id in facility_defs, f"power spec references unknown facility: {definition_id}")
         _require(spec.load_mw >= 0, f"negative power load: {definition_id}")
@@ -93,17 +136,18 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 
 
 def validate_runtime(sim: Any) -> None:
+    _validate_counter(
+        sim.facilities._counter, sim.facilities.facilities, "facility.", "facility"
+    )
     for facility_id, facility in sim.facilities.facilities.items():
         _require(facility_id == facility.id, f"facility state key mismatch: {facility_id}")
         _require(facility.definition_id in sim.facilities.definitions, f"facility state has unknown definition: {facility_id}")
-        _require(facility.location_id in sim.graph.nodes, f"facility state has unknown location: {facility_id}")
+        _require(sim.graph.has_operational_node(facility.operational_node_id), f"facility state has unknown operational node: {facility_id}")
+        _require(not sim.facilities.placement_failures(facility.definition_id, facility.operational_node_id, facility.site_cell_id), f"facility state has invalid placement: {facility_id}")
         _require(facility.level >= 1, f"facility state has invalid level: {facility_id}")
-        _require(isinstance(facility.maintenance_priority, int), f"facility maintenance priority must be an integer: {facility_id}")
+        _require(1 <= int(facility.activity_priority) <= 5, f"facility activity priority must be 1..5: {facility_id}")
+        _require(1 <= int(facility.maintenance_priority) <= 5, f"facility maintenance priority must be 1..5: {facility_id}")
         _require(all(amount >= -1e-9 for amount in facility.invested_resources.values()), f"facility has negative invested resource: {facility_id}")
-        _require(-1e-9 <= facility.maintenance_satisfaction <= 1.0 + 1e-9, f"facility maintenance satisfaction out of range: {facility_id}")
-        if sim.research is not None and facility.definition_id in sim.research.providers:
-            provider = sim.research.providers[facility.definition_id]
-            _require(any(level.level == facility.level for level in provider.levels), f"research provider does not define facility level: {facility_id}/{facility.level}")
 
 
 DOMAIN_EXTENSION = DomainExtension(
@@ -112,4 +156,5 @@ DOMAIN_EXTENSION = DomainExtension(
     configuration_validator=validate_configuration,
     runtime_validator=validate_runtime,
     referenced_resources=referenced_resources,
+    service_capacity_provider=lambda sim: sim.facilities,
 )

@@ -2,27 +2,85 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import DomainExtension, StateCodec
-from .validation_support import ValidationContext, require as _require, validate_site_requirements as _validate_site_requirements
-from .research_models import ResearchPhase, ResearchState
-from .shared import DefinitionId, SpatialNodeId
+from .domain import (
+    DomainExtension, StateCodec, decode_bool, decode_dict, decode_float, decode_int,
+    decode_list, decode_str, require_fields,
+)
+from .execution_requirements import ServiceCapacityRequirement
+from .validation_support import (
+    ValidationContext,
+    require as _require,
+    validate_generated_id_counter as _validate_counter,
+    validate_site_requirements as _validate_site_requirements,
+)
+from .research_models import (
+    ResearchExecutionSite,
+    ResearchTheoryStageSpec,
+    ResearchPrototypeStageSpec,
+    ResearchDemonstrationStageSpec,
+    ResearchOperationalExperienceStageSpec,
+    ResearchProviderSourceKind,
+    ResearchState,
+)
+from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from .site import requires_surface_cell_context
+
+
+def _capture_execution_site(site: ResearchExecutionSite | None) -> dict[str, str | None] | None:
+    if site is None:
+        return None
+    return {
+        "operational_node_id": str(site.operational_node_id),
+        "surface_cell_id": None if site.surface_cell_id is None else str(site.surface_cell_id),
+    }
+
+
+def _restore_execution_site(data: dict[str, Any] | None) -> ResearchExecutionSite | None:
+    if data is None:
+        return None
+    row = require_fields(
+        data, {"operational_node_id", "surface_cell_id"}, "research execution_context"
+    )
+    return ResearchExecutionSite(
+        SpatialNodeId(decode_str(row["operational_node_id"], "research operational_node_id")),
+        (
+            None
+            if row["surface_cell_id"] is None
+            else SurfaceCellId(decode_str(row["surface_cell_id"], "research surface_cell_id"))
+        ),
+    )
 
 
 def capture_research(sim: Any) -> dict[str, Any]:
     if sim.research is None:
-        return {"stored_points": 0.0, "active": []}
+        return {"stored_points": 0.0, "knowledge": {}, "active": [], "provider_assignment_counter": 0, "provider_assignments": []}
     return {
         "stored_points": sim.research.stored_points,
+        "knowledge": dict(sorted(sim.research.knowledge_state.experience_by_category.items())),
         "active": [
             {
                 "definition_id": str(r.definition_id),
-                "status": r.status.value,
-                "demonstration_done_days": r.demonstration_done_days,
+                "current_stage_id": r.current_stage_id,
+                "stage_progress": r.stage_progress,
+                "priority": r.priority,
                 "paused": r.paused,
-                "prototype_location_id": None if r.prototype_location_id is None else str(r.prototype_location_id),
-                "demonstration_location_id": None if r.demonstration_location_id is None else str(r.demonstration_location_id),
+                "execution_context": _capture_execution_site(r.execution_context),
+                "stage_started_day": r.stage_started_day,
             }
             for r in sorted(sim.research.active.values(), key=lambda row: str(row.definition_id))
+        ],
+        "provider_assignment_counter": sim.research._provider_assignment_counter,
+        "provider_assignments": [
+            {
+                "id": str(row.id),
+                "provider_definition_id": str(row.provider_definition_id),
+                "vehicle_definition_id": str(row.vehicle_definition_id),
+                "operational_node_id": str(row.operational_node_id),
+                "priority": row.priority,
+                "paused": row.paused,
+                "fleet_commitment_ref": str(row.fleet_commitment_ref),
+            }
+            for row in sorted(sim.research.provider_assignments.values(), key=lambda item: str(item.id))
         ],
     }
 
@@ -30,125 +88,269 @@ def capture_research(sim: Any) -> dict[str, Any]:
 def restore_research(sim: Any, data: dict[str, Any]) -> None:
     if sim.research is None:
         return
-    sim.research.stored_points = float(data["stored_points"])
+    sim.research.stored_points = decode_float(data["stored_points"], "research stored_points")
+    knowledge = decode_dict(data["knowledge"], "research knowledge")
+    sim.research.knowledge_state.experience_by_category = {
+        category: decode_float(value, "research knowledge value")
+        for category, value in knowledge.items()
+    }
     sim.research.active.clear()
-    for r in data.get("active", []):
-        rid = DefinitionId(r["definition_id"])
+    sim.research.provider_assignments.clear()
+    sim.research._provider_assignment_counter = decode_int(
+        data["provider_assignment_counter"], "research provider_assignment_counter"
+    )
+    sim.research.last_point_allocations.clear()
+    sim.research.last_point_requests.clear()
+    sim.research.last_execution_allocations.clear()
+    sim.research.last_execution_requests.clear()
+
+    active_fields = {
+        "definition_id", "current_stage_id", "stage_progress", "priority", "paused",
+        "execution_context", "stage_started_day",
+    }
+    for index, raw in enumerate(decode_list(data["active"], "research active")):
+        row = require_fields(raw, active_fields, f"research active[{index}]")
+        rid = DefinitionId(decode_str(row["definition_id"], "research definition_id"))
+        if rid in sim.research.active:
+            raise ValueError(f"duplicate active research: {rid}")
         sim.research.active[rid] = ResearchState(
-            rid,
-            ResearchPhase(r["status"]),
-            int(r["demonstration_done_days"]),
-            bool(r["paused"]),
-            None if r["prototype_location_id"] is None else SpatialNodeId(r["prototype_location_id"]),
-            None if r.get("demonstration_location_id") is None else SpatialNodeId(r["demonstration_location_id"]),
+            definition_id=rid,
+            current_stage_id=decode_str(row["current_stage_id"], "research current_stage_id"),
+            stage_progress=(
+                None
+                if row["stage_progress"] is None
+                else decode_float(row["stage_progress"], "research stage_progress")
+            ),
+            priority=decode_int(row["priority"], "research priority"),
+            paused=decode_bool(row["paused"], "research paused"),
+            execution_context=_restore_execution_site(row["execution_context"]),
+            stage_started_day=decode_int(row["stage_started_day"], "research stage_started_day"),
+        )
+
+    from .research import ResearchProviderAssignmentState
+    assignment_fields = {
+        "id", "provider_definition_id", "vehicle_definition_id",
+        "operational_node_id", "priority", "paused", "fleet_commitment_ref",
+    }
+    for index, raw in enumerate(
+        decode_list(data["provider_assignments"], "research provider_assignments")
+    ):
+        row = require_fields(
+            raw, assignment_fields, f"research provider_assignment[{index}]"
+        )
+        assignment_id = EntityId(decode_str(row["id"], "research assignment id"))
+        if assignment_id in sim.research.provider_assignments:
+            raise ValueError(f"duplicate research provider assignment: {assignment_id}")
+        sim.research.provider_assignments[assignment_id] = ResearchProviderAssignmentState(
+            id=assignment_id,
+            provider_definition_id=DefinitionId(
+                decode_str(row["provider_definition_id"], "research provider_definition_id")
+            ),
+            vehicle_definition_id=DefinitionId(
+                decode_str(row["vehicle_definition_id"], "research vehicle_definition_id")
+            ),
+            operational_node_id=SpatialNodeId(
+                decode_str(row["operational_node_id"], "research operational_node_id")
+            ),
+            priority=decode_int(row["priority"], "research provider priority"),
+            paused=decode_bool(row["paused"], "research provider paused"),
+            fleet_commitment_ref=EntityId(
+                decode_str(row["fleet_commitment_ref"], "research fleet_commitment_ref")
+            ),
         )
 
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:
     result: set[DefinitionId] = set()
-    if sim.research is not None:
-        for definition in sim.research.definitions.values():
-            if definition.prototype is not None:
-                result.update(definition.prototype.resources)
+    if sim.research is None:
+        return result
+    for definition in sim.research.definitions.values():
+        for spec in definition.stage_specs:
+            if isinstance(spec, ResearchPrototypeStageSpec):
+                result.update(spec.resources)
     return result
 
 
-STATE_CODEC = StateCodec("research", capture_research, restore_research, True)
+STATE_CODEC = StateCodec("research", capture_research, restore_research)
+
+
+def _validate_execution_requirements(requirements, research_id, stage_id, ctx):
+    for requirement in requirements:
+        if isinstance(requirement, ServiceCapacityRequirement):
+            _require(
+                requirement.service_type in ctx.known_service_types,
+                f"research stage references unknown service type: {research_id}/{stage_id}/{requirement.service_type}",
+            )
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     if sim.research is None:
         return
     definitions = sim.research.definitions
-    known_capabilities = ctx.known_capabilities
-    facility_defs = ctx.facility_defs
+    rule_categories = {rule.category_id for rule in sim.research.experience_rules}
     for research_id, research in definitions.items():
         _require(research_id == research.id, f"research definition key mismatch: {research_id}")
         _require(research.prerequisites.issubset(definitions), f"unknown research prerequisite: {research_id}")
         _require(research_id not in research.prerequisites, f"self research prerequisite: {research_id}")
-        _require(research.research_point_cost >= 0, f"negative research point cost: {research_id}")
-        if research.prototype is not None:
-            _require(
-                all(v >= 0 for v in research.prototype.resources.values()),
-                f"negative prototype resource requirement: {research_id}",
-            )
-            _validate_site_requirements(
-                research.prototype.site_requirements,
-                known_capabilities,
-                f"research:{research_id}:prototype",
-            )
-        if research.demonstration is not None:
-            _require(research.demonstration.days > 0, f"invalid research demonstration duration: {research_id}")
-            _validate_site_requirements(
-                research.demonstration.site_requirements,
-                known_capabilities,
-                f"research:{research_id}:demonstration",
-            )
-    visiting: set[object] = set()
-    visited: set[object] = set()
+        _require(bool(research.stage_specs), f"research has no stages: {research_id}")
+        stage_ids = [spec.stage_id for spec in research.stage_specs]
+        _require(len(stage_ids) == len(set(stage_ids)), f"research repeats stage id: {research_id}")
+        for spec in research.stage_specs:
+            owner = f"research:{research_id}:{spec.stage_id}"
+            if isinstance(spec, ResearchTheoryStageSpec):
+                _require(spec.research_point_cost > 0, f"invalid theory cost: {owner}")
+                _validate_execution_requirements(spec.execution_requirements, research_id, spec.stage_id, ctx)
+            elif isinstance(spec, ResearchPrototypeStageSpec):
+                _require(all(value >= 0 for value in spec.resources.values()), f"negative prototype resource requirement: {owner}")
+                _require(spec.required_work > 0, f"invalid prototype work: {owner}")
+                _validate_site_requirements(spec.site_requirements, ctx.known_capabilities, owner)
+                _validate_execution_requirements(spec.execution_requirements, research_id, spec.stage_id, ctx)
+            elif isinstance(spec, ResearchDemonstrationStageSpec):
+                _require(spec.required_work > 0, f"invalid demonstration work: {owner}")
+                _validate_site_requirements(spec.site_requirements, ctx.known_capabilities, owner)
+                _validate_execution_requirements(spec.execution_requirements, research_id, spec.stage_id, ctx)
+            elif isinstance(spec, ResearchOperationalExperienceStageSpec):
+                for category, required in spec.requirements.items():
+                    _require(required >= 0, f"negative experience requirement: {owner}/{category}")
+                    _require(category in rule_categories, f"research references experience category with no contribution rule: {owner}/{category}")
+            else:
+                raise TypeError(f"unknown research stage spec: {type(spec)!r}")
 
+    visiting: set[object] = set(); visited: set[object] = set()
     def visit(node: object) -> None:
-        if node in visited:
-            return
+        if node in visited: return
         _require(node not in visiting, f"research prerequisite cycle at {node}")
         visiting.add(node)
-        for dep in definitions[node].prerequisites:  # type: ignore[index]
-            visit(dep)
-        visiting.remove(node)
-        visited.add(node)
+        for dep in definitions[node].prerequisites: visit(dep)  # type: ignore[index]
+        visiting.remove(node); visited.add(node)
+    for research_id in definitions: visit(research_id)
 
-    for research_id in definitions:
-        visit(research_id)
-    for definition_id, provider in sim.research.providers.items():
-        _require(definition_id == provider.facility_def_id, f"research provider key mismatch: {definition_id}")
-        _require(definition_id in facility_defs, f"research provider references unknown facility: {definition_id}")
-        _require(provider.tier >= 1, f"invalid research provider tier: {definition_id}")
-        seen_levels: set[int] = set()
-        for level in provider.levels:
-            _require(level.level >= 1, f"invalid research provider level: {definition_id}/{level.level}")
-            _require(level.level not in seen_levels, f"duplicate research provider level: {definition_id}/{level.level}")
-            seen_levels.add(level.level)
-            _require(level.generation_points_per_day >= 0, f"negative research generation: {definition_id}/{level.level}")
-            _require(level.storage_capacity_points >= 0, f"negative research storage: {definition_id}/{level.level}")
+    facility_provider_sources: set[DefinitionId] = set()
+    for provider_id, provider in sim.research.providers.items():
+        _require(provider_id == provider.id, f"research provider key mismatch: {provider_id}")
+        _validate_site_requirements(
+            provider.site_requirements, ctx.known_capabilities, f"research_provider:{provider_id}"
+        )
+        if provider.source_kind is ResearchProviderSourceKind.FACILITY:
+            _require(provider.source_definition_id in ctx.facility_defs, f"research provider references unknown facility: {provider_id}")
+            _require(
+                provider.source_definition_id not in facility_provider_sources,
+                f"multiple Research Providers reference one facility definition: {provider.source_definition_id}",
+            )
+            facility_provider_sources.add(provider.source_definition_id)
+        else:
+            _require(
+                not requires_surface_cell_context(provider.site_requirements),
+                f"Fleet Research Provider cannot require a surface-cell execution context: {provider_id}",
+            )
+            _require(sim.transport.vehicle_definition(provider.source_definition_id) is not None, f"research provider references unknown vehicle: {provider_id}")
+            _require(
+                len(provider.levels) == 1 and provider.levels[0].level == 1,
+                f"Fleet research provider must define one per-unit level: {provider_id}",
+            )
+        _require(provider.tier >= 1, f"invalid research provider tier: {provider_id}")
+        levels = [level.level for level in provider.levels]
+        _require(len(levels) == len(set(levels)), f"duplicate research provider level: {provider_id}")
 
 
 def validate_runtime(sim: Any) -> None:
     if sim.research is None:
         return
+    _validate_counter(
+        sim.research._provider_assignment_counter, sim.research.provider_assignments,
+        "research.provider_assignment.", "research provider assignment",
+    )
     _require(sim.research.stored_points >= -1e-9, "negative stored research points")
+    for category, value in sim.research.knowledge_state.experience_by_category.items():
+        _require(category != "", "empty knowledge category")
+        _require(value >= -1e-9, f"negative knowledge value: {category}")
+
+    def validate_execution_context(research_id, spec, site):
+        if site is None: return
+        _require(sim.graph.has_operational_node(site.operational_node_id), f"research stage references unknown operational node: {research_id}/{spec.stage_id}")
+        needs_cell = requires_surface_cell_context(spec.site_requirements)
+        if site.surface_cell_id is None:
+            _require(not (site.operational_node_id in sim.graph.locations and needs_cell), f"research stage requires explicit surface cell: {research_id}/{spec.stage_id}")
+            return
+        location = sim.graph.locations.get(site.operational_node_id)
+        _require(location is not None, f"research stage cell requires surface location: {research_id}/{spec.stage_id}")
+        if location is not None:
+            _require(site.surface_cell_id in location.developed_cell_ids, f"research stage references undeveloped cell: {research_id}/{spec.stage_id}/{site.surface_cell_id}")
+        _require(needs_cell, f"research stage stores unnecessary surface cell: {research_id}/{spec.stage_id}")
+
+    for facility in sim.facilities.facilities.values():
+        provider = sim.research.facility_provider_spec(facility.id)
+        if provider is not None:
+            _require(
+                any(level.level == facility.level for level in provider.levels),
+                f"Research Provider has no contribution definition for Facility Level: {facility.id}/L{facility.level}",
+            )
+
+    provider_use_keys: set[tuple[DefinitionId, SpatialNodeId, DefinitionId]] = set()
+    for assignment_id, assignment in sim.research.provider_assignments.items():
+        _require(assignment_id == assignment.id, f"research provider assignment key mismatch: {assignment_id}")
+        use_key = (
+            assignment.provider_definition_id,
+            assignment.operational_node_id,
+            assignment.vehicle_definition_id,
+        )
+        _require(use_key not in provider_use_keys, f"duplicate research provider assignment: {use_key}")
+        provider_use_keys.add(use_key)
+        provider = sim.research.providers.get(assignment.provider_definition_id)
+        _require(provider is not None, f"research assignment references unknown provider: {assignment_id}")
+        if provider is None:
+            continue
+        _require(provider.source_kind is ResearchProviderSourceKind.FLEET, f"research assignment references non-Fleet provider: {assignment_id}")
+        commitment = sim.transport.fleet_commitment_snapshot(assignment.fleet_commitment_ref)
+        _require(commitment is not None, f"research assignment missing Fleet commitment: {assignment_id}")
+        if commitment is not None:
+            _require(commitment.owner_activity_ref.activity_type == "research_provider_assignment", f"research assignment Fleet owner type mismatch: {assignment_id}")
+            _require(commitment.owner_activity_ref.activity_id == assignment_id, f"research assignment Fleet owner id mismatch: {assignment_id}")
+            _require(assignment.vehicle_definition_id == provider.source_definition_id, f"research assignment Provider vehicle mismatch: {assignment_id}")
+            _require(commitment.vehicle_definition_id == assignment.vehicle_definition_id, f"research assignment Fleet definition mismatch: {assignment_id}")
+            _require(commitment.operational_node_id == assignment.operational_node_id, f"research assignment Fleet location mismatch: {assignment_id}")
+            _require(commitment.quantity > 0, f"research assignment has empty Fleet commitment: {assignment_id}")
+
+    allowed_reservations: dict[EntityId, tuple[DefinitionId, str, SpatialNodeId, ResearchPrototypeStageSpec]] = {}
     for research_id, state in sim.research.active.items():
         _require(research_id == state.definition_id, f"research state key mismatch: {research_id}")
-        _require(research_id in sim.research.definitions, f"active unknown research: {research_id}")
-        _require(
-            state.status in {ResearchPhase.PROTOTYPE, ResearchPhase.DEMONSTRATION},
-            f"invalid active research phase: {research_id}/{state.status}",
-        )
         definition = sim.research.definitions[research_id]
-        if state.status is ResearchPhase.PROTOTYPE:
-            _require(definition.prototype is not None, f"prototype state without prototype definition: {research_id}")
-            _require(state.demonstration_done_days == 0, f"prototype research has demonstration progress: {research_id}")
-            _require(state.demonstration_location_id is None, f"prototype research retains demonstration site: {research_id}")
+        try: spec = definition.stage_spec(state.current_stage_id)
+        except KeyError:
+            _require(False, f"invalid active research stage id: {research_id}/{state.current_stage_id}"); continue
+        _require(state.stage_started_day >= 0, f"negative research stage start day: {research_id}")
+        if isinstance(spec, ResearchOperationalExperienceStageSpec):
+            _require(state.stage_progress is None, f"operational experience stores project progress: {research_id}/{spec.stage_id}")
+            _require(state.execution_context is None, f"operational experience stores execution context: {research_id}/{spec.stage_id}")
         else:
-            _require(definition.demonstration is not None, f"demonstration state without demonstration definition: {research_id}")
-            _require(
-                0 <= state.demonstration_done_days <= definition.demonstration.days,
-                f"invalid demonstration progress: {research_id}",
-            )
-        _require(
-            state.prototype_location_id is None or state.prototype_location_id in sim.graph.nodes,
-            f"research prototype references unknown location: {research_id}",
-        )
-        _require(
-            state.demonstration_location_id is None or state.demonstration_location_id in sim.graph.nodes,
-            f"research demonstration references unknown location: {research_id}",
-        )
+            _require(state.stage_progress is not None and state.stage_progress >= -1e-9, f"progress-bearing stage lacks progress: {research_id}/{spec.stage_id}")
+        if isinstance(spec, ResearchTheoryStageSpec):
+            _require(state.execution_context is None, f"theory stage stores execution context: {research_id}/{spec.stage_id}")
+            _require((state.stage_progress or 0.0) <= spec.research_point_cost + 1e-7, f"theory progress exceeds requirement: {research_id}/{spec.stage_id}")
+        elif isinstance(spec, ResearchPrototypeStageSpec):
+            _require((state.stage_progress or 0.0) <= spec.required_work + 1e-7, f"prototype progress exceeds requirement: {research_id}/{spec.stage_id}")
+            validate_execution_context(research_id, spec, state.execution_context)
+            if state.execution_context is not None:
+                allowed_reservations[sim.research._prototype_reservation_owner_id(research_id, spec.stage_id)] = (research_id, spec.stage_id, state.execution_context.operational_node_id, spec)
+        elif isinstance(spec, ResearchDemonstrationStageSpec):
+            _require((state.stage_progress or 0.0) <= spec.required_work + 1e-7, f"demonstration progress exceeds requirement: {research_id}/{spec.stage_id}")
+            validate_execution_context(research_id, spec, state.execution_context)
+
+    for (owner_id, location_id, resource_id), amount in sim.inventory.reserved.items():
+        if not str(owner_id).startswith("research.stage:"): continue
+        _require(owner_id in allowed_reservations, f"orphaned research stage reservation: {owner_id}")
+        if owner_id not in allowed_reservations: continue
+        research_id, stage_id, expected_location, spec = allowed_reservations[owner_id]
+        _require(location_id == expected_location, f"research reservation at wrong location: {research_id}/{stage_id}")
+        _require(resource_id in spec.resources, f"research stage reserves unexpected resource: {research_id}/{stage_id}/{resource_id}")
+        if resource_id in spec.resources:
+            _require(-1e-9 <= amount <= spec.resources[resource_id] + 1e-9, f"research reserved resource outside requirement: {research_id}/{stage_id}/{resource_id}")
     _require(sim.research.completed.issubset(sim.research.definitions), "completed research contains unknown definition")
 
 
 DOMAIN_EXTENSION = DomainExtension(
-    "research",
-    state_codec=STATE_CODEC,
-    configuration_validator=validate_configuration,
-    runtime_validator=validate_runtime,
-    referenced_resources=referenced_resources,
+    "research", state_codec=STATE_CODEC, configuration_validator=validate_configuration,
+    runtime_validator=validate_runtime, referenced_resources=referenced_resources,
+    allocation_pool_provider=lambda sim: sim.research,
+    service_capacity_provider=lambda sim: sim.research,
 )

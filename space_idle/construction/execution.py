@@ -1,119 +1,262 @@
 from __future__ import annotations
 
+from ..execution_requirements import (
+    ExecutionAllocationPlan,
+    ExecutionRequirementBundle,
+    ServiceCapacityRequirement,
+)
+from ..disposal import salvage_admission_requirements, settle_salvage_recovery
 from ..power import PowerSnapshot
-from ..shared import SpatialNodeId
-from .models import ConstructionProject, FacilityUpgradeTarget, NewFacilityTarget, ProjectStatus
+from ..shared import EntityId, SpatialNodeId
+from .models import (
+    CONSTRUCTION_SERVICE_TYPE, ConstructionProject, FacilityDecommissionTarget, FacilityUpgradeTarget, NewFacilityTarget,
+    ProjectStatus, SurfaceCellDevelopmentTarget,
+)
 
 
 class ConstructionExecutionMixin:
 
-    def _finish_project(self, project: ConstructionProject) -> None:
+    @staticmethod
+    def decommission_salvage_bundle_id(project_id) -> EntityId:
+        return EntityId(f"execution.decommission_salvage:{project_id}")
+
+    def decommission_salvage_for_project(self, project: ConstructionProject) -> dict:
+        if not isinstance(project.target, FacilityDecommissionTarget):
+            return {}
+        if project.target.facility_id not in self.facilities.facilities:
+            return {}
+        return self.facilities.decommission_salvage(project.target.facility_id)
+
+    def _decommission_admission_requirements(self, project: ConstructionProject):
+        return salvage_admission_requirements(
+            self.inventory, self.decommission_salvage_for_project(project)
+        )
+
+    def _finish_project(
+        self, project: ConstructionProject, *, decommission_recoverable_fraction: float = 1.0
+    ) -> None:
         self._commit_materials(project)
         invested = self._committed_resources(project)
         target = project.target
         if isinstance(target, NewFacilityTarget):
             project.completed_facility_id = self.facilities.install(
                 target.facility_def_id,
-                project.location_id,
+                project.operational_node_id,
+                site_cell_id=project.site_cell_id,
                 invested_resources=invested,
             )
-        else:
+        elif isinstance(target, FacilityUpgradeTarget):
             self.facilities.upgrade_to(
                 target.facility_id,
                 target.target_level,
                 invested_resources=invested,
             )
             project.completed_facility_id = target.facility_id
+        elif isinstance(target, FacilityDecommissionTarget):
+            facility = self.facilities.facilities[target.facility_id]
+            recovery_potential = self.facilities.decommission_salvage(target.facility_id)
+            recovered = settle_salvage_recovery(
+                self.inventory,
+                facility.operational_node_id,
+                recovery_potential,
+                decommission_recoverable_fraction,
+            )
+            project.salvage_recovered_fraction = min(
+                1.0, max(0.0, float(decommission_recoverable_fraction))
+            )
+            project.salvage_recovered = dict(recovered)
+            self.facility_lifecycle_registry.release_references(target.facility_id)
+            self.facilities.finalize_decommission(target.facility_id)
+        else:
+            self.facilities.environment.graph.develop_surface_cell(
+                project.operational_node_id, target.cell_id
+            )
         project.status = ProjectStatus.COMPLETE
 
     def _target_ready_for_execution(self, project: ConstructionProject) -> bool:
-        if not isinstance(project.target, FacilityUpgradeTarget):
-            return True
-        facility = self.facilities.facilities.get(project.target.facility_id)
-        return (
-            facility is not None
-            and facility.location_id == project.location_id
-            and facility.level == project.target.target_level - 1
+        target = project.target
+        if isinstance(target, FacilityUpgradeTarget):
+            facility = self.facilities.facilities.get(target.facility_id)
+            return (
+                facility is not None
+                and facility.operational_node_id == project.operational_node_id
+                and facility.level == target.target_level - 1
+            )
+        if isinstance(target, SurfaceCellDevelopmentTarget):
+            return not self.facilities.environment.graph.surface_cell_development_failures(
+                project.operational_node_id, target.cell_id
+            )
+        if isinstance(target, FacilityDecommissionTarget):
+            facility = self.facilities.facilities.get(target.facility_id)
+            return facility is not None and facility.operational_node_id == project.operational_node_id
+        return True
+
+    @staticmethod
+    def construction_execution_bundle_id(project_id) -> EntityId:
+        return EntityId(f"execution.construction:{project_id}")
+
+    def _surface_development_incremental_service(self, project: ConstructionProject) -> float:
+        service = self.surface_infrastructure
+        if service is None or not isinstance(project.target, SurfaceCellDevelopmentTarget):
+            return 0.0
+        location = service.graph.locations[project.operational_node_id]
+        cells = set(location.developed_cell_ids)
+        cells.add(project.target.cell_id)
+        prospective = sum(
+            row.demand
+            for row in service.load_sources_for_cells(project.operational_node_id, cells)
         )
+        return max(0.0, prospective - service.demand(project.operational_node_id))
+
+    def project_service_requirement_forecast(
+        self, project: ConstructionProject
+    ) -> tuple[tuple[str, float], ...]:
+        """Project remaining finite-Service demand without mutating Project state."""
+        recipe = self.recipe_for_project(project)
+        if recipe.self_deploying or recipe.construction_work <= 1e-12:
+            return ()
+        remaining_work = max(0.0, recipe.construction_work - project.construction_done)
+        if remaining_work <= 1e-12:
+            return ()
+        rows: list[tuple[str, float]] = [(CONSTRUCTION_SERVICE_TYPE, remaining_work)]
+        incremental = self._surface_development_incremental_service(project)
+        if incremental > 1e-12 and self.surface_infrastructure is not None:
+            rows.append((self.surface_infrastructure.service_type, incremental))
+        return tuple(rows)
+
+    def execution_requirement_bundles(
+        self, day: int = 0
+    ) -> tuple[ExecutionRequirementBundle, ...]:
+        rows: list[ExecutionRequirementBundle] = []
+        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
+            if (
+                project.paused
+                or project.status not in {ProjectStatus.READY, ProjectStatus.BUILDING}
+                or not self._target_ready_for_execution(project)
+            ):
+                continue
+            recipe = self._recipe_for_project(project)
+            if recipe.self_deploying or recipe.construction_work <= 1e-12:
+                continue
+            if self.project_site_failures(project, day, None):
+                continue
+            forecast_services = self.project_service_requirement_forecast(project)
+            remaining_work = next(
+                (amount for service_type, amount in forecast_services if service_type == CONSTRUCTION_SERVICE_TYPE),
+                0.0,
+            )
+            if remaining_work <= 1e-12:
+                if isinstance(project.target, FacilityDecommissionTarget) and project.irreversible_started:
+                    requirements = self._decommission_admission_requirements(project)
+                    rows.append(ExecutionRequirementBundle(
+                        id=self.decommission_salvage_bundle_id(project.id),
+                        owner_kind="construction",
+                        owner_id=EntityId(str(project.id)),
+                        purpose="decommission_salvage_admission",
+                        operational_node_id=project.operational_node_id,
+                        requested_execution=1.0,
+                        priority=project.priority,
+                        requirements=requirements,
+                    ))
+                continue
+            requirements = [
+                ServiceCapacityRequirement(service_type, amount)
+                for service_type, amount in forecast_services
+            ]
+            rows.append(ExecutionRequirementBundle(
+                id=self.construction_execution_bundle_id(project.id),
+                owner_kind="construction",
+                owner_id=EntityId(str(project.id)),
+                purpose="construction_work",
+                operational_node_id=project.operational_node_id,
+                requested_execution=1.0,
+                priority=project.priority,
+                requirements=tuple(requirements),
+            ))
+        return tuple(rows)
 
     def advance_construction(
-        self, power_by_location: dict[SpatialNodeId, PowerSnapshot], day: int = 0
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        execution_allocations: ExecutionAllocationPlan,
+        day: int = 0,
     ) -> None:
-        for project in self.projects.values():
-            if not project.paused and project.status == ProjectStatus.READY:
-                recipe = self._recipe_for_project(project)
-                if not self._target_ready_for_execution(project):
+        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
+            if (
+                project.paused
+                or project.status not in {ProjectStatus.READY, ProjectStatus.BUILDING}
+                or not self._target_ready_for_execution(project)
+            ):
+                continue
+            recipe = self._recipe_for_project(project)
+            if recipe.self_deploying or recipe.construction_work <= 1e-12:
+                continue
+            power = power_by_location[project.operational_node_id]
+            if self.project_site_failures(project, day, power):
+                continue
+            try:
+                scale = execution_allocations.allocated(
+                    self.construction_execution_bundle_id(project.id)
+                )
+            except KeyError:
+                scale = 0.0
+            if scale <= 1e-12:
+                continue
+            if isinstance(project.target, FacilityDecommissionTarget) and not project.irreversible_started:
+                blockers = self._decommission_irreversible_blockers(project.target.facility_id)
+                if blockers:
                     continue
-                if self.project_site_failures(
-                    project,
-                    day,
-                    power_by_location.get(
-                        project.location_id,
-                        self.power.snapshot(project.location_id, self.facilities, day),
-                    ),
-                ):
-                    continue
-                if recipe.self_deploying or recipe.construction_work <= 1e-12:
-                    self._finish_project(project)
+                self.facilities.begin_decommission(project.target.facility_id)
+                project.irreversible_started = True
+            remaining_work = max(0.0, recipe.construction_work - project.construction_done)
+            work = min(remaining_work, remaining_work * min(1.0, scale))
+            if work <= 1e-12:
+                continue
+            self._commit_materials(project)
+            project.status = ProjectStatus.BUILDING
+            project.construction_done += work
+            if project.construction_done + 1e-9 >= recipe.construction_work:
+                project.construction_done = recipe.construction_work
 
-        locations = {
-            project.location_id
-            for project in self.projects.values()
-            if not project.paused
-            and project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}
-        }
-        for location_id in sorted(locations, key=str):
-            power = power_by_location.get(
-                location_id, self.power.snapshot(location_id, self.facilities, day)
-            )
-            candidates = [
-                project
-                for project in self.projects.values()
-                if project.location_id == location_id
-                and not project.paused
-                and project.status in {ProjectStatus.READY, ProjectStatus.BUILDING}
-                and self._target_ready_for_execution(project)
-                and not self._recipe_for_project(project).self_deploying
-                and self._recipe_for_project(project).construction_work > 1e-12
-                and not self.project_site_failures(project, day, power)
-            ]
-            if not candidates:
+    def settle_completions(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        execution_allocations: ExecutionAllocationPlan,
+        day: int = 0,
+    ) -> bool:
+        physical_state_changed = False
+        for project in sorted(self.projects.values(), key=lambda row: str(row.id)):
+            if (
+                project.paused
+                or project.status not in {ProjectStatus.READY, ProjectStatus.BUILDING}
+                or not self._target_ready_for_execution(project)
+            ):
                 continue
-            capacity = self.construction_capacity_at(location_id, power, day)
-            if capacity <= 1e-12:
+            recipe = self._recipe_for_project(project)
+            power = power_by_location[project.operational_node_id]
+            if self.project_site_failures(project, day, power):
                 continue
-            active = [project for project in candidates if project.construction_weight > 1e-12]
-            remaining_capacity = capacity
-            while active and remaining_capacity > 1e-12:
-                total_weight = sum(project.construction_weight for project in active)
-                if total_weight <= 1e-12:
-                    break
-                allocations = {
-                    project.id: remaining_capacity * project.construction_weight / total_weight
-                    for project in active
-                }
-                used = 0.0
-                completed: list[ConstructionProject] = []
-                for project in sorted(active, key=lambda row: (-row.priority, str(row.id))):
-                    recipe = self._recipe_for_project(project)
-                    remaining_work = max(0.0, recipe.construction_work - project.construction_done)
-                    work = min(allocations[project.id], remaining_work)
-                    if work <= 1e-12:
-                        completed.append(project)
+            if recipe.self_deploying or recipe.construction_work <= 1e-12:
+                self._finish_project(project)
+                physical_state_changed = True
+                continue
+            if project.construction_done + 1e-9 >= recipe.construction_work:
+                if isinstance(project.target, FacilityDecommissionTarget):
+                    if not project.irreversible_started:
                         continue
-                    self._commit_materials(project)
-                    project.status = ProjectStatus.BUILDING
-                    project.construction_done += work
-                    used += work
-                    if project.construction_done + 1e-9 >= recipe.construction_work:
-                        completed.append(project)
-                for project in completed:
-                    if project in active:
-                        active.remove(project)
-                    if project.status != ProjectStatus.COMPLETE:
-                        self._finish_project(project)
-                if used <= 1e-12:
-                    break
-                remaining_capacity -= used
-                if not completed:
-                    break
+                    try:
+                        recoverable_fraction = execution_allocations.fulfillment(
+                            self.decommission_salvage_bundle_id(project.id)
+                        )
+                    except KeyError:
+                        # Work may have reached completion in this same tick; the
+                        # salvage bundle becomes part of the next allocation pass.
+                        continue
+                    self._finish_project(
+                        project,
+                        decommission_recoverable_fraction=recoverable_fraction,
+                    )
+                else:
+                    self._finish_project(project)
+                physical_state_changed = True
+        return physical_state_changed

@@ -1,26 +1,32 @@
 from __future__ import annotations
 
+from hashlib import sha256
+from http import HTTPStatus
+import re
 import ssl
 from urllib.parse import parse_qs, urlsplit
 
 from ..application_commands import (
+    GetAttention,
     GetBottlenecks,
     GetBuildOptions,
     GetCargoFlows,
     GetFleet,
     GetContracts,
+    GetDependencyAnalytics,
     GetFlowReport,
-    GetLocation,
+    GetOperationalNode,
     GetLogistics,
-    GetLogisticsLanes,
     GetLogisticsSummary,
     GetProjects,
     GetResearch,
     GetScientificExplorations,
-    GetRoutes,
+    GetMovementPlans,
     GetSurveys,
+    GetSurfaceMap,
     GetTransportAllocations,
     GetWorld,
+    GetMarket,
 )
 from .codec import ApiPayloadError
 from .http_server import ApiServerConfig, SpaceIdleHTTPServer, SpaceIdleRequestHandler
@@ -38,37 +44,70 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             return
 
         params = parse_qs(parsed.query, keep_blank_values=False)
-        location_values = params.get("location_id", [])
-        if len(location_values) > 1:
-            raise ApiPayloadError("location_id must appear once")
-        location_id = location_values[0] if location_values else None
+        operational_node_values = params.get("operational_node_id", [])
+        if len(operational_node_values) > 1:
+            raise ApiPayloadError("operational_node_id must appear once")
+        operational_node_id = operational_node_values[0] if operational_node_values else None
+        surface_body_values = params.get("surface_body_id", [])
+        if len(surface_body_values) > 1:
+            raise ApiPayloadError("surface_body_id must appear once")
+        surface_body_id = surface_body_values[0] if surface_body_values else None
+
+        scope_key = f"{operational_node_id or ''}\0{surface_body_id or ''}"
+        scope_hash = sha256(scope_key.encode("utf-8")).hexdigest()[:12]
+        known_revision = None
+        known_view = self.headers.get("X-Space-Idle-Known-View", "").strip()
+        match = re.fullmatch(rf'"ui-state-(\d+)-{scope_hash}"', known_view)
+        if match is not None:
+            known_revision = int(match.group(1))
 
         queries = {
             "world": GetWorld(),
-            "global_issues": GetBottlenecks(),
+            "global_issues": GetAttention(),
             "research": GetResearch(),
             "scientific_explorations": GetScientificExplorations(),
             "contracts": GetContracts(),
             "logistics_summary": GetLogisticsSummary(),
             "logistics": GetLogistics(),
-            "routes": GetRoutes(include_modes=True),
+            "movement_plans": GetMovementPlans(include_modes=True),
             "fleet": GetFleet(),
             "transport_allocations": GetTransportAllocations(),
             "cargo_flows": GetCargoFlows(),
-            "lanes": GetLogisticsLanes(),
+            "market": GetMarket(),
         }
-        if location_id:
+        if operational_node_id:
             queries.update({
-                "location": GetLocation(location_id),
-                "flow": GetFlowReport(location_id),
-                "projects": GetProjects(location_id),
-                "build_options": GetBuildOptions(location_id),
-                "bottlenecks": GetBottlenecks(location_id),
-                "surveys": GetSurveys(location_id),
+                "operational_node": GetOperationalNode(operational_node_id),
+                "flow": GetFlowReport(operational_node_id),
+                "dependency_analytics_current": GetDependencyAnalytics("operational_nodes", node_ids=(operational_node_id,), time_basis="CURRENT"),
+                "dependency_analytics_forecast": GetDependencyAnalytics("operational_nodes", node_ids=(operational_node_id,), time_basis="FORECAST"),
+                "projects": GetProjects(operational_node_id),
+                "build_options": GetBuildOptions(operational_node_id),
+                "bottlenecks": GetBottlenecks(operational_node_id),
+                "surveys": GetSurveys(operational_node_id),
             })
+        if surface_body_id:
+            queries["surface_map"] = GetSurfaceMap(surface_body_id)
 
-        result = self.server.runtime.snapshot(queries)
-        self._result(result, etag=f'"rev-{result.revision}"')
+        result = self.server.runtime.snapshot_if_changed(
+            queries,
+            known_revision=known_revision,
+        )
+        if result is None:
+            assert known_revision is not None
+            etag = f'"ui-state-{known_revision}-{scope_hash}"'
+            self._write_json(
+                HTTPStatus.OK,
+                {"ok": True, "revision": known_revision, "data": {"unchanged": True}},
+                revision=known_revision,
+                etag=etag,
+                cache_control="no-store",
+            )
+            return
+        self._result(
+            result,
+            etag=f'"ui-state-{result.revision}-{scope_hash}"',
+        )
 
     def _handle_post(self) -> None:
         path = urlsplit(self.path).path.rstrip("/") or "/"

@@ -2,25 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain import DomainExtension, StateCodec
+from ..domain import DomainExtension
 from ..validation_support import ValidationContext, require as _require
-from ..shared import DefinitionId, EntityId
-
-
-def capture_industry(sim: Any) -> dict[str, Any]:
-    return {
-        "selected_process_by_facility": [
-            {"facility_id": str(fid), "process_id": str(pid)}
-            for fid, pid in sorted(sim.industry.selected_process_by_facility.items(), key=lambda x: str(x[0]))
-        ]
-    }
-
-
-def restore_industry(sim: Any, data: dict[str, Any]) -> None:
-    sim.industry.selected_process_by_facility = {
-        EntityId(r["facility_id"]): DefinitionId(r["process_id"])
-        for r in data.get("selected_process_by_facility", [])
-    }
+from ..shared import DefinitionId
 
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:
@@ -31,7 +15,6 @@ def referenced_resources(sim: Any) -> set[DefinitionId]:
     return result
 
 
-STATE_CODEC = StateCodec("industry", capture_industry, restore_industry)
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     facility_defs = ctx.facility_defs
     for process_id, process in sim.industry.processes.items():
@@ -40,14 +23,31 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(all(v >= 0 for v in process.inputs_per_day.values()), f"negative process input: {process_id}")
         _require(all(v >= 0 for v in process.outputs_per_day.values()), f"negative process output: {process_id}")
         _require(any(v > 0 for v in process.outputs_per_day.values()), f"process has no positive output: {process_id}")
-    for facility_id, process_id in sim.industry.selected_process_by_facility.items():
-        _require(facility_id in sim.facilities.facilities, f"process selection references unknown facility: {facility_id}")
+    for facility in sim.facilities.facilities.values():
+        process_id = facility.selected_process_id
+        if process_id is None:
+            continue
         _require(process_id in sim.industry.processes, f"process selection references unknown process: {process_id}")
-        _require(sim.industry.processes[process_id].facility_def_id == sim.facilities.facilities[facility_id].definition_id,
-                 f"selected process incompatible with facility: {facility_id}/{process_id}")
+        _require(
+            sim.industry.processes[process_id].facility_def_id == facility.definition_id,
+            f"selected process incompatible with facility: {facility.id}/{process_id}",
+        )
+
+
+def validate_runtime(sim: Any) -> None:
+    for facility in sim.facilities.facilities.values():
+        process_id = facility.selected_process_id
+        if process_id is None:
+            continue
+        _require(process_id in sim.industry.processes, f"process selection references unknown process: {process_id}")
+        _require(
+            sim.industry.processes[process_id].facility_def_id == facility.definition_id,
+            f"selected process incompatible with facility: {facility.id}/{process_id}",
+        )
 
 
 DOMAIN_EXTENSION = DomainExtension(
-    "production", state_codec=STATE_CODEC, configuration_validator=validate_configuration,
+    "production", configuration_validator=validate_configuration, runtime_validator=validate_runtime,
     referenced_resources=referenced_resources,
+    service_capacity_provider=lambda sim: sim.industry,
 )

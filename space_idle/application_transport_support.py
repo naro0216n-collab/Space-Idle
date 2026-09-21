@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .app_contracts.logistics_views import InfrastructureRequirementRow
-from .logistics import OperationAssetDisposition
+from .transport.models import OperationAssetDisposition
 
 
 def vehicle_concept(definition: object) -> str:
@@ -18,8 +18,8 @@ def vehicle_concept(definition: object) -> str:
 def infrastructure_requirement_rows(plan: object) -> tuple[InfrastructureRequirementRow, ...]:
     return tuple(
         InfrastructureRequirementRow(
-            str(location_id), capability_id, minimum_capacity, mode
+            str(location_id), capability_id, required_state
         )
-        for location_id, capability_id, minimum_capacity, mode
+        for location_id, capability_id, required_state
         in plan.infrastructure_requirements
     )

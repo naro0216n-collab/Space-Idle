@@ -1,17 +1,15 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Literal
-
-PathPolicyLiteral = Literal["fastest", "lowest_cost", "lowest_propellant"]
-TransportControlModeLiteral = Literal["units", "capacity"]
+from ..priority import (
+    ActivityPriority, DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PROVISIONING_PRIORITY, ProvisioningPriority,
+)
 
 
 @dataclass(frozen=True)
 class ProduceVehicle:
     vehicle_definition_id: str
-    location_id: str
-    priority: int = 50
-    allocation_weight: float = 1.0
+    operational_node_id: str
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
 
 
 @dataclass(frozen=True)
@@ -27,39 +25,38 @@ class ResumeVehicleProduction:
 @dataclass(frozen=True)
 class SetVehicleProductionSettings:
     production_id: str
-    priority: int | None = None
-    allocation_weight: float | None = None
+    priority: ActivityPriority | None = None
 
 
 @dataclass(frozen=True)
 class CreateTransportAllocation:
     vehicle_definition_id: str
-    anchor_location_id: str
+    anchor_node_id: str
     destination_id: str
-    priority: int = 50
-    control_mode: TransportControlModeLiteral = "units"
-    target_units: int | None = None
-    target_forward_t_per_day: float | None = None
-    target_reverse_t_per_day: float | None = None
-    path: tuple[str, ...] | None = None
-    path_policy: PathPolicyLiteral = "fastest"
+    target_forward_t_per_day: float
+    target_reverse_t_per_day: float
+    provisioning_priority: ProvisioningPriority = DEFAULT_PROVISIONING_PRIORITY
+    movement_hard_constraint: tuple[str, ...] | None = None
     paused: bool = False
 
 
 @dataclass(frozen=True)
 class UpdateTransportAllocation:
     allocation_id: str
-    priority: int | None = None
-    target_units: int | None = None
     target_forward_t_per_day: float | None = None
     target_reverse_t_per_day: float | None = None
-    path_policy: PathPolicyLiteral | None = None
+    provisioning_priority: ProvisioningPriority | None = None
 
 
 @dataclass(frozen=True)
-class ChangeTransportAllocationMode:
+class SetTransportMovementConstraint:
     allocation_id: str
-    control_mode: TransportControlModeLiteral
+    movement_plan_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ClearTransportMovementConstraint:
+    allocation_id: str
 
 
 @dataclass(frozen=True)
@@ -78,42 +75,28 @@ class DeleteTransportAllocation:
 
 
 @dataclass(frozen=True)
+class RetireFleet:
+    vehicle_definition_id: str
+    units: int
+    operational_node_id: str
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+
+
+@dataclass(frozen=True)
+class CancelFleetRetirement:
+    retirement_id: str
+
+
+@dataclass(frozen=True)
+class SetFleetRetirementPriority:
+    retirement_id: str
+    priority: ActivityPriority
+
+
+@dataclass(frozen=True)
 class RelocateFleet:
     vehicle_definition_id: str
     units: int
     source_id: str
     destination_id: str
-    path: tuple[str, ...] | None = None
-    path_policy: PathPolicyLiteral = "fastest"
-
-
-@dataclass(frozen=True)
-class CreateLogisticsLane:
-    source_id: str
-    destination_id: str
-    requested_capacity_t_per_day: float
-    priority: int = 50
-    path: tuple[str, ...] | None = None
-    path_policy: PathPolicyLiteral = "fastest"
-
-
-@dataclass(frozen=True)
-class UpdateLogisticsLane:
-    lane_id: str
-    requested_capacity_t_per_day: float
-    priority: int
-
-
-@dataclass(frozen=True)
-class PauseLogisticsLane:
-    lane_id: str
-
-
-@dataclass(frozen=True)
-class ResumeLogisticsLane:
-    lane_id: str
-
-
-@dataclass(frozen=True)
-class DeleteLogisticsLane:
-    lane_id: str
+    movement_hard_constraint: tuple[str, ...] | None = None

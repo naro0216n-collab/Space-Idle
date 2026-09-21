@@ -2,15 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 from typing import Protocol, runtime_checkable
 
-from ..shared import DefinitionId, EntityId, RouteId, SpatialNodeId
+from ..priority import (
+    ActivityPriority, DEFAULT_ACTIVITY_PRIORITY, DEFAULT_PROVISIONING_PRIORITY, ProvisioningPriority,
+)
+from ..shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
 
 POWERED_ASCENT = "powered_ascent"
 SPACEFLIGHT = "spaceflight"
 LANDING = "landing"
 ATMOSPHERIC_ENTRY = "atmospheric_entry"
+SURFACE_TRANSPORT = "surface_transport"
 
 
 class TransportOperationKind:
@@ -18,6 +23,7 @@ class TransportOperationKind:
     SPACEFLIGHT = SPACEFLIGHT
     LANDING = LANDING
     ATMOSPHERIC_ENTRY = ATMOSPHERIC_ENTRY
+    SURFACE_TRANSPORT = SURFACE_TRANSPORT
 
 
 class OperationAssetDisposition(str, Enum):
@@ -27,21 +33,21 @@ class OperationAssetDisposition(str, Enum):
     ORIGIN = "origin"
 
 
-class PathPolicy(str, Enum):
-    FASTEST = "fastest"
-    LOWEST_COST = "lowest_cost"
-    LOWEST_PROPELLANT = "lowest_propellant"
+@dataclass(frozen=True)
+class FleetActivityRef:
+    """Open owner reference for an exclusive Fleet commitment.
 
+    ``activity_type`` is a stable Domain/Application category, not a closed Core
+    enum. New Fleet-backed activities can therefore participate without changing
+    Fleet state ownership.
+    """
 
-class TransportControlMode(str, Enum):
-    UNITS = "units"
-    CAPACITY = "capacity"
+    activity_type: str
+    activity_id: EntityId
 
-
-class FleetReservationKind(str, Enum):
-    SCIENTIFIC_EXPLORATION = "scientific_exploration"
-    SPECIAL_MISSION = "special_mission"
-    OTHER = "other"
+    def __post_init__(self) -> None:
+        if not self.activity_type:
+            raise ValueError("fleet activity type must be non-empty")
 
 
 @dataclass(frozen=True)
@@ -50,14 +56,15 @@ class DirectionalCapacity:
     reverse_t_per_day: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.forward_t_per_day < 0 or self.reverse_t_per_day < 0:
-            raise ValueError("directional transport capacity must be non-negative")
+        values = (self.forward_t_per_day, self.reverse_t_per_day)
+        if any(not math.isfinite(value) or value < 0 for value in values):
+            raise ValueError("directional transport capacity must be finite and non-negative")
 
 
 @dataclass
 class FleetPool:
     vehicle_definition_id: DefinitionId
-    location_id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     total_units: int = 0
 
     def __post_init__(self) -> None:
@@ -68,62 +75,95 @@ class FleetPool:
 @dataclass(frozen=True)
 class FleetPoolSnapshot:
     vehicle_definition_id: DefinitionId
-    location_id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     total_units: int
     free_units: int
     transport_units: int
     exploration_units: int
-    other_reserved_units: int
+    retirement_units: int
+    other_committed_units: int
     relocating_units: int
     releasing_units: int
 
 
 @dataclass
-class FleetReservation:
+class FleetCommitmentState:
     id: EntityId
-    owner_id: EntityId
-    kind: FleetReservationKind
+    owner_activity_ref: FleetActivityRef
     vehicle_definition_id: DefinitionId
-    location_id: SpatialNodeId
-    units: int
+    quantity: int
+    operational_node_id: SpatialNodeId | None = None
+    movement_execution_id: EntityId | None = None
 
     def __post_init__(self) -> None:
-        if self.units <= 0:
-            raise ValueError("fleet reservation units must be positive")
+        if self.quantity <= 0:
+            raise ValueError("fleet commitment quantity must be positive")
+        if (self.operational_node_id is None) == (self.movement_execution_id is None):
+            raise ValueError(
+                "fleet commitment must be at exactly one Operational Node or Movement execution"
+            )
+
+    @property
+    def in_movement(self) -> bool:
+        return self.movement_execution_id is not None
 
 
 @dataclass(frozen=True)
-class FleetReservationSnapshot:
+class FleetCommitmentSnapshot:
     id: EntityId
-    owner_id: EntityId
-    kind: FleetReservationKind
+    owner_activity_ref: FleetActivityRef
     vehicle_definition_id: DefinitionId
-    location_id: SpatialNodeId
-    units: int
+    quantity: int
+    operational_node_id: SpatialNodeId | None
+    movement_execution_id: EntityId | None
+
+    @property
+    def in_movement(self) -> bool:
+        return self.movement_execution_id is not None
+
+
+@dataclass(frozen=True)
+class FleetRelocationResourceNeed:
+    operational_node_id: SpatialNodeId
+    resource_id: DefinitionId
+    required_t: float
+
+    def __post_init__(self) -> None:
+        if self.required_t < -1e-9:
+            raise ValueError("fleet relocation resource need must be non-negative")
 
 
 @dataclass
 class FleetRelocation:
     id: EntityId
     vehicle_definition_id: DefinitionId
-    units: int
+    requested_units: int
+    fleet_commitment_id: EntityId
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
-    departure_day: int
-    arrival_day: int
+    requested_day: int
+    path: tuple[MovementPlanId, ...]
+    resource_needs: tuple[FleetRelocationResourceNeed, ...] = ()
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+    movement_execution_id: EntityId | None = None
 
     def __post_init__(self) -> None:
-        if self.units <= 0:
-            raise ValueError("fleet relocation units must be positive")
+        self.priority = ActivityPriority(self.priority)
+        if self.requested_units <= 0:
+            raise ValueError("fleet relocation requested units must be positive")
         if self.source_id == self.destination_id:
             raise ValueError("fleet relocation endpoints must differ")
-        if self.arrival_day <= self.departure_day:
-            raise ValueError("fleet relocation arrival must follow departure")
+        if not self.path:
+            raise ValueError("fleet relocation requires a movement path")
+
+    @property
+    def started(self) -> bool:
+        return self.movement_execution_id is not None
 
 
 @dataclass(frozen=True)
 class FleetRelocationResourceRequirement:
-    location_id: SpatialNodeId
+    operational_node_id: SpatialNodeId
     resource_id: DefinitionId
     required_t: float
     available_t: float
@@ -135,12 +175,12 @@ class FleetRelocationPlan:
     units: int
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
-    path: tuple[RouteId, ...]
+    path: tuple[MovementPlanId, ...]
     travel_days: int
     departure_day: int
     arrival_day: int | None
     resource_requirements: tuple[FleetRelocationResourceRequirement, ...] = ()
-    infrastructure_requirements: tuple[tuple[SpatialNodeId, str, float, str], ...] = ()
+    infrastructure_requirements: tuple[tuple[SpatialNodeId, str, str], ...] = ()
     blockers: tuple[str, ...] = ()
 
     @property
@@ -152,50 +192,33 @@ class FleetRelocationPlan:
 class FleetRelease:
     id: EntityId
     allocation_id: EntityId
-    vehicle_definition_id: DefinitionId
-    location_id: SpatialNodeId
-    units: int
+    fleet_commitment_id: EntityId
     release_day: int
-
-    def __post_init__(self) -> None:
-        if self.units <= 0:
-            raise ValueError("fleet releasing units must be positive")
 
 
 @dataclass
 class TransportAllocation:
     id: EntityId
     vehicle_definition_id: DefinitionId
-    anchor_location_id: SpatialNodeId
+    anchor_node_id: SpatialNodeId
     destination_id: SpatialNodeId
-    priority: int
-    control_mode: TransportControlMode
-    target_units: int | None = None
-    target_capacity: DirectionalCapacity | None = None
-    path: tuple[RouteId, ...] | None = None
-    path_policy: PathPolicy = PathPolicy.FASTEST
+    provisioning_priority: ProvisioningPriority
+    target_capacity: DirectionalCapacity
+    movement_hard_constraint: tuple[MovementPlanId, ...] | None = None
     paused: bool = False
-    active_units: int = 0
     last_operated_day: int | None = None
 
     def __post_init__(self) -> None:
-        if self.anchor_location_id == self.destination_id:
+        self.provisioning_priority = ProvisioningPriority(self.provisioning_priority)
+        if self.anchor_node_id == self.destination_id:
             raise ValueError("transport allocation endpoints must differ")
-        if self.active_units < 0:
-            raise ValueError("transport allocation active units must be non-negative")
-        if self.control_mode is TransportControlMode.UNITS:
-            if self.target_units is None or self.target_units < 0 or self.target_capacity is not None:
-                raise ValueError("UNITS allocation requires only target_units")
-        elif self.control_mode is TransportControlMode.CAPACITY:
-            if self.target_capacity is None or self.target_units is not None:
-                raise ValueError("CAPACITY allocation requires only target_capacity")
-        else:
-            raise ValueError(f"unsupported transport control mode: {self.control_mode}")
+        if self.movement_hard_constraint is not None and not self.movement_hard_constraint:
+            raise ValueError("transport movement hard constraint must be non-empty when set")
 
 
 @dataclass(frozen=True)
 class TransportServiceLeg:
-    route_id: RouteId
+    movement_plan_id: MovementPlanId
     direction: str
     cargo_capable: bool
     payload_t: float
@@ -207,10 +230,10 @@ class TransportServiceLeg:
 class TransportServicePlan:
     allocation_id: EntityId
     vehicle_definition_id: DefinitionId
-    anchor_location_id: SpatialNodeId
+    anchor_node_id: SpatialNodeId
     destination_id: SpatialNodeId
-    forward_path: tuple[RouteId, ...]
-    reverse_path: tuple[RouteId, ...]
+    forward_path: tuple[MovementPlanId, ...]
+    reverse_path: tuple[MovementPlanId, ...]
     legs: tuple[TransportServiceLeg, ...]
     cycle_days: float
     turnaround_days: float
@@ -221,7 +244,7 @@ class TransportServicePlan:
     nominal_per_unit: DirectionalCapacity
     resource_t_per_full_utilization_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
     servicing_units_per_full_utilization_day: float = 0.0
-    infrastructure_requirements: tuple[tuple[SpatialNodeId, str, float, str], ...] = ()
+    infrastructure_requirements: tuple[tuple[SpatialNodeId, str, str], ...] = ()
     blockers: tuple[str, ...] = ()
     resource_t_per_empty_cycle_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
     resource_t_per_forward_payload_increment_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...] = ()
@@ -244,43 +267,70 @@ class TransportCapacitySnapshot:
     used: DirectionalCapacity
     spare: DirectionalCapacity
     utilization: float
-    operational_resource_demand: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+    operational_supply: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
     blockers: tuple[str, ...] = ()
     limiting_factors: tuple[str, ...] = ()
 
 
-class CargoFlowStatus(str, Enum):
-    IN_TRANSIT = "in_transit"
-    HANDOFF_WAITING = "handoff_waiting"
-    ARRIVAL_WAITING = "arrival_waiting"
+@dataclass(frozen=True)
+class TransportServiceSupply:
+    """Transport-owned projection of one directional service offered to Logistics."""
 
-
-@dataclass
-class CargoFlowBatch:
-    id: EntityId
-    resource_id: DefinitionId
-    amount_t: float
+    key: str
     source_id: SpatialNodeId
     destination_id: SpatialNodeId
-    lane_id: EntityId | None
-    demand_id: EntityId | None
-    owner_kind: str
-    owner_id: EntityId
-    priority: int
-    service_ids: tuple[str, ...]
-    service_destinations: tuple[SpatialNodeId, ...]
-    departure_day: int
-    ready_day: int
-    leg_index: int = 0
-    status: CargoFlowStatus = CargoFlowStatus.IN_TRANSIT
+    capacity_t_per_day: float
+    latency_days: int
+    cycle_days: float
+    movement_plan_path: tuple[MovementPlanId, ...]
+    allocation_id: EntityId
+    direction: str
+    propellant_t_per_t: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.amount_t <= 0:
-            raise ValueError("cargo flow amount must be positive")
-        if not self.service_ids or len(self.service_ids) != len(self.service_destinations):
-            raise ValueError("cargo flow requires aligned service path")
-        if self.leg_index < 0 or self.leg_index >= len(self.service_ids):
-            raise ValueError("cargo flow leg index out of range")
+        if self.capacity_t_per_day < 0:
+            raise ValueError("transport service supply capacity must be non-negative")
+        if self.latency_days <= 0:
+            raise ValueError("transport service supply latency must be positive")
+        if self.cycle_days <= 0:
+            raise ValueError("transport service supply cycle must be positive")
+        if self.source_id == self.destination_id:
+            raise ValueError("transport service supply endpoints must differ")
+        if self.direction not in ("forward", "reverse"):
+            raise ValueError("transport service supply direction must be forward or reverse")
+        if self.propellant_t_per_t < 0:
+            raise ValueError("transport service supply propellant must be non-negative")
+
+
+@dataclass(frozen=True)
+class TransportOperationDependencyProjection:
+    """Transport-owned dependencies Logistics must submit to shared allocators."""
+
+    allocation_id: EntityId
+    priority: ActivityPriority
+    anchor_node_id: SpatialNodeId
+    turnaround_service_type: str | None
+    turnaround_request_id: EntityId | None
+    surface_service_locations: tuple[SpatialNodeId, ...] = ()
+
+
+@dataclass(frozen=True)
+class TransportOperationUsageRequirements:
+    """Per-tonne operation inputs derived from one Fleet service-cycle state.
+
+    Direction-specific payload increments are linear. Shared empty-cycle and
+    turnaround loads are attributed between directions from a reference usage
+    mix so their aggregate remains equal to the service plan's max-utilization
+    semantics.
+    """
+
+    allocation_id: EntityId
+    forward_resource_per_t: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+    reverse_resource_per_t: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+    turnaround_service_type: str | None
+    turnaround_node_id: SpatialNodeId
+    forward_turnaround_per_t: float = 0.0
+    reverse_turnaround_per_t: float = 0.0
 
 
 class OperationSupportLocation(str, Enum):
@@ -335,20 +385,227 @@ class TransportOperationRequirement:
 
 
 @dataclass(frozen=True)
-class RouteDef:
-    id: RouteId
-    origin_id: SpatialNodeId
-    destination_id: SpatialNodeId
+class MovementEndpoint:
+    """Physical endpoint used by the Movement Resolver.
+
+    Normal logistics endpoints belong to an established Operational Node.
+    ``physical_target_cell_id`` is reserved for one-shot movement to a surface
+    target that is not yet an Operational Node (for example Founding).
+    """
+
+    operational_node_id: SpatialNodeId | None = None
+    surface_interface_id: EntityId | None = None
+    access_cell_id: SurfaceCellId | None = None
+    non_surface_interface: str | None = None
+    physical_target_cell_id: SurfaceCellId | None = None
+    physical_target_node_id: SpatialNodeId | None = None
+
+    def __post_init__(self) -> None:
+        locators = (
+            self.surface_interface_id is not None,
+            self.access_cell_id is not None,
+            self.non_surface_interface is not None,
+            self.physical_target_cell_id is not None,
+            self.physical_target_node_id is not None,
+        )
+        if sum(locators) != 1:
+            raise ValueError("movement endpoint requires exactly one physical locator")
+        if self.physical_target_cell_id is not None or self.physical_target_node_id is not None:
+            if self.operational_node_id is not None:
+                raise ValueError("physical target must not claim an Operational Node")
+        elif self.operational_node_id is None:
+            raise ValueError("normal movement endpoint requires an Operational Node")
+        if self.non_surface_interface is not None and not self.non_surface_interface:
+            raise ValueError("non-surface movement interface must not be empty")
+
+    @property
+    def node_id(self) -> SpatialNodeId:
+        if self.operational_node_id is None:
+            raise ValueError("physical target has no Operational Node")
+        return self.operational_node_id
+
+    @property
+    def locator_kind(self) -> str:
+        if self.surface_interface_id is not None:
+            return "surface_interface"
+        if self.access_cell_id is not None:
+            return "access_cell"
+        if self.physical_target_cell_id is not None:
+            return "physical_surface_target"
+        if self.physical_target_node_id is not None:
+            return "physical_non_surface_target"
+        return "non_surface_interface"
+
+    @property
+    def locator_id(self) -> str:
+        if self.surface_interface_id is not None:
+            return str(self.surface_interface_id)
+        if self.access_cell_id is not None:
+            return str(self.access_cell_id)
+        if self.physical_target_cell_id is not None:
+            return str(self.physical_target_cell_id)
+        if self.physical_target_node_id is not None:
+            return str(self.physical_target_node_id)
+        assert self.non_surface_interface is not None
+        return self.non_surface_interface
+
+
+@dataclass(frozen=True)
+class SpatialRelation:
+    origin_context_id: SpatialNodeId | SurfaceCellId
+    destination_context_id: SpatialNodeId | SurfaceCellId
+    movement_context: str
+    characteristic_distance_km: float | None = None
+    characteristic_delta_v_km_s: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not self.movement_context:
+            raise ValueError("movement context must not be empty")
+        if self.characteristic_distance_km is not None and self.characteristic_distance_km < 0:
+            raise ValueError("movement relation distance must be non-negative")
+        if self.characteristic_delta_v_km_s < 0:
+            raise ValueError("movement relation delta-v must be non-negative")
+
+
+@dataclass(frozen=True)
+class MovementPlan:
+    """Derived, non-persisted physical plan for one direct Movement leg."""
+
+    id: MovementPlanId
+    origin: MovementEndpoint
+    destination: MovementEndpoint
+    relation: SpatialRelation
     transit_days: int
     operations: tuple[TransportOperationRequirement, ...]
     display_name: str | None = None
     origin_requirements: SiteRequirements = SiteRequirements()
     destination_requirements: SiteRequirements = SiteRequirements()
 
+    def __post_init__(self) -> None:
+        if self.origin.operational_node_id is not None and self.destination.operational_node_id is not None:
+            if self.origin.operational_node_id == self.destination.operational_node_id:
+                raise ValueError("movement plan endpoints must differ")
+        if self.transit_days <= 0:
+            raise ValueError("movement plan transit days must be positive")
+        if not self.operations:
+            raise ValueError("movement plan requires at least one operation")
+
+    @property
+    def origin_id(self) -> SpatialNodeId | None:
+        return self.origin.operational_node_id
+
+    @property
+    def destination_id(self) -> SpatialNodeId | None:
+        return self.destination.operational_node_id
+
     @property
     def delta_v_km_s(self) -> float:
         return sum(operation.delta_v_km_s for operation in self.operations)
 
+
+class MovementExecutionKind(str, Enum):
+    FLEET_RELOCATION = "fleet_relocation"
+    FOUNDING_DEPLOYMENT = "founding_deployment"
+    SCIENTIFIC_EXPLORATION = "scientific_exploration"
+
+
+@dataclass(frozen=True)
+class MovementExecutionResourceRequirement:
+    """Frozen physical resource requirement for one started Movement leg."""
+
+    operational_node_id: SpatialNodeId
+    resource_id: DefinitionId
+    required_t: float
+
+    def __post_init__(self) -> None:
+        if self.required_t < -1e-9:
+            raise ValueError("movement execution resource requirement must be non-negative")
+
+
+@dataclass(frozen=True)
+class MovementExecutionPayloadResource:
+    """Physical Resource cargo owned by a started finite Movement."""
+
+    resource_id: DefinitionId
+    amount_t: float
+
+    def __post_init__(self) -> None:
+        if self.amount_t <= 0:
+            raise ValueError("movement execution payload resource must be positive")
+
+
+@dataclass(frozen=True)
+class MovementExecutionLeg:
+    """Frozen movement conditions captured when a one-shot execution starts."""
+
+    movement_plan_id: MovementPlanId
+    origin: MovementEndpoint
+    destination: MovementEndpoint
+    operations: tuple[TransportOperationRequirement, ...]
+    latency_days: int
+    payload_capacity_t: float
+    propellant_t_per_unit: float
+    asset_disposition: OperationAssetDisposition
+    resource_requirements: tuple[MovementExecutionResourceRequirement, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.latency_days <= 0:
+            raise ValueError("movement execution leg latency must be positive")
+        if self.payload_capacity_t < -1e-9:
+            raise ValueError("movement execution payload capacity must be non-negative")
+        if self.propellant_t_per_unit < -1e-9:
+            raise ValueError("movement execution propellant must be non-negative")
+        if not self.operations:
+            raise ValueError("movement execution leg requires operations")
+
+
+@dataclass
+class MovementExecution:
+    """Authoritative snapshot of a started finite Movement.
+
+    MovementPlan candidates remain derived. Once dispatch starts, this state owns
+    the conditions that must not change retroactively when Spatial, Infrastructure,
+    Technology, or current Vehicle definitions change.
+    """
+
+    id: EntityId
+    owner_id: EntityId
+    kind: MovementExecutionKind
+    fleet_commitment_id: EntityId
+    legs: tuple[MovementExecutionLeg, ...]
+    payload_t_per_unit: float
+    started_day: int
+    completion_day: int
+    payload_resources: tuple[MovementExecutionPayloadResource, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.legs:
+            raise ValueError("movement execution requires at least one leg")
+        if self.payload_t_per_unit < -1e-9:
+            raise ValueError("movement execution payload must be non-negative")
+        if self.completion_day <= self.started_day:
+            raise ValueError("movement execution completion must follow start")
+        if self.payload_t_per_unit > min(leg.payload_capacity_t for leg in self.legs) + 1e-9:
+            raise ValueError("movement execution payload exceeds frozen capacity")
+        payload_resource_ids = [row.resource_id for row in self.payload_resources]
+        if len(set(payload_resource_ids)) != len(payload_resource_ids):
+            raise ValueError("movement execution payload resources must be unique")
+
+    @property
+    def latency_days(self) -> int:
+        return sum(leg.latency_days for leg in self.legs)
+
+    @property
+    def origin(self) -> MovementEndpoint:
+        return self.legs[0].origin
+
+    @property
+    def destination(self) -> MovementEndpoint:
+        return self.legs[-1].destination
+
+    @property
+    def final_asset_disposition(self) -> OperationAssetDisposition:
+        return self.legs[-1].asset_disposition
 
 @dataclass(frozen=True)
 class PoweredAscentCapability:
@@ -380,6 +637,20 @@ class AtmosphericEntryCapability:
     max_surface_pressure_pa: float
     asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=ATMOSPHERIC_ENTRY)
+
+
+@dataclass(frozen=True)
+class SurfaceTransportCapability:
+    speed_km_per_day: float
+    max_distance_km: float | None = None
+    asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
+    operation_type: str = field(init=False, default=SURFACE_TRANSPORT)
+
+    def __post_init__(self) -> None:
+        if self.speed_km_per_day <= 0:
+            raise ValueError("surface transport speed must be positive")
+        if self.max_distance_km is not None and self.max_distance_km <= 0:
+            raise ValueError("surface transport maximum distance must be positive")
 
 
 @dataclass(frozen=True)
@@ -417,9 +688,9 @@ class TransportPerformanceProfile:
             if requirement.resource_id == resource_id
         )
 
-    def route_asset_disposition(self, route: RouteDef) -> OperationAssetDisposition:
+    def movement_asset_disposition(self, plan: MovementPlan) -> OperationAssetDisposition:
         disposition = OperationAssetDisposition.DESTINATION
-        for operation in route.operations:
+        for operation in plan.operations:
             current = self.operation_asset_disposition(operation.operation_type)
             if current is None:
                 continue
@@ -433,38 +704,82 @@ class TransportPerformanceProfile:
             return ()
         return (f"endurance:{operating_days:g}/{self.endurance_days:g}",)
 
-    def propellant_t(self, route: RouteDef, cargo_t: float) -> float:
-        return self.propellant_t_per_total_t_per_km_s * (self.dry_mass_t + cargo_t) * route.delta_v_km_s
+    def propellant_t(self, plan: MovementPlan, cargo_t: float) -> float:
+        return self.propellant_t_per_total_t_per_km_s * (self.dry_mass_t + cargo_t) * plan.delta_v_km_s
 
-    def max_cargo_for_route(self, route: RouteDef) -> float:
-        if self.propellant_t_per_total_t_per_km_s <= 1e-12 or route.delta_v_km_s <= 1e-12:
+    def max_cargo_for_movement(self, plan: MovementPlan) -> float:
+        if self.propellant_t_per_total_t_per_km_s <= 1e-12 or plan.delta_v_km_s <= 1e-12:
             return self.payload_t
         mass_budget = self.propellant_capacity_t / (
-            self.propellant_t_per_total_t_per_km_s * route.delta_v_km_s
+            self.propellant_t_per_total_t_per_km_s * plan.delta_v_km_s
         )
         return max(0.0, min(self.payload_t, mass_budget - self.dry_mass_t))
 
 
 @dataclass(frozen=True)
-class VehicleEconomicsSpec:
-    operating_cost_musd_per_cycle: float = 0.0
-    operating_cost_musd_per_cargo_t: float = 0.0
-
-
-@dataclass(frozen=True)
 class VehicleProductionSpec:
-    capability_id: str | None = None
+    service_type: str | None = None
     days: float = 0.0
-    cost_musd: float = 0.0
     resources: tuple[tuple[DefinitionId, float], ...] = ()
     site_requirements: SiteRequirements = SiteRequirements()
 
 
+class FleetRetirementPhase(str, Enum):
+    COMMITTED = "committed"
+    DISMANTLING = "dismantling"
+    COMPLETE = "complete"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class VehicleRetirementSpec:
+    service_type: str | None = None
+    work_days_per_unit: float = 0.0
+    resources_per_unit: tuple[tuple[DefinitionId, float], ...] = ()
+    recovery_resources_per_unit: tuple[tuple[DefinitionId, float], ...] = ()
+    site_requirements: SiteRequirements = SiteRequirements()
+
+    @property
+    def enabled(self) -> bool:
+        return self.work_days_per_unit > 0.0
+
+    def __post_init__(self) -> None:
+        if self.work_days_per_unit < 0:
+            raise ValueError("retirement work must be non-negative")
+        if any(amount < 0 for _resource_id, amount in self.resources_per_unit):
+            raise ValueError("retirement resource requirements must be non-negative")
+        if any(amount < 0 for _resource_id, amount in self.recovery_resources_per_unit):
+            raise ValueError("retirement recovery resources must be non-negative")
+
+
+@dataclass
+class FleetRetirementState:
+    id: EntityId
+    vehicle_definition_id: DefinitionId
+    operational_node_id: SpatialNodeId
+    requested_units: int
+    fleet_commitment_id: EntityId
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+    progress_work: float = 0.0
+    phase: FleetRetirementPhase = FleetRetirementPhase.COMMITTED
+    irreversible_started: bool = False
+    created_day: int = 0
+    salvage_recovered_fraction: float | None = None
+
+    def __post_init__(self) -> None:
+        self.priority = ActivityPriority(self.priority)
+        if self.requested_units <= 0:
+            raise ValueError("retirement requested units must be positive")
+        if self.progress_work < 0:
+            raise ValueError("retirement progress must be non-negative")
+        if self.salvage_recovered_fraction is not None and not 0.0 <= self.salvage_recovered_fraction <= 1.0:
+            raise ValueError("retirement salvage recovered fraction must be within 0..1")
+
+
 @dataclass(frozen=True)
 class VehicleMaintenanceSpec:
-    capability_id: str | None = None
+    service_type: str | None = None
     turnaround_days: float = 0.0
-    cost_musd: float = 0.0
     resources: tuple[tuple[DefinitionId, float], ...] = ()
 
 
@@ -473,8 +788,8 @@ class VehicleDef:
     id: DefinitionId
     display_name: str
     performance: TransportPerformanceProfile
-    economics: VehicleEconomicsSpec = VehicleEconomicsSpec()
     production: VehicleProductionSpec = VehicleProductionSpec()
+    retirement: VehicleRetirementSpec = VehicleRetirementSpec()
     maintenance: VehicleMaintenanceSpec = VehicleMaintenanceSpec()
 
     @property
@@ -498,37 +813,29 @@ class VehicleDef:
     @property
     def generic_capabilities(self) -> tuple[str, ...]: return self.performance.generic_capabilities
     @property
-    def operating_cost_musd_per_cycle(self) -> float: return self.economics.operating_cost_musd_per_cycle
-    @property
-    def operating_cost_musd_per_cargo_t(self) -> float: return self.economics.operating_cost_musd_per_cargo_t
-    @property
-    def production_capability_id(self) -> str | None: return self.production.capability_id
+    def production_service_type(self) -> str | None: return self.production.service_type
     @property
     def production_days(self) -> float: return self.production.days
     @property
-    def production_cost_musd(self) -> float: return self.production.cost_musd
-    @property
     def production_resources(self) -> tuple[tuple[DefinitionId, float], ...]: return self.production.resources
     @property
-    def turnaround_capability_id(self) -> str | None: return self.maintenance.capability_id
+    def turnaround_service_type(self) -> str | None: return self.maintenance.service_type
     @property
     def turnaround_days(self) -> float: return self.maintenance.turnaround_days
-    @property
-    def turnaround_cost_musd(self) -> float: return self.maintenance.cost_musd
     @property
     def turnaround_resources(self) -> tuple[tuple[DefinitionId, float], ...]: return self.maintenance.resources
 
     def capability_for(self, operation_type: str) -> OperationCapability | None:
         return self.performance.capability_for(operation_type)
 
-    def propellant_t(self, route: RouteDef, cargo_t: float) -> float:
-        return self.performance.propellant_t(route, cargo_t)
+    def propellant_t(self, plan: MovementPlan, cargo_t: float) -> float:
+        return self.performance.propellant_t(plan, cargo_t)
 
-    def max_cargo_for_route(self, route: RouteDef) -> float:
-        return self.performance.max_cargo_for_route(route)
+    def max_cargo_for_movement(self, plan: MovementPlan) -> float:
+        return self.performance.max_cargo_for_movement(plan)
 
-    def route_asset_disposition(self, route: RouteDef) -> OperationAssetDisposition:
-        return self.performance.route_asset_disposition(route)
+    def movement_asset_disposition(self, plan: MovementPlan) -> OperationAssetDisposition:
+        return self.performance.movement_asset_disposition(plan)
 
     def endurance_failures(self, operating_days: float) -> tuple[str, ...]:
         return self.performance.endurance_failures(operating_days)
@@ -541,33 +848,3 @@ class VehicleDef:
     def landing(self): return self.capability_for(LANDING)
     @property
     def atmospheric_entry(self): return self.capability_for(ATMOSPHERIC_ENTRY)
-
-
-@dataclass(frozen=True)
-class ExternalTransportServiceDef:
-    id: DefinitionId
-    display_name: str
-    capacity_t_per_day: float
-    cost_musd_per_t: float
-    performance: TransportPerformanceProfile
-    transit_time_multiplier: float = 1.0
-    origin_requirements: SiteRequirements = SiteRequirements()
-    destination_requirements: SiteRequirements = SiteRequirements()
-
-
-@dataclass
-class LogisticsLane:
-    id: EntityId
-    source_id: SpatialNodeId
-    destination_id: SpatialNodeId
-    requested_capacity_t_per_day: float
-    priority: int
-    path: tuple[RouteId, ...] | None = None
-    path_policy: PathPolicy = PathPolicy.FASTEST
-    paused: bool = False
-
-    def __post_init__(self) -> None:
-        if self.source_id == self.destination_id:
-            raise ValueError("logistics lane endpoints must differ")
-        if self.requested_capacity_t_per_day <= 0:
-            raise ValueError("logistics lane requested capacity must be positive")

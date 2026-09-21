@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import socket
 
-from ..bootstrap import build_game_application
+from ..bootstrap import build_game_application, build_game_application_for_load
 from ..simulation import OfflineProgressPolicy
 from .http_server import ApiServerConfig
 from .time_http_server import create_server
@@ -49,7 +49,12 @@ def main() -> None:
     args = parser.parse_args()
 
     policy = OfflineProgressPolicy(args.seconds_per_game_day, args.offline_max_days)
-    runtime = GameRuntime(factory=build_game_application, save_dir=Path(args.save_dir), offline_policy=policy)
+    runtime = GameRuntime(
+        new_game_factory=build_game_application,
+        load_factory=build_game_application_for_load,
+        save_dir=Path(args.save_dir),
+        offline_policy=policy,
+    )
     config = ApiServerConfig(
         host=args.host,
         port=args.port,

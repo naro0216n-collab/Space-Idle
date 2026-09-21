@@ -1,167 +1,688 @@
 from __future__ import annotations
 
+from math import ceil
+
+from .application_comparison import project_comparison_axes
+from .application_constraints import constraints_from_pairs, limiting_factors_from_codes
+from .app_contracts.ui_reports import ComparisonValueRow
 from .application_views import (
     BuildResourceOption,
     BuildOptionRow,
     BuildOptionsView,
-    FacilityUpgradeOption,
+    FacilityUpgradeOption, FacilityUpgradeDifferenceRow,
     ProjectResourceRow,
+    ProjectKnowledgeRequirementRow,
     ProjectRow,
 )
-from .construction.models import FacilityUpgradeTarget, NewFacilityTarget, ProjectStatus
-from .shared import SpatialNodeId
+from .construction.models import (
+    FacilityUpgradeTarget, FacilityDecommissionTarget, NewFacilityTarget,
+    ProjectStatus, SurfaceCellDevelopmentTarget,
+)
+from .facilities import FacilityPlacementScope
+from .disposal import project_salvage_recovery
+from .shared import EntityId, SpatialNodeId
+from .supply import SupplyRequirement
 
 
 class ProjectProjectorMixin:
+
     @staticmethod
-    def _construction_resource_options(recipe) -> tuple[BuildResourceOption, ...]:
-        return tuple(
-            BuildResourceOption(str(requirement.resource_id), requirement.amount_t)
-            for requirement in recipe.resources
+    def _projected_material_readiness_day(
+        *, day: int, owner_kind: str, owner_id: str, resources, requirement_rows
+    ) -> int | None:
+        shortages = [row for row in resources if row.shortage_t > 1e-9]
+        if not shortages:
+            return day
+        by_resource = {
+            row.resource_id: row
+            for row in requirement_rows
+            if row.owner_kind == owner_kind and row.owner_id == owner_id
+        }
+        readiness_days: list[int] = []
+        for resource in shortages:
+            requirement = by_resource.get(resource.resource_id)
+            if requirement is None:
+                return None
+            if requirement.external_required_t <= 1e-9:
+                readiness_days.append(day)
+                continue
+            if requirement.remaining_t > 1e-9:
+                return None
+            if requirement.earliest_confirmed_arrival_day is None:
+                return None
+            readiness_days.append(requirement.earliest_confirmed_arrival_day)
+        return max(readiness_days, default=day)
+    def _construction_resource_options(
+        self, recipe, location_id: SpatialNodeId, execution_allocation
+    ) -> tuple[tuple[BuildResourceOption, ...], int | None]:
+        """Project candidate material availability without creating procurement state.
+
+        Candidate projection must not borrow Cargo already committed to another owner.
+        It starts with unreserved local Inventory and asks Logistics for the residual.
+        Resources whose selected paths share Transport Services are grouped so they
+        cannot each claim the full shared capacity at the same time.
+        """
+        sim = self._simulation
+        projections: list[dict[str, object]] = []
+        for requirement in recipe.resources:
+            available = sim.inventory.available(location_id, requirement.resource_id)
+            shortage = max(0.0, requirement.amount_t - available)
+            projection: dict[str, object] = {
+                "resource_id": str(requirement.resource_id),
+                "required_t": requirement.amount_t,
+                "available_t": available,
+                "shortage_t": shortage,
+                "source_id": None,
+                "arrival_day": sim.day if shortage <= 1e-9 else None,
+                "capacity": None,
+                "service_ids": frozenset(),
+            }
+            if shortage > 1e-9:
+                # Path selection is amount-independent.  Reusing a location/resource
+                # projection identity lets Logistics share candidate-path work across
+                # multiple Facility candidates in the same derived projection scope.
+                projection_id = EntityId(
+                    f"projection.build:{location_id}:{requirement.resource_id}"
+                )
+                options = sim.logistics.supply_planning_options(
+                    SupplyRequirement(
+                        id=projection_id,
+                        owner_kind="construction_preview",
+                        owner_id=projection_id,
+                        destination_id=location_id,
+                        resource_id=requirement.resource_id,
+                        amount_t=shortage,
+                        forecast_requirement_day=sim.day,
+                        purpose="construction_preview",
+                    ),
+                    sim.day,
+                    execution_allocation=execution_allocation,
+                )
+                if options.selected_source_id is not None:
+                    source_available = sim.inventory.available(
+                        options.selected_source_id, requirement.resource_id
+                    )
+                    capacity = options.selected_bottleneck_capacity_t_per_day
+                    if (
+                        source_available + 1e-9 >= shortage
+                        and options.projected_arrival_day is not None
+                        and capacity is not None
+                        and capacity > 1e-12
+                    ):
+                        projection.update(
+                            source_id=str(options.selected_source_id),
+                            arrival_day=options.projected_arrival_day,
+                            capacity=float(capacity),
+                            service_ids=frozenset(options.selected_service_ids),
+                        )
+            projections.append(projection)
+
+        # Connected components of overlapping Service paths share at least one
+        # bottleneck.  Serialize their aggregate shortage through the lowest current
+        # bottleneck capacity; this is conservative when paths only partially overlap.
+        remote_indices = [
+            index for index, row in enumerate(projections)
+            if row["shortage_t"] > 1e-9 and row["arrival_day"] is not None
+        ]
+        remaining = set(remote_indices)
+        while remaining:
+            component = {remaining.pop()}
+            changed = True
+            while changed:
+                changed = False
+                component_services = set().union(*(projections[i]["service_ids"] for i in component))
+                connected = {
+                    index for index in remaining
+                    if component_services.intersection(projections[index]["service_ids"])
+                }
+                if connected:
+                    component.update(connected)
+                    remaining.difference_update(connected)
+                    changed = True
+            total_shortage = sum(float(projections[i]["shortage_t"]) for i in component)
+            capacity = min(float(projections[i]["capacity"]) for i in component)
+            first_arrival = max(int(projections[i]["arrival_day"]) for i in component)
+            readiness = first_arrival + max(1, ceil(total_shortage / capacity)) - 1
+            for index in component:
+                projections[index]["arrival_day"] = readiness
+
+        rows = tuple(
+            BuildResourceOption(
+                row["resource_id"],
+                float(row["required_t"]),
+                available_t=float(row["available_t"]),
+                projected_source_id=row["source_id"],
+                projected_arrival_day=row["arrival_day"],
+            )
+            for row in projections
         )
+        readiness_days = [row.projected_arrival_day for row in rows]
+        return (
+            rows,
+            max(readiness_days, default=sim.day)
+            if all(day is not None for day in readiness_days)
+            else None,
+        )
+
+    def _facility_upgrade_differences(self, facility, recipe) -> tuple[tuple[FacilityUpgradeDifferenceRow, ...], tuple[str, ...]]:
+        sim = self._simulation
+        target_level = recipe.target_level
+        rows: list[FacilityUpgradeDifferenceRow] = [
+            FacilityUpgradeDifferenceRow("level", "Level", facility.level, target_level),
+        ]
+        definition = sim.facilities.definitions[facility.definition_id]
+
+        if sim.extraction is not None:
+            extraction_spec = sim.extraction.specs.get(facility.definition_id)
+            if extraction_spec is not None:
+                current = extraction_spec.nominal_capacity_t_per_day * facility.level
+                target = extraction_spec.nominal_capacity_t_per_day * target_level
+                if abs(target - current) > 1e-9:
+                    rows.append(FacilityUpgradeDifferenceRow(
+                        "capacity", "抽出公称Capacity", current, target, "t/日"
+                    ))
+
+        provider = None if sim.research is None else sim.research.facility_provider_spec(facility.id)
+        if provider is not None:
+            current_spec = provider.level_spec(facility.level)
+            target_spec = provider.level_spec(target_level)
+            for kind, label, current, target, unit in (
+                ("capacity", "研究RP生成Capacity", current_spec.generation_points_per_day, target_spec.generation_points_per_day, "RP/日"),
+                ("capacity", "研究RP貯蔵Capacity", current_spec.storage_capacity_points, target_spec.storage_capacity_points, "RP"),
+                ("service", "研究実行Service供給", current_spec.research_execution_per_day, target_spec.research_execution_per_day, "work/日"),
+            ):
+                if abs(target - current) > 1e-9:
+                    rows.append(FacilityUpgradeDifferenceRow(kind, label, current, target, unit))
+
+        maintenance_fraction = definition.maintenance_fraction_per_year
+        if maintenance_fraction > 1e-12:
+            current_maintenance = sim.facilities.maintenance_requirements_per_day(facility.id)
+            target_investment = dict(facility.invested_resources)
+            for requirement in recipe.resources:
+                target_investment[requirement.resource_id] = target_investment.get(requirement.resource_id, 0.0) + requirement.amount_t
+            for resource_id in sorted(set(current_maintenance) | set(target_investment), key=str):
+                current = current_maintenance.get(resource_id, 0.0)
+                target = target_investment.get(resource_id, 0.0) * maintenance_fraction / 365.0
+                if abs(target - current) > 1e-12:
+                    rows.append(FacilityUpgradeDifferenceRow(
+                        "maintenance", f"維持需要 · {self._resource_name(resource_id)}", current, target, "t/日"
+                    ))
+
+        unchanged: list[str] = []
+        if definition.capability_supplies:
+            unchanged.append("Capability構成")
+        if sim.industry.compatible_processes(facility.definition_id):
+            unchanged.append("Process選択肢")
+        if definition.service_capacity_supplies:
+            unchanged.append("固定Service供給")
+        return tuple(rows), tuple(unchanged)
 
     def _facility_upgrade_option(self, facility, power=None) -> FacilityUpgradeOption | None:
         sim = self._simulation
         recipe = sim.projects.next_upgrade_recipe(facility.id)
         if recipe is None:
             return None
+        plan_failures = sim.projects.upgrade_plan_failures(facility.id)
         active_project_id = next(
-            (
-                str(project.id)
-                for project in sim.projects.projects.values()
-                if isinstance(project.target, FacilityUpgradeTarget)
-                and project.target.facility_id == facility.id
-                and project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
-            ),
+            (failure.detail for failure in plan_failures if failure.code == "active_upgrade_project"),
             None,
         )
-        snapshot = power if power is not None else sim.power.snapshot(facility.location_id, sim.facilities, sim.day)
-        failures = sim.projects.upgrade_site_failures(facility.id, recipe.target_level, sim.day, snapshot)
+        decision = self._tick_decision_projection()
+        snapshot = (
+            power
+            if power is not None
+            else decision.allocations.power_by_location[facility.operational_node_id]
+        )
+        site_failures = sim.projects.upgrade_site_failures(
+            facility.id, recipe.target_level, sim.day, snapshot
+        )
+        blockers = tuple(
+            ("technology", str(technology))
+            for technology in sorted(
+                recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
+                key=str,
+            )
+        ) + tuple((failure.code, failure.detail) for failure in site_failures)
+        for failure in plan_failures:
+            row = (failure.code, failure.detail)
+            if row not in blockers:
+                blockers += (row,)
+        differences, unchanged_aspects = self._facility_upgrade_differences(facility, recipe)
+        resources, _ = self._construction_resource_options(
+            recipe, facility.operational_node_id, decision.allocations.transport
+        )
         return FacilityUpgradeOption(
-            recipe.target_level,
-            recipe.construction_work,
-            self._construction_resource_options(recipe),
-            tuple(sorted(str(technology) for technology in recipe.prerequisite_technologies - sim.projects.unlocked_technologies)),
-            tuple((failure.code, failure.detail) for failure in failures),
-            active_project_id,
+            target_level=recipe.target_level,
+            construction_required=recipe.construction_work,
+            resources=resources,
+            blockers=constraints_from_pairs(
+                blockers,
+                affected_action="plan_facility_upgrade",
+                related_entity_kind="facility",
+                related_entity_id=str(facility.id),
+            ),
+            can_plan=not plan_failures,
+            active_project_id=active_project_id,
+            differences=differences,
+            unchanged_aspects=unchanged_aspects,
         )
 
-    def _project_external_supply_blocker(self, demand) -> tuple[str, str]:
-        """Translate Logistics demand state into a project-facing blocker.
+    def _external_supply_blocker(
+        self, requirement, execution_allocation=None
+    ) -> tuple[str, str]:
+        """Translate Logistics Supply Requirement state into an owning-project blocker.
 
-        Construction owns the need and sourcing policy; Logistics owns whether
-        the residual off-site demand has a usable lane, source stock and active
-        pipeline. The Application layer combines those contracts for the UI
-        without making Construction inspect Logistics state directly.
+        Finite project domains own their resource need and sourcing preference;
+        Logistics owns whether residual off-site requirement has a usable source/path,
+        source stock and active pipeline.  The Application layer combines those public
+        contracts without making either domain inspect the other's state.
         """
         sim = self._simulation
-        resource_id = str(demand.resource_id)
-        if sim.logistics.demand_remaining_t(demand) <= 1e-9:
+        resource_id = str(requirement.resource_id)
+        if sim.logistics.requirement_remaining_t(requirement) <= 1e-9:
             return ("import_transit", resource_id)
 
-        options = sim.logistics.demand_supply_options(demand, sim.day)
-        if not options.eligible_lane_ids:
-            return ("import_lane", resource_id)
-        if not options.operational_lane_ids:
+        options = sim.logistics.supply_planning_options(
+            requirement,
+            sim.day,
+            execution_allocation=execution_allocation,
+        )
+        if not options.candidate_source_ids:
+            return ("import_source", resource_id)
+        if not options.operational_source_ids:
             detail = resource_id
             if options.blockers:
                 detail += ":" + ";".join(options.blockers)
-            return ("import_lane_blocked", detail)
+            return ("import_transport_blocked", detail)
         if not options.stocked_source_ids:
             return ("import_stock", resource_id)
         return ("import_transit", resource_id)
 
-    def _project_external_demands(self) -> dict[str, object]:
+    def _external_requirements(self, owner_kind: str, requirements=None) -> dict[str, object]:
         return {
-            str(demand.id): demand
-            for demand in self._simulation.resource_demands()
-            if demand.owner_kind == "project"
+            str(requirement.id): requirement
+            for requirement in (
+                self._simulation.supplys()
+                if requirements is None else requirements
+            )
+            if requirement.owner_kind == owner_kind
         }
 
-    def _project_blockers(self, project, power, external_demands=None) -> tuple[tuple[str, str], ...]:
-        sim = self._simulation
-        demands = self._project_external_demands() if external_demands is None else external_demands
-        blockers: list[tuple[str, str]] = []
-        for blocker in sim.projects.blockers(project.id, sim.day, power):
+    def _resource_blockers(
+        self,
+        blockers,
+        *,
+        owner_kind: str,
+        owner_id: str,
+        requirements: dict[str, object],
+        execution_allocation=None,
+    ) -> tuple[tuple[str, str], ...]:
+        rows: list[tuple[str, str]] = []
+        for blocker in blockers:
             if blocker.code != "resource_shortage":
-                blockers.append((blocker.code, blocker.detail))
+                rows.append((blocker.code, blocker.detail))
                 continue
-            demand_id = f"demand.project:{project.id}:{blocker.detail}"
-            demand = demands.get(demand_id)
-            blockers.append(
-                self._project_external_supply_blocker(demand)
-                if demand is not None
+            requirement_id = f"requirement.{owner_kind}:{owner_id}:{blocker.detail}"
+            requirement = requirements.get(requirement_id)
+            rows.append(
+                self._external_supply_blocker(requirement, execution_allocation)
+                if requirement is not None
                 else (blocker.code, blocker.detail)
             )
-        return tuple(blockers)
+        return tuple(rows)
+
+    def _project_blockers(
+        self, project, power, external_requirements=None, execution_allocation=None
+    ) -> tuple[tuple[str, str], ...]:
+        sim = self._simulation
+        requirements = self._external_requirements("project") if external_requirements is None else external_requirements
+        return self._resource_blockers(
+            sim.projects.blockers(project.id, sim.day, power),
+            owner_kind="project",
+            owner_id=str(project.id),
+            requirements=requirements,
+            execution_allocation=execution_allocation,
+        )
 
     def _project_rows(self, location_id: SpatialNodeId | None) -> tuple[ProjectRow, ...]:
         sim = self._simulation
-        external_demands = self._project_external_demands()
+        decision = self._tick_decision_projection()
+        requirement_rows = self._requirement_rows(
+            execution_allocation=decision.allocations.transport,
+            resolutions=decision.plan.requirement_resolutions,
+        )
+        external_requirements = self._external_requirements(
+            "project", decision.plan.external_requirements
+        )
+        founding_requirements = self._external_requirements(
+            "founding", decision.plan.external_requirements
+        )
+        powers = decision.allocations.power_by_location
         rows = []
         for project in sorted(sim.projects.projects.values(), key=lambda row: str(row.id)):
-            if location_id is not None and project.location_id != location_id:
+            if location_id is not None and project.operational_node_id != location_id:
                 continue
             recipe = sim.projects.recipe_for_project(project)
             facility_definition_id = sim.projects.target_facility_definition_id(project)
-            definition = sim.facilities.definitions[facility_definition_id]
-            project_power = sim.power.snapshot(project.location_id, sim.facilities, sim.day)
-            blockers = self._project_blockers(project, project_power, external_demands)
+            project_power = powers[project.operational_node_id]
+            blockers = self._project_blockers(
+                project,
+                project_power,
+                external_requirements,
+                decision.allocations.transport,
+            )
             resources = []
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
                 reserved_t = sim.projects.reserved_resource_t(project, requirement.resource_id)
                 shortage = max(0.0, requirement.amount_t - reserved_t - state.committed_t)
-                demand_id = None
-                if state.import_committed_t is not None and shortage > 1e-9:
-                    demand_id = f"demand.project:{project.id}:{requirement.resource_id}"
+                candidate_requirement_id = f"requirement.project:{project.id}:{requirement.resource_id}"
+                requirement_id = (
+                    candidate_requirement_id
+                    if shortage > 1e-9 and candidate_requirement_id in external_requirements
+                    else None
+                )
                 resources.append(ProjectResourceRow(
-                    str(requirement.resource_id),
-                    requirement.amount_t,
-                    reserved_t,
-                    state.committed_t,
-                    shortage,
-                    state.import_committed_t,
-                    demand_id,
+                    str(requirement.resource_id), requirement.amount_t, reserved_t, 0.0, state.committed_t,
+                    shortage, requirement_id,
                 ))
-            if isinstance(project.target, NewFacilityTarget):
-                target_kind = "new_facility"; target_facility_id = None; target_level = None
+
+            target_facility_id = None
+            target_level = None
+            target_cell_id = None
+            target_body_id = None
+            target_location_id = None
+            target = project.target
+            if isinstance(target, NewFacilityTarget):
+                target_kind = "new_facility"
+                definition = sim.facilities.definitions[target.facility_def_id]
+                display_name = definition.display_name
+            elif isinstance(target, FacilityUpgradeTarget):
+                target_kind = "facility_upgrade"
+                target_facility_id = str(target.facility_id)
+                target_level = target.target_level
+                definition = sim.facilities.definitions[facility_definition_id]
+                display_name = definition.display_name
+            elif isinstance(target, FacilityDecommissionTarget):
+                target_kind = "facility_decommission"
+                target_facility_id = str(target.facility_id)
+                facility_definition_id = target.facility_definition_id
+                definition = sim.facilities.definitions[target.facility_definition_id]
+                display_name = definition.display_name
             else:
-                target_kind = "facility_upgrade"; target_facility_id = str(project.target.facility_id); target_level = project.target.target_level
+                target_kind = "surface_cell_development"
+                target_cell_id = str(target.cell_id)
+                target_location_id = str(project.operational_node_id)
+                display_name = recipe.display_name
+
+            construction_fulfillment = sim.projects.project_construction_fulfillment(
+                project, project_power, decision.allocations.execution,
+                decision.allocations.services, sim.day
+            )
+            limiting_factors = sim.projects.project_limiting_factors(
+                project, project_power, decision.allocations.execution,
+                decision.allocations.services, sim.day
+            )
+
+            salvage_potential = {}
+            salvage_projection = None
+            if isinstance(project.target, FacilityDecommissionTarget):
+                salvage_potential = sim.projects.decommission_salvage_for_project(project)
+                facility = sim.facilities.facilities.get(project.target.facility_id)
+                if facility is not None:
+                    post_removal_headroom = sim.storage.post_decommission_admission_headroom(
+                        facility.id, sim.day, project_power
+                    )
+                    salvage_projection = project_salvage_recovery(
+                        sim.inventory,
+                        project.operational_node_id,
+                        salvage_potential,
+                        admission_headroom_by_pool=post_removal_headroom,
+                    )
+
             rows.append(ProjectRow(
-                str(project.id), target_kind, str(project.location_id), str(facility_definition_id),
-                target_facility_id, target_level, definition.display_name, project.status, project.paused,
-                project.priority, project.sourcing_policy,
-                None if project.import_source_id is None else str(project.import_source_id),
-                sim.projects.settings_mutable(project.id),
-                sim.projects.sourcing_mutable(project.id),
-                tuple(sim.projects.sourcing_policy_options()),
-                tuple(str(source_id) for source_id in sim.projects.import_source_options(project.id)),
-                project.construction_done, recipe.construction_work, project.construction_weight,
+                str(project.id), target_kind, str(project.operational_node_id),
+                None if facility_definition_id is None else str(facility_definition_id),
+                target_facility_id, target_level, display_name, project.status, project.paused,
+                project.priority, project.procurement_policy,
+                sim.projects.settings_mutable(project.id), sim.projects.procurement_mutable(project.id),
+                tuple(sim.projects.procurement_policy_options()),
+                project.construction_done, recipe.construction_work,
                 project.materials_committed,
                 None if project.completed_facility_id is None else str(project.completed_facility_id),
-                tuple(resources), blockers,
+                tuple(resources), constraints_from_pairs(
+                    blockers,
+                    affected_action="progress_construction_project",
+                    related_entity_kind="project",
+                    related_entity_id=str(project.id),
+                ),
+                None if project.site_cell_id is None else str(project.site_cell_id),
+                target_cell_id, target_body_id, target_location_id,
+                construction_fulfillment, limiting_factors_from_codes(
+                    limiting_factors,
+                    affected_action="progress_construction_project",
+                    related_entity_kind="project",
+                    related_entity_id=str(project.id),
+                ),
+                self._projected_material_readiness_day(
+                    day=sim.day,
+                    owner_kind="project",
+                    owner_id=str(project.id),
+                    resources=resources,
+                    requirement_rows=requirement_rows,
+                ),
+                project.irreversible_started,
+                tuple(
+                    (str(resource_id), amount)
+                    for resource_id, amount in sorted(salvage_potential.items(), key=lambda row: str(row[0]))
+                ),
+                projected_salvage_fraction=(
+                    None if salvage_projection is None else salvage_projection.recoverable_fraction
+                ),
+                projected_salvage=(
+                    ()
+                    if salvage_projection is None
+                    else tuple(
+                        (str(resource_id), amount)
+                        for resource_id, amount in salvage_projection.recovered_by_resource
+                    )
+                ),
+                actual_salvage_fraction=project.salvage_recovered_fraction,
+                actual_salvage=tuple(
+                    (str(resource_id), amount)
+                    for resource_id, amount in sorted(project.salvage_recovered.items(), key=lambda row: str(row[0]))
+                ),
             ))
+        if sim.founding is not None:
+            for project in sorted(sim.founding.projects.values(), key=lambda row: str(row.id)):
+                if location_id is not None and project.staging_node_id != location_id:
+                    continue
+                recipe = sim.founding.deployment_recipes[project.deployment_recipe_id]
+                resource_status = sim.founding.project_resource_status(project.id)
+                resources = [
+                    ProjectResourceRow(
+                        str(status.resource_id), status.required_t, 0.0, status.staged_t,
+                        status.committed_t, status.shortage_t, None,
+                    )
+                    for status in resource_status
+                ]
+                blockers = self._resource_blockers(
+                    sim.founding.blockers(project.id, sim.day, powers[project.staging_node_id]),
+                    owner_kind="founding", owner_id=str(project.id),
+                    requirements=founding_requirements,
+                    execution_allocation=decision.allocations.transport,
+                )
+                target_spec = project.target_spec
+                target_cell = sim.founding.target_surface_cell_id(target_spec)
+                target_body = sim.founding.target_body_id(target_spec)
+                target_node = sim.founding.target_operational_node_id(target_spec)
+                knowledge_rows = []
+                if sim.survey is not None:
+                    for requirement in sim.founding.knowledge_requirements_for_target(target_spec, recipe):
+                        current = sim.survey.knowledge_level(
+                            requirement.target_cell_id, requirement.subject_resource_id
+                        )
+                        knowledge_rows.append(ProjectKnowledgeRequirementRow(
+                            target_cell_id=str(requirement.target_cell_id),
+                            subject_resource_id=str(requirement.subject_resource_id),
+                            minimum_level=int(requirement.minimum_level),
+                            current_level=int(current),
+                            met=current >= requirement.minimum_level,
+                        ))
+                site_blockers = tuple(
+                    row for row in blockers
+                    if row[0].startswith("staging:") or row[0].startswith("target:")
+                    or row[0] in {"knowledge_requirement", "knowledge_target_type", "surface_facility_target"}
+                )
+                movement_blockers = tuple(
+                    row for row in blockers if row[0] in {"deployment_vehicle", "fleet_units"}
+                )
+                rows.append(ProjectRow(
+                    id=str(project.id), target_kind="operational_node_founding",
+                    operational_node_id=str(project.staging_node_id), facility_definition_id=None,
+                    target_facility_id=None, target_level=None, display_name=project.display_name,
+                    status=project.status.value, paused=project.paused, priority=project.priority,
+                    procurement_policy="founding",
+                    settings_editable=project.status.value == "preparing", procurement_editable=False,
+                    procurement_policy_options=(),
+                    construction_done=project.preparation_done, construction_required=recipe.preparation_work,
+                    materials_committed=project.inputs_consumed, completed_facility_id=None,
+                    resources=tuple(resources),
+                    blockers=constraints_from_pairs(
+                        blockers,
+                        affected_action="progress_founding",
+                        related_entity_kind="founding_project",
+                        related_entity_id=str(project.id),
+                    ),
+                    site_cell_id=None,
+                    target_cell_id=None if target_cell is None else str(target_cell),
+                    target_body_id=None if target_body is None else str(target_body),
+                    target_location_id=str(target_node),
+                    construction_fulfillment=sim.founding.preparation_fulfillment(project.id, decision.allocations.execution),
+                    limiting_factors=limiting_factors_from_codes(
+                        sim.founding.preparation_limiting_factors(project.id, decision.allocations.execution),
+                        affected_action="progress_founding",
+                        related_entity_kind="founding_project",
+                        related_entity_id=str(project.id),
+                    ),
+                    projected_material_readiness_day=self._projected_material_readiness_day(
+                        day=sim.day, owner_kind="founding", owner_id=str(project.id),
+                        resources=resources, requirement_rows=requirement_rows,
+                    ),
+                    founding_target_type=sim.founding.target_type(target_spec),
+                    founding_knowledge_requirements=tuple(knowledge_rows),
+                    fleet_commitment_id=None if project.fleet_commitment_id is None else str(project.fleet_commitment_id),
+                    manifest_ready=all(row.shortage_t <= 1e-9 for row in resource_status),
+                    deployment_phase=project.status.value,
+                    site_blockers=constraints_from_pairs(
+                        site_blockers,
+                        affected_action="progress_founding",
+                        related_entity_kind="founding_project",
+                        related_entity_id=str(project.id),
+                    ),
+                    movement_blockers=constraints_from_pairs(
+                        movement_blockers,
+                        affected_action="progress_founding",
+                        related_entity_kind="founding_project",
+                        related_entity_id=str(project.id),
+                    ),
+                ))
         return tuple(rows)
 
     def _build_options_view(self, location_id: SpatialNodeId) -> BuildOptionsView:
         sim = self._simulation
+        decision = self._tick_decision_projection()
+        powers = decision.allocations.power_by_location
         rows = []
         for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id)):
             definition = sim.facilities.definitions[recipe.facility_def_id]
-            failures = sim.projects.site_failures(
-                recipe.facility_def_id, location_id, sim.day,
-                sim.power.snapshot(location_id, sim.facilities, sim.day),
+            if definition.placement_scope is not FacilityPlacementScope.OPERATIONAL_NODE:
+                continue
+            plan_failures = sim.projects.build_plan_failures(
+                recipe.facility_def_id, location_id
+            )
+            site_failures = sim.projects.site_failures(
+                recipe.facility_def_id, location_id, sim.day, powers[location_id]
+            )
+            blockers = tuple(
+                ("technology", str(technology))
+                for technology in sorted(
+                    recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
+                    key=str,
+                )
+            ) + tuple((failure.code, failure.detail) for failure in site_failures)
+            process_options = tuple(
+                (str(process.id), process.display_name)
+                for process in sorted(sim.industry.processes.values(), key=lambda row: str(row.id))
+                if process.facility_def_id == recipe.facility_def_id
+            )
+            build_resources, material_readiness_day = self._construction_resource_options(
+                recipe, location_id, decision.allocations.transport
+            )
+            capabilities = tuple(sorted(supply.id for supply in definition.capability_supplies))
+            service_capacity_supplies = tuple(
+                sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
+            )
+            comparison_values = (
+                ComparisonValueRow(axis_key="construction_work", number_value=recipe.construction_work),
+                ComparisonValueRow(
+                    axis_key="resource_total_t",
+                    number_value=sum(resource.required_t for resource in build_resources),
+                ),
+                ComparisonValueRow(
+                    axis_key="resource_type_count", number_value=float(len(build_resources))
+                ),
+                ComparisonValueRow(
+                    axis_key="capability_count", number_value=float(len(capabilities))
+                ),
+                ComparisonValueRow(
+                    axis_key="service_type_count",
+                    number_value=float(len(service_capacity_supplies)),
+                ),
+                ComparisonValueRow(
+                    axis_key="process_count", number_value=float(len(process_options))
+                ),
+                ComparisonValueRow(
+                    axis_key="self_deploying",
+                    text_value="自己展開" if recipe.self_deploying else "通常施工",
+                ),
             )
             rows.append(BuildOptionRow(
-                str(recipe.facility_def_id), definition.display_name, recipe.construction_work,
-                recipe.self_deploying, self._construction_resource_options(recipe),
-                tuple(sorted(str(technology) for technology in recipe.prerequisite_technologies - sim.projects.unlocked_technologies)),
-                tuple((failure.code, failure.detail) for failure in failures),
+                facility_definition_id=str(recipe.facility_def_id),
+                display_name=definition.display_name,
+                construction_required=recipe.construction_work,
+                self_deploying=recipe.self_deploying,
+                resources=build_resources,
+                blockers=constraints_from_pairs(
+                    blockers,
+                    affected_action="plan_facility_construction",
+                    related_entity_kind="facility_definition",
+                    related_entity_id=str(recipe.facility_def_id),
+                ),
+                can_plan=not plan_failures,
+                capabilities=capabilities,
+                service_capacity_supplies=service_capacity_supplies,
+                process_options=process_options,
+                placement_scope=definition.placement_scope.value,
+                projected_material_readiness_day=material_readiness_day,
+                comparison_key=str(recipe.facility_def_id),
+                comparison_values=comparison_values,
             ))
+        comparison_axes = project_comparison_axes(
+            (
+                ("construction_work", "必要工数", "number", None),
+                ("resource_total_t", "必要資源量", "number", "t"),
+                ("resource_type_count", "必要資源種", "integer", "種"),
+                ("capability_count", "追加能力", "integer", "種"),
+                ("service_type_count", "追加サービス", "integer", "種"),
+                ("process_count", "利用可能工程", "integer", "種"),
+                ("self_deploying", "施工方式", "text", None),
+            ),
+            (row.comparison_values for row in rows),
+        )
         return BuildOptionsView(
             str(location_id),
-            tuple(sim.projects.sourcing_policy_options()),
-            tuple(str(source_id) for source_id in sim.projects.import_source_options_for_location(location_id)),
+            tuple(sim.projects.procurement_policy_options()),
             tuple(rows),
+            comparison_axes,
         )

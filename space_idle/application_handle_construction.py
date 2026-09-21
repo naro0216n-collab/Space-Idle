@@ -7,13 +7,20 @@ from .application_commands import (
     PauseBuild,
     PlanBuild,
     PlanFacilityUpgrade,
+    PlanFacilityDecommission,
+    PlanOperationalNodeFounding,
+    CancelFounding,
+    PauseFounding,
+    ResumeFounding,
+    SetFoundingPriority,
+    DevelopSurfaceCell,
     ResumeBuild,
-    SetConstructionWeight,
-    SetProjectImportSource,
     SetProjectPriority,
-    SetProjectSourcingPolicy,
+    SetProjectProcurementPolicy,
 )
-from .shared import DefinitionId, EntityId, ProjectId
+from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
+from .app_contracts.construction import SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget
+from .founding import NonSurfaceOperationalNodeTargetSpec
 
 
 class ConstructionCommandHandlerMixin:
@@ -22,24 +29,76 @@ class ConstructionCommandHandlerMixin:
         if isinstance(command, PlanBuild):
             pid = sim.projects.plan_build(
                 DefinitionId(command.facility_id),
-                self._require_location(command.location_id),
+                self._require_operational_node(command.operational_node_id),
                 command.priority,
-                command.sourcing_policy,
+                command.procurement_policy,
                 day=sim.day,
-                import_source_id=(
-                    None if command.import_source_id is None else self._require_location(command.import_source_id)
-                ),
+                site_cell_id=None if command.site_cell_id is None else SurfaceCellId(command.site_cell_id),
             )
             return CommandResult(str(pid))
         if isinstance(command, PlanFacilityUpgrade):
             pid = sim.projects.plan_upgrade(
                 EntityId(command.facility_id),
                 command.priority,
-                command.sourcing_policy,
+                command.procurement_policy,
                 day=sim.day,
-                import_source_id=(
-                    None if command.import_source_id is None else self._require_location(command.import_source_id)
-                ),
+            )
+            return CommandResult(str(pid))
+        if isinstance(command, PlanFacilityDecommission):
+            pid = sim.projects.plan_decommission(
+                EntityId(command.facility_id),
+                command.priority,
+                command.procurement_policy,
+                day=sim.day,
+            )
+            return CommandResult(str(pid))
+        if isinstance(command, PlanOperationalNodeFounding):
+            if sim.founding is None:
+                raise ValueError("founding domain is not configured")
+            if isinstance(command.target_spec, SurfaceLocationFoundingTarget):
+                target_spec = sim.founding.surface_target_spec(
+                    CelestialBodyId(command.target_spec.body_id),
+                    SurfaceCellId(command.target_spec.core_cell_id),
+                )
+            elif isinstance(command.target_spec, NonSurfaceOperationalNodeFoundingTarget):
+                target_spec = NonSurfaceOperationalNodeTargetSpec(
+                    SpatialNodeId(command.target_spec.spatial_node_id)
+                )
+            else:
+                raise TypeError(f"unsupported founding target: {type(command.target_spec).__name__}")
+            pid = sim.founding.plan(
+                self._require_operational_node(command.staging_node_id),
+                command.display_name,
+                target_spec,
+                DefinitionId(command.deployment_recipe_id),
+                DefinitionId(command.vehicle_definition_id),
+                priority=command.priority,
+                day=sim.day,
+            )
+            return CommandResult(str(pid))
+        if isinstance(command, CancelFounding):
+            if sim.founding is None:
+                raise ValueError("founding domain is not configured")
+            sim.founding.cancel(ProjectId(command.project_id), sim.day); return CommandResult()
+        if isinstance(command, PauseFounding):
+            if sim.founding is None:
+                raise ValueError("founding domain is not configured")
+            sim.founding.pause(ProjectId(command.project_id)); return CommandResult()
+        if isinstance(command, ResumeFounding):
+            if sim.founding is None:
+                raise ValueError("founding domain is not configured")
+            sim.founding.resume(ProjectId(command.project_id)); return CommandResult()
+        if isinstance(command, SetFoundingPriority):
+            if sim.founding is None:
+                raise ValueError("founding domain is not configured")
+            sim.founding.set_priority(ProjectId(command.project_id), command.priority); return CommandResult()
+        if isinstance(command, DevelopSurfaceCell):
+            pid = sim.projects.plan_surface_cell_development(
+                self._require_operational_node(command.location_id),
+                SurfaceCellId(command.cell_id),
+                command.priority,
+                command.procurement_policy,
+                day=sim.day,
             )
             return CommandResult(str(pid))
         if isinstance(command, CancelBuild):
@@ -50,13 +109,8 @@ class ConstructionCommandHandlerMixin:
             sim.projects.resume(ProjectId(command.project_id), sim.day); return CommandResult()
         if isinstance(command, SetProjectPriority):
             sim.projects.set_priority(ProjectId(command.project_id), command.priority); return CommandResult()
-        if isinstance(command, SetProjectSourcingPolicy):
-            sim.projects.set_sourcing_policy(ProjectId(command.project_id), command.sourcing_policy); return CommandResult()
-        if isinstance(command, SetConstructionWeight):
-            sim.projects.set_construction_weight(ProjectId(command.project_id), command.weight); return CommandResult()
-        if isinstance(command, SetProjectImportSource):
-            sim.projects.set_import_source(
-                ProjectId(command.project_id),
-                None if command.location_id is None else self._require_location(command.location_id),
+        if isinstance(command, SetProjectProcurementPolicy):
+            sim.projects.set_procurement_policy(
+                ProjectId(command.project_id), command.procurement_policy, sim.day
             ); return CommandResult()
         return NotImplemented

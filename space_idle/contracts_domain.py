@@ -3,11 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from .contracts import ContractState, ContractStatus
-from .domain import DomainExtension, StateCodec
+from .domain import DomainExtension, StateCodec, decode_int, decode_list, decode_str, require_fields
 from .shared import ContractId, DefinitionId
 from .validation_support import (
     ValidationContext,
     require as _require,
+    validate_generated_id_counter as _validate_counter,
     validate_site_requirements as _validate_site_requirements,
 )
 
@@ -35,17 +36,22 @@ def capture_contracts(sim: Any) -> dict[str, Any]:
 def restore_contracts(sim: Any, data: dict[str, Any]) -> None:
     if sim.contracts is None:
         return
-    sim.contracts._counter = int(data.get("counter", 0))
-    sim.contracts.contracts = {
-        ContractId(row["id"]): ContractState(
-            ContractId(row["id"]),
-            DefinitionId(row["template_id"]),
-            int(row["offered_day"]),
-            int(row["deadline_day"]),
-            ContractStatus(row["status"]),
+    sim.contracts._counter = decode_int(data["counter"], "contract counter")
+    fields = {"id", "template_id", "offered_day", "deadline_day", "status"}
+    restored: dict[ContractId, ContractState] = {}
+    for index, raw in enumerate(decode_list(data["items"], "contracts items")):
+        row = require_fields(raw, fields, f"contract[{index}]")
+        contract_id = ContractId(decode_str(row["id"], "contract id"))
+        if contract_id in restored:
+            raise ValueError(f"duplicate contract: {contract_id}")
+        restored[contract_id] = ContractState(
+            contract_id,
+            DefinitionId(decode_str(row["template_id"], "contract template_id")),
+            decode_int(row["offered_day"], "contract offered_day"),
+            decode_int(row["deadline_day"], "contract deadline_day"),
+            ContractStatus(decode_str(row["status"], "contract status")),
         )
-        for row in data.get("items", [])
-    }
+    sim.contracts.contracts = restored
 
 
 def referenced_resources(sim: Any) -> set[DefinitionId]:
@@ -58,20 +64,22 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     for template_id, template in sim.contracts.templates.items():
         _require(template_id == template.id, f"contract template key mismatch: {template_id}")
         _require(template.duration_days >= 0, f"negative contract duration: {template_id}")
-        _require(template.reward_musd >= 0, f"negative contract reward: {template_id}")
         _validate_site_requirements(
             template.site_requirements, ctx.known_capabilities, f"contract:{template_id}"
         )
-        if template.target_location_id is not None:
+        if template.target_operational_node_id is not None:
             _require(
-                template.target_location_id in ctx.nodes,
-                f"contract references unknown location: {template_id}",
+                template.target_operational_node_id in ctx.operational_nodes,
+                f"contract references unknown operational node: {template_id}",
             )
 
 
 def validate_runtime(sim: Any) -> None:
     if sim.contracts is None:
         return
+    _validate_counter(
+        sim.contracts._counter, sim.contracts.contracts, "contract.", "contract"
+    )
     for contract_id, state in sim.contracts.contracts.items():
         _require(contract_id == state.id, f"contract state key mismatch: {contract_id}")
         _require(
@@ -84,7 +92,7 @@ def validate_runtime(sim: Any) -> None:
         )
 
 
-STATE_CODEC = StateCodec("contracts", capture_contracts, restore_contracts, True)
+STATE_CODEC = StateCodec("contracts", capture_contracts, restore_contracts)
 DOMAIN_EXTENSION = DomainExtension(
     "contracts",
     state_codec=STATE_CODEC,

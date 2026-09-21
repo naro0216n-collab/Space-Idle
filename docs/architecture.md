@@ -1,16 +1,33 @@
 # 宇宙開発Idleゲーム アーキテクチャ設計 v0.4.0
 
+## 文書ナビゲーション
+
+- §1–4: 文書の役割、Layer責務、Simulation phase、Definition / State分離
+- §5–6: Spatial / Operational Node / Environment / Facility / Maintenance
+- §7–9: Inventory / Allocation / Storage / Industry / Construction
+- §10: Movement / Transport / Logistics / Vehicle / Cargo
+- §11–12: Research / Knowledge / Scientific Exploration / Resource Survey
+- §13–16: Application API / Persistence / Validation / UI・Server・LLM
+- §17: 全節へ横断適用するArchitecture invariant
+- §18: Architecture定義の要約
+
+詳細規則は各担当節を正本とし、§17はそれらを再定義しない。現行moduleとの対応は非正準の `implementation-map.md` を参照する。
+
+---
+
 ## 1. 文書の目的
 
 本書は「宇宙開発Idleゲーム デザイン案」とSimulation Core実装の間に置くアーキテクチャ上の共有基準を定義する。
 
-対象は個別の仮バランス数値ではなく、状態所有、Generic CoreとContentの分離、Location・環境・Facility・Capability・資源・建設・維持・物流・Vehicle・Research・Exploration・Surveyの関係、Application境界、Save/Load・Offline Progress、検証・拡張原則である。
+対象は個別の仮バランス数値ではなく、状態所有、Generic CoreとContentの分離、Spatial context・Operational Node・Surface Location、Environment、Facility、Capability / Service Capacity、Execution Requirement / Supply Requirement、建設・維持・Movement・物流・Vehicle・Research / Knowledge、Exploration・Surveyの関係、Application境界、Save/Load・Offline Progress、検証・拡張原則である。
 
-現行の正準化対象実装はゲーム本体 `0.5` とする。ただしゲーム性評価段階では実装より本書とデザイン上の合意を優先する。本書で合意済みだが0.5時点で未実装の項目は次期developで実装する対象であり、旧API・旧データ・旧Saveとの後方互換を理由に不適切な構造を温存しない。
+本書は特定versionの実装状態や作業順序を記録する文書ではない。ここに定義するDomain境界、State ownership、Simulation契約、Persistence / Application境界を、成立すべきArchitectureの正本とする。
 
 ---
 
 ## 2. 全体構成
+
+通常Runtimeの呼出経路は次とする。
 
 ```text
 Web / PWA UI
@@ -23,16 +40,24 @@ Application Layer
 Simulation Orchestrator
     ↓
 Domain Services
-  Spatial / Facility / Power / Storage
-  Inventory / Industry / Construction / Maintenance
-  Logistics / Vehicle / Research / Exploration / Survey / Contracts
-    ↓
-Content Definitions
-    ↓
-Persistence / Validation
+  Spatial / Operational Node / Facility
+  Inventory / Allocation / Power / Storage
+  Industry / Construction / Maintenance
+  Transport / Logistics / Vehicle
+  Research / Knowledge / Exploration / Survey
 ```
 
-依存方向は原則として上から下とする。UIやHTTP層はDomain Serviceへ直接アクセスしない。Generic CoreはEarth、Moon、Mars、iPad、Web、LLM等の固有概念を知らない。
+Content、Persistence、Validationはこの縦列の下位Layerではなく、別の境界責務として接続する。
+
+```text
+World / Content Definitions ──→ Composition ←── Scenario Definition
+                                  ↓
+                         Domain Definitions / initial State
+Persistence        ←──→ Application-owned Game State
+Validation          ──→ Definitions / State / Domain invariants
+```
+
+UIやHTTP層はDomain Serviceへ直接アクセスしない。ApplicationはDomain契約を利用し、Simulation Orchestratorが時間進行上のphaseを統括する。Generic CoreはContent固有Definition、Persistence方式、UI、Earth、Moon、Mars、LLM等へ依存しない。ContentはGeneric Coreが定義したschemaへ具体値を供給し、Persistenceは可変Stateを保存・復元する。Runtime call flowとmodule dependencyを同じ上下図で表現しない。
 
 ---
 
@@ -42,44 +67,48 @@ Persistence / Validation
 
 世界で共通に成立する規則を担当する。
 
-- Spatial NodeとEnvironment Facet
-- SiteRequirements
-- Facility Definition / State
-- Capability
+- Star System / Celestial Body / Surface Cell / non-surface Spatial Node / Operational Node / Surface Location / Spatial Relation
+- Physical Environment State / SiteRequirements
+- Facility Definition / State / placement scope
+- Capability / Service Capacity / allocation
 - Facilityの資材維持需要と保守充足率
-- Inventory、Reservation、Storage
+- Inventory / Reservation / Execution Requirement / Stock admission / Storage
 - Power配分
 - Process / Industry
-- Extraction / Deposit
-- Construction Project
-- Transport Operation、Route、Transport Allocation、Transport Capacity、Cargo Flow、特殊Transport Mission
-- Vehicle Definition / Fleet State / Production / Maintenance / Relocation
-- Research Point、Research状態機械
+- Resource Potential / Extraction Opportunity / Extraction response
+- Construction / Surface Development Project / Operational Node Founding Deployment
+- Movement Operation / Movement Plan、Transport Allocation、Transport Service / Capacity、Cargo Flow、one-shot Movement Execution
+- Vehicle Definition / Fleet State / Fleet Commitment / Production / Maintenance / Relocation / Retirement
+- Supply Requirement / Target Stock / Logistics auto-sourcing / routing hard constraint / end-to-end path
+- Research Point、Technology State、Research Project状態機械
+- Operational Experience等のKnowledge State
 - Scientific Exploration Campaign
 - Resource Survey / Knowledge
-- Contract状態機械
-- 時間進行
+- Funds / External Resource Market / Trade Order / Market Interfaceの共通契約
+- 時間進行phase
 
-Generic Coreへ `if location == MoonSouthPole`、`if vehicle_type == lunar_lander`、用途allowlist等を持ち込まない。必要条件は環境Facet、Capability、Operation、Vehicle性能、Resource等で表現する。
+Generic Coreへ `if location == MoonSouthPole`、`if vehicle_type == lunar_lander`、用途allowlist等を持ち込まない。必要条件はSpatial classification、Physical Environment、Capability、Service Capacity、Operation、Vehicle性能、Resource等で表現する。
 
 ### 3.2 Content Layer
 
 具体的な遊びを定義する。
 
-- Celestial Body / Spatial Node
-- 初期Environment
-- Resource Definition
+- Star System / Celestial Body / Surface Cell topology / non-surface Spatial Node / transport geometry
+- Static geology / Resource Potential / 基準Physical Environment
+- Resource Definition / analytics用Resource Group
 - Facility Definition
 - Process Definition
-- Construction Recipe / maintenance rate
-- Deposit / Extraction Definition
-- Research Definition / Research Provider
+- Construction Recipe / maintenance rate / Facility decommission recovery definition
+- Resource Potential / Extraction Definition
+- Research Definition / Research Provider / Experience category
 - Scientific Exploration Definition
-- Survey Target
-- Route / Vehicle / External Transport Service
-- Contract / Event Definition
-- 初期施設・Vehicle・資金・在庫
+- Survey Target / Survey Provider Definition / initial Surface Cell Knowledge
+- Spatial transport geometry / Movement Operation / Vehicle / Vehicle retirement recovery / physical Infrastructure connection
+- External Resource Market Provider / buy-sell offer / Market Interface Definition
+- World Definition / Scenario Definition / Deployment Recipe / Founding target spec
 - 表示名
+
+外部組織、Contract、Event等はContent / Application側の拡張として追加できるが、FundsをResource売買以外の報酬・一般支払手段として変更しない。Research Point中心の成長ループや通常SimulationのGeneric Core必須Domainにも含めない。
 
 Content固有名は説明に使ってよいが、Generic Core内の分岐条件にはしない。
 
@@ -97,29 +126,75 @@ UIがCoreの可否判定や計算式を再実装しない。
 
 ### 3.4 Simulation Orchestrator
 
-1ゲーム日の処理順序を統括する。各Domainが別Domainの登録順や暗黙の呼出順へ依存しないようにする。
+Simulation OrchestratorはDomainを固定順に逐次呼び出して競合を解決する場所ではなく、1 game dayをcanonical quantumとする共通phase契約を統括する。各Domainが別Domainの登録順や偶然の呼出順へ依存しないようにする。
 
-概念順序：
+Applicationがtick間に受理したPlayer Commandは、次のPhysical snapshotを作る前にauthoritativeな設定・Project / Order Stateへ適用する。進行中tickの過去phaseをCommandで遡及変更しない。Pause / speedはRuntime schedulingを制御するが、Simulation上の状態変化はcanonical boundaryで確定する。
 
 ```text
-Power Snapshot
-→ Storage Service
-→ Production / Extraction
-→ Research Point generation / Research
-→ Scientific Exploration / Resource Survey
-→ Facility maintenance demand / fulfillment
-→ Construction procurement
-→ Transport availability snapshot
-→ Logistics lane allocation / Cargo Flow dispatch and progression
-→ Construction execution
-→ Storage refresh
-→ Contracts / events
-→ day update
+1. Boundary settlement
+   前tickまでの経過によって到着・完了条件を満たしたCargo、Movement Execution、Project、
+   Market Provider availability / replenishment、成熟したBuy Commitment等を確定する。
+   Cargo arrival / arrival waiting、成熟Buy Commitment等の既に発生済みの物理的obligationがCargo Handling、
+   purpose-specific Service、Inventory Admission等の有限constraintを必要とする場合は、通常Activityと同じconstraint key、
+   Activity Priority、同順位fairness semanticsを使うBoundary obligation allocationとして先に解決する。
+   成立した量だけhandoff / admission / Resource ownership transferと対応Funds消費をatomicにsettleし、
+   成立しない量はarrival waitingまたは外部側commitmentとして保持する。
+
+2. Physical snapshot
+   on-hand Inventory、既存Reservation、Funds、Market availability / commitment、Environment、
+   Facility / Fleet状態、Installed / Active Capability、Nominal Service Capacity、
+   利用可能Stock / Pool headroom等の当日配分前状態を固定する。
+   Boundary obligation allocationが当日に消費したService Capacity / admission headroomはここで残余量へ反映し、
+   後続の通常Allocationが同じcapacityを再利用しない。
+
+3. Intent generation
+   各DomainがActivityごとのExecution Requirement Bundle、Supply Requirement、Project work、
+   Research / Survey / Exploration intent、Trade Order需要等を生成する。
+
+4. Planning
+   Supply Requirement、Target Stock、在庫、Inbound Cargo、end-to-end latency、
+   Transport Capacity、必要なrouting hard constraintから当日dispatch量とsource / path候補を求める。
+   hard constraintがない通常状態では成立済みNetwork内で正準評価によりsource / pathを決定論的に選ぶ。
+   Service supplyがResource、Fleet、Power、Maintenance、上流Service等を必要とする場合は
+   provider dependencyとして明示する。
+
+5. Allocation
+   Resource、Service、Stock / Pool admission、Transport Capacity等のexecution依存関係を
+   一つの決定論的allocation graphとして解決する。
+   Activity Priorityは5段階のordinal bandとして高いbandから解決し、
+   同一band内の連続量Bundleはnormalized fulfillmentのprogressive max-minを基本とする。
+   Fleet Commitmentは既存の排他的物理Stateとしてconstraintへ反映し、Activity Priorityだけで別ownerから奪わない。
+   Transport Allocationへのfree Fleet provisioningは別のProvisioning Priority契約で解決し、
+   Research Provider / Survey / Exploration等のcommand-time Fleet commitを日次Activity allocationへ読み替えない。
+   Trade Order間の有限Market supply / demand競合も同じPriority semanticsを使うが、
+   Fundsを一般Execution Requirementへ混在させない。BuyのFunds / provider supply reservationは
+   Market DomainのBuy Commitmentとして所有する。SellはInterface在庫のResourceRequirementと
+   provider demand constraintを同じexecution量へ結合し、他用途とのInventory二重利用を防ぐ。
+
+6. Domain execution
+   Production、Extraction、Maintenance、Construction、Research、Exploration、Survey、
+   Decommission / Retirement work等を確定したfulfillmentだけで進行する。
+   MarketではAllocation済みbuy reservationからBuy Commitmentを生成し、Interfaceへ実際に提示済みの
+   Sell Resourceは割当済みprovider demandの範囲でownership transferとFunds加算をsettleする。
+
+7. Logistics / movement progression
+   割当済みResourceとTransport Capacityの範囲でCargo Flowをdispatchし、
+   進行中Cargo / one-shot Movement Executionを1 game day進める。
+
+8. State transition / derived refresh
+   Technology Unlock、Project completion、Founding、Asset removal等の状態遷移を確定し、
+   派生Query状態を再導出してtickを進める。
 ```
 
-順序がゲームルールとして意味を持つ場合はOrchestratorで明示する。
+Boundary settlement後のPhysical snapshotを当tick配分の物理的な正本とする。前tickまでに到着したCargoはBoundary settlementでhandoff / admission判定された後にsnapshotへ反映する。到着済みCargoは過去tickですでにdispatchされた物理的義務であるため、当日Productionより先にadmissionを試みる。ただし専用の無制限pre-passとして処理せず、同じ有限constraint modelを使うBoundary obligation allocationで競合を解き、その使用量を当日capacityから控除する。入庫できない量はLogistics-owned arrival waitingに残し、Storageへ荷卸し済みResourceはInventoryだけがauthoritative ownershipを持つ。
 
----
+Market buyでは前tick以前に成立してlead timeを満たしたBuy CommitmentだけをBoundary settlementの対象とする。lead timeが0でも当tick snapshot後に新規作成したCommitmentを同tickの過去Boundaryへ遡及させない。Market sellではInterface所在Nodeにsnapshot時点で実際に存在する取引可能なPlayer Resourceだけを対象とし、そのResourceRequirementとprovider demand constraintを同じActivity executionとして当日Allocationへ参加させる。Domain executionでは確定量のownership transferと対応Funds加算をatomicにsettleする。成立しなかったResource / Funds / availabilityを消費した扱いにしない。
+
+Planningで選ばれた発送元Resourceもsource側RequirementとしてAllocationへ参加させ、同じInventoryを現地実行と輸送が二重消費しない。Local Production / Extraction等が同じStorage / Pool headroomへoutputする場合は、output admissionをExecution Requirement Bundleの比例Requirementとして共通Allocationへ参加させ、各Domainが同じ空き容量を独立に全量利用しない。
+
+当tickのexecutionやmovementで新たに生産・到着・完了したResource、Capability、Service Capacityや、Market sellで新たに加算されたFundsはallocation graphのrootへ戻さず、次tickのBoundary settlement後snapshotまで新しいAllocationへ利用しない。同tick dependency graphに循環があるContent / DefinitionはConfiguration Validationでfail-closedとする。
+
+通常速度、高速進行、Offline Progressは同じ1 game dayのcanonical semanticsを利用する。複数tickを一括処理する最適化は、日次tickを逐次実行した場合と同じStateへ到達する区間に対してだけ利用できる。正のdurationはcanonical tick境界へ正規化し、通常進行・高速進行・Offlineで完了日が変化しないようにする。
 
 ## 4. DefinitionとStateの分離
 
@@ -131,68 +206,191 @@ Power Snapshot
 FacilityDef
   id
   display_name
-  installation_environment
-  operating_environment
+  placement_scope: OPERATIONAL_NODE | SURFACE_CELL
+  installation_eligibility
+  operating_eligibility
   capability_supplies
+  service_capacity_supplies
 
 FacilityState
   entity_id
   definition_id
-  location_id
+  operational_node_id
+  site_cell_id?
   level
+  lifecycle: NORMAL | DECOMMISSIONING
   paused
-  power_priority
+  selected_process_id?
+  allocation_priorities
 ```
 
 同様にVehicle、Transport Allocation、Research、Scientific Exploration、Survey、Construction Recipe等でもDefinitionと可変Stateを分ける。
 
-Vehicle Definitionは性能と製造・整備要件を持つ。通常運用するVehicleは同一Definition・所在地点ごとのFleet Stateとして数量管理し、輸送、Scientific Exploration、再配置、回収中等の排他的配分をFleet Domainが所有する。
+Vehicle Definitionは性能と製造・整備要件を持つ。通常運用するVehicleは同一Definition・所在Operational NodeごとのFleet Stateとして数量管理し、Transport、Scientific Exploration、Fleet-backed Survey / Research Provider、Relocation、Release、Retirement等の排他的配分をFleet Domainが所有する。
 
-Transport Service PlanとTransport Capacityは、Fleet Allocation、Route、Vehicle性能、Resource、Infrastructureから導出する派生状態とし、Save上の独立した正本にしない。
+Technology UnlockはResearch DefinitionやFacility Stateへ複製せず、一つのTechnology Stateをauthoritative stateとする。Operational ExperienceもResearch Project個別の経過時間として重複保持せず、experience categoryごとのKnowledge Stateを正本とする。
+
+`WorldDefinition` はStar System、Celestial Body、Surface Cell topology、static geology / Resource Potential、基準Physical Environment等の静的世界を構成する。`ScenarioDefinition` は開始時Operational Node / Surface Location、Facility、Fleet、Inventory、Knowledge / Technology、Funds、Market Provider State / Market Interface、Scenario固有の戦略固定が必要な場合だけrouting hard constraint等の初期Stateを構成する。World Definitionの構築自体がPlayer-owned Operational Stateを生成しない。Scenarioはnew game生成時だけ適用し、Save Load時に再適用しない。
+
+Movement Plan候補、Transport Service Plan、Transport Capacity、Projected Material Readiness、ロケーション産業自立・外部依存分析等は、保存済みStateとDefinitionから導出する派生状態とし、Save上の独立した正本にしない。
 
 静的DefinitionはSaveへ複製しない。
 
----
 
-## 5. Spatial / Environment / SiteRequirements
+### 4.1 共通Intent / Requirement / Commitment契約
 
-Celestial Bodyと、Inventory・Facility・Fleetが実際に存在するSpatial Nodeを分離する。
+Domain横断の再利用は、全Stateを一つの巨大base classへ統合するのではなく、同じ意味を持つ契約だけを共有する。
+
+Requirementは少なくとも次の意味を分離する。
+
+- `EligibilityRequirement`: 消費を伴わない成立条件。Technology、Spatial classification、Physical Environment、Installed / Active Capability、Knowledge threshold等。
+- `AllocationRequirement`: 当tick execution量に比例して有限Resource / Service / Poolを競合利用する条件。
+- `AdmissionRequirement`: outputをStock / Poolへ追加するためのheadroom。
+- `ReservationAcquisitionRequirement`: 将来実行用にon-hand Stockを複数tickで確保する要求。
+
+`SiteRequirements` はEligibilityRequirementのうち物理Siteに関係する条件集合とし、Construction work、Research execution、Power等の有限flowをSite条件へ混ぜない。Knowledge Requirementもtyped EligibilityとしてActivityへ合成できるが、Knowledge State自体の所有者はSurvey / Knowledge Domainに残す。
+
+Commitmentは将来executionやAsset利用のために既に確保済みのauthoritative Stateである。Resource Reservation、Fleet Commitment、Market Buy Commitment等は意味の異なるtyped Stateとして各所有Domainが保持し、同じ量を複数Domainへ保存しない。新しい資産種別が実際に同じ排他所有問題を持つまでは、万能なAsset Provisioning frameworkへ一般化しない。
+
+Player intentと運用自動化を分離する。Playerが成立させたResource、Service、Transport Network内の通常反復運用に必要なsource / path等の候補選択は、Coreが正準ルールで決定論的に導出できる。Playerがその自動選択を戦略的に制限する必要がある場合だけ、所有Domainがtyped hard constraintをauthoritative intentとして保持する。hard constraintが成立しない場合は別戦略へ暗黙fallbackしない。
+
+### 4.2 共通Activity control
+
+Pause可能なActivityではcontrol stateをDomain lifecycleとは分離する。Pauseは次のcanonical boundary以降に新しい裁量的execution / progress / dispatchを生成しないが、設定と成立済みprogressを保持する。
+
+開始済みMovement、dispatch済みCargo、arrival waiting、Market Commitment、不可逆settlement等の物理obligationはPauseで巻き戻さない。ReservationやFleet Commitment等のreversible commitmentをPause中も保持するか、安全なreleaseへ移すかは所有Domainが明示的に定義する。PauseをCancel、Abort、Asset releaseと同一状態にしない。
+
+Transport AllocationはPause時にtargetを保持したまま新規provisioning / dispatchを止め、運用中Fleetを必要なrecovery / release stateへ移してfree poolへ戻せる。Scientific Exploration等のone-shot CampaignはPauseだけでcommit Fleetを他用途へ解放せず、必要ならAbort / Return等の別transitionを利用する。
+
+Application QueryはActivityごとに現在利用可能なtransitionとblockerを返し、UIがDomain固有の状態遷移を再実装しない。
+
+## 5. Spatial / Operational Node / Environment / SiteRequirements
+
+### 5.1 Star System / Celestial Body / Surface Cell / Spatial Node / Operational Node
+
+物理的位置を表すSpatial modelと、経済・産業Stateを所有するOperational Nodeを分離する。Spatial modelは多数の天体、小惑星、将来の別恒星系を同じ契約で扱えるよう、Star Systemとその内部Spatial contextを持つ。
 
 ```text
-Earth
-├ Earth Surface
-└ LEO
+StarSystemDef
+  id
+  interstellar_transport_geometry
 
-Moon
-├ Lunar Orbit
-├ South Polar Surface
-├ Polar Cold Trap
-└ Nearside Surface
+CelestialBodyDef
+  id
+  star_system_id
+  parent_spatial_context?
+  system_local_transport_geometry
+  ...
+
+NonSurfaceSpatialNodeDef
+  id
+  star_system_id
+  parent_spatial_context?
+  system_local_transport_geometry
+  ...
+
+SurfaceCellDef
+  id
+  body_id
+  area
+  geometry / centroid
+  neighbor_ids
+  terrain
+  static_geology
+  resource_potential_by_resource
+
+SurfaceCellState / overlays
+  dynamic_environment
 ```
 
-Spatial NodeはGravity、Atmosphere、Illumination、Thermal、Surface、Orbital、Communication等のFacetを持つ。天体所属、移動関係、環境継承を同一視しない。
+`system_local_transport_geometry` は瞬間的な天体位置の時系列そのものではなく、任意二地点間Movementのcharacteristicな空間関係を一貫して導出するためのSpatial Definitionとする。別Star System間はStar System側のinterstellar transport geometryを利用する。具体的なMovement time、Payload、Resource消費はSpatialだけでは決めず、Movement OperationとVehicle性能を組み合わせて導出する。
 
-施設設置、Facility運転、Research Prototype / Demonstration、Route端点等の可否は共通SiteRequirementsを使用する。
+地表を `SurfaceCell` graphとして表現する。UIはヘックス主体で表示してよいが、Coreは完全六角格子、同一Cell面積、常時6隣接を仮定しない。Celestial BodyごとにCell数を変えてよい。
 
-Capability Requirementは少なくとも以下を区別する。
+Surface CellはInventory Nodeではなく、Facility一般の配置スロットでもない。資源、地形、可変Environment、Survey Knowledge、Surface Location開発領域の物理単位とする。
 
-- Infrastructure Capability：設備として存在する能力
-- Active Capability：停止されず環境適合している定格能力
-- Available Capability：電力・保守充足率等を反映した現在利用可能な能力
+軌道・Lagrange領域・深宇宙上の運用位置等は `NonSurfaceSpatialNodeDef` として物理contextを表現できる。Spatial NodeだけではInventoryやFacilityを所有しない。
 
----
+`OperationalNodeState` はInventory、Storage、Facility、Fleet、Power、Service Capacity、物流接続等の一般的な運用Stateの所有先とする。Operational NodeはSurface Locationまたはnon-surface Spatial NodeのSpatial contextへ結び付く。
+
+Surface LocationはOperational Nodeの一種として運用Stateを持つと同時に、追加でSurface Cell領域を所有する。
+
+```text
+OperationalNodeState
+  id
+  spatial_context
+  ...
+
+SurfaceLocationState
+  operational_node_id
+  body_id
+  core_cell_id
+  developed_cell_ids
+  ...
+```
+
+`developed_cell_ids` を開発所属のauthoritative stateとし、Surface Cell側の「所属Location」はこの集合から導出する。二重正本を持たない。集合は同一天体上で連結することを基本とし、同一Cellを複数Locationへ同時所属させない。政治的主権と産業開発所属は同一概念とはしない。
+
+Surface LocationのCell数はOperational Node数を増やさない。Inventory、Fleet、通常Facilityの主要所有単位はOperational Nodeのままとする。
+
+すべてのSpatial NodeをOperational Nodeへ昇格させない。未開発Surface Cellや単なる軌道位置はFounding / Mission等の物理targetにはなれても、通常Inventory / Logistics Nodeにはならない。
+
+### 5.2 Environment
+
+Surface Cellは静的地質・地形と可変Physical Environmentを分離する。Static geology / Resource Potentialを通常の採掘で消費・減少させない。Dynamic Physical Environmentはテラフォーミング、自然変化、明示的な地表改変等によって更新可能とする。
+
+Physical Environmentのfield definitionはscope / compositionを明示し、少なくとも `BODY_GLOBAL`、`SURFACE_CELL_LOCAL`、`BODY_WITH_CELL_OVERLAY` に相当する意味を表現できるようにする。Resolverは個別field名のallowlistでscopeを決めず、このDefinition contractからCelestial Body global stateとSurface Cell local stateを評価・合成する。Surface Locationそのものには単一の代表Physical Environmentを持たせず、`core_cell_id` をEnvironment lookupのfallbackにしない。Location向けEnvironment表示はdeveloped cellsの範囲・extrema・分布等から作るderived summaryであり、Simulation判定の正本にはしない。
+
+Non-surface Operational Nodeは結び付いたSpatial contextのPhysical Environmentを評価する。Surface Location上のOPERATIONAL_NODE FacilityはBody-globalなPhysical Environment、Spatial classification、Infrastructure Capability / Service Capacityを利用できるが、Cell-localな日照・地形・局所温度等を暗黙の代表Cellから取得しない。Cell-localな物理条件が必要なFacility / Operationは明示Surface Cell contextを要求する。
+
+与圧、温調、放射線遮蔽等の人工運用環境はPhysical Environment Stateを書き換えず、Infrastructureが供給するCapability / Service Capacityとして表現する。
+
+### 5.3 SiteRequirements / Capability / Service Capacity
+
+Facility設置・運転、Researchの物理Stage、Movement Endpoint、Operational Node Founding / Surface Location開発等の物理適合性は共通SiteRequirementsを利用する。SiteRequirementsはSpatial classification、Physical Environment、Installed / Active Capability等の非消費Eligibilityを型として分離する。
+
+Power、Construction work、Cargo Handling、Research execution等の有限flowは `Service Capacity` としてAllocation Requirementへ提出する。あるActivityが特定providerの存在自体を前提とする場合はCapability等のEligibilityで表し、実際に利用する有限量は別のService Requirementで競合させる。
+
+`Capability` はcategoricalな資格・機能を表す。`ServiceCapacity` はservice type、scope、Nominal、Available、Allocated、Spareを持てる。scopeは少なくとも `OPERATIONAL_NODE` と `ORGANIZATION` を表現できる。
+
+NominalはPhysical snapshotに固定する配分前supplyであり、Power、Maintenance、Resource、Fleet、Physical Environment、上流Infrastructure / Service等への依存をPlanningでprovider dependencyとして公開する。Organization-scope Serviceへ供給するproviderも、所在地でローカル依存条件を満たしたAvailable supplyだけを集約する。
+
+PowerはOperational Node scopeのService Capacityとする。Energy Storageを導入する場合はPower Capacityへ暗黙統合せず、独立Stock Stateと充放電executionを定義する。Knowledge threshold等の非Site条件はtyped EligibilityとしてActivityへ合成し、SiteRequirements fieldへ押し込まない。
+
+### 5.4 Location development / Surface Infrastructure
+
+Surface Locationは隣接Surface CellをDevelopment Projectで取り込む。Cell数に固定上限を設けず、Knowledge Eligibility、Resource、Construction Service Capacity、時間、地形・Physical Environment、Surface Infrastructure等を要求する。
+
+Location内部で個別ResourceをCellごとにroutingしない。ただし共通Inventoryによる内部移動を無償・無限とも扱わない。位置依存Facility / InfrastructureはSurface Cell上に `Surface Access Anchor` を供給できる。開発Cell、利用可能anchor、Surface geometry、Activityが利用するResource Opportunity / Movement endpointから、Core共通のLocal Distribution / Surface Infrastructure demand modelで必要Service量を導出する。
+
+共通modelは少なくとも、Activity量や必要spread増加に対して需要が不自然に減少しないこと、有効anchor追加だけで最小需要が悪化しないこと、停止anchorへfallbackしないこと、同じ地理負荷をOpportunityとService fulfillmentへ二重適用しないことを保証する。Contentはanchor性能、Facility能力、Spatial / physical入力を定義するが、LocationやResourceごとの任意負荷関数をCore外へ持たせない。
+
+`core_cell_id` はLocation設立起点とdeveloped-cell連結性のanchorであり、Environment、Movement、Resource Opportunity、Local Distributionの代表地点ではない。core cell自体に無料capacityや距離0特権を付与しない。
+
+近接地域への別Location設立はCoreで禁止しない。新Locationは独立Operational NodeとしてFounding、Inventory、Storage、Power、Construction、Gateway / access、拠点間物流等の固定費を要求する。同じSurface Cell、Resource Opportunity、Service CapacityをLocation分割で複製しない。
 
 ## 6. Facility / Maintenanceモデル
 
 ### 6.1 設置と運転
 
-Installation EnvironmentとOperating Environmentを分離する。先行建設や将来の環境変化をLocation特例なしで扱えるようにする。
+Installation EligibilityとOperating Eligibilityを分離する。Spatial classification、Physical Environment、Capability等の非消費条件をSiteRequirements / Eligibilityとして表し、建設work、Power、Process Service等の有限flowはexecution時のAllocation Requirementとして扱う。
+
+Facilityは同一Domainのまま配置種別を持つ。
+
+- `OPERATIONAL_NODE`: Operational Nodeへ所属し、個別Surface Cellを指定しない通常Facility。
+- `SURFACE_CELL`: 物理的位置が性能、Movement接続、局所Environment、環境改変等へ本質的に影響する位置依存Facility。
+
+`SURFACE_CELL` Facilityだけ `site_cell_id` を要求し、所属Operational NodeはSurface Locationで、対象CellはそのLocationのdeveloped領域でなければならない。
+
+Facility Definitionは互換Process集合を持てる。通常一Facility instanceが同時に実行するProcessは一つとする。互換Processが一つなら選択はDefinitionから導出でき、複数ある場合だけFacility Stateが `selected_process_id` をauthoritativeに所有する。登録順やID順で暗黙選択せず、Requirement不足時にも別Processへ自動切替しない。
+
+複数Process同時実行が独立したゲーム上の判断として必要になった場合は、capacity共有・配分・Power・Maintenance・UIの意味論を定義してからFacility契約を拡張する。現在は一Facility instanceにつき一active Processを正本とする。
 
 ### 6.2 Pause
 
-PauseしてもFacilityは消滅しない。通常運転に伴う生産、採掘、発電、建設能力、研究能力、Survey能力、Available Capabilityは停止する。
+PauseしてもFacilityは消滅しない。通常運転に伴うProcess、生産、採掘、発電、建設、Research、Survey等のService Capacityは停止する。Active Capabilityも運転を必要とするものは無効になるが、物理的なInstalled Capabilityまで失われたことにはしない。
 
-一方、安全維持・保冷等のstandby loadと物理的維持に必要なResource Demandは通常Pauseだけでは消滅しない。将来のMothballはPauseとは別状態とする。
+一方、安全維持・保冷等のstandby loadと物理的維持要件は通常Pauseだけでは消滅しない。当tickに必要な維持Execution Requirementと、その維持を継続するためのSupply Requirementは残る。将来のMothballはPauseとは別状態とする。
 
 ### 6.3 資材維持需要
 
@@ -203,64 +401,189 @@ maintenance_demand(resource, period)
 = cumulative_invested_resource × maintenance_fraction(period)
 ```
 
-維持率はContent Definitionのバランス値とする。維持資材は特別な税処理ではなく通常Resource DemandとしてInventory / Logisticsへ流す。
+維持率はContent Definitionのバランス値とする。維持資材は特別な税処理ではなく通常Resourceとして扱う。当tickの維持実行はExecution Requirement Bundle、将来の補充はSupply RequirementとしてInventory / Logistics契約へ接続する。
 
-資材不足時はFacilityを即時破壊せず、maintenance fulfillmentを0..1で算出し、Available Capability、生産率、Research Point生成等へ共通係数として反映できる構造を基本とする。
+割当済みmaintenance executionが不足した場合はFacilityを即時破壊せず、maintenance fulfillmentを0..1で算出し、Service Capacity、生産率、Research Point生成等へ共通係数として反映できる構造を基本とする。categorical Capabilityの有無と、現在供給可能な量を同じ数値で表さない。
 
----
+### 6.4 Decommission lifecycle
 
-## 7. Inventory / Storage / Power
+Facility lifecycleは少なくとも `NORMAL` と `DECOMMISSIONING` を区別する。Decommission Projectの計画・work allocationはConstruction系の共通Project能力を利用できるが、Facility lifecycle stateの所有者はFacility Domainとする。
 
-InventoryはLocationごとの所有資源を表し、在庫、予約、利用可能量、輸送待ち、輸送中、到着待機を区別する。
+不可逆な解体開始前は取消可能とし、開始後はFacilityを通常operationへ戻さない。`DECOMMISSIONING` Facilityは通常のProcess、Active Capability、Service Capacity supply、Storage admission等の新規Activity向け能力を停止する。既存stockや開始済みcommitmentを安全にsettleするため解体中にも残す必要がある受動能力だけは明示契約として保持できるが、新規Activityの供給能力へ数えない。
 
-StorageはPhysical CapacityとService Capacityを分けられる。輸送中Cargoは目的地Storageを事前予約せず、実到着時にだけ入庫判定する。入らない分はarrival waitingとして物流Domain側へ残す。
+既に開始済みでFacilityの現存を前提に安全にsettleする必要がある不可逆commitmentを破壊する場合はDecommission開始をblockする。Storage Facility除去後の残存Physical / Usable Capacityで既存Inventoryを保持できない場合も開始をblockする。これは既にPlayer-ownedなResourceの保存を守る契約であり、salvage admissionとは別に判定する。
 
-PowerはLocationごとのフロー制約とする。同一優先度帯では登録順ではなく比例配分し、可能な設備は部分稼働させる。
+Decommission完了時はFacility removalとsalvage settlementを同じcanonical transitionで確定する。salvageは累積投入ResourceとContent recovery定義からrecovery potentialを導出し、Facility removal後に残るcompatible Storage headroomを用いる全salvage Resourceのadmission requirementを一つのdisposal executionとして共通Allocationへ提出する。撤去対象Facility自身のStorage Capacityをsalvage受入余力へ数えない。Allocationは0..1の共通recoverable fractionを決め、そのfractionを全salvage outputへ比例適用する。実際にadmissionする量だけInventoryへResourceとして生成し、未回収potentialをauthoritative Resource Stateへしない。
 
----
+recoverable fractionが1未満であることだけを理由にFacility removalをblockしない。Resource列挙順によって回収構成が変化しないことをinvariantとする。
+
+## 7. Inventory / Allocation / Storage / Power
+
+通常Inventoryに属する物理Resourceは必ず有限Storage accountingへ参加する。通常Resourceは共通のdefault storage poolを利用し、保管方式そのものが独立したゲーム上の意味を持つResourceだけContentがspecial storage pool / compatibilityを指定できる。Generic Coreは具体的なStorage分類一覧やResource名分岐を持たない。内部pool keyはcapacity poolを一意に参照する識別子であり、その名称自体をゲーム上の固定taxonomyにしない。
+
+```text
+StorageCapacityPool
+  key
+  physical_capacity
+  usable_capacity
+  capabilities[]
+
+ResourceDefinition
+  storage_pool_key?   # 未指定ならdefault storage pool
+```
+
+StorageCapacityPoolのcapacityはFacility / Infrastructure等の供給元から導出する集約projectionであり、供給元と別のauthoritative capacityを重複所有しない。Physical Storage Capacityは設備として保持可能なstock上限、Usable Storage CapacityはPower、保冷、Facility状態、必要Capability等を反映して現在安全に利用できる上限とする。一定時間あたりの有限処理flow自体が共有bottleneckになる場合だけ、目的を明示したService Capacityとして定義する。
+
+InventoryはOperational Nodeごとの所有Resourceを表す。on-hand、Reservation、利用可能量、入庫・出庫flowを所有し、Logistics-ownedの輸送中Cargoやarrival waitingとはauthoritative ownershipを分離する。Application QueryではInventoryとInbound / outbound Cargoを統合表示してよいが、同じResource量を二つのDomain Stateへ重複保存しない。
+
+PowerはOperational Nodeごとのflow型Service Capacityとし、他の有限capacityと同じActivity Priority / Allocation契約を利用する。Power capacity自体をtick間Stockとして扱わない。時間を跨いで保持するenergyを導入する場合は明示Stock / Pool Stateとcharge / discharge executionを追加し、Power Service Capacityへ暗黙の蓄電量を混在させない。
+
+### 7.1 PriorityLevel
+
+共通Priority型を次の5段階とする。
+
+```text
+PriorityLevel
+  1 LOWEST
+  2 LOW
+  3 NORMAL
+  4 HIGH
+  5 HIGHEST
+```
+
+既定値は3とする。PriorityLevelはallocation weightではなくordinalなpriority bandである。Allocationは高いbandから順に供給を確定し、同一band内の競合を公平かつ決定論的に解決する。Pause / inactive等の状態はPriorityLevelから分離する。
+
+`Activity Priority` はProcess、Construction、Research、Maintenance、Supply Requirement、Target Stock等が既存Resource / Service / Transport Capacityを競合利用するときの優先度を表す。同じroot activityを成立させるRequirementはActivity Priorityを継承する。
+
+`Provisioning Priority` はfree Fleetを複数Transport Allocationへ配備する場合の優先度を表す。需要側のActivity PriorityがProvisioning PriorityやTransport Allocation targetを暗黙変更せず、Provisioning Priorityも別Activityへcommit済みFleetをpreemptしない。
+
+### 7.2 Execution Requirement Bundle
+
+同一tickの一単位executionに対して複数のResource、Service、Stock / Pool admission等が同時かつ比例して必要な場合は `ExecutionRequirementBundle` として提出する。
+
+```text
+ExecutionRequirementBundle
+  owner_intent
+  requested_execution
+  priority
+  requirements[]
+    ResourceRequirement(scope / operational_node_id)
+    ServiceCapacityRequirement(scope / site?)
+    PoolRequirement(scope)
+    StockOrPoolAdmissionRequirement(scope / operational_node_id)
+  minimum_execution?
+  atomic?
+```
+
+Bundle自体を必ず一つのOperational Nodeへ固定しない。各Requirementが必要なscope / siteを明示し、Organization-scope Research executionとOperational Node-scope Resource / Service requirement等を同じbundleで一貫して表現できるようにする。ただし一つのexecutionが物理的に一地点で行われる場合はExecution Siteをowner intent側で明示し、無関係なNodeのlocal capacityを混用しない。
+
+Bundle fulfillmentは構成Requirementが共通して成立できるexecution量として決める。Allocationで確定したexecution量に対応するRequirementだけをsettleし、あるResourceだけ100%消費した後に別Service不足で40%しか実行できない状態を作らない。
+
+FundsはResource Market settlement専用Stateであり、一般Execution Requirementへ含めない。
+
+Facility / Capabilityの存在、SiteRequirement、長期Reservation、既に確保済みStock、Fleet配置等の開始条件・保存状態・capacity provisioningはそれぞれの所有Domain契約として評価する。
+
+Production / Extraction / Research Point生成等でoutputをStock / Poolへ追加する場合、そのexecutionに必要なadmission headroomを`StockOrPoolAdmissionRequirement`としてBundleへ含める。複数Producerが同じStorage / Pool空き容量を二重利用しない。
+
+同一Priority band内の連続量Bundleは、共有constraintに対するnormalized fulfillmentをprogressive max-min方式で解決する。minimum / atomic要求は永続Intentのfairness ageとstable keyで決定論的にadmissionし、transient Claim生成順をfairnessの正本にしない。
+
+### 7.3 Reservation / commitment
+
+長期Project等で既に物理的に確保済みのResourceはInventory Reservation / commitmentとしてExecution Requirementと分離する。Execution Requirementを暗黙の永続Reservationへ変換しない。
+
+Project等がon-hand Resourceを将来実行用に段階的に確保する場合は、`ReservationAcquisitionRequirement` をActivity Priority付きでAllocationへ提出する。割当済み量だけをavailable stockからreserved stockへ移し、Reservationは以後のtickでもauthoritative Stateとして保持する。複数tickにまたがる資材蓄積はこの契約を利用する。
+
+将来必要量を表すSupply RequirementもReservationではない。将来必要であるというPlanning情報だけではon-hand Inventoryを他用途から排除しない。Project Domainが到着済みResourceを確保する必要がある場合にだけReservationAcquisitionRequirementを生成する。
+
+### 7.4 Inventory Admission / over-capacity
+
+Operational Nodeへ物理Resourceが増加するすべての経路は共通Inventory Admission契約を利用する。Industry output、Extraction output、Cargo unloading、Market buyによるownership transfer等をcompatible Storage poolのPhysical / Usable Capacity契約へ接続する。
+
+Local executionからのoutput admissionはExecution Requirement Bundle内のStock admission requirementとして当tick Allocationへ参加する。すでに過去tickでdispatchされて到着したCargoはBoundary settlementで先にadmissionを試み、入庫不能量はarrival waitingとしてLogistics側へ残す。
+
+Usable Storage Capacityが既存stock量を下回った場合は既存在庫を即時消去せずover-capacity stateとして保持する。新規admission可能量、成立していない保管条件やService、blocker等をApplicationへ公開する。
 
 ## 8. Industry / Extractionモデル
 
 ### 8.1 Process
 
-FacilityそのものとProcessを分離する。Processはinputs、outputs、基準処理能力、電力等を持つ。
+FacilityそのものとProcessを分離する。Processはinputs、outputs、基準処理能力、Power等のRequirementを持つ。
 
-Application Queryは設備ごとの選択Process、実効inputs / outputs、稼働率、limiting factorを返す。UIは「何を消費して何を作るか」をFacility画面から直接確認可能にする。
+一Facility instanceが通常同時に実行するProcessは一つとする。Facility Definitionに互換Processが一つしかなければProcess selectionはDefinitionから導出し、複数ある場合だけFacility Stateが `selected_process_id` をauthoritativeに所有する。登録順・ID順で暗黙選択せず、Requirement不足時に別Processへ自動切替しない。
 
-### 8.2 資源競合
+Processは一単位executionに必要なResource、Power、Process Service、output admission等をExecution Requirement Bundleとして提出する。Application Queryは選択Process、候補、実効inputs / outputs、requested / allocated execution、稼働率、limiting factorを返す。
 
-複数Processが同一Resourceを要求する場合、Facility登録順で資源を奪わせない。電力、原料、Storage等を反映した配分を行う。
+複数Process同時実行を導入する場合は、shared capacity、配分、Power、Maintenance、UIを含む新しいゲーム上の意味としてその時点でProcess契約を拡張する。
 
-### 8.3 Extraction
+### 8.2 資源・能力競合
 
-ExtractionはDeposit / Knowledge / ExtractionSpecから成立させる。
+Processは一単位executionに必要なResource input、Power、Process Service、output Storage admission等をExecution Requirement Bundleとして提出する。Industryだけの独自先着配分を持たず、Maintenance、Research、Construction等と同じAllocation契約で競合する。
 
-月面等ではSurveyによってKnowledgeを段階的に得る。初期地球産業では開始時から既知のDepositをContentとして定義し、低効率の地球採掘Facilityを利用可能にできる。EarthというLocation名へのCore特例は作らない。
+Allocation結果として確定したexecution fulfillmentだけProcessを進め、そのexecution量に対応するinputを消費し、許可済みadmission量の範囲でoutputを生成する。Application Queryはrequested execution / allocated execution / fulfillmentとlimiting factorを返す。
 
----
+### 8.3 Extraction / Resource Potential
+
+有限 `Deposit remaining` を採掘の正本にしない。地表資源はSurface Cellごとの静的 `Resource Potential` と、Locationに設置された採掘Facilityが供給するNominal Extraction Capacityから継続的なThroughputを導出する。
+
+Resource Potentialは残量、Facility slot数、固定最大`t/day`のいずれでもなく、追加採掘能力をどの程度高い限界生産性で利用できる地域かを表す。各developed Surface CellについてStatic PotentialにPhysical Environment・地質accessibilityを適用して `Cell Effective Opportunity` を導出し、それらをLocation単位へ集約する。
+
+```text
+CellEffectiveOpportunity(cell, resource, method)
+  <- static Resource Potential
+  <- current Physical Environment
+  <- geological / terrain accessibility
+
+EffectiveOpportunity(location, resource, method)
+  <- developed cellsのCellEffectiveOpportunity集約
+```
+
+Installed Nominal Extraction CapacityとEffective Opportunityから実効Throughputを求めるresponseはGeneric Coreの共通モデルとし、少なくとも次を保証する。
+
+- Installed Capacityが0ならThroughputは0。
+- Installed Capacity増加に対して総採掘量は単調非減少。
+- 同じOpportunityに対する限界増産量は逓減。
+- Opportunity改善だけで同じCapacityのThroughputが低下しない。
+- Facility数のハード上限をResource Potentialから直接導出しない。
+- 通常採掘でStatic Resource Potentialを減少させない。
+
+ResourceやLocationごとの任意response関数をContentへ持たせない。方式差は共通responseへ入力するOpportunity、Facility性能、Environment / accessibility等で表す。
+
+Surface Infrastructure / Local Distributionの有限能力はExtraction executionのService Requirementとして一度だけAllocationへ反映し、Resource Opportunityへ別係数として重ねない。Survey Knowledgeは物理Throughput係数ではなく、公開する推定値・候補・Knowledge blockerを決めるStateとして分離する。
+
+研究は新しいFacility Definition、Process、Construction / Modernization手段を解禁する。Throughput上昇には実際のFacility建設・Upgrade・更新が必要となる。
+
+### 8.4 ロケーション産業自立・外部依存Analytics
+
+ロケーション産業自立は保存Stateや特定天体固有のフラグではなく、authoritativeなProduction、Consumption、Supply Requirement、Import / Export、Unmet Requirementから導出するAnalyticsとする。
+
+単一Surface Location、単一Operational Node、任意のOperational Node集合をanalysis scopeとして選べる。Resource単位を正本とし、表示上のResource GroupはContent Definitionで定義できる。Mass、Energy、Propellant、Machinery等の固定カテゴリをGeneric Coreへ埋め込まない。
+
+Queryは少なくとも `CURRENT` と `FORECAST` のtime basisを区別する。CURRENTはsnapshot時点のrate / unmet stateを返す。FORECASTはactive Project、Supply Requirement、Target Stock等が持つforecast time / consumption rateから、既に計画へ現れている将来依存を導出する。固定horizonはauthoritative Stateにせず、期間指定が必要ならQuery filterとして扱う。Power等のService Capacity dependencyをResource Groupへ混在させず、必要なら別projectionとして扱う。派生AnalyticsなのでSaveへ独立保存しない。
 
 ## 9. Constructionモデル
 
 ### 9.1 建設能力
 
-Construction CapacityはLocation固定値ではなく、建設ヤード、施工設備、ロボット、移送可能な建設機械等から発生するフローとする。
+Construction Service CapacityはOperational Node固定値ではなく、建設ヤード、施工設備、ロボット、移送可能な建設機械等から発生する有限flowとする。
 
 複数Projectへ配分でき、一案件完了後の余剰能力は残案件へ再配分する。
 
 ### 9.2 Construction Recipe
 
-建築物は原則2〜3種類の明示的な実Resourceを消費して建造する。
+Facility Build / Upgradeは有限個の明示ResourceとConstruction workを定義する。
 
 ```text
 ConstructionRecipe
-  facility_definition_id
-  resources: 2..3 kinds
+  target definition / work kind
+  resources[]
   construction_work
-  site_requirements
+  eligibility_requirements
   prerequisite_technologies
 ```
 
-簡易Facilityは2種類、高度Facilityは3種類程度を基本とする。抽象ComponentへLocalSubstitutionTierをぶら下げる方式は採用しない。
+一般ContentではUI可読性と物流判断を保つため2〜3種類程度の主要Resourceを基準とするが、Generic CoreはResource種類数を固定上限としてValidationしない。追加Resourceが独立した判断を生む場合は明示Requirementとして定義する。
+
+Construction workはFacility建設・UpgradeだけでなくFacility Decommissionにも共通Service Capacity / Project schedulingを利用できる。ただしFacility lifecycle transition自体はFacility Domainが所有する。Decommission recipeは必要work、補助Resource、salvage definitionをContentとして定義できる。抽象ComponentへLocalSubstitutionTierをぶら下げる方式は採用しない。
 
 ### 9.3 産地非依存
 
@@ -279,119 +602,325 @@ Extraction
 
 ### 9.4 Build Project State
 
-Build Projectは少なくとも建設地点、進捗、調達状態、予約、調達元、経路、各Legの輸送方式、priority / allocation、pause状態を持つ。
+Construction系Projectはtarget kindを明示し、Build / Upgrade / Decommission等の異なるlifecycle intentを同じProject Schedulingへ接続できる。Build / Upgrade Projectは少なくともOperational Node、進捗、Resource commitment / Reservation状態、Activity Priority、pause状態を持ち、必要ResourceをSupply Requirementとして公開する。通常routingはProject destinationとResource需要からLogisticsが導出し、Project自体が物理的originをDomain意味として持つFounding等だけ、そのoriginをProject contractとして保持する。Projectが開始条件として複数tickにまたがる資材確保を必要とする場合はReservationAcquisitionRequirementで段階的にReservationを形成する。SURFACE_CELL Facilityだけは追加で配置Cellを持つ。Decommission Projectは対象Facility Entityを参照し、Facility Domainが公開する開始可否・不可逆境界・completion transitionを利用する。
 
-PauseとCancelを分離する。
+Projectは通常物流のsourceや各Leg、Transport Serviceをauthoritative stateとして所有しない。現在のconstruction executionに必要なResource / Construction Service等はExecution Requirement Bundleとして生成する。Project進行から予測できる将来資材必要量はstableなSupply RequirementとしてLogisticsへ公開し、Project進捗が変化すればremaining quantity / forecast requirement timeを更新する。
 
----
+PauseとCancelを分離する。Build / Upgrade ProjectのPauseは新規Construction executionと新規ReservationAcquisitionRequirement生成を止めるが、既取得Resource Reservationとprogressは保持する。Reservationを解放してProject intent自体を終了する処理はCancel側の明示transitionとする。
 
-## 10. Logistics / Vehicleモデル
+### 9.5 Operational Node founding / Surface development
 
-TransportはVehicle / Fleetから輸送能力を供給し、Logisticsはその能力をResource Demandへ配分する。通常物流で個体Vehicle Missionを繰り返し生成せず、Fleet Allocationから定常Transport Capacityを導出する。
+新しいOperational Nodeを成立させる一回限りの処理は共通 `OperationalNodeFoundingProject` lifecycleとして扱う。targetの物理種別はtyped specで分離する。
 
-### 10.1 Transport Operation / Route
+```text
+OperationalNodeFoundingProject
+  staging_node_id
+  target_spec
+  deployment_recipe_id
+  prepared_resource / fleet commitments
+  deployment_movement_requirement
+  preparation_work
+  priority
+  status
 
-Route可否は用途名でなくOperation要件と実性能から判定する。
+SurfaceLocationTargetSpec
+  body_id
+  core_cell_id
 
-- Powered Ascent
-- Spaceflight
-- Landing
-- Atmospheric Entry
+NonSurfaceOperationalNodeTargetSpec
+  spatial_context_id
+```
 
-必要に応じてDelta-v、Thrust、Endurance、Atmosphere、Gravity、Landing、Docking / Refueling Infrastructure等を使う。Launch Vehicle / Spacecraft / Lander等の名称は表示に利用できるが、可否判定には使わない。
+Founding前のtargetはphysical Movement endpointにはなれてもInventory / Logistics Nodeではない。Deployment Recipeはstaging側で実際に準備するResource、Fleet、workと、到着後に生成するOperational Node、Facility、Inventory等の対応を明示する。dispatch時にsource側Stateからone-shot Movement payload / commitmentへ移し、成功時だけtarget Stateへ一度settleする。Definitionだけを理由にResource、Fleet、Facilityを追加生成しない。dispatch前の取消は取得済みReservation / Fleet Commitmentを通常のrelease契約で解放する。dispatch後はpayloadやFleetを消去せず、Movement Executionが定義するreturn / recovery / failure dispositionを完了させてsettleする。
 
-研究技術IDをRouteの直接解除条件にせず、研究で解禁されたVehicle、推進、補給、Infrastructure等の実能力から到達可能性を決める。
+Surface Location Foundingは追加でKnowledge Eligibility、target Surface CellのPhysical Environment、Landing / access等を要求できる。Knowledge Requirementはtarget / knowledge subject / minimum levelを明示し、単一の「survey済み」flagや任意Resourceの最大Knowledge値へ縮退させない。
+
+既存Locationの隣接Surface Cell開発はResource・Construction Service Capacity・時間・Eligibilityを消費するDevelopment Projectとして扱う。成功後はgenerated Operational Node / developed cellを通常Inventory / Facility / Logistics契約へ接続する。
+
+## 10. Movement / Transport / Logistics / Vehicleモデル
+
+Spatialは二地点間の物理的関係、Movementは移動の成立条件と結果、TransportはFleet / Infrastructureから反復可能なcapacityを供給する責務、LogisticsはSupply Requirementを満たすResource flowを計画する責務を持つ。通常物流で個体Vehicle Missionを反復生成しない。
+
+### 10.1 Spatial Relation / Movement Plan
+
+通常Movementの二地点関係をOD別の静的Route Definitionとして保存しない。Movement Resolverはorigin / destination Endpoint、Spatial Relation、利用可能Operation、Vehicle性能、InfrastructureからMovement Plan候補を導出する。
+
+```text
+MovementEndpoint
+  operational_node_id?
+  locator:
+    surface_interface_id | access_cell_id | non_surface_interface | physical_target
+
+SpatialRelation
+  origin_spatial_context
+  destination_spatial_context
+  characteristic_geometry / separation
+  origin_endpoint_conditions
+  destination_endpoint_conditions
+  movement_context
+
+MovementPlan
+  origin_endpoint
+  destination_endpoint
+  operations[]
+  vehicle / movement requirements
+  payload characteristics
+  latency
+  resource / servicing requirements
+  endpoint requirements
+```
+
+Movement Operationには必要に応じてPowered Ascent、Spaceflight、Landing、Atmospheric Entry、Surface Transport等を利用する。Delta-v、Thrust、Endurance、Atmosphere、Gravity、Landing、Docking / Refueling Infrastructure等は適用可能なOperationの評価入力として利用できる。Launch Vehicle / Spacecraft / Lander等の名称は表示に利用できるが、可否判定には使わない。
+
+Surface LocationではCore Cellや代表座標をMovement距離の固定正本にせず、実際に利用するGateway / access interfaceとSurface Cell geometryをEndpoint条件へ反映する。Location拡大によって開発圏やGatewayが接近した場合、新しいEndpoint geometryからMovement Planを再導出できる。
+
+Surface Cell自体を通常Transport Capacity Network Nodeにはしない。Location設立前だけは `physical_target(surface_cell_id)` をFounding / Deployment等のone-shot Movementで利用できる。
+
+Movement Planはauthoritative StateではなくSpatial / Facility / Definitionからの派生結果である。同一physical state内では、全候補、OD別候補、Plan ID参照等が同じ導出結果を再利用できる索引をTransport Domainが保持してよい。Plan ID参照のたびに全Operational Node pairを再列挙する方式をQuery契約にはしない。Spatial topology、Movement Endpointを構成するFacility、その他Plan内容へ影響するphysical stateが変化したときだけ派生索引を無効化し、必要時に再導出する。派生索引はSave対象にしない。
 
 ### 10.2 Vehicle Definition / Fleet State
 
-Vehicle DefinitionはRoute適合と運用能力を導出する物理・運用性能を持ち、固定の`t/day`を持たない。必要に応じて以下を持つ。
+Vehicle DefinitionはMovement適合性、Payload、Propellant、Endurance、Operation interface、turnaround / maintenance、Production Requirement等の性能・物理要件を持つ。Funds costは一般Vehicle要件へ含めない。
 
-- Dry Mass / Payload Capacity
-- Propellant type / capacity / consumption model
-- Operation capabilities / environment envelope
-- Travel performance / Endurance
-- Docking / refueling等のinterface
-- minimum turnaround / servicing work / maintenance resources
-- Production Capability / duration / resources
+通常Vehicleは個体Entityではなく、同一Definition・所在Operational Nodeごとの `FleetPool` 数量として管理する。Fleet Domainは総数と排他的 `FleetCommitmentState` をauthoritativeに所有する。
 
-同じ性能モデルからRoute可否、運行cycle、方向別Payload、latency、推進剤需要、servicing需要を導出する。同一の物理制約をCapability上限とResource計算へ重複定義しない。
+```text
+FleetCommitmentState
+  commitment_id
+  owner_activity_ref
+  vehicle_definition_id
+  operational_node_id / movement_state
+  quantity
+  completion_disposition?
+```
 
-通常運用のVehicleは個体IDではなく、Vehicle Definition × Location単位のFleet Stateとして管理する。Fleet Stateは少なくとも総数と、Transport Allocation、Scientific Exploration、relocation、releasing等への排他的配分を持つ。未配分数はそれらから導出する。
+`owner_activity_ref` はTransport、Scientific Exploration等の用途名をFleet Coreの閉じた分岐へ変換するためではなく、所有Activity / Provider Assignmentへstableに参照する。Fleet Domainは用途固有progressを所有せず、数量保存、排他性、所在、commit / release / Movement settlementを保証する。Transport Allocation、Scientific Exploration、Fleet-backed Research / Survey Provider Assignment、Retirement等は必要unitをこの契約へcommitし、各Domainへ同じunit数量をauthoritativeに複製しない。Survey CampaignのようにProvider Serviceを消費するActivityへFleet Commitmentを重複保持しない。
 
-### 10.3 Vehicle Production / Fleet relocation
+free Fleetを継続的に自動配備する `Provisioning Priority` はTransport Allocationのゲーム上の判断として定義し、すべてのFleet利用Activityへ一律一般化しない。他Activityは開始・割当Command等、自身の意味に沿ってcommitする。
 
-ロケットや宇宙船は外部Serviceだけでなくプレイヤーが建造できる。対応Capability、2〜3種類程度の実Resource、時間を消費してProduction Stateへ入り、完了後は建造地点のFleetへ数量を追加する。
+Vehicleは任意Operational NodeでProduction requirementsを満たせば建造でき、完成unitはそのNodeのFleetPoolへ追加される。別Nodeへの配置換えはFleet Relocation / Movement Executionを通して物理移動し、sourceから減少したunitは到着完了までdestinationへ存在しない。
 
-地点間のFleet再配置はaggregateなFleet Relocationとして時間を要する。Transport Allocationを減らしたFleetも必要な回収時間中はreleasingとして拘束し、即座に別地点のfree Fleetへ戻さない。
+個体ごとの耐久、固有改修、履歴等が主要Stateにならない限り恒久Vehicle Entityを導入しない。同一状態unitをcohortとして表現できる場合はFleet集約を維持する。
 
-ApplicationはVehicle Production Option、Fleet所在・総数・各用途配分、relocation / releasing、現在のblockerをQueryできるようにする。
+### 10.3 Vehicle Production / Retirement / one-shot Movement Execution
 
-### 10.4 Transport Allocation / Transport Capacity
+Vehicle ProductionはOperational Nodeを実行地点として持ち、必要Resource、Production Capability / Service Capacity、SiteRequirements、時間を満たして進行する。完成時にそのNodeのFleetPoolへunitを追加する。
 
-プレイヤーはVehicle type、輸送する拠点間関係、経路・運用Policy、Allocation priorityを指定してFleetを輸送へ配分する。Corridor / Transport Serviceを別の管理対象として作成させない。
+Fleet RetirementはTransport / Fleet Domainが所有する永続Intentとする。retirement対象unitは所在Operational Nodeのfree Fleetから排他的にcommitし、所在Nodeで通常のService Capacity / Resource Requirementとして表現されるworkを経て完了時にFleet総数を減らす。不可逆な解体開始前は取消可能、開始後は対象unitを他用途へ解放しない。
 
-Transport Allocationは次のどちらか一方をauthoritative targetとして持つ。
+salvage量はVehicle Definitionのretirement recovery定義とunit数からrecovery potentialを導出する。Facility Decommissionと同じdisposal settlement契約を用い、全salvage Resourceのcompatible admissionを共通Allocationへ提出して0..1のrecoverable fractionを決め、全Resourceへ比例適用する。admission成立量だけInventoryへ生成し、recoverable fractionが1未満でもFleet unit removalを完了できる。Resource列挙順によって回収構成が変化してはならない。
 
-- `UNITS`: 目標Fleet隻数を指定し、輸送能力を導出する。
-- `CAPACITY`: 方向別の目標定常capacityを指定し、Nominalな1隻当たり能力から必要隻数を導出する。
+Fleet Relocation、Scientific Exploration等の有限操作はone-shot Movement Executionを利用し、開始時にFleet unitをsourceのfree poolから外し、完了時に定義されたdispositionへsettleする。in-transit unitをsource / destination Fleetへ同時に計上しない。
 
-両modeの値を同時に正本にしない。mode切替時は現在値から新modeの初期値を導出し、以後は新modeだけを保存する。CAPACITY modeのFleet必要数には一時的な燃料・整備不足を反映させず、不足を埋めるための自動増員を起こさない。
+### 10.4 Transport Allocation / Transport Service / Capacity
 
-Fleet不足でtargetを満たせないAllocationは有効な設定として保持し、不足数をblockerとして返す。free Fleetが増えた場合はAllocation priorityに従って既存targetまで投入できる。同順位の結果を登録順に依存させない。
+プレイヤーはVehicle type、origin / destination relation、方向別Target Capacity、Provisioning Priority、必要ならMovement hard constraintを指定してTransport Allocationを作る。
 
-Transport DomainはAllocationごとに、Cargo輸送後もFleetが反復運用可能な状態へ戻る経路を含むTransport Service Planを導出する。往復Route、Vehicle固有のrecovery、turnaround、refueling、servicingを一般モデルとして組み合わせ、機種名による特殊分岐を置かない。
+```text
+TransportAllocationState
+  allocation_id
+  origin_node_id
+  destination_node_id
+  vehicle_definition_id
+  target_capacity: DirectionalCapacity
+    forward_t_per_day
+    reverse_t_per_day
+  provisioning_priority
+  movement_hard_constraint?
+  control_state
+```
 
-Service Planから方向別Transport Capacityを導出し、少なくとも次を区別する。
+Target Capacityはforward / reverseを区別する方向別定常capacityであり、Transport Allocationの唯一のauthoritative targetとする。Fleet unit数はTarget Capacity、選択されたMovement / Service Plan、1unit当たりNominal Capacityから導出する。UIがFleet unit数を入力補助として受け取る場合はApplication境界でTarget Capacityへ変換し、Domain StateはTarget Capacityだけをauthoritativeに保持する。
 
-- Target: CAPACITY modeで指定した目標
-- Nominal: Fleet数と通常運用条件から得られる設計能力
-- Available: 現在のResource / Infrastructure / servicing制約を反映した能力
-- Used: Logisticsが実際に利用した能力
-- Spare: Available - Used
+Movement Plan候補が複数ある場合、hard constraintがなければlatency、Propellant等の運用Resource負担、service構成等を含む正準評価で決定論的に選ぶ。Playerが特定Gateway、Movement Plan、Service構成を戦略的に固定する場合だけhard constraintをauthoritative Stateとして保持する。
 
-往復Serviceは同一cycleが両方向を担当するため、方向別capacityを加算してFleet負荷を二重計上しない。帰り荷がない場合は空荷回送を含め、帰り荷がある場合は同じ復路capacityを利用する。
+Provisioning Priorityは1〜5、標準値3とし、Transport Allocation間でfree Fleetをどこへ配備するかを決める。Activity Priorityとは別Stateであり、Priority変更だけでScientific Exploration等の別ownerへcommit済みFleetをpreemptしない。
 
-推進剤・servicing等の可変運用需要はAllocation最大値ではなく実際のService利用率から発生させる。Available Capacityはそのtick開始時点のResource / Infrastructure snapshotから決め、同tick中に到着したResourceで遡及的に増加させない。
+必要Fleet数はNominalな1unit当たり能力から導出し、一時的な燃料・整備不足を埋めるため自動増員しない。Fleet不足でtarget未達でもAllocation設定を保持する。Pause時は必要active unitsを0として新規Provisioningを止め、運用中unitはrecovery / release lifecycleを経てfree poolへ戻すが、Allocation target自体は保持する。
 
-External Transport ServiceはFleet Allocationを持たず、同じTransport Capacity interfaceへ直接能力を供給できる。
+Transport DomainはAllocationごとにMovement、recovery、turnaround、refueling、servicingを組み合わせてTransport Service Planを導出する。Service PlanからTarget、Nominal、Available、Used、Spare Capacityを区別する。往復Serviceの同一cycle負荷を方向別capacityで二重計上しない。可変運用需要は実際のService利用率から発生させる。
 
-### 10.5 Logistics Lane / Cargo Flow
+Transport Service Plan、Movement選択結果、Required Fleet Units、current Capacityはderived stateとし、dispatch済みCargo Flowや開始済みMovement Executionが保持するlatency等はdispatch / start時点で確定してState化する。
 
-定常物流の主要設計対象は品目別補充ルールではなく、拠点間輸送能力、方式、Fleet配分、Lane priorityとする。
+### 10.5 Supply Requirement / Target Stock / Supply Planning
 
-Facility、Construction、Maintenance、Industry等はResource Demandを生成する。Laneはrequested capacityとpriorityを持ち、Transport AllocationやExternal Serviceから生成された共有Transport Capacityへ需要を配分する。
+各Domainは将来のResource補充・配置必要量を `SupplyRequirement` として公開できる。Supply RequirementはPlanning情報でありInventory ReservationやResource消費そのものではない。通常Facility / Project / Maintenance / Research需要はSupply Requirementから自動補給され、Target Stock設定を前提にしない。
 
-Transport Allocation targetは「どれだけ輸送能力を用意するか」、Lane requested capacityは「その能力をどれだけ物流需要へ利用するか」を表す。Lane需要からFleetを暗黙に増員しない。
+Target Stockは、通常需要を超えてPlayerが特定Operational Nodeへ追加で保持したい備蓄量を表すPlayer intentとして同じSupply Planningへ接続する。Target StockはInventory Reservationではなく、現在stockを通常Activityから隔離しない。不足量だけを追加Supply Requirementとして扱う。
 
-通常物流の実行は個体Vehicle MissionではなくCargo Flowとして表現する。利用したcapacityに応じてCargo Flow Batchを生成し、Service latency後に目的地Inventoryへ到着させる。輸送中Cargoは目的地Storageを事前予約せず、実到着時に入庫判定する。容量不足分はarrival waitingとしてLogisticsが保持する。
+```text
+TargetStockState
+  target_stock_id
+  destination_node_id
+  resource_id
+  target_quantity
+  activity_priority
+```
 
-### 10.6 End-to-End / Special Mission
+Logistics PlannerはSupply Requirement、Target Stock、Inventory、Reservation、Inbound Cargo、latency、Transport Capacity、Activity Priority、必要なrouting hard constraintを統合し、当日dispatch必要量・rateをactive shipping demandへ解決する。Activity Priorityが高くても、将来まで十分余裕があるRequirementは現在必要な低Priority活動を直ちに先取りしない。同一destination / Resourceの複数Requirementはlocal stock / inbound planning creditを共通配分し、同じ量を複数Requirementへ重複して充足済みと数えない。
 
-プレイヤーは原則として出発Nodeと最終目的Nodeを指定できる。経路未指定時は明示Policyに従ってTransport Capacity Network上のpathを選択し、中継Nodeごとの再発送Commandを要求しない。
+通常状態では、現在成立しているsource InventoryとTransport Service graphからsource / end-to-end pathを正準評価で決定論的に選択する。Playerが自動選択を制限したい場合だけ、需要scopeに直接結び付く疎なrouting hard constraintをauthoritative intentとして保持する。
 
-End-to-End能力は経路上の共有capacityと競合需要から決まる。同じFleetが途中NodeでCargoを引き渡さず連続運行できる場合は一つのTransport Serviceとして扱い、別Fleetへ引き渡す地点だけをLogistics上のhandoffとする。
+```text
+SupplyRoutingConstraintState
+  scope:
+    owner_ref?
+    destination_node_id
+    resource_id?
+  source_node_id?
+  required_via_node_ids?
+  required_transport_allocation_ids?
+```
 
-LEOやLunar OrbitはInventory / refueling / transfer / servicing Nodeとして利用できるが必須進行ゲートではない。プレイヤーが明示したVehicle / Service / pathが利用不能になった場合は、明示Policyがない限り別方式へ勝手にfallbackしない。
+routing hard constraintは需要scopeへ直接所属する。constraintが存在しない需要は通常auto-routingを用いる。hard constraintが成立しない場合はblockerを返し、別source / pathへ戦略的fallbackしない。
 
-有限・状況依存の特殊輸送はTransport Missionとして別途扱ってよい。通常のLane物流をMissionへ戻さない。
----
+PlanningはTransport Allocation target、Fleet provisioning、Trade Order、Facility、Target Stockを暗黙変更・生成しない。発送候補Resourceはsource側Execution Requirementとして現地用途と共通Allocationで競合する。routing constraint変更は未dispatch Planningへだけ作用し、dispatch済みCargo / Movement条件を遡及変更しない。
 
-## 11. Research Point / Researchモデル
+### 10.6 Cargo Flow / ownership
 
-Research Pointは通常貨物Inventoryとは分離した知識資源とする。
+通常物流のdispatch済みResourceはsource Inventoryから減算し、Logistics-owned Cargoとして保持する。同一条件が継続するdispatchはtickごとの個別BatchではなくCargo Flow Segmentとしてまとめる。
+
+```text
+CargoFlowSegment
+  resource_id
+  source_node_id
+  destination / next_handoff
+  transport_service_identity
+  dispatch_start
+  dispatch_end
+  dispatch_rate
+  latency
+  activity_priority
+```
+
+source、destination、service、latency、rate、priority等の輸送意味論が変化した時点で新しいSegmentを開始し、同じ条件の隣接Segmentは結合可能とする。Cargo State量を経過tick数そのものに比例させない。
+
+Cargo Flow Segmentのdispatch済み部分は、そのdispatch時点のTransport Service条件とlatencyを保持する。後続のInfrastructure / Technology / Fleet変更によって既にin-transitの到着時刻を遡及変更しない。
+
+### 10.7 Arrival / handoff / Inventory admission
+
+Cargoが目的地またはhandoff Operational Nodeへ到着した場合、Cargo HandlingとInventory Admissionを評価する。
+
+別Transport Serviceへdirect handoffできる場合は、必要なtransfer Service Capacityを利用してStorageへ移さずLogistics-owned Cargoのまま次Legへ接続できる。一旦Storageへ荷卸しする場合は、その時点で物理Resourceのauthoritative ownershipをInventoryへ移し、次Leg向けの確保はInventory Reservation / commitmentとして表現する。
+
+荷卸し条件が成立しないCargoはarrival waitingとしてLogistics側に残る。arrival waitingはCargo Handling / arrival holdingの物理制約を消費し、対応するTransport Serviceの再利用可能capacityへbackpressureを与える。個体Vehicleを通常物流へ生成せず、Service Planのpayload / cycleからaggregate occupancyとして扱う。
+
+輸送中Cargoは目的地Storageを事前予約しない。
+
+### 10.8 End-to-End path
+
+Logisticsは現在成立しているTransport Serviceをgraph edgeとして、destinationまでのend-to-end pathを導出する。SupplyRoutingConstraintがある場合はsource / via / Service等のhard constraintを満たす候補だけを残す。
+
+constraintがない通常状態では、latency、Propellant等の運用Resource負担、handoff burden、利用可能Transport Capacity等の実際の物流特性を正準評価し、同一physical stateから同一pathを決定論的に選ぶ。各指標の単位差だけで一方が支配しないよう正規化等を用い、同評価の候補だけstable keyでtie-breakする。
+
+同一Transport ServiceがCargoを保持したまま複数Movement Operationを継続する場合は一つのLogistics legとして扱える。別Serviceへ直接積替えするOperational Nodeだけhandoff pointとし、Spatial hierarchy上の中間contextを自動handoffにしない。
+
+Routingは既存Transport Serviceの利用を解決する責務であり、Transport AllocationのVehicle / Capacity / Movement hard constraintやFleet provisioningを変更しない。dispatch時に選ばれた各LegのService identity / latency等はCargo Stateへ確定し、後のNetwork変更で遡及変更しない。
+
+### 10.9 External Resource Market / Funds
+
+Fundsは組織全体のResource売買決済Stateであり、Operational Node Inventoryへ混在させない。`FundsState` は総残高だけをauthoritativeに所有し、利用可能残高はactive Buy Commitmentのreserved Fundsを控除して導出する。FundsをResearch、Construction、Maintenance、Vehicle production / operation、Transport Capacity、一般Service等のExecution Requirementに利用しない。
+
+`MarketProviderDef` はMarket identityとResourceごとのbuy / sell offer価格、有限availabilityのreplenishment rule、必要ならlead timeを定義する。現段階ではoffer価格はDefinition-backedな固定条件とし、`MarketProviderState` は内生的な価格Stateを持たない。有限の現在supply / demand availabilityと、決定論的なrate / interval等のreplenishmentに必要な可変値を `MarketProviderState` がauthoritativeに所有する。Player世界との物理接続はOperational Node上の `MarketInterfaceState` が所有し、Provider能力を他Nodeへ自動的に拡張しない。
+
+`TradeOrderState` はdirection、resource、Market Interface、Activity Priority、price conditionと、`QUANTITY` / `RATE` のcontrol modeを持つ。QUANTITYはtarget quantity、RATEはtarget rateだけをauthoritative targetとし、両方を同時正本にしない。QUANTITYの未達量はremaining targetとして次tick以降へ保持する。RATEは各tickの現在throughput目標であり、そのtickの未達量を翌tickへbacklogとして加算しない。Buyのprice conditionはmaximum buy price、Sellはminimum sell priceとして評価し、条件外offerでは新規commit / settlementを行わない。Order Stateはsettled quantityと未手配・in-flight / presented量を区別できる進捗を持つ。Buyの予約は別の `BuyCommitmentState` がorder_id、resource、unsettled committed quantity、commit時buy価格、reserved Funds、reserved provider supplyをauthoritativeに所有する。同じ予約量をTradeOrderState、MarketProviderState、FundsStateへ重複保存しない。利用可能Fundsとprovider supplyはactive Buy Commitmentを控除して導出する。
+
+Buyでは、maximum buy price条件を満たすOrderに対してFundsとprovider supplyを同じcommitment acquisitionとして競合解決し、両方が成立した量だけBuy Commitmentへ予約する。Fundsだけ、またはprovider supplyだけを片側commitしない。commit時のoffer価格をCommitmentへ固定するため、その後のOrder価格条件変更や市場価格変動は既commit lotの価格を遡及変更しない。provider lead timeが満了し、Market Interface所在Operational Nodeで必要なCargo HandlingとInventory Admissionが成立した量だけMarketからPlayer InventoryへResource ownershipを移し、そのownership transfer、対応Funds消費、commitment減少をatomicにsettleする。commit済み未settled supplyを別Orderへ二重割当せず、取消可能な未settled commitmentはFunds / provider supplyの双方を解放する。
+
+Sellでは遠隔Resourceのためにprovider demandを先行予約しない。Player ResourceをMarket Interface所在Operational Nodeへ通常Cargo / Inventory契約で運び、snapshot時点で実際に取引可能なResourceが提示され、かつminimum sell price条件を満たす場合だけSell executionを共通Allocationへ提出する。Sell executionはInterface在庫のResourceRequirementとprovider demand constraintを同じexecution量へ結合し、Activity Priorityに従って他のInventory用途および他Sell Orderと競合する。確定量だけPlayerからMarketへownershipを移し、Sell価格はownership transfer時点の有効sell offerを適用して対応Fundsをatomicに加算する。TradeOrderStateは未手配量と既dispatch / 提示済み量を区別して二重dispatchを防ぐ。Order変更・取消は既settlementを遡及変更せず、既dispatchのPlayer-owned Cargoを消去・転送しない。Marketへ未到達の遠隔ResourceをFundsへ直接変換しない。
+
+Market InterfaceへのResource輸送はPlayer-owned Fleet / Transport Capacityと通常Logisticsを利用する。External MarketはPlayerへ汎用Transport Serviceを供給せず、Resource取引以外の支出・収入経路を持たない。
+
+## 11. Research Point / Research / Knowledgeモデル
+
+Research Pointは通常貨物Inventoryとは分離し、組織全体の共有Knowledge PoolとしてResearch Stateが所有する。Research ProviderはOperational Node上のFacility / Fleet等のDefinition-backed providerからRP生成量と貯蔵能力を供給できるが、生成したRPをprovider所在地専用pointにはしない。
 
 Research ProviderはTierとLevelを持てる。
 
 - Tier：研究手段の世代差・基礎効率差
 - Level：同一世代設備への増設・拡張・改良
 
-研究源ごとに「この分野にしか使えないRP」という適用範囲は原則設けず、差は生成率、貯蔵容量、建造・維持要求で表現する。
+Research Provider Tierはprovider Definitionの設備世代であり、Technologyの表示上の研究段階区分とは別概念とする。Technologyの表示段階変更や完了によってprovider Tierを暗黙更新しない。
 
-Research Definitionは必要に応じてTheory、Prototype、Demonstration、Operational Experienceを持つ。
+Research Point storage capacityは有効なprovider群から導出する。容量低下で既獲得RPを消去せず、新規生成を制限する。
 
-研究技術IDをRouteの直接解除キーにしない。研究はVehicle、設備、推進、補給、製法等を解禁し、実際の到達可否はOperation要件・Vehicle性能・Infrastructureから決める。
+Facility-backed Research ProviderはFacility StateとDefinitionから供給を導出する。Fleet-backed Research ProviderはResearch Domainが `ResearchProviderAssignmentState` をauthoritativeなprovider-use intentとして所有し、そのStateがFleet Domainの排他的Fleet Commitmentを参照する。Fleet quantityと排他所有はFleet Domainだけが所有し、Research Domainへ複製しない。Player Commandはprovider用途へ配分する希望Fleet quantityを受け取る。
 
-貯蔵容量低下で既獲得RPを消去せず、新規生成を制限する。
+```text
+ResearchProviderAssignmentState
+  id
+  provider_definition_id
+  vehicle_definition_id
+  operational_node_id
+  priority
+  paused
+  fleet_commitment_ref
+```
+
+Assignmentは継続的な研究供給へFleetを使うPlayer intentであり、Transport AllocationのProvisioning Priorityを継承しない。割当unit数は参照先Fleet Commitmentのquantityから得る。Assignment作成・数量変更Commandは希望quantityを入力としてCommitmentを原子的に作成・resizeし、必要差分をfree Fleetから即時に確保できなければStateを変更せずblockerを返すため、自動補充待ちtargetは持たない。供給量はcommit quantityと所在地のPower / Maintenance / Environment等から導出する。PauseはRP generation / Research execution供給を停止するがFleet Commitmentを保持する。Fleetを他用途へ戻す場合はAssignment releaseでcommitmentを解放する。
+
+### 11.1 Technology State
+
+完了済みTechnology集合は単一のauthoritative `TechnologyState` が所有する。Facility、Process、Vehicle、Movement Operation等はprerequisite technologyを参照するだけで、各Domainへunlock flagを複製しない。
+
+Research DefinitionはTechnology間のdirect prerequisiteをContentとして定義できる。Technology dependency graphはacyclicなDAGとし、研究開始可否は完了済みTechnologyと個別prerequisiteから判定する。表示上の研究段階区分や専門区分を暗黙のprerequisiteにしない。
+
+研究段階区分はTechnologyの発展位置を可視化するContent metadataであり、Research Project内のStage種別とは別概念とする。Designは表示段階1〜8の基準名を定義し、第9段階以降も同じ原則で追加できる。Coreは段階数上限、区分ごとの研究数、特定区分の存在を固定しない。
+
+Content validationはTechnology ID一意性、prerequisite参照、dependency cycle、表示段階とdependency方向の自己矛盾を検証する。
+
+研究技術IDをMovementの直接解除キーにしない。研究は一般化可能な技術知識・工程・制御方法を表し、実際の到達可否はSpatial Relation・Operation要件・Vehicle性能・Infrastructureから決める。既存Facility性能もResearch完了時に暗黙変更しない。
+
+### 11.2 Research Project / stage
+
+Research Projectは複数を並行して進められる。並行性はRP、Research execution Service Capacity、Resource、Facility / Capability、Knowledge等の実Requirementから制約し、固定global queue数や登録順priorityを正準仕様にしない。Pause時はcurrent Stage / progressと取得済みResource Reservationを保持し、Reservation releaseをCancelとは別の暗黙副作用にしない。
+
+Research Definitionは次のtyped Stage Specを一つ以上含むordered listを持つ。各Stage instanceはResearch Definition内で一意な `stage_id` を持ち、同じStage種別も異なる技術的目的・Requirementを持つ別instanceとして複数回配置できる。
+
+- `THEORY`: RPとOrganization-scope Research executionを消費してprogressする。
+- `PROTOTYPE`: 明示Execution ContextでResourceと有限Serviceを使ってprogressする。
+- `DEMONSTRATION`: 明示Execution Contextでduration / work等をprogressする。
+- `OPERATIONAL_EXPERIENCE`: 対応Knowledge categoryのthreshold到達をcompletion conditionとする。
+
+```text
+ResearchStageSpec =
+  TheoryStageSpec
+  | PrototypeStageSpec
+  | DemonstrationStageSpec
+  | OperationalExperienceStageSpec
+
+# every typed Stage Spec includes
+  stage_id
+
+ResearchExecutionContext
+  operational_node_id
+  surface_cell_id?
+
+ResearchProjectState
+  research_definition_id
+  current_stage_id
+  stage_progress?  # only for progress-bearing Stage kinds
+  priority
+  paused
+  execution_context?
+  reservation_refs[]
+```
+
+Prototype / DemonstrationはOperational Nodeを基本Execution Contextとし、Cell-localなPhysical Environmentや位置そのものが必要な場合だけSurface Cellを追加する。EligibilityはSpatial / Environment / Capability / Knowledge等から判定し、有限Resource / ServiceはExecution Requirement Bundleで競合させる。Theory providerも所在地でローカル条件を満たしたAvailable Organization-scope capacityだけを供給する。
+
+Theory / Prototype / Demonstration等のprogress-bearing Stageは確定Allocationだけでstage-local progressを進め、completionをcanonical boundaryで次Stageへsettleする。Prototype等でResource先行確保が必要な場合はReservationAcquisitionRequirementを利用する。最終Stage完了時だけTechnology Stateへunlockを記録する。
+
+Operational ExperienceはProject時間やProject-owned progressとして複製せず、実Domain activityがKnowledge Stateへ蓄積した値をcompletion conditionとして参照する。新しいStage種別が異なるゲーム上の意思決定を追加する場合は、そのRequirement、progress ownership、completion、Application / UI契約を正準設計として追加する。
+
+### 11.3 Operational Experience / Knowledge State
+
+Operational ExperienceはResearch Projectが時間経過だけで生成するpointではない。Transport、Extraction、Manufacturing、Crewed Operation等の実Domain activityが共通interfaceを通じてexperience contributionを報告し、Knowledge Stateがcategoryごとの蓄積を所有する。Researchはこのstateをrequirementとして参照する。
+
+Domainごとに同じExperience値を重複保存しない。Experience categoryはContentで定義でき、特定Location名やVehicle名をGeneric Core categoryへ埋め込まない。
+
+### 11.4 Human operation abstraction
+
+有人運用はcrew-ratedなVehicle / Facility property、Habitation / Life Support等のCapability / Service Capacity、消耗Execution Requirement / Supply Requirement、Environment Requirementから表現する。Crew個人・人口の配置、成長、リスクが独立したプレイヤー判断を構成する場合は、そのState ownershipと状態遷移を独立Domainとして定義する。
 
 ---
 
@@ -401,31 +930,60 @@ Research Definitionは必要に応じてTheory、Prototype、Demonstration、Ope
 
 ### 12.1 Scientific Exploration
 
-Scientific Exploration Campaignは必要性能を満たすFleet unitを一定期間拘束し、科学観測・近接探査・有人活動等から有限量のResearch Pointを得る。
+Scientific Exploration Campaignは必要性能を満たすFleet unitをFleet Domainへ排他的にcommitし、one-shot Movement Executionとactive science executionを経て有限量のResearch Pointを得る。
 
-Definitionは対象、必要Operation / Delta-v / Endurance、必要Payload / Capability、必要環境・Infrastructure、期間、RP報酬、消耗Resource等を持てる。
+Definitionは対象、必要Operation / Endurance / Payload、Capability / Environment、期間、有限RP総量 / 生成率、Resource / Service requirement、完了後Fleet disposition等を持てる。
 
-Exploration DomainはFleetの所有状態を直接変更せず、Fleet Domainへ必要unit数の排他的reservationを要求する。拘束中unitはTransport Allocationや別Explorationへ利用できない。適合判定は「探査船」という用途タグではなく実性能から行い、Enduranceは往路・活動・必要な帰還を含むCampaign運用計画全体に対して判定する。
+Exploration DomainはFleet総数を直接所有せず、Fleet Domainのcommitmentを参照する。拘束中unitはTransport Allocationや別Exploration等へ同時利用できない。適合判定は用途タグではなくVehicle性能とMovement Planから行う。
 
-同一Campaignから無限RPを生成しないことを基本とする。
+active science executionはRP Pool admission headroomをExecution Requirement Bundleへ含める。Pool headroom不足分についてscience progressと`awarded RP`だけを進めず、有限Campaign rewardを暗黙消失させない。往路・帰路等のMovement progressはscience progressと分離する。
+
+Pause中は新しいscience executionを進めないが、開始済みMovementはsettleする。Pauseだけでcommit Fleetをfreeへ戻さず、Abort / Return / Cancel等の明示transitionが必要な場合はCampaign lifecycleとして定義する。Campaign completion時はoriginへ戻す、destination Operational Nodeへ残す等のdispositionを明示し、Fleetを暗黙テレポートさせない。
 
 ### 12.2 Resource Survey
 
-Resource SurveyはLocation × ResourceのKnowledgeを更新する。
+地表Resource Surveyは `SurfaceCell × Resource` のKnowledgeを更新する。固定Location × ResourceをSurvey正本にはしない。
 
 ```text
-Unknown
-→ Presence Probability
-→ Concentration
-→ Reserve
-→ fully surveyed
+UNKNOWN
+→ PRESENCE_PROBABILITY
+→ ESTIMATED_RESOURCE_POTENTIAL
+→ MEASURED_RESOURCE_POTENTIAL
 ```
 
-完了CampaignはSurvey能力配分対象から外し、余剰能力を未完了Campaignへ再配分する。
+各Levelは公開可能な情報schemaを持つ。Presenceは存在可能性、Estimatedは推定Potentialとuncertainty range、Measuredは投資判断に用いる測定済みPotentialを表す。具体的な精度はSurvey Provider / observation modeのContent parameterとする。
 
-科学探査のRP獲得とResource SurveyのKnowledge更新を同一状態機械へ混在させない。
+Survey Provider Definitionはsurvey rate、coverage / reach model、max Knowledge Level、observation precision、必要Operation / Infrastructure / source Capability、minimum source units等を持つ。Survey ServiceはproviderのSpatial contextとtarget Cellの関係からreachabilityを判定する。軌道Remote Survey providerは対象天体にSurface Locationが存在しなくても広域Cellを観測できる。
 
----
+Fleet-backed Survey ProviderはSurvey Domainが `SurveyProviderAssignmentState` をauthoritativeなprovider-use intentとして所有し、そのStateがFleet Domainの排他的Fleet Commitmentを参照する。Fleet quantityと排他所有はFleet Domainだけが所有し、Survey Campaignへ複製しない。Player Commandはprovider用途へ配分する希望Fleet quantityを受け取り、Provider AssignmentからSurvey Service Capacityを導出してFacility providerの能力と同じExecution allocationへ供給する。
+
+```text
+SurveyProviderAssignmentState
+  id
+  provider_definition_id
+  operational_node_id
+  vehicle_definition_id
+  fleet_commitment_ref
+```
+
+Survey Campaignは複数のSurface CellとResourceを一つのPlayer intentとして扱える。
+
+```text
+SurveyCampaignState
+  target_cell_ids
+  resource_ids
+  goal_knowledge_level
+  provider_constraint?
+  observation_mode_constraint?
+  activity_priority
+  control_state
+```
+
+別の永続Region Entityを必須にせず、UIの地域選択はtarget_cell_idsへ解決する。CampaignはKnowledge Stateからscope内の未完了targetを導出し、完了済みtargetをactive allocationから外して余剰Survey Capacityを同じscopeの未完了targetへ再配分できる。scope外targetを追加せず、goal Knowledge Levelを越えて進行しない。同じKnowledge progressをCampaign Stateへ重複保存しない。
+
+Provider / Observation Modeは物理的な能力差を表すDefinitionとして維持する。Campaignのscope / goalを満たす候補が一意、またはゲーム上同等ならCoreが決定論的に解決できる。必要Fleet拘束量、Resource消費、Reach、所要時間、Infrastructure Requirement、Knowledge上限等に戦略差がある候補が複数残る場合はApplicationへ候補差を返し、Playerがhard constraintを指定できる。登録順やID順だけで戦略的に異なる候補を暗黙選択しない。
+
+PauseはCampaignのSurvey execution需要を停止するがProvider Assignmentを変更しない。Founding / Development等はSurvey内部Stateを直接読まず、typed Knowledge Eligibilityを通してtarget / subject / minimum levelを要求する。Survey KnowledgeはStatic Resource Potential自体とは分離し、Dynamic Physical Environmentも別Stateとして更新する。Scientific Exploration RPとSurvey Knowledgeを同一state machineへ混在させない。
 
 ## 13. Command / Query API
 
@@ -434,103 +992,104 @@ Unknown
 主要カテゴリ：
 
 - Time pause / resume / speed
-- Build / Upgrade / Cancel / Pause / Resume
-- Construction priority / allocation / procurement route
-- Facility pause / resume / process / power priority
-- Vehicle produce / Fleet relocate
+- Operational Node founding deployment / Surface Location adjacent Cell develop
+- Build / Upgrade / Cancel / Pause / Resume / Facility Decommission
+- Surface-cell Facility placement where required
+- Facility pause / resume / Process selection
+- Activity Priority set (1..5)
+- Vehicle produce / Fleet relocate / Fleet Retirement
 - Transport Allocation create / update / pause / resume / delete
-- Logistics Lane create / update / pause / resume / delete
-- Manual Cargo / special Transport Mission
-- Research start / pause / resume / prototype / demonstration
-- Scientific Exploration start / pause / resume / Fleet assignment
-- Resource Survey start / pause / resume / allocation
-- Contract / external event response
+- Transport Allocation Directional Capacity target / Provisioning Priority / optional Movement hard constraint set
+- Target Stock set / clear
+- Supply routing hard constraint set / clear
+- External Resource Market Buy / Sell Trade Order create / update / cancel
+- Manual Cargo / special one-shot Movement
+- Research start / pause / resume / Activity Priority / current `stage_id` Prototype or Demonstration Execution Context
+- Fleet-backed Research Provider fleet quantity / Priority / pause / resume / release
+- Scientific Exploration start / pause / resume / Fleet assignment / Abort / Return / completion disposition
+- Fleet-backed Survey Provider fleet quantity / release
+- Resource Survey start / update / pause / resume / target Cell scope / Resource scope / goal Knowledge Level / optional provider or observation-mode hard constraint
+- External event response where an extension provides one
 
-現地材比率・代替材選択Commandは持たない。
+Command名は内部State名の変更を目的にせず、Player intentを一操作で表せることを優先する。Provider fleet quantity設定は内部的にAssignment create / resize / releaseへsettleしてよいが、その内部lifecycleを外部操作へ不必要に分解しない。
 
 ### 13.2 Query
 
 主要Query：
 
-- Catalog / World / Location
-- Flow / Bottleneck
-- Facility / Process inputs / outputs / utilization
+- Catalog / World / Star System / Celestial Body Surface Map / Operational Node / Surface Location
+- Surface Cell / Survey Knowledge / Resource Potential / Environment / development affiliation
+- Inventory / Reservation / inbound / outbound / Storage / over-capacity
+- Activity / Execution Requirement Bundle / requested execution / fulfillment / limiting factor
+- Capability / Service Capacity / requested / allocated / spare
+- Facility / placement scope / lifecycle / Decommission blocker / recovery potential / recoverable projection / selected Process / Process candidates / inputs / outputs / utilization
 - Maintenance demand / fulfillment
-- Build Options / Projects
+- Build Options / Projects / Founding Options / Knowledge and Site blocker / future Supply Requirement / Projected Material Readiness
 - Vehicle Production Options
-- Logistics / Routes / Fleet / Transport Allocations / Transport Capacity / Cargo Flow / Lanes / special Missions
-- Research Point / Research
-- Scientific Exploration
-- Resource Survey
-- Contracts / Events
+- Spatial Relation / Movement Plan候補 / required Operation / latency
+- Fleet / owner activity commitment / Transport Allocations / Provisioning Priority / Target・Nominal・Available・Used・Spare Capacity / Required Fleet Units / Retirement recovery projection
+- Cargo Flow / handoff / arrival waiting / selected end-to-end path / routing hard constraint / Transport shortfall
+- Target Stock / current stock / inbound amount / normal demand / additional stock demand
+- Funds / Market Provider / Market Interface / buy-sell offer / Trade Order / commitment / settlement
+- Research Point / Technology State / Research Provider Assignment / Fleet commitment / Research Projects / current typed Stage / Requirement / Operational Experience
+- Scientific Exploration / Fleet commitment / RP admission blocker
+- Resource Survey scope / goal / Knowledge distribution / resolved provider / observation mode / alternative strategic candidates / Survey Provider Assignment / Fleet commitment
+- Location territory / Physical Environment summary / Surface Access Anchor / Surface Infrastructure demand and fulfillment
+- external dependency analytics for selected Operational Node scope with CURRENT / FORECAST basis
+- External Events where an extension provides them
 
-Query DTOはJSON化可能なimmutableデータとする。UI側が可否・維持率・経路適合等を再計算しない。
+Query DTOはJSON化可能なimmutableデータとする。UI側が可否・維持率・Movement適合・routing・provider selection・allocation・Projected Material Readiness・産業依存度等を再計算しない。
 
----
+Queryは要求されたscopeを不必要に拡大しない。origin / destination、Operational Node、Entity ID等で対象が限定されている場合は、そのscopeから必要な派生状態を導出する。同一Application snapshot内で複数Queryが同じ派生状態を必要とする場合は同じprojection / indexを再利用し、各Query・各rowから全世界候補を再生成しない。read Queryはauthoritative Stateを変更せず、性能上の都合だけでDomain-owned derived indexを無条件にinvalidateしない。
 
 ## 14. Save / Load / Offline Progress
 
-SaveはApplication単位のversion付きSnapshotとする。静的Definitionは現在Contentから再構築し、可変Stateだけを復元する。
+SaveはApplication単位のversion付きSnapshotとする。静的Definitionは `WorldDefinition` とContentから再構築し、可変Stateだけを復元する。Save metadataは `world_definition_id` と `scenario_id` を保持し、Load時にScenario初期化処理を再実行しない。
 
-保存対象にはFacility、Inventory、Project、Vehicle Production、Fleet数量と用途配分、Transport Allocation target、Fleet Relocation / Releasing、Cargo Flow / arrival waiting、特殊Mission、Research、Exploration、Survey、Deposit remaining、Environment Overlay等を含める。Transport Service Plan、Nominal / Available Transport Capacity等の派生状態は保存せず、Load後に再導出する。
+保存対象はdomain-owned authoritative StateをApplication snapshot内のdomain sectionとして保持する。少なくともOperational Node / Surface Location affiliation、Facility lifecycle / Process selection、Inventory / Reservation、Build / Development / Decommission / Founding Project、Vehicle Production、FleetPool / Fleet Commitment / Relocation / Releasing、Transport AllocationのDirectional Capacity target / Provisioning Priority / optional Movement hard constraint、Movement Execution、Target Stock、sparse Supply Routing Constraint、Cargo Flow / arrival waiting、Funds / Market State、Research Point / Technology / Research Project current Stage ID / Research Provider Assignment、Operational Experience、Exploration、Survey Knowledge / Survey Provider Assignment / Survey Campaign scope・goal・explicit constraint、Dynamic Physical Environment、canonical game day等を含む。
 
-ゲーム性評価段階ではschema/content migrationを目的化しない。
+Static Star System / Celestial Body / Surface Cell topology / geology / Resource Potential / transport geometry / Market Provider DefinitionはWorld / Contentから再構築する。Movement Plan候補、Transport Service Plan、auto-selected source / end-to-end path、Required Fleet Units、Nominal / Available Capacity、auto-selected Survey provider / observation mode、Survey未完了target展開、salvage recoverable projection、Location Environment summary、Projected Material Readiness、tick内Requirement / allocation結果、external-dependency Analytics等の派生・transient状態は保存せず再導出する。
 
-Offline Progressは通常Simulationと別ルールにせず、実時間経過をゲーム時間へ換算して同じadvance経路を使う。
-
----
+Offline Progressは通常Simulationと別ルールにせず、実時間経過をゲーム時間へ換算して同じ1 game dayのcanonical advance経路を使う。通常進行、高速進行、Offlineで同じgame timeを進めた結果が同じStateになることを不変条件とする。fast-forwardは日次tick列と同値な区間をまとめる実装最適化としてのみ利用する。
 
 ## 15. Validation / Test
 
-Configuration Validation：
+Configuration Validationは、未定義Resource / Facility / Vehicle / Movement Operation参照、無効Eligibility / SiteRequirement、存在しないCapability / Service type、負の容量・率・期間、Priority範囲外、Facility Recipe / Maintenance / Decommission recovery、Vehicle Production、Transport Allocation、Spatial topology、Founding target / Deployment Recipe、Research Stage / Technology / Experience category、Survey Provider、Market Definition等の参照不整合を検出する。Research DefinitionではStage listが非空であること、`stage_id` の一意性、各typed Stage Specの必須fieldを検証する。Technology prerequisiteの未定義参照・自己参照・循環、表示段階とdependency方向の自己矛盾、Allocation dependency graphの循環もfail-closedとする。
 
-- 未定義Resource / Facility / Route / Vehicle参照
-- 無効SiteRequirement
-- 存在しないCapability
-- 負の容量・率・期間
-- Construction Recipeの不正Resource数・参照
-- Vehicle Production / Maintenance定義不整合
-- Transport Allocationの未定義Vehicle / Route / 不正control mode
-- Research / Exploration / Survey参照不整合
+Runtime Validationは、Inventory / Reservation / Cargo / Funds / Fleetの保存と二重所有、Execution / Admission / Reservation settlement超過、Transport Capacity二重消費、Facility / Project / Movement lifecycle不整合、Research Point Pool capacity、Technology / Knowledge重複正本、Market commitment、Facility Decommission、Fleet Retirement / Commitment、Location領域、Facility placement等を検査する。
 
-Runtime Validation：
+ゲーム性評価段階で優先するテストは次の契約へ集中する。
 
-- 在庫負値、予約超過
-- Cargo質量不整合
-- Fleet総数とTransport / Exploration / Relocation / Releasing配分の不整合
-- Transport AllocationのUNITS / CAPACITY二重正本
-- Transport Capacityの二重消費
-- Vehicle Production / Fleet Relocation状態不整合
-- Facility maintenance demand / fulfillment不整合
-- Research Point負値・容量処理不整合
-- 孤立Reservation / Entity参照
+- Resource / Cargo / Funds / Fleetの保存とauthoritative ownershipが一意である。
+- Execution Requirement BundleがResource / Service / admissionを同じexecution fulfillmentでsettleする。
+- Eligibility判定だけで有限Serviceを消費扱いにせず、同じServiceを複数Activityが共通Allocationで競合する。
+- PriorityLevelが5段階ordinal bandとして機能し、同順位結果が登録順に依存しない。
+- Supply Planningが現地用途と同じInventory / Transport Capacityを二重利用せず、Inbound Cargoを重複dispatchしない。
+- 通常物理Resourceがdefaultまたは明示special Storage poolを通じて有限Storage accountingへ参加し、pool未指定を通常Resourceのunlimited escape hatchにしない。
+- 通常Supply RequirementはTarget Stock未設定でも補給され、Target Stockは追加備蓄需要だけを生成しInventory ReservationとしてStockを隔離しない。
+- routing hard constraintがない通常状態では、成立済みNetwork内のsource / pathをlatency・運用Resource・handoff・利用可能capacity等から決定論的に選択する。hard constraintが成立しない場合は別戦略へfallbackせず、auto-routingがTransport AllocationやFleet等を変更しない。
+- Cargo arrival / direct handoff / Inventory admission / arrival waitingが有限constraintとResource ownershipを一貫して扱う。
+- snapshot後の生成・到着・Commandが同tick過去phaseへ遡及しない。
+- 通常進行 / 高速進行 / Offlineで同じgame timeの結果が一致する。
+- Facility Processは複数候補時にPlayer選択を要求し、登録順で暗黙決定しない。
+- Facility Build / Upgrade Recipeが有限個の明示Resourceを消費し、Resource種類数をGeneric Coreの固定上限にしない。
+- 維持需要が累積投入Resourceとmaintenance fractionから決定論的に導出される。
+- Extraction responseがCapacityに対して単調非減少・限界収益逓減で、Content固有任意関数へ分岐しない。
+- Surface Infrastructure負荷をOpportunity等へ二重適用せず、core cellへ暗黙fallbackしない。
+- Operational Node Foundingがprepared Resource / FleetをsourceからMovement payloadへ移し、target typeに応じたStateへ一度だけsettleする。
+- Founding / DevelopmentのKnowledge Requirementが対象subjectとminimum levelを明示し、無関係なSurvey Knowledgeで満たされない。
+- Fleet unitがowner activityを跨いで二重commitされず、Transport Allocationのauthoritative targetがDirectional CapacityでRequired Fleet Unitsを派生し、Transport Provisioning Priorityが別Activityのcommit Fleetをpreemptしない。
+- Transport Pauseがtargetを保持しつつsafe releaseを行い、one-shot Campaign Pauseが開始済みMovementを巻き戻さない。
+- Facility Decommission / Fleet Retirementで既存在庫を暗黙消去せず、salvageは全Resourceへ共通recoverable fractionを適用し、全量admission不能でもAsset removalを永久blockしない。
+- Scientific ExplorationはRP Pool headroom不足時に有限RPを消失させず、science progress / RP settlementを整合させる。
+- Research Definitionのtyped ordered StageとProject current stageが一致し、最終Stage完了時だけTechnology Stateを更新する。
+- Prototype / DemonstrationのExecution ContextがOperational Node / optional Surface Cellを正しく検証し、有限ServiceはAllocationで競合する。
+- Survey Knowledge levelごとの公開情報、provider coverage / max level、Remote Surveyが正しく成立し、multi-target Campaignが指定scope / goalだけを進める。Fleet-backed Survey Provider AssignmentのFleet ownershipとCampaignのService Capacity消費を分離し、戦略差のあるprovider / modeを登録順で暗黙選択しない。
+- External-dependency AnalyticsがCURRENT / FORECASTを区別し、派生Stateとして再導出される。
+- Save / Load後の将来進行が一致し、Scenario初期化を再適用しない。
+- Generic CoreへLocation / Celestial Body / Vehicle用途名等のContent固有分岐が侵入しない。
 
-ゲーム性評価段階で優先するテスト：
-
-- 資源保存・物流会計
-- 輸送中Cargoが目的地Storageを事前予約しない
-- Construction Recipeが2〜3種の実Resourceを直接消費する
-- 産地代替層が建設可否へ介入しない
-- 維持需要が累積建造投入量から決定論的に導出される
-- 維持不足がFacility能力へ一貫して反映される
-- Vehicle建造がCapability・Resource・時間を消費する
-- Fleet unitがTransport / Exploration / Relocationへ二重割当されない
-- Transport AllocationのUNITS / CAPACITY targetが単一正本である
-- CAPACITY modeの必要Fleet数が一時的なResource不足で自動膨張しない
-- Nominal / Available / Used capacityが同じService Planから一貫して導出される
-- 複数Laneが共有Transport Capacityを二重消費しない
-- Cargo Flowの資源保存とlatencyが成立する
-- Operation適合が名称・用途タグに依存しない
-- Research Pointの生成・貯蔵不変条件
-- Pause / Resume
-- 登録順依存排除
-- Save / Load後の将来進行同値性
-- Offlineと通常進行の同値性
-- Generic CoreへのLocation固有分岐侵入検知
-
-暫定価格、日数、生産量等の仮バランス固定テストは避ける。
-
----
+暫定価格、日数、生産量、特定攻略順等の仮バランスを構造テストで固定しない。
 
 ## 16. Web UI / Server / LLM
 
@@ -546,11 +1105,15 @@ GameApplication
 Simulation Core
 ```
 
-UIは設備一覧・InspectorでProcess inputs / outputs、maintenance fulfillment、Vehicle production blocker等を安定配置で表示する。Fleet / Transport UIでは所在・総数・用途配分、Allocation mode / target、必要・投入隻数、Nominal / Available / Used / Spare Capacity、運用Resource需要、blocker / limiting factorをApplication Queryから表示する。必要情報を隠してUIを簡略化しない。
+UIは天体Surface MapでSurvey状態、Resource Potential、Environment、Location領域、初期Location候補・Founding Deployment blocker、隣接開発候補、位置依存Facilityの配置候補を表示する。Surface Locationがまだ存在しない天体でも、non-surface Operational NodeからのRemote Survey、候補Cell比較、staging node、typed Founding target、Deployment Recipeを含む設立判断を同じMap上から追えるようにする。通常Facilityの建設・運用は設備一覧・Inspectorを中心とし、不要なCell選択を要求しない。設備一覧・InspectorではProcess inputs / outputs、Activity Priority、Execution Requirement / allocation、Service Capacity fulfillment、maintenance fulfillment、Vehicle production blocker等を安定配置で表示する。Fleet / Transport UIでは所在Operational Node・総数・用途配分、Retirement commitment、Directional Capacity target、Provisioning Priority、必要・投入隻数、Nominal / Available / Used / Spare Capacity、Movement latency、運用Resource需要、Cargo Flow / arrival waiting、blocker / limiting factorをApplication Queryから表示する。通常auto-routingの選択結果と必要なhard constraintも確認可能にする。Market UIではFunds、Market Interface、buy / sell offer、availability、Trade Order target / commitment / settlement、物流blockerを表示する。Location / region分析ではlocal production、imports、unmet demand等のロケーション産業自立・外部依存状態を表示できる。Survey UIではMap上のCell scope、Resource scope、goal Knowledge Levelを主要操作とし、resolved provider / observation modeを表示する。provider / observation modeに戦略差がある場合だけ候補差とhard constraint操作を提示する。Asset disposalではrecovery potentialと見込回収量を区別して表示する。必要情報を隠してUIを簡略化しない。
+
+Presentationの正本は `ui.md` とする。BrowserはNavigation / Decision Canvas / Context InspectorのDecision Contextを保持し、別Canvasへの遷移でも関連Entity、Resource、blocker等のContextを引き継げる。ApplicationはBlocker、limiting factor、Current / Target / Preview、候補差等を文字列解析に依存しない構造化DTOとして返し、UIにDomain判定の再実装を要求しない。
+
+Fast Previewはauthoritative Stateを変更しないQueryとして扱い、要求scopeを不必要に拡大せず同一snapshotのprojection / indexを再利用する。Structured DecisionのDraftはPresentation側の一時状態であり、Commit時はbase revisionに対してPlayer intentをatomicに適用する。Planning Modeによるpause / speed制御はRuntime schedulingだけを制御し、canonical Simulation semanticsを変更しない。
 
 LLMはFAST PATHへ入れない。
 
-FAST PATH：生産、建設、維持、物流、Research Point、Research、Exploration、Survey、Offline Progress。
+FAST PATH：Resource / Service Capacity allocation、生産、建設、維持、物流、Research Point、Research / Knowledge、Exploration、Survey、Offline Progress。
 
 SLOW PATH：外部組織要求、イベント、交渉、研究上の問題、状況依存Mission。
 
@@ -558,74 +1121,35 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 
 ---
 
-## 17. 変更時に守るアーキテクチャ原則
+## 17. 横断Architecture invariant
 
-1. 地点名で例外処理せず、条件をモデル化する。
-2. DefinitionとStateを分離する。
-3. 設備の存在と現在利用可能な能力を分離する。
-4. 所有在庫・輸送中・到着待機・Storage占有を混同しない。
-5. 遠距離輸送中Cargoで目的地Storageを事前予約しない。
-6. 自動化は反復処理を担当し、研究・物流・産業配置等の戦略判断を暗黙代行しない。
-7. 自動選択には明示的で一貫したPolicyを持つ。
-8. 同順位・同条件の結果をEntity登録順へ依存させない。
-9. UIへDomain内部構造を公開せずCommand / Query境界を通す。
-10. blocker / limiting factorはCore / Applicationが説明する。
-11. Saveは可変Stateを保存し、派生状態を再計算する。
-12. Offline Progressは通常Simulationと同じ経路を使う。
-13. ゲーム性評価段階では後方互換を目的化しない。
-14. 暫定バランス数値をテストで過度に固定しない。
-15. 個別不具合を特殊分岐で塞ぐ前に共通モデル不足を疑う。
-16. Celestial BodyとSurface / Orbit等のSpatial Nodeを分離する。
-17. Transport可否はVehicle用途名ではなく実性能とOperation要件で判定する。
-18. 発展段階や研究名を物流・航路の強制ゲートへ転用しない。
-19. 建設は2〜3種類の実Resourceを直接消費し、現地代替レイヤーを持たない。
-20. Facility維持は建造投入Resourceから導出した通常Resource Demandとして扱い、Pauseだけで回避できない。
-21. Vehicle建造はCapability・実Resource・時間を消費する通常の資産生産として扱う。
-22. Scientific ExplorationによるResearch Point獲得とResource SurveyによるKnowledge更新を分離する。
-23. Process inputs / outputs、維持状態、Vehicle建造条件等の意思決定情報をApplication QueryからUIへ明示する。
-24. 通常Vehicleは所在地点ごとのFleet数量として管理し、用途間の排他的配分をFleet Domainが所有する。
-25. Transport Service PlanとTransport CapacityはFleet Allocation等から導出し、独立した保存正本にしない。
-26. Transport AllocationのUNITS / CAPACITYは一方だけをauthoritative targetとする。
-27. LogisticsはFleet Stateを直接操作せず、Transportが供給する共有Capacityを消費する。
-28. 通常物流はCargo Flowとして扱い、個体Vehicle Missionを反復生成しない。
-29. Fleet Allocation解除・地点間再配置には回収・移動時間を持たせ、aggregate Fleetを瞬間移動させない。
+この節は各Domain節の詳細規則を再掲する一覧ではなく、変更時に複数Domainへ同時適用する不変条件を示す。具体的な型、状態遷移、処理順は対応する正準節を参照する。
 
----
+1. **State ownershipを一意にする。** Definition / State、Spatial context / Operational Node、Inventory-owned Resource / Logistics-owned Cargo、FleetPool / Fleet Commitment等を担当Domain間で重複所有しない。
+2. **Content固有例外ではなく共通条件をモデル化する。** Location名、天体名、Vehicle用途名、研究名をGeneric Coreの分岐条件にせず、Environment、Capability、Service Capacity、Operation、Spatial Relation、typed Requirementで表す。
+3. **Eligibilityと有限Allocationを分離する。** Site / Knowledge等の非消費条件と、Resource / Service / admissionの競合利用を同じ可否判定へ混在させない。
+4. **有限Resource / Serviceの競合を共通Allocationで解く。** Activity Priority、Execution Requirement Bundle、Reservation、Stock / Pool admissionをDomain処理順から分離し、同順位結果を登録順へ依存させない。
+5. **Transport Provisioningと需要利用を分離する。** Provisioning PriorityはTransport Allocation間のfree Fleet配備を所有し、Activity Priorityは既存Transport Capacity利用を順位付けする。別Activityへcommit済みFleetをpriorityだけでpreemptしない。
+6. **MovementはSpatial relationと実能力から導出する。** 任意の成立済みOperational Node pairを一般則で評価し、静的OD列挙や技術IDによる直接航路解除を正本にしない。
+7. **通常物流はaggregate serviceとして扱いながら物理保存を守る。** Transport Capacity、Cargo Flow、direct handoff、Inventory admission、arrival waitingを一つのCargo lifecycleへ接続する。
+8. **Player戦略と運用自動化を分離する。** PlayerはAsset、Capacity、Priority、Target Stock、必要なhard constraintを所有し、Coreは成立済みNetwork内の通常source / path選択やSurvey scope内の能力配分を決定論的に行う。自動化は新しいAsset、Transport Capacity、Trade Order、Target Stockを暗黙生成せず、hard constraint不成立時に別戦略へfallbackしない。
+9. **Pauseは物理Stateを巻き戻さない。** 設定・progressを保持しつつ、reversible commitmentの保持 / releaseは所有Domainの明示契約で決め、開始済みMovement / Cargo / Market settlementを消去しない。
+10. **Surface Cellを万能Entityにしない。** Surface Cellは物理地理・資源・環境・開発領域の単位とし、通常Inventory / Logistics Nodeや一般Facility slotへ兼用しない。
+11. **同じ効果を複数係数で適用しない。** Surface Infrastructure、Maintenance fulfillment等の共通bottleneckは所有Requirement / Serviceへ一度だけ反映する。
+12. **派生状態を保存正本へ昇格させない。** Transport Service Plan、current Capacity、Analytics、Query projection等はauthoritative StateとDefinitionから再導出する。
+13. **Application・Persistence・Validationまで同じ契約を貫く。** UIはDomain判定を再計算せず、Saveはdomain-owned authoritative Stateのみを保持し、Validationは不変条件とState ownershipを検査する。
+14. **抽象化は共有される意味へ限定する。** 複数Domainや同種Contentが同じState ownership・保存則・Requirementを共有するときに共通契約を置く。新しいゲーム上の意味が必要になった場合は、その責務を正準設計へ追加してからCoreを拡張する。
 
-## 18. 現行モジュールとの対応
+## 18. アーキテクチャ定義の要約
 
-| 領域 | 現行/想定責務 |
-|---|---|
-| `spatial.py` | Spatial Graph、Environment Facet |
-| `site.py` | SiteRequirements / Capability Requirement |
-| `facilities.py` | Facility Definition / State / Capability |
-| `power.py` | Power配分 |
-| `inventory.py` / `storage.py` | Inventory / Reservation / Storage |
-| `industry.py` / `production/` | Process inputs / outputs / production flow |
-| `construction/` / `projects.py` | Construction Recipe、Project、調達、能力配分 |
-| maintenance domain（導入対象） | Facility maintenance demand / fulfillment |
-| `transport/` | Operation、Route、Vehicle Definition、Fleet State、Vehicle production、Transport Allocation、派生Service Plan / Capacity、Fleet relocation |
-| `logistics.py` / logistics domain | Resource Demand、Lane、共有Capacity配分、Cargo Flow / pipeline、arrival waiting |
-| `research.py` | Research Point、Tier / Level、Research状態機械 |
-| exploration domain | Scientific Exploration Campaign / Fleet reservation / RP reward |
-| `survey.py` | Resource Knowledge、Survey Campaign、Extraction |
-| `simulation.py` | 時間進行・処理順序 |
-| `application*.py` | Command / Query / DTO |
-| `persistence.py` | Snapshot / Load / Offline resume |
-| `validation.py` | Configuration / Runtime invariant |
-| `content/` | ゲーム固有Definition |
-| `composition/` | DomainとContentの配線 |
+本作のCoreは、Research / Knowledgeの成長、物理的な産業拡大、空間的な拠点拡大、それを支えるResource / Service Capacity / Movement / Logisticsを一つの状態モデルへ接続する。
 
-現行実装がこの責務境界と一致しない箇所は、旧Mission / 個体Vehicle経路を互換層として温存せず、変更単位ごとに新しいFleet / Capacity契約へ置換する。
+World Definitionは静的宇宙・地理・物理基準を定義し、Scenario Definitionはnew game時のPlayer所有・運用Stateだけを構成する。Spatial contextとOperational Nodeを分離し、Surface Locationはconnected developed-cell領域を追加所有するOperational Nodeとして扱う。新しいOperational Nodeの成立は共通Founding lifecycleを利用し、Surface / non-surface targetの物理差はtyped target specで表す。
 
----
+有限Resource / Serviceの競合は5段階Activity PriorityとExecution Requirement Bundleで解き、Eligibilityと有限Allocationを分離する。Research ProjectはTheory / Prototype / Demonstration / Operational Experienceのtyped ordered Stageから必要な組合せを持ち、Technology表示段階とは別概念とする。Vehicleは同一Definition・所在NodeごとのFleet数量と排他的Fleet Commitmentで管理し、TransportのProvisioning PriorityはTransport Allocation間のfree Fleet配備だけを扱う。
 
-## 19. 現時点のアーキテクチャ定義
+通常物流はTransport CapacityとCargo Flowで表し、Resource ownershipをInventory / Logistics間で一意に保つ。Logistics PlannerはPlayerが成立させたNetworkと必要なhard constraintの範囲でsource / end-to-end pathを正準評価により決定論的に選ぶ。Playerが経路を戦略的に固定する場合だけhard constraintを保持し、そのconstraintが成立しない場合は別戦略へfallbackしない。FundsはExternal Resource MarketにおけるResource ownership transfer専用の決済Stateとする。
 
-本作のCoreは、
+Simulationは1 game dayのcanonical boundary → snapshot → intent → planning → allocation → execution → movement → state transitionで決定論的に進行し、通常速度・高速進行・Offlineで同じgame timeの結果を一致させる。Saveはdomain-owned authoritative Stateだけを保持し、派生状態は再導出する。
 
-**「天体と地表・軌道等のSpatial Nodeを分離し、環境・設備・能力・Vehicle性能・Transport Operation・資源・物流・維持需要・研究点生成を一般化された条件として組み合わせる。VehicleはFleetとして用途配分し、Transport Allocationから定常Transport Capacityを導出し、Logisticsは共有CapacityをCargo Flowへ配分する。静的Content Definition、可変State、派生状態を分離し、Application Command / Query境界を通して決定論的に進行するSimulation Core」**
-
-として維持する。
-
-ゲーム固有の面白さはEarth、Moon等の固有名をCoreへ埋め込むことで作るのではなく、Content DefinitionがGeneric Coreの組み合わせから異なる制約・産業構造・発展経路を形成することで作る。
+Generic CoreはEarth、Moon等の固有名や未要求の万能frameworkではなく、実際に複数Domainで共有されるState ownership、保存則、Requirement、Allocation、Movement、settlement契約を一般化する。

@@ -1,14 +1,101 @@
 from __future__ import annotations
 
-from ..resource_demand import ResourceDemand
+from ..execution_requirements import (
+    ExecutionAllocationPlan,
+    ReservationAcquisitionRequirement,
+)
+from ..supply import SupplyRequirement
 from ..shared import EntityId
-from .models import ProjectStatus, FacilityUpgradeTarget
+from .models import ProjectStatus, FacilityDecommissionTarget, FacilityUpgradeTarget
 
 
 class ConstructionProcurementMixin:
 
-    def resource_demands(self, day: int) -> tuple[ResourceDemand, ...]:
-        demands: list[ResourceDemand] = []
+    def _activate_procurement_if_eligible(self, project, day: int) -> bool:
+        """Enter procurement when current authoritative conditions allow it.
+
+        Player Commands are applied after Boundary settlement and before the
+        Physical snapshot, so a newly planned eligible project must be able to
+        generate same-day procurement intent without waiting for the next day
+        boundary. Projects blocked by technology/site state remain PLANNED.
+        """
+        if project.paused or project.status is not ProjectStatus.PLANNED:
+            return project.status is ProjectStatus.PROCURING
+        recipe = self._recipe_for_project(project)
+        if not recipe.prerequisite_technologies.issubset(self.unlocked_technologies):
+            return False
+        if self.project_site_failures(project, day, None):
+            return False
+        if isinstance(project.target, FacilityUpgradeTarget) and any(
+            blocker.code.startswith("upgrade_") for blocker in self.blockers(project.id, day)
+        ):
+            return False
+        if isinstance(project.target, FacilityDecommissionTarget) and any(
+            blocker.code in {"decommission_target_missing", "active_upgrade_commitment", "storage_stock"}
+            for blocker in self.blockers(project.id, day)
+        ):
+            return False
+        project.status = ProjectStatus.PROCURING
+        project.procurement_started_day = day
+        return True
+
+    def _procurement_policy_due(self, project, day: int) -> bool:
+        if project.status is not ProjectStatus.PROCURING:
+            return False
+        assert project.procurement_started_day is not None
+        waited = day - project.procurement_started_day
+        return waited >= self.procurement_wait_days[project.procurement_policy]
+
+    def forecast_supplys(self) -> tuple[SupplyRequirement, ...]:
+        """Project-owned future material requirements, independent of due timing."""
+        requirements: list[SupplyRequirement] = []
+        for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
+            if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED} or project.materials_committed:
+                continue
+            recipe = self._recipe_for_project(project)
+            requirement_day = None
+            if project.procurement_started_day is not None:
+                requirement_day = (
+                    project.procurement_started_day
+                    + self.procurement_wait_days[project.procurement_policy]
+                )
+            for requirement in recipe.resources:
+                state = project.resources[requirement.resource_id]
+                reserved = self._reserved_resource_t(project, requirement.resource_id)
+                missing = max(0.0, requirement.amount_t - state.committed_t - reserved)
+                if missing <= 1e-9:
+                    continue
+                requirements.append(SupplyRequirement(
+                    self._supply_id(project.id, requirement.resource_id),
+                    "project",
+                    EntityId(str(project.id)),
+                    project.operational_node_id,
+                    requirement.resource_id,
+                    missing,
+                    project.priority,
+                    forecast_requirement_day=requirement_day,
+                    purpose="construction",
+                ))
+        return tuple(requirements)
+
+    def supplys(self, day: int) -> tuple[SupplyRequirement, ...]:
+        active_projects = {
+            EntityId(str(project.id)): project
+            for project in self.projects.values()
+            if not project.paused and project.status in {ProjectStatus.PROCURING, ProjectStatus.READY}
+        }
+        return tuple(
+            requirement
+            for requirement in self.forecast_supplys()
+            if requirement.owner_id in active_projects
+            and self._procurement_policy_due(active_projects[requirement.owner_id], day)
+        )
+
+    def reservation_acquisition_requirements(
+        self, day: int
+    ) -> tuple[ReservationAcquisitionRequirement, ...]:
+        del day
+        rows: list[ReservationAcquisitionRequirement] = []
         for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
             if (
                 project.paused
@@ -18,26 +105,23 @@ class ConstructionProcurementMixin:
                 continue
             recipe = self._recipe_for_project(project)
             for requirement in recipe.resources:
-                state = project.resources[requirement.resource_id]
-                missing = max(0.0, requirement.amount_t - state.committed_t)
+                reserved = self._reserved_resource_t(project, requirement.resource_id)
+                missing = max(0.0, requirement.amount_t - reserved)
                 if missing <= 1e-9:
                     continue
-                demands.append(ResourceDemand(
-                    self._resource_demand_id(project.id, requirement.resource_id),
-                    "project",
-                    EntityId(str(project.id)),
-                    project.location_id,
-                    requirement.resource_id,
-                    missing,
-                    project.priority,
-                    project.import_source_id,
-                    missing,
-                    state.import_committed_t is not None,
+                rows.append(ReservationAcquisitionRequirement(
+                    id=self._reservation_acquisition_id(project.id, requirement.resource_id),
+                    owner_id=self._resource_reservation_owner_id(project.id),
+                    operational_node_id=project.operational_node_id,
+                    resource_id=requirement.resource_id,
+                    requested_amount=missing,
+                    priority=project.priority,
+                    purpose="construction_materials",
                 ))
-        return tuple(demands)
+        return tuple(rows)
 
     def advance_procurement(self, day: int) -> None:
-        """Advance sourcing policy without independently claiming shared stock."""
+        """Advance procurement timing without consuming or reserving inventory."""
         ordered = sorted(self.projects.values(), key=lambda project: (-project.priority, str(project.id)))
         for project in ordered:
             if project.paused or project.status in {
@@ -47,41 +131,14 @@ class ConstructionProcurementMixin:
                 ProjectStatus.BUILDING,
             }:
                 continue
-            recipe = self._recipe_for_project(project)
-            if not recipe.prerequisite_technologies.issubset(self.unlocked_technologies):
+            if project.status is ProjectStatus.PLANNED and not self._activate_procurement_if_eligible(project, day):
                 continue
-            if self.project_site_failures(
-                project,
-                day,
-                self.power.snapshot(project.location_id, self.facilities, day),
-            ):
-                continue
-            if isinstance(project.target, FacilityUpgradeTarget) and any(
-                blocker.code.startswith("upgrade_") for blocker in self.blockers(project.id, day)
-            ):
-                continue
-            if project.status == ProjectStatus.PLANNED:
-                project.status = ProjectStatus.PROCURING
-                project.procurement_started_day = day
 
-            assert project.procurement_started_day is not None
-            waited = day - project.procurement_started_day
-            wait_limit = self.sourcing_wait_days[project.sourcing_policy]
-            if waited < wait_limit:
-                continue
-            for requirement in recipe.resources:
-                state = project.resources[requirement.resource_id]
-                if state.import_committed_t is None and state.committed_t + 1e-9 < requirement.amount_t:
-                    state.import_committed_t = max(0.0, requirement.amount_t - state.committed_t)
 
-    def finalize_procurement(self, day: int) -> None:
-        """Synchronize readiness with the shared allocation without consuming it.
-
-        READY means every required material is currently reserved for the project.
-        Physical consumption belongs to construction execution, so a project blocked
-        by capacity, allocation, or site conditions can remain READY without losing
-        material from Inventory.
-        """
+    def finalize_procurement(
+        self, allocations: ExecutionAllocationPlan, day: int
+    ) -> None:
+        del day
         ordered = sorted(self.projects.values(), key=lambda project: (-project.priority, str(project.id)))
         for project in ordered:
             if (
@@ -91,6 +148,7 @@ class ConstructionProcurementMixin:
             ):
                 continue
             recipe = self._recipe_for_project(project)
+            self._acquire_project_reservations(project, allocations)
             ready = all(
                 self._reserved_resource_t(project, requirement.resource_id) + 1e-9
                 >= requirement.amount_t

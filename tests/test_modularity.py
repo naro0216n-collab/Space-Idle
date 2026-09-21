@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 
 
@@ -32,132 +31,81 @@ def _module_import_targets(path: Path) -> set[str]:
     return targets
 
 
-def _self_method_dependency_graph(directory: Path) -> dict[str, set[str]]:
-    """Map implementation module -> modules whose private self methods it calls."""
-    owners: dict[str, str] = {}
-    parsed: dict[str, ast.AST] = {}
-    for path in directory.glob("*.py"):
-        if path.name in {"__init__.py", "models.py", "domain.py"}:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        module = path.stem
-        parsed[module] = tree
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("_"):
-                owners.setdefault(node.name, module)
-
-    graph = {module: set() for module in parsed}
-    for module, tree in parsed.items():
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                continue
-            value = node.func.value
-            if isinstance(value, ast.Name) and value.id == "self":
-                owner = owners.get(node.func.attr)
-                if owner is not None and owner != module:
-                    graph[module].add(owner)
-    return graph
-
-
-def _assert_acyclic(graph: dict[str, set[str]]) -> None:
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(node: str) -> None:
-        if node in visited:
-            return
-        assert node not in visiting, f"cyclic implementation dependency at {node}: {graph}"
-        visiting.add(node)
-        for dependency in graph[node]:
-            visit(dependency)
-        visiting.remove(node)
-        visited.add(node)
-
-    for node in graph:
-        visit(node)
-
-
-def test_cross_cutting_state_and_validation_are_owned_by_registered_domains():
-    from space_idle.composition.domain_extensions import BASE_DOMAIN_EXTENSIONS
-    from space_idle.domain import validate_extension_registry
-
-    validate_extension_registry(BASE_DOMAIN_EXTENSIONS)
-    names = [extension.name for extension in BASE_DOMAIN_EXTENSIONS]
-    assert len(names) == len(set(names))
-    assert {
-        "core", "spatial", "technology", "facilities", "inventory", "storage",
-        "production", "logistics", "construction", "contracts", "research",
-        "survey", "extraction",
-    }.issubset(names)
-
-    codec_keys = [
-        extension.state_codec.key
-        for extension in BASE_DOMAIN_EXTENSIONS
-        if extension.state_codec is not None
-    ]
-    assert len(codec_keys) == len(set(codec_keys))
-    assert {"facilities", "inventory", "industry", "logistics", "projects", "research", "survey"}.issubset(codec_keys)
-    assert sum(extension.configuration_validator is not None for extension in BASE_DOMAIN_EXTENSIONS) > 1
-    assert sum(extension.runtime_validator is not None for extension in BASE_DOMAIN_EXTENSIONS) > 1
-
-
-def test_major_mutable_domain_states_are_owned_enums_not_distributed_string_sets():
-    from space_idle.contracts import ContractStatus
-    from space_idle.projects import ProjectStatus
-    from space_idle.research import ResearchPhase
-    from space_idle.logistics import FleetReservationKind, TransportControlMode
-    from space_idle.transport import CargoFlowStatus
-    from space_idle.transport.production import VehicleProductionPhase
-
-    for state_type in (
-        ContractStatus, ProjectStatus, ResearchPhase, FleetReservationKind,
-        TransportControlMode, CargoFlowStatus, VehicleProductionPhase,
-    ):
-        assert issubclass(state_type, Enum)
-        assert issubclass(state_type, str)
-
-
-def test_public_domain_facades_compose_focused_implementations():
-    from space_idle.application_query_projectors import ApplicationQueryMixin
-    from space_idle.application_command_handlers import ApplicationCommandMixin
-    from space_idle.industry import IndustryService
+def test_domain_authoritative_state_is_not_read_directly_across_domain_boundaries():
     from space_idle.logistics import LogisticsService
-    from space_idle.projects import ProjectService
-    from space_idle.research import ResearchService
+    from space_idle.transport.service import TransportService
 
-    def bases(cls):
-        return {base.__name__ for base in cls.__mro__[1:]}
+    authoritative_state = {
+        "transport": {
+            "vehicle_defs",
+            "fleet_pools",
+            "fleet_commitments",
+            "transport_allocations",
+            "fleet_relocations",
+            "movement_executions",
+            "fleet_releases",
+            "fleet_retirements",
+            "vehicle_production_projects",
+        },
+        "logistics": {
+            "target_stocks", "routing_constraints", "cargo_flows", "arrival_waiting",
+        },
+    }
+    service_fields = {
+        "transport": set(TransportService.__dataclass_fields__),
+        "logistics": set(LogisticsService.__dataclass_fields__),
+    }
 
-    assert {
-        "TransportCompatibilityMixin", "FleetAllocationMixin", "TransportLaneMixin",
-        "SteadyLogisticsMixin", "VehicleProductionMixin",
-    }.issubset(bases(LogisticsService))
-    assert not {"TransportPlanningMixin", "TransportExecutionMixin", "FleetManagementMixin"} & bases(LogisticsService)
-    assert {"ConstructionRulesMixin", "ConstructionPlanningMixin", "ConstructionProcurementMixin", "ConstructionExecutionMixin"}.issubset(bases(ProjectService))
-    assert {"ProcessSelectionMixin", "IndustryPlanningMixin", "IndustryExecutionMixin"}.issubset(bases(IndustryService))
-    assert {"ResearchWorkflowMixin", "ResearchCapacityMixin", "ResearchExecutionMixin"}.issubset(bases(ResearchService))
-    assert {"LocationProjectorMixin", "LogisticsProjectorMixin", "ProgressionProjectorMixin"}.issubset(bases(ApplicationQueryMixin))
-    assert {"ConstructionCommandHandlerMixin", "ProgressionCommandHandlerMixin", "TransportCommandHandlerMixin"}.issubset(bases(ApplicationCommandMixin))
+    for domain, fields in authoritative_state.items():
+        assert fields <= service_fields[domain]
+        for other_domain, other_fields in service_fields.items():
+            if other_domain != domain:
+                assert not fields & other_fields
 
+    violations: list[tuple[str, str]] = []
+    for path in PACKAGE.rglob("*.py"):
+        rel = path.relative_to(PACKAGE)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(rel))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute):
+                continue
+            owner = node.value
+            if not isinstance(owner, ast.Attribute):
+                continue
+            domain = owner.attr
+            fields = authoritative_state.get(domain)
+            if fields is None or node.attr not in fields:
+                continue
+            if domain == "transport" and rel.parts[0] == "transport":
+                continue
+            if domain == "logistics" and rel.name.startswith("logistics"):
+                continue
+            violations.append((str(rel), f"{domain}.{node.attr}"))
 
-def test_content_composition_and_architecture_stress_modules_have_unambiguous_ownership():
-    content = PACKAGE / "content"
-    composition = PACKAGE / "composition"
-    assert not (PACKAGE / "missions.py").exists()
-    assert (PACKAGE / "mission_stress.py").exists()
-    for filename in (
-        "base_ids.py", "base_requirements.py", "base_spatial.py", "base_catalog.py",
-        "base_facilities.py", "base_transport.py", "base_construction.py",
-        "base_industry.py", "base_progression.py", "base_game.py",
-    ):
-        assert (content / filename).exists()
-    assert (composition / "base_simulation.py").exists()
-    assert (composition / "domain_extensions.py").exists()
-    assert "GameApplication" not in (content / "base_game.py").read_text(encoding="utf-8")
+    assert violations == []
+
+    construction_files = [PACKAGE / "projects.py", *(PACKAGE / "construction").glob("*.py")]
+    for path in construction_files:
+        targets = _module_import_targets(path)
+        offenders = sorted(
+            target
+            for target in targets
+            if target.startswith(
+                (
+                    "space_idle.logistics",
+                    "space_idle.transport",
+                )
+            )
+        )
+        assert not offenders, (
+            f"{path.relative_to(PACKAGE)} bypasses Supply Requirement / Execution Claim boundary: {offenders}"
+        )
 
 
 def test_layer_dependency_direction_is_enforced():
     """Core/domain code cannot acquire inward dependencies on outer layers."""
+    from space_idle.content import base_ids
+
     forbidden_outer = (
         "space_idle.application", "space_idle.app_contracts", "space_idle.content",
         "space_idle.composition", "space_idle.bootstrap", "space_idle.persistence", "space_idle.api",
@@ -214,22 +162,46 @@ def test_layer_dependency_direction_is_enforced():
         )
         assert not offenders, f"{path.relative_to(PACKAGE)} imports concrete composition/content: {offenders}"
 
-
-def test_internal_modules_use_explicit_import_contracts():
-    for path in PACKAGE.rglob("*.py"):
+    core_files = [
+        path for path in PACKAGE.rglob("*.py")
+        if path.name != "__init__.py"
+        and not any(part in {"content", "composition", "app_contracts"} for part in path.parts)
+        and path.name not in {"bootstrap.py", "persistence.py"}
+        and not path.name.startswith("application")
+    ]
+    current_content_ids = {
+        value
+        for name, value in vars(base_ids).items()
+        if name.isupper() and isinstance(value, str) and value.startswith("base.")
+    }
+    assert current_content_ids
+    for path in core_files:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                assert all(alias.name != "*" for alias in node.names), f"star import in {path.relative_to(PACKAGE)}"
+        embedded = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value in current_content_ids
+        }
+        assert not embedded, (
+            f"{path.relative_to(PACKAGE)} embeds concrete Content IDs: {sorted(embedded)}"
+        )
 
 
-def test_cross_file_mixin_dependencies_remain_acyclic():
-    for package_name in ("transport", "construction", "production"):
-        graph = _self_method_dependency_graph(PACKAGE / package_name)
-        _assert_acyclic(graph)
-
-
-def test_transport_operation_extension_does_not_require_central_enum_change():
+def test_peer_extensions_join_generic_registries_without_central_enum_or_simulation_switches():
+    from space_idle import build_game_application
+    from space_idle.content import base_ids as ids
+    from space_idle.domain import DomainExtension
+    from space_idle.execution_requirements import pool_constraint
+    from space_idle.priority import DEFAULT_ACTIVITY_PRIORITY
+    from space_idle.service_capacity import ServiceCapacityRequest
+    from space_idle.shared import EntityId
+    from space_idle.spatial import (
+        CharacteristicTransportGeometry, EnvironmentFieldScope, EnvironmentResolver,
+        SpatialFacet, SpatialGraph, SpatialNodeDef, StarSystemDef, StaticFacetStore,
+    )
+    from space_idle.shared import SpatialNodeId, StarSystemId
     from space_idle.transport.models import TransportOperationRequirement
     from space_idle.transport.operations import OperationEvaluationContext, OperationEvaluatorRegistry
 
@@ -239,6 +211,22 @@ def test_transport_operation_extension_does_not_require_central_enum_change():
         operation_type: str = "test.custom_operation"
 
     registry = OperationEvaluatorRegistry()
+
+    @dataclass(frozen=True)
+    class TestEnvironmentField(SpatialFacet):
+        facet_key = "test_environment_field"
+        environment_scope = EnvironmentFieldScope.CONTEXT_LOCAL
+        value: float
+
+    graph = SpatialGraph()
+    system = StarSystemId("test.system.facets")
+    geometry = CharacteristicTransportGeometry((0.0,), (0.0,))
+    graph.add_star_system(StarSystemDef(system, "Facet System", geometry))
+    node = SpatialNodeId("test.node")
+    graph.add(SpatialNodeDef(node, "Test Node", system, geometry))
+    store = StaticFacetStore()
+    store.set(node, TestEnvironmentField(9.2))
+    assert EnvironmentResolver(graph, store).require(node, TestEnvironmentField).value == 9.2
 
     def evaluator(requirement, capability, context):
         assert context.transit_days == 7
@@ -250,23 +238,191 @@ def test_transport_operation_extension_does_not_require_central_enum_change():
     assert registry.evaluate(requirement, TestCapability(3.0), context) == ()
     assert registry.evaluate(requirement, TestCapability(1.0), context) == ("limit",)
 
+    sim = build_game_application()._simulation
+    custom_key = pool_constraint("test.custom_pool", scope_id="test")
 
-def test_create_logistics_lane_preserves_resource_agnostic_path_policy_across_application_boundary():
-    from space_idle import CreateLogisticsLane, GetLogistics, build_game_application
+    @dataclass
+    class TestPoolProvider:
+        capacity: float
+
+        def allocation_pool_capacities(self, day: int):
+            del day
+            return {custom_key: self.capacity}
+
+    pool_provider = TestPoolProvider(7.0)
+    request = ServiceCapacityRequest(
+        EntityId("request.test.root_service"),
+        ids.EARTH,
+        "surface_distribution",
+        0.25,
+        DEFAULT_ACTIVITY_PRIORITY,
+        "test_root_service",
+        EntityId("test.root_service"),
+        "test",
+    )
+
+    @dataclass
+    class TestRequestProvider:
+        row: ServiceCapacityRequest
+
+        def service_capacity_requests(self, day: int):
+            del day
+            return (self.row,)
+
+    request_provider = TestRequestProvider(request)
+    sim.domain_extensions += (
+        DomainExtension(
+            "test_custom_pool",
+            allocation_pool_provider=lambda _sim: pool_provider,
+        ),
+        DomainExtension(
+            "test_root_service_request",
+            service_capacity_request_provider=lambda _sim: request_provider,
+        ),
+    )
+
+    assert pool_provider in sim.allocation_pool_providers()
+    assert sim.allocation_pool_capacities()[custom_key] == 7.0
+    assert request_provider in sim.service_capacity_request_providers()
+    assert request in sim.service_capacity_root_requests()
+    assert sim.service_capacity_allocation_projection().request(request.id) == request
+
+
+def test_allocation_dependency_graph_is_deterministic_and_cycle_safe():
+    from types import MethodType
+
+    import pytest
+
+    from space_idle import build_game_application
+    from space_idle.allocation_graph import AllocationDependency
+    from space_idle.domain import DomainExtension
+    from space_idle.service_capacity import ServiceCapacityScope
+    from space_idle.simulation import (
+        ALLOCATION_LOGISTICS,
+        ALLOCATION_MAINTENANCE,
+        ALLOCATION_POWER,
+        ALLOCATION_RESOURCES,
+        ALLOCATION_TRANSPORT,
+    )
+    from space_idle.validation import validate_simulation_configuration
+    from space_idle.validation_support import ConfigurationError
+
+    sim = build_game_application()._simulation
+    service_plan = sim.service_capacity_allocation_projection()
+    service_types = {row.service_type for row in service_plan.requests}
+    for dependency in sim.service_capacity_dependencies():
+        service_types.add(dependency.service_type)
+        service_types.add(dependency.upstream_service_type)
+
+    order = sim.tick_allocation_order(service_types)
+    assert order == sim.tick_allocation_order(tuple(reversed(sorted(service_types))))
+    position = {node: index for index, node in enumerate(order)}
+    dependencies = sim.tick_allocation_dependencies(service_types)
+
+    assert position[ALLOCATION_LOGISTICS] < position[ALLOCATION_RESOURCES]
+    assert position[ALLOCATION_RESOURCES] < position[ALLOCATION_MAINTENANCE]
+    assert position[ALLOCATION_MAINTENANCE] < position[ALLOCATION_POWER]
+    assert position[ALLOCATION_POWER] < position[ALLOCATION_TRANSPORT]
+    assert all(position[edge.upstream_node] < position[edge.node] for edge in dependencies)
+
+    cross_domain = build_game_application()._simulation
+    original = cross_domain.tick_allocation_dependencies
+
+    def cyclic_dependencies(self, service_types):
+        return original(service_types) + (
+            AllocationDependency(ALLOCATION_LOGISTICS, ALLOCATION_TRANSPORT),
+        )
+
+    cross_domain.tick_allocation_dependencies = MethodType(cyclic_dependencies, cross_domain)
+    with pytest.raises(ConfigurationError, match="tick allocation dependency cycle"):
+        validate_simulation_configuration(cross_domain)
+
+    class CyclicProvider:
+        def service_capacity_types(self):
+            return ("test.cycle.a", "test.cycle.b")
+
+        def service_capacity_scope(self, service_type):
+            if service_type not in self.service_capacity_types():
+                raise KeyError(service_type)
+            return ServiceCapacityScope.OPERATIONAL_NODE
+
+        def service_capacity_provider_definition_ids(self, service_type):
+            if service_type not in self.service_capacity_types():
+                raise KeyError(service_type)
+            return frozenset()
+
+        def service_capacity_upstream_services(self, service_type):
+            if service_type == "test.cycle.a":
+                return frozenset({"test.cycle.b"})
+            if service_type == "test.cycle.b":
+                return frozenset({"test.cycle.a"})
+            raise KeyError(service_type)
+
+        def service_capacity_supply_at(self, *_args, **_kwargs):
+            return (0.0, 0.0)
+
+    service_cycle = build_game_application()._simulation
+    provider = CyclicProvider()
+    service_cycle.domain_extensions += (
+        DomainExtension(
+            "test.cyclic_service_provider",
+            service_capacity_provider=lambda _sim: provider,
+        ),
+    )
+    with pytest.raises(ConfigurationError, match="service capacity dependency cycle"):
+        validate_simulation_configuration(service_cycle)
+
+
+def test_world_definition_and_scenario_initialization_keep_static_and_runtime_state_separate():
+    import pytest
+
+    from space_idle import build_game_application
+    from space_idle.bootstrap import build_game_application_for_load
+    from space_idle.content.base_scenario import (
+        STANDARD_SCENARIO_ID,
+        build_standard_scenario_definition,
+    )
+    from space_idle.content.base_spatial import (
+        BASE_WORLD_DEFINITION_ID,
+        build_world_definition,
+    )
+
+    graph, _environment = build_world_definition()
+    assert graph.nodes
+    assert graph.surface_cells
+    assert graph.operational_node_states == {}
+    assert graph.locations == {}
+
+    load_app = build_game_application_for_load()
+    load_sim = load_app._simulation
+    assert not load_sim.runtime_state_initialized
+    assert load_sim.graph.nodes
+    assert load_sim.graph.surface_cells
+    assert load_sim.facilities.definitions
+    assert load_sim.transport.vehicle_defs
+    assert load_sim.market.provider_defs
+    assert load_sim.graph.operational_node_states == {}
+    assert load_sim.graph.locations == {}
+    assert load_sim.facilities.facilities == {}
+    assert load_sim.transport.fleet_pools == {}
+    assert load_sim.inventory.stock == {}
+    assert load_sim.storage.infrastructure_capacity_t == {}
+    assert load_sim.market.funds.balance == 0.0
+    assert load_sim.market.provider_states == {}
+    assert load_sim.market.interfaces == {}
+    assert load_sim.survey is not None and load_sim.survey.knowledge_progress == {}
 
     app = build_game_application()
-    result = app.execute(CreateLogisticsLane(
-        source_id="base.node.earth_surface",
-        destination_id="base.node.low_earth_orbit",
-        requested_capacity_t_per_day=0.25,
-        path_policy="lowest_cost",
-    ))
-    assert result.created_id is not None
-    row = next(lane for lane in app.query(GetLogistics()).lanes if lane.id == result.created_id)
-    assert row.path_policy == "lowest_cost"
-    lane = app._simulation.logistics.lanes[next(
-        lane_id for lane_id in app._simulation.logistics.lanes if str(lane_id) == result.created_id
-    )]
-    assert not hasattr(lane, "resource_id")
-    assert not hasattr(lane, "target_stock_t")
-    assert not hasattr(lane, "batch_t")
+    sim = app._simulation
+    assert app.world_definition_id == BASE_WORLD_DEFINITION_ID
+    assert app.scenario_id == STANDARD_SCENARIO_ID
+    assert sim.runtime_state_initialized
+    assert sim.graph.operational_node_states
+    assert sim.facilities.facilities
+    assert sim.transport.fleet_pools
+    assert sim.inventory.stock
+    assert sim.market.provider_states
+    assert sim.market.interfaces
+
+    with pytest.raises(ValueError, match="initial runtime state has already been established"):
+        build_standard_scenario_definition().apply(sim)

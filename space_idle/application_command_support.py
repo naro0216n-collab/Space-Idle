@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from .application_commands import ApplicationError, Command, CommandResult
+from .application_commands import (
+    AdvanceTime, ApplicationError, Command, CommandResult, SetTimeControl,
+)
 from .shared import DefinitionId, SpatialNodeId
 
 
 class ApplicationCommandSupportMixin:
-    def _require_location(self, location_id: str) -> SpatialNodeId:
-        value = SpatialNodeId(location_id)
-        if value not in self._simulation.graph.nodes:
+    def _require_operational_node(self, operational_node_id: str) -> SpatialNodeId:
+        value = SpatialNodeId(operational_node_id)
+        if not self._simulation.graph.has_operational_node(value):
             raise KeyError(value)
         return value
 
@@ -19,9 +21,13 @@ class ApplicationCommandSupportMixin:
 
     def execute(self, command: Command) -> CommandResult:
         try:
-            result = self._execute(command)
-            self._simulation.refresh_resource_claims()
-            return result
+            # Simulation-mutating Player Commands are applied only after all
+            # previous-day boundary obligations have settled and before the next
+            # Physical snapshot. Time control is Runtime scheduling state;
+            # AdvanceTime itself enters the canonical day path.
+            if not isinstance(command, (AdvanceTime, SetTimeControl)):
+                self._simulation.prepare_player_command()
+            return self._execute(command)
         except ApplicationError:
             raise
         except KeyError as exc:

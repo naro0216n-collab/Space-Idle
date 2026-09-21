@@ -1,42 +1,142 @@
 from __future__ import annotations
 
 from ..power import PowerSnapshot
-from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId
+from ..facilities import FacilityLifecycle
+from ..priority import ActivityPriority
+from ..shared import DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .models import (
     ConstructionProject,
     ConstructionTarget,
     FacilityUpgradeTarget,
+    FacilityDecommissionTarget,
     NewFacilityTarget,
+    SurfaceCellDevelopmentTarget,
     ProjectBlocker,
     ProjectResourceState,
     ProjectStatus,
-    SourcingPolicy,
+    ProcurementTimingPolicy,
 )
 
 
 class ConstructionPlanningMixin:
+    def build_plan_failures(
+        self,
+        facility_def_id: DefinitionId,
+        location_id: SpatialNodeId,
+        *,
+        site_cell_id: SurfaceCellId | None = None,
+    ) -> tuple[ProjectBlocker, ...]:
+        """Return blockers that prevent creating a new-facility project.
+
+        Runtime technology and site requirements intentionally do not belong
+        here: a valid project may be queued in PLANNED until those conditions
+        become true.
+        """
+        if facility_def_id not in self.recipes:
+            return (ProjectBlocker("construction_recipe", f"no construction recipe: {facility_def_id}"),)
+        return tuple(
+            ProjectBlocker(code, detail)
+            for code, detail in self.facilities.placement_failures(
+                facility_def_id, location_id, site_cell_id
+            )
+        )
+
+    def upgrade_plan_failures(self, facility_id: EntityId) -> tuple[ProjectBlocker, ...]:
+        """Return blockers that prevent creating the next upgrade project."""
+        facility = self.facilities.facilities.get(facility_id)
+        if facility is None:
+            return (ProjectBlocker("unknown_facility", f"unknown facility: {facility_id}"),)
+        target_level = facility.level + 1
+        if (facility.definition_id, target_level) not in self.upgrade_recipes:
+            return (ProjectBlocker("upgrade_recipe", "facility has no next upgrade recipe"),)
+        active = next((
+            project
+            for project in self.projects.values()
+            if isinstance(project.target, FacilityUpgradeTarget)
+            and project.target.facility_id == facility_id
+            and project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
+        ), None)
+        if active is not None:
+            return (ProjectBlocker("active_upgrade_project", str(active.id)),)
+        return ()
+
+    def decommission_plan_failures(self, facility_id: EntityId) -> tuple[ProjectBlocker, ...]:
+        facility = self.facilities.facilities.get(facility_id)
+        if facility is None:
+            return (ProjectBlocker("unknown_facility", f"unknown facility: {facility_id}"),)
+        if facility.lifecycle is not FacilityLifecycle.NORMAL:
+            return (ProjectBlocker("facility_lifecycle", "facility is already decommissioning"),)
+        if facility.definition_id not in self.decommission_recipes:
+            return (ProjectBlocker("decommission_recipe", "facility has no decommission recipe"),)
+        active = next((
+            project
+            for project in self.projects.values()
+            if isinstance(project.target, (FacilityUpgradeTarget, FacilityDecommissionTarget))
+            and project.target.facility_id == facility_id
+            and project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
+        ), None)
+        if active is not None:
+            return (ProjectBlocker("active_facility_project", str(active.id)),)
+        return self._decommission_irreversible_blockers(facility_id)
+
+    def _decommission_irreversible_blockers(self, facility_id: EntityId) -> tuple[ProjectBlocker, ...]:
+        facility = self.facilities.facilities.get(facility_id)
+        if facility is None:
+            return (ProjectBlocker("decommission_target_missing", str(facility_id)),)
+        blockers: list[ProjectBlocker] = []
+        # Active upgrades are durable facility-local commitments once construction
+        # has begun. Planned/future intent does not permanently pin the facility.
+        for project in self.projects.values():
+            if (
+                isinstance(project.target, FacilityUpgradeTarget)
+                and project.target.facility_id == facility_id
+                and project.status is ProjectStatus.BUILDING
+            ):
+                blockers.append(ProjectBlocker("active_upgrade_commitment", str(project.id)))
+
+        blockers.extend(
+            ProjectBlocker(blocker.code, blocker.detail)
+            for blocker in self.facility_lifecycle_registry.decommission_blockers(facility_id)
+        )
+        return tuple(blockers)
+
     def _create_project(
         self,
         target: ConstructionTarget,
         location_id: SpatialNodeId,
-        priority: int,
-        sourcing_policy: SourcingPolicy,
-        import_source_id: SpatialNodeId | None,
+        priority: ActivityPriority,
+        procurement_policy: ProcurementTimingPolicy,
+        site_cell_id: SurfaceCellId | None = None,
+        day: int = 0,
     ) -> ProjectId:
-        if location_id not in self.facilities.environment.graph.nodes:
+        if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
-        if sourcing_policy not in self.sourcing_wait_days:
-            raise ValueError(f"unknown sourcing policy: {sourcing_policy}")
-        if import_source_id is not None and import_source_id not in self.facilities.environment.graph.nodes:
-            raise KeyError(import_source_id)
-        if import_source_id == location_id:
-            raise ValueError("import source must differ from project location")
+        if procurement_policy not in self.procurement_wait_days:
+            raise ValueError(f"unknown procurement timing policy: {procurement_policy}")
 
         if isinstance(target, NewFacilityTarget):
             recipe = self.recipes[target.facility_def_id]
-        else:
+            placement_failures = self.facilities.placement_failures(
+                target.facility_def_id, location_id, site_cell_id
+            )
+            if placement_failures:
+                raise ValueError("; ".join(detail for _code, detail in placement_failures))
+        elif isinstance(target, FacilityUpgradeTarget):
+            if site_cell_id is not None:
+                raise ValueError("upgrade project must not duplicate facility site cell")
             facility = self.facilities.facilities[target.facility_id]
             recipe = self.upgrade_recipes[(facility.definition_id, target.target_level)]
+        elif isinstance(target, FacilityDecommissionTarget):
+            if site_cell_id is not None:
+                raise ValueError("decommission project uses the installed facility site")
+            facility = self.facilities.facilities[target.facility_id]
+            if facility.operational_node_id != location_id:
+                raise ValueError("decommission target location mismatch")
+            recipe = self.decommission_recipes[facility.definition_id]
+        else:
+            if site_cell_id is not None:
+                raise ValueError("spatial development target owns its cell directly")
+            recipe = self.spatial_recipes[target.recipe_id]
 
         self._counter += 1
         project_id = ProjectId(f"project.{self._counter}")
@@ -49,135 +149,143 @@ class ConstructionPlanningMixin:
             target,
             location_id,
             priority,
-            sourcing_policy,
-            import_source_id,
+            procurement_policy,
             resources=resources,
+            site_cell_id=site_cell_id,
         )
+        self._activate_procurement_if_eligible(self.projects[project_id], day)
         return project_id
 
     def plan_build(
         self,
         facility_def_id: DefinitionId,
         location_id: SpatialNodeId,
-        priority: int,
-        sourcing_policy: SourcingPolicy,
+        priority: ActivityPriority,
+        procurement_policy: ProcurementTimingPolicy,
         day: int = 0,
-        import_source_id: SpatialNodeId | None = None,
+        site_cell_id: SurfaceCellId | None = None,
     ) -> ProjectId:
-        if facility_def_id not in self.recipes:
-            raise KeyError(facility_def_id)
+        failures = self.build_plan_failures(
+            facility_def_id, location_id, site_cell_id=site_cell_id
+        )
+        if failures:
+            if failures[0].code == "construction_recipe":
+                raise KeyError(facility_def_id)
+            raise ValueError("; ".join(failure.detail for failure in failures))
         return self._create_project(
-            NewFacilityTarget(facility_def_id), location_id, priority, sourcing_policy, import_source_id
+            NewFacilityTarget(facility_def_id), location_id, priority, procurement_policy, site_cell_id, day
         )
 
     def plan_upgrade(
         self,
         facility_id: EntityId,
-        priority: int,
-        sourcing_policy: SourcingPolicy,
+        priority: ActivityPriority,
+        procurement_policy: ProcurementTimingPolicy,
         day: int = 0,
-        import_source_id: SpatialNodeId | None = None,
     ) -> ProjectId:
+        failures = self.upgrade_plan_failures(facility_id)
+        if failures:
+            if failures[0].code == "unknown_facility":
+                raise KeyError(facility_id)
+            if failures[0].code == "upgrade_recipe":
+                raise ValueError("facility has no next upgrade recipe")
+            raise ValueError("facility already has an active upgrade project")
         facility = self.facilities.facilities[facility_id]
         target_level = facility.level + 1
-        if (facility.definition_id, target_level) not in self.upgrade_recipes:
-            raise ValueError("facility has no next upgrade recipe")
-        if any(
-            isinstance(project.target, FacilityUpgradeTarget)
-            and project.target.facility_id == facility_id
-            and project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
-            for project in self.projects.values()
-        ):
-            raise ValueError("facility already has an active upgrade project")
         return self._create_project(
             FacilityUpgradeTarget(facility_id, target_level),
-            facility.location_id,
+            facility.operational_node_id,
             priority,
-            sourcing_policy,
-            import_source_id,
+            procurement_policy,
+            day=day,
+        )
+
+    def plan_decommission(
+        self,
+        facility_id: EntityId,
+        priority: ActivityPriority,
+        procurement_policy: ProcurementTimingPolicy = "standard_wait",
+        day: int = 0,
+    ) -> ProjectId:
+        failures = self.decommission_plan_failures(facility_id)
+        if failures:
+            if failures[0].code == "unknown_facility":
+                raise KeyError(facility_id)
+            raise ValueError("; ".join(f"{failure.code}: {failure.detail}" for failure in failures))
+        facility = self.facilities.facilities[facility_id]
+        return self._create_project(
+            FacilityDecommissionTarget(facility_id, facility.definition_id),
+            facility.operational_node_id,
+            priority,
+            procurement_policy,
+            day=day,
+        )
+
+    def plan_surface_cell_development(
+        self,
+        location_id: SpatialNodeId,
+        cell_id: SurfaceCellId,
+        priority: ActivityPriority,
+        procurement_policy: ProcurementTimingPolicy,
+        day: int = 0,
+    ) -> ProjectId:
+        recipe_id = self.surface_cell_development_recipe_id
+        if recipe_id is None or recipe_id not in self.spatial_recipes:
+            raise ValueError("surface cell development recipe is not configured")
+        failures = [
+            (failure.code, failure.detail)
+            for failure in self.surface_cell_development_failures(location_id, cell_id, day)
+        ]
+        if failures:
+            raise ValueError("; ".join(f"{code}: {detail}" for code, detail in failures))
+        return self._create_project(
+            SurfaceCellDevelopmentTarget(recipe_id, cell_id),
+            location_id,
+            priority,
+            procurement_policy,
+            day=day,
         )
 
     def settings_mutable(self, project_id: ProjectId) -> bool:
         return self.projects[project_id].status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
 
-    def set_priority(self, project_id: ProjectId, priority: int) -> None:
+    def set_priority(self, project_id: ProjectId, priority: ActivityPriority) -> None:
         if not self.settings_mutable(project_id):
             raise ValueError("completed or cancelled project settings cannot change")
-        self.projects[project_id].priority = priority
+        self.projects[project_id].priority = ActivityPriority(priority)
 
-    def sourcing_mutable(self, project_id: ProjectId) -> bool:
+    def procurement_mutable(self, project_id: ProjectId) -> bool:
         project = self.projects[project_id]
-        return (
-            project.status in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}
-            and not any(
-                state.import_committed_t is not None
-                for state in project.resources.values()
-            )
-        )
+        return project.status in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}
 
-    def sourcing_policy_options(self) -> tuple[SourcingPolicy, ...]:
-        return tuple(self.sourcing_wait_days)
+    def procurement_policy_options(self) -> tuple[ProcurementTimingPolicy, ...]:
+        return tuple(self.procurement_wait_days)
 
-    def import_source_options_for_location(self, location_id: SpatialNodeId) -> tuple[SpatialNodeId, ...]:
-        if location_id not in self.facilities.environment.graph.nodes:
-            raise KeyError(location_id)
-        return tuple(
-            sorted(
-                (
-                    candidate_id
-                    for candidate_id in self.facilities.environment.graph.nodes
-                    if candidate_id != location_id
-                ),
-                key=str,
-            )
-        )
+    def _ensure_procurement_mutable(self, project: ConstructionProject) -> None:
+        if not self.procurement_mutable(project.id):
+            raise ValueError("procurement timing can only change before construction readiness")
 
-    def import_source_options(self, project_id: ProjectId) -> tuple[SpatialNodeId, ...]:
-        return self.import_source_options_for_location(self.projects[project_id].location_id)
-
-    def _ensure_sourcing_mutable(self, project: ConstructionProject) -> None:
-        if not self.sourcing_mutable(project.id):
-            if project.status not in {ProjectStatus.PLANNED, ProjectStatus.PROCURING}:
-                raise ValueError("sourcing can only change before construction readiness")
-            raise ValueError("sourcing cannot change after import commitment")
-
-    def _release_project_reservations(self, project: ConstructionProject) -> None:
-        self._release_project_resource_reservations(project)
-
-    def set_sourcing_policy(self, project_id: ProjectId, sourcing_policy: SourcingPolicy) -> None:
-        if sourcing_policy not in self.sourcing_wait_days:
-            raise ValueError(f"unknown sourcing policy: {sourcing_policy}")
+    def set_procurement_policy(
+        self, project_id: ProjectId, procurement_policy: ProcurementTimingPolicy, day: int = 0
+    ) -> None:
+        if procurement_policy not in self.procurement_wait_days:
+            raise ValueError(f"unknown procurement timing policy: {procurement_policy}")
         project = self.projects[project_id]
-        self._ensure_sourcing_mutable(project)
-        self._release_project_reservations(project)
-        for state in project.resources.values():
-            state.import_committed_t = None
-        project.sourcing_policy = sourcing_policy
+        self._ensure_procurement_mutable(project)
+        project.procurement_policy = procurement_policy
         project.procurement_started_day = None
         project.status = ProjectStatus.PLANNED
+        self._activate_procurement_if_eligible(project, day)
 
-    def set_construction_weight(self, project_id: ProjectId, weight: float) -> None:
-        if weight < 0:
-            raise ValueError("construction weight must be non-negative")
-        if not self.settings_mutable(project_id):
-            raise ValueError("completed or cancelled project settings cannot change")
-        self.projects[project_id].construction_weight = weight
-
-    def set_import_source(self, project_id: ProjectId, location_id: SpatialNodeId | None) -> None:
-        project = self.projects[project_id]
-        if location_id is not None and location_id not in self.facilities.environment.graph.nodes:
-            raise KeyError(location_id)
-        if location_id == project.location_id:
-            raise ValueError("import source must differ from project location")
-        self._ensure_sourcing_mutable(project)
-        project.import_source_id = location_id
 
     def cancel(self, project_id: ProjectId) -> None:
         project = self.projects[project_id]
         if project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
             raise ValueError("project cannot be cancelled")
+        if isinstance(project.target, FacilityDecommissionTarget) and project.irreversible_started:
+            raise ValueError("decommission project cannot be cancelled after irreversible work begins")
         if not project.materials_committed:
-            self._release_project_reservations(project)
+                self._release_material_reservations(project)
         project.status = ProjectStatus.CANCELLED
         project.paused = False
         project.pause_started_day = None
@@ -201,6 +309,8 @@ class ConstructionPlanningMixin:
             project.procurement_started_day += max(0, day - project.pause_started_day)
         project.paused = False
         project.pause_started_day = None
+        if project.status is ProjectStatus.PLANNED:
+            self._activate_procurement_if_eligible(project, day)
 
     def blockers(
         self,
@@ -219,29 +329,36 @@ class ConstructionPlanningMixin:
             facility = self.facilities.facilities.get(project.target.facility_id)
             if facility is None:
                 blockers.append(ProjectBlocker("upgrade_target_missing", str(project.target.facility_id)))
-            elif facility.location_id != project.location_id:
+            elif facility.operational_node_id != project.operational_node_id:
                 blockers.append(ProjectBlocker("upgrade_target_location", str(project.target.facility_id)))
             elif facility.level != project.target.target_level - 1:
                 blockers.append(ProjectBlocker(
                     "upgrade_level_conflict",
                     f"current={facility.level}, target={project.target.target_level}",
                 ))
+        if isinstance(project.target, FacilityDecommissionTarget):
+            facility = self.facilities.facilities.get(project.target.facility_id)
+            if facility is None:
+                blockers.append(ProjectBlocker("decommission_target_missing", str(project.target.facility_id)))
+            elif not project.irreversible_started:
+                blockers.extend(self._decommission_irreversible_blockers(project.target.facility_id))
         missing_tech = recipe.prerequisite_technologies - self.unlocked_technologies
         if missing_tech:
             blockers.append(ProjectBlocker("technology", ",".join(sorted(map(str, missing_tech)))))
-        site_power = power if power is not None else self.power.snapshot(project.location_id, self.facilities, day)
-        for failure in self.project_site_failures(project, day, site_power):
+        # ``None`` means a structural/nominal site check.  Current-tick
+        # availability must be supplied by the shared allocation projection;
+        # planning/query code must not run a private Power allocation.
+        for failure in self.project_site_failures(project, day, power):
             blockers.append(ProjectBlocker(failure.code, failure.detail))
         if project.status in {ProjectStatus.PROCURING, ProjectStatus.READY} and not project.materials_committed:
             waited = 0 if project.procurement_started_day is None else day - project.procurement_started_day
-            wait_limit = self.sourcing_wait_days[project.sourcing_policy]
+            wait_limit = self.procurement_wait_days[project.procurement_policy]
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
-                if self._reserved_resource_t(project, requirement.resource_id) + 1e-9 >= requirement.amount_t:
+                if self.reserved_resource_t(project, requirement.resource_id) + 1e-9 >= requirement.amount_t:
                     continue
-                if state.import_committed_t is None:
-                    if waited < wait_limit:
-                        blockers.append(ProjectBlocker("destination_supply_wait", str(requirement.resource_id)))
+                if waited < wait_limit:
+                    blockers.append(ProjectBlocker("destination_supply_wait", str(requirement.resource_id)))
                     continue
                 blockers.append(ProjectBlocker("resource_shortage", str(requirement.resource_id)))
         if (
@@ -249,20 +366,17 @@ class ConstructionPlanningMixin:
             and not recipe.self_deploying
             and recipe.construction_work > 0
         ):
-            if project.construction_weight <= 1e-12:
-                blockers.append(ProjectBlocker("construction_allocation", "construction weight is zero"))
             if power is not None:
-                if self.construction_capacity_at(project.location_id, power, day) <= 1e-12:
+                if self.construction_capacity_at(project.operational_node_id, power, day) <= 1e-12:
                     blockers.append(ProjectBlocker("construction_capacity", "no usable construction flow"))
             else:
                 providers = [
                     facility
-                    for facility in self.facilities.active_compatible_at(project.location_id, day)
+                    for facility in self.facilities.active_compatible_at(project.operational_node_id, day)
                     if facility.definition_id in self.construction_providers
-                    and self.facilities.maintenance_factor(facility.id) > 1e-12
                 ]
                 resource_capacity = any(
-                    self.inventory.available(project.location_id, resource_id) > 1e-12
+                    self.inventory.available(project.operational_node_id, resource_id) > 1e-12
                     and spec.work_per_t_per_day > 0
                     for resource_id, spec in self.construction_resource_providers.items()
                 )

@@ -16,15 +16,14 @@
   <div id="app" class="app-shell" aria-busy="true">
     <header class="topbar">
       <div class="brand-block"><div class="brand">宇宙開発 Idle</div><div class="version" id="appVersion">v0.4.5</div></div>
-      <nav class="view-switch" aria-label="表示切替">
-        <button class="view-button is-active" data-view="operations" type="button">拠点運用</button>
-        <button class="view-button" data-view="logistics" type="button">物流ネットワーク</button>
-      </nav>
-      <div class="session-strip">
+      <div class="session-strip" aria-label="全体状態">
         <div class="session-stat"><span>Day</span><strong id="dayValue">—</strong></div>
-        <div class="session-stat"><span>資金</span><strong id="fundsValue">—</strong></div>
-        <div class="session-stat"><span>Rev</span><strong id="revisionValue">—</strong></div>
+        <div class="session-stat"><span>Research Point</span><strong id="researchPointValue">—</strong></div>
+        <button class="attention-button" id="attentionButton" type="button" data-section="global" aria-label="重要な通知">
+          <span>要確認</span><strong id="attentionCount">0</strong>
+        </button>
         <div class="connection-state" id="connectionState"><span class="dot"></span><span>接続中</span></div>
+        <span id="revisionValue" class="visually-hidden">—</span>
       </div>
       <div class="time-controls" aria-label="時間進行">
         <button type="button" id="timePauseButton" aria-label="一時停止" aria-pressed="false">⏸ 一時停止</button>
@@ -36,98 +35,166 @@
       <div class="session-actions"><button type="button" id="saveButton">保存</button><button type="button" id="loadButton">読込</button></div>
     </header>
 
+    <div id="activeDraftBar" class="active-draft-bar" hidden aria-live="polite">
+      <div><span class="eyebrow">編集中の判断</span><strong id="activeDraftTitle">—</strong><span id="activeDraftPlanningState" class="active-draft-planning" hidden></span></div>
+      <div class="active-draft-actions"><button type="button" id="activeDraftReturn">判断へ戻る</button><button type="button" class="secondary" id="activeDraftDiscard">Draftを破棄</button></div>
+    </div>
+
     <div id="statusBanner" class="status-banner" hidden></div>
 
-    <main id="operationsView" class="view-root operations-view">
-      <aside class="panel location-panel">
-        <div class="panel-heading"><div><div class="eyebrow">SPATIAL NODES</div><h2>拠点</h2></div><button class="icon-button" id="refreshButton" type="button" aria-label="再読込">↻</button></div>
-        <div id="locationList" class="location-list"></div>
-        <div class="panel-section compact"><div class="section-title">全体ボトルネック</div><div id="globalIssues" class="issue-stack"></div></div>
-      </aside>
+    <div class="main-shell">
+      <nav class="primary-nav" aria-label="主要領域">
+        <button class="primary-nav-button is-active" data-section="global" type="button"><span class="nav-glyph">◎</span><span>全体</span></button>
+        <button class="primary-nav-button" data-section="location" type="button"><span class="nav-glyph">⌂</span><span>拠点</span></button>
+        <button class="primary-nav-button" data-section="research" type="button"><span class="nav-glyph">⌬</span><span>研究</span></button>
+        <button class="primary-nav-button" data-section="exploration" type="button"><span class="nav-glyph">◇</span><span>探査</span></button>
+        <button class="primary-nav-button" data-section="logistics" type="button"><span class="nav-glyph">⇄</span><span>輸送</span></button>
+        <button class="primary-nav-button" data-section="economy" type="button"><span class="nav-glyph">¤</span><span>経済</span></button>
+      </nav>
 
-      <section class="workspace operations-workspace">
-        <div class="workspace-heading"><div><div class="eyebrow" id="locationKind">LOCATION</div><h1 id="locationTitle">拠点を読み込み中</h1></div><div class="headline-metrics" id="headlineMetrics"></div></div>
-        <div class="tabbar" role="tablist" aria-label="拠点情報">
-          <button type="button" class="tab-button is-active" data-tab="overview">概要</button>
-          <button type="button" class="tab-button" data-tab="facilities">設備</button>
-          <button type="button" class="tab-button" data-tab="inventory">在庫・フロー</button>
-          <button type="button" class="tab-button" data-tab="construction">建設</button>
-          <button type="button" class="tab-button" data-tab="research">研究</button>
-          <button type="button" class="tab-button" data-tab="scientific-exploration">科学探査</button>
-          <button type="button" class="tab-button" data-tab="survey">資源Survey</button>
-        </div>
-        <div id="operationsTabContent" class="tab-content"></div>
-      </section>
+      <div class="section-host">
+        <main id="globalView" class="view-root global-view">
+          <section class="workspace global-workspace">
+            <div class="workspace-heading"><div><div class="eyebrow">全体コンテキスト</div><h1>全体</h1></div><div id="globalHeadlineMetrics" class="headline-metrics"></div></div>
+            <div id="globalCanvasContent" class="global-canvas-content"></div>
+          </section>
+          <aside class="panel inspector-panel global-inspector">
+            <div class="panel-heading"><div><div class="eyebrow">選択コンテキスト</div><h2 id="globalInspectorTitle">全体状況</h2></div><button type="button" class="inspector-width-toggle" data-toggle-inspector aria-label="詳細パネルを拡大" aria-pressed="false">拡大</button></div>
+            <div id="globalInspectorContent" class="inspector-content"></div>
+          </aside>
+        </main>
 
-      <aside class="panel inspector-panel">
-        <div class="panel-heading"><div><div class="eyebrow">INSPECTOR</div><h2 id="inspectorTitle">選択項目</h2></div></div>
-        <div id="inspectorContent" class="inspector-content"><div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div></div>
-      </aside>
-    </main>
+        <main id="operationsView" class="view-root operations-view" hidden>
+          <div class="operations-decision-canvas">
+            <section class="workspace operations-workspace">
+              <div class="workspace-heading operations-heading"><div><div class="eyebrow" id="locationKind">拠点コンテキスト</div><h1 id="locationTitle">拠点を読み込み中</h1></div><div class="headline-metrics" id="headlineMetrics"></div></div>
+              <div class="location-context-bar" aria-label="拠点コンテキスト">
+                <div id="locationList" class="location-list"></div>
+                <button class="icon-button refresh-context-button" id="refreshButton" type="button" aria-label="最新状態を取得">↻</button>
+              </div>
+              <div id="globalIssues" class="visually-hidden" aria-live="polite"></div>
+              <div class="tabbar" role="tablist" aria-label="作業領域">
+                <button type="button" class="tab-button is-active" data-tab="overview" data-section-tab="location">概要</button>
+                <button type="button" class="tab-button" data-tab="facilities" data-section-tab="location">設備</button>
+                <button type="button" class="tab-button" data-tab="inventory" data-section-tab="location">在庫・フロー</button>
+                <button type="button" class="tab-button" data-tab="construction" data-section-tab="location">建設</button>
+                <button type="button" class="tab-button" data-tab="research" data-section-tab="research">研究ツリー</button>
+                <button type="button" class="tab-button" data-tab="scientific-exploration" data-section-tab="exploration">科学探査</button>
+                <button type="button" class="tab-button" data-tab="survey" data-section-tab="exploration">資源Survey</button>
+                <button type="button" class="tab-button" data-tab="surface" data-section-tab="exploration">地表マップ</button>
+              </div>
+              <div id="operationsTabContent" class="tab-content"></div>
+            </section>
+          </div>
 
-    <main id="logisticsView" class="view-root logistics-view" hidden>
-      <aside class="panel logistics-list-panel">
-        <div class="panel-heading"><div><div class="eyebrow">ROUTES</div><h2>輸送路</h2></div></div>
-        <div class="filter-row"><select id="routeOriginFilter" aria-label="出発地"></select><select id="routeDestinationFilter" aria-label="到着地"></select></div>
-        <div id="routeList" class="route-list"></div>
-      </aside>
+          <aside class="panel inspector-panel">
+            <div class="panel-heading"><div><div class="eyebrow">詳細・操作</div><h2 id="inspectorTitle">選択項目</h2></div><button type="button" class="inspector-width-toggle" data-toggle-inspector aria-label="詳細パネルを拡大" aria-pressed="false">拡大</button></div>
+            <div id="inspectorContent" class="inspector-content"><div class="empty-state">中央の項目を選択すると、状態・条件・操作をここに表示します。</div></div>
+          </aside>
+        </main>
 
-      <section class="workspace logistics-workspace">
-        <div class="workspace-heading logistics-heading"><div><div class="eyebrow">LOGISTICS NETWORK</div><h1>物流ネットワーク</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
-        <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
-        <div class="logistics-bottom-grid">
-          <section class="card"><div class="card-heading"><h3>物流Lane</h3><span id="laneCountBadge" class="badge"></span></div><div id="laneTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Resource Demand</h3><span id="demandCountBadge" class="badge"></span></div><div id="demandTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Fleet</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Transport Allocation</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Vehicle Production</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
-          <section class="card"><div class="card-heading"><h3>Cargo Flow</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
-        </div>
-      </section>
+        <main id="logisticsView" class="view-root logistics-view" hidden>
+          <div class="logistics-decision-canvas">
+            <section class="workspace logistics-workspace">
+              <div class="workspace-heading logistics-heading"><div><div class="eyebrow">輸送ネットワーク</div><h1>輸送</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
+              <div class="logistics-route-context-bar" aria-label="移動経路コンテキスト">
+                <div class="route-filter-row"><select id="movementPlanOriginFilter" aria-label="出発地"></select><select id="movementPlanDestinationFilter" aria-label="到着地"></select></div>
+                <div id="networkDecisionContext" class="network-decision-context" hidden></div>
+                <div id="movementPlanList" class="movement-plan-list"></div>
+              </div>
+              <section id="logisticsDecisionLane" class="logistics-decision-lane" aria-label="現在の輸送判断"></section>
+              <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
+              <div class="logistics-support-heading"><div><span class="eyebrow">詳細・設定</span><h2>物流状態とPlayer intent</h2></div><span>上の判断から必要な項目へ進み、必要時だけ設定を変更します。</span></div>
+              <div class="logistics-bottom-grid">
+                <section class="card logistics-support-card is-primary-support"><div class="card-heading"><h3>補給需要</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
+                <section class="card logistics-support-card is-primary-support"><div class="card-heading"><h3>輸送能力設定</h3><span id="allocationCountBadge" class="badge"></span></div><div id="allocationTable" class="table-wrap"></div></section>
+                <section class="card logistics-support-card"><div class="card-heading"><h3>保有機体</h3><span id="vehicleCountBadge" class="badge"></span></div><div id="vehicleTable" class="table-wrap"></div></section>
+                <section class="card logistics-support-card"><div class="card-heading"><h3>供給経路 / 追加備蓄</h3><span id="routingConstraintCountBadge" class="badge"></span></div><div id="routingConstraintTable" class="table-wrap"></div></section>
+                <section class="card logistics-support-card"><div class="card-heading"><h3>輸送中貨物</h3><span id="cargoCountBadge" class="badge"></span></div><div id="cargoTable" class="table-wrap"></div></section>
+                <section class="card logistics-support-card"><div class="card-heading"><h3>機体建造</h3><span id="vehicleProductionCountBadge" class="badge"></span></div><div id="vehicleProductionTable" class="table-wrap"></div></section>
+              </div>
+            </section>
+          </div>
 
-      <aside class="panel inspector-panel logistics-inspector">
-        <div class="panel-heading"><div><div class="eyebrow">ROUTE INSPECTOR</div><h2 id="routeInspectorTitle">輸送路を選択</h2></div></div>
-        <div id="routeInspectorContent" class="inspector-content"><div class="empty-state">左の輸送路またはネットワーク上の接続を選択してください。</div></div>
-      </aside>
-    </main>
+          <aside class="panel inspector-panel logistics-inspector">
+            <div class="panel-heading"><div><div class="eyebrow">経路コンテキスト</div><h2 id="movementPlanInspectorTitle">移動経路を選択</h2></div><button type="button" class="inspector-width-toggle" data-toggle-inspector aria-label="詳細パネルを拡大" aria-pressed="false">拡大</button></div>
+            <div id="movementPlanInspectorContent" class="inspector-content"><div class="empty-state">ネットワーク上の接続または移動経路を選択すると、結果・理由・制約を表示します。</div></div>
+          </aside>
+        </main>
 
-    <dialog id="laneDialog" class="modal-dialog">
-      <form method="dialog" id="laneForm">
-        <div class="dialog-heading"><div><div class="eyebrow">LOGISTICS LANE</div><h2>物流Laneを作成</h2></div><button type="button" class="icon-button" id="laneCloseButton">×</button></div>
-        <label>供給元<select id="laneSource" required></select></label>
-        <label>需要地<select id="laneDestination" required></select></label>
-        <div class="field-pair"><label>要求容量 (t/日)<input id="laneCapacity" type="number" min="0.01" step="0.01" value="1" required></label><label>優先度<input id="lanePriority" type="number" min="0" max="100" step="1" value="50" required></label></div>
-        <label>経路方針<select id="lanePolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
-        <div class="cell-sub">Laneは資源を指定しません。この供給元→需要地の容量を、建設・研究・産業が生成するResource Demandへ割り当てます。</div>
-        <div class="dialog-actions"><button type="button" class="secondary" id="laneCancelButton">取消</button><button type="submit" class="primary">Lane作成</button></div>
+        <main id="economyView" class="view-root economy-view" hidden>
+          <section class="workspace economy-workspace">
+            <div class="workspace-heading"><div><div class="eyebrow">市場</div><h1>経済</h1></div><span id="marketFundsBadge" class="badge"></span></div>
+            <div class="economy-canvas-content">
+              <section class="card market-card"><div class="card-heading"><h3>外部資源市場 / 資金</h3></div><div id="marketPanel"></div></section>
+            </div>
+          </section>
+          <aside class="panel inspector-panel economy-inspector">
+            <div class="panel-heading"><div><div class="eyebrow">市場コンテキスト</div><h2>市場と物流</h2></div><button type="button" class="inspector-width-toggle" data-toggle-inspector aria-label="詳細パネルを拡大" aria-pressed="false">拡大</button></div>
+            <div id="economyInspectorContent" class="inspector-content"></div>
+          </aside>
+        </main>
+      </div>
+    </div>
+    <dialog id="routingConstraintDialog" class="modal-dialog">
+      <form method="dialog" id="routingConstraintForm">
+        <div class="dialog-heading"><div><div class="eyebrow">ROUTE PREFERENCE</div><h2>供給経路の固定条件</h2></div><button type="button" class="icon-button" id="routingConstraintCloseButton">×</button></div>
+        <div id="routingConstraintScopeSummary" class="decision-context-summary"></div>
+        <label>固定供給元<select id="routingConstraintSource"><option value="">自動選択</option></select></label>
+        <div class="choice-section"><div class="choice-label">必須経由拠点</div><div id="routingConstraintViaChoices" class="choice-grid"></div></div>
+        <div class="choice-section"><div class="choice-label">必須輸送区間</div><div id="routingConstraintAllocationChoices" class="choice-grid"></div></div>
+        <div class="cell-sub">通常は既存の輸送網から自動選択します。特定の供給元・経由地・輸送区間を固定したい場合だけ条件を選択してください。固定条件を満たせない場合は自動で別経路へ切り替わりません。</div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="routingConstraintCancelButton">取消</button><button type="submit" class="primary">経路条件を保存</button></div>
       </form>
     </dialog>
 
+    <dialog id="targetStockDialog" class="modal-dialog">
+      <form method="dialog" id="targetStockForm">
+        <div class="dialog-heading"><div><div class="eyebrow">RESERVE STOCK</div><h2>追加備蓄を設定</h2></div><button type="button" class="icon-button" id="targetStockCloseButton">×</button></div>
+        <div class="field-pair"><label>需要地<select id="targetStockDestination" required></select></label><label>資源<select id="targetStockResource" required></select></label></div>
+        <div id="targetStockOptionSummary" class="decision-context-summary"><div class="cell-sub">需要地と資源を選択すると現在在庫・通常需要・入荷中を確認できます。</div></div>
+        <div class="direct-control">
+          <div class="direct-control-heading"><span>追加備蓄目標</span><strong id="targetStockQuantityValue">0 t</strong></div>
+          <input id="targetStockQuantityRange" type="range" min="0" max="1" step="0.01" value="0" aria-label="追加備蓄量">
+          <div id="targetStockPresets" class="preset-row"></div>
+        </div>
+        <details class="precision-input"><summary>数値を直接入力</summary><label>目標在庫 (t)<input id="targetStockQuantity" type="number" min="0" step="0.01" value="0" required></label></details>
+        <div class="choice-section"><div class="choice-label">活動優先度</div><input id="targetStockPriority" type="hidden" value="3"><div class="priority-segment" id="targetStockPriorityButtons" role="group" aria-label="追加備蓄優先度">
+          <button type="button" data-target-stock-priority="1">1 最低</button><button type="button" data-target-stock-priority="2">2 低</button><button type="button" class="is-selected" data-target-stock-priority="3">3 標準</button><button type="button" data-target-stock-priority="4">4 高</button><button type="button" data-target-stock-priority="5">5 最高</button>
+        </div></div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="targetStockCancelButton">取消</button><button type="submit" class="primary">追加備蓄を保存</button></div>
+      </form>
+    </dialog>
 
     <dialog id="relocationDialog" class="modal-dialog">
       <form method="dialog" id="relocationForm">
         <div class="dialog-heading"><div><div class="eyebrow">FLEET RELOCATION</div><h2>Fleetを移動</h2></div><button type="button" class="icon-button" id="relocationCloseButton">×</button></div>
-        <div class="field-pair"><label>Vehicle type<div id="relocationVehicle" class="cell-main">—</div></label><label>出発地<div id="relocationSource" class="cell-main">—</div></label></div>
-        <div class="cell-sub">現在free: <span id="relocationFree">0</span> unit。移動中はsource Fleetとして拘束され、到着時にdestination Poolへ移ります。</div>
+        <div class="field-pair"><label>機体種類<div id="relocationVehicle" class="cell-main">—</div></label><label>出発地<div id="relocationSource" class="cell-main">—</div></label></div>
+        <div class="cell-sub">現在の空き: <span id="relocationFree">0</span> 機。移動中は出発地Fleetとして拘束され、到着時に到着地Fleetへ移ります。</div>
         <label>到着地<select id="relocationDestination" required></select></label>
-        <div class="field-pair"><label>移動unit数<input id="relocationUnits" type="number" min="1" step="1" value="1" required></label><label>経路方針<select id="relocationPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label></div>
-        <div id="relocationPreview" class="inspector-section"><div class="cell-sub">到着地・unit数・経路方針から移動計画を確認します。</div></div>
+        <label>移動機数<input id="relocationUnits" type="number" min="1" step="1" value="1" required></label>
+        <div id="relocationPreview" class="inspector-section"><div class="cell-sub">到着地と機数から正準移動評価で移動計画を確認します。</div></div>
         <div class="dialog-actions"><button type="button" class="secondary" id="relocationCancelButton">取消</button><button type="submit" class="primary" id="relocationSubmitButton">移動開始</button></div>
       </form>
     </dialog>
 
     <dialog id="allocationDialog" class="modal-dialog">
       <form method="dialog" id="allocationForm">
-        <div class="dialog-heading"><div><div class="eyebrow">TRANSPORT ALLOCATION</div><h2>Fleetを輸送へ配分</h2></div><button type="button" class="icon-button" id="allocationCloseButton">×</button></div>
-        <label>Vehicle type<select id="allocationVehicle" required></select></label>
-        <label>Anchor / 出発地<select id="allocationSource" required></select></label>
-        <label>Transport relation / 到着地<select id="allocationDestination" required></select></label>
-        <div class="field-pair"><label>Control mode<select id="allocationMode"><option value="units">UNITS</option><option value="capacity">CAPACITY</option></select></label><label>Allocation priority<input id="allocationPriority" type="number" min="0" max="100" step="1" value="50" required></label></div>
-        <div id="allocationUnitsGroup"><label>Authoritative target units<input id="allocationUnits" type="number" min="0" step="1" value="1" required></label></div>
-        <div id="allocationCapacityGroup" hidden><div class="field-pair"><label>Forward target (t/日)<input id="allocationForward" type="number" min="0" step="0.01" value="1"></label><label>Reverse target (t/日)<input id="allocationReverse" type="number" min="0" step="0.01" value="0"></label></div></div>
-        <label>経路方針<select id="allocationPolicy"><option value="fastest">最速</option><option value="lowest_cost">最低コスト</option><option value="lowest_propellant">推進剤最少</option></select></label>
-        <div class="cell-sub">UNITSではunit数だけ、CAPACITYでは方向別capacityだけが正本です。Fleet不足でもtargetは保持され、active / unfilledとして表示されます。</div>
-        <div class="dialog-actions"><button type="button" class="secondary" id="allocationCancelButton">取消</button><button type="submit" class="primary">Allocation作成</button></div>
+        <div class="dialog-heading"><div><div class="eyebrow">TRANSPORT CAPACITY</div><h2>輸送能力を設定</h2></div><button type="button" class="icon-button" id="allocationCloseButton">×</button></div>
+        <label>機体種類<select id="allocationVehicle" required></select></label>
+        <label>出発地<select id="allocationSource" required></select></label>
+        <label>到着地<select id="allocationDestination" required></select></label>
+        <div class="choice-section"><div class="choice-label">配備優先度</div><input id="allocationPriority" type="hidden" value="3"><div class="priority-segment" id="allocationPriorityButtons" role="group" aria-label="輸送配備優先度">
+          <button type="button" data-allocation-priority="1">1 最低</button><button type="button" data-allocation-priority="2">2 低</button><button type="button" class="is-selected" data-allocation-priority="3">3 標準</button><button type="button" data-allocation-priority="4">4 高</button><button type="button" data-allocation-priority="5">5 最高</button>
+        </div></div>
+        <div class="direct-control"><div class="direct-control-heading"><span>往路能力目標</span><strong id="allocationForwardValue">0 t/日</strong></div><input id="allocationForwardRange" type="range" min="0" max="1" step="0.01" value="0" aria-label="往路輸送能力"><div id="allocationForwardPresets" class="preset-row"></div></div>
+        <div class="direct-control"><div class="direct-control-heading"><span>復路能力目標</span><strong id="allocationReverseValue">0 t/日</strong></div><input id="allocationReverseRange" type="range" min="0" max="1" step="0.01" value="0" aria-label="復路輸送能力"><div id="allocationReversePresets" class="preset-row"></div></div>
+        <details class="precision-input"><summary>輸送能力を数値で直接入力</summary><div class="field-pair"><label>往路 (t/日)<input id="allocationForward" type="number" min="0" step="any" value="0" required></label><label>復路 (t/日)<input id="allocationReverse" type="number" min="0" step="any" value="0" required></label></div></details>
+        <div class="choice-section"><div class="choice-label">経路固定（必要時のみ）</div><div id="allocationMovementChoices" class="choice-grid"></div><div class="cell-sub">通常は経路を自動選択します。特定経路を固定したい場合だけ候補を選択してください。</div></div>
+        <div id="allocationPreview" class="inspector-section"><div class="cell-sub">能力目標を調整すると必要Fleetと成立見込みを表示します。</div></div>
+        <div id="allocationServiceOptions" class="inspector-section"><div class="cell-sub">出発地と到着地から輸送手段候補を取得します。</div></div>
+        <div class="cell-sub">方向別の輸送能力目標が設定値です。必要機数は機体と輸送手段から自動計算し、Fleet不足でも目標値は保持されます。</div>
+        <div class="dialog-actions"><button type="button" class="secondary" id="allocationCancelButton">取消</button><button type="submit" class="primary">輸送設定を作成</button></div>
       </form>
     </dialog>
   </div>

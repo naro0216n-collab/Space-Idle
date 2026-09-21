@@ -15,7 +15,7 @@ class ProcessSelectionMixin:
         compatible = self.compatible_processes(facility.definition_id)
         if not compatible:
             return None
-        selected = self.selected_process_by_facility.get(facility.id)
+        selected = facility.selected_process_id
         if selected is not None:
             process = self.processes.get(selected)
             if process is None or process.facility_def_id != facility.definition_id:
@@ -32,4 +32,4 @@ class ProcessSelectionMixin:
         process = self.processes[process_id]
         if process.facility_def_id != facility.definition_id:
             raise ValueError("process is incompatible with facility")
-        self.selected_process_by_facility[facility.id] = process_id
+        facility.selected_process_id = process_id

@@ -1,23 +1,24 @@
 from __future__ import annotations
 
 from .application_commands import (
-    AcceptContract, AdvanceTime, ApplicationError, CancelBuild, ChangeTransportAllocationMode,
-    CreateLogisticsLane, CreateTransportAllocation, DeclineContract, DeleteLogisticsLane,
-    DeleteTransportAllocation, FundResearchPrototype, GetBottlenecks,
-    GetBuildOptions, GetCatalog, GetCargoFlows, GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport,
-    GetLocation, GetLogistics, GetLogisticsLanes, GetLogisticsSummary, GetProjects,
-    GetResearch, GetRoutes, GetScientificExplorations, GetSurveys, GetTransportAllocations,
-    GetTransportAllocationOptions, GetWorld, PauseBuild, PauseFacility, PauseLogisticsLane,
-    PauseResearch, PauseScientificExploration, PauseSurvey, PauseTransportAllocation,
-    PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, ProduceVehicle, RelocateFleet,
-    ResumeBuild, ResumeFacility, ResumeLogisticsLane, ResumeResearch,
+    AcceptContract, AdvanceTime, ApplicationError, CancelBuild, ClearTransportMovementConstraint,
+    CreateTransportAllocation, SetTransportMovementConstraint, DeclineContract,
+    DeleteTransportAllocation, SetResearchPriority, GetAttention, GetBottlenecks,
+    GetBuildOptions, GetCatalog, GetCargoFlows, GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast,
+    GetOperationalNode, GetLogistics, GetLogisticsSummary, GetProjects,
+    GetResearch, GetMovementPlans, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
+    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetWorld, GetSurfaceMap, PauseBuild, PauseFacility,
+    PauseResearch, PauseScientificExploration, AbortScientificExploration, ReturnScientificExploration, SetScientificExplorationCompletionDisposition, PauseSurvey, PauseTransportAllocation,
+    PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
+    ResumeBuild, ResumeFacility, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
-    ResumeVehicleProduction, SetConstructionWeight, SetFacilityProcess, SetMaintenancePriority,
-    SetPowerPriority, SetProjectImportSource, SetProjectPriority, SetProjectSourcingPolicy,
-    SetResearchDemonstrationSite, SetResearchPrototypeSite, SetSurveyAllocation,
-    SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration,
-    StartSurvey, UnassignExplorationFleet, UpdateLogisticsLane,
-    UpdateTransportAllocation, AssignExplorationFleet,
+    ResumeVehicleProduction, SetFacilityProcess, SetMaintenancePriority,
+    SetFacilityActivityPriority, SetProjectPriority, SetProjectProcurementPolicy,
+    SetResearchDemonstrationSite, SetResearchPrototypeSite, SetSurveyPriority,
+    SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration, SetScientificExplorationPriority,
+    SurveyProviderConstraintInput, StartSurvey, UpdateSurvey, UnassignExplorationFleet, UpdateTransportAllocation, AssignExplorationFleet, SetResearchProviderFleetQuantity, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity, CreateTradeOrder,
+    UpdateTradeOrder, CancelTradeOrder, GetMarket,
+    SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
 )
 
 from .application_command_handlers import ApplicationCommandMixin
@@ -32,10 +33,19 @@ class GameApplication(ApplicationCommandMixin, ApplicationQueryMixin):
         self._catalog = catalog
         self._time_paused = False
         self._time_speed_multiplier = 1.0
+        self._query_projection_cache = None
 
     @property
     def content_id(self) -> str:
         return self._simulation.content_id
+
+    @property
+    def world_definition_id(self) -> str:
+        return self._simulation.world_definition_id
+
+    @property
+    def scenario_id(self) -> str:
+        return self._simulation.scenario_id
 
     @property
     def time_paused(self) -> bool:

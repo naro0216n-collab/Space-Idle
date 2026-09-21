@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .simulation import Simulation
-from .site import FacetValueRange, RequiresFacet, SiteRequirements
+from .site import FacetValueRange, RequiresFacet, SiteRequirements, SpatialClassificationRequirement
 
 class ConfigurationError(ValueError):
     pass
@@ -22,8 +22,40 @@ def validate_environment_condition(condition: object, owner: str) -> None:
         dataclass_fields = getattr(condition.facet_type, "__dataclass_fields__", {})
         require(condition.attribute in dataclass_fields, f"site requirement references unknown facet attribute: {owner}/{code}/{condition.attribute}")
 
-def validate_site_requirements(requirements: SiteRequirements, known_capabilities: set[str], owner: str) -> None:
+
+
+def validate_generated_id_counter(
+    counter: object,
+    entity_ids: object,
+    prefix: str,
+    owner: str,
+) -> None:
+    """Validate a monotonic generated-id counter against live authoritative ids."""
+    require(
+        isinstance(counter, int) and not isinstance(counter, bool) and counter >= 0,
+        f"{owner} counter must be a non-negative integer",
+    )
+    maximum = 0
+    for entity_id in entity_ids:
+        text = str(entity_id)
+        if not text.startswith(prefix):
+            continue
+        suffix = text[len(prefix):]
+        if suffix.isdigit():
+            maximum = max(maximum, int(suffix))
+    require(counter >= maximum, f"{owner} counter trails existing generated id: {maximum}")
+
+def validate_site_requirements(
+    requirements: SiteRequirements,
+    known_capabilities: set[str],
+    owner: str,
+) -> None:
     seen_codes: set[str] = set()
+    for requirement in requirements.spatial_classification_requirements:
+        require(isinstance(requirement, SpatialClassificationRequirement), f"invalid spatial classification requirement: {owner}")
+        require(bool(requirement.code), f"site requirement has empty code: {owner}")
+        require(requirement.code not in seen_codes, f"duplicate site requirement code: {owner}/{requirement.code}")
+        seen_codes.add(requirement.code)
     for condition in requirements.environment:
         validate_environment_condition(condition, owner)
         code = getattr(condition, "code", "")
@@ -32,15 +64,17 @@ def validate_site_requirements(requirements: SiteRequirements, known_capabilitie
     seen_capabilities: set[tuple[str, str]] = set()
     for requirement in requirements.capability_requirements:
         require(requirement.capability_id in known_capabilities, f"site requirement references unknown capability: {owner}/{requirement.capability_id}")
-        key = (requirement.capability_id, requirement.mode)
-        require(key not in seen_capabilities, f"duplicate capability requirement: {owner}/{requirement.capability_id}/{requirement.mode}")
+        key = (requirement.capability_id, requirement.required_state.value)
+        require(key not in seen_capabilities, f"duplicate capability requirement: {owner}/{requirement.capability_id}/{requirement.required_state.value}")
         seen_capabilities.add(key)
 
 @dataclass(frozen=True)
 class ValidationContext:
-    nodes: dict
+    spatial_nodes: dict
+    operational_nodes: dict
     facility_defs: dict
     known_capabilities: set[str]
+    known_service_types: set[str]
     known_technologies: set
 
     @classmethod
@@ -48,4 +82,13 @@ class ValidationContext:
         technologies = set(sim.technology.completed)
         if sim.research is not None:
             technologies.update(sim.research.definitions)
-        return cls(sim.graph.nodes, sim.facilities.definitions, sim.facilities.capability_ids(), technologies)
+        service_types = set(sim.service_capacity_scopes())
+        service_types.add(sim.power.SERVICE_TYPE)
+        return cls(
+            sim.graph.nodes,
+            sim.graph.operational_node_map(),
+            sim.facilities.definitions,
+            sim.facilities.capability_ids(),
+            service_types,
+            technologies,
+        )
