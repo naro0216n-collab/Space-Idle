@@ -252,12 +252,14 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .global-map-card { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: #08131c; overflow: hidden; }
 .global-map-toolbar { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line-soft); }
 .global-map-toolbar h2 { margin: 2px 0 0; font-size: 16px; }
-.global-map-stage { position: relative; min-height: 455px; overflow: hidden; pointer-events: none; background: radial-gradient(circle at 48% 72%, #122a3c 0, #0a1823 42%, #061019 100%); }
+.global-map-stage { position: relative; min-height: 455px; overflow: hidden; background: radial-gradient(circle at 48% 72%, #122a3c 0, #0a1823 42%, #061019 100%); }
 .global-map-stage::after { content: ''; position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(circle, #7da3bd55 0 1px, transparent 1.5px); background-size: 54px 54px; opacity: .24; }
 .global-map-links { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
+.global-map-nodes { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
 .global-map-link { stroke: #39566a; stroke-width: .45; vector-effect: non-scaling-stroke; opacity: .5; }
 .global-map-link.is-available { stroke: #4d9fc4; opacity: .9; }
-.global-map-node { position: absolute; z-index: 2; width: 142px; min-height: 64px; transform: translate(-50%, -50%); padding: 8px 10px; text-align: left; pointer-events: auto; border-color: #36566d; background: #0f2230e8; box-shadow: 0 7px 20px #0005; }
+.global-map-node-shell { position: absolute; z-index: 2; width: 142px; min-height: 64px; transform: translate(-50%, -50%); pointer-events: auto; }
+.global-map-node { width: 100%; min-height: 64px; padding: 8px 10px; text-align: left; border-color: #36566d; background: #0f2230e8; box-shadow: 0 7px 20px #0005; }
 .global-map-node.is-selected { border-color: var(--accent); background: #15354a; box-shadow: 0 0 0 2px #4c9ccf33, 0 10px 24px #0007; }
 .global-map-node-name { display: block; font-size: 12px; font-weight: 700; line-height: 1.25; }
 .global-map-node-meta { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.3; }
@@ -282,7 +284,7 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 
 @media (max-width: 1080px) and (orientation: landscape) {
   .global-decision-grid { grid-template-columns: minmax(0, 1fr) 230px; }
-  .global-map-node { width: 122px; }
+  .global-map-node-shell { width: 122px; }
 }
 
 /* iPad landscape shell: preserve the three-region hierarchy and give the canvas priority. */

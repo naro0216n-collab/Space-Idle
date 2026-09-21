@@ -286,6 +286,12 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(page.locator(".global-map-node").count() > 0, "global map must expose spatial nodes as direct targets")
             _assert(page.locator(".global-map-link").count() > 0, "global map must expose movement relationships without a dashboard detour")
             first_global_node = page.locator(".global-map-node").first
+            first_global_node.evaluate("node => { window.__spaceIdleGlobalNode = node; }")
+            page.wait_for_timeout(1200)
+            _assert(
+                first_global_node.evaluate("node => node === window.__spaceIdleGlobalNode"),
+                "periodic sync must preserve the global-map interaction target across authoritative refresh",
+            )
             first_global_node.tap()
             selected_global_node_id = first_global_node.get_attribute("data-global-node-id")
             selected_global_node_name = first_global_node.locator(".global-map-node-name").inner_text().strip()
@@ -296,6 +302,13 @@ def run(*, browser=None) -> dict[str, object]:
             page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
             _assert(selected_global_node_name in page.locator("#networkDecisionContext").inner_text(), "global map selection must carry the node context into Transport")
             _assert(page.locator("#networkSvg .network-line.is-context-related").count() > 0, "Transport must highlight Network edges related to the inherited global node")
+            first_network_node = page.locator("[data-network-location]").first
+            first_network_node.evaluate("node => { window.__spaceIdleNetworkNode = node; }")
+            page.wait_for_timeout(1200)
+            _assert(
+                first_network_node.evaluate("node => node === window.__spaceIdleNetworkNode"),
+                "periodic sync must preserve network interaction targets across authoritative refresh",
+            )
             page.locator('.primary-nav-button[data-section="global"]').click()
             first_global_node = page.locator(f'.global-map-node[data-global-node-id="{selected_global_node_id}"]')
             first_global_node.tap()
@@ -483,6 +496,13 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(page.locator('.research-tree-card').evaluate("el => Boolean(el.compareDocumentPosition(document.querySelector('.research-provider-summary')) & Node.DOCUMENT_POSITION_FOLLOWING)"), "research DAG must precede provider allocation details in the decision flow")
             research_rows = page.locator('#researchTree [data-inspect="research"]')
             _assert(research_rows.count() > 0, "research tree must expose research decisions")
+            first_research_node = research_rows.first
+            first_research_node.evaluate("node => { window.__spaceIdleResearchNode = node; }")
+            page.wait_for_timeout(1200)
+            _assert(
+                first_research_node.evaluate("node => node === window.__spaceIdleResearchNode"),
+                "periodic sync must preserve research decision targets while progress projections refresh",
+            )
             unlock_node = page.locator(
                 f'#researchTree [data-inspect="research"][data-id="{unlock_fixture.id}"]'
             )
