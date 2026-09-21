@@ -254,7 +254,7 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .global-map-toolbar h2 { margin: 2px 0 0; font-size: 16px; }
 .global-map-stage { position: relative; min-height: 455px; overflow: hidden; background: radial-gradient(circle at 48% 72%, #122a3c 0, #0a1823 42%, #061019 100%); }
 .global-map-stage::after { content: ''; position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(circle, #7da3bd55 0 1px, transparent 1.5px); background-size: 54px 54px; opacity: .24; }
-.global-map-links { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+.global-map-links { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
 .global-map-link { stroke: #39566a; stroke-width: .45; vector-effect: non-scaling-stroke; opacity: .5; }
 .global-map-link.is-available { stroke: #4d9fc4; opacity: .9; }
 .global-map-node { position: absolute; z-index: 2; width: 142px; min-height: 64px; transform: translate(-50%, -50%); padding: 8px 10px; text-align: left; border-color: #36566d; background: #0f2230e8; box-shadow: 0 7px 20px #0005; }
